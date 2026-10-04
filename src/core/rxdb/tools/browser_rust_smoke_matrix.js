@@ -54,6 +54,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const os = require('os');
+const nativeSchemaContract = require('../../business_os/business_os_schema_contract.json');
 const {
   assertBusinessOsProductionSmokeRegistry,
   businessOsProductionSmokeEvidenceRequirements,
@@ -524,6 +525,10 @@ const modeEvidenceRequirements = {
       'schema_table',
       'stale_schema_table',
       'stale_schema_table_rows',
+      'stale_schema_table_count',
+      'native_command_count',
+      'native_task_count',
+      'command_task_link_verified',
       'task_table',
       'command_id',
       'task_id',
@@ -533,11 +538,16 @@ const modeEvidenceRequirements = {
     ],
     values: {
       schema_collection: 'business_commands',
-      schema_version: 1,
-      schema_table: 'ctox_business_os__business_commands__v1',
+      schema_version: nativeSchemaContract.business_commands.version,
+      schema_table: `ctox_business_os__business_commands__v${nativeSchemaContract.business_commands.version}`,
       stale_schema_table: 'ctox_business_os__business_commands__v0',
       stale_schema_table_rows: 0,
-      task_table: 'ctox_business_os__ctox_queue_tasks__v0',
+      stale_schema_table_count: 0,
+      native_command_count: 1,
+      native_task_count: 1,
+      command_task_link_verified: 1,
+      task_count_for_command: 1,
+      task_table: `ctox_business_os__ctox_queue_tasks__v${nativeSchemaContract.ctox_queue_tasks.version}`,
     },
   },
   'command-burst-browser-to-rust': {
@@ -1138,6 +1148,29 @@ function runSmokeMatrixSelfTest() {
     }
   }
   assertSelfTestThrows('unsupported evidence mode', () => evidenceRequirementsForMode('__missing_business_os_smoke__'));
+  const schemaRoutingMode = 'migration-version-browser-to-rust';
+  const schemaRoutingEvidence = {
+    ...evidenceRequirementsForMode(schemaRoutingMode).values,
+    command_id: 'command-proof', task_id: 'task-proof', status: 'accepted', task_status: 'pending',
+  };
+  if (validateModeEvidence(schemaRoutingMode, schemaRoutingEvidence).length) {
+    throw new Error('Canonical schema routing evidence was rejected');
+  }
+  for (const [key, invalid] of [
+    ['schema_version', 1],
+    ['schema_table', 'ctox_business_os__business_commands__v1'],
+    ['task_table', 'ctox_business_os__ctox_queue_tasks__v0'],
+    ['stale_schema_table_count', 1],
+    ['stale_schema_table_rows', 1],
+    ['native_command_count', 2],
+    ['native_task_count', 2],
+    ['task_count_for_command', 2],
+    ['command_task_link_verified', 0],
+  ]) {
+    if (!validateModeEvidence(schemaRoutingMode, { ...schemaRoutingEvidence, [key]: invalid }).length) {
+      throw new Error('Schema routing gate accepted invalid evidence: ' + key);
+    }
+  }
   const validSummary = makeSmokeMatrixSummarySelfTestArtifact();
   const validProblems = validateSmokeMatrixSummaryArtifact(validSummary, { final: true });
   if (validProblems.length) {

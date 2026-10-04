@@ -18,6 +18,8 @@ use super::rxdb_peer_commands::{
     command_id_from_document, incremental_upsert_document_with_envelope,
     project_appsec_command_result, project_support_command_result, project_threads_command_result,
 };
+use super::rxdb_peer_domain_recovery;
+use super::rxdb_peer_intake_reader;
 use super::rxdb_peer_intake_state::{
     business_command_document_is_terminal, is_pending_desktop_file_replication_error,
     resolve_business_command_intake_failure_history, PendingBusinessCommandIntakeOutcome,
@@ -30,7 +32,9 @@ use super::rxdb_peer_projections::{
 };
 use super::store;
 use anyhow::Context;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+#[cfg(test)]
+use rusqlite::OpenFlags;
+use rusqlite::{Connection, OptionalExtension};
 use rxdb::rx_database::RxDatabase;
 use serde_json::json;
 use serde_json::Value;
@@ -87,15 +91,17 @@ pub(super) async fn business_commands_source_stamp(
     root: &Path,
 ) -> anyhow::Result<BusinessCommandsSourceStamp> {
     let root = root.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        Ok(BusinessCommandsSourceStamp {
-            table: business_commands_table_stamp(&root)?,
-        })
-    })
-    .await
-    .context("join business commands source stamp")?
+    let query_root = root.clone();
+    let table = rxdb_peer_intake_reader::read(
+        &root,
+        empty_business_commands_table_stamp(None),
+        move |conn| business_commands_table_stamp_with_connection(&query_root, conn),
+    )
+    .await?;
+    Ok(BusinessCommandsSourceStamp { table })
 }
 
+#[cfg(test)]
 pub(super) fn business_commands_table_stamp(
     root: &Path,
 ) -> anyhow::Result<BusinessCommandsTableStamp> {
@@ -105,7 +111,9 @@ pub(super) fn business_commands_table_stamp(
     }
     let conn = Connection::open_with_flags(
         &path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
     )
     .with_context(|| {
         format!(
@@ -115,6 +123,13 @@ pub(super) fn business_commands_table_stamp(
     })?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
         .context("configure business command source stamp busy_timeout")?;
+    business_commands_table_stamp_with_connection(root, &conn)
+}
+
+fn business_commands_table_stamp_with_connection(
+    root: &Path,
+    conn: &Connection,
+) -> anyhow::Result<BusinessCommandsTableStamp> {
     let Some(table) = latest_rxdb_collection_table(&conn, "business_commands")? else {
         return Ok(empty_business_commands_table_stamp(None));
     };
@@ -130,9 +145,26 @@ pub(super) fn business_commands_table_stamp(
         "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
     };
     let stamp_sql = business_commands_table_stamp_sql(&quoted, deleted_expr, lwt_expr);
-    let (pending_count, latest_pending_lwt): (i64, f64) = conn
+    let (mut pending_count, mut latest_pending_lwt): (i64, f64) = conn
         .query_row(&stamp_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
         .with_context(|| format!("stamp pending business_commands rows in {table}"))?;
+    if let Some(predicate) = rxdb_peer_domain_recovery::retry_predicate(
+        &store::business_os_store_path(root),
+        &conn,
+        &quoted,
+        deleted_expr,
+    )? {
+        let (count, latest): (i64, f64) = conn.query_row(
+            &format!(
+                "SELECT COUNT(*), COALESCE(MAX({lwt_expr}), 0)
+                      FROM {quoted} WHERE {deleted_expr} = 0 AND {predicate}"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        pending_count += count;
+        latest_pending_lwt = latest_pending_lwt.max(latest);
+    }
     Ok(BusinessCommandsTableStamp {
         table_name: Some(table),
         pending_count,
@@ -202,69 +234,80 @@ pub(super) fn empty_business_commands_table_stamp(
 }
 
 pub(super) async fn consume_business_commands_loop(root: PathBuf, database: Arc<RxDatabase>) {
-    // Per-command failure budget. A command that keeps failing to accept
-    // (e.g. a corrupt document) used to abort the WHOLE round via `?`, get
-    // re-sorted to the head on the next 1s tick, and starve every command
-    // behind it — browser-issued commands then appeared to hang forever.
-    let mut accept_failures: HashMap<String, u32> = HashMap::new();
-    let mut last_source_stamp: Option<BusinessCommandsSourceStamp> = None;
-    // Do not run the comparatively expensive invariant sweep before the first
-    // command intake opportunity after peer startup.
-    let mut consecutive_idle_rounds = 0u32;
-    loop {
-        let started = Instant::now();
-        let result: anyhow::Result<usize> = async {
-            if business_commands_source_change(&root, &mut last_source_stamp)
-                .await?
-                .is_some()
-            {
-                let consumed =
-                    consume_pending_business_commands(&root, &database, &mut accept_failures)
-                        .await?;
-                return Ok(consumed);
-            }
+    rxdb_peer_intake_reader::scope(async {
+        // Per-command failure budget. A command that keeps failing to accept
+        // (e.g. a corrupt document) used to abort the WHOLE round via `?`, get
+        // re-sorted to the head on the next 1s tick, and starve every command
+        // behind it — browser-issued commands then appeared to hang forever.
+        let mut accept_failures: HashMap<String, u32> = HashMap::new();
+        let mut last_source_stamp: Option<BusinessCommandsSourceStamp> = None;
+        // Do not run the comparatively expensive invariant sweep before the first
+        // command intake opportunity after peer startup.
+        let mut consecutive_idle_rounds = 0u32;
+        loop {
+            let started = Instant::now();
+            let result: anyhow::Result<usize> = async {
+                if business_commands_source_change(&root, &mut last_source_stamp)
+                    .await?
+                    .is_some()
+                {
+                    let consumed =
+                        consume_pending_business_commands(&root, &database, &mut accept_failures)
+                            .await?;
+                    return Ok(consumed);
+                }
 
-            Ok(0)
-        }
-        .await;
-        record_native_peer_loop_result(&BUSINESS_COMMANDS_LOOP_METRICS, &result, started.elapsed());
-        if schedule_business_command_intake_retry(&mut last_source_stamp, &accept_failures) {
-            // A fully contended SQLite write can reject both acceptance and
-            // the durable failure record. In that case the RxDB source row is
-            // unchanged, so no notifier or source-stamp delta can wake us.
-            // Keep the retry finite and paced instead of sleeping for the
-            // 30-second idle safety poll or spinning at full CPU.
-            consecutive_idle_rounds = 0;
-            let retry_delay_ms = if accept_failures.values().all(|attempt| *attempt == 0) {
-                1_000
-            } else {
-                250
-            };
-            tokio::time::sleep(Duration::from_millis(retry_delay_ms)).await;
-            continue;
-        }
-        match result {
-            Ok(0) => {
-                consecutive_idle_rounds = consecutive_idle_rounds.saturating_add(1);
+                Ok(0)
             }
-            Ok(_) => {
+            .await;
+            record_native_peer_loop_result(
+                &BUSINESS_COMMANDS_LOOP_METRICS,
+                &result,
+                started.elapsed(),
+            );
+            if schedule_business_command_intake_retry(&mut last_source_stamp, &accept_failures) {
+                // A fully contended SQLite write can reject both acceptance and
+                // the durable failure record. In that case the RxDB source row is
+                // unchanged, so no notifier or source-stamp delta can wake us.
+                // Keep the retry finite and paced instead of sleeping for the
+                // 30-second idle safety poll or spinning at full CPU.
                 consecutive_idle_rounds = 0;
-                // Drain an already-arrived burst without imposing the former
-                // one-second post-command sleep.  Once the queue is empty the
-                // table-change notifier below becomes the bounded idle wait.
+                let retry_delay_ms = if accept_failures.values().all(|attempt| *attempt == 0) {
+                    1_000
+                } else {
+                    250
+                };
+                tokio::time::sleep(Duration::from_millis(retry_delay_ms)).await;
                 continue;
             }
-            Err(err) => {
-                consecutive_idle_rounds = 0;
-                eprintln!("[business-os] native rxdb command consumer failed: {err:#}");
+            match result {
+                Ok(0) => {
+                    consecutive_idle_rounds = consecutive_idle_rounds.saturating_add(1);
+                }
+                Ok(_) => {
+                    consecutive_idle_rounds = 0;
+                    // Drain an already-arrived burst without imposing the former
+                    // one-second post-command sleep.  Once the queue is empty the
+                    // table-change notifier below becomes the bounded idle wait.
+                    continue;
+                }
+                Err(err) => {
+                    consecutive_idle_rounds = 0;
+                    eprintln!("[business-os] native rxdb command consumer failed: {err:#}");
+                }
             }
-        }
-        // The current empty result has already incremented the counter. Enter
-        // the event-driven wait immediately; its timeout is only a bounded
-        // fallback when the SQLite notifier is unavailable.
-        wait_for_business_command_wake(&root, last_source_stamp.as_ref(), consecutive_idle_rounds)
+            // The current empty result has already incremented the counter. Enter
+            // the event-driven wait immediately; its timeout is only a bounded
+            // fallback when the SQLite notifier is unavailable.
+            wait_for_business_command_wake(
+                &root,
+                last_source_stamp.as_ref(),
+                consecutive_idle_rounds,
+            )
             .await;
-    }
+        }
+    })
+    .await;
 }
 
 pub(super) fn schedule_business_command_intake_retry(
@@ -334,26 +377,8 @@ pub(super) async fn wait_for_business_command_wake(
 /// How often a single command may fail `accept_pending_business_command`
 /// before it is marked `failed` and dropped from the pending queue.
 pub(super) const BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET: u32 = 5;
-pub(super) const BUSINESS_COMMAND_RETRY_CANDIDATE_SQL: &str = r#"(
-  json_extract(data, '$.status') IN ('pending_sync', 'waiting_dependencies')
-  OR (
-    (
-      json_extract(data, '$.status') = 'accepted'
-      OR (
-        json_extract(data, '$.status') = 'failed'
-        AND COALESCE(json_extract(data, '$.terminal_status'), 'none') = 'none'
-      )
-    )
-    AND json_extract(data, '$.command_type') IN (
-      'external_sql.sync.refresh',
-      'external_sql.write',
-      'outbound.research_source.generate_adapter',
-      'outbound.research_source.test',
-      'outbound.research_source.auth_assist',
-      'web_stack.person_research'
-    )
-  )
-)"#;
+#[cfg(test)]
+pub(super) use super::rxdb_peer_domain_recovery::BUSINESS_COMMAND_RETRY_CANDIDATE_SQL;
 
 pub(super) async fn consume_pending_business_commands(
     root: &Path,
@@ -525,6 +550,17 @@ pub(super) async fn consume_pending_business_commands(
                     }
                 }
                 if exhausted {
+                    if persisted_failure
+                        .get("domain_effect_applied")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    {
+                        // Keep the existing paced retry alive without projecting
+                        // a new accepted/failed document on every failed delivery.
+                        // Zero selects the existing one-second replication wait.
+                        accept_failures.insert(command_id.clone(), 0);
+                        continue;
+                    }
                     COMMAND_PLANE_METRICS
                         .exhausted_total
                         .fetch_add(1, Ordering::Relaxed);
@@ -592,11 +628,14 @@ pub(super) async fn pending_business_command_documents(
     limit: usize,
 ) -> anyhow::Result<Vec<Value>> {
     let root = root.to_path_buf();
-    tokio::task::spawn_blocking(move || pending_business_command_documents_sync(&root, limit))
-        .await
-        .context("join pending business_commands SQLite load")?
+    let query_root = root.clone();
+    rxdb_peer_intake_reader::read(&root, Vec::new(), move |conn| {
+        pending_business_command_documents_with_connection(&query_root, limit, conn)
+    })
+    .await
 }
 
+#[cfg(test)]
 pub(super) fn pending_business_command_documents_sync(
     root: &Path,
     limit: usize,
@@ -607,7 +646,9 @@ pub(super) fn pending_business_command_documents_sync(
     }
     let conn = Connection::open_with_flags(
         &path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
     )
     .with_context(|| {
         format!(
@@ -617,6 +658,14 @@ pub(super) fn pending_business_command_documents_sync(
     })?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
         .context("configure pending business command busy_timeout")?;
+    pending_business_command_documents_with_connection(root, limit, &conn)
+}
+
+fn pending_business_command_documents_with_connection(
+    root: &Path,
+    limit: usize,
+    conn: &Connection,
+) -> anyhow::Result<Vec<Value>> {
     let Some(table) = latest_rxdb_collection_table(&conn, "business_commands")? else {
         return Ok(Vec::new());
     };
@@ -632,6 +681,12 @@ pub(super) fn pending_business_command_documents_sync(
         "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
     };
     let oldest_limit = limit.saturating_add(1) / 2;
+    let receipt_predicate = rxdb_peer_domain_recovery::retry_predicate(
+        &store::business_os_store_path(root),
+        &conn,
+        &quoted,
+        deleted_expr,
+    )?;
     let newest_limit = limit.saturating_sub(oldest_limit);
     let mut documents = Vec::new();
     let mut seen_ids = HashSet::new();
@@ -640,13 +695,12 @@ pub(super) fn pending_business_command_documents_sync(
             continue;
         }
         let mut stmt = conn
-            .prepare(&format!(
-                "SELECT data
-                 FROM {quoted}
-                 WHERE {deleted_expr} = 0
-                   AND {BUSINESS_COMMAND_RETRY_CANDIDATE_SQL}
-                 ORDER BY {lwt_expr} {direction}
-                 LIMIT ?1"
+            .prepare(&rxdb_peer_domain_recovery::pending_query(
+                &quoted,
+                deleted_expr,
+                lwt_expr,
+                direction,
+                receipt_predicate.as_deref(),
             ))
             .with_context(|| {
                 format!("prepare pending business_commands {direction} scan in {table}")
@@ -699,7 +753,7 @@ fn business_command_store_error_is_permanent(err: &anyhow::Error) -> bool {
 /// Die Felder, die einen Befehl endgueltig terminal machen.
 ///
 /// Es reicht NICHT, `status` auf "failed" zu setzen:
-/// [`BUSINESS_COMMAND_RETRY_CANDIDATE_SQL`] laesst ein `failed`-Dokument
+/// Die Intake-Abfrage laesst ein `failed`-Dokument
 /// weiterhin als Wiederholungskandidat gelten, solange `terminal_status` fehlt.
 /// Auf einer Produktivinstanz drehten deshalb zwei ueber 500 Stunden alte
 /// Befehle rund 20-mal pro Sekunde durch die Verjaehrung, und der Dienst
@@ -758,6 +812,18 @@ pub(super) async fn accept_pending_business_command(
     database: &Arc<RxDatabase>,
     document: Value,
 ) -> anyhow::Result<PendingBusinessCommandIntakeOutcome> {
+    // Reconcile from durable evidence before interpreting browser-authored
+    // command type, age or payload. This branch cannot invoke a handler.
+    let recovery_root = root.to_path_buf();
+    let recovery_id = command_id_from_document(&document)?;
+    let recovered = tokio::task::spawn_blocking(move || {
+        super::command_plane::recover_applied_domain_effect_for_intake(&recovery_root, &recovery_id)
+    })
+    .await
+    .context("join applied domain effect recovery")??;
+    if recovered.is_some() {
+        return Ok(PendingBusinessCommandIntakeOutcome::Terminalized);
+    }
     // Verjaehrung VOR jeder Ausfuehrung — auch vor Browser-Kommandos.
     if let Some(created_at) = business_command_created_at_ms(&document) {
         let age = (now_ms() as u64).saturating_sub(created_at);
@@ -812,12 +878,38 @@ pub(super) async fn accept_pending_business_command(
     // its client_context (incl. actor) is attacker-controllable, so it is tagged
     // ReplicatedPeer and cannot authorize a privileged role without a verified
     // capability token (see store::rxdb_session_from_command).
+    let intake_probe = document_for_store
+        .pointer("/client_context/command_timing_probe")
+        .and_then(Value::as_bool)
+        .filter(|requested| *requested)
+        .map(|_| {
+            (
+                Instant::now(),
+                command_id_from_document(&document_for_store).ok(),
+            )
+        });
     let accepted_result = tokio::task::spawn_blocking(move || {
-        store::accept_rxdb_business_command_with_origin(
+        let queue_wait_ms = intake_probe
+            .as_ref()
+            .map(|(started, _)| started.elapsed().as_secs_f64() * 1_000.0);
+        let result = store::accept_rxdb_business_command_with_origin(
             &accept_root,
             document_for_store,
             store::CommandOrigin::ReplicatedPeer,
-        )
+        );
+        if let Some(((started, command_id), queue_wait_ms)) = intake_probe.zip(queue_wait_ms) {
+            eprintln!(
+                "command_intake_queue_sample={}",
+                json!({
+                    "command_id": command_id,
+                    "queue_wait_ms": queue_wait_ms,
+                    "store_execution_ms":
+                        started.elapsed().as_secs_f64() * 1_000.0 - queue_wait_ms,
+                    "ok": result.is_ok(),
+                })
+            );
+        }
+        result
     })
     .await;
 
@@ -1016,7 +1108,7 @@ pub(super) async fn accept_pending_business_command(
     if next.get("contract_version").and_then(Value::as_u64) == Some(2) {
         let persist_root = root.clone();
         let persisted = next.clone();
-        tokio::task::spawn_blocking(move || {
+        next = tokio::task::spawn_blocking(move || {
             store::persist_business_command_lifecycle_projection(&persist_root, &persisted)
         })
         .await

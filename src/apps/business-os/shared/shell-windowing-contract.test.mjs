@@ -167,7 +167,8 @@ test('the tenant shell resolves every windowed app to shell v2', () => {
   assert.match(appSource, /visualRect\.left \+ \(visualRect\.width - width\) \/ 2/);
   assert.match(appCss, /\.desktop-icon\.is-app-open:hover \.desktop-icon-glyph[\s\S]*?transform:\s*none !important/);
   assert.match(appSource, /shellContract:\s*shell\?\.contract \|\| 'v2'/);
-  assert.match(appSource, /iconAsset:\s*String\(operatorIcon\?\.asset \|\| mod\?\.layout\?\.icon_asset/);
+  assert.match(appSource, /function desktopAppDescriptorForModule\(mod\) \{[\s\S]*?const selectedIcon = operatorIconFor\(mod\.id\) \|\| grokShellIconFor\(mod\.id\);/);
+  assert.match(appSource, /function desktopAppDescriptorForModule\(mod\) \{[\s\S]*?iconAsset:\s*String\(selectedIcon\?\.asset \|\| mod\?\.layout\?\.icon_asset \|\| ''\)\.trim\(\)/);
   assert.match(appSource, /shellContract:\s*'v2',[\s\S]*?iconAnchorRect:\s*\(\) => desktopIconAnchorRect\(entry\.id\)/);
   assert.match(appSource, /trigger\.className = 'shell-v2-window-title-fallback'/);
   assert.match(windowManagerSource, /options\.shellContract === 'v1' \? 'v1' : 'v2'/);
@@ -225,7 +226,7 @@ test('legacy, runtime, and imported app records cannot opt back into full-worksp
   }
 });
 
-test('the shared shell keeps v1 chrome while v2 exposes icon drag, four corners and close only', () => {
+test('the shared shell keeps v1 chrome while v2 exposes icon drag, layout menu and close', () => {
   assert.deepEqual([...SHELL_WINDOW_CONTROL_ACTIONS].sort(), ['close', 'maximize', 'minimize']);
   assert.equal(SHELL_WINDOW_CHROME_VERSION, 'shared-v1');
   assert.equal(SHELL_WINDOW_V2_CHROME_VERSION, 'shared-v2');
@@ -241,7 +242,10 @@ test('the shared shell keeps v1 chrome while v2 exposes icon drag, four corners 
   assert.match(windowManagerSource, /macos: \['close', 'minimize', 'maximize'\]/);
   assert.match(windowManagerSource, /assertShellWindowChrome\(winEl, shellContract\)/);
   assert.match(windowManagerSource, /assertShellWindowChrome\(win\.element, win\.shellContract\)/);
-  assert.match(windowManagerSource, /shellContract === 'v2'\s*\? \['close'\]/);
+  assert.match(windowManagerSource, /shellContract === 'v2'\s*\? \['layout', 'close'\]/);
+  assert.match(windowManagerSource, /data-window-layout-menu/);
+  assert.match(windowManagerSource, /V2_LAYOUT_OPTIONS/);
+  assert.match(windowManagerSource, /allowWorkspaceSnap: false/);
   assert.match(windowManagerSource, /V2_RESIZE_HANDLES = \['nw', 'ne', 'sw', 'se'\]/);
   assert.match(windowManagerSource, /const finishDestroy = \(\) => \{[\s\S]*?focusNextAfter\(id\);[\s\S]*?window:closed/);
   assert.match(windowManagerSource, /btn\.type = 'button'/);
@@ -274,8 +278,16 @@ test('all app launch routes converge on the shared window manager', () => {
   assert.match(appSource, /state\.windowManager\.create\(\{/);
   assert.match(appSource, /ownerId: `desktop-app:\$\{entry\.id\}`/);
   assert.match(appSource, /ownerId: `desktop-app:\$\{mod\.id\}`/);
-  for (const staticAppId of ['explorer', 'file-viewer']) {
-    assert.match(appSource, new RegExp(`id: '${staticAppId}'`));
+  // explorer and file-viewer used to be shell-owned static desktop apps; the
+  // module port (4ab89e374) turned them into real windowed modules, so they no
+  // longer appear as `id: '<app>'` literals in app.js. What must hold is that
+  // they still reach the desktop through the shared window manager: a windowed
+  // v2 manifest in the generated catalog, launched by `openWindowedModule`.
+  for (const portedAppId of ['explorer', 'file-viewer']) {
+    assert.match(appSource, new RegExp(`"id": "${portedAppId}"`), `${portedAppId} must stay in the generated offline catalog`);
+    const manifest = JSON.parse(readFileSync(new URL(`../modules/${portedAppId}/module.json`, import.meta.url), 'utf8'));
+    assert.equal(manifest?.layout?.shell, 'windowed', `${portedAppId} must launch as a window`);
+    assert.equal(manifest?.layout?.shell_contract, 'v2', `${portedAppId} must carry the v2 shell contract`);
   }
   assert.doesNotMatch(appSource, /id:\s*'code-editor',[\s\S]*?title:\s*'Source Editor'/);
   assert.match(appSource, /mountIntegratedModuleSource[\s\S]*?desktop-apps\/code-editor\/app\.js/);

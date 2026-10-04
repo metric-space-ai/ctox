@@ -29,6 +29,12 @@ const LEGACY_FULL_WORKSPACE_MODULES = new Set([
 const SHELL_SURFACE_MODULES = new Set(['desktop']);
 
 const CONTEXTMENU_HANDLER = /(?:addEventListener\s*\(\s*['"]contextmenu['"]|\.oncontextmenu\s*=)/;
+// What the freeze forbids is a module building its own menu, not a module
+// opening the shell's. A handler that routes through the host-provided
+// `ctx.contextMenu` is the approved contract, so it is not a debt — the plain
+// handler grep flagged `modules/explorer/index.js` for following it and left CI
+// red on main (found 09.09.2026).
+const SHELL_CONTEXTMENU_DELEGATION = /(?:ctx\.contextMenu|contextMenu\.show\s*\(|createContextMenu\s*\()/;
 const offenders = [];
 const observedLegacyMenus = [];
 
@@ -37,11 +43,12 @@ for (const file of walk(modulesRoot)) {
   const source = readFileSync(file, 'utf8');
   if (!CONTEXTMENU_HANDLER.test(source)) continue;
   const rel = relative(businessOsRoot, file).replaceAll('\\', '/');
-  if (!LEGACY_CONTEXTMENU_FILES.has(rel)) {
-    offenders.push(`new module-local contextmenu handler: ${rel}`);
-  } else {
+  if (LEGACY_CONTEXTMENU_FILES.has(rel)) {
     observedLegacyMenus.push(rel);
+    continue;
   }
+  if (SHELL_CONTEXTMENU_DELEGATION.test(source)) continue;
+  offenders.push(`new module-local contextmenu handler: ${rel}`);
 }
 
 for (const entry of readdirSync(modulesRoot, { withFileTypes: true })) {

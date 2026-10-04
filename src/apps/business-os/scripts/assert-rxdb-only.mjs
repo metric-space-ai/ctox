@@ -416,7 +416,7 @@ function assertLoginDoesNotDefaultToAdmin() {
     !launchContext.includes('const pairedConfig = await readBusinessOsLaunchConfig()')
     || !launchContext.includes('window.CTOX_BUSINESS_OS_CONFIG = pairedConfig')
     || launchContext.indexOf('const pairedConfig = await readBusinessOsLaunchConfig()')
-      > launchContext.indexOf("fetchBusinessOsControlJson('/api/business-os/launch-context')")
+      > launchContext.indexOf("fetchBusinessOsControlJson('/api/business-os/launch-context'")
   ) {
     offenders.push('src/apps/business-os/app.js: static Workjet shells must resolve URL pairing before the hosted launch-context fallback');
   }

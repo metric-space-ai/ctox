@@ -72,6 +72,30 @@ function knownRole(value) {
   return text ? normalizeRole(text) : '';
 }
 
+// Mirrors only the native role-wide denials in business_os::policy. Native
+// actor, grant and scope checks remain authoritative for every collection.
+const ADMIN_ONLY_COLLECTIONS = new Set([
+  'business_users',
+  'business_module_acl',
+  'business_credentials',
+  'business_module_source_files',
+  'business_module_commits',
+  'business_module_source_blob_chunks',
+  'ctox_runtime_settings',
+]);
+const USER_PRIVATE_COCKPIT_COLLECTIONS = new Set([
+  'ctox_harness_events',
+  'ctox_runs',
+  'ctox_crew_learnings',
+]);
+
+export function roleMayReadCollection(role, collection) {
+  const normalizedRole = normalizeRole(role);
+  if (normalizedRole === 'chef' || normalizedRole === 'admin') return true;
+  if (ADMIN_ONLY_COLLECTIONS.has(collection)) return false;
+  return normalizedRole !== 'user' || !USER_PRIVATE_COCKPIT_COLLECTIONS.has(collection);
+}
+
 function governanceRoleForActor(governance = null, userId = '') {
   const source = governance?.governance || governance || {};
   const governanceUserId = String(source.user_id || '').trim();

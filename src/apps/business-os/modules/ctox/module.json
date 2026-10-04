@@ -4,6 +4,7 @@
   "description": "Deine Crew, ihre Aufgaben, Fortschritte und Ergebnisse.",
   "entry": "modules/ctox/index.html",
   "collections": [
+    "communication_accounts",
     "business_commands",
     "business_chats",
     "ctox_runtime_settings",
@@ -22,6 +23,9 @@
     "business_module_commits",
     "business_module_source_blob_chunks",
     "workjet_projects",
+    "workjet_project_chats",
+    "workjet_project_workers",
+    "workjet_worker_profile_bindings",
     "workjet_working_copies",
     "workjet_computers",
     "workjet_sessions",

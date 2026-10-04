@@ -653,7 +653,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
     let mut request = request;
     if let Some(mut fields) = handler.document_fields_for_peer(&peer, &request.collection_name) {
         if !super::webrtc_types::readable_query_fields(&request.query, &fields) {
-            registry.release(&peer_identity, &request.request_id);
+            registry.release(&connection_identity, &request.request_id);
             send_error(
                 handler.as_ref(),
                 &peer,
@@ -2480,6 +2480,77 @@ mod tests {
             documents[0].get("id").and_then(Value::as_str),
             Some("doc-0002")
         );
+    }
+
+    #[tokio::test]
+    async fn denied_fields_release_only_the_current_connection_query_slot() {
+        let collection = seeded_collection(2).await;
+        let registry = authorized_query_registry(1);
+        registry.register(collection);
+        // An older generation may still finish draining the same request id.
+        // Denying a query on its replacement must release only the new slot.
+        let old_cancel = registry.try_acquire("p1@6", "private").unwrap();
+        let mut native = MockHandler::new();
+        native.generation = Some(7);
+        let handler = Arc::new(native);
+        *handler.document_fields.lock() = Some(vec!["id".into()]);
+        let mut denied = make_request("private", "business_records", 0);
+        denied.params[0]["query"] = json!({"selector":{"private_profile":"secret"}});
+        run_query_fetch(
+            Arc::clone(&registry),
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            denied,
+        )
+        .await
+        .unwrap();
+        assert!(error_code_emitted(
+            &handler.sent.lock(),
+            QUERY_FETCH_ERROR_UNAUTHORIZED
+        ));
+        assert_eq!(
+            registry.count_inflight(),
+            1,
+            "only the older generation keeps a slot"
+        );
+        assert!(!old_cancel.load(Ordering::SeqCst));
+
+        handler.sent.lock().clear();
+        let mut allowed = make_request("public", "business_records", 0);
+        allowed.params[0]["query"] = json!({"selector":{},"sort":[{"id":"asc"}]});
+        run_query_fetch(
+            Arc::clone(&registry),
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            allowed,
+        )
+        .await
+        .unwrap();
+        let frames = handler.sent.lock();
+        assert!(!error_code_emitted(&frames, QUERY_FETCH_ERROR_STREAM_LIMIT));
+        let documents = frames
+            .iter()
+            .filter_map(|frame| match frame {
+                WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK => {
+                    serde_json::from_value::<QueryFetchChunk>(message.params[0].clone()).ok()
+                }
+                _ => None,
+            })
+            .flat_map(|chunk| decode_chunk_documents(&chunk).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            documents.len(),
+            2,
+            "an allowed query must still use the same connection"
+        );
+        assert!(documents
+            .iter()
+            .all(|doc| doc.get("private_profile").is_none()));
+        assert_eq!(registry.count_inflight(), 1);
+        registry.release("p1@6", "private");
+        assert_eq!(registry.count_inflight(), 0);
     }
 
     #[tokio::test]

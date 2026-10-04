@@ -31,7 +31,7 @@ pub async fn is_master_in_webrtc_replication(
 /// answers travel through the chunked frame transport whose own ack timeouts
 /// (30s per window) bound a genuinely wedged peer well below this. The
 /// browser side uses 15s/60s request timeouts, so 60s never fails first.
-const REQUEST_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const REQUEST_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 // ref: rxdb/src/plugins/replication-webrtc/webrtc-helper.ts:37-54
 /// Send a message to the peer and await the answer. The answer is identified by

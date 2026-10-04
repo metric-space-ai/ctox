@@ -63,6 +63,15 @@ static RUSTLS_CRYPTO_PROVIDER: Once = Once::new();
 type WsWrite = SplitSink<WsStream, Message>;
 type WsRead = SplitStream<WsStream>;
 
+/// Test-only local WebSocket listener shared by signaling and responder
+/// regressions. Production signaling remains an outbound WebSocket client.
+#[cfg(test)]
+pub(super) async fn bind_test_signaling_listener() -> tokio::net::TcpListener {
+    tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind local test signaling listener")
+}
+
 pub struct SignalingClient {
     /// URL of the initial connect (identification/logging only — reconnects
     /// ask `url_provider` for a fresh URL).
@@ -771,7 +780,7 @@ mod tests {
     /// server re-broadcasts the peer list and the connection handler can rebuild.
     #[tokio::test]
     async fn signaling_client_reconnects_and_rejoins_after_socket_drop() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = bind_test_signaling_listener().await;
         let addr = listener.local_addr().unwrap();
         let conns = Arc::new(AtomicUsize::new(0));
         let joins = Arc::new(AtomicUsize::new(0));
@@ -967,11 +976,11 @@ mod tests {
     async fn signaling_client_fails_over_across_url_candidates() {
         // Dead candidate: bind a port, then close the listener so connects
         // are refused fast.
-        let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead = bind_test_signaling_listener().await;
         let dead_addr = dead.local_addr().unwrap();
         drop(dead);
 
-        let live = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let live = bind_test_signaling_listener().await;
         let live_addr = live.local_addr().unwrap();
         let joins = Arc::new(AtomicUsize::new(0));
 
@@ -1015,9 +1024,9 @@ mod tests {
     /// dead one forever.
     #[tokio::test]
     async fn signaling_client_rotates_to_next_candidate_when_current_dies() {
-        let first = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first = bind_test_signaling_listener().await;
         let first_addr = first.local_addr().unwrap();
-        let second = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second = bind_test_signaling_listener().await;
         let second_addr = second.local_addr().unwrap();
         let joins = Arc::new(AtomicUsize::new(0));
 

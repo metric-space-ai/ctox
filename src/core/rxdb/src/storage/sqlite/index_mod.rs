@@ -40,11 +40,14 @@ pub async fn create_storage_instance(
         )?;
     }
     let database_path = storage.settings.database_path.clone();
+    let (point_reader, change_feed_reader) = storage.collection_readers();
     Ok(Arc::new(RxStorageInstanceSqlite::new(
         connection,
         params,
         table_name,
         database_path,
+        point_reader,
+        change_feed_reader,
     )))
 }
 
@@ -78,11 +81,14 @@ impl RxStorage for RxStorageSqlite {
             )?;
         }
         let database_path = self.settings.database_path.clone();
+        let (point_reader, change_feed_reader) = self.collection_readers();
         Ok(Arc::new(RxStorageInstanceSqlite::new(
             connection,
             params,
             table_name,
             database_path,
+            point_reader,
+            change_feed_reader,
         )))
     }
 }

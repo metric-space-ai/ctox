@@ -49,10 +49,11 @@ pub(crate) use outbound_review::{
     ensure_founder_reply_deliverables_present, is_reviewed_external_chat_channel,
     prepare_reviewed_external_chat_reply, prepare_reviewed_founder_reply,
     record_and_send_external_chat_escalation_reply, record_and_send_founder_escalation_reply,
-    record_external_chat_review_approval, record_founder_outbound_review_approval,
-    record_founder_reply_review_approval, required_founder_reply_deliverables,
-    reviewed_send_result_has_durable_outbound_artifact, send_reviewed_external_chat_action,
-    send_reviewed_founder_outbound_action, terminal_founder_outbound_artifact_count,
+    record_and_send_policy_report_email, record_external_chat_review_approval,
+    record_founder_outbound_review_approval, record_founder_reply_review_approval,
+    required_founder_reply_deliverables, reviewed_send_result_has_durable_outbound_artifact,
+    send_reviewed_external_chat_action, send_reviewed_founder_outbound_action,
+    terminal_founder_outbound_artifact_count, PolicyReportEmail,
 };
 pub(crate) use outbound_review::{ensure_open_routing_rows_once, ensure_schema_once};
 pub use outbound_review::{
@@ -67,20 +68,22 @@ use command_saga::transition_business_command_for_task_in_transaction;
 mod route_status;
 pub(crate) use command_saga::{
     audit_and_migrate_business_command_storage, business_command_core_diagnostics,
-    business_command_projection, business_command_retention_maintenance,
-    business_command_saga_pending_compensation_steps, business_command_saga_status,
-    business_command_saga_step_evidence, claim_business_command_saga_step,
-    claim_business_command_waiting_dependencies, claim_business_command_with_queue,
-    claim_business_control_command, complete_business_command_saga_step,
-    complete_business_control_command, fail_business_command_saga_step, inspect_business_command,
-    inspect_business_command_for_task, mark_business_command_outbox_delivered,
+    business_command_projection, business_command_projection_from_conn,
+    business_command_retention_maintenance, business_command_saga_pending_compensation_steps,
+    business_command_saga_status, business_command_saga_step_evidence,
+    claim_business_command_saga_step, claim_business_command_waiting_dependencies,
+    claim_business_command_with_queue, claim_business_control_command,
+    complete_business_command_saga_step, complete_business_control_command,
+    fail_business_command_saga_step, inspect_business_command, inspect_business_command_for_task,
+    inspect_business_command_for_task_from_conn, mark_business_command_outbox_delivered,
     mark_business_command_outbox_failed, pending_business_command_outbox,
     persist_business_command_worker_result, progress_business_control_command,
-    reconcile_business_command_invariants, record_business_command_intake_failure,
-    record_business_command_review, record_business_command_saga_step_evidence,
-    resolve_business_command_intake_failures, retry_failed_app_create_business_command,
-    runtime_business_command_action_snapshot, start_business_command_saga,
-    start_runtime_business_command_saga, transition_business_command_for_task,
+    reconcile_business_command_invariants, record_business_command_applied_effect_delivery_failure,
+    record_business_command_intake_failure, record_business_command_review,
+    record_business_command_saga_step_evidence, resolve_business_command_intake_failures,
+    retry_failed_app_create_business_command, runtime_business_command_action_snapshot,
+    start_business_command_saga, start_runtime_business_command_saga,
+    transition_business_command_for_task,
 };
 pub(crate) use route_status::QueueRouteStatus;
 
@@ -433,6 +436,7 @@ enum TerminalPolicyGrantKind {
     AppSecPipelineStageCompleted,
     MeetingScheduled,
     MeetingPassiveMention,
+    ReviewedFounderReplySent,
     HistoricalAutoSubmittedInbound,
     SystemProbeInbound,
     RoutingBackfillNonWork,
@@ -465,6 +469,10 @@ impl TerminalPolicyGrant {
         Self(TerminalPolicyGrantKind::MeetingPassiveMention)
     }
 
+    fn reviewed_founder_reply_sent() -> Self {
+        Self(TerminalPolicyGrantKind::ReviewedFounderReplySent)
+    }
+
     fn historical_auto_submitted_inbound() -> Self {
         Self(TerminalPolicyGrantKind::HistoricalAutoSubmittedInbound)
     }
@@ -493,6 +501,9 @@ impl TerminalPolicyGrant {
             }
             TerminalPolicyGrantKind::MeetingPassiveMention => {
                 "policy:meeting-passive-inbound-terminal-no-send"
+            }
+            TerminalPolicyGrantKind::ReviewedFounderReplySent => {
+                "policy:exact-reviewed-founder-reply-sent"
             }
             TerminalPolicyGrantKind::HistoricalAutoSubmittedInbound => {
                 "policy:auto-submitted-inbound-terminal-no-send"
@@ -595,8 +606,17 @@ pub fn sync_prompt_identity(root: &Path, settings: &BTreeMap<String, String>) ->
             "smtpPort": settings.get("CTO_EMAIL_SMTP_PORT").map(|value| value.trim()).unwrap_or(""),
             "graphUser": settings.get("CTO_EMAIL_GRAPH_USER").map(|value| value.trim()).unwrap_or(""),
             "ewsUrl": settings.get("CTO_EMAIL_EWS_URL").map(|value| value.trim()).unwrap_or(""),
+            "owaUrl": settings.get("CTO_EMAIL_OWA_URL").map(|value| value.trim()).unwrap_or(""),
             "ewsAuthType": settings.get("CTO_EMAIL_EWS_AUTH_TYPE").map(|value| value.trim()).unwrap_or(""),
             "ewsUsername": settings.get("CTO_EMAIL_EWS_USERNAME").map(|value| value.trim()).unwrap_or(""),
+            "ewsVersion": settings.get("CTO_EMAIL_EWS_VERSION").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncServer": settings.get("CTO_EMAIL_ACTIVESYNC_SERVER").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncUsername": settings.get("CTO_EMAIL_ACTIVESYNC_USERNAME").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncPath": settings.get("CTO_EMAIL_ACTIVESYNC_PATH").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncDeviceId": settings.get("CTO_EMAIL_ACTIVESYNC_DEVICE_ID").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncDeviceType": settings.get("CTO_EMAIL_ACTIVESYNC_DEVICE_TYPE").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncProtocolVersion": settings.get("CTO_EMAIL_ACTIVESYNC_PROTOCOL_VERSION").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncPolicyKey": settings.get("CTO_EMAIL_ACTIVESYNC_POLICY_KEY").map(|value| value.trim()).unwrap_or(""),
         });
         ensure_account(
             &mut conn,
@@ -1846,6 +1866,10 @@ fn load_strategic_directive_authority_events(
 pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
+        "email-account" => print_json(&crate::communication::email_account_cli::run(
+            root,
+            &args[1..],
+        )?),
         "init" => {
             let db_path = resolve_db_path(root, find_flag_value(args, "--db"));
             let conn = open_channel_db(&db_path)?;
@@ -2031,7 +2055,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send] [--reviewed-communication-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
+                "usage:\n  ctox channel email-account list | upsert --stdin | sync --address <address> [--limit <1..100>]\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] [--reason <text>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send] [--reviewed-communication-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
             )
         }
     }
@@ -2413,6 +2437,50 @@ pub fn founder_reply_sent_after_review_for_message(
     founder_reply_sent_after_review(&conn, inbound_message_key)
 }
 
+/// Close a stalled founder inbound only when its own reviewed reply has a
+/// durable accepted-send receipt. The proof check, terminal transition and
+/// queue projection commit together, including recovery from a failed route.
+pub(crate) fn handle_inbound_after_reviewed_founder_reply(
+    root: &Path,
+    inbound_message_key: &str,
+) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    attach_queue_projection_store(root, &conn)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    anyhow::ensure!(
+        founder_reply_sent_after_review(&tx, inbound_message_key)?,
+        "no exact reviewed founder reply was sent for {inbound_message_key}"
+    );
+    let message_keys = [inbound_message_key.to_string()];
+    guard_founder_handled_ack(root, &tx, &message_keys, "handled")?;
+    if current_queue_route_status(&tx, inbound_message_key)? == "handled" {
+        tx.commit()?;
+        return Ok(0);
+    }
+    let updated = ack_messages_in_transaction(
+        &tx,
+        &message_keys,
+        "handled",
+        None,
+        Some("exact_reviewed_founder_reply_sent"),
+        Some(TerminalPolicyGrant::reviewed_founder_reply_sent()),
+    )?;
+    if updated > 0 {
+        tx.execute(
+            "UPDATE communication_routing_state
+             SET failure_class=NULL, retry_not_before=NULL, hold_reason=NULL,
+                 wait_entity_type=NULL, wait_entity_id=NULL, lease_expires_at=NULL
+             WHERE message_key=?1",
+            [inbound_message_key],
+        )?;
+    }
+    let tasks = load_queue_projection_tasks(&tx, &message_keys)?;
+    refresh_queue_projection_tasks(root, &tx, &tasks)?;
+    tx.commit()?;
+    Ok(updated)
+}
+
 /// Whether any inbound communication message is still pending or leased
 /// (i.e. not acked as handled/blocked). Used by the mission watchdog to
 /// avoid queuing redundant continuation tasks when real work is already
@@ -2500,6 +2568,121 @@ pub fn ack_leased_messages_for_attempt(
         "UPDATE worker_attempt_finalizations
          SET queue_effects_applied_at = ?2, updated_at = ?2
          WHERE attempt_id = ?1 AND queue_effects_applied_at IS NULL",
+        params![attempt_id, now_iso_string()],
+    )?;
+    let tasks = load_queue_projection_tasks(&tx, message_keys)?;
+    refresh_queue_projection_tasks(root, &tx, &tasks)?;
+    tx.commit()?;
+    Ok(updated)
+}
+
+/// Stop a deterministic plan-finalization failure even when this same attempt
+/// already applied a nonterminal hold. Never clear/reuse its effect marker.
+/// The current lease, plan revision and command owner must still match.
+pub(crate) fn fail_incomplete_plan_for_attempt(
+    root: &Path,
+    attempt_id: &str,
+    message_keys: &[String],
+    lease_worker_id: Option<&str>,
+    incomplete: &crate::context::lcm::IncompleteTaskExecutionPlan,
+    reason: &str,
+) -> Result<usize> {
+    anyhow::ensure!(
+        message_keys.len() == 1,
+        "plan failure requires one command task"
+    );
+    anyhow::ensure!(!reason.trim().is_empty(), "plan failure requires a reason");
+    let task_id = &message_keys[0];
+    let mut conn = open_channel_db(&resolve_db_path(root, None))?;
+    attach_queue_projection_store(root, &conn)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let owns_attempt: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM worker_attempt_finalizations a
+         WHERE a.attempt_id=?1 AND a.work_key=?2 AND a.agent_outcome='Success'
+           AND a.effects_completed=0
+           AND NOT EXISTS(SELECT 1 FROM worker_attempt_finalizations newer
+             WHERE newer.work_key=a.work_key AND newer.rowid>a.rowid))",
+        params![attempt_id, incomplete.work_key],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        owns_attempt,
+        "plan failure attempt no longer owns this work"
+    );
+    let (command_id, phase, terminal): (String, String, String) = tx.query_row(
+        "SELECT a.command_id,a.execution_phase,a.terminal_status
+         FROM business_command_task_links l
+         JOIN business_command_aggregates a ON a.command_id=l.command_id
+         WHERE l.task_id=?1 AND a.command_type='business_os.chat.task'",
+        [task_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if phase == "terminal" {
+        // The operator or another terminal owner won. This also covers a
+        // crash after our own committed failure, before effects_completed.
+        tx.commit()?;
+        return Ok(0);
+    }
+    anyhow::ensure!(terminal == "none", "command has a different terminal owner");
+    let owns_plan: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM task_execution_plan_revisions
+         WHERE work_key=?1 AND revision=?2 AND task_id=?3 AND command_id=?4
+           AND attempt_id=?5 AND completed_steps=?6 AND total_steps=?7
+           AND revision=(SELECT MAX(revision) FROM task_execution_plan_revisions WHERE work_key=?1))",
+        params![incomplete.work_key, incomplete.revision, task_id, command_id,
+            attempt_id, incomplete.completed, incomplete.total],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        owns_plan,
+        "plan failure evidence no longer owns the current revision"
+    );
+    let worker_id = lease_worker_id.context("plan failure has no owned queue lease")?;
+    let owns_lease: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_routing_state
+         WHERE message_key=?1 AND route_status='leased' AND lease_worker_id=?2)",
+        params![task_id, worker_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(owns_lease, "plan failure queue lease changed owner");
+    // All failure evidence is fenced together, before any new owner or plan
+    // revision can interleave. Reuse the canonical review/outbox writer.
+    anyhow::ensure!(
+        command_saga::record_business_command_review_in_transaction(
+            &tx,
+            task_id,
+            "failed",
+            "failed",
+            &serde_json::json!({
+                "disposition": "terminal-queue-failure",
+                "failure_class": "incomplete_execution_plan",
+                "attempt_id": attempt_id,
+                "work_key": incomplete.work_key,
+                "plan_revision": incomplete.revision,
+                "completed_steps": incomplete.completed,
+                "total_steps": incomplete.total,
+                "summary": reason,
+            }),
+        )?,
+        "plan failure lost its command/task link"
+    );
+    tx.execute(
+        "UPDATE task_execution_plan_revisions
+         SET review_status='failed',phase='review',percent=?3,updated_at_ms=?4
+         WHERE work_key=?1 AND revision=?2",
+        params![
+            incomplete.work_key,
+            incomplete.revision,
+            (90.0 * incomplete.completed as f64 / incomplete.total as f64).round() as i64,
+            epoch_millis()
+        ],
+    )?;
+    let updated =
+        ack_messages_in_transaction(&tx, message_keys, "failed", Some(reason), None, None)?;
+    tx.execute(
+        "UPDATE worker_attempt_finalizations
+         SET queue_effects_applied_at=COALESCE(queue_effects_applied_at,?2), updated_at=?2
+         WHERE attempt_id=?1",
         params![attempt_id, now_iso_string()],
     )?;
     let tasks = load_queue_projection_tasks(&tx, message_keys)?;
@@ -2666,7 +2849,11 @@ fn hold_leased_messages_impl(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if let Some(attempt_id) = attempt_id {
         let already_applied: Option<Option<String>> = tx
             .query_row(
@@ -2921,7 +3108,11 @@ pub fn create_queue_task_with_metadata(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let task = create_queue_task_with_metadata_tx(&tx, request)?;
     refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;
     tx.commit()?;
@@ -2931,6 +3122,44 @@ pub fn create_queue_task_with_metadata(
 fn create_queue_task_with_metadata_tx(
     tx: &Transaction<'_>,
     request: QueueTaskCreateRequest,
+) -> Result<QueueTaskView> {
+    create_queue_task_with_native_app_origin_tx(tx, request, None)
+}
+
+fn queue_task_native_app_origin(conn: &Connection, task_id: &str) -> Result<Option<Value>> {
+    if let Some(task) = load_queue_task_from_conn(conn, task_id)? {
+        if let Some(origin) = task.metadata.get("business_os_origin") {
+            if let (Some(command_id), Some(module)) = (
+                origin.get("command_id").and_then(Value::as_str),
+                origin.get("module").and_then(Value::as_str),
+            ) {
+                let admitted: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM business_command_aggregates WHERE command_id=?1 AND module=?2)",
+                    params![command_id, module], |row| row.get(0),
+                )?;
+                if admitted {
+                    return Ok(Some(origin.clone()));
+                }
+            }
+        }
+    }
+    // A legacy root has a canonical link but no origin stamp yet.
+    let linked = conn
+        .query_row(
+            "SELECT l.command_id, a.module FROM business_command_task_links l
+         JOIN business_command_aggregates a ON a.command_id=l.command_id
+         WHERE l.task_id=?1",
+            [task_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    Ok(linked.map(|(command_id, module)| json!({"command_id":command_id,"module":module})))
+}
+
+fn create_queue_task_with_native_app_origin_tx(
+    tx: &Transaction<'_>,
+    request: QueueTaskCreateRequest,
+    native_origin: Option<Value>,
 ) -> Result<QueueTaskView> {
     let title = request.title.trim();
     let prompt = request.prompt.trim();
@@ -2972,6 +3201,19 @@ fn create_queue_task_with_metadata_tx(
     });
     if let Some(extra) = request.extra_metadata {
         merge_object_metadata(&mut metadata, extra);
+    }
+    // App provenance comes from native admission or an admitted parent in this
+    // same tenant store. A caller-supplied metadata value is never authority.
+    metadata
+        .as_object_mut()
+        .unwrap()
+        .remove("business_os_origin");
+    let inherited = match request.parent_message_key.as_deref() {
+        Some(parent) => queue_task_native_app_origin(tx, parent)?,
+        None => None,
+    };
+    if let Some(origin) = inherited.or(native_origin) {
+        metadata["business_os_origin"] = origin;
     }
     enforce_queue_task_spawn(
         tx,
@@ -3430,7 +3672,27 @@ fn update_queue_task_with_optional_terminal_policy_grant(
         current_queue_priority(&current)
     };
     let now = now_iso_string();
-    let sort_at = queue_sort_at(&priority, &now)?;
+    // An update keeps the task's place in the queue unless its priority is
+    // changed explicitly. Dispatch orders pending work by this timestamp, and
+    // recomputing it on every review-feedback or retry note moved a rejected
+    // task behind all fresh work: on tenant (26.09.2026) research leads queued
+    // at 07:49 waited behind tasks created two hours later, for hours, after a
+    // single review round. Runtime backoff stays in `retry_not_before`.
+    let preserved_sort_at = request
+        .priority
+        .is_none()
+        .then(|| {
+            current_metadata
+                .get("sort_at")
+                .and_then(Value::as_str)
+                .filter(|value| DateTime::parse_from_rfc3339(value).is_ok())
+                .map(str::to_string)
+        })
+        .flatten();
+    let sort_at = match preserved_sort_at {
+        Some(sort_at) => sort_at,
+        None => queue_sort_at(&priority, &now)?,
+    };
     let mut metadata = current_metadata;
     metadata.insert(
         "source".to_string(),
@@ -3484,7 +3746,11 @@ fn update_queue_task_with_optional_terminal_policy_grant(
         metadata.remove("defer_reason");
     }
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if cockpit_control {
         let status = current_queue_route_status(&tx, &current.message_key)?;
         anyhow::ensure!(
@@ -3939,6 +4205,91 @@ pub fn renew_message_leases(
         )?;
     }
     Ok(renewed)
+}
+
+/// Exact native lease identity supplied to a service-owned harness turn.
+/// A cancelled, missing or re-leased row revokes the old turn's authority.
+#[derive(Debug, Clone)]
+pub(crate) struct QueueTurnLeaseFence {
+    pub(crate) root: PathBuf,
+    pub(crate) message_keys: Vec<String>,
+    pub(crate) worker_id: String,
+}
+
+pub(crate) struct QueueTurnLeaseReader {
+    connection: Connection,
+    #[cfg(unix)]
+    identity: (u64, u64),
+}
+
+#[cfg(unix)]
+fn queue_turn_store_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+impl QueueTurnLeaseFence {
+    pub(crate) fn open_reader(&self) -> Result<QueueTurnLeaseReader> {
+        anyhow::ensure!(
+            !self.message_keys.is_empty() && !self.worker_id.trim().is_empty(),
+            "queue turn cancelled: missing native lease identity"
+        );
+        let path = resolve_db_path(&self.root, None);
+        #[cfg(unix)]
+        let identity = queue_turn_store_identity(&path)?;
+        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        #[cfg(unix)]
+        anyhow::ensure!(
+            queue_turn_store_identity(&path)? == identity,
+            "queue turn cancelled: native store changed while opening lease reader"
+        );
+        // Keep one read-only connection per bounded turn, without schema
+        // repair, write transactions or a long-lived WAL read transaction.
+        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        Ok(QueueTurnLeaseReader {
+            connection: conn,
+            #[cfg(unix)]
+            identity,
+        })
+    }
+
+    pub(crate) fn still_owned(&self, reader: &QueueTurnLeaseReader) -> Result<bool> {
+        let path = resolve_db_path(&self.root, None);
+        #[cfg(unix)]
+        let conn = {
+            if queue_turn_store_identity(&path)? != reader.identity {
+                return Ok(false);
+            }
+            &reader.connection
+        };
+        // Platforms without a stable file identity read the current path on
+        // every check rather than trusting the retained connection's file.
+        #[cfg(not(unix))]
+        let conn = {
+            let _ = &reader.connection;
+            let conn =
+                Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            conn.busy_timeout(std::time::Duration::from_millis(100))?;
+            conn
+        };
+        for key in &self.message_keys {
+            let owned: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM communication_routing_state
+                 WHERE message_key=?1 AND route_status='leased' AND lease_worker_id=?2)",
+                params![key, self.worker_id],
+                |row| row.get(0),
+            )?;
+            if !owned {
+                return Ok(false);
+            }
+        }
+        #[cfg(unix)]
+        if queue_turn_store_identity(&path)? != reader.identity {
+            return Ok(false);
+        }
+        Ok(true)
+    }
 }
 
 /// lease-3 (F-002): durable worker identity for queue-task leases. The worker
@@ -6363,7 +6714,7 @@ fn load_queue_message_from_conn(
     .map_err(anyhow::Error::from)
 }
 
-fn load_queue_task_from_conn(
+pub(crate) fn load_queue_task_from_conn(
     conn: &Connection,
     message_key: &str,
 ) -> Result<Option<QueueTaskView>> {
@@ -6991,7 +7342,13 @@ pub(crate) fn ensure_account(
     provider: &str,
     profile_json: Value,
 ) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+    // IMMEDIATE, not deferred: ensure_account_tx reads the stored profile and
+    // then writes. A deferred transaction that started as a reader cannot
+    // upgrade once another connection has committed (WAL snapshot) and fails
+    // at once with "database is locked", bypassing busy_timeout. Under
+    // research load native e-mail sends hit that twice in a row while
+    // generating an Outbound update digest.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     ensure_account_tx(&tx, account_key, channel, address, provider, profile_json)?;
     tx.commit()?;
     Ok(())
@@ -7175,3 +7532,57 @@ mod queue_task_metadata_tests {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod ensure_account_lock_tests {
+    use super::*;
+
+    // Native e-mail sends failed with "database is locked" while research
+    // tasks were writing. ensure_account read the
+    // stored profile in a deferred transaction and then wrote; once another
+    // connection committed in between, SQLite refused the upgrade at once.
+    #[test]
+    fn ensure_account_waits_for_a_concurrent_writer_instead_of_failing() {
+        let root = tempfile::tempdir().expect("temp root");
+        let path = root.path().join("ctox.sqlite3");
+        let mut conn = crate::communication_store::open_channel_db(&path).expect("open");
+        conn.execute_batch("PRAGMA journal_mode=WAL;").expect("wal");
+        ensure_account(
+            &mut conn,
+            "email:a@example.com",
+            "email",
+            "a@example.com",
+            "owa",
+            json!({}),
+        )
+        .expect("seed account");
+
+        let writer_path = path.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let writer =
+                crate::communication_store::open_channel_db(&writer_path).expect("open writer");
+            writer.execute_batch("BEGIN IMMEDIATE;").expect("begin");
+            writer
+                .execute(
+                    "UPDATE communication_accounts SET updated_at = 'x' WHERE account_key = ?1",
+                    ["email:a@example.com"],
+                )
+                .expect("write");
+            locked_tx.send(()).expect("signal");
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            writer.execute_batch("COMMIT;").expect("commit");
+        });
+        locked_rx.recv().expect("writer holds the lock");
+        ensure_account(
+            &mut conn,
+            "email:a@example.com",
+            "email",
+            "a@example.com",
+            "owa",
+            json!({}),
+        )
+        .expect("ensure_account must wait for the writer, not fail with database is locked");
+        writer.join().expect("writer thread");
+    }
+}

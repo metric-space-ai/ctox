@@ -1,46 +1,13 @@
 # Managed upgrade: service cutover
 
-Field trigger (Thesen, 2026-09-08 10:36–10:37 UTC): source preparation
-published the new public executable and CTOX_ROOT wrapper before `current`
-changed. A restart/watchdog launch could run the new release while manifest
-and current still named the old release; the subsequent 15-second stop failed.
+The historical PR74 addressed candidate publication before the active release changed. Current main already keeps rebuild outputs release-local and publishes launchers after switching current. Its exclusive flock guard drains an old dispatched watchdog and prevents new ticks throughout update/rollback; that guard is retained. The old timer-pause helper remains historical source, is not called, and supplies no current runtime claim.
 
-`install.sh --rebuild` now prepares only release-local launch binaries and
-wrappers. Runtime dependency preparation remains idempotent. Only the Rust
-updater publishes managed/public launchers after the guarded stop and atomic
-current switch. A failed build therefore cannot change what the watchdog starts.
+The remaining defect was shutdown ordering: orphan cleanup sent TERM and KILL after200 ms before the315-second residue poll. The release-only Unix path now requests shutdown without that cleanup, waits for selected instance-root processes to exit, checks socket/backend residue within the same deadline, and refuses a switch if anything remains alive. PID markers are retained until success. Ordinary stop and its explicit policies are separate; the leased-app stop admission guard remains.
 
-During update/rollback cutover the updater stops the watchdog timer first,
-then any dispatched watchdog oneshot. Failure to stop either prevents cutover.
-Unit refresh can enable the timer for future boots but cannot start it inside
-this scope. The prior active timer is restored on ordinary success/error;
-intentionally inactive timers remain inactive. A hard kill of the updater
-cannot run destructor recovery; service/timer status must be checked on that
-recovery path. No permanent mask and no new environment toggle is introduced.
+On Linux, before queueing the asynchronous stop, the release path writes a typed service drop-in with TimeoutStopSec315 and SendSIGKILL=no, reloads systemd, and verifies the effective SendSIGKILL setting. An overriding configuration that still permits escalation refuses the stop. This also protects an old installed20-second unit; neither a new shell unit nor an unchecked set-property capability is assumed. The persisted drop-in prevents manager escalation and restart with old processes remaining; no runtime environment toggle is added. See the upstream [systemd kill contract](https://raw.githubusercontent.com/systemd/systemd/main/man/systemd.kill.xml).
 
-`ServiceLifecycleTimeouts` owns the 300-second cold-start window and the
-15-second ordinary stop budget. A release-switch stop uses their sum (315 s).
-The generated Linux unit uses that same stop limit. Existing old units retain
-their previously installed timeout until refreshed. Systemd stop is submitted
-with `--no-block`; the native residue poll owns waiting, rather than the
-five-second systemctl client timeout. A remaining process/socket/backend still
-fails the switch; leased app creation/modification tasks still refuse a stop.
+On macOS, the launchd job is disabled before signaling and booted out only after the process exits. Windows keeps the existing guarded typed-timeout stop path; the new Unix grace proof is not Windows evidence.
 
-First-rollout caveat: the new shell preparation behavior takes effect when an
-old updater builds this source. Rust lifecycle/watchdog changes run only when
-the invoking updater binary includes them. No live Thesen upgrade or restart
-was performed as part of local validation.
+The typed lifecycle module retains startup300 seconds, ordinary shutdown15 seconds and release shutdown315 seconds. Increasing that number alone was not a fix. The new tests use actual owned delayed-exit and TERM-ignoring child processes to distinguish waiting beyond200 ms from a timeout that leaves the process alive. They also check that effective systemd escalation is rejected. Tests have not yet executed on this revised head.
 
-Checks:
-- `tests/install_rebuild_cutover_smoke.sh`: real staging and wrappers, mocked
-  expensive provisioning, old public-wrapper watchdog launch, failed build,
-  current/manifest/desktop launcher preservation. Fails on base 365927a3c
-  because the public wrapper differs, passes on the fix.
-- Watchdog guard: stop order, in-flight oneshot stop refusal, error restoration,
-  inactive/absent preservation, bounded control subprocess timeout.
-- Lifecycle budget follows custom startup/shutdown durations.
-- Existing install/app-task stop guard and rollback tests run in Crew liveness
-  CI, together with cargo check/test compilation and Clippy.
-- Existing shell-asset smoke fails both on base 365927a3c and this change:
-  its synthetic source lacks scripts/assert-customer-app-isolation.mjs.
-  This fixture defect is recorded, not bypassed.
+Current state: main7d is composed into the existing PR74 branch, canonical rollback/flock logic retained. Source changes are UNVERIFIED until local native checks, these owned-process tests, existing app-task/rollback guards and an actual supported Linux cutover/rollback run pass. No live WELSCH/THESEN stop, restart, cutover or installation has been performed for this repair.

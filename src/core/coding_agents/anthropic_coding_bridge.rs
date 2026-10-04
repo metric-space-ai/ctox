@@ -1,7 +1,7 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 
-//! Turn-scoped Anthropic-compatible coding-plan bridge.
+//! Turn-scoped native coding bridge for Anthropic plans and inherited Responses.
 //!
 //! Pi talks Anthropic Messages to this loopback-only endpoint using a public
 //! sentinel. The native owner replaces that sentinel with the selected
@@ -10,6 +10,8 @@
 //! The same owner boundary carries MiniMax Coding Plan and Kimi Coding Plan;
 //! provider-specific account configuration still owns the fixed upstream URL,
 //! model allow-list and secret handle.
+//! Inherited Responses routes reuse the same capability and lifecycle boundary;
+//! native runtime resolution owns their endpoint, model and Bearer credential.
 
 use anyhow::Context;
 use ring::hmac;
@@ -25,6 +27,13 @@ use zeroize::Zeroizing;
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const BRIDGE_TOKEN_HEADER: &str = "X-CTOX-Bridge-Token";
 
+#[derive(Clone)]
+enum CodingProtocol {
+    Anthropic,
+    Responses { model: String },
+    ChatCompletions { model: String },
+}
+
 pub(crate) struct AnthropicCodingBridge {
     base_url: String,
     capability_token: Zeroizing<String>,
@@ -35,6 +44,44 @@ pub(crate) struct AnthropicCodingBridge {
 
 impl AnthropicCodingBridge {
     pub(crate) fn spawn(api_key: String, upstream_base_url: &str) -> anyhow::Result<Self> {
+        Self::spawn_protocol(api_key, upstream_base_url, CodingProtocol::Anthropic)
+    }
+
+    /// The inherited main route keeps its credential in this native owner too.
+    /// It is a per-turn capability, not the retired persistent :12434 gateway.
+    pub(crate) fn spawn_responses(
+        api_key: String,
+        upstream_base_url: &str,
+        model: &str,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_protocol(
+            api_key,
+            upstream_base_url,
+            CodingProtocol::Responses {
+                model: model.to_owned(),
+            },
+        )
+    }
+
+    pub(crate) fn spawn_chat_completions(
+        api_key: String,
+        upstream_base_url: &str,
+        model: &str,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_protocol(
+            api_key,
+            upstream_base_url,
+            CodingProtocol::ChatCompletions {
+                model: model.to_owned(),
+            },
+        )
+    }
+
+    fn spawn_protocol(
+        api_key: String,
+        upstream_base_url: &str,
+        protocol: CodingProtocol,
+    ) -> anyhow::Result<Self> {
         let mut token_bytes = [0u8; 32];
         SystemRandom::new()
             .fill(&mut token_bytes)
@@ -76,6 +123,7 @@ impl AnthropicCodingBridge {
                         &upstream_base_url,
                         api_key.as_str(),
                         worker_capability_token.as_str(),
+                        &protocol,
                     );
                 }
             })
@@ -113,8 +161,14 @@ fn handle_request(
     upstream_base_url: &str,
     api_key: &str,
     capability_token: &str,
+    protocol: &CodingProtocol,
 ) {
-    if request.method().as_str() != "POST" || request.url() != "/v1/messages" {
+    let path = match protocol {
+        CodingProtocol::Anthropic => "/v1/messages",
+        CodingProtocol::Responses { .. } => "/v1/responses",
+        CodingProtocol::ChatCompletions { .. } => "/v1/chat/completions",
+    };
+    if request.method().as_str() != "POST" || request.url() != path {
         let _ = request.respond(Response::from_string("not found").with_status_code(404));
         return;
     }
@@ -157,6 +211,20 @@ fn handle_request(
         return;
     }
 
+    if let CodingProtocol::Responses { model } | CodingProtocol::ChatCompletions { model } =
+        protocol
+    {
+        // A turn capability cannot select a different upstream model.
+        let allowed = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .is_some_and(|body| body.get("model").and_then(|value| value.as_str()) == Some(model));
+        if !allowed {
+            let _ = request
+                .respond(Response::from_string("model is outside this turn").with_status_code(403));
+            return;
+        }
+    }
+
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
         .timeout_write(Duration::from_secs(30))
@@ -164,23 +232,36 @@ fn handle_request(
         .timeout(Duration::from_secs(330))
         .redirects(0)
         .build();
-    let url = format!("{upstream_base_url}/v1/messages");
+    let url = match protocol {
+        CodingProtocol::Anthropic => format!("{upstream_base_url}/v1/messages"),
+        CodingProtocol::Responses { .. } => format!("{upstream_base_url}/responses"),
+        CodingProtocol::ChatCompletions { .. } => format!("{upstream_base_url}/chat/completions"),
+    };
     let mut upstream = agent
         .post(&url)
-        .set("x-api-key", api_key)
         .set("content-type", "application/json")
         .set("accept", "application/json, text/event-stream");
+    upstream = match protocol {
+        CodingProtocol::Anthropic => upstream.set("x-api-key", api_key),
+        CodingProtocol::Responses { .. } | CodingProtocol::ChatCompletions { .. } => {
+            upstream.set("authorization", &format!("Bearer {api_key}"))
+        }
+    };
     let mut saw_version = false;
     for header in request.headers() {
         let name = header.field.as_str().as_str();
-        if name.eq_ignore_ascii_case("anthropic-version") {
+        if matches!(protocol, CodingProtocol::Anthropic)
+            && name.eq_ignore_ascii_case("anthropic-version")
+        {
             saw_version = true;
             upstream = upstream.set("anthropic-version", header.value.as_str());
-        } else if name.eq_ignore_ascii_case("anthropic-beta") {
+        } else if matches!(protocol, CodingProtocol::Anthropic)
+            && name.eq_ignore_ascii_case("anthropic-beta")
+        {
             upstream = upstream.set("anthropic-beta", header.value.as_str());
         }
     }
-    if !saw_version {
+    if matches!(protocol, CodingProtocol::Anthropic) && !saw_version {
         upstream = upstream.set("anthropic-version", "2023-06-01");
     }
 
@@ -210,6 +291,114 @@ fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_chat_bridge_uses_selected_provider_endpoint_and_bearer() -> anyhow::Result<()> {
+        let upstream =
+            Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let address = upstream
+            .server_addr()
+            .to_ip()
+            .context("fake chat upstream")?;
+        let worker = std::thread::spawn(move || {
+            let mut request = upstream
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .expect("chat request");
+            assert_eq!(request.url(), "/v1/chat/completions");
+            assert!(request.headers().iter().any(|header| header
+                .field
+                .as_str()
+                .as_str()
+                .eq_ignore_ascii_case("authorization")
+                && header.value.as_str() == "Bearer native-minimax-key"));
+            let mut body = String::new();
+            request.as_reader().read_to_string(&mut body).unwrap();
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["model"], "MiniMax-M3");
+            assert_eq!(body["messages"][0]["content"], "bounded fixture");
+            request.respond(Response::from_string("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n").with_header(Header::from_bytes("content-type", "text/event-stream").unwrap())).unwrap();
+        });
+        let bridge = AnthropicCodingBridge::spawn_chat_completions(
+            "native-minimax-key".to_owned(),
+            &format!("http://{address}/v1"),
+            "MiniMax-M3",
+        )?;
+        let response = ureq::post(&format!("{}/v1/chat/completions", bridge.base_url()))
+            .set(BRIDGE_TOKEN_HEADER, bridge.capability_token())
+            .send_string(r#"{"model":"MiniMax-M3","messages":[{"role":"user","content":"bounded fixture"}],"stream":true}"#)?;
+        assert!(response.into_string()?.contains("[DONE]"));
+        worker.join().expect("chat upstream assertions");
+        drop(bridge);
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_responses_bridge_authenticates_scopes_streams_and_stops() -> anyhow::Result<()> {
+        const BODY: &str = r#"{"model":"MiniMax-M3","stream":true,"input":[],"tools":[]}"#;
+        const SSE: &str = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"output\":[]}}\n\n";
+        let upstream =
+            Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let address = upstream.server_addr().to_ip().context("fake upstream")?;
+        let worker =
+            std::thread::spawn(move || {
+                let mut request = upstream
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .expect("one authorized request");
+                assert_eq!(request.url(), "/v1/responses");
+                let header = |name: &str| {
+                    request
+                        .headers()
+                        .iter()
+                        .find(|header| header.field.as_str().as_str().eq_ignore_ascii_case(name))
+                        .map(|header| header.value.as_str().to_owned())
+                };
+                assert_eq!(
+                    header("authorization").as_deref(),
+                    Some("Bearer native-secret")
+                );
+                assert!(header(BRIDGE_TOKEN_HEADER).is_none());
+                assert!(header("X-CTOX-Provider").is_none());
+                assert!(header("anthropic-version").is_none());
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap();
+                assert_eq!(body, BODY);
+                request
+                    .respond(Response::from_string(SSE).with_header(
+                        Header::from_bytes("content-type", "text/event-stream").unwrap(),
+                    ))
+                    .unwrap();
+            });
+        let bridge = AnthropicCodingBridge::spawn_responses(
+            "native-secret".to_owned(),
+            &format!("http://{address}/v1"),
+            "MiniMax-M3",
+        )?;
+        let endpoint = format!("{}/v1/responses", bridge.base_url());
+        let no_capability = ureq::post(&endpoint).send_string(BODY).unwrap_err();
+        assert!(matches!(no_capability, ureq::Error::Status(401, _)));
+        let wrong_model = ureq::post(&endpoint)
+            .set(BRIDGE_TOKEN_HEADER, bridge.capability_token())
+            .send_string(r#"{"model":"other"}"#)
+            .unwrap_err();
+        assert!(matches!(wrong_model, ureq::Error::Status(403, _)));
+        let response = ureq::post(&endpoint)
+            .set(BRIDGE_TOKEN_HEADER, bridge.capability_token())
+            .set("authorization", "Bearer sidecar-sentinel")
+            .set("X-CTOX-Provider", "other-account")
+            .send_string(BODY)?;
+        assert_eq!(response.header("content-type"), Some("text/event-stream"));
+        assert_eq!(response.into_string()?, SSE);
+        worker.join().expect("fake upstream assertions");
+        let base_url = bridge.base_url().to_owned();
+        drop(bridge);
+        assert!(
+            ureq::get(&base_url).call().is_err(),
+            "bridge is reaped with its owner"
+        );
+        Ok(())
+    }
 
     #[test]
     fn bridge_replaces_the_public_sentinel_without_exposing_the_secret_to_pi() -> anyhow::Result<()>

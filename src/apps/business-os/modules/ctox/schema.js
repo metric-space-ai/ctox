@@ -1,4 +1,8 @@
+import { collections as conversationCollections } from '../conversations/schema.js';
+
 export const collections = {
+  // Reuse the canonical channel schema so Crew can load accounts before Mail or Conversations opens.
+  communication_accounts: conversationCollections.communication_accounts,
   ctox_crew_members: {
     version: 0,
     primaryKey: 'id',
@@ -503,7 +507,66 @@ export const collections = {
     required: ['id', 'blob_id', 'module_id', 'commit_id', 'idx', 'total', 'encoding', 'data', 'created_at_ms'],
     additionalProperties: false
   },
+  workjet_project_chats: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 256 },
+      thread_id: { type: 'string', maxLength: 256 },
+      project_id: { type: 'string', maxLength: 128 },
+      owner_user_id: { type: 'string', maxLength: 256 },
+      kind: { type: 'string', enum: ['group', 'private'] },
+      worker_profile_id: { type: 'string', maxLength: 256 },
+      initial: { type: 'boolean' },
+      created_at_ms: { type: 'number' },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' }
+    },
+    required: ['id', 'thread_id', 'project_id', 'owner_user_id', 'kind', 'initial', 'created_at_ms', 'updated_at_ms'],
+    indexes: ['project_id', 'owner_user_id', ['owner_user_id', 'project_id', 'kind'], 'updated_at_ms'],
+    additionalProperties: false
+  },
+  workjet_project_workers: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 256 },
+      project_id: { type: 'string', maxLength: 128 },
+      group_chat_id: { type: 'string', maxLength: 256 },
+      owner_user_id: { type: 'string', maxLength: 256 },
+      worker_profile_id: { type: 'string', maxLength: 256 },
+      status: { type: 'string', enum: ['active', 'removed'] },
+      created_at_ms: { type: 'number' },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' }
+    },
+    required: ['id', 'project_id', 'group_chat_id', 'owner_user_id', 'worker_profile_id', 'status', 'created_at_ms', 'updated_at_ms'],
+    indexes: ['project_id', 'owner_user_id', ['owner_user_id', 'project_id', 'status'], 'updated_at_ms'],
+    additionalProperties: false
+  },
+  workjet_worker_profile_bindings: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 256 },
+      owner_user_id: { type: 'string', maxLength: 256 },
+      worker_profile_id: { type: 'string', maxLength: 256 },
+      computer_id: { type: 'string', maxLength: 256 },
+      crew_member_id: { type: 'string', maxLength: 256 },
+      status: { type: 'string', enum: ['active', 'inactive'] },
+      created_at_ms: { type: 'number' },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' }
+    },
+    required: ['id', 'owner_user_id', 'worker_profile_id', 'computer_id', 'status', 'created_at_ms', 'updated_at_ms'],
+    indexes: ['owner_user_id', ['owner_user_id', 'status'], 'updated_at_ms'],
+    additionalProperties: false
+  },
   workjet_projects: {
+
     version: 0,
     primaryKey: 'id',
     type: 'object',
@@ -555,7 +618,7 @@ export const collections = {
     additionalProperties: false
   },
   workjet_computers: {
-    version: 0,
+    version: 1,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -714,6 +777,16 @@ export const collections = {
 };
 
 export const migrationStrategies = {
+  workjet_computers: {
+    1: (oldDoc) => ({
+      ...oldDoc,
+      device_binding_id: oldDoc.device_binding_id || '',
+      actor_epoch: oldDoc.actor_epoch || 0,
+      last_seen_at_ms: oldDoc.last_seen_at_ms || 0,
+      replication_up: oldDoc.replication_up || false,
+      is_deleted: oldDoc.is_deleted || false
+    })
+  },
   business_commands: {
     1: (oldDoc) => ({
       ...oldDoc,

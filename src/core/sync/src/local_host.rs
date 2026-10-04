@@ -2,7 +2,10 @@
 #[cfg(test)]
 #[path = "local_host_tests.rs"]
 mod tests;
-use crate::{authority::client::ExecutionAuthority, ipc::AuthorityIpc};
+use crate::{
+    authority::client::ExecutionAuthority,
+    ipc::{AuthorityIpc, IpcService},
+};
 use fs2::FileExt;
 use std::{
     fs::{self, DirBuilder, File, OpenOptions},
@@ -31,15 +34,25 @@ pub fn private_ipc_directory() -> io::Result<tempfile::TempDir> {
         .tempdir()
 }
 
-pub struct LocalAuthorityHost {
+pub struct LocalIpcHost {
     endpoint: PathBuf,
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<io::Result<()>>>,
 }
-impl LocalAuthorityHost {
+impl LocalIpcHost {
     /// `directory` is a dedicated private runtime directory, not a workspace.
     /// The host does not own the supplied authority or its WebRTC pool lifecycle.
-    pub async fn start(directory: PathBuf, node: Arc<dyn ExecutionAuthority>) -> io::Result<Self> {
+    pub async fn start_authority(
+        directory: PathBuf,
+        node: Arc<dyn ExecutionAuthority>,
+    ) -> io::Result<Self> {
+        Self::start(directory, Arc::new(AuthorityIpc::new(node))).await
+    }
+
+    /// Bind one private endpoint for a host-owned service. This does not create
+    /// or imply execution membership; all connections share the same ACL,
+    /// concurrency budget and supervised shutdown as the authority adapter.
+    pub async fn start(directory: PathBuf, service: Arc<dyn IpcService>) -> io::Result<Self> {
         let bound = tokio::task::spawn_blocking(move || BoundSocket::bind(&directory))
             .await
             .map_err(io::Error::other)??;
@@ -49,7 +62,6 @@ impl LocalAuthorityHost {
         let task = tokio::spawn(async move {
             // Keep the process lock and socket inode guard alive through connection teardown.
             let _bound = bound;
-            let service = Arc::new(AuthorityIpc::new(node));
             let mut connections = JoinSet::new();
             loop {
                 tokio::select! {
@@ -63,7 +75,7 @@ impl LocalAuthorityHost {
                             continue;
                         }
                         let service = service.clone();
-                        connections.spawn(async move { service.serve(stream).await });
+                        connections.spawn(async move { service.serve_connection(Box::new(stream)).await });
                     }
                 }
             }
@@ -100,7 +112,7 @@ impl LocalAuthorityHost {
         result
     }
 }
-impl Drop for LocalAuthorityHost {
+impl Drop for LocalIpcHost {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());

@@ -27,40 +27,40 @@
          Sibling of the header, not a child: under shell-v2 the header band is
          exactly one header row high, so every grammar row owns its own track.
          data-pg-* attributes are wired by the shell grammar. -->
-    <div class="reports-filterbar" data-shell-v2-header-row="2">
+    <div class="ctox-filterbar" data-shell-v2-header-row="2">
       <input class="ctox-pane-search" type="search" data-pg-search placeholder="Suchen..." aria-label="Bugs und Features suchen" />
       <!-- ONE control, not two (Betreiber-Direktive 31.08.2026): the button is
            an ACTION that switches the view, so it carries no aria-pressed.
            `data-pg-view` stays on it as the shell grammar's state channel and
            always holds the CURRENT view; icon, aria-label and title announce
            the view it switches TO. -->
-      <button type="button" class="ctox-pane-icon reports-view-toggle" data-reports-view-toggle data-pg-view="cards" aria-label="Als Liste anzeigen" title="Als Liste anzeigen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
-      <button type="button" class="ctox-pane-icon reports-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      <button type="button" class="ctox-pane-icon" data-reports-view-toggle data-pg-view="cards" aria-label="Als Liste anzeigen" title="Als Liste anzeigen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+      <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
     </div>
-    <div class="reports-filter-advanced" data-shell-v2-header-row="3" data-pg-tray hidden>
-      <div class="reports-filter-row">
-        <select class="ctox-select reports-select" data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="Status filtern">
+    <div class="ctox-filter-tray" data-shell-v2-header-row="3" data-pg-tray hidden>
+      <div class="ctox-filter-row">
+        <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="Status filtern">
           <option value="all">Alle Status</option>
           <option value="open">Offen</option>
           <option value="running">In Arbeit</option>
           <option value="completed">Erledigt</option>
           <option value="blocked">Blockiert</option>
         </select>
-        <button type="button" class="reports-sort-dir reports-filter-reset" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+        <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
       </div>
     </div>
     <!-- Row 4: counted view band (zeros filled by the module, zeros included). -->
-    <nav class="reports-view-switch" data-report-kind-chips aria-label="Typ Ansichten">
+    <nav class="ctox-view-switch" data-report-kind-chips aria-label="Typ Ansichten">
       <div class="ctox-pane-tabs">
         <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true">Alle<span class="view-count" data-pg-count="all"></span></button>
         <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="bug" aria-selected="false">Bugs<span class="view-count" data-pg-count="bug"></span></button>
         <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="feature" aria-selected="false">Features<span class="view-count" data-pg-count="feature"></span></button>
       </div>
     </nav>
-    <div class="ctox-pane-body reports-well">
+    <div class="ctox-pane-body ctox-well">
       <div class="ctox-list" data-reports-list></div>
     </div>
-    <footer class="reports-footer"><span data-pg-footer></span></footer>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="500" aria-label="Spaltenbreite anpassen"></button>
   <section class="ctox-pane reports-detail" data-reports-detail aria-label="Report Details">
@@ -86,7 +86,7 @@
       </div>
     </header>
     <div class="ctox-pane-scroll reports-detail-scroll" data-reports-detail-scroll></div>
-    <footer class="reports-footer"><span data-pg-footer></span></footer>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </section>
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="280" data-resizer-max="440" aria-label="Spaltenbreite anpassen"></button>
   <aside class="ctox-pane reports-actions" aria-label="Report Aktionen" data-reports-actions></aside>

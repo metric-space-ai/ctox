@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -60,12 +60,22 @@ impl Default for RxStorageSqliteSettings {
 
 pub type SharedSqliteConnection = Arc<Mutex<Connection>>;
 
+pub(crate) type SqliteReaderCache = Arc<Mutex<Option<SharedSqliteConnection>>>;
+pub(crate) const SQLITE_POINT_READER_COUNT: usize = 4;
+
 /// Storage factory holding a shared SQLite connection.
 pub struct RxStorageSqlite {
     pub name: String,
     pub settings: RxStorageSqliteSettings,
     pub connection: Mutex<Option<SharedSqliteConnection>>,
     external_poll_key: Mutex<Option<String>>,
+    // A collection is a table, not a separate SQLite database. Share a bounded
+    // set of schema caches across its short reads instead of opening one per
+    // collection. Change-feed drains have their own reader; long query streams
+    // continue to use dedicated connections and cannot occupy these slots.
+    point_readers: [SqliteReaderCache; SQLITE_POINT_READER_COUNT],
+    change_feed_reader: SqliteReaderCache,
+    next_point_reader: AtomicUsize,
 }
 
 impl RxStorageSqlite {
@@ -75,7 +85,19 @@ impl RxStorageSqlite {
             settings,
             connection: Mutex::new(None),
             external_poll_key: Mutex::new(None),
+            point_readers: std::array::from_fn(|_| Arc::new(Mutex::new(None))),
+            change_feed_reader: Arc::new(Mutex::new(None)),
+            next_point_reader: AtomicUsize::new(0),
         })
+    }
+
+    pub(crate) fn collection_readers(&self) -> (SqliteReaderCache, SqliteReaderCache) {
+        let index =
+            self.next_point_reader.fetch_add(1, Ordering::Relaxed) % SQLITE_POINT_READER_COUNT;
+        (
+            Arc::clone(&self.point_readers[index]),
+            Arc::clone(&self.change_feed_reader),
+        )
     }
 
     pub fn connection(&self) -> RxResult<SharedSqliteConnection> {

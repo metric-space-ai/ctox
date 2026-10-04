@@ -37,6 +37,9 @@ impl CheckpointStore {
             max_blob_bytes,
         })
     }
+    pub(crate) fn max_blob_bytes(&self) -> u64 {
+        self.max_blob_bytes
+    }
     fn blob_path(&self, artifact: &ArtifactRef) -> io::Result<PathBuf> {
         if !hash_valid(&artifact.sha256) || artifact.size_bytes > self.max_blob_bytes {
             return Err(invalid("invalid checkpoint artifact identity or size"));
@@ -113,6 +116,7 @@ impl CheckpointStore {
         for entry in manifest
             .workspace
             .iter()
+            .chain(&manifest.workspace_state.required_untracked)
             .chain(&manifest.provider_state)
             .filter(|e| e.kind == WorkspaceEntryKind::Symlink)
         {
@@ -195,10 +199,34 @@ impl CheckpointStore {
         }
         fs::create_dir(target)?;
         let result = (|| {
-            self.restore_entries(&manifest.workspace, &target.join("workspace"))?;
+            let mut workspace_entries = manifest.workspace.clone();
+            workspace_entries.extend(manifest.workspace_state.required_untracked.iter().cloned());
+            self.restore_entries(&workspace_entries, &target.join("workspace"))?;
             self.restore_entries(&manifest.provider_state, &target.join("provider"))?;
             self.restore_artifacts(&manifest.history, &target.join("history"))?;
             self.restore_artifacts(&manifest.attachments, &target.join("attachments"))?;
+            let git_root = target.join("git");
+            fs::create_dir(&git_root)?;
+            self.restore_named_artifact(
+                &manifest.workspace_state.index_patch,
+                &git_root.join("index.patch"),
+            )?;
+            self.restore_named_artifact(
+                &manifest.workspace_state.worktree_patch,
+                &git_root.join("worktree.patch"),
+            )?;
+            let mut base = OpenOptions::new();
+            base.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                base.mode(0o600);
+            }
+            let mut base_file = base.open(git_root.join("base-commit"))?;
+            base_file.write_all(manifest.workspace_state.base_commit.as_bytes())?;
+            base_file.write_all(b"\n")?;
+            base_file.sync_all()?;
+            sync_directory(&git_root)?;
             let manifest_file = target.join("checkpoint.json");
             let mut f = OpenOptions::new()
                 .write(true)
@@ -215,6 +243,18 @@ impl CheckpointStore {
             return Err(error);
         }
         Ok(manifest)
+    }
+    fn restore_named_artifact(&self, artifact: &ArtifactRef, path: &Path) -> io::Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut output = options.open(path)?;
+        io::copy(&mut self.open_blob(artifact)?, &mut output)?;
+        output.sync_all()
     }
     fn restore_artifacts(&self, artifacts: &[ArtifactRef], root: &Path) -> io::Result<()> {
         fs::create_dir(root)?;
@@ -298,12 +338,21 @@ fn artifacts(manifest: &CheckpointManifest) -> impl Iterator<Item = &ArtifactRef
         .history
         .iter()
         .chain(&manifest.attachments)
+        .chain(std::iter::once(&manifest.workspace_state.index_patch))
+        .chain(std::iter::once(&manifest.workspace_state.worktree_patch))
         .chain(manifest.workspace.iter().map(|e| &e.artifact))
+        .chain(
+            manifest
+                .workspace_state
+                .required_untracked
+                .iter()
+                .map(|e| &e.artifact),
+        )
         .chain(manifest.provider_state.iter().map(|e| &e.artifact))
 }
 pub fn validate_manifest(manifest: &CheckpointManifest) -> io::Result<()> {
     let session = &manifest.session;
-    if manifest.version != 1
+    if manifest.version != 2
         || session.version != 1
         || manifest.sequence > MAX_SAFE_INTEGER
         || session.scope_id.is_empty()
@@ -320,31 +369,30 @@ pub fn validate_manifest(manifest: &CheckpointManifest) -> io::Result<()> {
             "incomplete or incompatible portable session manifest",
         ));
     }
-    for entries in [&manifest.workspace, &manifest.provider_state] {
-        let mut names = BTreeSet::new();
-        for entry in entries {
-            validate_path(&entry.path)?;
-            let name = entry.path.to_lowercase();
-            if !names.insert(name) {
-                return Err(invalid("duplicate or case-colliding session path"));
-            }
-        }
-        for name in &names {
-            let mut prefix = String::new();
-            for component in name
-                .split('/')
-                .take(name.split('/').count().saturating_sub(1))
-            {
-                if !prefix.is_empty() {
-                    prefix.push('/');
-                }
-                prefix.push_str(component);
-                if names.contains(&prefix) {
-                    return Err(invalid(
-                        "session file or symlink is also used as a directory",
-                    ));
-                }
-            }
+    if !commit_valid(&manifest.workspace_state.base_commit) {
+        return Err(invalid("portable session requires a full Git base commit"));
+    }
+    let mut workspace_entries = manifest.workspace.clone();
+    workspace_entries.extend(manifest.workspace_state.required_untracked.iter().cloned());
+    let workspace_names = validate_entries(&workspace_entries)?;
+    validate_entries(&manifest.provider_state)?;
+    let mut deleted_names = BTreeSet::new();
+    for path in &manifest.workspace_state.deleted_paths {
+        validate_path(path)?;
+        let name = path.to_lowercase();
+        if !deleted_names.insert(name.clone())
+            || deleted_names.iter().any(|other| {
+                other != &name
+                    && (name.starts_with(&format!("{other}/"))
+                        || other.starts_with(&format!("{name}/")))
+            })
+            || workspace_names.iter().any(|entry| {
+                entry == &name
+                    || entry.starts_with(&format!("{name}/"))
+                    || name.starts_with(&format!("{entry}/"))
+            })
+        {
+            return Err(invalid("deleted path is also present in the workspace"));
         }
     }
     for artifact in artifacts(manifest) {
@@ -354,7 +402,41 @@ pub fn validate_manifest(manifest: &CheckpointManifest) -> io::Result<()> {
     }
     Ok(())
 }
-fn validate_path(path: &str) -> io::Result<()> {
+fn validate_entries(entries: &[WorkspaceEntry]) -> io::Result<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    for entry in entries {
+        validate_path(&entry.path)?;
+        let name = entry.path.to_lowercase();
+        if !names.insert(name) {
+            return Err(invalid("duplicate or case-colliding session path"));
+        }
+    }
+    for name in &names {
+        let mut prefix = String::new();
+        for component in name
+            .split('/')
+            .take(name.split('/').count().saturating_sub(1))
+        {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(component);
+            if names.contains(&prefix) {
+                return Err(invalid(
+                    "session file or symlink is also used as a directory",
+                ));
+            }
+        }
+    }
+    Ok(names)
+}
+fn commit_valid(commit: &str) -> bool {
+    (commit.len() == 40 || commit.len() == 64)
+        && commit
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+pub(crate) fn validate_path(path: &str) -> io::Result<()> {
     if path.is_empty()
         || path.len() > 4096
         || path.starts_with('/')
@@ -381,7 +463,7 @@ fn validate_path(path: &str) -> io::Result<()> {
     }
     Ok(())
 }
-fn validate_link(path: &str, target: &str) -> io::Result<()> {
+pub(crate) fn validate_link(path: &str, target: &str) -> io::Result<()> {
     if target.is_empty()
         || target.len() > 4096
         || target.starts_with('/')

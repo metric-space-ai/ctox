@@ -5,6 +5,12 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const modulePath = resolve(scriptDir, '../shared/business-chat.js');
 const source = readFileSync(modulePath, 'utf8');
+// The creature renderer and its keyframes were extracted into their own module
+// (b1a47dc66). The chat surface is both files together, so rules that live in
+// the renderer are still part of what this guard protects.
+const crewRendererSource = readFileSync(resolve(scriptDir, '../shared/crew-renderer.js'), 'utf8');
+const crewMotionSource = readFileSync(resolve(scriptDir, '../shared/crew-motion.js'), 'utf8');
+const chatSurfaceSource = `${source}\n${crewRendererSource}`;
 const failures = [];
 
 const dockRule = source.match(/\.ctox-chat-dock\s*\{(?<body>[\s\S]*?)\n\s*\}/)?.groups?.body || '';
@@ -145,7 +151,10 @@ expectIncludes(
   'Inactive desktop windows must remain visible and focusable as a 3D gallery'
 );
 expectIncludes(source, 'function crewCreatureHtml(chat, taskState = getTaskState(chat), placement = \'dock\')', 'Crew members need deterministic SVG identities');
-expectIncludes(source, '@keyframes ctoxCrewWork', 'Crew status must have a working animation');
+// Working crew is animated procedurally by the page-wide engine (base pose per
+// state), no longer by a CSS keyframe loop.
+expectIncludes(crewMotionSource, "if (mode === 'working') {", 'Crew status must have a working animation');
+expectIncludes(source, "import { syncCrewMotion } from './crew-motion.js", 'Chat creatures must be driven by the crew motion engine');
 expectIncludes(
   source,
   'setWindowInteractiveState(node, chat.id === activeChat?.id && !chat.minimized);',

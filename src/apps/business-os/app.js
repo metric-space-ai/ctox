@@ -1,14 +1,17 @@
-import { CtoxResizer } from './shared/resizer.js?v=20260908-shell-v2-crew-language-v354';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260908-shell-v2-crew-language-v354';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260908-shell-v2-crew-language-v354';
-import { createAppActions } from './shared/app-actions.js?v=20260908-shell-v2-crew-language-v354';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261003-shell-v2-backend-version-v440';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261003-shell-v2-backend-version-v440';
+import { CtoxResizer } from './shared/resizer.js?v=20261003-shell-v2-backend-version-v440';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261003-shell-v2-backend-version-v440';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261003-shell-v2-backend-version-v440';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261003-shell-v2-backend-version-v440';
+import { createAppActions } from './shared/app-actions.js?v=20261003-shell-v2-backend-version-v440';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/app-lifecycle.js?v=20261003-shell-v2-backend-version-v440';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -16,20 +19,21 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260908-shell-v2-crew-language-v354';
+  roleMayReadCollection,
+} from './shared/permissions.js?v=20261003-shell-v2-backend-version-v440';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260908-shell-v2-crew-language-v354';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/branding.js?v=20261003-shell-v2-backend-version-v440';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261003-shell-v2-backend-version-v440';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/presentation.js?v=20261003-shell-v2-backend-version-v440';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -40,9 +44,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260908-shell-v2-crew-language-v354';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260908-shell-v2-crew-language-v354';
-import { createDocumentsFacade } from './shared/documents.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/shell-permissions-ui.js?v=20261003-shell-v2-backend-version-v440';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261003-shell-v2-backend-version-v440';
+import { createDocumentsFacade } from './shared/documents.js?v=20261003-shell-v2-backend-version-v440';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -50,16 +54,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/maintenance-state.js?v=20261003-shell-v2-backend-version-v440';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/workspace-session.js?v=20261003-shell-v2-backend-version-v440';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260908-shell-v2-crew-language-v354';
+} from './shared/taskbar-pins.js?v=20261003-shell-v2-backend-version-v440';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -67,9 +71,19 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260908-shell-v2-crew-language-v354';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260908-shell-v2-crew-language-v354';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260908-shell-v2-crew-language-v354';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261003-shell-v2-backend-version-v440';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261003-shell-v2-backend-version-v440';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261003-shell-v2-backend-version-v440';
+import {
+  LAUNCH_CONTEXT_DEADLINE_MS,
+  SHELL_GENERATION_PROBE_DEADLINE_MS,
+  cancelStartupResponseBody,
+  isStartupDeadlineError,
+  shouldPropagateGenerationProbeError,
+  withStartupDeadline,
+} from './shared/startup-deadlines.js?v=20261003-shell-v2-backend-version-v440';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261003-shell-v2-backend-version-v440';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -77,14 +91,17 @@ const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
 const PAIRING_CONFIG_KEY = 'ctox.businessOs.pairingConfig';
 const RXDB_BOOTSTRAP_VERSION_KEY = 'ctox.businessOs.rxdbBootstrapVersion';
-const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
+const TASKBAR_PIN_HYDRATION_TIMEOUT_MS = 20_000;
+const TASKBAR_PIN_HYDRATION_RETRY_BASE_MS = 500;
+const TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS = 60_000;
+const TASKBAR_PIN_HYDRATION_ATTEMPT_DIAGNOSTICS_MAX = 8;
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260908-shell-v2-crew-language-v354';
+const APP_BUILD = '20261003-shell-v2-backend-version-v440';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -229,6 +246,11 @@ function assertCriticalSyncCollectionsMatchBundle(rxdb) {
 }
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
+let taskbarPinHydrationRetryTimer = null;
+let taskbarPinHydrationRetryCount = 0;
+let taskbarPinHydrationRetryStartedAtMs = 0;
+let taskbarPinHydrationGeneration = 0;
+let taskbarPinHydrationAttemptSequence = 0;
 let workspaceSessionSaveTimer = null;
 let desktopOpenIconObserver = null;
 let desktopOpenIconObserverTarget = null;
@@ -271,11 +293,16 @@ const SHELL_COL_MIN = {
 
 const SHELL_COL_SIDE_MAX = 620;
 
+const shellPerformanceTrace = createShellPerformanceTrace();
+globalThis.addEventListener?.('pagehide', () => shellPerformanceTrace.stop(), { once: true });
+const traceShellPhase = (name, action) => shellPerformanceTrace.measure(name, action);
+
 const state = {
   bootTimings: {
     startedAt: new Date().toISOString(),
     startedAtMs: performance.now(),
     shellVisibleMs: null,
+    firstModuleMountedMs: null,
     firstWebRtcConnectedMs: null,
     firstAdvancedStatusHealthyMs: null,
   },
@@ -304,6 +331,11 @@ const state = {
   governance: null,
   moduleLayout: null,
   taskbarPins: [],
+  taskbarPinHydrationRetryCount: 0,
+  taskbarPinHydrationRetryStartedAtMs: 0,
+  taskbarPinHydrationLastError: null,
+  taskbarPinHydrationAttempts: [],
+  taskbarPinsKnown: false,
   taskbarPinsUpdatedAtMs: 0,
   schemaRegistrations: new Map(),
   schemaRegistrationQueue: Promise.resolve(),
@@ -620,6 +652,8 @@ function installAdvancedStatusInterface() {
   globalThis.workjetSessionControl = workjetSessionControl;
   globalThis.workjetSessionEvents = createWorkjetSessionEvents();
   state.openModule = (moduleId, options = {}) => openModule(moduleId, options);
+  // Navigation only; settings retain their own role and command-policy checks.
+  state.openSettingsDrawer = (options = {}) => openSettingsDrawer(options);
   // A crew member dropped from the chat bar onto an app opens the CTOX context
   // menu at that point with the member standing by (drag-and-drop handoff).
   state.openCrewContextMenu = ({ clientX, clientY, crew } = {}) => {
@@ -634,7 +668,8 @@ async function ensureAdvancedStatusRequiredCollections(requiredCollections, opti
   if (!Array.isArray(requiredCollections) || !state.sync?.startCollection) return;
   const names = requiredCollections
     .filter((collection) => typeof collection === 'string' && collection.trim())
-    .filter((collection) => state.db?.raw?.[collection]);
+    .filter((collection) => state.db?.raw?.[collection]
+      && state.sync.mayReadCollection?.(collection) !== false);
   await Promise.all(names.map((collection) => state.sync.startCollection(collection).catch(() => null)));
   if (options.allowRestart !== true) return;
   for (const collection of names) {
@@ -663,7 +698,8 @@ function shouldRestartAdvancedStatusRequiredCollection(collection) {
   );
   const ageMs = Number.isFinite(startedAt) ? Date.now() - startedAt : 0;
   if (ageMs < 12000) return false;
-  if (diagnostics.lastLifecycleEvent?.code === 'peer_connect_timeout') return true;
+  if (['peer_connect_timeout', 'peer_unstable_after_open']
+    .includes(diagnostics.lastLifecycleEvent?.code)) return true;
   return ['connecting', 'running', 'reconnecting'].includes(status) && activePeerCount < 1;
 }
 
@@ -683,6 +719,7 @@ if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
     createModuleContext,
     createModulePermissionFacade,
     storageKeys: businessOsStorageKeys,
+    appBuild: APP_BUILD,
     renderTabs,
     listLaunchTargets,
     openAppLifecycleDrawer,
@@ -851,8 +888,8 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
   // which may carry tooling prefixes (bench_contracts_... -> B).
   const normalized = String(id || '').replace(/^module:|^desktop-app:/, '');
   const moduleDef = state.modules?.find?.((mod) => mod.id === normalized);
-  const operatorIcon = operatorIconFor(normalized);
-  const rasterAsset = String(operatorIcon?.asset || moduleDef?.layout?.icon_asset || '').trim();
+  const selectedIcon = operatorIconFor(normalized) || grokShellIconFor(normalized);
+  const rasterAsset = String(selectedIcon?.asset || moduleDef?.layout?.icon_asset || '').trim();
   const rasterSrcSet = String(moduleDef?.layout?.icon_asset_srcset || '').trim();
   if (rasterAsset && !rasterAsset.includes('..') && !/^[a-z][a-z0-9+.-]*:/i.test(rasterAsset)) {
     const srcset = rasterSrcSet && !rasterSrcSet.includes('..') && !/[<>]/.test(rasterSrcSet)
@@ -928,12 +965,20 @@ async function importBusinessOsModule(url, label) {
     } catch (error) {
       lastError = error;
       try {
-        const generationProbe = await fetch(`app.js?v=${APP_BUILD}`, { cache: 'no-store' });
-        if (scheduleShellGenerationReload(generationProbe)) {
+        const generationProbe = await withStartupDeadline(
+          (probeSignal) => fetch(`app.js?v=${APP_BUILD}`, { cache: 'no-store', signal: probeSignal }),
+          SHELL_GENERATION_PROBE_DEADLINE_MS,
+          `Shell generation probe timed out after ${SHELL_GENERATION_PROBE_DEADLINE_MS / 1000} seconds.`,
+        );
+        const reloadGeneration = scheduleShellGenerationReload(generationProbe);
+        await cancelStartupResponseBody(generationProbe);
+        if (reloadGeneration) {
           throw new Error(`${label} belongs to an inactive shell generation`);
         }
       } catch (generationError) {
-        if (shellGenerationReloadGuard.scheduled) throw generationError;
+        if (shouldPropagateGenerationProbeError(generationError, shellGenerationReloadGuard.scheduled)) {
+          throw generationError;
+        }
       }
       if (attempt < retryDelaysMs.length - 1) {
         console.warn(`[business-os] ${label} temporarily unavailable; retrying`, error);
@@ -987,7 +1032,7 @@ const shellMessages = {
     activity: 'Aktivität',
     agentContext: 'Agent-Kontext',
     webrtcSync: 'Datenabgleich',
-    ctoxNotWorking: 'CTOX Verbindung prüfen',
+    ctoxNotWorking: 'Die Crew braucht deine Hilfe',
     recoveryExport: 'Recovery exportieren',
     recoveryPassphrase: 'Passwort für den verschlüsselten Recovery-Export (mindestens 8 Zeichen)',
     recoveryExported: 'Recovery-Export wurde erstellt.',
@@ -1078,7 +1123,7 @@ const shellMessages = {
     bootSchemasDone: 'Speicherstrukturen erfolgreich geladen.',
     moduleTitles: {
       desktop: 'Desktop',
-      ctox: 'CTOX',
+      ctox: 'Crew',
       documents: 'Dokumente',
       spreadsheets: 'Tabellen',
       knowledge: 'Knowledge',
@@ -1106,7 +1151,7 @@ const shellMessages = {
     activity: 'Activity',
     agentContext: 'Agent context',
     webrtcSync: 'Data sync',
-    ctoxNotWorking: 'Check CTOX connection',
+    ctoxNotWorking: 'The crew needs your attention',
     recoveryExport: 'Export recovery',
     recoveryPassphrase: 'Passphrase for the encrypted recovery export (at least 8 characters)',
     recoveryExported: 'Recovery export created.',
@@ -1197,7 +1242,7 @@ const shellMessages = {
     bootSchemasDone: 'Storage structures loaded.',
     moduleTitles: {
       desktop: 'Desktop',
-      ctox: 'CTOX',
+      ctox: 'Crew',
       documents: 'Documents',
       spreadsheets: 'Spreadsheets',
       knowledge: 'Knowledge',
@@ -1213,6 +1258,7 @@ const shellMessages = {
 
 const els = {
   status: document.querySelector('[data-status-text]'),
+  collectionFreshnessWarning: document.querySelector('[data-collection-freshness-warning]'),
   ctoxWarning: document.querySelector('[data-ctox-shell-warning]'),
   maintenanceBanner: document.querySelector('[data-maintenance-banner]'),
   recoveryWarning: document.querySelector('[data-recovery-warning]'),
@@ -1249,12 +1295,12 @@ bootstrap().catch(async (error) => {
 });
 
 async function bootstrap() {
-  await loadLaunchContext();
+  await traceShellPhase('launch-context', loadLaunchContext);
   resetDataPlaneReady('bootstrap');
   if (!globalThis.crypto?.subtle) {
     throw new Error('WebCrypto is missing (Insecure Origin on Safari 127.0.0.1). Please use http://localhost:8765/');
   }
-  const { installBusinessDialogFallbacks } = await loadShellDialogsModule();
+  const { installBusinessDialogFallbacks } = await traceShellPhase('dialog-assets', loadShellDialogsModule);
   installBusinessDialogFallbacks();
   const prefs = readAccountPrefs();
   applyShellTheme(prefs.theme || 'dark', { persist: false });
@@ -1266,7 +1312,7 @@ async function bootstrap() {
   // Resolve the session before showing any "loading" UI. An unauthenticated
   // request must never see the workspace startup loader — that falsely implies
   // the system is loading data when nothing past the auth gate runs.
-  const session = await loadSession();
+  const session = await traceShellPhase('session', loadSession);
   state.session = session;
   renderAccountButton(session);
   if (!session.authenticated) {
@@ -1288,49 +1334,46 @@ async function bootstrap() {
   setStartupProgress(10, shellText('bootConfig'));
   setStartupProgress(30, shellText('bootSession'));
   setStartupProgress(50, shellText('bootDatastore'));
-  const syncConfig = await loadSyncConfig();
-  await purgeLegacySharedBusinessDb(syncConfig);
-  await purgeSupersededBusinessDbGenerations(syncConfig).catch((error) => {
-    // Never fatal: a browser that refuses the cleanup must still boot.
-    console.warn('[business-os] superseded replica cleanup failed', error);
-  });
-  await resetBusinessDataPlaneForBuildIfNeeded(syncConfig);
-  await openBusinessDataPlane(syncConfig);
+  const syncConfig = await traceShellPhase('sync-config', loadSyncConfig);
+  await traceShellPhase('build-guard', () => resetBusinessDataPlaneForBuildIfNeeded(syncConfig));
+  await traceShellPhase('data-plane-open', () => openBusinessDataPlane(syncConfig));
   if (await completeWorkjetPairingRedirect()) return;
 
   setStartupProgress(70, shellText('bootWorkspace'));
   let modules;
   try {
     setStartupProgress(85, shellText('bootApps'));
-    modules = await loadModules();
+    modules = await traceShellPhase('module-catalog', loadModules);
   } catch (error) {
     if (!isModuleCatalogSyncError(error)) throw error;
     console.warn('[business-os] module catalog sync stalled; extending its WebRTC wait', error);
     setStartupProgress(82, shellText('bootCatalog'));
     try {
-      modules = await loadModules({ timeoutMs: 180000, allowShellSeed: false });
+      modules = await traceShellPhase('module-catalog-retry', () => loadModules({ timeoutMs: 180000, allowShellSeed: false }));
     } catch (retryError) {
       if (!isModuleCatalogSyncError(retryError)) throw retryError;
       console.warn('[business-os] module catalog still unavailable; restarting only its WebRTC bridge', retryError);
       setStartupProgress(80, shellText('bootCatalog'));
       await state.sync?.restartCollection?.('business_module_catalog');
-      modules = await loadModules({ timeoutMs: 180000, allowShellSeed: false });
+      modules = await traceShellPhase('module-catalog-restarted', () => loadModules({ timeoutMs: 180000, allowShellSeed: false }));
     }
   }
-  modules = await waitForRequestedHashModule(modules);
+  modules = await traceShellPhase('requested-app-catalog', () => waitForRequestedHashModule(modules));
   state.modules = modules.modules || [];
   state.moduleCatalogFingerprint = modules.catalogFingerprint || state.moduleCatalogFingerprint;
   try {
-    await registerCustomModuleIcons();
+    await traceShellPhase('custom-icon-assets', registerCustomModuleIcons);
   } catch (error) {
     console.warn('[business-os] custom module icon registration failed:', error);
   }
   state.governance = modules.governance || null;
-  state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
-  state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules);
+  state.moduleLayout = normalizeModuleLayout(await traceShellPhase('module-layout-read', loadModuleLayout), state.modules);
+  state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules, {
+    preserveKnownEmpty: state.taskbarPinsKnown === true,
+  });
   persistModuleLayout();
   renderTabs();
-  const shellUi = await loadShellUiModules();
+  const shellUi = await traceShellPhase('shell-ui-assets', loadShellUiModules);
   state.eventBus = shellUi.createEventBus();
   state.contextMenu = shellUi.createContextMenu({
     host: document.body,
@@ -1387,11 +1430,15 @@ async function bootstrap() {
     const workspaceSession = readWorkspaceSessionSnapshot();
     const explicitModule = location.hash.replace(/^#/, '').trim();
     beginPreferredDesktopAppFocus(explicitModule);
-    await openModule(explicitModule || workspaceSession?.activeModuleId || initialModuleRefAfterLogin());
-    await restoreWorkspaceSession(workspaceSession, { preferredAppId: explicitModule });
+    // Companions are shell chrome, not workspace-window children. Start them
+    // before the first module and restore loop so one slow/restored window
+    // cannot delay chat/reporter readiness.
+    scheduleBusinessCompanions();
+    await traceShellPhase('first-module-mount', () => openModule(explicitModule || workspaceSession?.activeModuleId || initialModuleRefAfterLogin()));
+    markBootTiming('firstModuleMountedMs');
+    await traceShellPhase('restored-windows', () => restoreWorkspaceSession(workspaceSession, { preferredAppId: explicitModule }));
     markBootTiming('shellVisibleMs');
     setWorkspaceStatus();
-    scheduleBusinessCompanions();
   } catch (error) {
     console.error('[business-os] module startup failed', error);
     if (isManagedCollectionAuthorizationError(error)) {
@@ -1406,6 +1453,9 @@ async function bootstrap() {
     // would strand every later catalog notification in the deferred queue.
     state.initialModuleOpened = true;
     flushDeferredCatalogRefresh();
+    // Metadata-only recovery diagnostics preserve all replicas, but must not
+    // hold database opening or the first usable app behind enumeration.
+    void reportPreservedLocalReplicas(syncConfig);
   }
   // Phase 2: no critical-sync warmup choreography here anymore — replication
   // starts lazily inside RxDB when a collection is first subscribed/read.
@@ -1436,7 +1486,16 @@ function businessDbName(syncConfig = state.syncConfig) {
     .join('_');
 }
 
-async function purgeLegacySharedBusinessDb(syncConfig) {
+async function reportPreservedLocalReplicas(syncConfig) {
+  await traceShellPhase('legacy-db-inventory', async () => await reportLegacySharedBusinessDb(syncConfig)).catch((error) => {
+    console.warn('[business-os] legacy replica inspection failed', error);
+  });
+  await traceShellPhase('superseded-db-inventory', async () => await reportSupersededBusinessDbGenerations(syncConfig)).catch((error) => {
+    console.warn('[business-os] superseded replica inspection failed', error);
+  });
+}
+
+async function reportLegacySharedBusinessDb(syncConfig) {
   const instanceId = String(syncConfig?.instance_id || syncConfig?.instanceId || 'default')
     .replace(/[^a-zA-Z0-9_-]+/g, '_')
     .slice(0, 80) || 'default';
@@ -1444,29 +1503,23 @@ async function purgeLegacySharedBusinessDb(syncConfig) {
     .replace(/[^a-zA-Z0-9_-]+/g, '_')
     .slice(0, 80) || 'local';
   const legacyName = [BUSINESS_DB_NAME, originId, instanceId].join('_');
-  const marker = `ctox.business-os.user-db-migration.v1:${legacyName}`;
-  if (localStorage.getItem(marker) === 'complete') return;
-  const { resetBusinessDb } = await loadBusinessDbModule();
-  let resetCompleted = true;
-  await resetBusinessDb({ name: legacyName }).catch((error) => {
-    console.warn('[business-os] legacy shared IndexedDB cleanup failed', error);
-    if (error?.code === 'recovery_export_required') {
-      resetCompleted = false;
-      return;
-    }
-    throw error;
-  });
-  if (resetCompleted) localStorage.setItem(marker, 'complete');
+  // This old replica may still contain the only copy of unacknowledged writes.
+  // Do not infer safety from a cached recovery-status marker or an export call.
+  if (typeof indexedDB?.databases !== 'function') return;
+  const entries = await indexedDB.databases();
+  if (entries.some((entry) => entry?.name === legacyName)) {
+    console.warn('[business-os] preserved legacy shared local replica for recovery', { name: legacyName });
+  }
 }
 
-// Advancing BUSINESS_DB_STORAGE_GENERATION deliberately opens a fresh replica
-// instead of migrating the old one. What it did NOT do was remove the replica
-// it walked away from, so every superseded generation stayed in IndexedDB
-// forever. Measured on a customer instance: 2059 MB of orphaned replicas, and a
-// tab that climbed to 3.2 GB of a 4 GB heap within 30 s and was killed by the
-// renderer before its first replication could finish — every click dead, no
-// error anywhere. A generation bump has to take its predecessor with it.
-async function purgeSupersededBusinessDbGenerations(syncConfig) {
+// A generation bump opens a new replica while the old primary and its recovery
+// journal may still hold writes that the server has not acknowledged. A
+// snapshot count is not a safe deletion gate: an old tab can write after the
+// count, and its versionchange handler can close the handle for deleteDatabase.
+// Preserve both databases until an explicit, verified recovery/retirement flow
+// exists. Old generations can consume substantial storage, so report them for
+// diagnosis instead of silently discarding potentially unique customer data.
+async function reportSupersededBusinessDbGenerations(syncConfig) {
   if (typeof indexedDB?.databases !== 'function') return;
   const currentName = businessDbName(syncConfig);
   const suffix = currentName.slice(
@@ -1488,27 +1541,12 @@ async function purgeSupersededBusinessDbGenerations(syncConfig) {
       && name.startsWith(prefix)
       && name.includes(suffix)
       && !name.includes(BUSINESS_DB_STORAGE_GENERATION)
+      && !name.endsWith('__recovery_v2')
     ));
   if (!superseded.length) return;
-  const removed = [];
-  for (const name of superseded) {
-    // Also take the paired recovery journal; it is scoped to the same replica.
-    for (const target of [name, `${name}__recovery_v2`]) {
-      const ok = await new Promise((resolve) => {
-        let settled = false;
-        const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
-        const request = indexedDB.deleteDatabase(target);
-        request.onsuccess = () => finish(true);
-        request.onerror = () => finish(false);
-        request.onblocked = () => finish(false);
-        setTimeout(() => finish(false), 8000);
-      });
-      if (ok) removed.push(target);
-    }
-  }
-  console.info('[business-os] removed superseded local replica generations', {
+  console.warn('[business-os] preserved superseded local replica generations for recovery', {
     current: currentName,
-    removed,
+    preserved: superseded,
   });
 }
 
@@ -1532,11 +1570,16 @@ async function openBusinessDataPlane(syncConfig) {
   try {
     state.syncConfig = syncConfig;
     const dbName = businessDbName(syncConfig);
+    // Pending edits and known-empty state are scoped to the database/session
+    // identity now opening. Never let a replacement race inherit them.
+    state.taskbarPins = [];
+    state.taskbarPinsKnown = false;
+    state.taskbarPinsUpdatedAtMs = 0;
 
     await openBusinessDbAndRegisterCoreCollections(dbName);
 
     setStartupProgress(62, shellText('bootDesktopLayout'));
-    await hydrateTaskbarPinsFromDesktopLayout();
+    // Paint cached pins without querying the data plane before Sync exists.
     renderTabs();
 
     setStartupProgress(66, shellText('bootSyncStart'));
@@ -1577,6 +1620,10 @@ async function openBusinessDataPlane(syncConfig) {
       config: syncConfig,
       onDiagnostic: updateSyncDiagnostics,
       capabilityTokenProvider: commandBusModule.getBusinessOsCapabilityToken,
+      mayReadCollection: (collection) => roleMayReadCollection(
+        businessActorFromSession(state.session, state.governance).role,
+        collection,
+      ),
     });
 
     setStartupProgress(69, shellText('bootServices'));
@@ -1586,13 +1633,30 @@ async function openBusinessDataPlane(syncConfig) {
       session: () => state.session,
       config: syncConfig,
     });
-    // Register the mutation plane before restored app windows enqueue their
-    // module collections. This gives foreground actions a ready shared-room
-    // registration instead of placing their one-row command behind the whole
-    // restored workspace bootstrap.
-    await state.sync.startCollection('business_commands').catch((error) => {
-      console.warn('[business-os] command transport warmup deferred', error);
-    });
+    // Request command transport early, but do not put its WebRTC registration
+    // on the cached workspace's first-paint path. A foreground command
+    // re-acquires this bridge through prepareCommandSync before insertion.
+    startCommandTransportWarmup(state.sync);
+    // Reconcile only after transport registration. An unresolved native read
+    // must not become an empty layout or a fresh local write during startup.
+    // A replaced peer generation is a transport boundary, not authoritative
+    // absence; retry the same strict read briefly so late signaling converges.
+    clearTaskbarPinHydrationRetry({ resetAttempts: true });
+    const pinHydrationGeneration = taskbarPinHydrationGeneration;
+    void hydrateTaskbarPinsFromDesktopLayout(pinHydrationGeneration)
+      .then(() => {
+        if (taskbarPinHydrationGeneration === pinHydrationGeneration) renderTabs();
+      })
+      .catch((error) => {
+        if (taskbarPinHydrationGeneration !== pinHydrationGeneration) return;
+        state.taskbarPinHydrationLastError = String(error?.message || error);
+        console.warn('[business-os] taskbar pin hydration failed:', error);
+      })
+      .finally(() => {
+        if (taskbarPinHydrationGeneration === pinHydrationGeneration) {
+          scheduleTaskbarPinHydrationRetry();
+        }
+      });
     startShellCtoxHealthMonitor();
     startWorkspaceBrandingMonitor();
 
@@ -1618,12 +1682,20 @@ async function openBusinessDataPlane(syncConfig) {
   }
 }
 
+function startCommandTransportWarmup(sync) {
+  void Promise.resolve()
+    .then(() => sync.startCollection('business_commands'))
+    .catch((error) => {
+      console.warn('[business-os] command transport warmup deferred', error);
+    });
+}
+
 async function openBusinessDbAndRegisterCoreCollections(dbName) {
   const { createBusinessDb } = await loadBusinessDbModule();
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     setStartupProgress(54, shellText('bootDbOpen'));
-    state.db = await createBusinessDb({ name: dbName });
+    state.db = await traceShellPhase(`local-db-open-${attempt}`, () => createBusinessDb({ name: dbName, trace: traceShellPhase }));
     assertCriticalSyncCollectionsMatchBundle(state.db?.rxdb);
 
     try {
@@ -1634,7 +1706,7 @@ async function openBusinessDbAndRegisterCoreCollections(dbName) {
       // second registration against the same store. On large workspaces this
       // caused the startup/reload loop that left the shell without db/sync.
       // Await the single registration operation to completion instead.
-      await registerCoreCollections();
+      await traceShellPhase(`core-schema-registration-${attempt}`, registerCoreCollections);
       return;
     } catch (error) {
       // A settled InvalidStateError means the connection really was closed by
@@ -2324,6 +2396,13 @@ function wireShellActions() {
   document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
     openSettingsDrawer();
   });
+  document.querySelector('[data-open-sync-diagnostics]')?.addEventListener('click', () => {
+    if (!state.session?.authenticated
+      || document.documentElement.dataset.authState === 'locked'
+      || document.body.dataset.authState === 'locked') return;
+    els.rightDrawer.classList.remove('account-popover');
+    openDrawer('right', renderSyncDiagnosticsDrawer());
+  });
   document.querySelector('[data-shell-ctox]')?.addEventListener('click', (event) => {
     event.preventDefault();
     openModule('ctox');
@@ -2466,7 +2545,16 @@ function isTrustedBusinessOsMessageSource(event) {
 // still emits `ctox-business-os-sync-diagnostics` for those views.
 function setupSyncToast() {
   document.querySelector('[data-sync-toast]')?.remove();
-  syncToastRefresh = () => {};
+  syncToastRefresh = renderCollectionFreshnessWarning;
+  renderCollectionFreshnessWarning();
+}
+
+function renderCollectionFreshnessWarning() {
+  renderFreshnessWarning(els.collectionFreshnessWarning, {
+    collections: Array.isArray(state.activeModule?.collections) ? state.activeModule.collections : [],
+    diagnostics: state.syncDiagnostics,
+    language: shellLang(),
+  });
 }
 
 function teardownModuleResizers() {
@@ -3663,6 +3751,7 @@ function shellText(key) {
 
 function updateSyncDiagnostics(snapshot) {
   state.syncDiagnostics = snapshot;
+  renderCollectionFreshnessWarning();
   if (hasWebRtcConnectedCollection(snapshot)) markBootTiming('firstWebRtcConnectedMs');
   updateModuleScriptPreloadAvailability(snapshot);
   window.ctoxBusinessOsSyncDiagnostics = snapshot;
@@ -3693,8 +3782,10 @@ function serializeBootTimings() {
   return {
     startedAt: state.bootTimings.startedAt,
     shellVisibleMs: state.bootTimings.shellVisibleMs,
+    firstModuleMountedMs: state.bootTimings.firstModuleMountedMs,
     firstWebRtcConnectedMs: state.bootTimings.firstWebRtcConnectedMs,
     firstAdvancedStatusHealthyMs: state.bootTimings.firstAdvancedStatusHealthyMs,
+    performanceTrace: shellPerformanceTrace.snapshot(),
   };
 }
 
@@ -4360,8 +4451,7 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
   const stallAfterMs = 45000;
   const entries = requiredCollections.map((collection) => {
     const diagnostics = collections?.[collection] || null;
-    const httpBridgeReady = isHttpBridgeReady(diagnostics);
-    const initialReplicationAt = diagnostics?.initialReplicationAt || (httpBridgeReady ? diagnostics?.httpBridgePulledAt : null) || null;
+    const initialReplicationAt = diagnostics?.initialReplicationAt || null;
     const startedAt = diagnostics?.initialReplicationStartedAt || null;
     const startedMs = startedAt ? Date.parse(startedAt) : NaN;
     const state = initialReplicationAt
@@ -4371,7 +4461,7 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       ? diagnostics.remoteCapabilities
       : [];
     const checkpoint = sanitizeAdvancedStatusRemoteCheckpoint(diagnostics?.remoteCheckpoint || null);
-    const checkpointEpochAdvertised = httpBridgeReady || hasAdvertisedCheckpointEpoch(diagnostics);
+    const checkpointEpochAdvertised = hasAdvertisedCheckpointEpoch(diagnostics);
     const streamingReady = isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertised);
     const stalledForMs = !initialReplicationAt && Number.isFinite(startedMs)
       ? Math.max(0, now - startedMs)
@@ -4381,7 +4471,7 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       state,
       status: diagnostics?.status || null,
       connectionStatus: diagnostics?.connectionStatus || null,
-      source: httpBridgeReady ? 'http-bridge' : (diagnostics?.initialReplicationSource || null),
+      source: diagnostics?.initialReplicationSource || null,
       initialReplicationStartedAt: startedAt,
       initialReplicationAt,
       checkpointState: checkpoint?.state || null,
@@ -4421,7 +4511,7 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
 function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
   const status = diagnostics?.connectionStatus || diagnostics?.status || '';
   if (evidence?.hasCollection !== true || !diagnostics) return false;
-  if (isHttpBridgeReady(diagnostics)) return true;
+
   const initialReplicationComplete = Boolean(diagnostics.initialReplicationAt || diagnostics.initialReplicationState === 'complete');
   if (!hasAdvertisedCheckpointEpoch(diagnostics)) return false;
   if (['failed', 'error', 'stopped', 'pending'].includes(status)) return false;
@@ -4438,7 +4528,7 @@ function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
 
 function isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertised = hasAdvertisedCheckpointEpoch(diagnostics)) {
   if (!diagnostics) return false;
-  if (isHttpBridgeReady(diagnostics)) return true;
+
   if (!checkpointEpochAdvertised) return false;
   const status = diagnostics.connectionStatus || diagnostics.status || '';
   if (['failed', 'error', 'stopped', 'pending'].includes(status)) return false;
@@ -4456,16 +4546,13 @@ function isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertis
 
 function hasAdvertisedCheckpointEpoch(diagnostics) {
   if (!diagnostics) return false;
-  if (isHttpBridgeReady(diagnostics)) return true;
+
   const capabilities = Array.isArray(diagnostics.remoteCapabilities) ? diagnostics.remoteCapabilities : [];
   if (!capabilities.includes('ctox-checkpoint-epoch-v1')) return false;
   const checkpoint = sanitizeAdvancedStatusRemoteCheckpoint(diagnostics.remoteCheckpoint || null);
   return Boolean(checkpoint?.state === 'advertised' && checkpoint.epoch);
 }
 
-function isHttpBridgeReady(diagnostics) {
-  return Boolean(diagnostics?.httpBridgeStatus === 'ready' && diagnostics?.httpBridgePulledAt);
-}
 
 async function collectAdvancedStatusCounts() {
   const names = [
@@ -4607,9 +4694,10 @@ function moduleAppearsAsWindowTarget(mod) {
 function desktopAppDescriptorForModule(mod) {
   const presentation = resolvePresentation(mod);
   const shell = resolveShellWindowContract(mod);
-  const operatorIcon = operatorIconFor(mod.id);
+  const selectedIcon = operatorIconFor(mod.id) || grokShellIconFor(mod.id);
   return {
     id: mod.id,
+    module: mod,
     title: moduleDisplayTitle(mod),
     glyph: taskbarMarkForModule(mod),
     category: workjetCategoryForModule(mod),
@@ -4623,7 +4711,7 @@ function desktopAppDescriptorForModule(mod) {
     shellGeometryContract: shell?.geometryContract || '',
     shellHeaderRows: Math.max(2, Number.parseInt(mod?.layout?.shell_header_rows, 10) || 2),
     shellIconRows: Math.max(2, Number.parseInt(mod?.layout?.shell_icon_rows, 10) || 2),
-    iconAsset: String(operatorIcon?.asset || mod?.layout?.icon_asset || '').trim(),
+    iconAsset: String(selectedIcon?.asset || mod?.layout?.icon_asset || '').trim(),
     iconSrcSet: String(mod?.layout?.icon_asset_srcset || '').trim(),
     framePalette: mod?.layout?.frame_palette || null,
   };
@@ -4708,6 +4796,7 @@ async function openDesktopApp(appId, options = {}) {
   const existing = findDesktopWindow(appId);
   if (existing) {
     restoreAndFocusWindow(existing);
+    setThreadReturnAction(existing, options.args);
     const launchDelivered = dispatchDesktopAppLaunch(existing, appId, options.args);
     if (options.args && !launchDelivered) {
       throw new Error(`Desktop app launch arguments could not be delivered: ${appId}`);
@@ -4730,6 +4819,7 @@ async function openDesktopApp(appId, options = {}) {
     iconSrcSet: entry.iconSrcSet,
     iconAnchorRect: () => desktopIconAnchorRect(entry.id),
   });
+  setThreadReturnAction(win, options.args);
   applyWorkjetCategory(win.element, entry.category || 'imported');
   let teardown = null;
   try {
@@ -4799,6 +4889,7 @@ async function openDesktopApp(appId, options = {}) {
       }
     });
   }
+  setThreadReturnAction(win, options.args);
   return win.id;
 }
 
@@ -4808,6 +4899,7 @@ async function openWindowedModule(mod, options = {}) {
   const existing = descriptor.multiInstance ? null : findDesktopWindow(mod.id);
   if (existing) {
     restoreAndFocusWindow(existing);
+    setThreadReturnAction(existing, options.args);
     const launchDelivered = dispatchDesktopAppLaunch(existing, mod.id, options.args);
     if (options.args?.openFile) {
       state.eventBus?.emitAsync?.('desktop-app:open-file', {
@@ -4839,6 +4931,7 @@ async function openWindowedModule(mod, options = {}) {
     iconAnchorRect: () => desktopIconAnchorRect(mod.id),
     ...windowHeaderOptionsForModule(mod),
   });
+  setThreadReturnAction(win, options.args);
   applyWorkjetCategory(win.element, descriptor.category);
   // Apply the declared presentation before the asynchronous module mount.
   // Shell controls are interactive as soon as the window exists; applying the
@@ -4898,6 +4991,7 @@ async function openWindowedModule(mod, options = {}) {
     }
     wireShellV2ModuleTitle(mod, win, content);
     state.windowManager?.refreshV2Chrome?.(win.id);
+    setThreadReturnAction(win, options.args);
     const windowResizers = [];
     cleanupWindowResizers = setupModuleResizers(mod, {
       scope: root,
@@ -5061,6 +5155,55 @@ function dispatchDesktopAppLaunch(win, appId, args = {}) {
   }));
   return true;
 }
+
+function setThreadReturnAction(win, args = {}) {
+  const actions = win?.element?.querySelector?.('[data-window-actions]');
+  if (!actions) return;
+  const existing = actions.querySelector('[data-thread-return]');
+  const threadId = String(args?.return_thread_id || '').trim();
+  const targetRecordId = String(args?.record || args?.record_id || args?.case_id
+    || args?.task_id || args?.command_id || args?.message_id || args?.thread_key || '').trim();
+  if (!threadId || threadId.length > 256) {
+    existing?.remove();
+    return;
+  }
+  if (existing?.dataset.threadReturn === threadId
+    && existing?.dataset.targetRecordId === targetRecordId) return;
+  existing?.remove();
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'shell-window-header-action';
+  button.dataset.threadReturn = threadId;
+  button.dataset.targetRecordId = targetRecordId;
+  button.dataset.windowHeaderAction = '';
+  button.textContent = '↩ Threads';
+  button.setAttribute('aria-label', 'Zurück zur Abstimmung in Threads');
+  button.addEventListener('click', () => {
+    window.location.hash = `#threads?thread_id=${encodeURIComponent(threadId)}`;
+  });
+  actions.prepend(button);
+}
+
+document.addEventListener('ctox-business-os-record-focus', (event) => {
+  const detail = event.detail || {};
+  if (!['record_focused', 'unavailable', 'forbidden'].includes(detail.status)) return;
+  const windowElement = event.target?.closest?.('.shell-window');
+  const returnButton = windowElement?.querySelector?.('[data-thread-return]');
+  if (!returnButton || windowElement?.dataset.ownerId !== `desktop-app:${detail.module}`
+    || returnButton.dataset.threadReturn !== detail.returnThreadId
+    || returnButton.dataset.targetRecordId !== detail.recordId) return;
+  returnButton.dataset.sourceFocusStatus = detail.status;
+  returnButton.title = detail.status === 'record_focused'
+    ? 'Datensatz in der Quell-App fokussiert · Zurück zu Threads'
+    : detail.status === 'forbidden'
+      ? 'Kein Zugriff auf den verknüpften Datensatz · Zurück zu Threads'
+      : 'Verknüpfter Datensatz nicht verfügbar · Zurück zu Threads';
+  if (detail.status !== 'record_focused'
+    || !performance.getEntriesByName('ctox.threads.source_navigation_started', 'mark').length) return;
+  performance.mark('ctox.threads.source_record_focused');
+  performance.measure('ctox.threads.source_record_focus',
+    'ctox.threads.source_navigation_started', 'ctox.threads.source_record_focused');
+});
 
 function openBusinessChat(detail = {}) {
   const moduleId = detail.module || detail.source_module || '';
@@ -5281,7 +5424,9 @@ function renderTabs() {
   const fragment = document.createDocumentFragment();
   const tabsTarget = { append: (node) => fragment.append(node) };
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
-  state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules, {
+    preserveKnownEmpty: state.taskbarPinsKnown === true,
+  });
   const rendered = new Set();
   for (const id of state.taskbarPins) {
     const target = launchTargetForId(id);
@@ -5333,7 +5478,7 @@ function renderModuleTab(target, options = {}) {
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
   const svgHtml = getRegisteredSvgIcon(target.id, 16, 1.8);
-  const lifecycle = target.kind === 'module'
+  const lifecycle = target.module
     ? appLifecycleBadge(target.module, {
       session: state.session,
       governance: state.governance,
@@ -5383,7 +5528,7 @@ function renderModuleTab(target, options = {}) {
   button.querySelector('[data-app-lifecycle-badge]')?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
   button.addEventListener('click', () => openLaunchTarget(target));
   return button;
@@ -5466,6 +5611,7 @@ function listLaunchTargets(kind = '') {
       glyph: app.glyph,
       category: workjetCategoryForTarget({ kind: 'app', app }),
       app,
+      module: app.module || null,
     }));
   const targetsById = new Map();
   for (const target of moduleTargets) {
@@ -5602,7 +5748,10 @@ function toggleTaskbarPin(targetId, shouldPin = !isTaskbarPinned(targetId)) {
   if (!launchTargetForId(targetId)) return;
   const pins = state.taskbarPins.filter((id) => id !== targetId);
   if (shouldPin) pins.push(targetId);
-  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules, {
+    preserveKnownEmpty: true,
+  });
+  state.taskbarPinsKnown = true;
   persistTaskbarPins();
   renderTabs();
 }
@@ -5613,7 +5762,10 @@ function moveTaskbarPinBefore(targetId, beforeTargetId) {
   const index = pins.indexOf(beforeTargetId);
   if (index >= 0) pins.splice(index, 0, targetId);
   else pins.push(targetId);
-  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules, {
+    preserveKnownEmpty: true,
+  });
+  state.taskbarPinsKnown = true;
   persistTaskbarPins();
   renderTabs();
 }
@@ -5627,10 +5779,14 @@ function draggedTaskbarPinId(event) {
 function readTaskbarPins() {
   const cached = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
   state.taskbarPinsUpdatedAtMs = cached.updatedAtMs;
-  return cached.pins.length ? cached.pins : null;
+  // A valid cache exists even when its selection is deliberately empty.
+  // Missing or malformed storage is unknown, not native/native-empty.
+  state.taskbarPinsKnown = cached.present === true;
+  return cached.pins;
 }
 
 function persistTaskbarPins() {
+  state.taskbarPinsKnown = true;
   state.taskbarPinsUpdatedAtMs = Date.now();
   writeScopedLocalStorage(
     TASKBAR_PINS_KEY,
@@ -5652,7 +5808,10 @@ function normalizeTaskbarPins(rawPins, modules, options = {}) {
     .map((id) => String(id || '').trim())
     .filter((id, index, arr) => id && valid.has(id) && arr.indexOf(id) === index);
   if (options.compactLegacyAllPins && looksLikeLegacyAllPins(pins, valid)) pins = [];
-  if (!pins.length) {
+  // Preserve only an explicitly supplied empty selection. Do not turn a
+  // non-empty native list whose ids are currently invalid into a user choice.
+  const suppliedEmpty = Array.isArray(rawPins) && rawPins.length === 0;
+  if (!pins.length && !(options.preserveKnownEmpty && suppliedEmpty)) {
     pins = DEFAULT_TASKBAR_PIN_IDS.filter((id) => valid.has(id));
     if (!pins.length) pins = listLaunchTargets('module').slice(0, 4).map((target) => target.id);
   }
@@ -5665,37 +5824,207 @@ function looksLikeLegacyAllPins(pins, valid) {
   return coverage >= 0.75;
 }
 
-async function hydrateTaskbarPinsFromDesktopLayout() {
-  const collection = state.db?.collection?.('desktop_layout');
-  if (!collection) {
-    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+function clearTaskbarPinHydrationRetry({ resetAttempts = false } = {}) {
+  if (taskbarPinHydrationRetryTimer) {
+    window.clearTimeout(taskbarPinHydrationRetryTimer);
+    taskbarPinHydrationRetryTimer = null;
+  }
+  if (resetAttempts) {
+    // Fence in-flight authority reads as well as their timers. A late
+    // settlement belongs to the replaced startup/reconnect session.
+    taskbarPinHydrationGeneration += 1;
+    taskbarPinHydrationRetryCount = 0;
+    taskbarPinHydrationRetryStartedAtMs = 0;
+    state.taskbarPinHydrationRetryCount = 0;
+    state.taskbarPinHydrationRetryStartedAtMs = 0;
+    state.taskbarPinHydrationLastError = null;
+    state.taskbarPinHydrationAttempts = [];
+  }
+}
+
+function scheduleTaskbarPinHydrationRetry({ now = Date.now } = {}) {
+  if (!state.sync?.readCollectionNativeDocument || state.taskbarPinsKnown === true) return;
+  if (taskbarPinHydrationRetryCount === 0) {
+    taskbarPinHydrationRetryStartedAtMs = now();
+    state.taskbarPinHydrationRetryStartedAtMs = taskbarPinHydrationRetryStartedAtMs;
+  } else if (
+    now() - taskbarPinHydrationRetryStartedAtMs
+      >= TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS
+  ) {
     return;
   }
-  const doc = await withStartupTimeout(
-    collection.findOne('layout').exec(),
-    1500,
-    null,
-    'desktop_layout read',
-  );
-  const layout = doc?.toJSON?.() || null;
-  const local = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  if (taskbarPinHydrationRetryTimer) return;
+  const attempt = taskbarPinHydrationRetryCount + 1;
+  const generation = taskbarPinHydrationGeneration;
+  taskbarPinHydrationRetryTimer = window.setTimeout(() => {
+    // Check both fences when the timer actually runs. A busy tab can deliver
+    // the callback after the retry window has already elapsed.
+    if (taskbarPinHydrationGeneration !== generation) return;
+    taskbarPinHydrationRetryTimer = null;
+    if (now() - taskbarPinHydrationRetryStartedAtMs
+      >= TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS) return;
+    taskbarPinHydrationRetryCount = attempt;
+    state.taskbarPinHydrationRetryCount = attempt;
+    state.taskbarPinHydrationLastError = null;
+    void hydrateTaskbarPinsFromDesktopLayout(generation)
+      .then(() => {
+        if (taskbarPinHydrationGeneration === generation) renderTabs();
+      })
+      .catch((error) => {
+        if (taskbarPinHydrationGeneration !== generation) return;
+        state.taskbarPinHydrationLastError = String(error?.message || error);
+        console.warn('[business-os] taskbar pin hydration retry failed:', error);
+      })
+      .finally(() => {
+        if (taskbarPinHydrationGeneration === generation) {
+          scheduleTaskbarPinHydrationRetry({ now });
+        }
+      });
+  }, Math.min(5000, TASKBAR_PIN_HYDRATION_RETRY_BASE_MS * attempt));
+}
+
+async function hydrateTaskbarPinsFromDesktopLayout(
+  hydrationGeneration = taskbarPinHydrationGeneration,
+  { now = Date.now } = {},
+) {
+  const database = state.db;
+  const sync = state.sync;
+  const storageKey = scopedStorageKey(TASKBAR_PINS_KEY);
+  if (!sync?.readCollectionNativeDocument || !database) {
+    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules, {
+      preserveKnownEmpty: state.taskbarPinsKnown === true,
+    });
+    return;
+  }
+
+  // Keep the last few actual native-read boundaries. This is intentionally
+  // separate from retry bookkeeping: a swallowed rejection must remain visible
+  // as a failed strict read, while a stale result is recorded as discarded.
+  const attemptId = ++taskbarPinHydrationAttemptSequence;
+  const attempt = {
+    schema: 'ctox.taskbarPinHydrationAttempt.v1',
+    id: attemptId,
+    generation: hydrationGeneration,
+    timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+    outcome: 'pending',
+    startedAtMs: now(),
+  };
+  if (taskbarPinHydrationGeneration === hydrationGeneration) {
+    state.taskbarPinHydrationAttempts = [
+      ...(Array.isArray(state.taskbarPinHydrationAttempts)
+        ? state.taskbarPinHydrationAttempts
+        : []),
+      attempt,
+    ].slice(-TASKBAR_PIN_HYDRATION_ATTEMPT_DIAGNOSTICS_MAX);
+  }
+  const finishAttempt = (outcome, details = {}, endedAtMs = now()) => {
+    if (taskbarPinHydrationGeneration !== hydrationGeneration) return;
+    const attempts = Array.isArray(state.taskbarPinHydrationAttempts)
+      ? state.taskbarPinHydrationAttempts
+      : [];
+    const index = attempts.findIndex((entry) => entry?.id === attemptId);
+    if (index < 0) return;
+    attempts[index] = {
+      ...attempts[index],
+      ...details,
+      outcome,
+      endedAtMs,
+      durationMs: Math.max(0, endedAtMs - attempts[index].startedAtMs),
+    };
+  };
+
+  // The native wrapper owns collection lifecycle, query readiness and an
+  // opaque authority token. It rejects pending, stale and cancelled reads;
+  // it never translates them into a completed empty answer.
+  let authoritativeDocument;
+  let nativeEndedAtMs;
+  try {
+    authoritativeDocument = await sync.readCollectionNativeDocument('desktop_layout', 'layout', {
+      timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+    });
+    nativeEndedAtMs = now();
+  } catch (error) {
+    nativeEndedAtMs = now();
+    finishAttempt('rejected', {
+      failureReason: String(error?.code || error?.name || 'unknown').slice(0, 80),
+      failureMessage: String(error?.message || error).slice(0, 240),
+    }, nativeEndedAtMs);
+    throw error;
+  }
+  const identity = {
+    generationStale: taskbarPinHydrationGeneration !== hydrationGeneration,
+    databaseStale: state.db !== database,
+    syncStale: state.sync !== sync,
+    storageKeyStale: scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey,
+  };
+  if (identity.generationStale || identity.databaseStale || identity.syncStale
+    || identity.storageKeyStale) {
+    finishAttempt('stale_discarded', { ...identity }, nativeEndedAtMs);
+    return;
+  }
+
+  state.taskbarPinsKnown = true;
+  const layout = authoritativeDocument?.toJSON?.() || null;
+  const cache = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  const cachePresent = cache.present === true;
+  const pendingLocal = state.taskbarPinsKnown
+    && Number(state.taskbarPinsUpdatedAtMs || 0) > Number(cache.updatedAtMs || 0);
+  const localPins = pendingLocal ? state.taskbarPins : cache.pins;
+  const localUpdatedAtMs = pendingLocal
+    ? Number(state.taskbarPinsUpdatedAtMs || 0)
+    : Number(cache.updatedAtMs || 0);
+  const localPresent = cachePresent || pendingLocal;
   const resolved = resolveTaskbarPinState({
-    localPins: local.pins,
-    localUpdatedAtMs: local.updatedAtMs,
+    localPins,
+    localUpdatedAtMs,
+    localPresent,
     remotePins: layout?.taskbar_pins,
     remoteUpdatedAtMs: layout?.updated_at_ms,
   });
-  state.taskbarPins = state.modules.length
-    ? normalizeTaskbarPins(resolved.pins, state.modules, {
-        compactLegacyAllPins: resolved.source === 'remote',
-      })
+  const reconciledPins = resolved.source === 'local' && !localPresent
+    ? state.taskbarPins
     : resolved.pins;
-  state.taskbarPinsUpdatedAtMs = resolved.updatedAtMs || Date.now();
-  writeScopedLocalStorage(
-    TASKBAR_PINS_KEY,
-    encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
-  );
-  await withStartupTimeout(syncTaskbarPinsToDesktopLayout(), 1500, null, 'desktop_layout write');
+  state.taskbarPins = state.modules.length
+    ? normalizeTaskbarPins(reconciledPins, state.modules, {
+      compactLegacyAllPins: resolved.source === 'remote',
+      preserveKnownEmpty: true,
+    })
+    : reconciledPins;
+  // Confirmed absence is not a user edit. Preserve zero rather than inventing
+  // an initialization timestamp; remote and real pending values retain theirs.
+  state.taskbarPinsUpdatedAtMs = Number(resolved.updatedAtMs || 0);
+  finishAttempt('adopted', {
+    resultPresent: authoritativeDocument !== null,
+    remoteDocumentPresent: layout !== null,
+    remoteUpdatedAtMs: Number(layout?.updated_at_ms || 0),
+    remotePinCount: Array.isArray(layout?.taskbar_pins)
+      ? layout.taskbar_pins.length
+      : null,
+    resolvedSource: resolved.source,
+    knownAfterRead: state.taskbarPinsKnown === true,
+    adoptedPinCount: state.taskbarPins.length,
+    adoptedUpdatedAtMs: state.taskbarPinsUpdatedAtMs,
+  }, nativeEndedAtMs);
+  if (resolved.source === 'remote' || localUpdatedAtMs > 0) {
+    try {
+      writeScopedLocalStorage(
+        TASKBAR_PINS_KEY,
+        encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+      );
+    } catch (error) {
+      // The pending in-memory edit remains eligible for authoritative
+      // write-back even when private mode or quota blocks the cache.
+      console.warn('[business-os] taskbar pin cache write failed:', error);
+    }
+  }
+  renderTabs();
+  // Only a real, strictly newer local selection may write back. The existing
+  // authoritative handle avoids a second ordinary/local query.
+  const shouldWriteBack = resolved.source === 'local'
+    && localUpdatedAtMs > Number(layout?.updated_at_ms || 0);
+  if (shouldWriteBack && authoritativeDocument) {
+    await syncTaskbarPinsToDesktopLayout({ authoritativeDocument });
+  }
 }
 
 async function withStartupTimeout(promise, timeoutMs, fallback, label) {
@@ -5715,17 +6044,44 @@ async function withStartupTimeout(promise, timeoutMs, fallback, label) {
   }
 }
 
-async function syncTaskbarPinsToDesktopLayout() {
-  const collection = state.db?.collection?.('desktop_layout');
+async function syncTaskbarPinsToDesktopLayout(options = {}) {
+  const database = state.db;
+  const sync = state.sync;
+  const storageKey = scopedStorageKey(TASKBAR_PINS_KEY);
+  if (!database) return;
+  let existing = options.authoritativeDocument || null;
+  if (!existing) {
+    if (!sync?.readCollectionNativeDocument) return;
+    try {
+      existing = await sync.readCollectionNativeDocument('desktop_layout', 'layout', {
+        timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+      });
+    } catch (error) {
+      // Keep the in-memory pending edit. Storage/cache remains best effort.
+      console.warn('[business-os] taskbar pin write-back read failed:', error);
+      return;
+    }
+  }
+  if (state.db !== database || state.sync !== sync
+    || scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey) {
+    return;
+  }
+  const collection = database?.collection?.('desktop_layout');
   if (!collection) return;
-  const existing = await collection.findOne('layout').exec();
   const existingLayout = existing?.toJSON?.() || null;
-  const remoteUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
-  if (remoteUpdatedAtMs > Number(state.taskbarPinsUpdatedAtMs || 0)) {
+  const resolved = resolveTaskbarPinState({
+    localPins: state.taskbarPins,
+    localUpdatedAtMs: state.taskbarPinsUpdatedAtMs,
+    localPresent: state.taskbarPinsKnown === true,
+    remotePins: existingLayout?.taskbar_pins,
+    remoteUpdatedAtMs: existingLayout?.updated_at_ms,
+  });
+  if (resolved.source === 'remote') {
     state.taskbarPins = normalizeTaskbarPins(existingLayout.taskbar_pins, state.modules, {
       compactLegacyAllPins: true,
+      preserveKnownEmpty: true,
     });
-    state.taskbarPinsUpdatedAtMs = remoteUpdatedAtMs;
+    state.taskbarPinsUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
     writeScopedLocalStorage(
       TASKBAR_PINS_KEY,
       encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
@@ -5733,21 +6089,25 @@ async function syncTaskbarPinsToDesktopLayout() {
     renderTabs();
     return;
   }
+  // Only a genuine user edit can reach here with a timestamp. Confirmed
+  // absence and unchanged values must not invent one or create a layout.
+  if (!state.taskbarPinsKnown || Number(state.taskbarPinsUpdatedAtMs || 0) <= 0) return;
   const remotePins = Array.isArray(existingLayout?.taskbar_pins)
     ? existingLayout.taskbar_pins.map((id) => String(id || '').trim()).filter(Boolean)
-    : [];
+    : null;
   const localPins = Array.isArray(state.taskbarPins)
     ? state.taskbarPins.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
   if (existing
-    && remoteUpdatedAtMs === Number(state.taskbarPinsUpdatedAtMs || 0)
+    && Number(existingLayout?.updated_at_ms || 0) === Number(state.taskbarPinsUpdatedAtMs || 0)
+    && Array.isArray(remotePins)
     && remotePins.length === localPins.length
     && remotePins.every((id, index) => id === localPins[index])) {
     return;
   }
   const patch = {
     taskbar_pins: state.taskbarPins,
-    updated_at_ms: state.taskbarPinsUpdatedAtMs || Date.now(),
+    updated_at_ms: Number(state.taskbarPinsUpdatedAtMs || 0),
   };
   if (existing) {
     await existing.incrementalPatch(patch);
@@ -5806,6 +6166,14 @@ function renderModuleGroup(group, modulesById) {
   return wrap;
 }
 
+function replaceModuleHash(moduleId) {
+  // A shell-pack <base> is for assets, never for the public navigation URL.
+  // Resolve against the actual document so a reload stays on its entry route.
+  const next = new URL(location.href);
+  next.hash = moduleId;
+  history.replaceState(null, '', next.href);
+}
+
 async function openModule(moduleId, options = {}) {
   const rawModuleRef = String(moduleId || '');
   const parsedModuleRef = parseHashWithParams(rawModuleRef);
@@ -5813,7 +6181,7 @@ async function openModule(moduleId, options = {}) {
   const refArgs = parsedModuleRef.params ? searchParamsToObject(parsedModuleRef.params) : {};
   const requestedId = moduleAliases[moduleId] || moduleId;
   if (requestedId !== moduleId && currentHashModuleId() === moduleId) {
-    history.replaceState(null, '', `#${requestedId}`);
+    replaceModuleHash(requestedId);
   }
   let mod = state.modules.find((item) => item.id === requestedId);
   if (!mod && requestedId) {
@@ -5836,7 +6204,7 @@ async function openModule(moduleId, options = {}) {
     const fallbackId = visibleModuleFallbackId(mod.id);
     setStatus(`${moduleDisplayTitle(mod)} ist für diesen Account nicht sichtbar. ${lifecycle.reason || ''}`.trim());
     if (currentHashModuleId() === mod.id && fallbackId) {
-      history.replaceState(null, '', `#${fallbackId}`);
+      replaceModuleHash(fallbackId);
     }
     if (fallbackId && fallbackId !== mod.id) {
       await openModule(fallbackId, {
@@ -5858,10 +6226,10 @@ async function openModule(moduleId, options = {}) {
       ...(options.args || {}),
     };
     if (fallbackId && state.activeModule?.id !== fallbackId) {
-      if (currentHashModuleId() === mod.id) history.replaceState(null, '', `#${fallbackId}`);
+      if (currentHashModuleId() === mod.id) replaceModuleHash(fallbackId);
       await openModule(fallbackId, { isNavHistory: true });
     } else if (currentHashModuleId() === mod.id && fallbackId) {
-      history.replaceState(null, '', `#${fallbackId}`);
+      replaceModuleHash(fallbackId);
     }
     await openDesktopApp(mod.id, {
       title: moduleDisplayTitle(mod),
@@ -6137,7 +6505,9 @@ function collectForeignSchemaModules(mod) {
   const eigene = new Set(declared.filter((name) => String(name || '').startsWith(`${mod.id}_`)));
   const gesucht = declared
     .map((name) => String(name || '').trim())
-    .filter((name) => name && !eigene.has(name));
+    // Already registered shared schemas (e.g. business_commands) must not
+    // make every app that reads them a startup dependency of this module.
+    .filter((name) => name && !eigene.has(name) && !state.db?.raw?.[name]);
   if (!gesucht.length) return [];
   const besitzer = new Map();
   for (const other of state.modules) {
@@ -6185,21 +6555,9 @@ function startModuleSync(mod) {
 
 async function recoverFromLocalRxDbSchemaDrift(error) {
   if (!isRxDbSchemaDriftError(error)) return false;
-  const repairToken = `${businessDbName()}:${RXDB_BOOTSTRAP_VERSION}`;
-  try {
-    if (sessionStorage.getItem(RXDB_SCHEMA_REPAIR_KEY) === repairToken) return false;
-    sessionStorage.setItem(RXDB_SCHEMA_REPAIR_KEY, repairToken);
-  } catch {}
-  console.warn('[business-os] local RxDB schema repair triggered; rebuilding browser cache', error);
-  setStatus('Lokale Datenverbindung wird neu aufgebaut');
-  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before schema repair failed', stopError); }
-  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before schema repair failed', closeError); }
-  try {
-    const { resetBusinessDb } = await loadBusinessDbModule();
-    await resetBusinessDb({ name: businessDbName() });
-  } catch (resetError) { console.warn('[business-os] RxDB schema repair reset failed', resetError); }
-  window.setTimeout(() => window.location.reload(), 250);
-  return true;
+  console.warn('[business-os] local RxDB schema drift; preserving local replica instead of resetting it', error);
+  setStatus('Lokale Datenbank benötigt eine sichere Wiederherstellung; Daten bleiben erhalten');
+  return false;
 }
 
 function isRxDbSchemaDriftError(error) {
@@ -6438,6 +6796,15 @@ function createModuleContext(mod, overrides = {}) {
     runtimeCapabilities: createRuntimeCapabilityFacade(mod),
     storageScope: createStorageScopeFacade(mod),
     sync: moduleSync,
+    readNativeCollectionDocument: mod.id === 'desktop' || mod.id === 'mail'
+      ? (collection, documentId, options = {}) => {
+          if (mod.id === 'mail' && collection !== 'communication_accounts') {
+            throw new Error('Mail can verify only its account records.');
+          }
+          return state.sync?.readCollectionNativeDocument(collection, documentId, options)
+            .then((document) => document ?? null);
+        }
+      : null,
     commandBus: createLiveCommandBusFacade(),
     actions: createAppActions({
       module: mod,
@@ -6717,6 +7084,9 @@ const BUSINESS_CHAT_DB_COLLECTIONS = [
   // the takeover line reads the selection event of the tracked task.
   'ctox_crew_members',
   'ctox_harness_events',
+  // Worker truth for the crew bar count and app presence: only queue tasks a
+  // worker really executes (active_task_ids) count as work.
+  'ctox_harness_status',
   'ctox_queue_tasks',
   'desktop_file_chunks',
   'desktop_files',
@@ -6774,6 +7144,7 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
   ctox: Object.freeze([
     'business_chats',
     'business_commands',
+    'communication_accounts',
     WORKSPACE_BRANDING_COLLECTION,
     'ctox_bug_reports',
     'ctox_crew_learnings',
@@ -6839,6 +7210,7 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
     'user_notifications',
     'user_thread_links',
     'user_thread_messages',
+    'user_thread_states',
     'user_threads',
   ]),
   tickets: Object.freeze([
@@ -7559,7 +7931,7 @@ function createContextActionsFacade(moduleLike) {
       const extraClientContext = options.client_context && typeof options.client_context === 'object'
         ? options.client_context
         : {};
-      return state.commandBus.dispatch({
+      const command = {
         id: commandId,
         command_id: commandId,
         module: moduleId,
@@ -7594,7 +7966,15 @@ function createContextActionsFacade(moduleLike) {
           ...(options.visible_scope ? { visible_scope: options.visible_scope } : {}),
           ...(options.actor ? { actor: options.actor } : {}),
         },
-      }, { until: 'local' });
+      };
+      if (options.openChat === true) {
+        return submitBusinessChatTask(moduleLike, {
+          ...command,
+          onPresented: options.onPresented,
+          crew_identity: options.crew_identity,
+        });
+      }
+      return state.commandBus.dispatch(command, { until: 'local' });
     },
   });
 }
@@ -7735,12 +8115,21 @@ async function submitBusinessChatTask(moduleLike, options = {}) {
         window.clearTimeout(timeoutId);
         callback(value);
       };
+      // Laeuft das Fenster ab, wissen wir NICHT, dass die Uebergabe scheiterte —
+      // wir wissen nur, dass die Bestaetigung ausblieb. thesen 09.09.2026: die
+      // Oberflaeche meldete "nicht uebergeben", waehrend der Befehl 123 Sekunden
+      // spaeter angenommen wurde und der Worker laengst lief. Wer der Meldung
+      // glaubt, startet ein zweites Mal und erzeugt Dubletten. Der Text sagt
+      // deshalb, was gilt: unbestaetigt, nicht gescheitert.
       const timeoutId = window.setTimeout(() => {
-        finish(reject, new Error('Die CTOX-Crew hat den Auftrag nicht rechtzeitig an die Queue übergeben.'));
+        finish(reject, new Error('Die Übergabe an die Queue wurde in 30 Sekunden nicht bestätigt. Der Auftrag kann trotzdem angenommen worden sein — bitte die Aufgabenliste prüfen, bevor du erneut startest.'));
       }, 30_000);
       window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
         detail: {
           resolveSubmission: (submission) => finish(resolve, submission),
+          onPresented: options.onPresented,
+          crew_member_id: payload.crew_member_id || '',
+          crew_identity: options.crew_identity || null,
           rejectSubmission: (error) => finish(reject, error instanceof Error ? error : new Error(String(error || 'Task konnte nicht übergeben werden.'))),
         text: prompt,
         title,
@@ -8573,6 +8962,7 @@ function sanitizeClientId(value) {
 }
 
 function renderLoginGate(session, options = {}) {
+  cancelBusinessCompanions();
   document.body.dataset.authState = 'locked';
   delete document.body.dataset.moduleShell;
   delete document.body.dataset.moduleLoading;
@@ -9107,6 +9497,7 @@ function writeAccountPrefs(nextPrefs) {
 }
 
 function clearStoredBrowserAuth() {
+  cancelBusinessCompanions();
   localStorage.removeItem(SESSION_TOKEN_KEY);
   localStorage.removeItem(AUTH_HEADER_KEY);
 }
@@ -9177,52 +9568,46 @@ function loadBusinessChatModule() {
   return businessChatModulePromise;
 }
 
+const businessCompanionScheduler = createBusinessCompanionScheduler({
+  loadBusinessReporterModule,
+  loadBusinessChatModule,
+  getSession: () => state.session,
+  findCtoxModule: () => state.modules.find((mod) => mod.id === 'ctox'),
+  registerModuleSchemas,
+  createReporterContext: (_session, reporterModule) => ({
+    getActiveModule: () => reporterModule.resolveBusinessReporterModule({
+      activeModule: state.activeModule,
+      modules: state.modules,
+      windowManager: state.windowManager,
+    }),
+    db: createScopedSystemDbFacade('business-reporter-companion', BUSINESS_REPORTER_DB_COLLECTIONS),
+    sync: createLiveSyncFacade(),
+    ensureReportCollections: async () => {
+      const reportsModule = state.modules.find((mod) => mod.id === 'reports');
+      if (!reportsModule) throw new Error('Bugs & Features ist noch nicht im Modulkatalog verfügbar.');
+      await registerModuleSchemas(reportsModule);
+    },
+  }),
+  createChatContext: () => ({
+    commandBus: createLiveCommandBusFacade(),
+    db: createScopedSystemDbFacade('business-chat-companion', BUSINESS_CHAT_DB_COLLECTIONS),
+    sync: createLiveSyncFacade(),
+    getActiveModule: () => state.activeModule,
+  }),
+  onError: (error) => {
+    console.warn('[business-os] companion surface lazy init failed', error);
+  },
+  onSchemaError: (error) => {
+    console.warn('[business-os] crew schema registration for the chat bar failed', error);
+  },
+});
+
 function scheduleBusinessCompanions() {
-  loadBusinessReporterModule()
-    .then(({ initBusinessReporter, resolveBusinessReporterModule }) => {
-      initBusinessReporter({
-        session: state.session,
-        getActiveModule: () => resolveBusinessReporterModule({
-          activeModule: state.activeModule,
-          modules: state.modules,
-          windowManager: state.windowManager,
-        }),
-        db: createScopedSystemDbFacade('business-reporter-companion', BUSINESS_REPORTER_DB_COLLECTIONS),
-        sync: createLiveSyncFacade(),
-        ensureReportCollections: async () => {
-          const reportsModule = state.modules.find((mod) => mod.id === 'reports');
-          if (!reportsModule) throw new Error('Bugs & Features ist noch nicht im Modulkatalog verfügbar.');
-          await registerModuleSchemas(reportsModule);
-        },
-      });
-    })
-    .catch((error) => {
-      console.warn('[business-os] reporter surface lazy init failed', error);
-    });
-  loadBusinessChatModule()
-    .then(async ({ initBusinessChat }) => {
-      // The crew bar is a shell surface: it needs the CTOX module's collections
-      // (crew members) registered before the first pool load, not only once the
-      // CTOX window has been opened.
-      const ctoxModule = state.modules.find((mod) => mod.id === 'ctox');
-      if (ctoxModule) {
-        try {
-          await registerModuleSchemas(ctoxModule);
-        } catch (error) {
-          console.warn('[business-os] crew schema registration for the chat bar failed', error);
-        }
-      }
-      initBusinessChat({
-        session: state.session,
-        commandBus: createLiveCommandBusFacade(),
-        db: createScopedSystemDbFacade('business-chat-companion', BUSINESS_CHAT_DB_COLLECTIONS),
-        sync: createLiveSyncFacade(),
-        getActiveModule: () => state.activeModule,
-      });
-    })
-    .catch((error) => {
-      console.warn('[business-os] chat surface lazy init failed', error);
-    });
+  return businessCompanionScheduler.schedule();
+}
+
+function cancelBusinessCompanions() {
+  businessCompanionScheduler.cancel();
 }
 
 function renderLeftContext(mod) {
@@ -9876,7 +10261,15 @@ async function tryAcknowledgeMaintenanceReadiness() {
   if (missing.length) {
     if (els.maintenanceBanner) {
       const detail = els.maintenanceBanner.querySelector('[data-maintenance-detail]');
-      if (detail) detail.textContent = `${CTOX_MAINTENANCE_SYNC_MESSAGE} · ${missing.length} ausstehend`;
+      // Name the collection that is holding the instance read-only. "1
+      // ausstehend" forced a reach into window.ctoxBusinessOsSyncDiagnostics
+      // to find out which one, while every user waited out the grace period
+      // (thesen 09.09.2026, four upgrades in a row).
+      if (detail) {
+        const named = missing.slice(0, 3).join(', ');
+        const rest = missing.length > 3 ? ` und ${missing.length - 3} weitere` : '';
+        detail.textContent = `${CTOX_MAINTENANCE_SYNC_MESSAGE} · wartet auf ${named}${rest}`;
+      }
     }
     return;
   }
@@ -10245,17 +10638,19 @@ function renderShellCtoxVersion(status = state.ctoxHealth) {
   }
   const platform = status?.runtime_settings?.platform || null;
   const version = platformDisplayVersion(platform?.version || platform?.release_tag || '');
+  const labelEl = container.querySelector('[data-ctox-version-label]');
+  const button = container.querySelector('[data-ctox-update-button]');
   if (!version) {
-    container.hidden = true;
-    container.removeAttribute('title');
+    if (labelEl) labelEl.textContent = 'CTOX —';
+    container.title = 'Backend-Version derzeit nicht verfügbar; Runtime-Status über Sync prüfen';
+    container.hidden = false;
+    if (button) button.hidden = true;
     return;
   }
   maybeRefreshCtoxUpdateCheck(platform);
   const check = currentCtoxUpdateCheck();
   const updateAvailable = check?.update_available === true;
   const latest = platformDisplayVersion(check?.latest_release || '');
-  const labelEl = container.querySelector('[data-ctox-version-label]');
-  const button = container.querySelector('[data-ctox-update-button]');
   const parts = [`CTOX ${version}`];
   // Die Versionsnummer stammt aus Cargo.toml und wird auf main nie
   // hochgezaehlt: sie zeigt seit Monaten 0.3.22, egal wie oft aktualisiert
@@ -10432,8 +10827,13 @@ async function loadLaunchContext() {
   }
   let payload;
   try {
-    payload = await fetchBusinessOsControlJson('/api/business-os/launch-context');
+    payload = await withStartupDeadline(
+      (signal) => fetchBusinessOsControlJson('/api/business-os/launch-context', { signal }),
+      LAUNCH_CONTEXT_DEADLINE_MS,
+      `Business OS launch context timed out after ${LAUNCH_CONTEXT_DEADLINE_MS / 1000} seconds.`,
+    );
   } catch (error) {
+    if (isStartupDeadlineError(error)) throw error;
     throw new Error(`Business OS launch context could not be loaded: ${error?.message || error}`);
   }
   const hasOwn = (key) => Object.prototype.hasOwnProperty.call(payload || {}, key);
@@ -10466,6 +10866,7 @@ async function fetchBusinessOsControlJson(url, options = {}) {
     body: options.body,
     credentials: 'same-origin',
     cache: 'no-store',
+    signal: options.signal,
   });
   const text = await response.text();
   let payload = null;
@@ -10501,6 +10902,19 @@ function shellCtoxHealthProblem(status) {
   }
   if (!status || status.ok === false) {
     return [shellText('ctoxStatusUnavailable'), status?.error].filter(Boolean).join(' ');
+  }
+  const runtime = status.runtime_settings;
+  if (subscriptionModelUnavailable(runtime)) {
+    return state.lang === 'en' ? 'The selected model is not offered for this login. Choose an available model in Settings.'
+      : 'Das ausgewählte Modell wird für diesen Zugang nicht angeboten. Bitte in den Einstellungen ein verfügbares Modell auswählen.';
+  }
+  if (runtime?.diagnostics?.auth_needs_attention === true) {
+    return state.lang === 'en' ? 'The crew cannot work: model access is missing. Configure the provider in Settings.'
+      : 'Die Crew kann nicht arbeiten: Der Modellzugang fehlt. Bitte den Anbieter in den Einstellungen einrichten.';
+  }
+  if (runtime?.runtime?.provider && !String(runtime.runtime.chat_model || '').trim()) {
+    return state.lang === 'en' ? 'The crew cannot work: no model selected. Choose a model in Settings.'
+      : 'Die Crew kann nicht arbeiten: Es ist kein Modell ausgewählt. Bitte in den Einstellungen auswählen.';
   }
   const service = status.ctox_service;
   if (!service) return shellText('ctoxStatusUnavailable');
@@ -10609,12 +11023,14 @@ function isLocalBusinessOsSurface() {
 async function loadModules(options = {}) {
   const normalized = typeof options === 'number' ? { timeoutMs: options } : (options || {});
   const allowShellSeed = normalized.allowShellSeed !== false && allowsPackagedModuleCatalogSeed();
+  const startup = {};
   const catalog = await loadModuleCatalog(normalized.timeoutMs, {
     allowShellSeed,
+    startup,
   });
   const merged = await ensurePackagedModuleList(
     normalizeModuleList(catalog.modules),
-    { allowShellSeed }
+    { allowShellSeed, useEmbeddedMetadata: startup.usedProjectedCatalog === true }
   );
   // Remember the catalog-provided allowlist so desktop-app gating (listDesktopApps)
   // stays in sync with the tab list. Only overwrite when the synced catalog actually
@@ -10837,7 +11253,14 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
     && moduleCatalogProjectionRevisionMs(injectedCatalog) >= moduleCatalogProjectionRevisionMs(cachedCatalog)
     ? injectedCatalog
     : cachedCatalog;
-  const shellCatalog = options.allowShellSeed === false ? null : await loadPackagedModuleCatalog();
+  if (projectedCatalog && options.startup) options.startup.usedProjectedCatalog = true;
+  // A warm local/native projection must render without waiting for static
+  // manifest and per-module asset fetches. Those are code metadata, not the
+  // authority for which apps this actor may see; the current build embeds the
+  // same packaged system catalog for the first paint.
+  const shellCatalog = options.allowShellSeed === false
+    ? null
+    : projectedCatalog ? loadEmbeddedPackagedModuleCatalog() : await loadPackagedModuleCatalog();
 
   if (projectedCatalog) {
     state.sync?.startCollection?.('business_module_catalog').catch((error) => {
@@ -10922,7 +11345,9 @@ function normalizeModuleList(modules) {
 }
 
 async function ensurePackagedModuleList(modules, options = {}) {
-  const shellCatalog = await loadPackagedModuleCatalog();
+  const shellCatalog = options.useEmbeddedMetadata
+    ? loadEmbeddedPackagedModuleCatalog()
+    : await loadPackagedModuleCatalog();
   const canonicalSystemIds = new Set(
     normalizeModuleList(shellCatalog?.modules).map((mod) => String(mod?.id || '').trim()),
   );
@@ -11054,6 +11479,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "full-workspace",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/desktop.png",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-desktop\"><defs><linearGradient id=\"grad-desktop\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#94a3b8\" /><stop offset=\"100%\" stop-color=\"#3b82f6\" /></linearGradient></defs><rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"3\" ry=\"3\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.12\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M12 17v4M8 21h8\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><rect x=\"5\" y=\"6\" width=\"6\" height=\"4\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"13\" y=\"6\" width=\"6\" height=\"8\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"5\" y=\"12\" width=\"6\" height=\"2\" rx=\"0.5\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect></svg>",
         "left": "desktop scopes",
         "center": "desktop surface",
@@ -11104,7 +11530,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/app-store.jpg",
+        "icon_asset_sha256": "b6e9bc5bfa8bb42b86748efc00e9b5e736c4a0b6809b6c763aa6e8e7164de108",
+        "icon_selection_sha256": "b6e9bc5bfa8bb42b86748efc00e9b5e736c4a0b6809b6c763aa6e8e7164de108",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Development",
       "version": "1.1.1",
@@ -11160,6 +11591,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "windowed",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/creator.png",
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-creator\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-creator\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#8b5cf6\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"4\" fill=\"url(#grad-creator)\" fill-opacity=\"0.12\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 7v10M7 12h10\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M16.5 5.5l2 2\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
@@ -11231,6 +11663,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "windowed",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/explorer.png",
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-explorer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-explorer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M3 7.5h7l2-2h9v13.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5Z\" fill=\"url(#grad-explorer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M3 10h18\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
@@ -11294,13 +11727,14 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "windowed",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/file-viewer.png",
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-file-viewer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-file-viewer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f59e0b\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M6 3h8l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z\" fill=\"url(#grad-file-viewer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M14 3v5h4\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 14s1.5-2 4-2 4 2 4 2-1.5 2-4 2-4-2-4-2Z\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"1.7\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"14\" r=\"1\" fill=\"url(#grad-file-viewer)\"></circle></svg>",
         "default_width": 760,
         "default_height": 560,
         "min_width": 520,
-        "min_height": 400
+        "min_height": 480
       },
       "category": "Workspace",
       "version": "1.0.0",
@@ -11336,9 +11770,9 @@ const OFFLINE_FALLBACK_CATALOG = {
         },
         "minimum_size": {
           "width": 520,
-          "height": 400
+          "height": 480
         },
-        "multi_instance": true,
+        "multi_instance": false,
         "auto_restore": false
       },
       "source": "core",
@@ -11372,7 +11806,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1280,
         "default_height": 820,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/appsec-pentest.jpg",
+        "icon_asset_sha256": "85fd7ee28a9d4f8a047569cbc376b63e5f26d16584272ccd0785fae638fb1a53",
+        "icon_selection_sha256": "85fd7ee28a9d4f8a047569cbc376b63e5f26d16584272ccd0785fae638fb1a53",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Security",
       "version": "0.2.0",
@@ -11450,7 +11889,11 @@ const OFFLINE_FALLBACK_CATALOG = {
         "min_height": 480,
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-browser\"><defs><linearGradient id=\"grad-browser\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#22c55e\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" fill=\"url(#grad-browser)\" fill-opacity=\"0.12\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M3 9h18\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><circle cx=\"7\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><circle cx=\"10\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><path d=\"M8 15h8M12 11v8\" stroke=\"url(#grad-browser)\" stroke-width=\"1.7\" stroke-linecap=\"round\"></path></svg>",
         "top": "browser tabs and address bar",
-        "center": "web page"
+        "center": "web page",
+        "icon_asset_sha256": "8fa94a7ae4b6db8885c0088a68cf736a23c0fd717a3711cd9b015c969f799a11",
+        "icon_selection_sha256": "8fa94a7ae4b6db8885c0088a68cf736a23c0fd717a3711cd9b015c969f799a11",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Workspace",
       "version": "0.3.0",
@@ -11514,7 +11957,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "left": "Projects: Business OS apps the agent can work on",
         "center": "Chat with the pi agent (transcript + composer)",
         "right": "Live task artifact: free HTML the agent maintains about its run",
-        "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task."
+        "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/coding-agents.jpg",
+        "icon_asset_sha256": "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3",
+        "icon_selection_sha256": "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3",
+        "icon_selection_candidate": "candidate-09",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Development",
       "version": "0.2.6",
@@ -11573,7 +12021,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-importer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-importer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><rect x=\"3\" y=\"9\" width=\"18\" height=\"12\" rx=\"2.5\" fill=\"url(#grad-importer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 3v9\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M8.5 8.5 12 12l3.5-3.5\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
         "left": "Source: folder or GitHub",
         "center": "Durable porting and validation progress",
-        "right": "Live application evidence"
+        "right": "Live application evidence",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/importer.jpg",
+        "icon_asset_sha256": "13c493fc01ebc97db2fd6d098281ffde490761deadfbfc9963db7b8ecda60e61",
+        "icon_selection_sha256": "13c493fc01ebc97db2fd6d098281ffde490761deadfbfc9963db7b8ecda60e61",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "development",
       "version": "0.3.0",
@@ -11635,7 +12088,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-credentials\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-credentials\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#14b8a6\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><path d=\"M12 2l8 3v6c0 5-3.5 8-8 11-4.5-3-8-6-8-11V5l8-3z\" fill=\"url(#grad-credentials)\" fill-opacity=\"0.12\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"10\" r=\"2.4\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\"></circle><path d=\"M12 12.4V16\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
         "left": "Credential catalog and status",
         "center": "Set, rotate and remove credentials",
-        "right": "Security notes"
+        "right": "Security notes",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/credentials.jpg",
+        "icon_asset_sha256": "d796dc418c8f64faadc3f43e914a7bfb6ea6e6a4b54a7b6d643e6ff40b1f4e57",
+        "icon_selection_sha256": "d796dc418c8f64faadc3f43e914a7bfb6ea6e6a4b54a7b6d643e6ff40b1f4e57",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Security",
       "version": "0.1.2",
@@ -11687,6 +12145,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       "description": "Deine Crew, ihre Aufgaben, Fortschritte und Ergebnisse.",
       "entry": "modules/ctox/index.html",
       "collections": [
+        "communication_accounts",
         "business_commands",
         "business_chats",
         "ctox_runtime_settings",
@@ -11705,6 +12164,9 @@ const OFFLINE_FALLBACK_CATALOG = {
         "business_module_commits",
         "business_module_source_blob_chunks",
         "workjet_projects",
+        "workjet_project_chats",
+        "workjet_project_workers",
+        "workjet_worker_profile_bindings",
         "workjet_working_copies",
         "workjet_computers",
         "workjet_sessions",
@@ -11720,7 +12182,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1320,
         "default_height": 860,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/ctox.jpg",
+        "icon_asset_sha256": "595492dd0ab23f3db59a0ebe9a6ec8062b1b2a80cbc54f566ee32b0501bcf0ce",
+        "icon_selection_sha256": "595492dd0ab23f3db59a0ebe9a6ec8062b1b2a80cbc54f566ee32b0501bcf0ce",
+        "icon_selection_candidate": "candidate-02",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "System",
       "version": "1.1.2",
@@ -11791,7 +12258,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "drawers": {
           "left": "document metadata and import settings",
           "bottom": "diagnostics, export evidence, and selected document context"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/documents.jpg",
+        "icon_asset_sha256": "31123bf173860e01f05eb6be2431f71925bab9f355241b2582d30a2d06aef216",
+        "icon_selection_sha256": "31123bf173860e01f05eb6be2431f71925bab9f355241b2582d30a2d06aef216",
+        "icon_selection_candidate": "candidate-05",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Knowledge",
       "version": "1.0.0",
@@ -11863,7 +12335,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-iot\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-iot\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"url(#grad-iot)\" fill-opacity=\"0.18\" stroke=\"url(#grad-iot)\" stroke-width=\"2\"></circle><path d=\"M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4\" stroke=\"url(#grad-iot)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14\" stroke=\"url(#grad-iot)\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-opacity=\"0.7\"></path></svg>",
         "left": "Realm scope, asset/signal tree; right-click a signal to create an order or a webhook source",
         "center": "Dashboards of automation widgets (the three CTOX-programmed parts: trigger logic, widget code, order prompt), Karten ⇄ Liste",
-        "right": ""
+        "right": "",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/iot.jpg",
+        "icon_asset_sha256": "47e1a59d94e34baa238268a4eb5ec8190b8211e885ac418e106bb0de25bd2e43",
+        "icon_selection_sha256": "47e1a59d94e34baa238268a4eb5ec8190b8211e885ac418e106bb0de25bd2e43",
+        "icon_selection_candidate": "candidate-14",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "1.0.2",
@@ -11952,7 +12429,11 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1200,
         "default_height": 720,
         "min_width": 360,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset_sha256": "257526ec6c932c287be864be47e7e7708f32d136d587ab2d17da6cc62629c220",
+        "icon_selection_sha256": "6aaaac3c849a444f1bc8af3e4f019eb4eded5ad64ac70ec85eee5c54cdb06e3b",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Knowledge",
       "version": "1.1.7",
@@ -12015,7 +12496,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "left": "Folders and note list",
         "center": "Markdown editor and rich text live preview",
         "right": "Command dashboard and formatting shortcuts",
-        "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout."
+        "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout.",
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/notes.jpg",
+        "icon_asset_sha256": "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b",
+        "icon_selection_sha256": "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b",
+        "icon_selection_candidate": "candidate-06",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Productivity",
       "version": "1.0.2",
@@ -12087,7 +12573,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/reports.jpg",
+        "icon_asset_sha256": "f83ec81f7954a899490a63d02af84fc4d145f49184b7884b97a749a8bd373275",
+        "icon_selection_sha256": "f83ec81f7954a899490a63d02af84fc4d145f49184b7884b97a749a8bd373275",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Governance",
       "version": "1.1.2",
@@ -12161,7 +12652,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "drawers": {
           "right": "task setup, scoring model, and selected source detail",
           "bottom": "Knowledge table diagnostics and raw row evidence"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/research.jpg",
+        "icon_asset_sha256": "a888d0b6ca2053cd15030286577951004fb449a97e79980df76ffaf643e796fb",
+        "icon_selection_sha256": "a888d0b6ca2053cd15030286577951004fb449a97e79980df76ffaf643e796fb",
+        "icon_selection_candidate": "candidate-14",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Research",
       "version": "1.0.16",
@@ -12229,7 +12725,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "drawers": {
           "left": "spreadsheet metadata and import settings",
           "bottom": "diagnostics, export evidence, and selected spreadsheet context"
-        }
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/spreadsheets.jpg",
+        "icon_asset_sha256": "664b5a31fa43c3d1135b15979c8348e0397dc648c37dbd823e681f4da35db284",
+        "icon_selection_sha256": "664b5a31fa43c3d1135b15979c8348e0397dc648c37dbd823e681f4da35db284",
+        "icon_selection_candidate": "candidate-05",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Analytics",
       "version": "1.0.1",
@@ -12302,7 +12803,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/threads.jpg",
+        "icon_asset_sha256": "b4cf784881d8c5463837688755795dffbd66b5082333bf1508357df3a10d28ed",
+        "icon_selection_sha256": "b4cf784881d8c5463837688755795dffbd66b5082333bf1508357df3a10d28ed",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "System",
       "version": "0.2.4",
@@ -12379,7 +12885,12 @@ const OFFLINE_FALLBACK_CATALOG = {
         "default_width": 1180,
         "default_height": 780,
         "min_width": 640,
-        "min_height": 480
+        "min_height": 480,
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/tickets.jpg",
+        "icon_asset_sha256": "6d0cbd2138977725b6043fd582b1d2b65b7214c8c9153ad7977942c26ebc4675",
+        "icon_selection_sha256": "6d0cbd2138977725b6043fd582b1d2b65b7214c8c9153ad7977942c26ebc4675",
+        "icon_selection_candidate": "candidate-02",
+        "icon_asset_kind": "raster-reference"
       },
       "category": "Operations",
       "version": "1.0.2",
@@ -12511,6 +13022,18 @@ function getOfflineFallbackCatalog() {
     templates: [],
     governance: null,
     source: 'business-os-shell-embedded-catalog',
+  };
+}
+
+function loadEmbeddedPackagedModuleCatalog() {
+  const catalog = getOfflineFallbackCatalog();
+  const explicitlyAllowedIds = resolveModuleAllowlist();
+  return {
+    ...catalog,
+    modules: catalog.modules.filter((mod) => {
+      const id = String(mod?.id || '').trim();
+      return isSystemModule(mod) || explicitlyAllowedIds.has(id);
+    }),
   };
 }
 
@@ -12913,12 +13436,72 @@ async function workjetProjectControl(request = {}) {
   }
   const action = boundedWorkjetProjectText(request.action, 'action', 64);
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
-  const { projectBridge, workingCopyBridge } = await requireWorkjetProjectDataPlane();
+  const requestSession = state.session;
+  const requestDb = state.db;
+  // Reserve a delivery margin inside Workjet's 30-second desktop call.
+  const listDeadline = action === 'project.list'
+    ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
+  const acquisition = requireWorkjetProjectDataPlane();
+  const { projectBridge, workingCopyBridge } = listDeadline
+    ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
+    : await acquisition;
+
+  if (action === 'project.worker.add' || action === 'project.chat.create') {
+    const creatingChat = action === 'project.chat.create';
+    const allowedKeys = new Set(['action', 'commandId', 'projectId', 'workerProfileId', 'createdAt']);
+    if (creatingChat) allowedKeys.add('title');
+    assertWorkjetProjectPayloadKeys(request, allowedKeys);
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const workerProfileId = boundedWorkjetProjectText(request.workerProfileId, 'workerProfileId', 256);
+    boundedWorkjetProjectIsoDate(request.createdAt, 'createdAt');
+    const payload = { project_id: projectId, worker_profile_id: workerProfileId };
+    if (creatingChat) payload.title = boundedWorkjetProjectText(request.title, 'title', 256);
+    const assertCurrentSession = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the command result was delivered.');
+      }
+    };
+    assertCurrentSession();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: creatingChat ? 'ctox.workjet.project.chat.create' : 'ctox.workjet.project.worker.add',
+      record_id: projectId,
+      payload,
+      client_context: {
+        source: 'workjet-project-control',
+        actor: actorContext(requestSession),
+      },
+    }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentSession();
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId
+      || receipt.payload?.project_id !== projectId || receipt.payload?.worker_profile_id !== workerProfileId
+      || (creatingChat && receipt.payload?.title !== payload.title)
+      || receipt.result?.ok !== true || receipt.result?.contract !== 'workjet-project-chats.v1') {
+      throw new Error('Workjet project command returned an uncorrelated or unsuccessful receipt.');
+    }
+    const chatId = creatingChat ? receipt.result.chat_id : receipt.result.first_chat_id;
+    if (typeof chatId !== 'string' || !/^workjet_private_[A-Za-z0-9_-]+$/.test(chatId) || chatId.length > 256) {
+      throw new Error('Workjet project command did not return a private chat id.');
+    }
+    return { action, commandId, projectId, workerProfileId, chatId };
+  }
 
   if (action === 'project.list') {
     assertWorkjetProjectPayloadKeys(request, new Set(['action']));
     const commandId = `cmd_workjet_project_list_${newId()}`;
-    await state.commandBus.dispatch({
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the list was delivered.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await awaitWorkjetProjectListStep(state.commandBus.dispatch({
       id: commandId,
       command_id: commandId,
       module: 'ctox',
@@ -12929,14 +13512,40 @@ async function workjetProjectControl(request = {}) {
         source: 'workjet-project-control',
         actor: actorContext(state.session),
       },
-    }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
-    await waitForSyncBridgeReady(projectBridge, WORKJET_PROJECT_CONTROL_TIMEOUT_MS);
-    await waitForSyncBridgeReady(workingCopyBridge, WORKJET_PROJECT_CONTROL_TIMEOUT_MS);
-    const workingCopies = await listProjectedWorkjetWorkingCopies(ownerUserId);
+    }, {
+      until: 'terminal',
+      sync_queue_tasks: false,
+      timeoutMs: Math.max(1, listDeadline - Date.now()),
+    }), listDeadline, 'command');
+    assertCurrentIdentity();
+    if (receipt?.command_id !== commandId || receipt?.status !== 'completed'
+      || receipt?.ok !== true || receipt?.result?.ok !== true
+      || receipt?.result?.collection !== 'workjet_projects') {
+      throw new Error('Workjet project list returned an uncorrelated or unsuccessful receipt.');
+    }
+    const selector = { owner_user_id: { $eq: ownerUserId } };
+    const controller = new AbortController();
+    let projectDocs;
+    let copyDocs;
+    try {
+      [projectDocs, copyDocs] = await Promise.all([
+        readWorkjetProjectListRows(projectBridge, {
+          selector, limit: WORKJET_PROJECT_CONTROL_MAX_RESULTS,
+        }, commandId, listDeadline, controller.signal),
+        readWorkjetProjectListRows(workingCopyBridge, {
+          selector, limit: WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES,
+        }, commandId, listDeadline, controller.signal),
+      ]);
+    } finally {
+      controller.abort();
+    }
+    assertCurrentIdentity();
+    const workingCopies = await listProjectedWorkjetWorkingCopies(ownerUserId, copyDocs);
     const projects = await listProjectedWorkjetProjects(
       ownerUserId,
       WORKJET_PROJECT_CONTROL_MAX_RESULTS,
       workingCopies,
+      projectDocs,
     );
     return { action: 'project.list', projects };
   }
@@ -13032,18 +13641,79 @@ async function requireWorkjetProjectDataPlane() {
   }
   const collection = state.db?.collection?.('workjet_projects');
   if (!collection) throw new Error('workjet_projects collection is not registered.');
-  const commandBridge = await state.sync?.startCollection?.('business_commands');
-  await waitForSyncBridgeReady(commandBridge, 15_000);
-  const projectBridge = await state.sync?.startCollection?.('workjet_projects');
-  await waitForSyncBridgeReady(projectBridge, 15_000);
-  const workingCopyBridge = await state.sync?.startCollection?.('workjet_working_copies');
-  await waitForSyncBridgeReady(workingCopyBridge, 15_000);
+  // Command submission owns authenticated readiness, not a historical pull.
+  const [, projectBridge, workingCopyBridge] = await Promise.all([
+    state.sync?.startCollection?.('business_commands'),
+    state.sync?.startCollection?.('workjet_projects', { pin: false, forceDirect: true }),
+    state.sync?.startCollection?.('workjet_working_copies', { pin: false, forceDirect: true }),
+  ]);
   return { projectBridge, workingCopyBridge };
 }
 
-async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = []) {
+async function awaitWorkjetProjectListStep(operation, deadline, phase) {
+  let timer;
+  const timeout = () => Object.assign(
+    new Error(`Workjet project list did not finish ${phase} before its deadline.`),
+    { code: 'WORKJET_PROJECT_TIMEOUT', retryable: true },
+  );
+  try {
+    const value = await Promise.race([
+      operation,
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(timeout()), Math.max(0, deadline - Date.now()));
+      }),
+    ]);
+    if (Date.now() >= deadline) throw timeout();
+    return value;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readWorkjetProjectListRows(bridge, query, requireRevision, deadline, signal) {
+  const current = !bridge?.state && bridge?.ready
+    ? await awaitWorkjetProjectListStep(bridge.ready, deadline, 'bridge') : bridge;
+  const peer = current?.state;
+  if (!peer?.awaitQueryReady || peer.cancelled) {
+    throw new Error('Workjet project query readiness is unavailable.');
+  }
+  await awaitWorkjetProjectListStep(
+    peer.awaitQueryReady(Math.max(1, deadline - Date.now())), deadline, 'query readiness',
+  );
+  const generation = peer.collectionQueryGenerationToken?.(peer.activeRemotePeerId);
+  const loader = peer.collection?.demandLoader;
+  if (!generation || !loader) throw new Error('Workjet project query authority is unavailable.');
+  const primaryPath = peer.collection.schema?.primaryPath || 'id';
+  const rows = [];
+  const ids = new Set();
+  while (rows.length < query.limit) {
+    const limit = Math.min(200, query.limit - rows.length);
+    const page = await awaitWorkjetProjectListStep(peer.collection.find({
+      ...query, limit, skip: rows.length, sort: [{ [primaryPath]: 'asc' }], requireRevision, signal,
+    }).exec(), deadline, 'native projection');
+    if (peer.cancelled || peer.collection.demandLoader !== loader
+      || peer.collectionQueryGenerationToken?.(peer.activeRemotePeerId) !== generation) {
+      throw new Error('Workjet project query generation changed.');
+    }
+    if (!Array.isArray(page) || page.length > limit) {
+      throw new Error('Workjet project query exceeded its bounded window.');
+    }
+    for (const document of page) {
+      const id = (document?.toJSON?.() || document)?.[primaryPath];
+      if (typeof id !== 'string' || !id || ids.has(id)) {
+        throw new Error('Workjet project query returned an invalid or repeated identity.');
+      }
+      ids.add(id);
+    }
+    rows.push(...page);
+    if (page.length < limit) break;
+  }
+  return rows;
+}
+
+async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null) {
   const collection = state.db?.collection?.('workjet_projects');
-  const docs = await collection.find({
+  const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId } },
     limit: Math.min(limit, WORKJET_PROJECT_CONTROL_MAX_RESULTS),
   }).exec();
@@ -13104,9 +13774,9 @@ async function waitForProjectedWorkjetProject(
   throw error;
 }
 
-async function listProjectedWorkjetWorkingCopies(ownerUserId) {
+async function listProjectedWorkjetWorkingCopies(ownerUserId, nativeDocs = null) {
   const collection = state.db?.collection?.('workjet_working_copies');
-  const docs = await collection.find({
+  const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId } },
     limit: WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES,
   }).exec();
@@ -14161,6 +14831,10 @@ function getFriendlyErrorMessage(error) {
     title = `${instanceName} konnte nicht geladen werden`;
     description = 'Die CTOX-Instanz hat den Zugriff auf die benötigten Business-OS-Daten abgelehnt. Der verwaltete Workspace wurde deshalb sicher gestoppt.';
     advice = 'Bitte die Berechtigungen dieser ctox.dev-Verbindung prüfen. Eine lokale Ersatzoberfläche wird nicht verwendet.';
+  } else if (isStartupDeadlineError(error)) {
+    title = 'Netzwerk-Zeitüberschreitung beim Start';
+    description = 'Eine benötigte Startanfrage hat nicht rechtzeitig geantwortet.';
+    advice = 'Bitte auf "Erneut versuchen" klicken. Bleibt die Meldung bestehen, prüfen Sie die Netzwerkverbindung und den CTOX-Dienst.';
   } else if (msg.includes('WebCrypto') || msg.includes('subtle') || !globalThis.crypto?.subtle) {
     title = 'Sicherer Kontext erforderlich (WebCrypto fehlt)';
     description = 'Safari blockiert notwendige Verschlüsselungsfunktionen, wenn die Seite über die IP-Adresse "127.0.0.1" geladen wird.';
@@ -14206,40 +14880,9 @@ function isManagedCollectionAuthorizationError(error) {
   );
 }
 
-function isLocalRxDbStartupError(error) {
-  const msg = String(error?.message || error || '');
-  return msg.includes('IndexedDB lock')
-    || msg.includes('IndexedDB open blocked')
-    || msg.includes('RxDB database creation timed out')
-    || msg.includes('RxDB database retry timed out')
-    || msg.includes('RxDB createRxDatabase timed out')
-    || msg.includes('RxDB database reset timed out');
-}
-
-async function resetLocalRxDbBeforeStartupRetry(error) {
-  if (!isLocalRxDbStartupError(error)) return false;
-  setStatus('Lokale Datenverbindung wird neu synchronisiert');
-  try { sessionStorage.removeItem(RXDB_SCHEMA_REPAIR_KEY); } catch {}
-  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before startup retry reset failed', stopError); }
-  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before startup retry reset failed', closeError); }
-  if (state.workspaceBrandingSubscription) {
-    try { state.workspaceBrandingSubscription.unsubscribe(); } catch (error) {}
-    state.workspaceBrandingSubscription = null;
-  }
-  state.workspaceBranding = applyWorkspaceBranding(null);
-  state.sync = null;
-  state.db = null;
-  try {
-    const { resetBusinessDb } = await loadBusinessDbModule();
-    await resetBusinessDb({ name: businessDbName() });
-    return true;
-  } catch (resetError) {
-    console.warn('[business-os] local RxDB startup retry reset failed', resetError);
-    return false;
-  }
-}
-
 function showStartupError(error) {
+  // A fatal startup failure must also stop companions whose imports or schema work is pending.
+  cancelBusinessCompanions();
   console.error('[business-os] bootstrap error caught:', error);
   const errMsg = error ? (error.message || String(error)) : 'Unbekannter Fehler';
 
@@ -14302,10 +14945,7 @@ function showStartupError(error) {
         window.ctoxBusinessOsDesktop.refreshManagedLaunch();
         return;
       }
-      retryBtn.textContent = isLocalRxDbStartupError(error)
-        ? 'Lokale Datenverbindung wird neu synchronisiert...'
-        : 'Wird neu geladen...';
-      await resetLocalRxDbBeforeStartupRetry(error);
+      retryBtn.textContent = 'Wird neu geladen...';
       window.location.reload();
     };
   }
@@ -14559,7 +15199,7 @@ function filterStartMenu(panel, query) {
 }
 
 function renderStartMenuLifecycleBadge(target) {
-  if (target?.kind !== 'module' || !target.module) return '';
+  if (!target?.module) return '';
   const lifecycle = appLifecycleBadge(target.module, {
     session: state.session,
     governance: state.governance,
@@ -14621,7 +15261,7 @@ function buildStartMenuItem(target) {
   el.querySelector('[data-module-lifecycle]')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
 
   el.querySelector('.start-menu-item-pin-btn').addEventListener('click', (e) => {
@@ -14887,9 +15527,13 @@ function detectRecordFromElement(moduleId, element) {
   let current = element.nodeType === Node.ELEMENT_NODE ? element : element.parentElement;
 
   // `data-*-id` attributes that are layout/UI hooks, never a record handle.
+  // data-owner-id/data-window-id name the shell window, not a record: the
+  // context menu of an app window showed a random heading ("Kampagnen") as
+  // record label (Klicktest Outbound P2 SHL-06, 11.09.2026).
   const NON_RECORD_ID_ATTRS = new Set([
     'data-context-id', 'data-context-record-id', 'data-tab-id', 'data-grad-id',
-    'data-gradient-id', 'data-loading-id', 'data-drawer-id',
+    'data-gradient-id', 'data-loading-id', 'data-drawer-id', 'data-owner-id',
+    'data-window-id',
   ]);
   // Trailing tokens that describe an interaction (`data-account-click-id`), not the type.
   const ACTION_SUFFIXES = new Set(['click', 'select', 'open', 'toggle', 'manage', 'expand', 'edit', 'view']);
@@ -15095,6 +15739,13 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
   positionMenu();
 
   const form = globalCtoxContextMenuEl.querySelector('form');
+  // Submission may finish after this shared popover has been reopened. Only
+  // the form that started the request may close it; preserve a newer draft.
+  const hideSubmittedMenu = () => {
+    if (globalCtoxContextMenuEl?.querySelector('form') === form) {
+      hideGlobalCtoxContextMenu();
+    }
+  };
   const composer = globalCtoxContextMenuEl.querySelector('.ctox-context-composer');
   const textarea = globalCtoxContextMenuEl.querySelector('.ctox-context-textarea');
   const userRow = globalCtoxContextMenuEl.querySelector('.ctox-context-user-row');
@@ -15288,7 +15939,7 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
             record_id: context.record_id,
           },
         }, { until: 'local' });
-        hideGlobalCtoxContextMenu();
+        hideSubmittedMenu();
       } catch (error) {
         if (statusEl) statusEl.textContent = error?.message || chatNotReadyLabel;
       }
@@ -15316,7 +15967,10 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
     }
 
     try {
-      const result = await createContextActionsFacade(mod).dispatch(mode, {
+      await createContextActionsFacade(mod).dispatch(mode, {
+        openChat: true,
+        onPresented: hideSubmittedMenu,
+        crew_identity: crew?.id ? { name: crew.name, shape: crew.shape, color: crew.color } : null,
         context,
         prompt: instruction,
         title,
@@ -15337,17 +15991,7 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
         visible_scope: agentScope,
         actor: agentScope.actor,
       });
-      openBusinessChat({
-        title,
-        module: mod.id,
-        source_module: mod.id,
-        record_id: context.record_id || mod.id,
-        command_id: result?.command_id || result?.id || '',
-        thread_key: `business-os/${mod.id}/${context.record_id || 'module'}`,
-        reuseActive: false,
-        ...(crew?.id ? { crew_member_id: crew.id, crew_identity: { name: crew.name, shape: crew.shape, color: crew.color } } : {}),
-      });
-      hideGlobalCtoxContextMenu();
+      hideSubmittedMenu();
     } catch (error) {
       if (statusEl) statusEl.textContent = error?.message || chatNotReadyLabel;
     }
@@ -15430,8 +16074,20 @@ async function maybeShowRecordApprovalBanner() {
     `;
     const decide = async (decision) => {
       const note = decision === 'reject' ? (window.prompt('Begründung oder Änderungswunsch:') || '') : '';
+      if (decision === 'reject' && !note.trim()) return;
+      const actionButtons = [...banner.querySelectorAll('[data-record-approval-approve], [data-record-approval-reject]')];
+      actionButtons.forEach((button) => { button.disabled = true; });
+      let status = banner.querySelector('[data-record-approval-status]');
+      if (!status) {
+        status = document.createElement('span');
+        status.dataset.recordApprovalStatus = '';
+        status.setAttribute('role', 'status');
+        banner.querySelector('.ctox-record-approval-copy')?.append(status);
+      }
+      status.textContent = 'Entscheidung wird übermittelt…';
       try {
-        await state.commandBus?.dispatch?.({
+        if (!state.commandBus?.dispatch) throw new Error('Freigabe ist derzeit nicht verfügbar.');
+        const outcome = await state.commandBus.dispatch({
           command_type: decision === 'approve' ? 'threads.ctox_approval.approve' : 'threads.ctox_approval.reject',
           module: 'threads',
           record_id: pending.id,
@@ -15440,11 +16096,16 @@ async function maybeShowRecordApprovalBanner() {
             expected_updated_at_ms: Number(pending.updated_at_ms || 0),
             decision_note: note,
           },
-        });
+        }, { until: 'terminal' });
+        if (['failed', 'rejected', 'blocked'].includes(outcome?.status)) {
+          throw new Error(outcome?.error || 'Die Entscheidung wurde nicht übernommen.');
+        }
+        banner.remove();
       } catch (error) {
         console.warn('[record-approval] decision dispatch failed', error);
+        status.textContent = error?.message || 'Die Entscheidung konnte nicht übernommen werden.';
+        actionButtons.forEach((button) => { button.disabled = false; });
       }
-      banner.remove();
     };
     banner.querySelector('[data-record-approval-approve]')?.addEventListener('click', () => { decide('approve'); });
     banner.querySelector('[data-record-approval-reject]')?.addEventListener('click', () => { decide('reject'); });

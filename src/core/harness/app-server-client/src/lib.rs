@@ -1758,3 +1758,6 @@ mod tests {
             .expect("shutdown should complete");
     }
 }
+
+#[cfg(test)]
+mod persistent_resume_tests;

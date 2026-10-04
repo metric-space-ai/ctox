@@ -90,7 +90,8 @@ pub(super) fn control(
                 );
                 let color = text(p, "color")?;
                 ensure!(
-                    ["#1685ee", "#00aa9a", "#7d7f84", "#7c6df2", "#e97255", "#34a26f"]
+                    // No neutral grey: it is the "no member yet" creature.
+                    ["#1685ee", "#00aa9a", "#e0a82e", "#7c6df2", "#e97255", "#34a26f"]
                         .contains(&color),
                     "color is not a CREW_COLOR"
                 );
@@ -136,10 +137,18 @@ pub(super) fn control(
                 // The owner curates a member's memory through the same LCM
                 // continuity documents the harness reads and refreshes.
                 let id = text(p, "member_id")?;
+                // The LCM engine commits the memory on its own connection. A
+                // read on `tx` before that pinned a WAL snapshot, and the member
+                // touch below then failed with "database is locked" although the
+                // memory was already written (thesen, 11.09.2026). The check runs
+                // on a separate connection so `tx` starts with the touch.
+                let check = Connection::open(crate::paths::core_db(root))?;
+                check.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
                 ensure!(
-                    crew::members(&tx)?.iter().any(|m| m.id == id),
+                    crew::members(&check)?.iter().any(|m| m.id == id),
                     "member not found"
                 );
+                drop(check);
                 let kind_label = text(p, "kind")?;
                 let kind = match kind_label {
                     "anchors" => crate::lcm::ContinuityKind::Anchors,
@@ -149,8 +158,14 @@ pub(super) fn control(
                 let engine = crew::open_engine(root)?;
                 let conversation = crew::member_conversation_id(id);
                 engine.continuity_init_documents(conversation)?;
+                // Not `text()`: its 200-character cap made the 8 000 here
+                // unreachable, so no whole memory entry could be replaced.
                 let bounded = |key: &str| -> Result<&str> {
-                    let value = text(p, key)?;
+                    let value = p
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.trim().is_empty())
+                        .with_context(|| format!("{key} is required"))?;
                     ensure!(value.chars().count() <= 8_000, "{key} is too long");
                     Ok(value)
                 };

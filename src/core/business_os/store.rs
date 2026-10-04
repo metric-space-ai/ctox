@@ -1,6 +1,8 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "store_peer_revocations.rs"]
+mod peer_revocations;
 #[path = "store_security_projections.rs"]
 mod security_projections;
 use super::app_runtime;
@@ -84,12 +86,12 @@ use super::store_projections::tests::{create_repair_rxdb_tables, insert_rxdb_tes
 pub(super) use super::store_projections::upsert_business_record;
 use super::store_projections::{
     business_chat_id, business_chat_owner_user_id, business_chat_payload, business_chat_title,
-    business_command_queue_task_payload, enrich_queue_projection_payload, is_business_chat_command,
-    materialize_pending_business_chat, normalize_queue_status,
+    business_command_queue_task_payload, enrich_queue_projection_payload,
+    existing_business_chat_owner, initial_pending_business_chat_payload, is_business_chat_command,
+    is_placeholder_business_chat_owner, materialize_pending_business_chat, normalize_queue_status,
     persist_terminal_business_chat_command_projection, queue_projection_command_id,
     queue_projection_execution_phase, queue_projection_structured_status,
-    queue_projection_terminal_status, queue_task_payload, refresh_queue_task_projection,
-    write_queue_task_projection,
+    queue_projection_terminal_status, refresh_queue_task_projection, write_queue_task_projection,
 };
 use super::store_release_review::{
     data_access_review_from_release_snapshot, module_release_data_access_review_summary,
@@ -103,6 +105,7 @@ use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
+pub use peer_revocations::is_business_peer_revoked;
 use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::params;
 use rusqlite::params_from_iter;
@@ -110,6 +113,7 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
+use rusqlite::TransactionBehavior;
 use security_projections::*;
 pub(crate) use security_projections::{
     appsec_business_command_requires_data_write, project_all_iot,
@@ -1105,6 +1109,38 @@ pub(super) struct TemplateManifest {
     tags: Vec<String>,
 }
 
+/// Native reconciliation reads application identity from the domain owner's
+/// transaction, never from a browser-authored actor or replacement credential.
+pub(super) fn domain_effect_identity_for_intake(
+    root: &Path,
+    command_id: &str,
+) -> anyhow::Result<Option<super::domain_effect::DomainEffectIdentity>> {
+    with_store_connection(root, |conn| {
+        super::domain_effect::identity(conn, command_id)
+    })
+}
+
+pub(super) fn active_domain_recovery_session(
+    root: &Path,
+    actor_id: &str,
+) -> anyhow::Result<BusinessOsSession> {
+    let user = with_store_connection(root, |conn| active_business_user(conn, actor_id))?
+        .context("domain recovery actor is no longer active")?;
+    Ok(BusinessOsSession {
+        ok: true,
+        authenticated: true,
+        auth_required: false,
+        user: Some(BusinessOsSessionUser {
+            id: user.id,
+            display_name: user.display_name,
+            is_admin: role_can_manage(&user.role),
+            role: user.role,
+        }),
+        login_url: None,
+        reason: None,
+    })
+}
+
 pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
     let path = business_os_store_path(root);
     let conn = open_store_connection(&path)?;
@@ -1251,11 +1287,18 @@ pub(super) fn next_projected_rxdb_revision(previous: Option<&str>) -> String {
 
 fn next_direct_rxdb_revision(previous: Option<&str>) -> String {
     let height = previous
-        .and_then(|revision| revision.split_once('-').map(|(height, _)| height))
-        .and_then(|height| height.parse::<u64>().ok())
+        .and_then(direct_rxdb_revision_height)
         .unwrap_or(0)
         .saturating_add(1);
     format!("{height}-{}", Uuid::new_v4().simple())
+}
+
+fn direct_rxdb_revision_height(revision: &str) -> Option<u64> {
+    let (height, suffix) = revision.split_once('-')?;
+    if suffix.is_empty() {
+        return None;
+    }
+    height.parse::<u64>().ok()
 }
 
 fn upsert_attached_rxdb_record(
@@ -1391,6 +1434,19 @@ fn refresh_attached_queue_projections(
     if !attached {
         return Ok(());
     }
+    // The store file is attached whenever it exists, but its schema may not
+    // be there yet: the hooks are registered process-wide by the first
+    // open_store, so a root whose store was never opened attaches an empty
+    // file. Without the table there is nothing to refresh.
+    let has_records: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_os_projection.sqlite_master
+                       WHERE type = 'table' AND name = 'business_records')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_records {
+        return Ok(());
+    }
     let updated_at_ms = now_ms() as i64;
     for task in tasks {
         let row = conn
@@ -1470,6 +1526,15 @@ fn refresh_attached_queue_projections(
             continue;
         };
         let mut command_payload = serde_json::from_str::<Value>(&command_raw)?;
+        if task.route_status == "leased" {
+            mark_outbound_lead_running_attached(
+                conn,
+                &command_payload,
+                &command_id,
+                &task.message_key,
+                updated_at_ms,
+            )?;
+        }
         let command_projection_changed =
             !command_projection_status_fields_match(&command_payload, task);
         if command_projection_changed {
@@ -1516,6 +1581,81 @@ fn refresh_attached_queue_projections(
             command_payload,
         )?;
     }
+    Ok(())
+}
+
+/// A lead whose research task a worker has picked up says "Läuft".
+///
+/// A leased research task kept showing "Wartet" until the first writeback, because the
+/// only transition to `running` happened there. The queue-to-command sync
+/// already sees the lease, so it moves the lead along — only a lead that is
+/// still `queued` and belongs to this very command, read from the live RxDB
+/// document so no browser edit is overwritten.
+fn mark_outbound_lead_running_attached(
+    conn: &Connection,
+    command: &Value,
+    command_id: &str,
+    task_id: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    let Some(record_id) = outbound_research_projection_record_id(
+        command
+            .get("module")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        command
+            .get("command_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        command.get("record_id").and_then(Value::as_str),
+        command.get("payload").unwrap_or(&Value::Null),
+    ) else {
+        return Ok(());
+    };
+    let Some(table) = attached_rxdb_collection_table(conn, "outbound_lead_generation_leads")?
+    else {
+        return Ok(());
+    };
+    let raw = conn
+        .query_row(
+            &format!(
+                "SELECT data FROM business_os_rxdb_projection.{} WHERE id = ?1",
+                sqlite_quote_identifier(&table)
+            ),
+            params![record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    let Ok(mut lead) = serde_json::from_str::<Value>(&raw) else {
+        return Ok(());
+    };
+    if lead.get("_deleted").and_then(Value::as_bool) == Some(true)
+        || lead.get("research_status").and_then(Value::as_str) != Some("queued")
+    {
+        return Ok(());
+    }
+    let owner = lead
+        .get("command_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !owner.is_empty() && owner != command_id {
+        return Ok(());
+    }
+    lead["research_status"] = Value::String("running".to_string());
+    lead["task_id"] = Value::String(task_id.to_string());
+    lead["research_updated_at_ms"] = Value::from(now);
+    upsert_attached_business_record(
+        conn,
+        "outbound_lead_generation_leads",
+        record_id,
+        now,
+        lead.clone(),
+    )?;
+    upsert_attached_rxdb_record(conn, "outbound_lead_generation_leads", record_id, now, lead)?;
     Ok(())
 }
 
@@ -3735,13 +3875,27 @@ pub fn load_module_source_records(
         left_path.cmp(right_path)
     });
     let now = now_ms() as i64;
-    let conn = open_store(root)?;
+    let current_ids = files
+        .iter()
+        .filter_map(|file| file.get("id").and_then(Value::as_str))
+        .collect::<HashSet<_>>();
+    let previous = pull_coding_module_source_records(root, &module_id)?;
+    let mut writer = BusinessProjectionWriter::open(root)?;
+    for file in previous {
+        let id = file
+            .get("id")
+            .and_then(Value::as_str)
+            .context("source projection id missing")?;
+        if !current_ids.contains(id) {
+            writer.tombstone_source_projection("business_module_source_files", id, now)?;
+        }
+    }
     let mut file_ids = Vec::with_capacity(files.len());
     for file in &files {
         let Some(id) = file.get("id").and_then(Value::as_str) else {
             continue;
         };
-        upsert_business_record(&conn, "business_module_source_files", id, now, file.clone())?;
+        writer.upsert_source_projection("business_module_source_files", id, now, file.clone())?;
         file_ids.push(id.to_string());
     }
     Ok(serde_json::json!({
@@ -3811,7 +3965,7 @@ fn save_module_source_record_inner(
     let app_root = resolve_business_os_app_root(root)?;
     let module_id = source_sanitize_slug(&mutation.module_id);
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-    let (module_root, source_app_root) =
+    let (module_root, _source_app_root) =
         resolve_module_source_root_for_root(root, &app_root, &module_id)?;
     let rel = normalize_source_relative_path(&mutation.path)?;
     anyhow::ensure!(
@@ -3884,7 +4038,7 @@ fn save_module_source_record_inner(
     )?;
     drop(conn);
     if changed {
-        record_module_version(root, &source_app_root, &module_id, "edit", "", "")?;
+        super::module_lifecycle::record_module_version_at(root, &module_root, &module_id)?;
     }
     Ok(serde_json::json!({
         "ok": true,
@@ -3892,6 +4046,7 @@ fn save_module_source_record_inner(
         "path": rel_display,
         "source_file_id": file_id,
         "source_file_ids": [file_id],
+        "app_directory": module_root.strip_prefix(root).unwrap_or(&module_root).to_string_lossy().replace('\\', "/"),
         "size_bytes": metadata.len(),
         "modified_at_ms": modified_at_ms(&metadata),
         "sha256": next_sha256,
@@ -4842,6 +4997,10 @@ fn collect_module_source_files(
 ) -> anyhow::Result<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
+        // Source reads must not follow file symlinks out of the app either.
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -4912,13 +5071,13 @@ pub(super) fn resolve_module_source_root(
     app_root: &Path,
     module_id: &str,
 ) -> anyhow::Result<PathBuf> {
-    let core = app_root.join("modules").join(module_id);
-    if core.join("module.json").is_file() {
-        return Ok(core);
-    }
-    let installed = app_root.join("installed-modules").join(module_id);
-    if installed.join("module.json").is_file() {
-        return Ok(installed);
+    for namespace in ["modules", "installed-modules", "local-modules"] {
+        if let Some(manifest) = checked_module_manifest_candidate(app_root, namespace, module_id)? {
+            return Ok(manifest
+                .parent()
+                .context("module manifest parent missing")?
+                .to_path_buf());
+        }
     }
     anyhow::bail!("module `{module_id}` was not found")
 }
@@ -4928,9 +5087,42 @@ pub(super) fn resolve_module_source_root_for_root(
     app_root: &Path,
     module_id: &str,
 ) -> anyhow::Result<(PathBuf, PathBuf)> {
-    let manifest_path = module_manifest_path(root, app_root, module_id)?;
+    // The served catalog excludes store templates from the bundled namespace.
+    // Resolve its native selection rather than letting a same-id template shadow
+    // an installed app. Never trust a caller/projection supplied filesystem path.
+    let installed_root = resolve_business_os_installed_app_root(root);
+    let catalog = load_module_manifests(root, app_root, &installed_root)?;
+    let manifest_path = if let Some(selected) = catalog.manifests.iter().find(|m| m.id == module_id)
+    {
+        let selected_path = PathBuf::from(&selected.local_manifest_path);
+        let namespace = selected_path
+            .parent()
+            .and_then(Path::parent)
+            .context("selected module namespace missing")?;
+        let base = namespace.parent().context("selected module root missing")?;
+        let namespace = namespace
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("selected module namespace invalid")?;
+        let checked = checked_module_manifest_candidate(base, namespace, module_id)?
+            .context("selected module source disappeared")?;
+        anyhow::ensure!(checked == selected_path, "selected module source changed");
+        anyhow::ensure!(
+            hex_sha256(&fs::read(&checked)?) == selected.manifest_sha256,
+            "selected module manifest changed; reload before editing"
+        );
+        checked
+    } else {
+        // Preserve source-only lifecycle operations before catalog publication.
+        module_manifest_path(root, app_root, module_id)?
+    };
     let source_app_root = app_root_for_module_manifest(app_root, &manifest_path);
-    let module_root = resolve_module_source_root(&source_app_root, module_id)?;
+    // Keep the exact selected manifest; re-searching another root can pick a
+    // shadowed module with the same id instead of the authorized source.
+    let module_root = manifest_path
+        .parent()
+        .context("module manifest parent missing")?
+        .to_path_buf();
     Ok((module_root, source_app_root))
 }
 
@@ -5125,7 +5317,10 @@ pub(super) fn compute_module_bundle(
 /// Deterministic bundle hash over an explicit module directory (used for the
 /// live install dir, a catalog source, and a freshly fetched github archive so
 /// they are all comparable).
-fn compute_module_bundle_at(module_root: &Path, module_id: &str) -> anyhow::Result<ModuleBundle> {
+pub(super) fn compute_module_bundle_at(
+    module_root: &Path,
+    module_id: &str,
+) -> anyhow::Result<ModuleBundle> {
     let mut raw = Vec::new();
     collect_module_source_files(module_id, module_root, module_root, &mut raw)?;
     let mut files: Vec<Value> = raw
@@ -5828,23 +6023,88 @@ pub(super) fn module_manifest_path(
     let module_id = module_id.trim();
     let installed_app_root = resolve_business_os_installed_app_root(root);
     let mut candidates = vec![
-        app_root.join("modules").join(module_id).join("module.json"),
-        app_root
-            .join("installed-modules")
-            .join(module_id)
-            .join("module.json"),
-        installed_app_root
-            .join("installed-modules")
-            .join(module_id)
-            .join("module.json"),
+        (app_root, "modules"),
+        (app_root, "installed-modules"),
+        (installed_app_root.as_path(), "installed-modules"),
+        (app_root, "local-modules"),
+        (installed_app_root.as_path(), "local-modules"),
     ];
     candidates.dedup();
-    for candidate in candidates {
-        if candidate.is_file() {
+    for (base, namespace) in candidates {
+        if let Some(candidate) = checked_module_manifest_candidate(base, namespace, module_id)? {
+            let module_dir = candidate
+                .parent()
+                .context("module manifest parent missing")?;
+            let manifest: Value = serde_json::from_slice(&fs::read(&candidate)?)?;
+            if namespace == "modules" {
+                super::customer_apps::authorize_global_module(module_dir, &manifest)?;
+            } else {
+                super::customer_apps::authorize_runtime_module(root, module_dir, &manifest)?;
+            }
             return Ok(candidate);
         }
     }
     anyhow::bail!("module manifest not found: {module_id}")
+}
+
+fn checked_module_manifest_candidate(
+    app_root: &Path,
+    namespace: &str,
+    module_id: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    anyhow::ensure!(
+        !module_id.is_empty()
+            && module_id
+                .bytes()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == b'-' || ch == b'_'),
+        "unsafe module id"
+    );
+    // A shared namespace may be symlinked without containing this module.
+    // Skip only an absent module directory, not a present (even dangling)
+    // module symlink, so lower-priority installed sources remain reachable
+    // without relaxing the checks on an actual source candidate.
+    let module_directory = app_root.join(namespace).join(module_id);
+    match fs::symlink_metadata(&module_directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let relative = PathBuf::from(namespace).join(module_id).join("module.json");
+    ensure_source_path_has_no_symlink_components(app_root, &relative)?;
+    let candidate = app_root.join(relative);
+    if !candidate.is_file() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        candidate
+            .canonicalize()?
+            .starts_with(app_root.canonicalize()?),
+        "module manifest escapes its source root"
+    );
+    let manifest: Value = serde_json::from_slice(&fs::read(&candidate)?)?;
+    anyhow::ensure!(
+        manifest.get("id").and_then(Value::as_str) == Some(module_id),
+        "module manifest id does not match source directory"
+    );
+    Ok(Some(candidate))
+}
+
+/// Source tools can resolve operator-owned local modules, but delegated app
+/// authoring currently only has installed/source sandbox and validator modes.
+/// Resolve the authorized source, never a caller-supplied install_target/path:
+/// admitting a local app here would create an installed-module shadow.
+pub(super) fn ensure_delegated_app_modify_target_supported(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<()> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let (module_root, _) = resolve_module_source_root_for_root(root, &app_root, module_id)?;
+    anyhow::ensure!(
+        module_root.parent().and_then(Path::file_name).and_then(|name| name.to_str())
+            != Some("local-modules"),
+        "local_app_authoring_unsupported: module `{module_id}` is operator-owned under local-modules; delegated modify_app has no local sandbox/validation lifecycle contract and must not create an installed-module shadow"
+    );
+    Ok(())
 }
 
 pub(super) fn app_root_for_module_manifest(
@@ -5860,7 +6120,7 @@ pub(super) fn app_root_for_module_manifest(
     if collection_dir
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, "modules" | "installed-modules"))
+        .is_some_and(|name| matches!(name, "modules" | "installed-modules" | "local-modules"))
     {
         return collection_dir
             .parent()
@@ -6223,7 +6483,7 @@ fn hash_session_token(token: &str) -> String {
 }
 
 /// Revoke a sync-mesh peer by its signaling peer id. The native peer's
-/// `is_peer_valid` gate denies any revoked id at connect, so a revoked device is
+/// `is_peer_valid` gate denies any revoked id at connect and RPC admission, so a revoked device is
 /// dropped from the mesh server-side regardless of what the browser claims.
 pub fn revoke_business_peer(
     root: &Path,
@@ -6256,27 +6516,6 @@ pub fn clear_business_peer_revocation(root: &Path, peer_id: &str) -> anyhow::Res
     Ok(())
 }
 
-/// Hot-path revocation check used by the native peer's `is_peer_valid` gate.
-/// Fails open (returns `false`) on a store error so a transient DB hiccup cannot
-/// sever every peer; a genuine revocation persists and is re-checked per connect.
-pub fn is_business_peer_revoked(root: &Path, peer_id: &str) -> bool {
-    let peer_id = peer_id.trim();
-    if peer_id.is_empty() {
-        return false;
-    }
-    let Ok(conn) = open_store(root) else {
-        return false;
-    };
-    conn.query_row(
-        "SELECT 1 FROM business_peer_revocations WHERE peer_id = ?1",
-        params![peer_id],
-        |_| Ok(()),
-    )
-    .optional()
-    .map(|row| row.is_some())
-    .unwrap_or(false)
-}
-
 /// List currently-revoked peers (for an admin/control surface).
 pub fn list_revoked_business_peers(root: &Path) -> anyhow::Result<Vec<Value>> {
     let conn = open_store(root)?;
@@ -6298,16 +6537,34 @@ pub fn list_revoked_business_peers(root: &Path) -> anyhow::Result<Vec<Value>> {
     Ok(rows)
 }
 
-pub fn record_command(
+pub fn record_command(root: &Path, command: BusinessCommand) -> anyhow::Result<CommandAccepted> {
+    record_command_inner(root, command, None)
+}
+
+pub(super) fn record_mcp_app_command(
+    root: &Path,
+    authority: Option<super::mcp_channel::AuthenticatedMcpAppCommand>,
+    command: BusinessCommand,
+) -> anyhow::Result<CommandAccepted> {
+    record_command_inner(root, command, authority.as_ref())
+}
+
+fn record_command_inner(
     root: &Path,
     mut command: BusinessCommand,
+    authority: Option<&super::mcp_channel::AuthenticatedMcpAppCommand>,
 ) -> anyhow::Result<CommandAccepted> {
     let command_id = command
         .id
         .clone()
         .unwrap_or_else(|| format!("cmd_{}", Uuid::new_v4()));
     command.id = Some(command_id.clone());
-    if let Some(_decision) = reject_app_build_command_if_denied(root, &command)? {
+    let authenticated_session = authority
+        .map(|authority| authority.session(root, &command))
+        .transpose()?;
+    if let Some(_decision) =
+        reject_app_build_command_if_denied(root, &command, authenticated_session.as_ref())?
+    {
         return Ok(CommandAccepted {
             ok: false,
             command_id,
@@ -6317,7 +6574,22 @@ pub fn record_command(
             ..CommandAccepted::default()
         });
     }
-    let native_authorization = queue_command_native_authorization(root, &command)?;
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
+    }
+    let mut native_authorization =
+        queue_command_native_authorization(root, &command, authenticated_session.as_ref())?;
+    if let (Some(authority), Some(receipt)) = (authority, native_authorization.as_mut()) {
+        receipt["managed_mcp_authority"] = authority.receipt()?;
+    }
+    {
+        let conn = open_store(root)?;
+        if let Some(denied) = claim_or_reject_business_chat(root, &conn, &command_id, &command)? {
+            return Ok(denied);
+        }
+    }
     let missing_dependencies = missing_business_command_dependencies(root, &command)?;
     if !missing_dependencies.is_empty() {
         let evidence = Value::Array(missing_dependencies);
@@ -6471,6 +6743,12 @@ pub fn record_command(
     )? {
         return Ok(completed);
     }
+    project_outbound_lead_queued(
+        root,
+        &command,
+        &command_id,
+        queue_task.as_ref().map(|task| task.message_key.as_str()),
+    )?;
     Ok(CommandAccepted {
         ok: true,
         command_id,
@@ -6482,6 +6760,76 @@ pub fn record_command(
         chat_id,
         ..CommandAccepted::default()
     })
+}
+
+/// Only an explicit, record-bound research writeback owns a lead's research state.
+/// A record_id also scopes CRM-note reviews and other chat tasks; it is not
+/// evidence that those tasks started research.
+fn outbound_research_projection_record_id<'a>(
+    module: &str,
+    command_type: &str,
+    record_id: Option<&'a str>,
+    payload: &Value,
+) -> Option<&'a str> {
+    if module != "outbound-lead-generation" || command_type != "business_os.chat.task" {
+        return None;
+    }
+    let record_id = record_id.map(str::trim).filter(|id| !id.is_empty())?;
+    let contract = payload.get("writeback_contract")?;
+    if !super::mcp_channel::supports_command_writeback(contract) {
+        return None;
+    }
+    contract
+        .get("record_ids")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|id| id.trim() == record_id)
+        .then_some(record_id)
+}
+
+#[cfg(test)]
+#[path = "store_outbound_research_projection_tests.rs"]
+mod outbound_research_projection_tests;
+
+/// A lead whose research has been accepted says "Wartet", and it says so
+/// because the daemon wrote it, not because a browser tab got around to it.
+///
+/// Measured on a customer instance on 09.09.2026: three research commands were accepted for
+/// Aeroxon, Beiersdorf and Carbosulf, and all three leads kept showing their
+/// previous state. The only writer of `queued` was an optimistic patch from
+/// the tab that pressed the button, and that write is lost whenever the tab is
+/// slow, throttled or closed. Then the screen contradicts the queue, and a
+/// user who believes the screen starts the same research twice.
+fn project_outbound_lead_queued(
+    root: &Path,
+    command: &BusinessCommand,
+    command_id: &str,
+    task_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(record_id) = outbound_research_projection_record_id(
+        &command.module,
+        &command.command_type,
+        command.record_id.as_deref(),
+        &command.payload,
+    ) else {
+        return Ok(());
+    };
+    let Some(mut lead) =
+        load_rxdb_collection_record(root, "outbound_lead_generation_leads", record_id)?
+    else {
+        return Ok(());
+    };
+    lead["research_status"] = Value::String("queued".to_string());
+    lead["research_error"] = Value::String(String::new());
+    lead["command_id"] = Value::String(command_id.to_string());
+    if let Some(task_id) = task_id.map(str::trim).filter(|value| !value.is_empty()) {
+        lead["task_id"] = Value::String(task_id.to_string());
+    }
+    let now = now_ms() as i64;
+    lead["research_updated_at_ms"] = Value::from(now);
+    upsert_rxdb_collection_record(root, "outbound_lead_generation_leads", record_id, now, lead)?;
+    Ok(())
 }
 
 fn missing_business_command_dependencies(
@@ -7476,14 +7824,471 @@ fn write_text(path: &Path, value: &str) -> anyhow::Result<()> {
     fs::write(path, value).with_context(|| format!("failed to write {}", path.display()))
 }
 
+fn authorized_business_chat_actor_id(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<String>> {
+    if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+        let session = rxdb_authenticated_session(root, command)?;
+        return Ok(session_user_id(&session)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !is_placeholder_business_chat_owner(value))
+            .map(str::to_string));
+    }
+    let claimed = business_chat_owner_user_id(command);
+    Ok((!is_placeholder_business_chat_owner(&claimed)).then_some(claimed))
+}
+
+fn chat_owner_mismatch_accepted(command_id: &str, chat_id: &str) -> CommandAccepted {
+    CommandAccepted {
+        ok: false,
+        command_id: command_id.to_string(),
+        status: "failed",
+        execution_mode: "queue",
+        task_status: Some("failed".to_string()),
+        chat_id: Some(chat_id.to_string()),
+        result: Some(serde_json::json!({
+            "error_code": "chat_owner_mismatch",
+            "error": "Business chat belongs to another user."
+        })),
+        ..CommandAccepted::default()
+    }
+}
+
+pub(super) fn trusted_native_chat_owner(
+    conn: &Connection,
+    chat_id: &str,
+    exclude_command_id: &str,
+) -> anyhow::Result<Option<String>> {
+    // Bind recovery to the same canonical chat target as admission/materialization
+    // (`business_chat_id`). Do not OR caller-controlled candidate fields: an ignored
+    // record_id, payload.chat_id, or client_context value can point at a foreign
+    // legacy chat while the command's real target is elsewhere.
+    let mut stmt = conn.prepare(
+        "SELECT c.command_id,
+                c.module,
+                c.command_type,
+                c.record_id,
+                c.payload_json,
+                c.client_context_json,
+                json_extract(e.payload_json, '$.actor.id')
+         FROM business_events e
+         INNER JOIN business_commands c ON c.command_id = e.record_id
+         WHERE e.collection = 'business_commands'
+           AND e.command_type = 'business_os.policy.allowed'
+           AND (?1 = '' OR c.command_id != ?1)
+           AND CAST(COALESCE(json_extract(e.payload_json, '$.actor.trusted'), 0) AS INTEGER) = 1",
+    )?;
+    let mut owners = Vec::new();
+    let mut rows = stmt.query(params![exclude_command_id])?;
+    while let Some(row) = rows.next()? {
+        let command_id: String = row.get(0)?;
+        let module: String = row.get(1)?;
+        let command_type: String = row.get(2)?;
+        let record_id: Option<String> = row.get(3)?;
+        let payload_json: String = row.get(4)?;
+        let client_context_json: String = row.get(5)?;
+        let actor_id: Option<String> = row.get(6)?;
+        let Some(actor) = actor_id
+            .map(|item| item.trim().to_string())
+            .filter(|item| !is_placeholder_business_chat_owner(item))
+        else {
+            continue;
+        };
+        let payload = if payload_json.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&payload_json).with_context(|| {
+                format!("invalid payload_json for trusted chat receipt {command_id}")
+            })?
+        };
+        let client_context = if client_context_json.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&client_context_json).with_context(|| {
+                format!("invalid client_context_json for trusted chat receipt {command_id}")
+            })?
+        };
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some(command_id.clone()),
+            module,
+            command_type,
+            record_id,
+            payload,
+            client_context,
+        };
+        if !is_business_chat_command(&command) {
+            continue;
+        }
+        if business_chat_id(&command, &command_id) != chat_id {
+            continue;
+        }
+        owners.push(actor);
+    }
+    let Some(first) = owners.first().cloned() else {
+        return Ok(None);
+    };
+    if owners.iter().any(|item| item != &first) {
+        return Ok(None);
+    }
+    Ok(Some(first))
+}
+
+fn business_chat_owner_from_payload(payload: &Value) -> String {
+    payload
+        .get("owner_user_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string()
+}
+
+enum RxdbBusinessChatProjection {
+    Absent,
+    Tombstone,
+    Live(Value),
+}
+
+fn rxdb_collection_row_deleted(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<bool> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok(false);
+    };
+    Ok(
+        match conn.query_row(
+            &format!("SELECT deleted FROM {table} WHERE id = ?1"),
+            [record_id],
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(value) => value != 0,
+            Err(rusqlite::Error::QueryReturnedNoRows) => false,
+            Err(_) => false,
+        },
+    )
+}
+
+fn load_rxdb_business_chat_projection(
+    root: &Path,
+    chat_id: &str,
+) -> anyhow::Result<RxdbBusinessChatProjection> {
+    let Some(record) = load_rxdb_collection_record(root, "business_chats", chat_id)? else {
+        return Ok(RxdbBusinessChatProjection::Absent);
+    };
+    if is_rxdb_deleted_document(&record)
+        || rxdb_collection_row_deleted(root, "business_chats", chat_id)?
+    {
+        return Ok(RxdbBusinessChatProjection::Tombstone);
+    }
+    Ok(RxdbBusinessChatProjection::Live(record))
+}
+
+fn rxdb_business_chat_owner_is_placeholder_or_missing(
+    root: &Path,
+    chat_id: &str,
+) -> anyhow::Result<bool> {
+    Ok(match load_rxdb_business_chat_projection(root, chat_id)? {
+        RxdbBusinessChatProjection::Absent => true,
+        RxdbBusinessChatProjection::Tombstone => false,
+        RxdbBusinessChatProjection::Live(record) => {
+            is_placeholder_business_chat_owner(&business_chat_owner_from_payload(&record))
+        }
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static RXDB_CHAT_OWNER_REPAIR_INTERLEAVE: RefCell<Option<Box<dyn FnMut(&Path, &str)>>> =
+        RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) struct RxdbChatOwnerRepairInterleaveGuard;
+
+#[cfg(test)]
+impl Drop for RxdbChatOwnerRepairInterleaveGuard {
+    fn drop(&mut self) {
+        RXDB_CHAT_OWNER_REPAIR_INTERLEAVE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_rxdb_chat_owner_repair_interleave<F>(
+    hook: F,
+) -> RxdbChatOwnerRepairInterleaveGuard
+where
+    F: FnMut(&Path, &str) + 'static,
+{
+    RXDB_CHAT_OWNER_REPAIR_INTERLEAVE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+    RxdbChatOwnerRepairInterleaveGuard
+}
+
+#[cfg(test)]
+fn invoke_rxdb_chat_owner_repair_interleave(root: &Path, chat_id: &str) {
+    RXDB_CHAT_OWNER_REPAIR_INTERLEAVE.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().as_mut() {
+            hook(root, chat_id);
+        }
+    });
+}
+
+pub(super) fn repair_placeholder_business_chat_owners(
+    root: &Path,
+    conn: &Connection,
+    rxdb_writers: &mut RxdbProjectionWriterCache,
+    apply: bool,
+    now: i64,
+    counters: &mut BTreeMap<&'static str, usize>,
+    actions: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    let chats = {
+        let mut stmt = conn.prepare(
+            "SELECT record_id, payload_json
+             FROM business_records
+             WHERE collection = 'business_chats' AND deleted = 0
+             ORDER BY record_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (chat_id, payload_json) in chats {
+        let payload: Value = serde_json::from_str(&payload_json)
+            .with_context(|| format!("invalid business_chats payload for repair {chat_id}"))?;
+        let existing_owner = business_chat_owner_from_payload(&payload);
+        let proven = trusted_native_chat_owner(conn, &chat_id, "")?;
+        let native_placeholder = is_placeholder_business_chat_owner(&existing_owner);
+        let expected_owner = if native_placeholder {
+            proven.clone()
+        } else if proven.as_deref() == Some(existing_owner.as_str()) {
+            Some(existing_owner.clone())
+        } else {
+            None
+        };
+        let Some(expected_owner) = expected_owner else {
+            continue;
+        };
+        let rxdb_stale = rxdb_business_chat_owner_is_placeholder_or_missing(root, &chat_id)?;
+        if !native_placeholder && !rxdb_stale {
+            continue;
+        }
+        if !apply {
+            *counters.entry("chat_owner_repaired").or_insert(0) += 1;
+            push_repair_action(
+                actions,
+                "chat_owner_repaired",
+                &chat_id,
+                None,
+                &existing_owner,
+                &expected_owner,
+                Some("placeholder chat owner repaired from trusted native policy receipt"),
+            );
+            continue;
+        }
+
+        let mut repaired = false;
+        let mut native_payload = payload;
+        if native_placeholder {
+            let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+            let current_payload = tx
+                .query_row(
+                    "SELECT payload_json FROM business_records
+                     WHERE collection = 'business_chats' AND record_id = ?1 AND deleted = 0",
+                    params![chat_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let Some(current_payload) = current_payload else {
+                tx.rollback()?;
+                continue;
+            };
+            let mut current: Value = serde_json::from_str(&current_payload)?;
+            let current_owner = business_chat_owner_from_payload(&current);
+            if is_placeholder_business_chat_owner(&current_owner) {
+                let Some(owner) = trusted_native_chat_owner(&tx, &chat_id, "")? else {
+                    tx.rollback()?;
+                    continue;
+                };
+                if let Some(obj) = current.as_object_mut() {
+                    obj.insert("owner_user_id".to_string(), Value::String(owner.clone()));
+                }
+                upsert_business_record(&tx, "business_chats", &chat_id, now, current.clone())?;
+                tx.commit()?;
+                native_payload = current;
+                repaired = true;
+            } else {
+                tx.rollback()?;
+                native_payload = current;
+            }
+        }
+
+        let native_owner = business_chat_owner_from_payload(&native_payload);
+        if native_owner == expected_owner {
+            #[cfg(test)]
+            invoke_rxdb_chat_owner_repair_interleave(root, &chat_id);
+            if rxdb_writers.repair_business_chat_placeholder_owner(
+                &chat_id,
+                &expected_owner,
+                native_payload,
+                now,
+            )? {
+                repaired = true;
+            }
+        }
+        if repaired {
+            *counters.entry("chat_owner_repaired").or_insert(0) += 1;
+            push_repair_action(
+                actions,
+                "chat_owner_repaired",
+                &chat_id,
+                None,
+                &existing_owner,
+                &expected_owner,
+                Some("placeholder chat owner repaired from trusted native policy receipt"),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn proven_existing_business_chat_owner(
+    conn: &Connection,
+    chat_id: &str,
+    existing_owner: &str,
+    exclude_command_id: &str,
+) -> anyhow::Result<Option<String>> {
+    if !is_placeholder_business_chat_owner(existing_owner) {
+        return Ok(Some(existing_owner.trim().to_string()));
+    }
+    trusted_native_chat_owner(conn, chat_id, exclude_command_id)
+}
+
+fn insert_business_chat_owner_claim(
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    chat_id: &str,
+    owner: &str,
+) -> anyhow::Result<()> {
+    let now = now_ms() as i64;
+    let mut payload =
+        initial_pending_business_chat_payload(command, command_id, owner, now, command_id);
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("id".to_string(), Value::String(chat_id.to_string()));
+        obj.insert(
+            "owner_user_id".to_string(),
+            Value::String(owner.to_string()),
+        );
+    }
+    upsert_business_record(conn, "business_chats", chat_id, now, payload)
+}
+
+fn stamp_business_chat_owner(conn: &Connection, chat_id: &str, owner: &str) -> anyhow::Result<()> {
+    let payload = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'business_chats' AND record_id = ?1 AND deleted = 0",
+            params![chat_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let mut value = payload
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({ "id": chat_id, "messages": [] }));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "owner_user_id".to_string(),
+            Value::String(owner.to_string()),
+        );
+    }
+    upsert_business_record(conn, "business_chats", chat_id, now_ms() as i64, value)
+}
+
+pub(super) fn claim_or_reject_business_chat(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<CommandAccepted>> {
+    if !is_business_chat_command(command) {
+        return Ok(None);
+    }
+    let chat_id = business_chat_id(command, command_id);
+    let actor_id = authorized_business_chat_actor_id(root, command)?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let existing_owner = existing_business_chat_owner(&tx, &chat_id)?;
+    let denied = match existing_owner {
+        None => {
+            let owner = match actor_id.as_deref() {
+                Some(actor) => actor.to_string(),
+                None if matches!(command.origin, CommandOrigin::TrustedLocal) => {
+                    business_chat_owner_user_id(command)
+                }
+                None => {
+                    tx.rollback()?;
+                    return Ok(Some(chat_owner_mismatch_accepted(command_id, &chat_id)));
+                }
+            };
+            insert_business_chat_owner_claim(&tx, command_id, command, &chat_id, &owner)?;
+            None
+        }
+        Some(existing_owner) => {
+            let proven =
+                proven_existing_business_chat_owner(&tx, &chat_id, &existing_owner, command_id)?;
+            match (proven, actor_id.as_deref()) {
+                (Some(owner), Some(actor)) if owner == actor => {
+                    if is_placeholder_business_chat_owner(&existing_owner) {
+                        stamp_business_chat_owner(&tx, &chat_id, actor)?;
+                    }
+                    None
+                }
+                (None, None)
+                    if matches!(command.origin, CommandOrigin::TrustedLocal)
+                        && is_placeholder_business_chat_owner(&existing_owner) =>
+                {
+                    None
+                }
+                _ => Some(chat_owner_mismatch_accepted(command_id, &chat_id)),
+            }
+        }
+    };
+    if denied.is_some() {
+        tx.rollback()?;
+    } else {
+        tx.commit()?;
+    }
+    Ok(denied)
+}
+
 fn reject_app_build_command_if_denied(
     root: &Path,
     command: &BusinessCommand,
+    authenticated_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Option<PolicyDecision>> {
     let Some((permission, module_id)) = app_build_command_policy_target(command) else {
         return Ok(None);
     };
-    let session = rxdb_authenticated_session(root, command)?;
+    let session = match authenticated_session {
+        Some(session) => session.clone(),
+        None => rxdb_authenticated_session(root, command)?,
+    };
     let decision = match permission {
         BusinessOsPermission::AppsModify => {
             module_policy_decision(root, &session, permission, &module_id)?
@@ -7496,7 +8301,16 @@ fn reject_app_build_command_if_denied(
         )?,
     };
     if decision.allowed {
-        record_business_policy_decision_event(root, command, &decision)?;
+        if let Some(session) = authenticated_session {
+            record_business_policy_decision_event_with_actor(
+                root,
+                command,
+                &decision,
+                session_audit_actor_context(session),
+            )?;
+        } else {
+            record_business_policy_decision_event(root, command, &decision)?;
+        }
         return Ok(None);
     }
     reject_command_if_policy_denied(root, command, &decision)?;
@@ -7527,11 +8341,15 @@ pub(super) fn queue_command_policy_target(
 fn queue_command_native_authorization(
     root: &Path,
     command: &BusinessCommand,
+    authenticated_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Option<Value>> {
-    if !matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+    if authenticated_session.is_none() && !matches!(command.origin, CommandOrigin::ReplicatedPeer) {
         return Ok(None);
     }
-    let session = rxdb_authenticated_session(root, command)?;
+    let session = match authenticated_session {
+        Some(session) => session.clone(),
+        None => rxdb_authenticated_session(root, command)?,
+    };
     let decision = queue_command_policy_decision(root, &session, command)?;
     anyhow::ensure!(
         decision.allowed,
@@ -7563,7 +8381,14 @@ fn revalidate_queue_native_authorization(
         authorization.get("allowed").and_then(Value::as_bool) == Some(true),
         "Business OS command was not authorized at admission"
     );
-    let (permission, module_id, _) = queue_command_policy_target(command);
+    let control_permission = recoverable_background_control_permission(&command.command_type);
+    let (permission, module_id) = match control_permission {
+        Some(permission) => (permission, command.module.clone()),
+        None => {
+            let (permission, module_id, _) = queue_command_policy_target(command);
+            (permission, module_id)
+        }
+    };
     anyhow::ensure!(
         authorization.get("permission").and_then(Value::as_str) == Some(permission.as_str()),
         "Business OS command authorization permission changed"
@@ -7588,6 +8413,30 @@ fn revalidate_queue_native_authorization(
         .and_then(Value::as_str)
         .map(normalize_business_role)
         .context("Business OS command authorized actor role is missing")?;
+    if let Some(receipt) = authorization.get("managed_mcp_authority") {
+        let authority =
+            super::mcp_channel::AuthenticatedMcpAppCommand::from_native_receipt(receipt)?;
+        let session = authority.session(root, command)?;
+        let user = session
+            .user
+            .as_ref()
+            .context("managed MCP app actor is missing")?;
+        anyhow::ensure!(
+            user.id == actor_id && user.role == authorized_role,
+            "native managed MCP authorization actor changed"
+        );
+        let decision = if control_permission.is_some() {
+            module_policy_decision(root, &session, permission, &module_id)?
+        } else {
+            queue_command_policy_decision(root, &session, command)?
+        };
+        anyhow::ensure!(
+            decision.allowed,
+            "Business OS execution permission was revoked: {}",
+            decision.display_reason
+        );
+        return Ok((session, decision));
+    }
     let conn = open_store(root)?;
     seed_configured_business_users(&conn)?;
     let user = active_business_user(&conn, actor_id)?
@@ -7609,7 +8458,11 @@ fn revalidate_queue_native_authorization(
         login_url: None,
         reason: None,
     };
-    let decision = queue_command_policy_decision(root, &session, command)?;
+    let decision = if control_permission.is_some() {
+        module_policy_decision(root, &session, permission, &module_id)?
+    } else {
+        queue_command_policy_decision(root, &session, command)?
+    };
     anyhow::ensure!(
         decision.allowed,
         "Business OS execution permission was revoked: {}",
@@ -7641,6 +8494,11 @@ pub(crate) fn revalidate_business_command_execution_authorization(
         session.authenticated,
         "Business OS actor is no longer authenticated at harness lease"
     );
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
+    }
     let missing_dependencies = missing_business_command_dependencies(root, &command)?;
     anyhow::ensure!(
         missing_dependencies.is_empty(),
@@ -7773,6 +8631,20 @@ pub(super) fn record_business_policy_decision_event(
     command: &BusinessCommand,
     decision: &PolicyDecision,
 ) -> anyhow::Result<()> {
+    record_business_policy_decision_event_with_actor(
+        root,
+        command,
+        decision,
+        policy_audit_actor_context(root, command),
+    )
+}
+
+fn record_business_policy_decision_event_with_actor(
+    root: &Path,
+    command: &BusinessCommand,
+    decision: &PolicyDecision,
+    actor: Value,
+) -> anyhow::Result<()> {
     let command_id = command.id.as_deref().context("command id is required")?;
     let event_type = if decision.allowed {
         "business_os.policy.allowed"
@@ -7780,7 +8652,6 @@ pub(super) fn record_business_policy_decision_event(
         "business_os.policy.denied"
     };
     let observed_at_ms = now_ms() as i64;
-    let actor = policy_audit_actor_context(root, command);
     let client_context = policy_audit_client_context(command);
     let conn = open_store(root)?;
     insert_business_event(
@@ -9886,7 +10757,7 @@ pub fn complete_ready_documents_report_commands(
     })
 }
 
-fn process_business_chat_reply(
+pub(super) fn process_business_chat_reply(
     root: &Path,
     conn: &Connection,
     command_id: &str,
@@ -9999,6 +10870,68 @@ fn process_business_chat_reply(
         target_task_id: None,
         target_record_id: command.record_id.clone(),
     })
+}
+
+/// Complete source snapshot for the coding owner. Select the same collection
+/// plane as `pull_collection_records`, before filtering by module, and never
+/// splice an RxDB snapshot into a partially populated native collection.
+pub(crate) fn pull_coding_module_source_records(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let native = with_store_connection(root, |conn| {
+        let tx = conn.unchecked_transaction()?;
+        let has_collection: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM business_records
+             WHERE collection = 'business_module_source_files')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_collection {
+            return Ok(None);
+        }
+        let mut statement = tx.prepare(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'business_module_source_files'
+               AND deleted = 0 AND json_extract(payload_json, '$.module_id') = ?1
+             ORDER BY record_id",
+        )?;
+        let rows = statement.query_map([module_id], |row| row.get::<_, String>(0))?;
+        let mut documents = Vec::new();
+        for row in rows {
+            documents.push(serde_json::from_str::<Value>(&row?)?);
+        }
+        Ok(Some(documents))
+    })?;
+    if let Some(documents) = native {
+        return Ok(documents);
+    }
+
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let tx = conn.unchecked_transaction()?;
+    for version in (0..=1).rev() {
+        let table = format!("ctox_business_os__business_module_source_files__v{version}");
+        if !rxdb_table_exists_cached(&path, &tx, &table)? {
+            continue;
+        }
+        let mut statement = tx.prepare(&format!(
+            "SELECT data FROM {table}
+             WHERE json_extract(data, '$.module_id') = ?1
+               AND COALESCE(json_extract(data, '$._deleted'), 0) = 0
+             ORDER BY id"
+        ))?;
+        let rows = statement.query_map([module_id], |row| row.get::<_, String>(0))?;
+        let mut documents = Vec::new();
+        for row in rows {
+            documents.push(serde_json::from_str::<Value>(&row?)?);
+        }
+        return Ok(documents);
+    }
+    Ok(Vec::new())
 }
 
 pub fn pull_collection_records(
@@ -10284,6 +11217,177 @@ pub fn pull_latest_collection_records(
     }))
 }
 
+fn mcp_rxdb_document(record_id: &str, raw: &str, sql_deleted: i64) -> anyhow::Result<Value> {
+    let mut document: Value = serde_json::from_str(raw)
+        .with_context(|| format!("parse native RxDB document `{record_id}` for MCP read"))?;
+    let deleted = sql_deleted != 0 || is_rxdb_deleted_document(&document);
+    let object = document
+        .as_object_mut()
+        .with_context(|| format!("native RxDB document `{record_id}` is not an object"))?;
+    if object
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id != record_id)
+    {
+        anyhow::bail!("native RxDB document `{record_id}` has a different payload id");
+    }
+    object.insert("id".to_string(), Value::String(record_id.to_string()));
+    object.insert("_deleted".to_string(), Value::Bool(deleted));
+    for alias in ["deleted", "is_deleted"] {
+        if object.contains_key(alias) {
+            object.insert(alias.to_string(), Value::Bool(deleted));
+        }
+    }
+    Ok(document)
+}
+
+/// MCP app reads prefer the native RxDB row that the browser sees. A tombstone
+/// is a present row; falling back to an older shadow would resurrect it.
+pub fn pull_mcp_app_collection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if path.is_file() {
+        let conn = Connection::open(&path)?;
+        if let Some(table) = rxdb_collection_table_name(&path, &conn, collection) {
+            let columns = rxdb_table_columns(&conn, &table)?;
+            let deleted_column = if columns.contains("deleted") {
+                "deleted"
+            } else if columns.contains("_deleted") {
+                "_deleted"
+            } else {
+                "0"
+            };
+            let row = conn
+                .query_row(
+                    &format!("SELECT data, {deleted_column} FROM {table} WHERE id = ?1"),
+                    [record_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .optional()?;
+            // Presence of the native collection owns absence too. A purged
+            // tombstone must not expose an older live business_records shadow.
+            return row
+                .map(|(raw, deleted)| mcp_rxdb_document(record_id, &raw, deleted))
+                .transpose();
+        }
+    }
+    pull_collection_record(root, collection, record_id)
+}
+
+/// A present native collection owns the complete MCP result, including absence.
+/// Legacy shadow reads are allowed only when no native collection table exists.
+pub fn pull_mcp_app_collection_records(
+    root: &Path,
+    collection: &str,
+    limit: Option<usize>,
+) -> anyhow::Result<Value> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let path = rxdb_store_path(root);
+    let rxdb = if path.is_file() {
+        let conn = Connection::open(&path)?;
+        rxdb_collection_table_name(&path, &conn, collection).map(|table| (conn, table))
+    } else {
+        None
+    };
+    let mut documents = Vec::new();
+    if let Some((conn, table)) = rxdb.as_ref() {
+        let columns = rxdb_table_columns(conn, table)?;
+        let deleted_column = if columns.contains("deleted") {
+            "deleted"
+        } else if columns.contains("_deleted") {
+            "_deleted"
+        } else {
+            "0"
+        };
+        let write_clock = if columns.contains("lastWriteTime") {
+            "lastWriteTime"
+        } else {
+            "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
+        };
+        let mut statement = conn.prepare(&format!(
+            "SELECT id, data, {deleted_column}, {write_clock} AS write_clock FROM {table}
+             ORDER BY {write_clock} DESC, id DESC LIMIT ?1"
+        ))?;
+        let rows = statement.query_map([limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, raw, deleted, write_time) = row?;
+            documents.push((
+                write_time,
+                id.clone(),
+                mcp_rxdb_document(&id, &raw, deleted)?,
+            ));
+        }
+    }
+    let shadow_only = if rxdb.is_none() {
+        with_store_connection(root, |conn| {
+            let mut statement = conn.prepare(
+                "SELECT record_id, deleted, updated_at_ms, payload_json
+                 FROM business_records WHERE collection = ?1
+                 ORDER BY updated_at_ms DESC, record_id DESC",
+            )?;
+            let mut rows = statement.query([collection])?;
+            let mut fallback = Vec::new();
+            while fallback.len() < limit {
+                let Some(row) = rows.next()? else { break };
+                let id: String = row.get(0)?;
+                let deleted: i64 = row.get(1)?;
+                let updated_at_ms: i64 = row.get(2)?;
+                let raw: String = row.get(3)?;
+                let mut document: Value = serde_json::from_str(&raw)
+                    .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
+                let object = document.as_object_mut().with_context(|| {
+                    format!("shadow document `{collection}/{id}` is not an object")
+                })?;
+                object
+                    .entry("id".to_string())
+                    .or_insert_with(|| Value::String(id.clone()));
+                object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+                object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+                fallback.push((updated_at_ms as f64, id, document));
+            }
+            Ok(fallback)
+        })?
+    } else {
+        Vec::new()
+    };
+    documents.extend(shadow_only);
+    documents.sort_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+    });
+    documents.truncate(limit);
+    let documents: Vec<Value> = documents
+        .into_iter()
+        .map(|(_, _, document)| document)
+        .collect();
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": collection,
+        "count": documents.len(),
+        "documents": documents,
+        "since_ms": 0,
+        "source": "mcp_rxdb_priority"
+    }))
+}
+
 pub fn pull_business_command_status_record(
     root: &Path,
     command_id: &str,
@@ -10538,6 +11642,219 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
     Ok(Some((id, record)))
 }
 
+/// Required lookup surface: missing/unreadable storage is not an empty query.
+/// Keep every probe on the same read transaction instead of checking readiness
+/// and then reopening through optional helpers which may silently return empty.
+pub(super) fn required_rxdb_collection_read_connection(
+    root: &Path,
+    collection: &str,
+    lookup_fields: &[&str],
+) -> anyhow::Result<(Connection, String)> {
+    anyhow::ensure!(
+        is_safe_rxdb_collection_name(collection),
+        "invalid collection name"
+    );
+    let path = rxdb_store_path(root);
+    // Preserve main's best-effort expression-index preparation without opening
+    // or creating missing stores. Data probes below still share one required
+    // read-only transaction, even if index preparation is unavailable.
+    for field in lookup_fields {
+        anyhow::ensure!(
+            !field.is_empty()
+                && field
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_'),
+            "invalid RxDB lookup field"
+        );
+    }
+    if !lookup_fields.is_empty() && path.is_file() {
+        if let Ok(index_conn) =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        {
+            if index_conn
+                .busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+                .is_ok()
+            {
+                if let Some(table) = rxdb_collection_table_name(&path, &index_conn, collection) {
+                    for field in lookup_fields {
+                        ensure_rxdb_string_field_lookup_index(&path, &index_conn, &table, field);
+                    }
+                }
+            }
+        }
+    }
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .context("required lookup store is unavailable")?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    conn.execute_batch("BEGIN")?;
+    let table = rxdb_collection_table_name(&path, &conn, collection)
+        .context("required lookup collection is unavailable")?;
+    Ok((conn, table))
+}
+
+/// Exact-match lookup over one JSON field of an RxDB collection table.
+///
+/// The JSON path is a literal and `deleted` leads the predicate so SQLite can
+/// use the `("deleted", json_extract(data, '$.field'), "id")` expression index
+/// that RxDB schema indexes and [`ensure_rxdb_string_field_lookup_index`]
+/// create. The former `CAST(json_extract(data, ?1) AS TEXT) = ?2` could use no
+/// index: each Sellify lookup parsed every row, e.g. 92,875 campaign rows
+/// (118 MB) per campaign import on tenant (26.09.2026). The caller must have
+/// validated `field` as `[A-Za-z0-9_]+`.
+pub(super) fn rxdb_string_field_lookup_sql(table: &str, field: &str) -> String {
+    format!(
+        "SELECT id, data
+         FROM {table}
+         WHERE deleted IN (0, 1)
+           AND json_extract(data, '$.{field}') IN (?1, ?2)
+         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+         LIMIT ?3"
+    )
+}
+
+/// Creates the expression index a string-field lookup needs when the RxDB
+/// schema does not declare one (e.g. `sellify_campaigns.name`). Best effort:
+/// without the index the lookup stays correct, only slower.
+fn ensure_rxdb_string_field_lookup_index(path: &Path, conn: &Connection, table: &str, field: &str) {
+    static CHECKED: std::sync::OnceLock<std::sync::Mutex<BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    let key = format!("{}|{table}|{field}", path.display());
+    let checked = CHECKED.get_or_init(|| std::sync::Mutex::new(BTreeSet::new()));
+    if checked
+        .lock()
+        .map(|set| set.contains(&key))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let expression = format!("json_extract(data, '$.{field}')");
+    let result = (|| -> rusqlite::Result<()> {
+        let mut statement = conn.prepare(
+            "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1",
+        )?;
+        let covered = statement
+            .query_map(params![table], |row| row.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .any(|sql| sql.contains(&format!("(\"deleted\", {expression}")));
+        if !covered {
+            conn.execute_batch(&format!(
+                "CREATE INDEX IF NOT EXISTS \"{table}_lookup_{field}_idx\"
+                 ON \"{table}\"(\"deleted\", {expression}, \"id\");"
+            ))?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            if let Ok(mut set) = checked.lock() {
+                set.insert(key);
+            }
+        }
+        Err(error) => {
+            eprintln!("[business-os] lookup index on {table}.{field} not available yet: {error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod rxdb_string_field_lookup_tests {
+    use super::*;
+
+    #[test]
+    fn grouped_contains_search_counts_live_rows_per_value() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE group_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                 deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0);
+             INSERT INTO group_table (id, data, deleted) VALUES
+                 ('a', '{\"name\":\"Maschinenbau - Welle 1\"}', 0),
+                 ('b', '{\"name\":\"Maschinenbau - Welle 1\"}', 0),
+                 ('c', '{\"name\":\"Maschinenbau - Welle 1\",\"is_deleted\":true}', 0),
+                 ('d', '{\"name\":\"Maschinenbau - Welle 1\"}', 1),
+                 ('e', '{\"name\":\"Chemie - Welle 1\"}', 0),
+                 ('f', '{\"name\":\"Beauty\"}', 0);",
+        )
+        .expect("seed");
+        let path = Path::new("/nonexistent/group-test.sqlite3");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "group_table", "name");
+        let mut statement = conn
+            .prepare(&rxdb_string_field_group_sql("group_table", "name"))
+            .expect("prepare");
+        let mut groups = statement
+            .query_map(params!["%welle%"], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .expect("query")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("rows");
+        groups.sort();
+        assert_eq!(
+            groups,
+            vec![
+                ("Chemie - Welle 1".to_string(), 1),
+                ("Maschinenbau - Welle 1".to_string(), 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn string_field_lookup_uses_an_expression_index_and_matches_text_and_numbers() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE lookup_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                 deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0);
+             INSERT INTO lookup_table (id, data) VALUES
+                 ('a', '{\"name\":\"Maschinenbau\",\"updated_at_ms\":2}'),
+                 ('b', '{\"name\":\"Chemie\",\"updated_at_ms\":1}'),
+                 ('c', '{\"contact_id\":123,\"updated_at_ms\":3}'),
+                 ('d', '{\"contact_id\":\"123\",\"updated_at_ms\":4}');",
+        )
+        .expect("seed");
+        let path = Path::new("/nonexistent/lookup-test.sqlite3");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "lookup_table", "name");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "lookup_table", "contact_id");
+
+        let lookup = |field: &str, expected: &str| -> Vec<String> {
+            let numeric = expected.parse::<i64>().ok();
+            let mut statement = conn
+                .prepare(&rxdb_string_field_lookup_sql("lookup_table", field))
+                .expect("prepare");
+            statement
+                .query_map(params![expected, numeric, 10_i64], |row| {
+                    row.get::<_, String>(0)
+                })
+                .expect("query")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("rows")
+        };
+        assert_eq!(lookup("name", "Maschinenbau"), vec!["a".to_string()]);
+        assert_eq!(
+            lookup("contact_id", "123"),
+            vec!["d".to_string(), "c".to_string()]
+        );
+        assert!(lookup("name", "Bau").is_empty());
+
+        let plan = conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                rxdb_string_field_lookup_sql("lookup_table", "name")
+            ))
+            .expect("prepare plan")
+            .query_map(
+                params!["Maschinenbau", Option::<i64>::None, 10_i64],
+                |row| row.get::<_, String>(3),
+            )
+            .expect("plan")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("plan rows")
+            .join("\n");
+        assert!(
+            plan.contains("lookup_table_lookup_name_idx"),
+            "lookup must use the expression index, plan: {plan}"
+        );
+    }
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field(
     root: &Path,
     collection: &str,
@@ -10562,19 +11879,17 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
         return Ok(Vec::new());
     }
     let conn = Connection::open(&path)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
         return Ok(Vec::new());
     };
-    let json_path = format!("$.{field}");
-    let mut stmt = conn.prepare(&format!(
-        "SELECT id, data
-         FROM {table}
-         WHERE CAST(json_extract(data, ?1) AS TEXT) = ?2
-         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
-         LIMIT ?3"
-    ))?;
+    ensure_rxdb_string_field_lookup_index(&path, &conn, &table, field);
+    // A numeric JSON value must still match its decimal text (the former
+    // `CAST(... AS TEXT) = ?` semantics), so the integer form is probed too.
+    let numeric = expected.parse::<i64>().ok();
+    let mut stmt = conn.prepare(&rxdb_string_field_lookup_sql(&table, field))?;
     let rows = stmt
-        .query_map(params![json_path, expected, limit as i64], |row| {
+        .query_map(params![expected, numeric, limit as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -10595,6 +11910,78 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
 /// CRM company matching, where names drift over time (legal-form suffixes,
 /// renames): the browser must not scan 17k replicated documents itself, so
 /// the LIKE scan runs natively over the SQLite store instead.
+/// Counts live records per value of one JSON string field whose value
+/// contains `needle` (case-insensitive LIKE), largest groups first.
+///
+/// A Sellify campaign search needs only names and member counts. Loading every
+/// matching membership row (up to 50,000 full documents) and grouping in Rust
+/// took 8 s for "Welle" and silently undercounted once the cap was reached
+/// (tenant 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
+/// expression index reads the name from the index and touches a row only for
+/// its `is_deleted` flag.
+pub(super) fn group_rxdb_collection_string_field_contains(
+    root: &Path,
+    collection: &str,
+    field: &str,
+    needle: &str,
+    max_groups: usize,
+) -> anyhow::Result<(Vec<(String, u64)>, u64)> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    if !field
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        anyhow::bail!("invalid RxDB JSON field `{field}`");
+    }
+    let needle = needle.trim();
+    if max_groups == 0 || needle.len() < 2 {
+        return Ok((Vec::new(), 0));
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok((Vec::new(), 0));
+    }
+    let conn = Connection::open(&path)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok((Vec::new(), 0));
+    };
+    ensure_rxdb_string_field_lookup_index(&path, &conn, &table, field);
+    let escaped = needle
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
+    let mut stmt = conn.prepare(&rxdb_string_field_group_sql(&table, field))?;
+    let groups = stmt
+        .query_map(params![pattern], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let scanned = groups.iter().map(|(_, count)| (*count).max(0) as u64).sum();
+    let mut groups = groups
+        .into_iter()
+        .map(|(name, count)| (name.trim().to_string(), count.max(0) as u64))
+        .filter(|(name, _)| !name.is_empty())
+        .collect::<Vec<_>>();
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    groups.truncate(max_groups);
+    Ok((groups, scanned))
+}
+
+pub(super) fn rxdb_string_field_group_sql(table: &str, field: &str) -> String {
+    format!(
+        "SELECT json_extract(data, '$.{field}') AS grouped_value, COUNT(*)
+         FROM {table}
+         WHERE deleted = 0
+           AND json_extract(data, '$.{field}') LIKE ?1 ESCAPE '\\'
+           AND COALESCE(json_extract(data, '$.is_deleted'), 0) NOT IN (1, 'true')
+         GROUP BY grouped_value"
+    )
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field_contains(
     root: &Path,
     collection: &str,
@@ -10787,6 +12174,297 @@ pub(crate) fn project_web_stack_auth_session_placeholder(
     Ok(())
 }
 
+/// Read witnesses and the current canonical row in one SQLite snapshot.
+/// A witness left by an older native mutation cannot authenticate a removed,
+/// changed or deleted status supplied by a caller.
+pub(super) fn load_current_native_field_status_witnesses(
+    root: &Path,
+    record_id: &str,
+) -> anyhow::Result<super::outbound_field_review::NativeFieldStatusWitnesses> {
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(Default::default());
+    }
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let tx = conn.unchecked_transaction()?;
+    let Some(table) = rxdb_collection_table_name(&path, &tx, "outbound_lead_generation_leads")
+    else {
+        return Ok(Default::default());
+    };
+    let columns = rxdb_table_columns_for_path(&tx, &path, &table)?;
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| columns.contains(*column))
+        .unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!("SELECT data, {deleted_expression} FROM {table} WHERE id=?1"),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((raw, deleted)) = raw else {
+        return Ok(Default::default());
+    };
+    let lead: Value = serde_json::from_str(&raw)?;
+    if deleted != 0 || is_rxdb_deleted_document(&lead) {
+        return Ok(Default::default());
+    }
+    let mut issued =
+        super::outbound_field_review::NativeFieldStatusWitnesses::load(&tx, record_id)?;
+    issued.retain_current(&lead);
+    tx.commit()?;
+    Ok(issued)
+}
+
+/// Native writeback issuance is committed with the actual persisted statuses.
+/// Only the validated writeback handler supplies the freshly stamped revision
+/// and exact delivered field locations. This is not an external record API.
+pub(super) fn upsert_native_research_writeback_record(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    expected_master: &Value,
+    revision: &Value,
+    keys: &BTreeSet<(String, String, String)>,
+) -> anyhow::Result<()> {
+    upsert_native_field_status_if_current(
+        root,
+        record_id,
+        updated_at_ms,
+        payload,
+        expected_master,
+        super::outbound_field_review::NativeFieldStatusIssuance::Writeback { revision, keys },
+    )
+}
+
+/// Native email results do not issue writeback/review provenance. They must
+/// nevertheless fence the full canonical snapshot read before deriving their
+/// patch, so an independently published review cannot be lost.
+pub(super) fn upsert_native_email_validation_record(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    expected_master: &Value,
+) -> anyhow::Result<()> {
+    upsert_native_field_status_if_current(
+        root,
+        record_id,
+        updated_at_ms,
+        payload,
+        expected_master,
+        super::outbound_field_review::NativeFieldStatusIssuance::Preserve,
+    )
+}
+
+fn upsert_native_field_status_if_current(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    expected_master: &Value,
+    issuance: super::outbound_field_review::NativeFieldStatusIssuance<'_>,
+) -> anyhow::Result<()> {
+    let writer = RxdbCollectionWriter::open(root, "outbound_lead_generation_leads")?
+        .context("native research persistence collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column))
+        .unwrap_or("0");
+    let current = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id=?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    anyhow::ensure!(
+        current.as_ref().is_some_and(|(_, deleted)| *deleted == 0),
+        "native research persistence cannot create or resurrect a missing/deleted lead"
+    );
+    let mut current: Value = serde_json::from_str(&current.unwrap().0)?;
+    if let Some(object) = current.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(record_id.to_string()));
+    }
+    anyhow::ensure!(
+        !is_rxdb_deleted_document(&current),
+        "native research lead is deleted"
+    );
+    anyhow::ensure!(
+        current == *expected_master,
+        "native lead changed before persistence; retry from the current record"
+    );
+    let issued = super::outbound_field_review::NativeFieldStatusWitnesses::load(&tx, record_id)?;
+    write_native_field_status_record(
+        &tx,
+        &writer,
+        record_id,
+        updated_at_ms,
+        payload,
+        &issued,
+        issuance,
+    )?;
+    tx.commit()?;
+    writer.notify_committed_change();
+    Ok(())
+}
+
+fn write_native_field_status_record(
+    tx: &rusqlite::Transaction<'_>,
+    writer: &RxdbCollectionWriter,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    issued: &super::outbound_field_review::NativeFieldStatusWitnesses,
+    issuance: super::outbound_field_review::NativeFieldStatusIssuance<'_>,
+) -> anyhow::Result<()> {
+    let expected = payload.clone();
+    upsert_rxdb_collection_record_with_writer(
+        tx,
+        &writer.table,
+        &writer.columns,
+        record_id,
+        updated_at_ms,
+        updated_at_ms,
+        payload,
+        writer.demand_file_storage,
+        false,
+        false,
+    )?;
+    let raw: String = tx.query_row(
+        &format!("SELECT data FROM {} WHERE id=?1", writer.table),
+        [record_id],
+        |row| row.get(0),
+    )?;
+    let staged: Value = serde_json::from_str(&raw)?;
+    anyhow::ensure!(
+        super::outbound_field_review::peer_preserves_native_field_status(
+            "outbound_lead_generation_leads",
+            &staged,
+            Some(&expected)
+        ),
+        "native field-status projection changed during normalization or budget clamping"
+    );
+    issued.persist(tx, record_id, &staged, issuance)?;
+    Ok(())
+}
+
+/// Audit publication requires exact prior issuance in this same snapshot.
+/// Its new witness and field verdict commit together; absence/deletion/clamp
+/// can never leave a publication witness behind.
+pub(super) fn update_native_field_review_record(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    review_id: &str,
+    update: impl FnOnce(
+        &mut Value,
+        &super::outbound_field_review::NativeFieldStatusWitnesses,
+    ) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    let writer = RxdbCollectionWriter::open(root, "outbound_lead_generation_leads")?
+        .context("native field review collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column))
+        .unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id=?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((raw, deleted)) = raw else {
+        tx.rollback()?;
+        return Ok(false);
+    };
+    let mut lead: Value = serde_json::from_str(&raw)?;
+    let issued = super::outbound_field_review::NativeFieldStatusWitnesses::load(&tx, record_id)?;
+    if deleted != 0 || is_rxdb_deleted_document(&lead) || !update(&mut lead, &issued)? {
+        tx.rollback()?;
+        return Ok(false);
+    }
+    write_native_field_status_record(
+        &tx,
+        &writer,
+        record_id,
+        updated_at_ms,
+        lead,
+        &issued,
+        super::outbound_field_review::NativeFieldStatusIssuance::Review(review_id),
+    )?;
+    tx.commit()?;
+    writer.notify_committed_change();
+    Ok(true)
+}
+
+/// Apply native field-review metadata to the current persisted document.
+/// The comparison and publication share an IMMEDIATE transaction, including
+/// browser/native writes. Absence and tombstones never become new records.
+#[cfg(test)]
+pub(super) fn update_rxdb_record_conditionally(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    update: impl FnOnce(&mut Value) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    let writer = RxdbCollectionWriter::open(root, collection)?
+        .context("native conditional update collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_column = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column));
+    let deleted_expression = deleted_column.unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id = ?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((raw, deleted)) = raw else {
+        tx.rollback()?;
+        return Ok(false);
+    };
+    let mut record: Value = serde_json::from_str(&raw)?;
+    if deleted != 0 || is_rxdb_deleted_document(&record) || !update(&mut record)? {
+        tx.rollback()?;
+        return Ok(false);
+    }
+    upsert_rxdb_collection_record_with_writer(
+        &tx,
+        &writer.table,
+        &writer.columns,
+        record_id,
+        updated_at_ms,
+        updated_at_ms,
+        record,
+        writer.demand_file_storage,
+        false,
+        false,
+    )?;
+    tx.commit()?;
+    writer.notify_committed_change();
+    Ok(true)
+}
+
 pub(super) fn upsert_rxdb_collection_record_cached(
     root: &Path,
     mut writers: Option<&mut RxdbProjectionWriterCache>,
@@ -10802,12 +12480,60 @@ pub(super) fn upsert_rxdb_collection_record_cached(
     }
 }
 
+#[path = "store_control_projection_cache.rs"]
+mod control_projection_cache;
+pub(super) use control_projection_cache::with_control_projection_writers;
+
 pub(super) struct RxdbProjectionWriterCache {
     root: PathBuf,
     writers: HashMap<String, Option<RxdbCollectionWriter>>,
 }
 
 impl RxdbProjectionWriterCache {
+    /// Replace current source records, including removed fields and tombstones.
+    pub(super) fn replace_domain_record_required(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        deleted: bool,
+    ) -> anyhow::Result<()> {
+        if !matches!(self.writers.get(collection), Some(Some(_))) {
+            let writer =
+                RxdbCollectionWriter::open(&self.root, collection)?.with_context(|| {
+                    format!("domain effect projection collection unavailable: {collection}")
+                })?;
+            self.writers.insert(collection.to_owned(), Some(writer));
+        }
+        let writer = self
+            .writers
+            .get_mut(collection)
+            .and_then(Option::as_mut)
+            .context("domain projection writer missing")?;
+        let result = writer.replace_source(record_id, updated_at_ms, payload, deleted);
+        if result.is_err() {
+            self.writers.remove(collection);
+        }
+        result
+    }
+
+    /// Recovery must distinguish absent storage from successful delivery.
+    pub(super) fn upsert_required(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+    ) -> anyhow::Result<()> {
+        self.upsert(collection, record_id, updated_at_ms, payload)?;
+        anyhow::ensure!(
+            matches!(self.writers.get(collection), Some(Some(_))),
+            "domain effect projection collection unavailable: {collection}"
+        );
+        Ok(())
+    }
+
     pub(super) fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
@@ -10834,6 +12560,32 @@ impl RxdbProjectionWriterCache {
             result?;
         }
         Ok(())
+    }
+
+    pub(super) fn repair_business_chat_placeholder_owner(
+        &mut self,
+        record_id: &str,
+        expected_owner: &str,
+        absent_payload: Value,
+        updated_at_ms: i64,
+    ) -> anyhow::Result<bool> {
+        if !matches!(self.writers.get("business_chats"), Some(Some(_))) {
+            let writer = RxdbCollectionWriter::open(&self.root, "business_chats")?;
+            self.writers.insert("business_chats".to_string(), writer);
+        }
+        if let Some(Some(writer)) = self.writers.get_mut("business_chats") {
+            let result = writer.repair_placeholder_chat_owner(
+                record_id,
+                expected_owner,
+                absent_payload,
+                updated_at_ms,
+            );
+            if result.is_err() {
+                self.writers.remove("business_chats");
+            }
+            return result;
+        }
+        Ok(false)
     }
 
     fn upsert_source_projection(
@@ -10958,6 +12710,8 @@ struct RxdbCollectionWriter {
     columns: HashSet<String>,
     demand_file_storage: bool,
     last_replication_lwt: i64,
+    database_key: BusinessOsStoreDbKey,
+    schema_version: i64,
 }
 
 impl RxdbCollectionWriter {
@@ -10978,12 +12732,18 @@ impl RxdbCollectionWriter {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             *counts.entry(key).or_insert(0) += 1;
         }
+        let database_key = business_os_store_db_key(&path);
         let conn = Connection::open(&path)?;
         conn.busy_timeout(Duration::from_secs(10))?;
+        // Capture table metadata and its generation in one read snapshot.
+        // No write transaction is held while this writer is idle.
+        let metadata_tx = conn.unchecked_transaction()?;
+        let schema_version: i64 =
+            metadata_tx.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
         // A writer is opened once per collection, or retried after failed delivery.
         // Read the schema here: a table created in WAL need not change the file
         // stamp used by the general read cache during its 60-second lifetime.
-        let tables = rxdb_table_names_uncached(&conn)?;
+        let tables = rxdb_table_names_uncached(&metadata_tx)?;
         let expected = format!(
             "ctox_business_os__{collection}__v{}",
             rxdb_schema_version(collection)
@@ -10992,12 +12752,13 @@ impl RxdbCollectionWriter {
         else {
             return Ok(None);
         };
-        let columns = rxdb_table_columns_for_path(&conn, &path, &table)?;
-        let last_replication_lwt = conn.query_row(
+        let columns = rxdb_table_columns_for_path(&metadata_tx, &path, &table)?;
+        let last_replication_lwt = metadata_tx.query_row(
             &format!("SELECT COALESCE(MAX(lastWriteTime), 0) FROM {table}"),
             [],
             |row| row.get::<_, f64>(0),
         )? as i64;
+        metadata_tx.commit()?;
         Ok(Some(Self {
             conn,
             database_path: path,
@@ -11007,6 +12768,8 @@ impl RxdbCollectionWriter {
                 root, collection,
             ),
             last_replication_lwt,
+            database_key,
+            schema_version,
         }))
     }
 
@@ -11026,9 +12789,97 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
+            true,
         )?;
         self.notify_committed_change();
         Ok(())
+    }
+
+    fn repair_placeholder_chat_owner(
+        &mut self,
+        record_id: &str,
+        expected_owner: &str,
+        mut absent_payload: Value,
+        updated_at_ms: i64,
+    ) -> anyhow::Result<bool> {
+        if let Some(obj) = absent_payload.as_object_mut() {
+            obj.insert("id".to_string(), Value::String(record_id.to_string()));
+            obj.insert(
+                "owner_user_id".to_string(),
+                Value::String(expected_owner.to_string()),
+            );
+        }
+        let table = self.table.clone();
+        let columns = self.columns.clone();
+        let demand_file_storage = self.demand_file_storage;
+        let deleted_column = ["deleted", "_deleted"]
+            .into_iter()
+            .find_map(|column| columns.contains(column).then_some(column));
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let current = if let Some(deleted_column) = deleted_column {
+            tx.query_row(
+                &format!("SELECT data, {deleted_column} FROM {table} WHERE id = ?1"),
+                [record_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+        } else {
+            tx.query_row(
+                &format!("SELECT data FROM {table} WHERE id = ?1"),
+                [record_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|raw| (raw, 0))
+        };
+        let payload_to_write = match current {
+            None => Some(absent_payload),
+            Some((raw, row_deleted)) => {
+                let mut record: Value = serde_json::from_str(&raw)?;
+                if let Some(object) = record.as_object_mut() {
+                    object
+                        .entry("id".to_string())
+                        .or_insert_with(|| Value::String(record_id.to_string()));
+                }
+                if row_deleted != 0 || is_rxdb_deleted_document(&record) {
+                    None
+                } else {
+                    let owner = business_chat_owner_from_payload(&record);
+                    if owner == expected_owner {
+                        None
+                    } else if is_placeholder_business_chat_owner(&owner) {
+                        if let Some(obj) = record.as_object_mut() {
+                            obj.insert(
+                                "owner_user_id".to_string(),
+                                Value::String(expected_owner.to_string()),
+                            );
+                        }
+                        Some(record)
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
+        let Some(payload) = payload_to_write else {
+            tx.rollback()?;
+            return Ok(false);
+        };
+        upsert_rxdb_collection_record_with_writer(
+            &tx,
+            &table,
+            &columns,
+            record_id,
+            updated_at_ms,
+            updated_at_ms,
+            payload,
+            demand_file_storage,
+            false,
+            false,
+        )?;
+        tx.commit()?;
+        self.notify_committed_change();
+        Ok(true)
     }
 
     fn read(&self, record_id: &str) -> anyhow::Result<Option<Value>> {
@@ -11065,6 +12916,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
+            true,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -11092,6 +12944,32 @@ impl RxdbCollectionWriter {
             }),
             self.demand_file_storage,
             true,
+            true,
+        )?;
+        self.notify_committed_change();
+        Ok(())
+    }
+
+    fn replace_source(
+        &mut self,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        deleted: bool,
+    ) -> anyhow::Result<()> {
+        let now = now_ms().min(i64::MAX as u128) as i64;
+        self.last_replication_lwt = now.max(self.last_replication_lwt.saturating_add(1));
+        upsert_rxdb_collection_record_with_writer(
+            &self.conn,
+            &self.table,
+            &self.columns,
+            record_id,
+            updated_at_ms,
+            self.last_replication_lwt,
+            payload,
+            self.demand_file_storage,
+            deleted,
+            false,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -11109,6 +12987,74 @@ impl RxdbCollectionWriter {
     }
 }
 
+/// Repair documents written by older native projections before RxDB opens.
+/// Missing envelope fields can break collection queries and replication even
+/// when only one projected document is malformed.
+pub(super) fn repair_missing_rxdb_envelopes(
+    root: &Path,
+    collection: &str,
+) -> anyhow::Result<usize> {
+    let Some(mut writer) = RxdbCollectionWriter::open(root, collection)? else {
+        return Ok(0);
+    };
+    let deleted_column = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column));
+    let rows = {
+        let mut statement = writer.conn.prepare(&format!(
+            "SELECT id, data, {} FROM {}",
+            deleted_column.unwrap_or("NULL"),
+            writer.table
+        ))?;
+        let mapped = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })?;
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut repaired = 0;
+    for (id, raw, sql_deleted) in rows {
+        let document: Value = serde_json::from_str(&raw)
+            .with_context(|| format!("parse projected {collection} document {id}"))?;
+        let json_deleted = document.get("_deleted").and_then(Value::as_bool);
+        // A legacy SQLite tombstone must never become live because its JSON
+        // deletion marker was lost or contradicted during projection.
+        let deleted = sql_deleted.is_some_and(|value| value != 0)
+            || json_deleted
+                .or_else(|| document.get("is_deleted").and_then(Value::as_bool))
+                .unwrap_or(false);
+        let valid_envelope = document
+            .pointer("/_meta/lwt")
+            .and_then(Value::as_f64)
+            .is_some()
+            && document
+                .get("_rev")
+                .and_then(Value::as_str)
+                .is_some_and(|revision| direct_rxdb_revision_height(revision).is_some())
+            && json_deleted.is_some()
+            && document.get("_attachments").is_some_and(Value::is_object)
+            && json_deleted == Some(deleted)
+            && sql_deleted.is_none_or(|value| (value != 0) == deleted);
+        if valid_envelope {
+            continue;
+        }
+        let source_updated_at_ms = document
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| now_ms().min(i64::MAX as u128) as i64);
+        if deleted {
+            writer.replace_source(&id, source_updated_at_ms, document, true)?;
+        } else {
+            writer.upsert_source_projection(&id, source_updated_at_ms, document)?;
+        }
+        repaired += 1;
+    }
+    Ok(repaired)
+}
+
 fn upsert_rxdb_collection_record_with_writer(
     conn: &Connection,
     table: &str,
@@ -11119,8 +13065,10 @@ fn upsert_rxdb_collection_record_with_writer(
     mut payload: Value,
     demand_file_storage: bool,
     deleted: bool,
+    merge_existing: bool,
 ) -> anyhow::Result<()> {
     let mut previous_revision = None;
+    let mut existing_row = false;
     if let Some(existing_json) = conn
         .query_row(
             &format!("SELECT data FROM {table} WHERE id = ?1"),
@@ -11129,26 +13077,66 @@ fn upsert_rxdb_collection_record_with_writer(
         )
         .optional()?
     {
+        existing_row = true;
         if let Ok(mut existing) = serde_json::from_str::<Value>(&existing_json) {
             previous_revision = existing
                 .get("_rev")
                 .and_then(Value::as_str)
+                .filter(|revision| direct_rxdb_revision_height(revision).is_some())
                 .map(str::to_string);
-            merge_json_object_values(&mut existing, &payload);
-            payload = existing;
+            if merge_existing {
+                merge_json_object_values(&mut existing, &payload);
+                payload = existing;
+            }
+        }
+    }
+    if existing_row && previous_revision.is_none() {
+        if let Some(revision_column) = ["revision", "_rev"]
+            .into_iter()
+            .find(|column| table_columns.contains(*column))
+        {
+            previous_revision = conn
+                .query_row(
+                    &format!("SELECT {revision_column} FROM {table} WHERE id = ?1"),
+                    [record_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten()
+                .filter(|revision| direct_rxdb_revision_height(revision).is_some());
         }
     }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
     if let Some(object) = payload.as_object_mut() {
         object.insert("id".to_string(), Value::String(record_id.to_string()));
         object.insert("_rev".to_string(), Value::String(rev.clone()));
+        object.insert("_deleted".to_string(), Value::Bool(deleted));
+        // A live re-projection must clear legacy deletion aliases left by a
+        // merged tombstone, or readers can still treat the revived row as dead.
+        for alias in ["deleted", "is_deleted"] {
+            if object.contains_key(alias) {
+                object.insert(alias.to_string(), Value::Bool(deleted));
+            }
+        }
+        let meta = object
+            .entry("_meta".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !meta.is_object() {
+            *meta = serde_json::json!({});
+        }
+        meta.as_object_mut().expect("_meta is an object").insert(
+            "lwt".to_string(),
+            Value::Number(serde_json::Number::from(replication_lwt_ms)),
+        );
+        if !object.get("_attachments").is_some_and(Value::is_object) {
+            object.insert("_attachments".to_string(), serde_json::json!({}));
+        }
         object.insert(
             "updated_at_ms".to_string(),
             Value::Number(serde_json::Number::from(payload_updated_at_ms)),
         );
         if deleted {
             object.insert("is_deleted".to_string(), Value::Bool(true));
-            object.insert("_deleted".to_string(), Value::Bool(true));
         }
     }
     // SECURITY: strip bearer credentials from client_context on the FINAL merged
@@ -11265,6 +13253,97 @@ pub fn upsert_projection_record(
     let conn = open_store(root)?;
     upsert_business_record(&conn, collection, record_id, updated_at_ms, payload.clone())?;
     upsert_rxdb_collection_record(root, collection, record_id, updated_at_ms, payload)
+}
+
+/// External app-record permission does not issue native research receipts.
+/// Guard the effective patch under the same IMMEDIATE transaction as its RxDB
+/// write. Native projections and typed writebacks keep their trusted path.
+pub(super) fn upsert_external_projection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+) -> anyhow::Result<()> {
+    if collection != "outbound_lead_generation_leads" {
+        return upsert_projection_record(root, collection, record_id, updated_at_ms, payload);
+    }
+    let writer = RxdbCollectionWriter::open(root, collection)?
+        .context("external record collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column))
+        .unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id = ?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let master = raw
+        .map(|(raw, deleted)| -> anyhow::Result<Value> {
+            let value: Value = serde_json::from_str(&raw)?;
+            anyhow::ensure!(
+                deleted == 0 && !is_rxdb_deleted_document(&value),
+                "external record write cannot resurrect a deleted lead"
+            );
+            Ok(value)
+        })
+        .transpose()?;
+    let mut effective = master.clone().unwrap_or_else(|| serde_json::json!({}));
+    merge_json_object_values(&mut effective, &payload);
+    anyhow::ensure!(
+        super::outbound_field_review::peer_preserves_native_field_status(
+            collection,
+            &effective,
+            master.as_ref(),
+        ),
+        "external record write cannot change native-owned field status"
+    );
+    upsert_rxdb_collection_record_with_writer(
+        &tx,
+        &writer.table,
+        &writer.columns,
+        record_id,
+        updated_at_ms,
+        updated_at_ms,
+        effective.clone(),
+        writer.demand_file_storage,
+        false,
+        false,
+    )?;
+    // Normalization and the existing wire-budget clamp run inside the writer.
+    // Validate the actual staged document as well, not only its input patch.
+    let staged: String = tx.query_row(
+        &format!("SELECT data FROM {} WHERE id = ?1", writer.table),
+        [record_id],
+        |row| row.get(0),
+    )?;
+    let staged: Value = serde_json::from_str(&staged)?;
+    anyhow::ensure!(
+        super::outbound_field_review::peer_preserves_native_field_status(
+            collection,
+            &staged,
+            master.as_ref(),
+        ),
+        "external record projection would change native-owned field status"
+    );
+    tx.commit()?;
+    writer.notify_committed_change();
+    // The existing core projection mirror follows the accepted RxDB write.
+    // Never write caller-supplied native metadata there before the guard.
+    upsert_business_record(
+        &open_store(root)?,
+        collection,
+        record_id,
+        updated_at_ms,
+        effective,
+    )
 }
 
 fn rxdb_table_has_column(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
@@ -12330,6 +14409,125 @@ fn list_credentials_command(root: &Path) -> anyhow::Result<Value> {
 
 /// Store/rotate a credential value in the encrypted secret store. The value is
 /// never echoed back; the caller redacts it from the persisted command record.
+/// Secret values detached from `ctox.secret.put` at intake, keyed by command
+/// id, with the time they were detached. Previously the
+/// handler redacted its own writes, but intake had already persisted the
+/// original payload in business_command_aggregates (claim intent),
+/// business_records, business_commands, ctox_process_events and the RxDB
+/// document; later re-projections from the aggregate wrote the plaintext back.
+/// The value now leaves the command before intake persists anything and
+/// reaches the handler only through this in-memory map. A restart between
+/// intake and handler loses the value; the put then fails with "credential
+/// value must not be empty" and the app asks to save again.
+static SECRET_INTAKE_VALUES: OnceLock<Mutex<HashMap<(String, &'static str), (String, Instant)>>> =
+    OnceLock::new();
+const SECRET_INTAKE_VALUE_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// Payload fields that carry a secret, per command type.
+fn secret_payload_field(command_type: &str) -> Option<&'static str> {
+    match command_type {
+        "ctox.secret.put" => Some("value"),
+        "ctox.mailserver.save_user" => Some("password"),
+        _ => None,
+    }
+}
+
+pub(super) fn detach_secret_intake_value(command_id: &str, command: &mut BusinessCommand) {
+    let Some(field) = secret_payload_field(&command.command_type) else {
+        return;
+    };
+    let Some(value) = command
+        .payload
+        .as_object_mut()
+        .and_then(|payload| payload.remove(field))
+    else {
+        return;
+    };
+    if let Some(value) = value.as_str() {
+        stash_secret_intake_value(command_id, field, value.to_string());
+    }
+}
+
+fn stash_secret_intake_value(command_id: &str, field: &'static str, value: String) {
+    let mut values = SECRET_INTAKE_VALUES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    values.retain(|_, (_, detached_at)| detached_at.elapsed() < SECRET_INTAKE_VALUE_TTL);
+    values.insert((command_id.to_string(), field), (value, Instant::now()));
+}
+
+/// Master-write sanitizer for replicated documents (installed on the native
+/// RxDB peer). A browser pushes its `business_commands` document with the
+/// secret in the payload; the native store would hold it — and replicate it to
+/// every other browser — until intake overwrote the document. Seconds, but
+/// measured live (UI-Test 11.09.2026, P0-04/P0-08). The value is taken out
+/// before the document is persisted and reaches intake through the stash.
+pub(crate) fn detach_secret_from_replicated_document(collection: &str, document: &mut Value) {
+    if collection != "business_commands" {
+        return;
+    }
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    let Some(field) = ["command_type", "type"]
+        .iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .find_map(secret_payload_field)
+    else {
+        return;
+    };
+    let Some(command_id) = ["command_id", "id"]
+        .iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(value) = object
+        .get_mut("payload")
+        .and_then(Value::as_object_mut)
+        .and_then(|payload| payload.remove(field))
+    else {
+        return;
+    };
+    if let Some(value) = value.as_str() {
+        stash_secret_intake_value(&command_id, field, value.to_string());
+    }
+}
+
+pub(crate) fn install_replicated_secret_sanitizer() {
+    rxdb::replication_protocol::index_mod::set_master_write_sanitizer(Arc::new(
+        detach_secret_from_replicated_document,
+    ));
+    rxdb::replication_protocol::index_mod::set_master_write_validator(Arc::new(
+        super::outbound_field_review::peer_preserves_native_field_status,
+    ));
+}
+
+/// The secret a handler needs: the value detached at intake, or — for callers
+/// that bypass RxDB intake (CLI, tests) — the value still in the payload.
+fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {
+    let field = secret_payload_field(&command.command_type)?;
+    let detached = command.id.as_deref().and_then(|command_id| {
+        SECRET_INTAKE_VALUES
+            .get()?
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&(command_id.to_string(), field))
+            .map(|(value, _)| value)
+    });
+    detached.or_else(|| {
+        command
+            .payload
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
+}
+
 fn put_credential_command(root: &Path, mutation: &CtoxSecretPutMutation) -> anyhow::Result<Value> {
     let name = mutation.name.trim();
     anyhow::ensure!(
@@ -12735,39 +14933,47 @@ pub(super) fn handle_workspace_control_command(
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .context("target command has no cancellable execution task")?;
-            let actor = session_user_id(&session).unwrap_or("unknown");
-            let cancellation = serde_json::json!({
-                "ok": true,
-                "target_command_id": target_command_id,
-                "execution_task_id": task_id,
-                "cancelled_by": actor,
-                "cancelled_at_ms": now_ms(),
-                "reason": reason,
-                "side_effects_may_have_started": target
-                    .pointer("/command/execution_phase")
-                    .and_then(Value::as_str)
-                    .is_some_and(|phase| !matches!(phase, "accepted" | "queued" | "waiting_dependencies")),
-            });
-            channels::transition_business_command_for_task(
-                root,
-                task_id,
-                "cancelled",
-                Some(&cancellation),
-                None,
-                None,
-                &format!("cancelled by {actor}: {reason}"),
-            )?;
-            return write_rxdb_control_command_outcome(
-                root,
-                &command,
-                "completed",
-                Some(task_id),
-                Some("cancelled"),
-                cancellation,
-            );
-            },
-        )?
-        .into_outcome();
+                    let actor = session_user_id(&session).unwrap_or("unknown");
+                    // Leasing hands the task to a worker before the command projection
+                    // necessarily advances. Once leased, side effects may have begun
+                    // even if the projected execution phase still says "accepted".
+                    let side_effects_may_have_started = target
+                        .pointer("/command/execution_phase")
+                        .and_then(Value::as_str)
+                        .is_some_and(|phase| {
+                            !matches!(phase, "accepted" | "queued" | "waiting_dependencies")
+                        })
+                        || channels::load_queue_task(root, task_id)?
+                            .is_some_and(|task| task.attempt > 0);
+                    let cancellation = serde_json::json!({
+                        "ok": true,
+                        "target_command_id": target_command_id,
+                        "execution_task_id": task_id,
+                        "cancelled_by": actor,
+                        "cancelled_at_ms": now_ms(),
+                        "reason": reason,
+                        "side_effects_may_have_started": side_effects_may_have_started,
+                    });
+                    channels::transition_business_command_for_task(
+                        root,
+                        task_id,
+                        "cancelled",
+                        Some(&cancellation),
+                        None,
+                        None,
+                        &format!("cancelled by {actor}: {reason}"),
+                    )?;
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        Some(task_id),
+                        Some("cancelled"),
+                        cancellation,
+                    );
+                },
+            )?
+            .into_outcome();
         }
         "ctox.runtime_settings.save" => {
             let mutation: RuntimeSettingsRequest = serde_json::from_value(command.payload.clone())
@@ -13166,10 +15372,32 @@ pub(super) fn handle_app_lifecycle_command(
                         "permission must be data.read or data.write"
                     );
                     let owned_prefix = format!("{}_", module_id.replace('-', "_"));
-                    anyhow::ensure!(
-                        !module_id.is_empty() && collection.starts_with(&owned_prefix),
-                        "collection must be owned by the target module"
-                    );
+                    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+                    if !collection.starts_with(&owned_prefix) {
+                        // Shared operational views (for example Mail) do not
+                        // own the canonical collections they display. Their
+                        // read grants need an explicit operator review; app
+                        // installation or a manifest declaration is not consent.
+                        anyhow::ensure!(
+                            permission == "data.read"
+                                && command.payload.get("reviewed_shared_read")
+                                    .and_then(Value::as_bool) == Some(true)
+                                && command.payload.get("reason")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|reason| !reason.trim().is_empty()),
+                            "shared collection access requires an explicit reviewed read grant and reason"
+                        );
+                        let decision = scoped_policy_decision(
+                            root,
+                            &session,
+                            BusinessOsPermission::DataRead,
+                            BusinessOsScope::collection(collection),
+                        )?;
+                        anyhow::ensure!(
+                            decision.allowed,
+                            "reviewing operator cannot read the requested shared collection"
+                        );
+                    }
                     let inspection = app_runtime::inspect_module(root, module_id)?;
                     anyhow::ensure!(
                         inspection
@@ -13704,10 +15932,7 @@ pub(super) fn handle_mailserver_command(
                 .filter(|value| !value.is_empty())
                 .unwrap_or(&username)
                 .to_string();
-            let password = command
-                .payload
-                .get("password")
-                .and_then(Value::as_str)
+            let password = take_secret_intake_value(&command)
                 .unwrap_or_default()
                 .trim()
                 .to_string();
@@ -14329,8 +16554,11 @@ pub(super) fn handle_secret_command(
         }
         "ctox.secret.put" => {
             let session = rxdb_authenticated_session(root, &command)?;
-            let mutation: CtoxSecretPutMutation =
+            let mut mutation: CtoxSecretPutMutation =
                 serde_json::from_value(command.payload.clone()).unwrap_or_default();
+            if let Some(value) = take_secret_intake_value(command) {
+                mutation.value = value;
+            }
             // Redact the secret value before ANY persistence path runs: the
             // business_commands table, the re-projected RxDB document, the
             // policy-denied outcome, and the policy-decision audit event all
@@ -15187,6 +17415,16 @@ pub(super) fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.research_source.test"
             | "outbound.research_source.auth_assist"
             | "outbound.sellify.lookup"
+            // Has a native handler. Without this entry the command fell
+            // through to the harness queue and cost a full worker turn per
+            // save; research tasks waited behind it.
+            | "outbound.research_policy.publish"
+            // Same: the outbound app reads the registry whenever its source
+            // panel opens, and every read became a worker task that mostly
+            // failed.
+            | "outbound.research_source.registry_read"
+            // "Jetzt testen" of the Update-Verteiler: native, deterministic.
+            | "outbound.update_digest.send_now"
     )
 }
 
@@ -15689,6 +17927,24 @@ pub(super) fn webrtc_capability_allows_workspace_permission(
     .unwrap_or(false)
 }
 
+// Unix cache keys bind the connection to a file identity. The portable key
+// contains only a path, so preserve fresh opens there rather than retain a
+// grant writer across a database replacement that cannot be fenced.
+fn with_capability_store_connection<T>(
+    root: &Path,
+    f: impl FnOnce(&Connection) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    #[cfg(unix)]
+    {
+        with_store_connection(root, f)
+    }
+    #[cfg(not(unix))]
+    {
+        let conn = open_store(root)?;
+        f(&conn)
+    }
+}
+
 /// Preserve the pre-hardening ordinary-data behavior by materializing it as
 /// explicit, auditable collection grants. The sync hooks themselves remain
 /// fail-closed and consult only native policy plus these exact grants.
@@ -15701,23 +17957,31 @@ pub(super) fn ensure_legacy_collection_grants(
     // contention during capability issuance.
     let server_owned_collections =
         super::external_sql_sync::server_owned_projection_collections(root)?;
-    let mut conn = open_store(root)?;
-    let tx = conn.transaction()?;
-    let now = now_ms() as i64;
-    for collection in collections {
-        let collection = collection.trim();
-        if collection.is_empty()
-            || policy::ADMIN_ONLY_COLLECTIONS.contains(&collection)
-            || collection == "ctox_queue_tasks"
-            || policy::is_cockpit_projection(collection)
-        {
-            continue;
-        }
-        let server_owned_write = super::threads::is_threads_owned_collection(collection)
-            || server_owned_collections.contains(collection);
-        if server_owned_write {
-            tx.execute(
-                "UPDATE business_permission_grants
+    ensure_legacy_collection_grants_with_ownership(root, collections, &server_owned_collections)
+}
+
+fn ensure_legacy_collection_grants_with_ownership(
+    root: &Path,
+    collections: &[String],
+    server_owned_collections: &HashSet<String>,
+) -> anyhow::Result<()> {
+    with_capability_store_connection(root, |conn| {
+        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        let now = now_ms() as i64;
+        for collection in collections {
+            let collection = collection.trim();
+            if collection.is_empty()
+                || policy::ADMIN_ONLY_COLLECTIONS.contains(&collection)
+                || collection == "ctox_queue_tasks"
+                || policy::is_cockpit_projection(collection)
+            {
+                continue;
+            }
+            let server_owned_write = super::threads::is_threads_owned_collection(collection)
+                || server_owned_collections.contains(collection);
+            if server_owned_write {
+                tx.prepare_cached(
+                    "UPDATE business_permission_grants
                  SET active=0,
                      reason='Server-owned collection is read-only for browser sync',
                      updated_at_ms=?1
@@ -15726,37 +17990,163 @@ pub(super) fn ensure_legacy_collection_grants(
                    AND scope_type='collection'
                    AND scope_id=?3
                    AND created_by='business-os-policy-migration'",
-                params![now, BusinessOsPermission::DataWrite.as_str(), collection],
-            )?;
-        }
-        for role in ["founder", "user"] {
-            for permission in [
-                BusinessOsPermission::DataRead,
-                BusinessOsPermission::DataWrite,
-            ] {
-                if permission == BusinessOsPermission::DataWrite && server_owned_write {
-                    continue;
-                }
-                let grant_id = format!(
-                    "migration.sync.{}.{}.{}",
-                    role,
-                    permission.as_str().replace('.', "_"),
+                )?
+                .execute(params![
+                    now,
+                    BusinessOsPermission::DataWrite.as_str(),
                     collection
-                );
-                tx.execute(
-                    "INSERT OR IGNORE INTO business_permission_grants
+                ])?;
+            }
+            for role in ["founder", "user"] {
+                for permission in [
+                    BusinessOsPermission::DataRead,
+                    BusinessOsPermission::DataWrite,
+                ] {
+                    if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                        continue;
+                    }
+                    let grant_id = format!(
+                        "migration.sync.{}.{}.{}",
+                        role,
+                        permission.as_str().replace('.', "_"),
+                        collection
+                    );
+                    tx.prepare_cached(
+                        "INSERT OR IGNORE INTO business_permission_grants
                         (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
                          active, reason, created_by, created_at_ms, updated_at_ms)
                      VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
                              'Migrated legacy sync access to exact collection grant',
                              'business-os-policy-migration', ?5, ?5)",
-                    params![grant_id, role, permission.as_str(), collection, now],
-                )?;
+                    )?
+                    .execute(params![
+                        grant_id,
+                        role,
+                        permission.as_str(),
+                        collection,
+                        now
+                    ])?;
+                }
             }
         }
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+/// First-party catalog apps (Mail, Documents, Auth-Handoff) run as installed
+/// modules, and the browser shell gives installed apps only collections with
+/// an explicit, reviewed grant. Their shared collections (mail, commands) only
+/// ever had `migration.sync.*` grants for founder/user, which the shell
+/// deliberately ignores, so the Mail app could read nothing — not even for an
+/// admin (thesen 22.09.2026: "Mail konnte nicht geladen werden", then 0 mails).
+/// Server policy already lets admin/chef read and write all business data;
+/// this materialises exactly that for the collections the first-party apps
+/// declare. Third-party apps and ordinary roles are unchanged.
+pub(super) fn ensure_first_party_catalog_collection_grants(
+    root: &Path,
+    installed_app_root: &Path,
+) -> anyhow::Result<usize> {
+    ensure_first_party_catalog_collection_grants_with_ownership(root, installed_app_root, None)
+}
+
+fn ensure_first_party_catalog_collection_grants_with_ownership(
+    root: &Path,
+    installed_app_root: &Path,
+    ownership: Option<&HashSet<String>>,
+) -> anyhow::Result<usize> {
+    let modules_dir = installed_app_root.join("installed-modules");
+    let Ok(entries) = fs::read_dir(&modules_dir) else {
+        return Ok(0);
+    };
+    let mut declared: Vec<(String, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let manifest_path = entry.path().join("module.json");
+        let Ok(raw) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if manifest.get("source").and_then(Value::as_str) != Some("catalog") {
+            continue;
+        }
+        let Some(module_id) = manifest
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        for collection in manifest
+            .get("collections")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if collection == "ctox_queue_tasks" || policy::is_cockpit_projection(collection) {
+                continue;
+            }
+            declared.push((module_id.to_string(), collection.to_string()));
+        }
     }
-    tx.commit()?;
-    Ok(())
+    if declared.is_empty() {
+        return Ok(0);
+    }
+    let current_ownership;
+    let server_owned_collections = match ownership {
+        Some(ownership) => ownership,
+        None => {
+            current_ownership =
+                super::external_sql_sync::server_owned_projection_collections(root)?;
+            &current_ownership
+        }
+    };
+    with_capability_store_connection(root, |conn| {
+        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        let now = now_ms() as i64;
+        let mut inserted = 0usize;
+        for (module_id, collection) in &declared {
+            let server_owned_write = super::threads::is_threads_owned_collection(collection)
+                || server_owned_collections.contains(collection.as_str());
+            for role in ["admin", "chef"] {
+                for permission in [
+                    BusinessOsPermission::DataRead,
+                    BusinessOsPermission::DataWrite,
+                ] {
+                    if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                        continue;
+                    }
+                    let grant_id = format!(
+                        "catalog.first_party.{module_id}.{role}.{}.{collection}",
+                        permission.as_str().replace('.', "_")
+                    );
+                    inserted += tx
+                        .prepare_cached(
+                            "INSERT OR IGNORE INTO business_permission_grants
+                        (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                         active, reason, created_by, created_at_ms, updated_at_ms)
+                     VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
+                             'First-party catalog app data access for administrators',
+                             'business-os-first-party-catalog', ?5, ?5)",
+                        )?
+                        .execute(params![
+                            grant_id,
+                            role,
+                            permission.as_str(),
+                            collection,
+                            now
+                        ])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(inserted)
+    })
 }
 
 fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
@@ -15766,6 +18156,7 @@ fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn ensure_default_sync_collection_grants(root: &Path) -> anyhow::Result<()> {
     ensure_legacy_collection_grants(root, &business_os_collection_names_for_legacy_grants())
 }
@@ -15856,16 +18247,35 @@ fn issue_business_os_capability_token_until_with_identity(
     // deterministic baseline grants before reading capability_epoch; otherwise
     // native peer startup can insert grants moments later and invalidate the
     // freshly issued token before its first collection fetch.
-    ensure_default_sync_collection_grants(root)?;
-    let conn = open_store(root)?;
-    seed_configured_business_users(&conn)?;
-    let user = active_business_user(&conn, user_id.trim())?
-        .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
-    let actor_epoch: i64 = conn.query_row(
-        "SELECT capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
-        params![user.id.as_str()],
-        |row| row.get(0),
+    // The same ordering applies to first-party catalog grants added when a
+    // newly installed app causes the native peer to reconfigure.
+    // One fresh ownership snapshot per issuance, never a cached authorization
+    // decision. Both grant materializers must finish before reading the epoch.
+    let ownership = super::external_sql_sync::server_owned_projection_collections(root)?;
+    ensure_legacy_collection_grants_with_ownership(
+        root,
+        &business_os_collection_names_for_legacy_grants(),
+        &ownership,
     )?;
+    ensure_first_party_catalog_collection_grants_with_ownership(
+        root,
+        &resolve_business_os_installed_app_root(root),
+        Some(&ownership),
+    )?;
+    // Reuse the existing identity-fenced connection, never its authorization
+    // results. Materializers commit before this fresh actor/epoch read, and no
+    // connection borrow or transaction survives into signing.
+    let (user, actor_epoch) = with_capability_store_connection(root, |conn| {
+        seed_configured_business_users(conn)?;
+        let user = active_business_user(conn, user_id.trim())?
+            .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
+        let actor_epoch: i64 = conn.query_row(
+            "SELECT capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
+            params![user.id.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok((user, actor_epoch))
+    })?;
     let secret = capability_signing_secret(root)?;
     let token = super::capability::issue_capability_token_with_epoch_and_identity(
         &secret,
@@ -15908,10 +18318,10 @@ pub fn issue_business_os_capability_token_for_session(
         display_name
     };
     let role = normalize_business_role(&user.role);
-    let conn = open_store(root)?;
-    seed_configured_business_users(&conn)?;
-    conn.execute(
-        "INSERT INTO business_users
+    with_capability_store_connection(root, |conn| {
+        seed_configured_business_users(conn)?;
+        conn.execute(
+            "INSERT INTO business_users
             (user_id, display_name, role, active, created_at_ms, updated_at_ms)
          VALUES (?1, ?2, ?3, 1, ?4, ?4)
          ON CONFLICT(user_id) DO UPDATE SET
@@ -15919,9 +18329,10 @@ pub fn issue_business_os_capability_token_for_session(
             role = excluded.role,
             active = 1,
             updated_at_ms = excluded.updated_at_ms",
-        params![user_id, display_name, role.as_str(), now_ms],
-    )?;
-    drop(conn);
+            params![user_id, display_name, role.as_str(), now_ms],
+        )?;
+        Ok(())
+    })?;
     issue_business_os_capability_token(root, user_id, now_ms)
 }
 
@@ -16764,13 +19175,65 @@ pub(super) fn terminal_person_research_projection_candidates(
     Ok(candidates)
 }
 
+/// Public identity comes only from the accepted native context, after peer
+/// authentication stamped owner_user_id. Never promote a replica's actor or
+/// copy its credentials into a lifecycle projection. Core intent/hash remains
+/// unchanged: this is presentation enrichment, not an authorization receipt.
+fn command_projection_with_native_identity(
+    conn: &Connection,
+    document: &Value,
+) -> anyhow::Result<Value> {
+    let command_id = document
+        .get("command_id")
+        .or_else(|| document.get("id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .context("business command projection is missing command_id")?;
+    let native_context: Option<String> = conn
+        .query_row(
+            "SELECT client_context_json FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let native_context: Value = native_context
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or(Value::Null);
+    let owner_id = native_context
+        .get("owner_user_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty());
+    let verified_owner = owner_id.filter(|owner| {
+        native_context.pointer("/actor/id").and_then(Value::as_str) == Some(*owner)
+    });
+    let mut projected = document.clone();
+    let context = projected
+        .as_object_mut()
+        .context("business command projection must be an object")?
+        .entry("client_context")
+        .or_insert_with(|| serde_json::json!({}));
+    if !context.is_object() {
+        *context = serde_json::json!({});
+    }
+    let context = context.as_object_mut().expect("context normalized");
+    for key in ["actor", "owner_user_id", "user_id", "claimed_actor"] {
+        context.remove(key);
+    }
+    if let Some(owner_id) = verified_owner {
+        context.insert("actor".into(), serde_json::json!({"id": owner_id}));
+        context.insert("owner_user_id".into(), Value::String(owner_id.to_string()));
+    }
+    redact_document_client_context_secrets(&mut projected);
+    Ok(projected)
+}
+
 /// Persist the native-enriched v2 command document as the canonical Business OS
 /// projection. The caller has already completed the canonical intake/side
 /// effect and will mirror the same document into RxDB afterwards.
 pub(crate) fn persist_business_command_lifecycle_projection(
     root: &Path,
     document: &Value,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -16779,6 +19242,7 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         .filter(|value| !value.is_empty())
         .context("business command lifecycle projection is missing command_id")?;
     let conn = open_store(root)?;
+    let document = command_projection_with_native_identity(&conn, document)?;
     let exists = conn
         .query_row(
             "SELECT 1 FROM business_commands WHERE command_id = ?1",
@@ -16787,10 +19251,22 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         )
         .optional()?
         .is_some();
-    anyhow::ensure!(
-        exists,
-        "cannot persist lifecycle projection before canonical intake"
-    );
+    // Owner-Befund 18.09.2026 (thesen): JEDER Recherchestart scheiterte hier.
+    // `business_os.chat.task` ist kein Kontrollbefehl und durchlaeuft die
+    // Kontrollbefehl-Aufnahme nicht; endet die Aufgabe terminal, bevor die
+    // kanonische Zeile geschrieben ist, lehnte dieser Waechter die Projektion
+    // ab. Der Aufnahme-Wiederholer gab nach fuenf Versuchen in zwei Sekunden
+    // auf, der Befehl war verbrannt, und die EIGENTLICHE Fehlermeldung wurde
+    // durch "cannot persist lifecycle projection before canonical intake"
+    // ersetzt — die Recherche lief nicht mehr und niemand sah warum.
+    //
+    // Wer hier ankommt, haelt das vollstaendige Lebenszyklus-Dokument in der
+    // Hand. Fehlt die Zeile, wird sie daraus angelegt — genau das, was die
+    // Aufnahme getan haette. Der Waechter bleibt fuer Dokumente ohne
+    // Kennzeichnung bestehen, damit keine leeren Projektionen entstehen.
+    if !exists {
+        seed_canonical_business_command_row(&conn, command_id, &document)?;
+    }
     let updated_at_ms = document
         .get("updated_at_ms")
         .and_then(Value::as_i64)
@@ -16801,7 +19277,67 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         command_id,
         updated_at_ms,
         document.clone(),
-    )
+    )?;
+    Ok(document)
+}
+
+/// Legt die kanonische `business_commands`-Zeile aus einem Lebenszyklus-
+/// Dokument an. Nur fuer Dokumente mit Modul und Befehlstyp: ohne diese
+/// Angaben waere die Zeile wertlos und der Fehler bleibt richtig.
+fn seed_canonical_business_command_row(
+    conn: &Connection,
+    command_id: &str,
+    document: &Value,
+) -> anyhow::Result<()> {
+    let module = document
+        .get("module")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("cannot persist lifecycle projection before canonical intake")?;
+    let command_type = document
+        .get("command_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("cannot persist lifecycle projection before canonical intake")?;
+    let record_id = document
+        .get("record_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let status = document
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("accepted");
+    let payload = document.get("payload").cloned().unwrap_or(Value::Null);
+    let client_context = document
+        .get("client_context")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let observed_at_ms = document
+        .get("updated_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| now_ms() as i64);
+    conn.execute(
+        "INSERT INTO business_commands
+            (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(command_id) DO UPDATE SET
+            status = excluded.status,
+            observed_at_ms = excluded.observed_at_ms",
+        params![
+            command_id,
+            module,
+            command_type,
+            record_id,
+            status,
+            serde_json::to_string(&payload)?,
+            serde_json::to_string(&client_context)?,
+            observed_at_ms,
+        ],
+    )?;
+    Ok(())
 }
 
 /// Deliver canonical command lifecycle changes from the core SQLite outbox.
@@ -16814,7 +19350,10 @@ pub(crate) fn deliver_business_command_outbox(root: &Path, limit: usize) -> anyh
     let mut delivered = 0_u64;
     let mut failed = 0_u64;
     for event in events {
-        let projection = channels::business_command_projection(root, &event.command_id);
+        let projection =
+            channels::business_command_projection(root, &event.command_id).and_then(|projection| {
+                command_projection_with_native_identity(&open_store(root)?, &projection)
+            });
         let delivery = projection.and_then(|projection| match event.destination.as_str() {
             "business-os" => {
                 let command_id = event.command_id.as_str();
@@ -16851,7 +19390,6 @@ pub(crate) fn deliver_business_command_outbox(root: &Path, limit: usize) -> anyh
                         record_id = excluded.record_id,
                         status = excluded.status,
                         payload_json = excluded.payload_json,
-                        client_context_json = excluded.client_context_json,
                         observed_at_ms = excluded.observed_at_ms",
                     params![
                         command_id,
@@ -16957,7 +19495,13 @@ pub(crate) fn record_business_command_intake_failure(
             .cloned()
             .unwrap_or(Value::Null),
     };
-    let core_outcome = channels::record_business_command_intake_failure(
+    let has_applied_effect = domain_effect_identity_for_intake(root, command_id)?.is_some();
+    let record_failure = if has_applied_effect {
+        channels::record_business_command_applied_effect_delivery_failure
+    } else {
+        channels::record_business_command_intake_failure
+    };
+    let core_outcome = record_failure(
         root,
         business_command_core_claim(command_id, &command)?,
         error_message,
@@ -17517,17 +20061,10 @@ pub fn update_ctox_task(
     )?;
     let now = now_ms() as i64;
     let command_id = queue_projection_command_id(&conn, &task_id)?;
-    let structured_status =
-        queue_projection_structured_status(&conn, command_id.as_deref(), &task_id)?;
-    write_queue_task_projection(&conn, command_id.as_deref(), &updated, now)?;
+    let task_payload = write_queue_task_projection(&conn, command_id.as_deref(), &updated, now)?;
     Ok(serde_json::json!({
         "ok": true,
-        "task": queue_task_payload(
-            command_id.as_deref(),
-            &updated,
-            structured_status.as_deref(),
-            now,
-        )
+        "task": task_payload
     }))
 }
 
@@ -18407,51 +20944,22 @@ fn systematic_research_evidence_snapshot(
     let run_id = first_string_field(&command.payload, &["research_run_id", "run_id"])
         .or_else(|| first_string_field(&command.client_context, &["research_run_id", "run_id"]))
         .context("systematic research completion requires an immutable research_run_id")?;
-    let path = rxdb_store_path(root);
-    anyhow::ensure!(
-        path.is_file(),
-        "systematic research completion requires the RxDB store"
-    );
-    let conn = Connection::open(&path)?;
-    let table = rxdb_collection_table_name(&path, &conn, "knowledge_tables")
-        .context("systematic research completion requires Knowledge tables")?;
-    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    let mut domain_tables = Vec::new();
-    for raw in rows {
-        let document: Value = serde_json::from_str(&raw?)?;
-        let source = document
-            .get("payload")
-            .filter(|value| value.is_object())
-            .unwrap_or(&document);
-        if first_string_field(source, &["domain", "knowledge_domain"]).as_deref()
-            == Some(domain.as_str())
-        {
-            domain_tables.push(document);
-        }
-    }
+    // Parquet is the row source. One manifest entry per catalog table, not per
+    // RxDB projection chunk. `knowledge_active_tables` already orders by table_id.
+    let domain_tables = crate::knowledge::knowledge_active_tables(root, Some(&domain))?;
     anyhow::ensure!(
         !domain_tables.is_empty(),
         "systematic research completion requires authoritative Knowledge tables for {domain}"
     );
-    domain_tables.sort_by_key(|document| {
-        first_string_field(document, &["id", "table_id"]).unwrap_or_default()
-    });
 
     let mut identified_count = 0_i64;
     let mut source_receipt_links = Vec::new();
     let mut snapshot_hashes = Vec::new();
     let mut run_manifest = Vec::new();
-    for document in &domain_tables {
-        let source = document
-            .get("payload")
-            .filter(|value| value.is_object())
-            .unwrap_or(document);
-        let table_key = first_string_field(source, &["table_key"]).unwrap_or_default();
-        let table_id = first_string_field(source, &["id", "table_id"])
-            .or_else(|| first_string_field(document, &["id", "table_id"]))
-            .unwrap_or_default();
-        let run_rows = document_knowledge_table_rows(document)
+    for (catalog_id, _table_domain, table_key) in &domain_tables {
+        let table_id = format!("table:{catalog_id}");
+        let run_rows = crate::knowledge::knowledge_table_all_rows(root, catalog_id)?
+            .rows
             .into_iter()
             .filter(|row| {
                 first_string_field(row, &["research_run_id", "run_id"]).as_deref()
@@ -18919,20 +21427,6 @@ fn document_source_receipt_snapshot_hash(link: &Value) -> Option<String> {
     )
 }
 
-fn document_knowledge_table_rows(document: &Value) -> Vec<Value> {
-    [
-        document.get("rows"),
-        document.pointer("/payload/rows"),
-        document.get("records"),
-        document.pointer("/payload/records"),
-    ]
-    .into_iter()
-    .flatten()
-    .find_map(Value::as_array)
-    .cloned()
-    .unwrap_or_default()
-}
-
 fn document_source_receipt_row_matches(row: &Value, reference: &str) -> bool {
     ["source_id", "receipt_id", "evidence_id", "id"]
         .iter()
@@ -18956,37 +21450,58 @@ fn document_source_receipt_from_knowledge_tables(
             "table_ref",
         ],
     );
-    if let Some(table_id) = table_reference {
-        if let Some(document) = load_rxdb_collection_record(root, "knowledge_tables", &table_id)? {
-            if let Some(row) = document_knowledge_table_rows(&document)
-                .into_iter()
-                .find(|row| document_source_receipt_row_matches(row, &reference))
-            {
-                return Ok(Some(row));
-            }
+    let mut already_read = None;
+    if let Some(raw_table_id) = table_reference.as_deref() {
+        let table_id = knowledge_receipt_table_id(raw_table_id);
+        already_read = Some(table_id.clone());
+        match knowledge_receipt_row(root, &table_id, &reference)? {
+            Some(row) => return Ok(Some(row)),
+            None => {}
         }
     }
 
-    let path = rxdb_store_path(root);
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let conn = Connection::open(&path)?;
-    let Some(table) = rxdb_collection_table_name(&path, &conn, "knowledge_tables") else {
-        return Ok(None);
-    };
-    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    for raw in rows {
-        let document: Value = serde_json::from_str(&raw?)?;
-        if let Some(row) = document_knowledge_table_rows(&document)
-            .into_iter()
-            .find(|row| document_source_receipt_row_matches(row, &reference))
-        {
+    for (table_id, _domain, _table_key) in crate::knowledge::knowledge_active_tables(root, None)? {
+        if already_read.as_deref() == Some(table_id.as_str()) {
+            continue;
+        }
+        if let Some(row) = knowledge_receipt_row(root, &table_id, &reference)? {
             return Ok(Some(row));
         }
     }
     Ok(None)
+}
+
+/// Strip one `table:` prefix and a trailing `:chunk:` + digits suffix.
+fn knowledge_receipt_table_id(raw: &str) -> String {
+    let stripped = raw.strip_prefix("table:").unwrap_or(raw);
+    match stripped.rsplit_once(":chunk:") {
+        Some((table_id, suffix))
+            if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            table_id.to_string()
+        }
+        _ => stripped.to_string(),
+    }
+}
+
+fn knowledge_table_lookup_miss(err: &anyhow::Error) -> bool {
+    crate::knowledge::is_knowledge_table_not_found(err)
+}
+
+fn knowledge_receipt_row(
+    root: &Path,
+    table_id: &str,
+    reference: &str,
+) -> anyhow::Result<Option<Value>> {
+    let window = match crate::knowledge::knowledge_table_all_rows(root, table_id) {
+        Ok(window) => window,
+        Err(err) if knowledge_table_lookup_miss(&err) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    Ok(window
+        .rows
+        .into_iter()
+        .find(|row| document_source_receipt_row_matches(row, reference)))
 }
 
 fn document_source_receipt_candidate(root: &Path, link: &Value) -> anyhow::Result<Option<Value>> {
@@ -22324,6 +24839,9 @@ fn create_ctox_queue_task(
     command: &BusinessCommand,
     native_authorization: Option<&Value>,
 ) -> anyhow::Result<Option<channels::QueueTaskView>> {
+    if !is_cv_print_parse_command(command) {
+        command_instruction(command)?;
+    }
     let attachments = materialize_business_chat_attachments(root, command_id, command)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, command)?;
     let title = command_title(command);
@@ -22332,7 +24850,7 @@ fn create_ctox_queue_task(
         command,
         &attachments,
         prompt_enrichment.as_deref(),
-    );
+    )?;
     let priority = command
         .payload
         .get("priority")
@@ -22509,6 +25027,9 @@ pub(crate) fn rebuild_business_command_queue_prompt_for_task(
             .unwrap_or_else(|| serde_json::json!({})),
         origin: CommandOrigin::TrustedLocal,
     };
+    if !is_cv_print_parse_command(&command) {
+        command_instruction(&command)?;
+    }
     let attachments = materialize_business_chat_attachments(root, command_id, &command)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, &command)?;
     Ok(Some(command_prompt(
@@ -22516,7 +25037,7 @@ pub(crate) fn rebuild_business_command_queue_prompt_for_task(
         &command,
         &attachments,
         prompt_enrichment.as_deref(),
-    )))
+    )?))
 }
 fn command_queue_thread_key(command_id: &str, command: &BusinessCommand) -> String {
     if is_business_os_app_module_command(command) {
@@ -22597,16 +25118,7 @@ fn command_title(command: &BusinessCommand) -> String {
         })
 }
 
-fn command_prompt(
-    command_id: &str,
-    command: &BusinessCommand,
-    attachments: &[MaterializedBusinessChatAttachment],
-    prompt_enrichment: Option<&str>,
-) -> String {
-    if is_cv_print_parse_command(command) {
-        return cv_print_command_prompt(command_id, command, prompt_enrichment);
-    }
-
+fn command_instruction(command: &BusinessCommand) -> anyhow::Result<&str> {
     let instruction = command
         .payload
         .get("instruction")
@@ -22615,18 +25127,38 @@ fn command_prompt(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("Execute this Business OS automation through CTOX.");
-    let instruction =
-        truncate_text_preserve(instruction, BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS);
+    let character_count = instruction.chars().count();
+    anyhow::ensure!(
+        character_count <= BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS,
+        "business_command_instruction_too_large: selected instruction has {character_count} characters, maximum {BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS}; split the request into bounded commands instead of executing a shortened instruction"
+    );
+    Ok(instruction)
+}
+
+fn command_prompt(
+    command_id: &str,
+    command: &BusinessCommand,
+    attachments: &[MaterializedBusinessChatAttachment],
+    prompt_enrichment: Option<&str>,
+) -> anyhow::Result<String> {
+    if is_cv_print_parse_command(command) {
+        return Ok(cv_print_command_prompt(
+            command_id,
+            command,
+            prompt_enrichment,
+        ));
+    }
+    let instruction = command_instruction(command)?;
     let required_skill_names = required_skill_names(command);
     if is_business_os_app_module_command(command) {
-        return business_os_app_command_prompt(
+        return Ok(business_os_app_command_prompt(
             command_id,
             command,
             attachments,
             prompt_enrichment,
-            &instruction,
+            instruction,
             &required_skill_names,
-        );
+        ));
     }
     let mut payload_preview_value = command.payload.clone();
     if let Some(payload) = payload_preview_value.as_object_mut() {
@@ -22662,7 +25194,10 @@ fn command_prompt(
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
     );
-    truncate_text_preserve(&prompt, BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS)
+    Ok(truncate_text_preserve(
+        &prompt,
+        BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS,
+    ))
 }
 
 fn sanitize_command_prompt_preview(value: Value) -> Value {
@@ -22896,6 +25431,19 @@ pub(super) fn redact_document_client_context_secrets(payload: &mut Value) {
         if context.is_object() || context.is_array() {
             let redacted = redact_client_context_secrets(context);
             object.insert("client_context".to_string(), redacted);
+        }
+    }
+    // A ctox.secret.put document arrives from the browser carrying the value.
+    // Every native projection of the command merges into that document, so a
+    // redacted command payload alone leaves the browser's value in place
+    // after writeback. Strip it from the final document.
+    let secret_field = ["command_type", "type"]
+        .iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .find_map(secret_payload_field);
+    if let Some(field) = secret_field {
+        if let Some(command_payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
+            command_payload.remove(field);
         }
     }
 }
@@ -23329,6 +25877,7 @@ fn upsert_business_record_tombstone(
 }
 
 fn migrate(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch(super::domain_effect::SCHEMA)?;
     let schema = "
         CREATE TABLE IF NOT EXISTS business_records (
             collection TEXT NOT NULL,
@@ -23984,10 +26533,26 @@ struct SignalingUrlsConfig {
 }
 
 fn signaling_urls_config(root: &Path) -> SignalingUrlsConfig {
-    if let Ok(raw) = std::env::var("CTOX_BUSINESS_OS_SIGNALING_URLS") {
-        let urls = parse_signaling_urls(&raw);
+    signaling_urls_config_with_override(
+        root,
+        std::env::var("CTOX_BUSINESS_OS_SIGNALING_URLS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+// The environment override applies to this process only. It used to be
+// written into runtime/business-os-signaling-urls.json, so a single test or
+// release-check process started with a loopback signaling URL against a real
+// state root permanently redirected that instance's browsers and native peer
+// (welsch, 26.09.2026). The persisted file stays the durable configuration.
+fn signaling_urls_config_with_override(
+    root: &Path,
+    override_urls: Option<&str>,
+) -> SignalingUrlsConfig {
+    if let Some(raw) = override_urls {
+        let urls = parse_signaling_urls(raw);
         if !urls.is_empty() {
-            persist_signaling_urls(root, &urls);
             return SignalingUrlsConfig {
                 urls,
                 source: "environment",
@@ -24016,20 +26581,6 @@ fn parse_signaling_urls(raw: &str) -> Vec<String> {
 
 fn persisted_signaling_urls_path(root: &Path) -> PathBuf {
     root.join("runtime").join(BUSINESS_OS_SIGNALING_URLS_FILE)
-}
-
-fn persist_signaling_urls(root: &Path, urls: &[String]) {
-    let path = persisted_signaling_urls_path(root);
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let Ok(content) = serde_json::to_vec_pretty(urls) else {
-        return;
-    };
-    let _ = fs::write(path, content);
 }
 
 fn read_persisted_signaling_urls(root: &Path) -> Option<Vec<String>> {
@@ -24061,6 +26612,48 @@ fn room_secret_id(value: &str) -> String {
 pub(super) mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn signaling_env_override_is_process_local_and_never_persisted() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        let config = signaling_urls_config_with_override(root, Some(" ws://127.0.0.1:18894 , "));
+        assert_eq!(config.urls, vec!["ws://127.0.0.1:18894".to_string()]);
+        assert_eq!(config.source, "environment");
+        assert!(
+            !persisted_signaling_urls_path(root).exists(),
+            "an environment override must not rewrite the instance's durable signaling config"
+        );
+        // Without the override the instance keeps its default.
+        let config = signaling_urls_config_with_override(root, None);
+        assert_eq!(config.urls, vec![DEFAULT_SIGNALING_URL.to_string()]);
+        assert_eq!(config.source, "default");
+    }
+
+    #[test]
+    fn signaling_persisted_config_stays_durable_below_an_override() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = persisted_signaling_urls_path(root);
+        std::fs::create_dir_all(path.parent().expect("runtime dir")).expect("runtime dir");
+        std::fs::write(&path, r#"["wss://signaling.example.test/v2"]"#).expect("write config");
+        let config = signaling_urls_config_with_override(root, None);
+        assert_eq!(
+            config.urls,
+            vec!["wss://signaling.example.test/v2".to_string()]
+        );
+        assert_eq!(config.source, "runtime");
+        let config = signaling_urls_config_with_override(root, Some("ws://127.0.0.1:1"));
+        assert_eq!(config.source, "environment");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read config"),
+            r#"["wss://signaling.example.test/v2"]"#,
+            "the override leaves the durable file untouched"
+        );
+        // An empty override does not shadow the durable config.
+        let config = signaling_urls_config_with_override(root, Some(" , "));
+        assert_eq!(config.source, "runtime");
+    }
 
     #[test]
     fn desktop_file_dependency_accepts_content_generation_id() {
@@ -24623,60 +27216,42 @@ pub(super) mod tests {
     fn research_report_lineage_binds_eligible_receipts_and_knowledge_version() -> anyhow::Result<()>
     {
         let root = tempdir()?;
-        let snapshot_path = root.path().join("runtime/research/snapshots/source-7.html");
+        let snapshot_path = root.path().join("research/snapshots/source-7.html");
         fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
         fs::write(&snapshot_path, b"authoritative publisher content")?;
         let receipt_hash = format!("sha256:{}", hex_sha256(b"authoritative publisher content"));
-        let rxdb_path = rxdb_store_path(root.path());
-        fs::create_dir_all(rxdb_path.parent().context("RxDB parent")?)?;
-        let rxdb_conn = Connection::open(&rxdb_path)?;
-        let table = format!(
-            "ctox_business_os__knowledge_tables__v{}",
-            rxdb_schema_version("knowledge_tables")
-        );
-        rxdb_conn.execute(
-            &format!(
-                "CREATE TABLE {} (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    revision TEXT,
-                    deleted INTEGER NOT NULL DEFAULT 0,
-                    lastWriteTime REAL NOT NULL DEFAULT 0,
-                    data TEXT NOT NULL
-                )",
-                sqlite_quote_identifier(&table)
-            ),
-            [],
-        )?;
-        drop(rxdb_conn);
-        upsert_rxdb_collection_record(
+        let snapshot_path_value = snapshot_path
+            .canonicalize()
+            .context("canonicalize source snapshot")?
+            .display()
+            .to_string();
+        crate::knowledge::seed_knowledge_table_for_test(
             root.path(),
-            "knowledge_tables",
             "table-evidence",
-            1700000000000,
-            serde_json::json!({
-                "table_key": "source_catalog",
-                "rows": [{
-                    "id": "source-7",
-                    "source_id": "source-7",
-                    "evidence_id": "evidence-7",
-                    "snapshot_id": "snapshot-7",
-                    "trace_id": "trace-7",
-                    "snapshot_path": "runtime/research/snapshots/source-7.html",
-                    "snapshot_hash": receipt_hash.clone(),
-                    "retrieved_at": "2026-07-17T00:00:00Z",
-                    "url_role": "publisher_full_text",
-                    "content_scope": "full_text",
-                    "verification_status": "verified",
-                    "transport_verified": true,
-                    "content_extracted": true,
-                    "actual_full_text_or_data": true,
-                    "evidence_relevance_score": 9,
-                    "http_status": 200,
-                    "canonical_url": "https://publisher.example/source-7",
-                    "source_tier": "primary",
-                    "evidence_eligible": true
-                }]
-            }),
+            "bearing_design",
+            "source_catalog",
+            &[serde_json::json!({
+                "id": "source-7",
+                "source_id": "source-7",
+                "evidence_id": "evidence-7",
+                "snapshot_id": "snapshot-7",
+                "trace_id": "trace-7",
+                "snapshot_path": snapshot_path_value,
+                "snapshot_hash": receipt_hash.clone(),
+                "retrieved_at": "2026-07-17T00:00:00Z",
+                "url_role": "publisher_full_text",
+                "content_scope": "full_text",
+                "verification_status": "verified",
+                "transport_verified": true,
+                "content_extracted": true,
+                "actual_full_text_or_data": true,
+                "evidence_relevance_score": 9,
+                "http_status": 200,
+                "canonical_url": "https://publisher.example/source-7",
+                "source_tier": "primary",
+                "evidence_eligible": true
+            })],
+            None,
         )?;
         let linked_records = vec![
             serde_json::json!({ "kind": "research_task", "id": "task-42" }),
@@ -24725,6 +27300,48 @@ pub(super) mod tests {
         assert_ne!(
             lineage.source_receipt_snapshot_hashes[0],
             hex_sha256(b"the generated DOCX bytes")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn document_source_receipt_finds_row_past_projection_cap() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let row_total = 5_100usize;
+        // Every row carries `marker`: Parquet schema inference drops a column
+        // that appears in only one of 5,100 rows.
+        let rows = (0..row_total)
+            .map(|index| {
+                serde_json::json!({
+                    "source_id": format!("source-{}", index + 1),
+                    "marker": format!("row-{}", index + 1),
+                })
+            })
+            .collect::<Vec<_>>();
+        crate::knowledge::seed_knowledge_table_for_test(
+            root.path(),
+            "kdt-wide",
+            "wide_domain",
+            "notes",
+            &rows,
+            None,
+        )?;
+
+        let found = document_source_receipt_from_knowledge_tables(
+            root.path(),
+            &serde_json::json!({
+                "id": "source-5050",
+                "table_id": "table:kdt-wide:chunk:0009",
+            }),
+        )?
+        .context("row 5050 must be readable past the 5000-row projection cap")?;
+        assert_eq!(
+            found.get("source_id").and_then(Value::as_str),
+            Some("source-5050")
+        );
+        assert_eq!(
+            found.get("marker").and_then(Value::as_str),
+            Some("row-5050")
         );
         Ok(())
     }
@@ -25559,16 +28176,17 @@ pub(super) mod tests {
     fn peer_revocation_registry_round_trips() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        assert!(!is_business_peer_revoked(root, "peer-abc"));
+        drop(open_store(root)?);
+        assert!(!is_business_peer_revoked(root, "peer-abc")?);
         revoke_business_peer(root, "peer-abc", "admin-1", "stolen device")?;
-        assert!(is_business_peer_revoked(root, "peer-abc"));
-        assert!(!is_business_peer_revoked(root, "peer-xyz"));
+        assert!(is_business_peer_revoked(root, "peer-abc")?);
+        assert!(!is_business_peer_revoked(root, "peer-xyz")?);
         let listed = list_revoked_business_peers(root)?;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0]["peer_id"], "peer-abc");
         assert_eq!(listed[0]["revoked_by"], "admin-1");
         clear_business_peer_revocation(root, "peer-abc")?;
-        assert!(!is_business_peer_revoked(root, "peer-abc"));
+        assert!(!is_business_peer_revoked(root, "peer-abc")?);
         assert!(list_revoked_business_peers(root)?.is_empty());
         Ok(())
     }
@@ -26322,6 +28940,138 @@ pub(super) mod tests {
         Ok(())
     }
 
+    #[test]
+    fn app_shared_read_grant_requires_review_and_preserves_write_boundary() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_id = "sharedreadapp";
+        fs::write(root.path().join("index.html"), "<main></main>\n")?;
+        write_minimal_runtime_app_artifacts(root.path(), module_id)?;
+        seed_business_user(root.path(), "admin1", "admin")?;
+        seed_business_user(root.path(), "user1", "user")?;
+        // The fixture declares business_commands, which is shared and remains
+        // server-owned. A read review must never authorize writes or other data.
+        for (id, actor, role, permission, collection, reviewed, reason) in [
+            (
+                "missing-review",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_commands",
+                false,
+                "review",
+            ),
+            (
+                "missing-reason",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_commands",
+                true,
+                "  ",
+            ),
+            (
+                "shared-write",
+                "admin1",
+                "admin",
+                "data.write",
+                "business_commands",
+                true,
+                "review",
+            ),
+            (
+                "undeclared",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_users",
+                true,
+                "review",
+            ),
+            (
+                "unprivileged",
+                "user1",
+                "user",
+                "data.read",
+                "business_commands",
+                true,
+                "review",
+            ),
+        ] {
+            let outcome = accept_rxdb_business_command(
+                root.path(),
+                serde_json::json!({
+                    "id": id, "command_id": id, "module": module_id,
+                    "command_type": "ctox.app.access.grant",
+                    "payload": {
+                        "module_id": module_id, "subject_type": "user", "subject_id": "admin1",
+                        "permission": permission, "collection": collection,
+                        "reviewed_shared_read": reviewed, "reason": reason
+                    },
+                    "client_context": {"actor": {"id": actor, "role": role}}
+                }),
+            );
+            assert!(
+                outcome
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.get("status"))
+                    .and_then(Value::as_str)
+                    != Some("completed"),
+                "{id} must fail closed"
+            );
+        }
+        let conn = open_store(root.path())?;
+        let unexpected: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_permission_grants WHERE grant_id LIKE 'app-access:sharedreadapp:%' AND active=1",
+            [], |row| row.get(0),
+        )?;
+        assert_eq!(unexpected, 0);
+        for (id, action, active) in [
+            ("reviewed-read", "ctox.app.access.grant", true),
+            ("revoke-read", "ctox.app.access.revoke", false),
+        ] {
+            let outcome = accept_rxdb_business_command(
+                root.path(),
+                serde_json::json!({
+                    "id": id, "command_id": id, "module": module_id,
+                    "command_type": action,
+                    "payload": {
+                        "module_id": module_id, "subject_type": "user", "subject_id": "admin1",
+                        "permission": "data.read", "collection": "business_commands",
+                        "reviewed_shared_read": true, "reason": "Operator reviewed command-status display"
+                    },
+                    "client_context": {"actor": {"id": "admin1", "role": "admin"}}
+                }),
+            )?;
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            let stored: bool = conn.query_row(
+                "SELECT active FROM business_permission_grants WHERE grant_id='app-access:sharedreadapp:user:admin1:data.read:business_commands'",
+                [], |row| row.get(0),
+            )?;
+            assert_eq!(stored, active);
+            let catalog = load_rxdb_collection_record(
+                root.path(),
+                "business_module_catalog",
+                "module-catalog",
+            )?
+            .context("catalog missing")?;
+            let grants = catalog
+                .pointer("/governance/permission_model/explicit_grants")
+                .and_then(Value::as_array)
+                .context("governance grants missing")?;
+            let projected_active = grants.iter().any(|grant| {
+                grant.get("grant_id").and_then(Value::as_str)
+                    == Some("app-access:sharedreadapp:user:admin1:data.read:business_commands")
+                    && grant.get("active").and_then(Value::as_bool) == Some(true)
+            });
+            assert_eq!(projected_active, active);
+        }
+        Ok(())
+    }
+
     fn build_test_app_module_zip(module_id: &str) -> anyhow::Result<Vec<u8>> {
         let mut buffer = Cursor::new(Vec::new());
         {
@@ -26453,6 +29203,49 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn capability_issuance_reuses_connection_but_reads_current_actor() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "operator1", "user")?;
+        let now = now_ms() as i64;
+        let (first, _) = issue_business_os_capability_token(root.path(), "operator1", now)?;
+        assert_eq!(
+            verify_capability_role(root.path(), &first).as_deref(),
+            Some("user")
+        );
+
+        // A separate connection must be able to commit immediately after each
+        // issuance. Retaining a transaction or actor snapshot would make this
+        // write fail or let the following token retain the old authority.
+        let conn = open_store(root.path())?;
+        conn.busy_timeout(Duration::ZERO)?;
+        conn.execute(
+            "UPDATE business_users SET role = 'founder' WHERE user_id = 'operator1'",
+            [],
+        )?;
+        let (second, _) = issue_business_os_capability_token(root.path(), "operator1", now)?;
+        assert!(verify_capability_actor(root.path(), &first).is_none());
+        assert_eq!(
+            verify_capability_role(root.path(), &second).as_deref(),
+            Some("founder")
+        );
+        with_store_connection(root.path(), |cached| {
+            assert!(
+                cached.is_autocommit(),
+                "issuance must not retain a transaction"
+            );
+            Ok(())
+        })?;
+
+        conn.execute(
+            "UPDATE business_users SET active = 0 WHERE user_id = 'operator1'",
+            [],
+        )?;
+        assert!(issue_business_os_capability_token(root.path(), "operator1", now).is_err());
+        assert!(verify_capability_actor(root.path(), &second).is_none());
+        Ok(())
+    }
+
+    #[test]
     fn capability_token_survives_idempotent_sync_grant_materialization() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         seed_business_user(root.path(), "operator1", "user")?;
@@ -26471,6 +29264,89 @@ pub(super) mod tests {
             "business_module_catalog",
             BusinessOsPermission::DataRead
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn capability_token_survives_catalog_grants_after_install() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "catalog-operator", "chef")?;
+        let installed = root.path().join("runtime/business-os");
+        fs::create_dir_all(&installed)?;
+        let now = now_ms() as i64;
+        let (old_token, _) =
+            issue_business_os_capability_token(root.path(), "catalog-operator", now)?;
+        assert!(verify_capability_actor(root.path(), &old_token).is_some());
+
+        let module = installed.join("installed-modules/catalog-epoch-test");
+        fs::create_dir_all(&module)?;
+        fs::write(
+            module.join("module.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "id": "catalog-epoch-test",
+                "source": "catalog",
+                "collections": ["catalog_epoch_records"]
+            }))?,
+        )?;
+        let (fresh_token, _) =
+            issue_business_os_capability_token(root.path(), "catalog-operator", now)?;
+        assert_eq!(
+            ensure_first_party_catalog_collection_grants(root.path(), &installed)?,
+            0,
+            "peer bring-up must not revoke a freshly issued post-install token"
+        );
+        assert!(verify_capability_actor(root.path(), &old_token).is_none());
+        assert!(verify_capability_actor(root.path(), &fresh_token).is_some());
+        assert!(capability_allows_collection_permission(
+            root.path(),
+            &fresh_token,
+            "catalog_epoch_records",
+            BusinessOsPermission::DataRead
+        ));
+        // Chef has baseline read access. Assert the installed grants' exact
+        // scope instead of mistaking baseline policy for an extra catalog grant.
+        let conn = open_store(root.path())?;
+        let mut statement = conn.prepare(
+            "SELECT subject_id, permission, scope_id
+             FROM business_permission_grants
+             WHERE grant_id LIKE 'catalog.first_party.catalog-epoch-test.%'
+               AND subject_type='role' AND scope_type='collection' AND active=1
+             ORDER BY subject_id, permission",
+        )?;
+        let grants = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(
+            grants,
+            vec![
+                (
+                    "admin".into(),
+                    "data.read".into(),
+                    "catalog_epoch_records".into()
+                ),
+                (
+                    "admin".into(),
+                    "data.write".into(),
+                    "catalog_epoch_records".into()
+                ),
+                (
+                    "chef".into(),
+                    "data.read".into(),
+                    "catalog_epoch_records".into()
+                ),
+                (
+                    "chef".into(),
+                    "data.write".into(),
+                    "catalog_epoch_records".into()
+                ),
+            ]
+        );
         Ok(())
     }
 
@@ -26809,6 +29685,7 @@ pub(super) mod tests {
     fn capability_token_redacted_in_projection_but_retained_natively() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         seed_business_user(root.path(), "chef1", "chef")?;
+        drop(super::super::store_projections::tests::create_repair_rxdb_tables(root.path())?);
         let now = now_ms() as i64;
         let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
 
@@ -26876,6 +29753,70 @@ pub(super) mod tests {
             "non-secret actor context must survive redaction"
         );
         drop(conn);
+
+        let canonical_before = channels::business_command_projection(root.path(), cid)?;
+        let mut forged_projection = canonical_before.clone();
+        forged_projection["client_context"] = serde_json::json!({
+            "actor": {"id": "attacker", "role": "admin"},
+            "owner_user_id": "attacker",
+            "capability_token": "must-not-be-published"
+        });
+        let repaired =
+            persist_business_command_lifecycle_projection(root.path(), &forged_projection)?;
+        assert_eq!(
+            repaired
+                .pointer("/client_context/actor/id")
+                .and_then(Value::as_str),
+            Some("chef1")
+        );
+        assert!(repaired.pointer("/client_context/actor/role").is_none());
+        assert!(repaired
+            .pointer("/client_context/capability_token")
+            .is_none());
+
+        // The outbox must not replace the accepted native credential with the
+        // reduced public context, or erase verified identity on either replica.
+        let delivery = deliver_business_command_outbox(root.path(), 100)?;
+        assert_eq!(delivery["failed"], 0);
+        assert!(delivery["delivered"].as_u64().unwrap_or(0) > 0);
+        let conn = open_store(root.path())?;
+        let after_delivery = load_business_command(&conn, cid)?;
+        assert_eq!(
+            after_delivery.client_context["capability_token"],
+            chef_token
+        );
+        let local = outbound_load_required(&conn, "business_commands", cid, "command")?;
+        drop(conn);
+        let replicated = load_rxdb_collection_record(root.path(), "business_commands", cid)?
+            .context("terminal RxDB command projection")?;
+        for doc in [local, replicated] {
+            assert_eq!(
+                doc.pointer("/client_context/actor/id")
+                    .and_then(Value::as_str),
+                Some("chef1")
+            );
+            assert!(doc.pointer("/client_context/capability_token").is_none());
+            assert!(!serde_json::to_string(&doc)?.contains(&chef_token));
+            assert_eq!(doc["terminal_status"], "completed");
+        }
+        let canonical_after = channels::business_command_projection(root.path(), cid)?;
+        assert_eq!(
+            canonical_after["payload_hash"],
+            canonical_before["payload_hash"]
+        );
+        assert_eq!(
+            canonical_after["client_context"],
+            canonical_before["client_context"]
+        );
+
+        // No native admission evidence: claimed actor/owner must not acquire
+        // authority merely because the lifecycle projection seeds a missing row.
+        forged_projection["id"] = Value::String("unadmitted-projection".into());
+        forged_projection["command_id"] = Value::String("unadmitted-projection".into());
+        let unknown =
+            persist_business_command_lifecycle_projection(root.path(), &forged_projection)?;
+        assert!(unknown.pointer("/client_context/actor").is_none());
+        assert!(unknown.pointer("/client_context/owner_user_id").is_none());
 
         // The retained token is still a valid, replayable-by-native credential —
         // proving redaction ran AFTER verification, not before it.
@@ -28937,7 +31878,7 @@ pub(super) mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_app_bench", &command, &[], None);
+        let prompt = command_prompt("cmd_app_bench", &command, &[], None).unwrap();
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
@@ -29022,7 +31963,7 @@ pub(super) mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_app_create", &command, &[], None);
+        let prompt = command_prompt("cmd_app_create", &command, &[], None).unwrap();
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
@@ -29314,6 +32255,58 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(founder_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn first_party_catalog_apps_get_admin_grants_for_declared_collections_only(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        drop(conn);
+        let installed = root.join("runtime/business-os");
+        let write_manifest = |id: &str, source: &str, collections: &[&str]| -> anyhow::Result<()> {
+            let dir = installed.join("installed-modules").join(id);
+            fs::create_dir_all(&dir)?;
+            fs::write(
+                dir.join("module.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "id": id, "source": source, "collections": collections
+                }))?,
+            )?;
+            Ok(())
+        };
+        write_manifest(
+            "mail",
+            "catalog",
+            &["communication_messages", "business_commands"],
+        )?;
+        write_manifest("thirdparty", "user", &["customer_accounts"])?;
+
+        let inserted = ensure_first_party_catalog_collection_grants(root, &installed)?;
+        assert!(inserted > 0);
+        let conn = open_store(root)?;
+        let count = |role: &str, permission: &str, collection: &str| -> anyhow::Result<i64> {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM business_permission_grants
+                 WHERE subject_type='role' AND subject_id=?1 AND permission=?2
+                   AND scope_type='collection' AND scope_id=?3 AND active=1
+                   AND grant_id NOT LIKE 'migration.sync.%'",
+                params![role, permission, collection],
+                |row| row.get(0),
+            )?)
+        };
+        let read = BusinessOsPermission::DataRead.as_str();
+        assert_eq!(count("admin", read, "communication_messages")?, 1);
+        assert_eq!(count("chef", read, "business_commands")?, 1);
+        assert_eq!(count("user", read, "communication_messages")?, 0);
+        assert_eq!(count("admin", read, "customer_accounts")?, 0);
+        // Idempotent across restarts.
+        assert_eq!(
+            ensure_first_party_catalog_collection_grants(root, &installed)?,
+            0
+        );
         Ok(())
     }
 
@@ -35405,7 +38398,7 @@ pub(super) mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_context_redaction", &command, &[], None);
+        let prompt = command_prompt("cmd_context_redaction", &command, &[], None).unwrap();
         assert!(prompt.contains("Client context JSON"));
         assert!(prompt.contains("business-os-context-menu"));
         assert!(prompt.contains("\"safe\": \"kept\""));
@@ -35435,11 +38428,79 @@ pub(super) mod tests {
             client_context: serde_json::json!({"source": "web-research"}),
         };
 
-        let prompt = command_prompt("cmd_research_prompt_once", &command, &[], None);
+        let prompt = command_prompt("cmd_research_prompt_once", &command, &[], None).unwrap();
         assert_eq!(prompt.matches(instruction).count(), 1);
         assert!(prompt.contains("\"research_run_id\": \"run-1\""));
         assert!(!prompt.contains("\"instruction\""));
         assert!(!prompt.contains("\"prompt\""));
+    }
+
+    #[test]
+    fn business_command_instruction_limit_preserves_the_complete_unicode_boundary(
+    ) -> anyhow::Result<()> {
+        let suffix = "END-OF-INSTRUCTION";
+        let instruction = format!(
+            "{}{}",
+            "é".repeat(BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS - suffix.chars().count()),
+            suffix
+        );
+        let mut command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_instruction_boundary".to_owned()),
+            module: "research".to_owned(),
+            command_type: "business_os.chat.task".to_owned(),
+            record_id: None,
+            payload: serde_json::json!({"instruction": instruction}),
+            client_context: serde_json::json!({}),
+        };
+        let prompt = command_prompt("cmd_instruction_boundary", &command, &[], None)?;
+        assert!(prompt.starts_with(&instruction));
+        assert_eq!(prompt.matches(suffix).count(), 1);
+        command.payload = serde_json::json!({"prompt": instruction});
+        assert!(
+            command_prompt("cmd_instruction_boundary", &command, &[], None)?
+                .starts_with(&instruction)
+        );
+        command.payload["prompt"] = Value::String(format!("{instruction}Z"));
+        let error = command_prompt("cmd_instruction_boundary", &command, &[], None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("business_command_instruction_too_large"));
+        assert!(error.contains("8001"));
+        assert!(!error.contains(suffix));
+        Ok(())
+    }
+
+    #[test]
+    fn business_command_instruction_limit_precedes_attachment_and_queue_writes(
+    ) -> anyhow::Result<()> {
+        for field in ["instruction", "prompt"] {
+            let temp = tempdir()?;
+            let mut payload = serde_json::json!({
+                "attachment_refs": [{"kind": "desktop_file", "file_id": "missing_sensitive_file"}]
+            });
+            payload[field] =
+                Value::String("s".repeat(BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS + 1));
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some("cmd_instruction_rejected".to_owned()),
+                module: "research".to_owned(),
+                command_type: "business_os.chat.task".to_owned(),
+                record_id: None,
+                payload,
+                client_context: serde_json::json!({}),
+            };
+            let error =
+                create_ctox_queue_task(temp.path(), "cmd_instruction_rejected", &command, None)
+                    .unwrap_err()
+                    .to_string();
+            assert!(error.contains("business_command_instruction_too_large"));
+            assert!(
+                fs::read_dir(temp.path())?.next().is_none(),
+                "no attachment materialization, workspace or queue store before rejection"
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -37265,75 +40326,15 @@ pub(super) mod tests {
                 "updated_at_ms": 1
             }),
         )?;
-        let snapshot_path = root.join("runtime/research/snapshots/source-1.html");
+        let snapshot_path = root.join("research/snapshots/source-1.html");
         fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
         fs::write(&snapshot_path, b"verified source bytes")?;
         let snapshot_hash = format!("sha256:{}", hex_sha256(b"verified source bytes"));
-        // Seed with a valid RxDB revision envelope ("<height>-<token>") so the
-        // knowledge_tables projection sync can read and tombstone this stale
-        // document instead of failing on an unparseable revision.
-        rxdb_conn.execute(
-            "INSERT INTO ctox_business_os__knowledge_tables__v0
-             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
-            params![
-                "knowledge_source_catalog",
-                "1-test",
-                1.0_f64,
-                serde_json::to_string(&serde_json::json!({
-                    "id": "knowledge_source_catalog",
-                    "domain": "drone_bearing_design",
-                    "table_key": "source_catalog",
-                    "rows": [{
-                        "source_id": "source-1",
-                        "research_run_id": "research_run_1",
-                        "research_command_id": "cmd_research_completed",
-                        "evidence_id": "evidence-1",
-                        "snapshot_id": "snapshot-1",
-                        "snapshot_path": "runtime/research/snapshots/source-1.html",
-                        "snapshot_hash": snapshot_hash,
-                        "canonical_url": "https://publisher.example/source-1",
-                        "url_role": "original_content",
-                        "content_scope": "full_text",
-                        "retrieved_at": "2026-07-17T00:00:00Z",
-                        "source_type": "publisher",
-                        "source_tier": "primary",
-                        "verification_status": "verified",
-                        "transport_verified": true,
-                        "content_extracted": true,
-                        "actual_full_text_or_data": true,
-                        "evidence_relevance_score": 9,
-                        "http_status": 200,
-                        "evidence_eligible": true
-                    }, {
-                        "source_id": "stale-source",
-                        "research_run_id": "research_run_stale",
-                        "research_command_id": "cmd_research_stale",
-                        "evidence_id": "stale-evidence",
-                        "snapshot_id": "snapshot-1",
-                        "snapshot_path": "runtime/research/snapshots/source-1.html",
-                        "snapshot_hash": snapshot_hash,
-                        "canonical_url": "https://publisher.example/stale",
-                        "url_role": "original_content",
-                        "content_scope": "full_text",
-                        "retrieved_at": "2026-07-17T00:00:00Z",
-                        "source_type": "publisher",
-                        "source_tier": "primary",
-                        "verification_status": "verified",
-                        "transport_verified": true,
-                        "content_extracted": true,
-                        "actual_full_text_or_data": true,
-                        "evidence_relevance_score": 9,
-                        "http_status": 200,
-                        "evidence_eligible": true
-                    }],
-                    "updated_at_ms": 2,
-                    "_rev": "1-test",
-                    "_meta": { "lwt": 1.0 },
-                    "_attachments": {},
-                    "_deleted": false
-                }))?
-            ],
-        )?;
+        let snapshot_path_value = snapshot_path
+            .canonicalize()
+            .context("canonicalize source snapshot")?
+            .display()
+            .to_string();
         drop(rxdb_conn);
 
         // The native writeback gate requires the completed research workspace
@@ -37422,7 +40423,7 @@ pub(super) mod tests {
         fs::write(
             dashboard_dir.join("source_catalog.csv"),
             format!(
-                "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash\n{lineage},source-1,https://publisher.example/source-1,{snapshot_hash}\n"
+                "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash,evidence_id,snapshot_id,snapshot_path,retrieved_at,url_role,content_scope,verification_status,transport_verified,content_extracted,actual_full_text_or_data,evidence_relevance_score,http_status,source_type,source_tier,trace_id\n{lineage},source-1,https://publisher.example/source-1,{snapshot_hash},evidence-1,snapshot-1,{snapshot_path_value},2026-07-17T00:00:00Z,original_content,full_text,verified,true,true,true,9,200,publisher,primary,trace-1\n"
             ),
         )?;
 
@@ -37799,6 +40800,185 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(last_write_time, 1_004.0);
+        let document: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {table} WHERE id = 'probe-4'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(
+            document.pointer("/_meta/lwt"),
+            Some(&serde_json::json!(1_004))
+        );
+        assert_eq!(document.get("_deleted"), Some(&Value::Bool(false)));
+        assert_eq!(document.get("_attachments"), Some(&serde_json::json!({})));
+        Ok(())
+    }
+
+    #[test]
+    fn repair_missing_command_envelopes_preserves_result_and_advances_checkpoint(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = format!(
+            "ctox_business_os__business_commands__v{}",
+            rxdb_schema_version("business_commands")
+        );
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            &format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let original = serde_json::json!({
+            "id": "writeback_probe", "_rev": "4-old", "status": "completed",
+            "updated_at_ms": 42, "result": {"count": 7}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["writeback_probe", "4-old", original.to_string()],
+        )?;
+        let malformed_live = serde_json::json!({
+            "id": "malformed_live", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "false", "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_live", "1-old", malformed_live.to_string()],
+        )?;
+        let missing_revision = serde_json::json!({
+            "id": "missing_revision", "_meta": {"lwt": 42},
+            "_deleted": false, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["missing_revision", "1-old", missing_revision.to_string()],
+        )?;
+        for (id, json_revision) in [("empty_revision", ""), ("malformed_revision", "broken")] {
+            let document = serde_json::json!({
+                "id": id, "_rev": json_revision, "_meta": {"lwt": 42},
+                "_deleted": false, "_attachments": {}, "updated_at_ms": 42,
+                "result": {"preserve": true}
+            });
+            conn.execute(
+                &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+                params![id, "4-old", document.to_string()],
+            )?;
+        }
+        let malformed_tombstone = serde_json::json!({
+            "id": "malformed_tombstone", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "invalid", "is_deleted": true, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_tombstone", "1-old", malformed_tombstone.to_string()],
+        )?;
+        let sql_tombstone_without_json_flag = serde_json::json!({
+            "id": "sql_tombstone_without_json_flag", "_rev": "2-old",
+            "_meta": {"lwt": 42}, "_attachments": {}, "updated_at_ms": 42,
+            "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_without_json_flag", "2-old", sql_tombstone_without_json_flag.to_string()],
+        )?;
+        let sql_tombstone_with_live_json_flag = serde_json::json!({
+            "id": "sql_tombstone_with_live_json_flag", "_rev": "3-old",
+            "_meta": {"lwt": 42}, "_deleted": false, "_attachments": {},
+            "updated_at_ms": 42, "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_with_live_json_flag", "3-old", sql_tombstone_with_live_json_flag.to_string()],
+        )?;
+        drop(conn);
+
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 8);
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 0);
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (revision, lwt, raw): (String, f64, String) = conn.query_row(
+            &format!(
+                "SELECT revision, lastWriteTime, data FROM {table} WHERE id='writeback_probe'"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let repaired: Value = serde_json::from_str(&raw)?;
+        assert_eq!(repaired["result"], original["result"]);
+        assert_eq!(repaired["updated_at_ms"], original["updated_at_ms"]);
+        assert_eq!(repaired["_rev"], revision);
+        assert!(revision.starts_with("5-"));
+        assert!(lwt > 42.0);
+        assert_eq!(
+            repaired.pointer("/_meta/lwt").and_then(Value::as_f64),
+            Some(lwt)
+        );
+        assert_eq!(repaired["_deleted"], false);
+        assert_eq!(repaired["_attachments"], serde_json::json!({}));
+        for (id, expected_deleted) in [
+            ("malformed_live", false),
+            ("missing_revision", false),
+            ("empty_revision", false),
+            ("malformed_revision", false),
+            ("malformed_tombstone", true),
+            ("sql_tombstone_without_json_flag", true),
+            ("sql_tombstone_with_live_json_flag", true),
+        ] {
+            let (revision_column, deleted_column, raw): (String, i64, String) = conn.query_row(
+                &format!("SELECT revision, deleted, data FROM {table} WHERE id = ?1"),
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            let repaired: Value = serde_json::from_str(&raw)?;
+            assert_eq!(repaired["_deleted"], expected_deleted);
+            assert_eq!(deleted_column != 0, expected_deleted);
+            assert!(repaired["_rev"]
+                .as_str()
+                .is_some_and(|revision| !revision.is_empty()));
+            assert_eq!(repaired["_rev"], revision_column);
+            if id == "missing_revision" {
+                assert!(revision_column.starts_with("2-"));
+            }
+            if id == "empty_revision" || id == "malformed_revision" {
+                assert!(revision_column.starts_with("5-"));
+                assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
+            }
+            if id.starts_with("sql_tombstone") {
+                assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
+                let expected_revision = if id.ends_with("without_json_flag") {
+                    "3-"
+                } else {
+                    "4-"
+                };
+                assert!(repaired["_rev"]
+                    .as_str()
+                    .is_some_and(|revision| revision.starts_with(expected_revision)));
+            }
+        }
+
+        let chats_table = format!(
+            "ctox_business_os__business_chats__v{}",
+            rxdb_schema_version("business_chats")
+        );
+        conn.execute(
+            &format!("CREATE TABLE {chats_table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let chat = serde_json::json!({
+            "id": "chat_probe", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": false, "updated_at_ms": 42, "title": "Preserved"
+        });
+        conn.execute(
+            &format!("INSERT INTO {chats_table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["chat_probe", "1-old", chat.to_string()],
+        )?;
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_chats")?, 1);
+        let repaired_chat: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {chats_table} WHERE id='chat_probe'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(repaired_chat["title"], "Preserved");
+        assert_eq!(repaired_chat["_attachments"], serde_json::json!({}));
         Ok(())
     }
 
@@ -37856,6 +41036,76 @@ pub(super) mod tests {
         let payload: Value = serde_json::from_str(&payload)?;
         assert_eq!(payload["_deleted"], true);
         assert_eq!(payload["is_deleted"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn source_projection_revives_tombstone_without_stale_deletion_flags() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__writer_delete_probe__v0";
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            &format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    lastWriteTime REAL NOT NULL DEFAULT 0,
+                    data TEXT NOT NULL
+                )"
+            ),
+            [],
+        )?;
+        drop(conn);
+
+        let mut writer = BusinessProjectionWriter::open(root)?;
+        writer.upsert_source_projection(
+            "writer_delete_probe",
+            "probe-1",
+            1_000,
+            serde_json::json!({"id":"probe-1","name":"Old"}),
+        )?;
+        writer.tombstone_source_projection("writer_delete_probe", "probe-1", 2_000)?;
+        writer.upsert_source_projection(
+            "writer_delete_probe",
+            "probe-1",
+            3_000,
+            serde_json::json!({"id":"probe-1","name":"Restored"}),
+        )?;
+        drop(writer);
+
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (revision, deleted, raw): (String, i64, String) = conn.query_row(
+            &format!("SELECT revision,deleted,data FROM {table} WHERE id='probe-1'"),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let document: Value = serde_json::from_str(&raw)?;
+        assert_eq!(deleted, 0);
+        assert_eq!(document["_deleted"], false);
+        assert_eq!(document["is_deleted"], false);
+        assert_eq!(document["name"], "Restored");
+        assert_eq!(document["_rev"], revision);
+        assert!(revision.starts_with("3-"));
+        assert_eq!(
+            repair_missing_rxdb_envelopes(root, "writer_delete_probe")?,
+            0
+        );
+
+        let conn = open_store(root)?;
+        let (deleted, payload): (i64, String) = conn.query_row(
+            "SELECT deleted,payload_json FROM business_records
+             WHERE collection='writer_delete_probe' AND record_id='probe-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(deleted, 0);
+        let payload: Value = serde_json::from_str(&payload)?;
+        assert_eq!(payload["name"], "Restored");
+        assert_eq!(payload["_deleted"], false);
+        assert!(payload.get("is_deleted").is_none());
         Ok(())
     }
 
@@ -38592,6 +41842,63 @@ pub(super) mod tests {
         assert!(!is_recoverable_background_control_command_type(
             "office.document.create"
         ));
+    }
+
+    #[test]
+    fn research_control_revalidation_uses_native_actor_and_original_permission(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "operator", "chef")?;
+        for command_type in [
+            "outbound.research_source.generate_adapter",
+            "outbound.research_source.test",
+        ] {
+            // Reactivation changes capability_epoch; it cannot resurrect the
+            // previous case's token. Each admission needs a fresh capability.
+            let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+            assert_eq!(
+                verify_capability_actor(root, &token),
+                Some(("operator".into(), "chef".into()))
+            );
+            let mut command = BusinessCommand {
+                origin: CommandOrigin::ReplicatedPeer,
+                id: Some(format!("cmd_{command_type}")),
+                module: "outbound".into(),
+                command_type: command_type.into(),
+                record_id: None,
+                payload: serde_json::json!({"company":"Fixture GmbH"}),
+                client_context: serde_json::json!({"capability_token":token.clone()}),
+            };
+            let receipt = recoverable_background_control_authorization(root, &command)
+                .with_context(|| format!("authorization receipt for {command_type}"))?;
+            command.client_context = serde_json::json!({"actor":{"id":"forged","role":"admin"}, "owner_user_id":"forged"});
+            let (session, decision) =
+                revalidate_queue_native_authorization(root, &command, &receipt)?;
+            assert_eq!(session.user.as_ref().unwrap().id, "operator");
+            assert_eq!(decision.permission, receipt["permission"].as_str().unwrap());
+            let mut wrong = receipt.clone();
+            wrong["permission"] = Value::String("data.read".into());
+            assert!(revalidate_queue_native_authorization(root, &command, &wrong).is_err());
+            wrong = receipt.clone();
+            wrong["actor"]["role"] = Value::String("user".into());
+            assert!(revalidate_queue_native_authorization(root, &command, &wrong).is_err());
+            let conn = open_store(root)?;
+            conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id='operator'",
+                [],
+            )?;
+            assert!(revalidate_queue_native_authorization(root, &command, &receipt).is_err());
+            conn.execute(
+                "UPDATE business_users SET active=1 WHERE user_id='operator'",
+                [],
+            )?;
+            assert!(
+                verify_capability_actor(root, &token).is_none(),
+                "reactivation must not resurrect a revoked capability"
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -39524,6 +42831,222 @@ pub(super) mod tests {
             crate::secrets::credential_scope(),
             "OPENAI_API_KEY"
         )?);
+        Ok(())
+    }
+
+    /// Every text cell of every table in every SQLite file below `root` that
+    /// contains `needle`, as "file table count". The secret store is encrypted,
+    /// so the plaintext must not appear anywhere.
+    fn sqlite_cells_containing(root: &Path, needle: &str) -> anyhow::Result<Vec<String>> {
+        fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, files);
+                } else if path.extension().and_then(|ext| ext.to_str()) == Some("sqlite3") {
+                    files.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(root, &mut files);
+        let mut hits = Vec::new();
+        for file in files {
+            let conn = Connection::open(&file)?;
+            let tables: Vec<String> = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            for table in tables {
+                let columns: Vec<String> = conn
+                    .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
+                    .query_map([], |row| row.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                if columns.is_empty() {
+                    continue;
+                }
+                let condition = columns
+                    .iter()
+                    .map(|column| format!("instr(CAST(\"{column}\" AS TEXT), ?1) > 0"))
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                let Ok(count) = conn.query_row(
+                    &format!("SELECT count(*) FROM \"{table}\" WHERE {condition}"),
+                    params![needle],
+                    |row| row.get::<_, i64>(0),
+                ) else {
+                    continue;
+                };
+                if count > 0 {
+                    hits.push(format!("{} {table} {count}", file.display()));
+                }
+            }
+        }
+        Ok(hits)
+    }
+
+    // A credential saved from the Outbound app
+    // stood in plaintext in business_commands, business_records,
+    // business_command_aggregates, ctox_process_events and the replicated RxDB
+    // business_commands document. The handler redacted only its own writes;
+    // intake had already persisted the original payload.
+    // UI-Test 11.09.2026 (P0-04/P0-08): the browser's pushed document held the
+    // value in the native store for seconds after "gespeichert". The
+    // master-write sanitizer takes it out before persistence; intake must still
+    // store the credential from the stash.
+    #[test]
+    fn replicated_secret_put_document_is_stripped_before_persistence_and_still_applied(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        let value = r#"{"username":"uitest-user","password":"REPLICATED_PLAINTEXT"}"#;
+        let mut document = serde_json::json!({
+            "id": "cmd_outbound_secret_put_replicated",
+            "command_id": "cmd_outbound_secret_put_replicated",
+            "module": "outbound-lead-generation",
+            "command_type": "ctox.secret.put",
+            "record_id": "OUTBOUND_REPLICATED_LOGIN",
+            "payload": { "name": "OUTBOUND_REPLICATED_LOGIN", "value": value },
+            "client_context": {
+                "actor": { "id": "global_admin", "display_name": "Global Admin" }
+            }
+        });
+        detach_secret_from_replicated_document("business_commands", &mut document);
+        assert!(document.pointer("/payload/value").is_none());
+        assert_eq!(
+            document.pointer("/payload/name").and_then(Value::as_str),
+            Some("OUTBOUND_REPLICATED_LOGIN")
+        );
+        {
+            let conn = Connection::open(rxdb_store_path(root))?;
+            rxdb::storage::sqlite::sql::ensure_collection_table(
+                &conn,
+                "ctox_business_os__business_commands__v2",
+            )?;
+            conn.execute(
+                "INSERT INTO ctox_business_os__business_commands__v2
+                    (id, revision, deleted, lastWriteTime, data)
+                 VALUES (?1, '1-browser', 0, ?2, ?3)",
+                params![
+                    "cmd_outbound_secret_put_replicated",
+                    now_ms() as f64,
+                    serde_json::to_string(&document)?,
+                ],
+            )?;
+        }
+        let put = accept_rxdb_business_command(root, document)?;
+        assert_eq!(put.get("status").and_then(Value::as_str), Some("completed"));
+        assert_eq!(
+            crate::secrets::read_secret_value(
+                root,
+                crate::secrets::credential_scope(),
+                "OUTBOUND_REPLICATED_LOGIN"
+            )?,
+            value
+        );
+        let hits = sqlite_cells_containing(root, "REPLICATED_PLAINTEXT")?;
+        assert!(
+            hits.is_empty(),
+            "secret value persisted in plaintext: {hits:#?}"
+        );
+
+        // Other collections and non-secret commands pass untouched.
+        let mut lead = serde_json::json!({
+            "id": "lead_x",
+            "command_type": "ctox.secret.put",
+            "payload": { "value": "kept" }
+        });
+        detach_secret_from_replicated_document("outbound_lead_generation_leads", &mut lead);
+        assert_eq!(
+            lead.pointer("/payload/value").and_then(Value::as_str),
+            Some("kept")
+        );
+        let mut other = serde_json::json!({
+            "id": "cmd_other",
+            "command_type": "outbound.sellify.lookup",
+            "payload": { "value": "kept" }
+        });
+        detach_secret_from_replicated_document("business_commands", &mut other);
+        assert_eq!(
+            other.pointer("/payload/value").and_then(Value::as_str),
+            Some("kept")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_secret_put_value_reaches_no_table_in_any_store() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        let value = r#"{"username":"probe-user","password":"PLAINTEXT_MUST_NOT_PERSIST"}"#;
+        let command = serde_json::json!({
+            "id": "cmd_outbound_secret_put_probe",
+            "command_id": "cmd_outbound_secret_put_probe",
+            "module": "outbound-lead-generation",
+            "command_type": "ctox.secret.put",
+            "record_id": "OUTBOUND_PROBE_LOGIN",
+            "payload": { "name": "OUTBOUND_PROBE_LOGIN", "value": value },
+            "client_context": {
+                "actor": { "id": "global_admin", "display_name": "Global Admin" }
+            }
+        });
+        // The browser's document reaches the native RxDB store by replication
+        // before intake runs; intake must overwrite it.
+        {
+            let conn = Connection::open(rxdb_store_path(root))?;
+            rxdb::storage::sqlite::sql::ensure_collection_table(
+                &conn,
+                "ctox_business_os__business_commands__v2",
+            )?;
+            conn.execute(
+                "INSERT INTO ctox_business_os__business_commands__v2
+                    (id, revision, deleted, lastWriteTime, data)
+                 VALUES (?1, '1-browser', 0, ?2, ?3)",
+                params![
+                    "cmd_outbound_secret_put_probe",
+                    now_ms() as f64,
+                    serde_json::to_string(&command)?,
+                ],
+            )?;
+        }
+        let put = accept_rxdb_business_command(root, command)?;
+        assert_eq!(put.get("status").and_then(Value::as_str), Some("completed"));
+        assert_eq!(
+            crate::secrets::read_secret_value(
+                root,
+                crate::secrets::credential_scope(),
+                "OUTBOUND_PROBE_LOGIN"
+            )?,
+            value
+        );
+        let hits = sqlite_cells_containing(root, "PLAINTEXT_MUST_NOT_PERSIST")?;
+        assert!(
+            hits.is_empty(),
+            "secret value persisted in plaintext: {hits:#?}"
+        );
+        // The scan must actually see the stores the command went through.
+        let command_hits = sqlite_cells_containing(root, "cmd_outbound_secret_put_probe")?;
+        for store in [
+            "business-os-rxdb.sqlite3",
+            "business-os.sqlite3",
+            "ctox.sqlite3",
+        ] {
+            assert!(
+                command_hits
+                    .iter()
+                    .any(|hit| hit.contains(&format!("/{store} "))),
+                "scan did not reach {store}: {command_hits:#?}"
+            );
+        }
         Ok(())
     }
 

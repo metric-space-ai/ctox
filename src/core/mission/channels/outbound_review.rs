@@ -633,6 +633,29 @@ pub(super) fn ensure_founder_outbound_body_clean(request: &ChannelSendRequest) -
     ensure_founder_outbound_body_text_clean(&request.body)
 }
 
+// The subject and recipients come from the reviewed thread action. Some
+// workers nevertheless prefix their reply with its exact Subject header.
+// Remove only that redundant first line before the exact-body review digest;
+// mismatched or additional headers still fail the normal body-clean gate.
+pub(super) fn reviewed_reply_body_only(body: &str, subject: &str) -> Result<String> {
+    let trimmed = body.trim();
+    let Some((first_line, rest)) = body.trim_start().split_once('\n') else {
+        return Ok(trimmed.to_string());
+    };
+    let Some((name, value)) = first_line.trim().split_once(':') else {
+        return Ok(trimmed.to_string());
+    };
+    if !name.eq_ignore_ascii_case("subject") || value.trim() != subject.trim() {
+        return Ok(trimmed.to_string());
+    }
+    let reply = rest.trim();
+    anyhow::ensure!(
+        !reply.is_empty(),
+        "reviewed founder reply is empty after its redundant Subject header"
+    );
+    Ok(reply.to_string())
+}
+
 pub(crate) fn ensure_founder_outbound_body_text_clean(body: &str) -> Result<()> {
     let lowered = body.to_ascii_lowercase();
     let first_lines = body
@@ -718,6 +741,17 @@ pub(super) fn send_email_message(
     request: &ChannelSendRequest,
     reviewed_context: Option<ReviewedFounderSendContext<'_>>,
 ) -> Result<Value> {
+    send_email_message_with_html(root, conn, db_path, request, reviewed_context, None)
+}
+
+fn send_email_message_with_html(
+    root: &Path,
+    conn: &Connection,
+    db_path: &Path,
+    request: &ChannelSendRequest,
+    reviewed_context: Option<ReviewedFounderSendContext<'_>>,
+    body_html: Option<&str>,
+) -> Result<Value> {
     let adapter = communication_adapters::email();
     let sender_email = request
         .sender_address
@@ -756,10 +790,7 @@ pub(super) fn send_email_message(
                 .and_then(Value::as_str)
                 .unwrap_or("accepted"),
             "delivery_confirmed": existing
-                .get("adapter_result")
-                .or_else(|| existing.get("adapterResult"))
-                .and_then(|value| value.get("delivery"))
-                .and_then(|value| value.get("confirmed"))
+                .get("delivery_confirmed")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             "adapter_result": existing
@@ -790,6 +821,7 @@ pub(super) fn send_email_message(
             sender_display: request.sender_display.as_deref(),
             subject: &request.subject,
             body: &request.body,
+            body_html,
             attachments: &request.attachments,
         },
     ) {
@@ -969,6 +1001,16 @@ pub(super) fn existing_durable_outbound_send_result(
     Ok(Some(json!({
         "status": status,
         "folder_hint": folder_hint,
+        "delivery_confirmed": metadata
+            .get("sentCopyConfirmation")
+            .is_some()
+            || metadata
+                .get("adapterResult")
+                .or_else(|| metadata.get("adapter_result"))
+                .and_then(|value| value.get("delivery"))
+                .and_then(|value| value.get("confirmed"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         "adapter_result": metadata
             .get("adapterResult")
             .or_else(|| metadata.get("adapter_result"))
@@ -1234,7 +1276,10 @@ pub(crate) fn record_founder_reply_review_approval(
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     let action = prepare_reviewed_founder_reply(root, inbound_message_key)?;
-    let (action_digest, action_json, body_sha256) = founder_reply_review_digest(&action, body);
+    let reviewed_body = reviewed_reply_body_only(body, &action.subject)?;
+    ensure_founder_outbound_body_text_clean(&reviewed_body)?;
+    let (action_digest, action_json, body_sha256) =
+        founder_reply_review_digest(&action, &reviewed_body);
     let approval_key = format!("founder-review:{inbound_message_key}:{action_digest}");
     conn.execute(
         r#"
@@ -2001,7 +2046,7 @@ pub fn send_reviewed_founder_reply(
             channel: "email".to_string(),
             account_key: inbound.account_key.clone(),
             thread_key: action.thread_key.clone(),
-            body: body.trim().to_string(),
+            body: reviewed_reply_body_only(body, &action.subject)?,
             subject: action.subject.clone(),
             to: action.to.clone(),
             cc: action.cc.clone(),
@@ -2264,6 +2309,120 @@ pub(crate) fn record_and_send_founder_escalation_reply(
             }),
         },
     );
+    Ok(send_result)
+}
+
+/// A scheduled report whose recipients, sender mailbox and cadence an admin
+/// configured in a Business OS app (Outbound "Update-Verteiler"). The body is
+/// built deterministically from measured app records, so the configuration IS
+/// the review: record a policy-authored approval for the exact body and send it
+/// through the same gated sequence as every reviewed mail (send lock,
+/// exact-digest approval, body-clean gate, core transition, durable send
+/// artifact). `report_key` identifies the slot (e.g. `outbound-update:2026-09-23`);
+/// a consumed approval stays consumed, so a retry of the same slot and body
+/// cannot send twice.
+pub(crate) struct PolicyReportEmail<'a> {
+    pub sender_email: &'a str,
+    pub to: &'a [String],
+    pub subject: &'a str,
+    pub body: &'a str,
+    /// Rich rendering of `body` built from the same data; `body` is the
+    /// approved text and stays the plain-text alternative.
+    pub body_html: Option<&'a str>,
+    pub report_key: &'a str,
+    pub policy_summary: &'a str,
+}
+
+pub(crate) fn record_and_send_policy_report_email(
+    root: &Path,
+    report: &PolicyReportEmail<'_>,
+) -> Result<Value> {
+    let _send_guard = acquire_reviewed_founder_send_lock()?;
+    let sender = report.sender_email.trim().to_ascii_lowercase();
+    anyhow::ensure!(
+        sender.contains('@'),
+        "policy report needs a sender mailbox address"
+    );
+    let to = report
+        .to
+        .iter()
+        .map(|address| address.trim().to_ascii_lowercase())
+        .filter(|address| address.contains('@'))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(!to.is_empty(), "policy report needs at least one recipient");
+    anyhow::ensure!(
+        !report.subject.trim().is_empty() && !report.body.trim().is_empty(),
+        "policy report needs subject and body"
+    );
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let request = ChannelSendRequest {
+        channel: "email".to_string(),
+        account_key: format!("email:{sender}"),
+        thread_key: format!("policy-report:{}", report.report_key),
+        body: report.body.trim().to_string(),
+        subject: report.subject.trim().to_string(),
+        to,
+        cc: Vec::new(),
+        attachments: Vec::new(),
+        sender_display: None,
+        sender_address: Some(sender.clone()),
+        send_voice: false,
+        reviewed_founder_send: true,
+    };
+    ensure_founder_outbound_body_clean(&request)?;
+    let action = FounderReplyAction {
+        account_key: request.account_key.clone(),
+        thread_key: request.thread_key.clone(),
+        subject: request.subject.clone(),
+        to: request.to.clone(),
+        cc: Vec::new(),
+        attachments: Vec::new(),
+    };
+    let (action_digest, action_json, body_sha256) =
+        founder_reply_review_digest(&action, &request.body);
+    let anchor_key = format!("policy-report:{}", report.report_key);
+    let approval_key = format!("policy-report:{}:{action_digest}", report.report_key);
+    conn.execute(
+        r#"
+        INSERT INTO communication_founder_reply_reviews (
+            approval_key, inbound_message_key, action_digest, action_json,
+            body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'policy-report', ?6, ?7, NULL, '{}')
+        ON CONFLICT(inbound_message_key, action_digest) DO UPDATE SET
+            review_summary=excluded.review_summary
+        "#,
+        params![
+            approval_key,
+            anchor_key,
+            action_digest,
+            action_json,
+            body_sha256,
+            report.policy_summary,
+            now_iso_string()
+        ],
+    )
+    .context("failed to record policy report approval")?;
+    let approval_key =
+        require_unconsumed_founder_reply_review(&conn, &anchor_key, &action, &request.body)?;
+    let entity_id = format!("policy-report:{}", report.report_key);
+    enforce_reviewed_founder_send_core_transition(&conn, &entity_id, &approval_key, &request)?;
+    if let Some(html) = report.body_html {
+        ensure_founder_outbound_body_text_clean(html)?;
+    }
+    let send_result = send_email_message_with_html(
+        root,
+        &conn,
+        &db_path,
+        &request,
+        Some(ReviewedFounderSendContext {
+            entity_id: &entity_id,
+            approval_key: &approval_key,
+        }),
+        report.body_html,
+    )?;
+    mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
     Ok(send_result)
 }
 

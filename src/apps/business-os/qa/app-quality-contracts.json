@@ -12,41 +12,477 @@
     "console_network_health"
   ],
   "apps": [
-    { "id": "app-store", "archetype": "record-workbench", "variant": "store", "business_story": "App finden, filtern, installieren, Version und Release prüfen", "required_actions": ["filter", "sort", "install", "release"] },
-    { "id": "appsec-pentest", "archetype": "queue-workflow", "variant": "review-evidence", "business_story": "Assessment starten, Finding prüfen und Freigabe delegieren", "required_actions": ["filter", "select", "run", "approve"] },
-    { "id": "browser", "archetype": "editor-document", "variant": "browser", "business_story": "Session öffnen, URL ändern und Browseraktion ausführen", "required_actions": ["open", "edit", "run"] },
-    { "id": "buchhaltung", "archetype": "record-workbench", "variant": "finance-table", "business_story": "Buchung importieren, filtern, bearbeiten und DATEV-Aktion starten", "required_actions": ["import", "filter", "sort", "edit", "run"] },
-    { "id": "calendar", "archetype": "queue-workflow", "variant": "planner", "business_story": "Termin filtern, planen, verschieben und speichern", "required_actions": ["filter", "create", "edit", "move"] },
-    { "id": "coding-agents", "archetype": "queue-workflow", "variant": "agent-runs", "business_story": "Agent auswählen, Run starten und Terminalstatus nachverfolgen", "required_actions": ["filter", "select", "run", "resume"] },
-    { "id": "consent", "archetype": "record-workbench", "variant": "privacy-register", "business_story": "Einwilligung prüfen und Betroffenenrecht kontrolliert ausführen", "required_actions": ["filter", "check", "export", "erase"] },
-    { "id": "conversations", "archetype": "timeline-thread", "variant": "channels", "business_story": "Kanal filtern, Verlauf auswählen und Antwort delegieren", "required_actions": ["filter", "select", "reply", "delegate"] },
-    { "id": "mail", "archetype": "timeline-thread", "variant": "mail-campaigns", "business_story": "Postfach filtern, Thread lesen, Entwurf einer Gruppe zuordnen und kontrolliert freigeben", "required_actions": ["filter", "select", "create", "approve", "send"] },
-    { "id": "credentials", "archetype": "record-workbench", "variant": "secure-form", "business_story": "Credential anlegen und Geheimwert ohne Rückleseleck aktualisieren", "required_actions": ["filter", "create", "edit", "save"] },
-    { "id": "ctox", "archetype": "queue-workflow", "variant": "live-runs", "business_story": "CTOX-Aufgabe starten, Status beobachten und kontrolliert fortsetzen", "required_actions": ["filter", "run", "cancel", "resume"] },
-    { "id": "customers", "archetype": "record-workbench", "variant": "crm", "business_story": "Kunden suchen, filtern, bearbeiten und Auswahl nach Reload fortsetzen", "required_actions": ["search", "filter", "sort", "edit"] },
-    { "id": "cv-print-builder", "archetype": "editor-document", "variant": "pdf-preview", "business_story": "CV importieren, Layout bearbeiten und PDF erzeugen", "required_actions": ["import", "edit", "preview", "run"] },
-    { "id": "desktop", "archetype": "shell-exception", "variant": "window-manager", "business_story": "App starten, Window verwalten und Launcherzustand wiederherstellen", "required_actions": ["launch", "move", "resize", "restore"] },
-    { "id": "documents", "archetype": "editor-document", "variant": "native-document", "business_story": "Dokument öffnen, bearbeiten, speichern und Automation starten", "required_actions": ["open", "edit", "save", "run"] },
-    { "id": "esign", "archetype": "queue-workflow", "variant": "approval", "business_story": "Signaturvorgang auswählen, prüfen und freigeben", "required_actions": ["filter", "select", "approve", "run"] },
-    { "id": "intake", "archetype": "queue-workflow", "variant": "deduplication", "business_story": "Datensatz importieren, Duplikate prüfen und Aufnahme ausführen", "required_actions": ["import", "filter", "review", "run"] },
-    { "id": "importer", "archetype": "queue-workflow", "variant": "intake", "business_story": "Externe App-Quelle wählen, nach ESM transkodieren, Bericht prüfen und als versionierte App installieren", "required_actions": ["select_source", "transcode", "review_report", "install"] },
-    { "id": "interviews", "archetype": "queue-workflow", "variant": "scorecard", "business_story": "Interview planen, Scorecard bearbeiten und Ergebnis abschließen", "required_actions": ["filter", "schedule", "edit", "complete"], "command_actions": [] },
-    { "id": "invoices", "archetype": "record-workbench", "variant": "financial-document", "business_story": "Rechnung importieren, Status filtern, bearbeiten und verbuchen", "required_actions": ["import", "filter", "sort", "edit", "run"] },
-    { "id": "iot", "archetype": "automation", "variant": "canvas-signal-tree", "business_story": "Signal auswählen, Automation konfigurieren und Run beobachten", "required_actions": ["filter", "select", "configure", "run"] },
-    { "id": "knowledge", "archetype": "editor-document", "variant": "data-markdown", "business_story": "Wissensquelle auswählen, durchsuchen, bearbeiten und Runbook starten", "required_actions": ["search", "filter", "edit", "run"] },
-    { "id": "kundenpipeline", "archetype": "queue-workflow", "variant": "bounded-decisions", "business_story": "Offene Entscheidung auswählen, Kontext prüfen, beantworten und nachvollziehbar abschließen", "required_actions": ["filter", "select", "answer", "resolve"] },
-    { "id": "matching", "archetype": "record-workbench", "variant": "multi-pane", "business_story": "Quellen importieren, Kriterien filtern, Matching prüfen und exportieren", "required_actions": ["import", "filter", "sort", "edit", "run"] },
-    { "id": "nachweise", "archetype": "record-workbench", "variant": "evidence-status", "business_story": "Nachweis filtern, bearbeiten und Prüfaktion ausführen", "required_actions": ["filter", "sort", "edit", "run"] },
-    { "id": "notes", "archetype": "editor-document", "variant": "text-editor", "business_story": "Notiz suchen, auswählen, bearbeiten und persistent speichern", "required_actions": ["search", "select", "edit", "save"] },
-    { "id": "outbound", "archetype": "automation", "variant": "qualification-run", "business_story": "Kontakte importieren, qualifizieren und Outreach-Automation starten", "required_actions": ["import", "filter", "edit", "run"] },
-    { "id": "placements", "archetype": "queue-workflow", "variant": "commercial-status", "business_story": "Placement filtern, Garantie-/Honorarstatus bearbeiten und übergeben", "required_actions": ["filter", "sort", "edit", "handoff"] },
-    { "id": "reports", "archetype": "queue-workflow", "variant": "review-rollback", "business_story": "Report erzeugen, Evidence prüfen, freigeben oder zurückrollen", "required_actions": ["filter", "run", "review", "rollback"] },
-    { "id": "research", "archetype": "automation", "variant": "sources-results", "business_story": "Quellen konfigurieren, Recherche starten und Ergebnis wiederaufnehmen", "required_actions": ["filter", "configure", "run", "resume"] },
-    { "id": "shiftflow", "archetype": "queue-workflow", "variant": "planner", "business_story": "Schicht filtern, planen, verschieben und speichern", "required_actions": ["filter", "create", "edit", "move"] },
-    { "id": "spreadsheets", "archetype": "editor-document", "variant": "spreadsheet", "business_story": "Tabelle öffnen, Zelle bearbeiten, speichern und Runbook starten", "required_actions": ["open", "edit", "save", "run"] },
-    { "id": "submissions", "archetype": "queue-workflow", "variant": "consent-dedup", "business_story": "Vorstellung filtern, Consent/Duplikat prüfen und absenden", "required_actions": ["filter", "review", "run"] },
-    { "id": "support", "archetype": "queue-workflow", "variant": "timeline-sla", "business_story": "Supportfall filtern, Verlauf prüfen, Makro anwenden und antworten", "required_actions": ["filter", "select", "edit", "reply"] },
-    { "id": "threads", "archetype": "timeline-thread", "variant": "approval-delegation", "business_story": "Thread auswählen, Approval prüfen, entscheiden und Folgeaktion delegieren", "required_actions": ["filter", "select", "approve", "delegate"] },
-    { "id": "tickets", "archetype": "queue-workflow", "variant": "command-reference", "business_story": "Ticket filtern, auswählen, klären und kontrolliert weiterleiten", "required_actions": ["filter", "select", "edit", "handoff"] }
+    {
+      "id": "app-store",
+      "archetype": "record-workbench",
+      "variant": "store",
+      "business_story": "App finden, filtern, installieren, Version und Release prüfen",
+      "required_actions": [
+        "filter",
+        "sort",
+        "install",
+        "release"
+      ]
+    },
+    {
+      "id": "appsec-pentest",
+      "archetype": "queue-workflow",
+      "variant": "review-evidence",
+      "business_story": "Assessment starten, Finding prüfen und Freigabe delegieren",
+      "required_actions": [
+        "filter",
+        "select",
+        "run",
+        "approve"
+      ]
+    },
+    {
+      "id": "browser",
+      "archetype": "editor-document",
+      "variant": "browser",
+      "business_story": "Session öffnen, URL ändern und Browseraktion ausführen",
+      "required_actions": [
+        "open",
+        "edit",
+        "run"
+      ]
+    },
+    {
+      "id": "buchhaltung",
+      "archetype": "record-workbench",
+      "variant": "finance-table",
+      "business_story": "Buchung importieren, filtern, bearbeiten und DATEV-Aktion starten",
+      "required_actions": [
+        "import",
+        "filter",
+        "sort",
+        "edit",
+        "run"
+      ]
+    },
+    {
+      "id": "calendar",
+      "archetype": "queue-workflow",
+      "variant": "planner",
+      "business_story": "Termin filtern, planen, verschieben und speichern",
+      "required_actions": [
+        "filter",
+        "create",
+        "edit",
+        "move"
+      ]
+    },
+    {
+      "id": "coding-agents",
+      "archetype": "queue-workflow",
+      "variant": "agent-runs",
+      "business_story": "Agent auswählen, Run starten und Terminalstatus nachverfolgen",
+      "required_actions": [
+        "filter",
+        "select",
+        "run",
+        "resume"
+      ]
+    },
+    {
+      "id": "consent",
+      "archetype": "record-workbench",
+      "variant": "privacy-register",
+      "business_story": "Einwilligung prüfen und Betroffenenrecht kontrolliert ausführen",
+      "required_actions": [
+        "filter",
+        "check",
+        "export",
+        "erase"
+      ]
+    },
+    {
+      "id": "conversations",
+      "archetype": "timeline-thread",
+      "variant": "channels",
+      "business_story": "Kanal filtern, Verlauf auswählen und Antwort delegieren",
+      "required_actions": [
+        "filter",
+        "select",
+        "reply",
+        "delegate"
+      ]
+    },
+    {
+      "id": "creator",
+      "archetype": "automation",
+      "variant": "app-authoring",
+      "business_story": "Neue Business-OS-App beschreiben, Archetyp und Collections wählen, Auftrag an den Coding-Agenten geben und den Fortschritt verfolgen",
+      "required_actions": [
+        "describe",
+        "configure",
+        "dispatch",
+        "track"
+      ]
+    },
+    {
+      "id": "credentials",
+      "archetype": "record-workbench",
+      "variant": "secure-form",
+      "business_story": "Credential anlegen und Geheimwert ohne Rückleseleck aktualisieren",
+      "required_actions": [
+        "filter",
+        "create",
+        "edit",
+        "save"
+      ]
+    },
+    {
+      "id": "ctox",
+      "archetype": "queue-workflow",
+      "variant": "live-runs",
+      "business_story": "CTOX-Aufgabe starten, Status beobachten und kontrolliert fortsetzen",
+      "required_actions": [
+        "filter",
+        "run",
+        "cancel",
+        "resume"
+      ]
+    },
+    {
+      "id": "customers",
+      "archetype": "record-workbench",
+      "variant": "crm",
+      "business_story": "Kunden suchen, filtern, bearbeiten und Auswahl nach Reload fortsetzen",
+      "required_actions": [
+        "search",
+        "filter",
+        "sort",
+        "edit"
+      ]
+    },
+    {
+      "id": "cv-print-builder",
+      "archetype": "editor-document",
+      "variant": "pdf-preview",
+      "business_story": "CV importieren, Layout bearbeiten und PDF erzeugen",
+      "required_actions": [
+        "import",
+        "edit",
+        "preview",
+        "run"
+      ]
+    },
+    {
+      "id": "desktop",
+      "archetype": "shell-exception",
+      "variant": "window-manager",
+      "business_story": "App starten, Window verwalten und Launcherzustand wiederherstellen",
+      "required_actions": [
+        "launch",
+        "move",
+        "resize",
+        "restore"
+      ]
+    },
+    {
+      "id": "documents",
+      "archetype": "editor-document",
+      "variant": "native-document",
+      "business_story": "Dokument öffnen, bearbeiten, speichern und Automation starten",
+      "required_actions": [
+        "open",
+        "edit",
+        "save",
+        "run"
+      ]
+    },
+    {
+      "id": "esign",
+      "archetype": "queue-workflow",
+      "variant": "approval",
+      "business_story": "Signaturvorgang auswählen, prüfen und freigeben",
+      "required_actions": [
+        "filter",
+        "select",
+        "approve",
+        "run"
+      ]
+    },
+    {
+      "id": "explorer",
+      "archetype": "record-workbench",
+      "variant": "files",
+      "business_story": "Dateien und Datensätze durchsuchen, hochladen, öffnen, umbenennen und in den Papierkorb legen",
+      "required_actions": [
+        "browse",
+        "upload",
+        "open",
+        "rename",
+        "trash"
+      ]
+    },
+    {
+      "id": "file-viewer",
+      "archetype": "editor-document",
+      "variant": "preview",
+      "business_story": "Eine gespeicherte Datei laden, in der passenden Vorschau ansehen, blättern und herunterladen",
+      "required_actions": [
+        "load",
+        "preview",
+        "navigate",
+        "download"
+      ]
+    },
+    {
+      "id": "importer",
+      "archetype": "queue-workflow",
+      "variant": "intake",
+      "business_story": "Externe App-Quelle wählen, nach ESM transkodieren, Bericht prüfen und als versionierte App installieren",
+      "required_actions": [
+        "select_source",
+        "transcode",
+        "review_report",
+        "install"
+      ]
+    },
+    {
+      "id": "intake",
+      "archetype": "queue-workflow",
+      "variant": "deduplication",
+      "business_story": "Datensatz importieren, Duplikate prüfen und Aufnahme ausführen",
+      "required_actions": [
+        "import",
+        "filter",
+        "review",
+        "run"
+      ]
+    },
+    {
+      "id": "interviews",
+      "archetype": "queue-workflow",
+      "variant": "scorecard",
+      "business_story": "Interview planen, Scorecard bearbeiten und Ergebnis abschließen",
+      "required_actions": [
+        "filter",
+        "schedule",
+        "edit",
+        "complete"
+      ],
+      "command_actions": []
+    },
+    {
+      "id": "invoices",
+      "archetype": "record-workbench",
+      "variant": "financial-document",
+      "business_story": "Rechnung importieren, Status filtern, bearbeiten und verbuchen",
+      "required_actions": [
+        "import",
+        "filter",
+        "sort",
+        "edit",
+        "run"
+      ]
+    },
+    {
+      "id": "iot",
+      "archetype": "automation",
+      "variant": "canvas-signal-tree",
+      "business_story": "Signal auswählen, Automation konfigurieren und Run beobachten",
+      "required_actions": [
+        "filter",
+        "select",
+        "configure",
+        "run"
+      ]
+    },
+    {
+      "id": "knowledge",
+      "archetype": "editor-document",
+      "variant": "data-markdown",
+      "business_story": "Wissensquelle auswählen, durchsuchen, bearbeiten und Runbook starten",
+      "required_actions": [
+        "search",
+        "filter",
+        "edit",
+        "run"
+      ]
+    },
+    {
+      "id": "kundenpipeline",
+      "archetype": "queue-workflow",
+      "variant": "bounded-decisions",
+      "business_story": "Offene Entscheidung auswählen, Kontext prüfen, beantworten und nachvollziehbar abschließen",
+      "required_actions": [
+        "filter",
+        "select",
+        "answer",
+        "resolve"
+      ]
+    },
+    {
+      "id": "mail",
+      "archetype": "timeline-thread",
+      "variant": "mail-campaigns",
+      "business_story": "Postfach filtern, Thread lesen, Entwurf einer Gruppe zuordnen und kontrolliert freigeben",
+      "required_actions": [
+        "filter",
+        "select",
+        "create",
+        "approve",
+        "send"
+      ]
+    },
+    {
+      "id": "matching",
+      "archetype": "record-workbench",
+      "variant": "multi-pane",
+      "business_story": "Quellen importieren, Kriterien filtern, Matching prüfen und exportieren",
+      "required_actions": [
+        "import",
+        "filter",
+        "sort",
+        "edit",
+        "run"
+      ]
+    },
+    {
+      "id": "nachweise",
+      "archetype": "record-workbench",
+      "variant": "evidence-status",
+      "business_story": "Nachweis filtern, bearbeiten und Prüfaktion ausführen",
+      "required_actions": [
+        "filter",
+        "sort",
+        "edit",
+        "run"
+      ]
+    },
+    {
+      "id": "notes",
+      "archetype": "editor-document",
+      "variant": "text-editor",
+      "business_story": "Notiz suchen, auswählen, bearbeiten und persistent speichern",
+      "required_actions": [
+        "search",
+        "select",
+        "edit",
+        "save"
+      ]
+    },
+    {
+      "id": "outbound",
+      "archetype": "automation",
+      "variant": "qualification-run",
+      "business_story": "Kontakte importieren, qualifizieren und Outreach-Automation starten",
+      "required_actions": [
+        "import",
+        "filter",
+        "edit",
+        "run"
+      ]
+    },
+    {
+      "id": "placements",
+      "archetype": "queue-workflow",
+      "variant": "commercial-status",
+      "business_story": "Placement filtern, Garantie-/Honorarstatus bearbeiten und übergeben",
+      "required_actions": [
+        "filter",
+        "sort",
+        "edit",
+        "handoff"
+      ]
+    },
+    {
+      "id": "reports",
+      "archetype": "queue-workflow",
+      "variant": "review-rollback",
+      "business_story": "Report erzeugen, Evidence prüfen, freigeben oder zurückrollen",
+      "required_actions": [
+        "filter",
+        "run",
+        "review",
+        "rollback"
+      ]
+    },
+    {
+      "id": "research",
+      "archetype": "automation",
+      "variant": "sources-results",
+      "business_story": "Quellen konfigurieren, Recherche starten und Ergebnis wiederaufnehmen",
+      "required_actions": [
+        "filter",
+        "configure",
+        "run",
+        "resume"
+      ]
+    },
+    {
+      "id": "shiftflow",
+      "archetype": "queue-workflow",
+      "variant": "planner",
+      "business_story": "Schicht filtern, planen, verschieben und speichern",
+      "required_actions": [
+        "filter",
+        "create",
+        "edit",
+        "move"
+      ]
+    },
+    {
+      "id": "spreadsheets",
+      "archetype": "editor-document",
+      "variant": "spreadsheet",
+      "business_story": "Tabelle öffnen, Zelle bearbeiten, speichern und Runbook starten",
+      "required_actions": [
+        "open",
+        "edit",
+        "save",
+        "run"
+      ]
+    },
+    {
+      "id": "submissions",
+      "archetype": "queue-workflow",
+      "variant": "consent-dedup",
+      "business_story": "Vorstellung filtern, Consent/Duplikat prüfen und absenden",
+      "required_actions": [
+        "filter",
+        "review",
+        "run"
+      ]
+    },
+    {
+      "id": "support",
+      "archetype": "queue-workflow",
+      "variant": "timeline-sla",
+      "business_story": "Supportfall filtern, Verlauf prüfen, Makro anwenden und antworten",
+      "required_actions": [
+        "filter",
+        "select",
+        "edit",
+        "reply"
+      ]
+    },
+    {
+      "id": "threads",
+      "archetype": "timeline-thread",
+      "variant": "approval-delegation",
+      "business_story": "Thread auswählen, Approval prüfen, entscheiden und Folgeaktion delegieren",
+      "required_actions": [
+        "filter",
+        "select",
+        "approve",
+        "delegate"
+      ]
+    },
+    {
+      "id": "tickets",
+      "archetype": "queue-workflow",
+      "variant": "command-reference",
+      "business_story": "Ticket filtern, auswählen, klären und kontrolliert weiterleiten",
+      "required_actions": [
+        "filter",
+        "select",
+        "edit",
+        "handoff"
+      ]
+    }
   ]
 }

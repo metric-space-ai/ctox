@@ -9,7 +9,7 @@ fn blob(bytes: &[u8]) -> ArtifactRef {
 }
 fn manifest() -> CheckpointManifest {
     CheckpointManifest {
-        version: 1,
+        version: 2,
         sequence: 1,
         session: SessionManifest {
             version: 1,
@@ -23,7 +23,18 @@ fn manifest() -> CheckpointManifest {
             required_capabilities: BTreeSet::new(),
             credential_references: ["gateway-account".into()].into_iter().collect(),
         },
-        base_commit: Some("git-base".into()),
+        workspace_state: GitWorkspaceState {
+            base_commit: "a".repeat(40),
+            index_patch: blob(b"index patch"),
+            worktree_patch: blob(b"worktree patch"),
+            required_untracked: vec![WorkspaceEntry {
+                path: "config/local.json".into(),
+                kind: WorkspaceEntryKind::File,
+                artifact: blob(b"required untracked"),
+                executable: false,
+            }],
+            deleted_paths: ["src/removed.rs".into()].into_iter().collect(),
+        },
         history: vec![blob(b"complete journal")],
         attachments: vec![blob(b"attachment")],
         workspace: vec![WorkspaceEntry {
@@ -47,6 +58,9 @@ fn populate(store: &CheckpointStore) {
         b"attachment",
         b"uncommitted source",
         b"provider checkpoint",
+        b"index patch",
+        b"worktree patch",
+        b"required untracked",
     ] {
         store.ingest_blob(&blob(bytes), Cursor::new(bytes)).unwrap();
     }
@@ -68,6 +82,18 @@ fn full_session_is_verified_and_restored_without_touching_existing_work() {
     assert_eq!(
         fs::read(target.join("provider/rollout.jsonl")).unwrap(),
         b"provider checkpoint"
+    );
+    assert_eq!(
+        fs::read(target.join("workspace/config/local.json")).unwrap(),
+        b"required untracked"
+    );
+    assert_eq!(
+        fs::read(target.join("git/index.patch")).unwrap(),
+        b"index patch"
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("git/base-commit")).unwrap(),
+        format!("{}\n", m.workspace_state.base_commit)
     );
     assert_eq!(
         fs::read(target.join("history").join(&m.history[0].sha256)).unwrap(),
@@ -210,6 +236,27 @@ fn unsafe_paths_and_unresolved_effects_cannot_resume() {
     let digest = store.publish(&m).unwrap();
     assert!(store.restore(&digest, &root.path().join("target")).is_err());
     assert!(!root.path().join("target").exists());
+}
+#[test]
+fn portable_git_state_rejects_incomplete_or_overlapping_reconstruction_data() {
+    let root = tempfile::tempdir().unwrap();
+    let store = CheckpointStore::open(root.path().join("store"), 1024).unwrap();
+    populate(&store);
+    let mut m = manifest();
+    m.version = 1;
+    assert!(store.publish(&m).is_err());
+
+    let mut m = manifest();
+    m.workspace_state.base_commit = "git-base".into();
+    assert!(store.publish(&m).is_err());
+
+    let mut m = manifest();
+    m.workspace_state.deleted_paths.insert("src/main.rs".into());
+    assert!(store.publish(&m).is_err());
+
+    let mut m = manifest();
+    m.workspace_state.required_untracked[0].path = "src".into();
+    assert!(store.publish(&m).is_err());
 }
 #[test]
 fn invalid_transfer_and_escaping_symlink_leave_no_valid_copy() {

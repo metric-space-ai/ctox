@@ -63,6 +63,7 @@ jobs:
 
     env:
       CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "2"
       APPSEC_PROFILE: ${{ inputs.profile || 'standard' }}
       APPSEC_INCLUDE_DATA_BUNDLES: ${{ github.event_name != 'workflow_dispatch' || inputs.include_data_bundles }}
       APPSEC_ATTEST_NATIVE: ${{ github.event_name != 'workflow_dispatch' || inputs.attest_native }}
@@ -94,7 +95,7 @@ jobs:
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.25.x"
+          go-version: "1.26.4"
           check-latest: true
 
       - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a
@@ -107,7 +108,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          packages=(nmap ncat ndiff bubblewrap git ca-certificates pkg-config libssl-dev libfontconfig1-dev libpcap-dev)
+          packages=(nmap ncat ndiff bubblewrap git ca-certificates pkg-config libssl-dev libfontconfig1-dev libpcap-dev libre2-dev)
           if [ "$APPSEC_PROFILE" = "full" ]; then
             packages+=(clamav clamav-freshclam)
           fi
@@ -147,6 +148,42 @@ jobs:
           cargo build --locked --manifest-path src/tools/appsec-pentest/Cargo.toml
           cargo build --locked --manifest-path src/tools/web-stack/Cargo.toml --no-default-features --bin ctox-web-stack
 
+      - name: Test scanner environment isolation and probe evidence
+        shell: bash
+        run: |
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib scanner_probe_ -- --test-threads=2
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib scanner_pipe_ -- --test-threads=2
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib python_scanner_plans_do_not_share_dependency_environments -- --test-threads=2
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib python_installer_repairs_an_incompatible_venv_once_then_reuses_it -- --test-threads=2
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib install_plans_use_isolated_python_and_node_runtimes -- --test-threads=2
+
+      - name: Prove Linux scanner resource enforcement
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$APPSEC_PROOF_ROOT"
+          scope_script=src/tools/appsec-pentest/fixtures/linux-resource-scope.sh
+          bash "$scope_script" /bin/true
+          if bash "$scope_script" /bin/bash -c 'exit 7'; then
+            echo "scope accepted failed command" >&2
+            exit 1
+          fi
+          if bash "$scope_script" /bin/bash -c 'kill -TERM "$PPID"; sleep 1'; then
+            echo "scope accepted terminated supervisor" >&2
+            exit 1
+          fi
+          echo "scope completion controls passed"
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib linux_legacy_rlimits_without_delegation -- --ignored --test-threads=1 --nocapture | tee "$APPSEC_PROOF_ROOT/resource-fallback-tests.log"
+          bash "$scope_script" cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib linux_scanner_cgroup_runtime_ -- --ignored --test-threads=1 --nocapture | tee "$APPSEC_PROOF_ROOT/resource-cgroup-tests.log"
+          python3 - "$APPSEC_PROOF_ROOT" <<'PY'
+          import pathlib, re, sys
+          for name, count in [("resource-fallback-tests.log", 2), ("resource-cgroup-tests.log", 11)]:
+              content = (pathlib.Path(sys.argv[1]) / name).read_text()
+              assert re.search(rf"(?m)^test result: ok\. {count} passed; 0 failed; 0 ignored;", content), f"incomplete test execution: {name}"
+          print("complete resource test summaries verified")
+          PY
+
       - name: Run AppSec toolchain proof
         shell: bash
         run: |
@@ -176,7 +213,11 @@ jobs:
           if [ "$APPSEC_ATTEST_NATIVE" = "true" ]; then
             args+=(--attest-current-native --reviewed-by "github-actions:${RUNNER_OS}")
           fi
-          "$APPSEC_BIN" "${args[@]}" --json | tee "$APPSEC_PROOF_ROOT/proof-run-output.json"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            bash src/tools/appsec-pentest/fixtures/linux-resource-scope.sh "$APPSEC_BIN" "${args[@]}" --json | tee "$APPSEC_PROOF_ROOT/proof-run-output.json"
+          else
+            "$APPSEC_BIN" "${args[@]}" --json | tee "$APPSEC_PROOF_ROOT/proof-run-output.json"
+          fi
           node <<'NODE'
           const fs = require('fs');
           const path = require('path');
@@ -390,6 +431,7 @@ jobs:
           retention-days: 14
           path: |
             ${{ runner.temp }}/ctox-appsec-proof/proof-run-output.json
+            ${{ runner.temp }}/ctox-appsec-proof/resource-*-tests.log
             ${{ runner.temp }}/ctox-appsec-proof/platform-acceptance.json
             ${{ runner.temp }}/ctox-appsec-proof/browser-prepare.json
             ${{ runner.temp }}/ctox-appsec-proof/browser-automation.json
