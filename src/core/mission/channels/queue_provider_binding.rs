@@ -27,6 +27,9 @@ pub(crate) struct NativeProviderFacts {
 
 struct ProviderState {
     live: bool,
+    /// Registry insertion precedes commit; a concurrent lookup must not turn
+    /// an uncommitted or ambiguously failed preparation into live authority.
+    committed: bool,
     turn_id: Option<String>,
 }
 
@@ -178,15 +181,23 @@ impl NativeProviderTurnOwner {
                 facts_json,
                 state: Mutex::new(ProviderState {
                     live: true,
+                    committed: false,
                     turn_id: None,
                 }),
             });
             entries.insert(key.clone(), Arc::downgrade(&record));
             Ok(record)
         })?;
-        // If commit fails, no owner/consumer is returned; the registry weak
-        // reference expires. An uncertain row cannot restore live authority.
-        Ok(Self { record })
+        // If commit fails, even a registry lookup that raced and upgraded the
+        // weak reference sees committed=false and cannot obtain a consumer.
+        let owner = Self { record };
+        owner
+            .record
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native provider preparation state poisoned"))?
+            .committed = true;
+        Ok(owner)
     }
 
     pub(crate) fn binding(&self) -> NativeProviderBinding {
@@ -208,7 +219,7 @@ impl NativeProviderTurnOwner {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("native provider state poisoned"))?;
             ensure!(
-                state.live && state.turn_id.is_none(),
+                state.live && state.committed && state.turn_id.is_none(),
                 "native provider turn already bound/closed"
             );
             let updated = tx.execute(
@@ -265,7 +276,10 @@ impl NativeProviderBinding {
                 .state
                 .lock()
                 .map_err(|_| anyhow::anyhow!("native provider state poisoned"))?;
-            ensure!(state.live, "native provider lifetime ended");
+            ensure!(
+                state.live && state.committed,
+                "native provider lifetime ended or preparation not committed"
+            );
             let (json, turn, finished): (String, Option<String>, Option<i64>) = tx.query_row(
                 "SELECT facts_json, provider_turn_id, finished_at_ms
                  FROM native_worker_provider_bindings WHERE binding_id=?1",
