@@ -6,7 +6,7 @@
 
 use super::channel::RemoteGuestDriver;
 use super::qemu::{PreparedQemuGuest, QemuProcess};
-use super::{identifier, GuestDriver};
+use super::{identifier, GuestDriver, GuestFrame, GuestInput};
 use anyhow::{ensure, Context, Result};
 use ctox_sync::guest_restore::GuestLiveEndpoint;
 use std::process::ExitStatus;
@@ -95,28 +95,93 @@ impl RetainedQemuDesktop {
     }
 
     async fn probe_inner(&mut self) -> Result<GuestLiveEndpoint> {
+        let (frame, endpoint) = self.observe_inner().await?;
+        drop(frame);
+        Ok(endpoint)
+    }
+
+    /// Capture only while the caller holds the actual command, worker, policy
+    /// and controller guards. The returned bytes still require a guarded native
+    /// publisher; this method never turns a capture into delivery permission.
+    pub(in crate::business_os) async fn observe_live(
+        &mut self,
+    ) -> Result<(GuestFrame, GuestLiveEndpoint)> {
+        ensure!(self.phase == DesktopPhase::Ready, "guest is not ready");
+        self.phase = DesktopPhase::EndpointUnavailable;
+        let result = self.observe_inner().await;
+        if result.is_ok() {
+            self.phase = DesktopPhase::Ready;
+        }
+        result
+    }
+
+    async fn observe_inner(&mut self) -> Result<(GuestFrame, GuestLiveEndpoint)> {
         self.process.ensure_alive()?;
         let driver = self
             .driver
             .as_ref()
             .context("guest endpoint is unavailable")?;
         let session = driver.probe_endpoint().await?;
-        // Exercise the actual local display path; a responding process alone is
-        // insufficient. Keep this bootstrap image private and discard its bytes.
-        drop(driver.capture().await?);
+        // The same real display path supplies bootstrap and authorized capture.
+        // Never publish bytes when the child or guest service changed in flight.
+        let frame = driver.capture().await?;
         ensure!(
             driver.probe_endpoint().await? == session,
             "guest session changed during readiness"
         );
         self.process.ensure_alive()?;
-        Ok(GuestLiveEndpoint {
+        let endpoint = GuestLiveEndpoint {
             process_instance_id: self.process_instance_id.clone(),
             guest_session_id: session.session_id,
             endpoint_id: self
                 .endpoint_id
                 .clone()
                 .context("guest endpoint is unregistered")?,
-        })
+        };
+        Ok((frame, endpoint))
+    }
+
+    /// The native consumer must additionally admit the exact current frame and
+    /// serialize this call under its command/worker/policy/controller guard.
+    /// A failed or cancelled operation retires cached readiness. It must never
+    /// be retried merely because the retained QEMU PID is still alive.
+    pub(in crate::business_os) async fn input_live(
+        &mut self,
+        expected: &GuestLiveEndpoint,
+        input: &GuestInput,
+    ) -> Result<()> {
+        ensure!(self.phase == DesktopPhase::Ready, "guest is not ready");
+        input.validate()?;
+        ensure!(
+            expected.process_instance_id == self.process_instance_id
+                && self.endpoint_id.as_deref() == Some(expected.endpoint_id.as_str()),
+            "guest input endpoint belongs to another native child"
+        );
+        self.phase = DesktopPhase::EndpointUnavailable;
+        let result = async {
+            self.process.ensure_alive()?;
+            let driver = self
+                .driver
+                .as_ref()
+                .context("guest endpoint is unavailable")?;
+            let session = driver.probe_endpoint().await?;
+            ensure!(
+                session.session_id == expected.guest_session_id,
+                "guest input observation belongs to another service session"
+            );
+            driver.input(input).await?;
+            ensure!(
+                driver.probe_endpoint().await? == session,
+                "guest session changed during input; reconcile"
+            );
+            self.process.ensure_alive()?;
+            Ok(())
+        }
+        .await;
+        if result.is_ok() {
+            self.phase = DesktopPhase::Ready;
+        }
+        result
     }
 
     pub(in crate::business_os) fn driver(&self) -> Result<&RemoteGuestDriver<UnixStream>> {

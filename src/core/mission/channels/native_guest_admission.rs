@@ -3,7 +3,7 @@
 #[path = "native_guest_admission_tests.rs"]
 mod regression_tests;
 use super::queue_provider_binding::{
-    NativeProviderAdmission, NativeProviderBinding, NativeProviderFacts,
+    NativeProviderAdmission, NativeProviderBinding, NativeProviderCommand, NativeProviderFacts,
 };
 use anyhow::{ensure, Context, Result};
 use ctox_sync::{
@@ -35,6 +35,19 @@ pub(crate) struct NativeGuestAdmissionDestination {
 /// do not reopen it or await. Policy/controller revoke and publication must use
 /// this same native guard. A persisted row or a preflight boolean is insufficient.
 pub(crate) trait NativeGuestAdmissionOwner: Send + Sync {
+    /// Called inside the exact command witness's held worker transaction.
+    /// Current policy/controller/effect work stays inside this callback.
+    fn execute_current_guest_command(
+        &self,
+        _tx: &Transaction<'_>,
+        _runtime_root: &std::path::Path,
+        _facts: &NativeProviderFacts,
+        _actual_turn: &str,
+        _command: &crate::business_os::store::BusinessCommand,
+    ) -> Result<ctox_protocol::mcp::CallToolResult> {
+        anyhow::bail!("native guest command lifecycle owner is not registered")
+    }
+
     fn with_current_destination(
         &self,
         tx: &Transaction<'_>,
@@ -208,6 +221,22 @@ impl NativeGuestAdmission {
     }
 }
 impl NativeProviderAdmission for NativeGuestAdmission {
+    fn execute_guest_command(
+        &self,
+        command: &crate::business_os::store::BusinessCommand,
+        witness: NativeProviderCommand,
+    ) -> Result<ctox_protocol::mcp::CallToolResult> {
+        witness.with_current_command_transaction(command, |tx, facts, turn| {
+            self.owner.execute_current_guest_command(
+                tx,
+                witness.runtime_root(),
+                facts,
+                turn,
+                command,
+            )
+        })
+    }
+
     fn admit<'a>(
         &'a self,
         provider: NativeProviderBinding,
