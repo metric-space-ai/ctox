@@ -17,11 +17,11 @@ fn candidate_devin_history_attaches_thoughts_calls_and_matched_results() {
         "previous_interaction_id":"session-uuid-1",
         "input":[
             {"type":"user_input","content":[{"type":"text","text":"hello"}]},
-            {"type":"thought","content":[{"type":"text","text":"planning..."}],"signature":"c2VhbGVkLnYxLnRlc3Q="},
+            {"type":"thought","content":[{"type":"text","text":"planning..."}],"signature":" \t\r\n","thought_signature":"c2VhbGVkLnYxLnRlc3Q="},
             {"type":"thought","text":"next thought","signature":"sealed.v1.later"},
             {"type":"model_output","content":[{"type":"text","text":"I can help."}]},
             {"type":"model_output","text":"Next line."},
-            {"type":"function_call","name":"read_file","id":"call_1","arguments":{ "path":"main.go" }},
+            {"type":"function_call","name":"read_file","id":" \t","call_id":"call_1","arguments":{ "path":"main.go" }},
             {"type":"function_result","call_id":"call_1","result":"package main\n"}
         ],
         "tools":[{"name":"read_file","description":"Read file","parameters":{"type":"object"}}]
@@ -88,14 +88,14 @@ fn candidate_devin_history_config_session_presence_and_orphan_matching() {
     let present_null = parse_devin_interactions_payload(
         br#"{
         "generation_config":null,"generationConfig":{"temperature":0.25,"max_output_tokens":8},
-        "session_id":" ","sessionId":"do-not-select-after-first-nonempty",
+        "session_id":" \t\r\n","sessionId":" next-session ",
         "input":[],"messages":[{"role":"user","content":"do-not-use-fallback"}]
     }"#,
         br#"{"temperature":0.75,"conversation_id":" original-session "}"#,
     );
     assert_eq!(present_null.temperature, Some(0.75));
     assert_eq!(present_null.max_tokens, DEVIN_DEFAULT_MAX_TOKENS);
-    assert_eq!(present_null.session_id, "original-session");
+    assert_eq!(present_null.session_id, "next-session");
     assert!(present_null.prompts.is_empty());
     let explicit_null = parse_devin_interactions_payload(
         br#"{"generationConfig":{"temperature":null}}"#,
@@ -118,7 +118,7 @@ fn candidate_devin_history_config_session_presence_and_orphan_matching() {
             {"role":"user","content":"go"},
             {"role":"assistant","content":"calls","tool_calls":[
                 {"id":"first","function":{"name":"one","arguments":"{\"q\":\"你好\"}"}},
-                {"call_id":"second","name":"two","arguments":{ "n":9007199254740993 }}
+                {"id":" \t","call_id":"second","name":"two","function":{"name":""},"arguments":{ "n":9007199254740993 }}
             ]},
             {"role":"tool","content":"first result"},
             {"role":"tool","tool_call_id":"second","content":"second result"},
@@ -139,12 +139,24 @@ fn candidate_devin_history_config_session_presence_and_orphan_matching() {
         r#"{ "n":9007199254740993 }"#
     );
     assert_eq!(prepared.prompts[2].source, 4);
+    assert_eq!(prepared.prompts[1].tool_calls[0].name, "one");
+    assert_eq!(prepared.prompts[1].tool_calls[1].name, "two");
     assert_eq!(prepared.prompts[2].tool_call_id, "first");
     assert_eq!(prepared.prompts[3].tool_call_id, "second");
     assert_eq!(prepared.prompts[4].source, 1);
     assert!(prepared.prompts[4].is_orphaned_tool);
     assert_eq!(prepared.prompts[4].original_tool_call_id, "second");
     assert!(prepared.prompts[4].tool_call_id.is_empty());
+
+    let raw_name = parse_devin_interactions_payload(
+        br#"{"messages":[{"role":"assistant","tool_calls":[
+            {"id":"first","function":{"name":" \t"},"name":"do-not-replace"},
+            {"id":"second","function":{"name":""},"name":"fallback"}
+        ]}]}"#,
+        b"",
+    );
+    assert_eq!(raw_name.prompts[0].tool_calls[0].name, " \t");
+    assert_eq!(raw_name.prompts[0].tool_calls[1].name, "fallback");
 }
 
 #[test]

@@ -1,4 +1,4 @@
-// ref: internal/runtime/executor/devin_executor.go:1486-2430
+// ref: internal/runtime/executor/devin_executor.go:1486-2430,2570-2576
 // Upstream: d7914afdedca7af95ee974a42453dc49fc1388ce
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
@@ -45,9 +45,10 @@ fn string(value: &Value<'_>, path: &str) -> String {
     field.str().to_owned()
 }
 fn first_nonempty(values: impl IntoIterator<Item = String>) -> String {
+    // ref: devin_executor.go:2570-2576 — skip whitespace-only values, retain raw content.
     values
         .into_iter()
-        .find(|value| !value.is_empty())
+        .find(|value| !value.trim().is_empty())
         .unwrap_or_default()
 }
 fn normalized(value: &Value<'_>, path: &str) -> String {
@@ -250,8 +251,10 @@ pub fn parse_devin_interactions_payload(
                     let calls = message.get("tool_calls");
                     for call in calls.array() {
                         let id = first_nonempty([string(&call, "id"), string(&call, "call_id")]);
-                        let name =
-                            first_nonempty([string(&call, "function.name"), string(&call, "name")]);
+                        let mut name = string(&call, "function.name");
+                        if name.is_empty() {
+                            name = string(&call, "name");
+                        }
                         let mut arguments = call.get("function.arguments");
                         if !arguments.exists() {
                             arguments = call.get("arguments");
