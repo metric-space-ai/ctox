@@ -30,6 +30,10 @@ impl AuthError {
     #[must_use]
     pub fn is_request_scoped(&self) -> bool {
         self.code == REQUEST_SCOPED_ERROR_CODE
+            || crate::internal::clienterror::is_claude_thread_not_found(
+                self.http_status,
+                self.message.as_bytes(),
+            )
     }
 
     #[must_use]

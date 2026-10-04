@@ -687,7 +687,11 @@ impl ClaudeSubscriptionMessagesExecutor {
                     &claude_message_id_from_response(first.body()),
                 );
             }
-            let request_scoped = fast_request && !(200..300).contains(&first.status());
+            let request_scoped = (fast_request && !(200..300).contains(&first.status()))
+                || crate::internal::clienterror::is_claude_thread_not_found(
+                    first.status(),
+                    first.body(),
+                );
             let state_persisted = if request_scoped {
                 Some(true)
             } else {
@@ -730,7 +734,11 @@ impl ClaudeSubscriptionMessagesExecutor {
                 &claude_message_id_from_response(response.body()),
             );
         }
-        let request_scoped = fast_request && !(200..300).contains(&response.status());
+        let request_scoped = (fast_request && !(200..300).contains(&response.status()))
+            || crate::internal::clienterror::is_claude_thread_not_found(
+                response.status(),
+                response.body(),
+            );
         let state_persisted = if request_scoped {
             Some(true)
         } else {
@@ -868,7 +876,11 @@ impl ClaudeSubscriptionMessagesExecutor {
         {
             response = ClaudeMessagesStreamResponse::synthetic(502);
         }
-        let request_scoped = fast_request && !(200..300).contains(&response.status());
+        let request_scoped = (fast_request && !(200..300).contains(&response.status()))
+            || crate::internal::clienterror::is_claude_thread_not_found(
+                response.status(),
+                response.error_body(),
+            );
         let state_persisted = if request_scoped {
             Some(true)
         } else {
@@ -2159,6 +2171,290 @@ mod tests {
 
     fn target() -> ClaudeUpstreamTarget {
         ClaudeUpstreamTarget::new("https", "api.anthropic.com").unwrap()
+    }
+
+    const THREAD_MISSING_BODY: &[u8] = br#"{"type":"error","error":{"type":"not_found_error","message":"No thread state was found for the requested previous_message_id."}}"#;
+
+    struct ThreadBootstrapTransport {
+        status: u16,
+        body: Vec<u8>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ClaudeMessagesStreamingTransport for ThreadBootstrapTransport {
+        fn execute_stream<'a>(
+            &'a self,
+            _: &'a ClaudeMessagesRequest,
+            _: Duration,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            ClaudeMessagesStreamResponse,
+                            ClaudeMessagesTransportFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (sender, receiver) = mpsc::channel(1);
+                if self.status == 200 {
+                    sender.try_send(Ok(b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"thread-fixture\"}}\n\n".to_vec())).unwrap();
+                }
+                drop(sender);
+                Ok(
+                    ClaudeMessagesStreamResponse::new(self.status, None, receiver)
+                        .with_error_body(self.body.clone()),
+                )
+            })
+        }
+    }
+
+    fn thread_fixture_pool(
+        first: Arc<SequenceTransport>,
+        second: Arc<SequenceTransport>,
+        streams: Option<(
+            Arc<dyn ClaudeMessagesStreamingTransport>,
+            Arc<dyn ClaudeMessagesStreamingTransport>,
+        )>,
+    ) -> (ClaudeSubscriptionAccountPool, Arc<MemoryCooldownStore>) {
+        let cooldowns = Arc::new(MemoryCooldownStore::default());
+        let conductor = Arc::new(CooldownConductor::new(cooldowns.clone()));
+        let mut account_a = executor(first);
+        let mut account_b = executor(second);
+        if let Some((stream_a, stream_b)) = streams {
+            account_a = account_a.with_stream_transport(stream_a);
+            account_b = account_b.with_stream_transport(stream_b);
+        }
+        let account_a = Arc::new(
+            account_a
+                .with_account_state_clock(
+                    "account-a",
+                    conductor.clone(),
+                    Arc::new(FixedAccountClock),
+                )
+                .unwrap(),
+        );
+        let account_b = Arc::new(
+            account_b
+                .with_account_state_clock("account-b", conductor, Arc::new(FixedAccountClock))
+                .unwrap(),
+        );
+        let candidates = ["account-a", "account-b"]
+            .into_iter()
+            .map(|auth_id| AccountCandidate {
+                auth_id: auth_id.to_owned(),
+                provider: "claude".to_owned(),
+                priority: 0,
+                weight: 1,
+                websocket_enabled: false,
+                supported_models: Vec::new(),
+                disabled: false,
+            })
+            .collect();
+        let pool = ClaudeSubscriptionAccountPool::with_clock(
+            Arc::new(AccountRouter::new(cooldowns.clone())),
+            candidates,
+            HashMap::from([
+                ("account-a".to_owned(), account_a),
+                ("account-b".to_owned(), account_b),
+            ]),
+            Arc::new(FixedAccountClock),
+        )
+        .unwrap()
+        .with_targets(HashMap::from([
+            ("account-a".to_owned(), target()),
+            ("account-b".to_owned(), target()),
+        ]))
+        .unwrap();
+        (pool, cooldowns)
+    }
+
+    fn thread_fixture_transport(statuses: Vec<u16>, body: &[u8]) -> Arc<SequenceTransport> {
+        let mut transport = SequenceTransport::statuses(statuses);
+        transport.response_body = body.to_vec();
+        Arc::new(transport)
+    }
+
+    fn thread_fixture_stream(status: u16, body: &[u8]) -> Arc<ThreadBootstrapTransport> {
+        Arc::new(ThreadBootstrapTransport {
+            status,
+            body: body.to_vec(),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_pool_unary_preserves_account_only_for_missing_thread() {
+        for (status, body, neutral) in [
+            (404, THREAD_MISSING_BODY, true),
+            (
+                404,
+                br#"{"error":{"type":"not_found_error","message":"model not found"}}"#.as_slice(),
+                false,
+            ),
+            (500, THREAD_MISSING_BODY, false),
+        ] {
+            let first = thread_fixture_transport(vec![status], body);
+            let second = Arc::new(SequenceTransport::statuses(vec![200]));
+            let (pool, cooldowns) = thread_fixture_pool(first.clone(), second.clone(), None);
+            let outcome = pool
+                .execute(target(), "sonnet", b"{}".to_vec(), false)
+                .await
+                .unwrap();
+            if neutral {
+                assert_eq!(outcome.selected_auth_id(), "account-a");
+                assert_eq!(outcome.attempted_auth_ids(), ["account-a"]);
+                assert_eq!(outcome.outcome().response().body(), body);
+                assert!(outcome.outcome().request_scoped());
+                assert!(second.authorizations.lock().unwrap().is_empty());
+                assert!(cooldowns.0.lock().unwrap().is_empty());
+            } else {
+                assert_eq!(outcome.selected_auth_id(), "account-b");
+                assert_eq!(outcome.attempted_auth_ids(), ["account-a", "account-b"]);
+                assert_eq!(cooldowns.0.lock().unwrap().len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_pool_after_401_keeps_refreshed_credential_and_cache_lane() {
+        let first = thread_fixture_transport(vec![401, 404], THREAD_MISSING_BODY);
+        let second = Arc::new(SequenceTransport::statuses(vec![200]));
+        let (pool, cooldowns) = thread_fixture_pool(first.clone(), second.clone(), None);
+        let outcome = pool
+            .execute(target(), "sonnet", b"{}".to_vec(), false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.selected_auth_id(), "account-a");
+        assert_eq!(outcome.attempted_auth_ids(), ["account-a"]);
+        assert!(outcome.outcome().request_scoped());
+        assert!(second.authorizations.lock().unwrap().is_empty());
+        let headers = first.authorizations.lock().unwrap();
+        assert_eq!(headers.len(), 2);
+        assert!(headers[0].contains("access-old"));
+        assert!(headers[1].contains("access-new"));
+        assert!(cooldowns.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_pool_stream_bootstrap_preserves_account_and_real_failover() {
+        for (body, neutral) in [
+            (THREAD_MISSING_BODY, true),
+            (
+                br#"{"error":{"type":"not_found_error","message":"model not found"}}"#.as_slice(),
+                false,
+            ),
+        ] {
+            let first = thread_fixture_stream(404, body);
+            let second = thread_fixture_stream(200, b"");
+            let (pool, cooldowns) = thread_fixture_pool(
+                Arc::new(SequenceTransport::statuses(vec![200])),
+                Arc::new(SequenceTransport::statuses(vec![200])),
+                Some((first.clone(), second.clone())),
+            );
+            let outcome = pool
+                .execute_stream_configured("sonnet", b"{}".to_vec())
+                .await
+                .unwrap();
+            assert_eq!(first.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            if neutral {
+                assert_eq!(outcome.selected_auth_id(), "account-a");
+                assert_eq!(outcome.attempted_auth_ids(), ["account-a"]);
+                assert!(outcome.outcome().request_scoped());
+                assert_eq!(outcome.outcome().response().error_body(), body);
+                assert_eq!(second.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+                assert!(cooldowns.0.lock().unwrap().is_empty());
+            } else {
+                assert_eq!(outcome.selected_auth_id(), "account-b");
+                assert_eq!(second.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+                assert_eq!(cooldowns.0.lock().unwrap().len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_pool_adapter_returns_replay_body_for_unary_and_bootstrap() {
+        use crate::sdk::cliproxy::executor::RequestTerminatedError;
+        use crate::sdk::pluginapi::{ExecutorRequest, ProviderExecutor};
+        for stream in [false, true] {
+            let first = thread_fixture_transport(vec![404], THREAD_MISSING_BODY);
+            let second = Arc::new(SequenceTransport::statuses(vec![200]));
+            let stream_a = thread_fixture_stream(404, THREAD_MISSING_BODY);
+            let stream_b = thread_fixture_stream(200, b"");
+            let (pool, cooldowns) = thread_fixture_pool(
+                first,
+                second.clone(),
+                Some((stream_a.clone(), stream_b.clone())),
+            );
+            let adapter =
+                crate::internal::runtime::executor::ClaudeProviderExecutor::new(Arc::new(pool));
+            let request = ExecutorRequest {
+                auth_id: "account-a".to_owned(),
+                auth_provider: "claude".to_owned(),
+                model: "sonnet".to_owned(),
+                payload: b"{}".to_vec(),
+                stream,
+                ..ExecutorRequest::default()
+            };
+            let error = if stream {
+                match adapter.execute_stream(request).await {
+                    Err(error) => error,
+                    Ok(_) => panic!("Missing thread must fail before SSE begins"),
+                }
+            } else {
+                adapter.execute(request).await.unwrap_err()
+            };
+            let direct = error.downcast_ref::<RequestTerminatedError>().unwrap();
+            assert_eq!(direct.http_status, 404);
+            let value: Value = serde_json::from_slice(&direct.body).unwrap();
+            assert_eq!(value["error"]["details"]["error_code"], "thread_not_found");
+            assert!(
+                crate::sdk::cliproxy::auth::conductor_execution::is_request_scoped_plugin_error(
+                    &error
+                )
+            );
+            assert!(second.authorizations.lock().unwrap().is_empty());
+            assert_eq!(stream_b.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert!(cooldowns.0.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn candidate_claude_thread_wrapped_auth_error_remains_request_scoped() {
+        #[derive(Debug)]
+        struct Wrapped(crate::sdk::cliproxy::auth::AuthError);
+        impl std::fmt::Display for Wrapped {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("wrapped upstream failure")
+            }
+        }
+        impl std::error::Error for Wrapped {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        for (status, expected) in [(404, true), (500, false)] {
+            let error: crate::sdk::pluginapi::PluginExecutionError =
+                Arc::new(Wrapped(crate::sdk::cliproxy::auth::AuthError {
+                    code: "upstream".to_owned(),
+                    message: String::from_utf8(THREAD_MISSING_BODY.to_vec()).unwrap(),
+                    http_status: status,
+                    ..Default::default()
+                }));
+            assert_eq!(
+                crate::sdk::cliproxy::auth::conductor_execution::is_request_scoped_plugin_error(
+                    &error
+                ),
+                expected
+            );
+            assert_eq!(
+                crate::sdk::cliproxy::auth::conductor_execution::plugin_error_status(&error),
+                status
+            );
+        }
     }
 
     #[tokio::test]

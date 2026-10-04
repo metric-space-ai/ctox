@@ -83,6 +83,13 @@ struct ClaudeErrorDetail {
     #[serde(rename = "type")]
     error_type: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<ClaudeErrorDetails>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ClaudeErrorDetails {
+    error_code: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -98,12 +105,19 @@ fn claude_error_response(status: u16, error_text: Option<&str>) -> ClaudeErrorRe
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .unwrap_or(fallback);
-    let (error_type, message) = claude_error_detail_from_text(status, text);
+    let thread =
+        crate::internal::clienterror::claude_thread_not_found_detail(status, text.as_bytes());
+    let replay = thread.is_some();
+    let (error_type, message) =
+        thread.unwrap_or_else(|| claude_error_detail_from_text(status, text));
     ClaudeErrorResponse {
         response_type: "error",
         error: ClaudeErrorDetail {
             error_type,
             message,
+            details: replay.then_some(ClaudeErrorDetails {
+                error_code: "thread_not_found",
+            }),
         },
     }
 }

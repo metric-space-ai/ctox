@@ -11,6 +11,30 @@ use super::{
 };
 
 #[test]
+fn candidate_claude_thread_handler_marks_replay_without_changing_other_errors() {
+    let missing = r#"{"error":{"type":"not_found_error","message":"No thread state for previous_message_id"},"n":1e1000}"#;
+    let response = ClaudeMessagesHttpResponse::upstream_error(404, missing);
+    let value: Value = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(response.status(), 404);
+    assert_eq!(
+        value["error"]["message"],
+        "No thread state for previous_message_id"
+    );
+    assert_eq!(value["error"]["details"]["error_code"], "thread_not_found");
+    for (status, body) in [
+        (500, missing),
+        (
+            404,
+            r#"{"error":{"type":"not_found_error","message":"model not found"}}"#,
+        ),
+    ] {
+        let response = ClaudeMessagesHttpResponse::upstream_error(status, body);
+        let value: Value = serde_json::from_slice(response.body()).unwrap();
+        assert!(value["error"].get("details").is_none());
+    }
+}
+
+#[test]
 fn candidate_v13_claude_timeout_before_stream_returns_json_without_committing_sse() {
     let response = pool_error_response(AntigravityAccountPoolError::Execution(
         AntigravityExecutionError::Transport(AntigravityGenerateTransportFailure::Timeout),
