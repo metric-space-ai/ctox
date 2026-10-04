@@ -23,9 +23,9 @@ use super::store::{
     record_business_module_lifecycle_event, record_command, record_report_command,
     recoverable_background_control_claim_authorization, run_channel_command,
     rxdb_authenticated_session, rxdb_command_session, rxdb_verified_identity_email,
-    stored_rxdb_business_command_outcome, write_rxdb_failed_control_command_outcome,
-    BusinessCommand, BusinessOsReportMutation, ChannelCommandRequest, CommandOrigin,
-    RxdbProjectionWriterCache, APPSEC_MODULE_ID,
+    stored_rxdb_business_command_outcome, with_control_projection_writers,
+    write_rxdb_failed_control_command_outcome, BusinessCommand, BusinessOsReportMutation,
+    ChannelCommandRequest, CommandOrigin, RxdbProjectionWriterCache, APPSEC_MODULE_ID,
 };
 use super::store_appsec_commands::handle_appsec_business_command;
 use super::store_ats_commands::{handle_ats_active_command, handle_ats_mutating_command};
@@ -282,8 +282,11 @@ mod crew_cockpit_tests;
 #[cfg(test)]
 #[path = "crew_identity_command_tests.rs"]
 mod crew_identity_tests;
+#[cfg(test)]
+#[path = "guest_command_tests.rs"]
+mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 94] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 96] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -315,6 +318,8 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 94] = [
     "ctox.command.cancel",
     "ctox.file.export",
     "ctox.file.materialize",
+    "ctox.guest.input",
+    "ctox.guest.observe",
     "ctox.mailserver.delete_domain",
     "ctox.mailserver.delete_user",
     "ctox.mailserver.get_config",
@@ -617,6 +622,24 @@ pub fn accept_rxdb_business_command_with_origin(
     document: Value,
     origin: CommandOrigin,
 ) -> anyhow::Result<Value> {
+    accept_rxdb_business_command_with_guest_runtime(
+        root,
+        document,
+        origin,
+        super::guest_commands::GuestRuntimeInjection::Unregistered,
+    )
+}
+
+/// Same intake as [`accept_rxdb_business_command_with_origin`], with an explicit
+/// guest owner/driver injection. The public wrappers pass `Unregistered`; a
+/// registered owner is only supplied by this internal boundary. There is no
+/// process-global registry.
+pub(super) fn accept_rxdb_business_command_with_guest_runtime(
+    root: &Path,
+    document: Value,
+    origin: CommandOrigin,
+    guest_runtime: super::guest_commands::GuestRuntimeInjection,
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -756,7 +779,8 @@ pub fn accept_rxdb_business_command_with_origin(
                     object.insert("ok".to_string(), Value::Bool(true));
                     object.insert("already_accepted".to_string(), Value::Bool(true));
                 }
-                persist_business_command_lifecycle_projection(root, &lifecycle_outcome)?;
+                lifecycle_outcome =
+                    persist_business_command_lifecycle_projection(root, &lifecycle_outcome)?;
                 let receipt = BusinessCommandReplayReceipt::stored_outcome_with_lifecycle(
                     &command_id,
                     existing_status.as_deref().unwrap_or("known"),
@@ -893,6 +917,7 @@ pub fn accept_rxdb_business_command_with_origin(
     }
 
     let mut prepared = PreparedBusinessCommand::from_command(&command)?;
+    prepared.guest_owner = guest_runtime;
     prepared.domain_effect_hash = domain_effect_hash;
     prepared.owns_new_control_claim = owns_new_control_claim;
     match CommandAuthorizationStage::for_command(&command) {
@@ -981,6 +1006,8 @@ enum CentralCommandPolicyRequirement {
     ThreadExternalApproval,
     WorkjetSessionDataRead,
     WorkjetSessionDataWrite,
+    GuestObserve,
+    GuestInput,
 }
 
 impl CentralCommandPolicyRequirement {
@@ -1087,6 +1114,10 @@ impl CentralCommandPolicyRequirement {
             return Some(Self::WorkjetSessionDataWrite);
         } else if command_type == "ctox.workjet.session.transfer.status" {
             return Some(Self::WorkjetSessionDataRead);
+        } else if command_type == "ctox.guest.observe" {
+            return Some(Self::GuestObserve);
+        } else if command_type == "ctox.guest.input" {
+            return Some(Self::GuestInput);
         } else if is_appsec_business_command(command_type) {
             let permission = if appsec_business_command_requires_data_write(command_type) {
                 BusinessOsPermission::DataWrite
@@ -1174,6 +1205,30 @@ impl CentralCommandPolicyRequirement {
                     scope,
                 ))
             }
+            Self::GuestObserve => {
+                super::guest_commands::require_authenticated_actor(session)?;
+                Ok(CommandPolicyRequirement::scoped(
+                    BusinessOsPermission::DataRead,
+                    BusinessOsScope {
+                        scope_type: BusinessOsScopeType::Record,
+                        scope_id: Some(super::guest_commands::guest_record_scope_id(command)),
+                        assigned_to_actor: false,
+                        owned_by_actor: false,
+                    },
+                ))
+            }
+            Self::GuestInput => {
+                super::guest_commands::require_authenticated_actor(session)?;
+                Ok(CommandPolicyRequirement::scoped(
+                    BusinessOsPermission::DataWrite,
+                    BusinessOsScope {
+                        scope_type: BusinessOsScopeType::Record,
+                        scope_id: Some(super::guest_commands::guest_record_scope_id(command)),
+                        assigned_to_actor: false,
+                        owned_by_actor: false,
+                    },
+                ))
+            }
             Self::ThreadExternalApproval => {
                 let approval_id = command
                     .payload
@@ -1219,6 +1274,7 @@ struct PreparedBusinessCommand {
     domain_effect_hash: Option<String>,
     owns_new_control_claim: bool,
     domain_effect_admission: Option<DomainEffectAdmission>,
+    guest_owner: super::guest_commands::GuestRuntimeInjection,
 }
 
 impl PreparedBusinessCommand {
@@ -1244,6 +1300,7 @@ impl PreparedBusinessCommand {
             mutation.client_context = command.client_context.clone();
             prepared.report_mutation = Some(mutation);
         }
+
         Ok(prepared)
     }
 }
@@ -1561,6 +1618,21 @@ fn dispatch_business_command(
                 owner_email.as_deref(),
                 can_manage_all_records,
             ) {
+                Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({
+                        "ok": false,
+                        "error": error.to_string(),
+                    }),
+                    error,
+                )),
+            }
+        }
+        "ctox.guest.observe" | "ctox.guest.input" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            super::guest_commands::require_authenticated_actor(session)?;
+            match super::guest_commands::execute_injected(&prepared.guest_owner, session, command) {
                 Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,
@@ -2079,38 +2151,41 @@ fn write_rxdb_control_command_state(
         attach_command_timing_to_result(&mut result);
         projection["result"] = result.clone();
     }
-    // Both writes belong to this command. Retain its writer until canonical
-    // completion instead of reopening and inspecting the entire RxDB schema.
-    let mut projection_writers = RxdbProjectionWriterCache::new(root);
-    let projection_started = command_timing_probe_requested(command).then(std::time::Instant::now);
-    projection_writers.upsert("business_commands", command_id, now, projection)?;
-    if let Some(started) = projection_started {
-        let sample = serde_json::json!({
-            "command_id": command_id,
-            "initial_rxdb_projection_ms": started.elapsed().as_secs_f64() * 1_000.0,
-        })
-        .to_string();
-        eprintln!("command_initial_projection_sample={sample}");
-    }
-    // Readers treat the canonical terminal transition as a completion barrier.
-    // Publish it only after the chat and all local/RxDB projections are durable.
-    if let Some(terminal_status) = canonical_terminal_status {
-        complete_and_project_business_control_command(
-            root,
-            command_id,
-            terminal_status,
-            &result,
-            (terminal_status == "failed")
-                .then(|| {
-                    result
-                        .get("error")
-                        .or_else(|| result.pointer("/outcome/stderr"))
-                        .and_then(Value::as_str)
-                })
-                .flatten(),
-            &mut projection_writers,
-        )?;
-    }
+    // Reuse only the bounded control writer; each write fences the actual DB
+    // identity/schema under its transaction. No authorization is cached.
+    with_control_projection_writers(root, |projection_writers| {
+        let projection_started =
+            command_timing_probe_requested(command).then(std::time::Instant::now);
+        projection_writers.upsert_control("business_commands", command_id, now, projection)?;
+        if let Some(started) = projection_started {
+            let sample = serde_json::json!({
+                "command_id": command_id,
+                "initial_rxdb_projection_ms": started.elapsed().as_secs_f64() * 1_000.0,
+            })
+            .to_string();
+            eprintln!("command_initial_projection_sample={sample}");
+        }
+        // Readers treat the canonical terminal transition as a completion barrier.
+        // Publish it only after the chat and all local/RxDB projections are durable.
+        if let Some(terminal_status) = canonical_terminal_status {
+            complete_and_project_business_control_command(
+                root,
+                command_id,
+                terminal_status,
+                &result,
+                (terminal_status == "failed")
+                    .then(|| {
+                        result
+                            .get("error")
+                            .or_else(|| result.pointer("/outcome/stderr"))
+                            .and_then(Value::as_str)
+                    })
+                    .flatten(),
+                projection_writers,
+            )?;
+        }
+        Ok(())
+    })?;
     Ok(serde_json::json!({
         "ok": true,
         "id": command_id,
@@ -2171,14 +2246,14 @@ pub(super) fn complete_and_project_business_control_command(
     let canonical = channels::business_command_projection(root, command_id)?;
     let canonical_read_ms =
         completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
-    persist_business_command_lifecycle_projection(root, &canonical)?;
+    let canonical = persist_business_command_lifecycle_projection(root, &canonical)?;
     let local_projected_ms =
         completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
     let updated_at_ms = canonical
         .get("updated_at_ms")
         .and_then(Value::as_i64)
         .unwrap_or_else(|| now_ms() as i64);
-    projection_writers.upsert("business_commands", command_id, updated_at_ms, canonical)?;
+    projection_writers.upsert_control("business_commands", command_id, updated_at_ms, canonical)?;
     if let Some((((started, core_ms), read_ms), local_ms)) = completion_started
         .zip(core_completed_ms)
         .zip(canonical_read_ms)
@@ -3968,6 +4043,57 @@ mod tests {
         let persisted: Value = serde_json::from_str(&persisted)?;
         assert_eq!(persisted["execution_phase"], "terminal");
         assert_eq!(persisted["terminal_status"], "completed");
+        Ok(())
+    }
+
+    #[test]
+    fn control_projection_cache_reuses_writer_across_completed_commands() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let rxdb = create_repair_rxdb_tables(root.path())?;
+        super::super::store::reset_rxdb_collection_writer_open_count(
+            root.path(),
+            "business_commands",
+        );
+        for index in 0..3 {
+            let command_id = format!("control_cache_command_{index}");
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some(command_id.clone()),
+                module: "ctox".to_string(),
+                command_type: "ctox.provider_subscription.status".to_string(),
+                record_id: None,
+                payload: serde_json::json!({}),
+                client_context: serde_json::json!({ "actor": { "id": "local-dev" } }),
+            };
+            channels::claim_business_control_command(
+                root.path(),
+                business_command_core_claim(&command_id, &command)?,
+            )?;
+            write_rxdb_control_command_outcome(
+                root.path(),
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                serde_json::json!({ "ok": true }),
+            )?;
+            let persisted: String = rxdb.query_row(
+                "SELECT data FROM ctox_business_os__business_commands__v1 WHERE id = ?1",
+                [&command_id],
+                |row| row.get(0),
+            )?;
+            let persisted: Value = serde_json::from_str(&persisted)?;
+            assert_eq!(persisted["execution_phase"], "terminal");
+            assert_eq!(persisted["terminal_status"], "completed");
+        }
+        #[cfg(unix)]
+        assert_eq!(
+            super::super::store::rxdb_collection_writer_open_count(
+                root.path(),
+                "business_commands"
+            ),
+            1
+        );
         Ok(())
     }
 

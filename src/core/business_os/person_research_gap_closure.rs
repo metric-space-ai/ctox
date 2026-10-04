@@ -59,6 +59,46 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
     let Some(object) = payload.as_object_mut() else {
         return payload;
     };
+    // A carrier key next to the envelope ("unknown field `item`", tenant
+    // 26.09.2026) wraps the payload members themselves: merge them up.
+    for carrier in ["item", "items", "entry", "entries"] {
+        if let Some(Value::Object(inner)) = object.get(carrier).cloned() {
+            object.remove(carrier);
+            for (key, value) in inner {
+                object.entry(key).or_insert(value);
+            }
+        }
+    }
+    // A bare field value at the top level ("unknown field `firma_telefon`",
+    // tenant 26.09.2026) is a value without its status entry. It belongs into
+    // `result.fields`; the field then counts as open instead of the whole
+    // writeback being rejected.
+    let bare_values: Vec<String> = object
+        .iter()
+        .filter(|(key, value)| {
+            !ENVELOPE.contains(&key.as_str())
+                && !value.is_object()
+                && ctox_web_stack::sources::FieldKey::from_str(key).is_some()
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    if !bare_values.is_empty() {
+        let mut result = match object.remove("result") {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        let mut fields = match result.remove("fields") {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        for key in bare_values {
+            if let Some(value) = object.remove(&key) {
+                fields.entry(key).or_insert(value);
+            }
+        }
+        result.insert("fields".to_string(), Value::Object(fields));
+        object.insert("result".to_string(), Value::Object(result));
+    }
     let stray: Vec<String> = object
         .keys()
         .filter(|key| !ENVELOPE.contains(&key.as_str()))
@@ -77,7 +117,12 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
         _ => Map::new(),
     };
     let mut hoisted_result = false;
-    for key in ["fields", "person_records", "evidence"] {
+    for key in [
+        "fields",
+        "person_records",
+        "evidence",
+        "person_field_status",
+    ] {
         if let Some(value) = object.remove(key) {
             result.entry(key.to_string()).or_insert(value);
             hoisted_result = true;
@@ -87,7 +132,15 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
     // expected one of `fields`, ...", 07.09.2026) belong into `result.fields`.
     let stray_result_keys: Vec<String> = result
         .keys()
-        .filter(|key| !["fields", "person_records", "evidence"].contains(&key.as_str()))
+        .filter(|key| {
+            ![
+                "fields",
+                "person_records",
+                "evidence",
+                "person_field_status",
+            ]
+            .contains(&key.as_str())
+        })
         .cloned()
         .collect();
     if !stray_result_keys.is_empty() {
@@ -153,9 +206,9 @@ where
                 if !status.is_object() {
                     continue;
                 }
-                let parsed = serde_json::from_value::<FieldStatus>(status)
-                    .map_err(|error| D::Error::custom(format!("field_status.{field}: {error}")))?;
-                entries.insert(field, parsed);
+                if let Some(parsed) = parse_field_status_entry(status) {
+                    entries.insert(field, parsed);
+                }
             }
         }
         Value::Array(list) => {
@@ -174,9 +227,9 @@ where
                 for key in ["field", "key", "name", "field_key"] {
                     status.remove(key);
                 }
-                let parsed = serde_json::from_value::<FieldStatus>(Value::Object(status))
-                    .map_err(|error| D::Error::custom(format!("field_status.{field}: {error}")))?;
-                entries.insert(field, parsed);
+                if let Some(parsed) = parse_field_status_entry(Value::Object(status)) {
+                    entries.insert(field, parsed);
+                }
             }
         }
         Value::Null => {}
@@ -189,9 +242,20 @@ where
     Ok(entries)
 }
 
+/// One malformed field entry must not cost the whole writeback. On the
+/// Carbosulf lead 23.09.2026 four of six writebacks were rejected, one of them
+/// carrying the only person record, because a single entry had no `status` or
+/// a source said `"requires_credential": "false"`. An entry that still cannot
+/// be read, or names no status, is dropped: the field then shows up as open
+/// and the rest of the payload lands.
+fn parse_field_status_entry(entry: Value) -> Option<FieldStatus> {
+    let parsed = serde_json::from_value::<FieldStatus>(entry).ok()?;
+    (!parsed.status.trim().is_empty()).then_some(parsed)
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct FieldStatus {
-    #[serde(deserialize_with = "lenient_string")]
+    #[serde(default, deserialize_with = "lenient_string")]
     status: String,
     #[serde(default)]
     value: Value,
@@ -203,6 +267,40 @@ struct FieldStatus {
     reason: String,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
+}
+
+/// Native provenance for one accepted writeback. A chat assignment without a
+/// durable queue task has an unknown attempt, not an invented zero counter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FieldWritebackRevision {
+    writeback_id: String,
+    command_id: String,
+    attempt: Option<i64>,
+    written_at_ms: i64,
+}
+
+fn stamp_writeback_field_revisions(
+    request: &mut ResearchWritebackRequest,
+    revision: &FieldWritebackRevision,
+) -> anyhow::Result<()> {
+    let revision = serde_json::to_value(revision)?;
+    for status in request.field_status.values_mut() {
+        // Store object merges preserve omitted keys: null expires an old review.
+        status.extra.insert("review".to_string(), Value::Null);
+        status
+            .extra
+            .insert("revision".to_string(), revision.clone());
+    }
+    if let Some(people) = request.result.person_field_status.as_object_mut() {
+        for fields in people.values_mut().filter_map(Value::as_object_mut) {
+            for status in fields.values_mut().filter_map(Value::as_object_mut) {
+                status.insert("review".to_string(), Value::Null);
+                status.insert("revision".to_string(), revision.clone());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Workers hand `sources` over as a list, but live runs also sent one source as
@@ -363,7 +461,7 @@ struct RawFieldSource {
     quote: String,
     #[serde(default)]
     person_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bool")]
     requires_credential: bool,
     #[serde(default, deserialize_with = "lenient_string")]
     task_id: String,
@@ -409,6 +507,23 @@ fn host_of_url(url: &str) -> String {
     host.to_ascii_lowercase()
 }
 
+/// Flags that arrive as strings (`"false"`, `"true"`, `"ja"`, `"1"`) or numbers
+/// are read by meaning; null and anything unrecognised count as false.
+fn lenient_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Bool(flag) => flag,
+        Value::Number(number) => number.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(text) => matches!(
+            text.trim().to_ascii_lowercase().as_str(),
+            "true" | "1" | "yes" | "ja" | "y" | "j"
+        ),
+        _ => false,
+    })
+}
+
 /// Strings that arrive as numbers or booleans are rendered; null becomes "".
 fn lenient_string<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
@@ -451,6 +566,11 @@ struct ResearchWritebackResult {
     person_records: Vec<Value>,
     #[serde(default, deserialize_with = "lenient_values")]
     evidence: Vec<Value>,
+    /// Status per person: `{person_key: {person_field: status}}`. The lead-level
+    /// `field_status` holds one entry per field, so the second person's
+    /// `person_email` overwrote the first (Codex review 27.09.2026).
+    #[serde(default, deserialize_with = "lenient_object")]
+    person_field_status: Value,
 }
 
 /// Live workers send `evidence`/`person_records` as `""` or as one object;
@@ -613,6 +733,7 @@ Phase-A-Kommando: {research_command_id}
 - Listen sind reine JSON-Listen: `"sources": [ {{...}}, {{...}} ]`. NIEMALS ein Traegerobjekt wie `{{"item": [...]}}`, weder bei `sources` und `attempts` noch bei `result.person_records` und `result.evidence`.
 - E-Mail-Pruefung (`person_email_validation`) uebernimmt der Daemon selbst: nach jedem Rueckschreiben prueft er jede gelieferte Kontaktadresse ueber experte.de und haengt das Ergebnis dem Kontakt an. Liefere die Adresse als `person_email` mit Beleg und dem `person_key` der Person. Setze `person_email_validation` NICHT auf `no_match`, nur weil du die Pruefung nicht selbst ausfuehren kannst.
 - Personenbezogene Ergebnisse und Belege tragen einen stabilen `person_key`.
+- Status je Person: Bei mehreren Personen gehoert der Status eines person_-Feldes in `result.person_field_status` als `{{"<person_key>": {{"person_email": {{"status": ..., "reason": ..., "sources": [...]}}}}}}`. Das Lead-weite `field_status` fasst pro Feld nur EINEN Eintrag; der Status einer zweiten Person ueberschrieb dort den der ersten. Ein fehlerhafter Eintrag einer Person verwirft nur diesen Eintrag.
 - Schreibe in `result.fields` nur strukturierte Feldobjekte, keine freien Texte.
 - `action_required` ist ausschließlich für Login/Freigabe zulässig und verweist auf einen Auth-Assist (source_id plus Task-/Command-ID) oder eine Quelle mit `requires_credential=true`.
 - Abschluss erfolgt AUSSCHLIESSLICH mit `ctox business-os commands dispatch` und dem typisierten Befehl `outbound.lead.research_writeback`.
@@ -918,11 +1039,423 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
     Value::Object(merged)
 }
 
+/// Stores person-bound field statuses durably in `lead.person_field_status`
+/// (`{person_key: {field: status}}`), merged per person like the lead-level
+/// map. Sources: `result.person_field_status` and lead-level `person_*`
+/// entries that name their `person_key`. Every entry is checked on its own; a
+/// malformed entry of one person is reported and dropped without touching the
+/// valid entries of the others. Returns the rejection lines.
+fn apply_person_field_status(
+    lead: &mut Value,
+    incoming: &Value,
+    lead_level: &BTreeMap<String, FieldStatus>,
+    requested_fields: &[String],
+    crm: &CrmBaseline,
+    terminal_check: Option<(&Path, &Value)>,
+) -> Vec<String> {
+    struct Gate<'a> {
+        requested: BTreeSet<String>,
+        crm: &'a CrmBaseline,
+        terminal_check: Option<(&'a Path, &'a Value)>,
+    }
+    fn take(
+        gate: &Gate<'_>,
+        per_person: &mut BTreeMap<String, Map<String, Value>>,
+        person_key: &str,
+        field: &str,
+        status: FieldStatus,
+        rejections: &mut Vec<String>,
+    ) {
+        let label = format!("person_field_status[{person_key}].{field}");
+        if !field.starts_with("person_") {
+            rejections.push(format!(
+                "{label}: nur person_*-Felder sind personengebunden"
+            ));
+            return;
+        }
+        if !gate.requested.contains(field) {
+            rejections.push(format!("{label}: nicht angefordert"));
+            return;
+        }
+        let status = match sanitize_person_status(field, person_key, status, gate.crm) {
+            Ok((status, notes)) => {
+                rejections.extend(notes.into_iter().map(|note| format!("{label}: {note}")));
+                status
+            }
+            Err(error) => {
+                rejections.push(format!("{label}: {error}"));
+                return;
+            }
+        };
+        let checked = match gate.terminal_check {
+            Some((workspace, contract)) => {
+                validate_terminal_field(field, &status, workspace, contract)
+            }
+            None => validate_person_status_basics(field, &status),
+        };
+        if let Err(error) = checked {
+            rejections.push(format!("{label}: {error}"));
+            return;
+        }
+        match serde_json::to_value(&status) {
+            Ok(mut value) => {
+                value["person_key"] = Value::String(person_key.to_string());
+                per_person
+                    .entry(person_key.to_string())
+                    .or_default()
+                    .insert(field.to_string(), value);
+            }
+            Err(error) => rejections.push(format!("{label}: {error}")),
+        }
+    }
+    let gate = Gate {
+        requested: requested_fields.iter().cloned().collect(),
+        crm,
+        terminal_check,
+    };
+    let mut rejections = Vec::new();
+    let mut per_person: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    if let Some(people) = incoming.as_object() {
+        for (person_key, fields) in people {
+            let person_key = person_key.trim();
+            let Some(fields) = fields.as_object().filter(|_| !person_key.is_empty()) else {
+                rejections.push(format!(
+                    "person_field_status[{person_key}]: erwartet ein Objekt je person_key"
+                ));
+                continue;
+            };
+            for (field, raw) in fields {
+                match parse_field_status_entry(raw.clone()) {
+                    Some(status) => take(
+                        &gate,
+                        &mut per_person,
+                        person_key,
+                        field,
+                        status,
+                        &mut rejections,
+                    ),
+                    None => rejections.push(format!(
+                        "person_field_status[{person_key}].{field}: ohne lesbaren status"
+                    )),
+                }
+            }
+        }
+    }
+    for (field, status) in lead_level {
+        let bound = status
+            .extra
+            .get("person_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty() && field.starts_with("person_"));
+        if let Some(person_key) = bound {
+            let already = per_person
+                .get(person_key)
+                .is_some_and(|fields| fields.contains_key(field));
+            if !already {
+                take(
+                    &gate,
+                    &mut per_person,
+                    person_key,
+                    field,
+                    status.clone(),
+                    &mut rejections,
+                );
+            }
+        }
+    }
+    if per_person.is_empty() {
+        return rejections;
+    }
+    if !lead
+        .get("person_field_status")
+        .is_some_and(Value::is_object)
+    {
+        lead["person_field_status"] = Value::Object(Map::new());
+    }
+    for (person_key, fields) in per_person {
+        let merged = merge_field_status(
+            lead["person_field_status"].get(&person_key),
+            Value::Object(fields),
+        );
+        lead["person_field_status"][person_key] = merged;
+    }
+    rejections
+}
+
+/// The evidence rules of the lead-level path, applied to one person's status
+/// (Codex review 27.09.2026: key A with a quote naming b@… and person_key B
+/// must not be stored as A's verified e-mail). Returns the cleaned status and
+/// notes about dropped sources/values, or an error when a `verified` entry
+/// cannot stand.
+fn sanitize_person_status(
+    field: &str,
+    person_key: &str,
+    mut status: FieldStatus,
+    crm: &CrmBaseline,
+) -> Result<(FieldStatus, Vec<String>), String> {
+    let mut notes = Vec::new();
+    if status.status != "verified" {
+        if research_value_is_populated(&status.value) {
+            notes.push("Wert auf nicht-verifiziertem Feld entfernt".to_string());
+            status.value = Value::Null;
+        }
+        return Ok((status, notes));
+    }
+    let value = match &status.value {
+        Value::String(text) => text.trim().to_string(),
+        Value::Number(number) => number.to_string(),
+        _ => String::new(),
+    };
+    if value.is_empty() {
+        return Err("verified ohne Wert".to_string());
+    }
+    // Every source belongs to this person: a missing or foreign person_key on
+    // a source is not evidence for this person.
+    if let Some(foreign) = status
+        .sources
+        .iter()
+        .find(|source| source.person_key.as_deref().map(str::trim) != Some(person_key))
+    {
+        return Err(format!(
+            "person_key in Beleg ({}) und Personenschluessel nicht identisch",
+            foreign.person_key.as_deref().unwrap_or("fehlt")
+        ));
+    }
+    let before = status.sources.len();
+    status.sources.retain(|source| {
+        crm.check(field, &source.url, &source.quote) != Some(false)
+            && quote_backs_value(field, &value, &source.quote)
+            && email_quote_backs(field, &value, &source.quote)
+    });
+    if status.sources.len() != before {
+        notes.push(format!(
+            "{} Beleg(e) verworfen (Zitat nennt den Wert oder die Adresse nicht, oder Sellify ohne Deckung)",
+            before - status.sources.len()
+        ));
+    }
+    if !status
+        .sources
+        .iter()
+        .any(|source| crm.check(field, &source.url, &source.quote) == Some(true))
+    {
+        if let Some(source) = crm.agreeing_source(field, &value, Some(person_key)) {
+            status.sources.push(source);
+        }
+    }
+    let hosts = status
+        .sources
+        .iter()
+        .filter_map(
+            |source| match crm.check(field, &source.url, &source.quote) {
+                Some(true) => Some(CRM_SOURCE_SCHEME.to_string()),
+                Some(false) => None,
+                None => url::Url::parse(source.url.trim()).ok().and_then(|url| {
+                    url.host_str()
+                        .map(|host| host.trim_start_matches("www.").to_ascii_lowercase())
+                }),
+            },
+        )
+        .collect::<BTreeSet<_>>();
+    if let Some(host) = hosts
+        .iter()
+        .find(|host| host_is_reserved_for_documentation(host))
+    {
+        return Err(format!(
+            "Beleg vom Dokumentations-Host `{host}` beweist nichts"
+        ));
+    }
+    let needed = super::person_research_command::required_independent_sources(field);
+    let independent = super::person_research_command::crm_aware_provider_count(
+        hosts.len(),
+        hosts.iter().map(String::as_str),
+    );
+    if independent == 0 {
+        return Err(if hosts.is_empty() {
+            "verified ohne gueltigen Beleg".to_string()
+        } else {
+            "Sellify allein belegt nichts: eine externe Quelle muss den Wert bestaetigen"
+                .to_string()
+        });
+    }
+    if independent < needed {
+        return Err(format!(
+            "verified verlangt {needed} unabhaengige Quell-Hosts, gefunden: {}",
+            hosts.len()
+        ));
+    }
+    Ok((status, notes))
+}
+
+/// Minimal check for a chat assignment (the gap task checks through
+/// `validate_terminal_field`): a terminal status, sources for `verified`, a
+/// reason for `no_match`.
+fn validate_person_status_basics(field: &str, status: &FieldStatus) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        TERMINAL_FIELD_STATUSES.contains(&status.status.as_str()),
+        "field `{field}` has non-terminal or unsupported status `{}`",
+        status.status
+    );
+    match status.status.as_str() {
+        "verified" => {
+            anyhow::ensure!(
+                !status.sources.is_empty(),
+                "verified field `{field}` needs a source"
+            );
+            for source in &status.sources {
+                validate_source(field, source)?;
+            }
+        }
+        "no_match" => anyhow::ensure!(
+            !status.reason.trim().is_empty(),
+            "no_match field `{field}` needs a reason"
+        ),
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Every key under which a contact can be addressed as a person, each once
+/// (a contact carrying the same id as `sellify_person_id` and `person_id` is
+/// still one owner of that alias).
+fn contact_person_keys(contact: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for member in ["person_key", "sellify_person_id", "person_id"] {
+        let raw = match contact.get(member) {
+            Some(Value::String(text)) => text.trim().to_string(),
+            Some(Value::Number(number)) => number.to_string(),
+            _ => continue,
+        };
+        if raw.is_empty() {
+            continue;
+        }
+        let mut candidates = Vec::new();
+        if raw.chars().all(|c| c.is_ascii_digit()) {
+            candidates.push(format!("sellify-person-{raw}"));
+        }
+        candidates.push(raw);
+        for key in candidates {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+    }
+    keys
+}
+
+/// Projects `lead.person_field_status` onto `contacts[].field_status`, the
+/// place the app reads a person's own status from. Runs after every
+/// writeback, so a contact rebuilt by a later writeback gets its status back.
+///
+/// A contact's own `person_key` claims its entry first. An alias (Sellify id)
+/// only applies when no contact carries that key as its own `person_key` and
+/// exactly one contact carries the alias; entries under both keys of the same
+/// person are merged, the canonical key winning per field. A status never
+/// follows a foreign or ambiguous key.
+fn project_person_field_status(lead: &mut Value) {
+    let Some(stored) = lead
+        .get("person_field_status")
+        .and_then(Value::as_object)
+        .cloned()
+    else {
+        return;
+    };
+    let Some(contacts) = lead.get_mut("contacts").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let canonical: Vec<Option<String>> = contacts
+        .iter()
+        .map(|contact| {
+            contact
+                .get("person_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string)
+        })
+        .collect();
+    let claimed: BTreeSet<String> = canonical.iter().flatten().cloned().collect();
+    let mut alias_owners: BTreeMap<String, usize> = BTreeMap::new();
+    for (index, contact) in contacts.iter().enumerate() {
+        for key in contact_person_keys(contact) {
+            if canonical[index].as_deref() != Some(key.as_str()) {
+                *alias_owners.entry(key).or_default() += 1;
+            }
+        }
+    }
+    for (index, contact) in contacts.iter_mut().enumerate() {
+        let mut combined = Map::new();
+        for key in contact_person_keys(contact) {
+            if canonical[index].as_deref() == Some(key.as_str())
+                || claimed.contains(&key)
+                || alias_owners.get(&key).copied().unwrap_or(0) != 1
+            {
+                continue;
+            }
+            if let Some(Value::Object(fields)) = stored.get(&key) {
+                combined.extend(fields.clone());
+            }
+        }
+        if let Some(Value::Object(fields)) =
+            canonical[index].as_ref().and_then(|key| stored.get(key))
+        {
+            combined.extend(fields.clone());
+        }
+        if combined.is_empty() {
+            continue;
+        }
+        let merged = merge_field_status(contact.get("field_status"), Value::Object(combined));
+        contact["field_status"] = merged;
+    }
+}
+
+/// Persons whose status for a requested person field is still open, judged
+/// on the contacts after the projection: every contact that is a person
+/// (carries a person key) counts, whether or not a status was ever delivered
+/// for it, and a person's canonical key and alias are one contact. `None`
+/// when the lead holds no keyed contacts (the lead-level entry then decides).
+/// An absent or empty status map is missing work, not an empty person scope.
+fn open_persons_for_field(lead: &Value, field: &str) -> Option<Vec<String>> {
+    if !field.starts_with("person_") {
+        return None;
+    }
+    let contacts = lead.get("contacts").and_then(Value::as_array)?;
+    let persons = contacts
+        .iter()
+        .filter_map(|contact| {
+            contact_person_keys(contact)
+                .into_iter()
+                .next()
+                .map(|key| (key, contact))
+        })
+        .collect::<Vec<_>>();
+    if persons.is_empty() {
+        return None;
+    }
+    Some(
+        persons
+            .into_iter()
+            .filter_map(|(key, contact)| {
+                let answered = contact
+                    .get("field_status")
+                    .and_then(|statuses| statuses.get(field))
+                    .is_some_and(research_field_is_answered);
+                (!answered).then_some(key)
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    )
+}
+
 /// A research field is answered when the lead carries a verified value for it
 /// or a documented `no_match`. `unsupported` and `action_required` mean the
 /// question is still open, whether the worker never delivered the field or the
 /// evidence gate rejected what it delivered.
 fn research_field_is_answered(status: &Value) -> bool {
+    if super::outbound_field_review::is_refuted_no_match(status) {
+        return false;
+    }
     matches!(
         status
             .get("status")
@@ -931,6 +1464,96 @@ fn research_field_is_answered(status: &Value) -> bool {
             .trim(),
         "verified" | "no_match"
     )
+}
+
+/// The asynchronous native e-mail pass may resolve the final outstanding
+/// field after the research writeback has already set `needs_review`. Only a
+/// writeback that recorded its complete requested scope and zero rejections
+/// may be promoted; older leads without that receipt remain for review.
+pub(super) fn complete_after_native_email_validation_with_native_reviews(
+    root: &Path,
+    record_id: &str,
+    lead: &mut Value,
+) -> anyhow::Result<bool> {
+    let mut view = super::outbound_field_review::native_review_view(root, record_id, lead)?;
+    if !complete_after_native_email_validation(&mut view) {
+        return Ok(false);
+    }
+    lead["research_status"] = view["research_status"].clone();
+    lead["payload"]["native_research_terminal_status"] =
+        view["payload"]["native_research_terminal_status"].clone();
+    Ok(true)
+}
+
+pub(super) fn complete_after_native_email_validation(lead: &mut Value) -> bool {
+    if lead.get("research_status").and_then(Value::as_str) != Some("needs_review")
+        || lead
+            .pointer("/payload/native_research_terminal_status")
+            .and_then(Value::as_str)
+            != Some("needs_review")
+        || lead
+            .pointer("/payload/native_research_rejections_count")
+            .and_then(Value::as_u64)
+            != Some(0)
+    {
+        return false;
+    }
+    let Some(requested) = lead
+        .pointer("/payload/native_research_requested_fields")
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    if requested.is_empty() || requested.iter().any(|field| field.as_str().is_none()) {
+        return false;
+    }
+    let requested = requested
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    if requested.contains(&"person_email_validation")
+        && !super::contact_email_validation::emails_needing_validation(lead, 1).is_empty()
+    {
+        return false;
+    }
+    let unanswered = requested
+        .iter()
+        .any(|field| match open_persons_for_field(lead, field) {
+            Some(open) => !open.is_empty(),
+            None => !lead["field_status"]
+                .get(*field)
+                .is_some_and(research_field_is_answered),
+        });
+    let needs_review = unanswered
+        || lead["person_field_status"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, fields)| fields.as_object().into_iter().flatten())
+            .any(|(field, status)| {
+                requested.contains(&field.as_str())
+                    && matches!(
+                        status.get("status").and_then(Value::as_str),
+                        Some("no_match" | "action_required")
+                    )
+            })
+        || lead["field_status"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(field, status)| {
+                requested.contains(&field.as_str())
+                    && matches!(
+                        status.get("status").and_then(Value::as_str),
+                        Some("no_match" | "action_required")
+                    )
+            });
+    if needs_review {
+        return false;
+    }
+    lead["research_status"] = Value::String("completed".to_string());
+    lead["payload"]["native_research_terminal_status"] = Value::String("completed".to_string());
+    true
 }
 
 fn is_filler_field_status(status: &Value) -> bool {
@@ -1012,8 +1635,29 @@ fn reject_evidence_free_writeback(request: &ResearchWritebackRequest) -> anyhow:
         .values()
         .any(|status| !status.sources.is_empty() || !status.attempts.is_empty())
         || !request.result.evidence.is_empty();
+    // A writeback that carries its findings per person counts the same way.
+    let person_statuses = request
+        .result
+        .person_field_status
+        .as_object()
+        .into_iter()
+        .flatten()
+        .flat_map(|(_, fields)| fields.as_object().into_iter().flatten())
+        .map(|(_, status)| status)
+        .collect::<Vec<&Value>>();
+    let any_person_verified = person_statuses.iter().any(|status| {
+        status.get("status").and_then(Value::as_str).map(str::trim) == Some("verified")
+    });
+    let any_person_evidence = person_statuses.iter().any(|status| {
+        ["sources", "attempts"].iter().any(|key| {
+            status
+                .get(*key)
+                .and_then(Value::as_array)
+                .is_some_and(|list| !list.is_empty())
+        })
+    });
     anyhow::ensure!(
-        any_verified || any_evidence,
+        any_verified || any_evidence || any_person_verified || any_person_evidence,
         "evidence-free research writeback rejected: no field is verified and no field carries a source or a documented attempt; a `no_match` needs the documented search and page reads that led to it"
     );
     Ok(())
@@ -1046,6 +1690,7 @@ pub(super) fn handle_research_writeback(
     validate_original_research_command(root, &request)?;
     let mut lead = store::load_rxdb_collection_record(root, LEAD_COLLECTION, &request.record_id)?
         .context("research writeback lead record does not exist")?;
+    let expected_master = lead.clone();
     let gap_task = if request.gap_task_id.trim().is_empty() {
         // Chat assignment: the harness worker researched the lead directly
         // (skill `outbound-lead-generation-research`). No queue task, no
@@ -1112,7 +1757,7 @@ pub(super) fn handle_research_writeback(
     // minutes), so undelivered fields are reported separately as `open_fields`.
     let research_payload = research_command_payload(root, &request.research_command_id)?;
     let crm = CrmBaseline::from_research_payload(&research_payload);
-    let rejections = sanitize_research_writeback(&mut request, &requested_fields, &crm)?
+    let mut rejections = sanitize_research_writeback(&mut request, &requested_fields, &crm)?
         .into_iter()
         .filter(|entry| !entry.ends_with(": nicht geliefert"))
         .collect::<Vec<String>>();
@@ -1138,6 +1783,30 @@ pub(super) fn handle_research_writeback(
                 .cloned()
         })
         .unwrap_or_else(|| Value::Array(Vec::new()));
+    // Provenance belongs to this native writeback, never to worker-supplied
+    // extra metadata. Stamp before moving result fields into the projection.
+    let now = super::person_research_command::now_ms();
+    let writeback_id = match command.id.as_deref() {
+        Some(id) => {
+            anyhow::ensure!(!id.trim().is_empty(), "writeback command id is empty");
+            id.to_string()
+        }
+        None => format!("native-writeback:{}", uuid::Uuid::new_v4()),
+    };
+    let native_attempt = match &gap_task {
+        Some((task, _)) => Some(task.attempt),
+        None => {
+            channels::load_queue_task_for_business_os_command(root, &request.research_command_id)?
+                .map(|task| task.attempt)
+        }
+    };
+    let revision = FieldWritebackRevision {
+        writeback_id,
+        command_id: request.research_command_id.clone(),
+        attempt: native_attempt,
+        written_at_ms: now,
+    };
+    stamp_writeback_field_revisions(&mut request, &revision)?;
     let mut projection_result = serde_json::json!({
         "fields": request.result.fields,
         "person_records": request.result.person_records,
@@ -1145,8 +1814,12 @@ pub(super) fn handle_research_writeback(
         "known_person_records": known_person_records,
     });
     add_field_status_evidence(&mut projection_result, &request.field_status)?;
-    let now = super::person_research_command::now_ms();
     let previous_keys = previous_research_keys(&lead);
+    let previous_person_statuses = lead
+        .get("person_field_status")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let previous_contacts = lead.get("contacts").cloned().unwrap_or(Value::Null);
     let patch = outbound_lead_generation_research_outcome_patch(&lead, &projection_result, now);
     merge_json_object_values(&mut lead, &patch);
     union_research_keys(&mut lead, &previous_keys);
@@ -1155,30 +1828,72 @@ pub(super) fn handle_research_writeback(
         serde_json::to_value(&request.field_status)?,
     );
     lead["field_status"] = merged_field_status;
+    let terminal_check = gap_task
+        .as_ref()
+        .map(|(task, contract)| {
+            task_workspace(root, task, contract).map(|workspace| (workspace, contract.clone()))
+        })
+        .transpose()?;
+    rejections.extend(apply_person_field_status(
+        &mut lead,
+        &request.result.person_field_status,
+        &request.field_status,
+        &requested_fields,
+        &crm,
+        terminal_check
+            .as_ref()
+            .map(|(workspace, contract)| (workspace.as_path(), contract)),
+    ));
+    project_person_field_status(&mut lead);
+    super::contact_email_validation::invalidate_changed_email_addresses(
+        &mut lead,
+        &previous_contacts,
+    );
+    // The worker can still report the old "daemon will check this" placeholder
+    // after experte.de has already returned. Restore only a native verdict for
+    // the same person and unchanged address before computing open fields.
+    super::contact_email_validation::restore_native_email_verdicts(
+        &mut lead,
+        &previous_person_statuses,
+    );
     // A field is answered only when the lead now carries a verified value or a
     // documented `no_match`. Everything else stays open — including a field the
     // evidence gate downgraded from `verified` because it carried a single
     // source host. Reporting those as answered told the worker there was
     // nothing left to do and ended the run with 3 of 32 fields stored while 10
     // verified answers had been dropped (thesen, Sasol Germany, 09.09.2026).
+    // Person fields with keyed contacts are judged per person: A answered
+    // and B still open is open; every person answered is answered even when
+    // the single lead-level entry was a filler (no pointless retry).
+    let reviewed_lead =
+        super::outbound_field_review::native_review_view(root, &request.record_id, &lead)?;
+    let lead_level_answered = |field: &str| {
+        reviewed_lead["field_status"]
+            .get(field)
+            .map(research_field_is_answered)
+            .unwrap_or(false)
+    };
+    let open_person_fields = requested_fields
+        .iter()
+        .flat_map(|field| {
+            open_persons_for_field(&reviewed_lead, field)
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |person_key| format!("{person_key}:{field}"))
+        })
+        .collect::<Vec<String>>();
+    let field_answered = |field: &str| match open_persons_for_field(&reviewed_lead, field) {
+        Some(open) => open.is_empty(),
+        None => lead_level_answered(field),
+    };
     let open_fields = requested_fields
         .iter()
-        .filter(|field| {
-            lead["field_status"]
-                .get(field.as_str())
-                .map(|status| !research_field_is_answered(status))
-                .unwrap_or(true)
-        })
+        .filter(|field| !field_answered(field))
         .cloned()
         .collect::<Vec<String>>();
     let accepted_fields = requested_fields
         .iter()
-        .filter(|field| {
-            lead["field_status"]
-                .get(field.as_str())
-                .map(research_field_is_answered)
-                .unwrap_or(false)
-        })
+        .filter(|field| field_answered(field))
         .cloned()
         .collect::<Vec<String>>();
     if gap_task.is_some() {
@@ -1193,8 +1908,21 @@ pub(super) fn handle_research_writeback(
     // Judged on the lead's merged state, not on this call's subset: a closing
     // writeback that only resolved two conflicts turned a lead with 21
     // `no_match` fields into `completed` (Sasol, 11.09.2026).
+    let person_needs_review = lead["person_field_status"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .flat_map(|(_, fields)| fields.as_object().into_iter().flatten())
+        .any(|(field, status)| {
+            requested_fields.contains(field)
+                && matches!(
+                    status.get("status").and_then(Value::as_str),
+                    Some("no_match" | "action_required")
+                )
+        });
     let needs_review = !rejections.is_empty()
         || !open_fields.is_empty()
+        || person_needs_review
         || lead["field_status"]
             .as_object()
             .into_iter()
@@ -1214,15 +1942,48 @@ pub(super) fn handle_research_writeback(
     lead["research_status"] = Value::String(terminal_lead_status.to_string());
     lead["payload"]["native_research_terminal_status"] =
         Value::String(terminal_lead_status.to_string());
+    lead["payload"]["native_research_requested_fields"] = serde_json::json!(requested_fields);
+    lead["payload"]["native_research_rejections_count"] = Value::from(rejections.len() as u64);
     lead["payload"]["research_finished_at_ms"] = Value::Number(now.into());
     lead["research_error"] = Value::Null;
     lead["research_updated_at_ms"] = Value::Number(now.into());
-    store::upsert_rxdb_collection_record(root, LEAD_COLLECTION, &request.record_id, now, lead)?;
+    let mut issued_keys = request
+        .field_status
+        .keys()
+        .map(|field| ("lead".to_string(), String::new(), field.clone()))
+        .collect::<BTreeSet<_>>();
+    for (person, fields) in request
+        .result
+        .person_field_status
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        for field in fields
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(field, _)| field)
+        {
+            issued_keys.insert(("person".into(), person.clone(), field.clone()));
+            issued_keys.insert(("contact".into(), person.clone(), field.clone()));
+        }
+    }
+    store::upsert_native_research_writeback_record(
+        root,
+        &request.record_id,
+        now,
+        lead,
+        &expected_master,
+        &serde_json::to_value(&revision)?,
+        &issued_keys,
+    )?;
     super::contact_email_validation::spawn_contact_email_validation(root, &request.record_id);
 
     Ok(serde_json::json!({
         "ok": true,
         "record_id": request.record_id,
+        "writeback_id": revision.writeback_id,
         "research_command_id": request.research_command_id,
         "gap_task_id": request.gap_task_id,
         "research_status": if needs_review { "needs_review" } else { "completed" },
@@ -1234,11 +1995,13 @@ pub(super) fn handle_research_writeback(
         "accepted_fields": accepted_fields,
         "delivered_fields": delivered_fields.iter().cloned().collect::<Vec<String>>(),
         "open_fields": open_fields,
+        // Welche Person bei welchem Personenfeld noch offen ist ("B:person_email").
+        "open_person_fields": open_person_fields,
         // Der Agent erfaehrt genau, was verworfen wurde, und kann im selben
         // Auftrag nachliefern statt die ganze Firma neu zu recherchieren.
         "rejections": rejections,
         "summary": format!(
-            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (zwei unabhaengige Quell-Hosts; bei Selbstauskuenften wie Telefon, E-Mail, Domain und allen person_-Feldern genuegt ein Beleg von der Unternehmensseite bzw. dem Profil) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende Zweitquelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
+            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (eine passende externe Quelle, deren Zitat den Wert nennt; Sellify allein belegt nichts; widersprechen sich Quellen, bleibt das Feld action_required) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende externe Quelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
             accepted_count,
             rejections.len(),
             open_count
@@ -1480,6 +2243,34 @@ fn sanitize_research_writeback(
         verworfene_felder.insert(field);
     }
 
+    // A value next to a non-verified status (action_required, no_match, …)
+    // must not be stored. It used to reject the whole writeback, so one
+    // disputed firma_name threw away every proven field of the lead
+    // (thesen 22.09.2026: three writebacks in a row failed on it). Drop the
+    // value, keep the status and its reason, accept the rest.
+    for (field, status) in request.field_status.iter_mut() {
+        if status.status == "verified" {
+            continue;
+        }
+        let mut dropped = false;
+        if research_value_is_populated(&status.value) {
+            status.value = Value::Null;
+            dropped = true;
+        }
+        if let Some(entry) = fields.get_mut(field).and_then(Value::as_object_mut) {
+            if entry.get("value").is_some_and(research_value_is_populated) {
+                entry.insert("value".to_string(), Value::Null);
+                dropped = true;
+            }
+        }
+        if dropped {
+            rejections.push(format!(
+                "result.fields.{field}: Wert ohne verifizierten Status verworfen ({})",
+                status.status
+            ));
+        }
+    }
+
     let vorher = request.result.person_records.len();
     request.result.person_records.retain(|person| {
         person
@@ -1528,6 +2319,30 @@ fn sanitize_research_writeback(
             }
             Some(field) if verworfene_felder.contains(field) => {
                 Some(format!("Feld {field} wurde bereits verworfen"))
+            }
+            Some(field)
+                if !quote_backs_value(
+                    field,
+                    &evidence
+                        .get("value")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            request.field_status.get(field).and_then(|status| {
+                                match &status.value {
+                                    Value::String(text) => Some(text.clone()),
+                                    Value::Number(number) => Some(number.to_string()),
+                                    _ => None,
+                                }
+                            })
+                        })
+                        .unwrap_or_default(),
+                    evidence.get("quote").and_then(Value::as_str).unwrap_or(""),
+                ) =>
+            {
+                Some(format!(
+                    "Zitat stuetzt den Wert von {field} nicht (nur Spanne oder andere Zahl)"
+                ))
             }
             Some(field) if parse_requested_fields(&[field.to_string()]).is_err() => {
                 Some(format!("Feld {field} ist kein bekanntes Recherchefeld"))
@@ -1595,7 +2410,21 @@ fn sanitize_research_writeback(
                 }
             },
         );
-        let dropped = before - status.sources.len();
+        // A figure needs a quote that states it. Carbosulf, 23.09.2026:
+        // mitarbeiter "30 Vollzeitmitarbeiter" carried Leadfeeder's quote
+        // "employee range 11-100" as its second source; a size class proves
+        // no exact headcount. Checked for every source, not only Sellify.
+        let vor_mengenpruefung = status.sources.len();
+        status
+            .sources
+            .retain(|source| quote_backs_value(field, &value, &source.quote));
+        let mengen_verworfen = vor_mengenpruefung - status.sources.len();
+        if mengen_verworfen > 0 {
+            rejections.push(format!(
+                "field_status.{field}: {mengen_verworfen} Beleg(e) verworfen (Zitat nennt den Wert nicht, nur eine Spanne oder eine andere Zahl)"
+            ));
+        }
+        let dropped = before - vor_mengenpruefung;
         if dropped > 0 {
             rejections.push(format!(
                 "field_status.{field}: {dropped} Sellify-Beleg(e) verworfen ({})",
@@ -1611,6 +2440,11 @@ fn sanitize_research_writeback(
         let Some(person) = person.as_object_mut() else {
             continue;
         };
+        let person_email = person
+            .get("person_email")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         for list in ["evidence", "sources"] {
             let Some(entries) = person.get_mut(list).and_then(Value::as_array_mut) else {
                 continue;
@@ -1629,10 +2463,11 @@ fn sanitize_research_writeback(
                     .unwrap_or("");
                 let quote = entry.get("quote").and_then(Value::as_str).unwrap_or("");
                 crm.check(field, url, quote) != Some(false)
+                    && email_quote_backs(field, &person_email, quote)
             });
             if entries.len() != before {
                 rejections.push(format!(
-                    "result.person_records: {} Sellify-Beleg(e) verworfen ({})",
+                    "result.person_records: {} Beleg(e) verworfen (Sellify ohne Deckung oder Zitat nennt die E-Mail-Adresse nicht; {})",
                     before - entries.len(),
                     crm.hint()
                 ));
@@ -1867,6 +2702,130 @@ fn sanitize_research_writeback(
     }
 
     Ok(rejections)
+}
+
+/// Fields whose value is a figure. Only for these is a quote's number checked.
+const QUANTITY_FIELDS: &[&str] = &["mitarbeiter", "umsatz"];
+
+/// Numbers in a text, German or English notation ("1.500", "50,87",
+/// "50.870.000", "1,500"), in order of appearance, each with its byte span.
+fn numbers_in(text: &str) -> Vec<(f64, std::ops::Range<usize>)> {
+    let pattern = regex::Regex::new(r"\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?")
+        .expect("number pattern");
+    pattern
+        .find_iter(text)
+        .filter_map(|found| {
+            let raw = found.as_str();
+            let grouped = regex::Regex::new(r"^\d{1,3}(?:([.,])\d{3})+(?:[.,]\d+)?$")
+                .expect("group pattern")
+                .captures(raw)
+                .and_then(|caps| caps.get(1).map(|sep| sep.as_str().to_string()));
+            let normalized = match grouped.as_deref() {
+                // Thousands separator: drop it; the other mark is the decimal.
+                Some(".") => raw.replace('.', "").replace(',', "."),
+                Some(",") => raw.replace(',', ""),
+                _ => raw.replace(',', "."),
+            };
+            normalized
+                .parse::<f64>()
+                .ok()
+                .map(|number| (number, found.range()))
+        })
+        .collect()
+}
+
+/// Whether a source quote states the field's figure. Non-quantity fields and
+/// values without a figure have nothing to compare; a numeric value needs a
+/// matching figure in the quote.
+/// Numbers that only bound a range ("11-100", "11 bis 100") do not count: a
+/// size class never proves an exact value.
+/// A quote backs a value only when it states it: figures by number
+/// ([`quantity_quote_backs`]), a personal e-mail address by the address
+/// itself ([`email_quote_backs`]), and names/titles as whole words.
+pub(super) fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
+    quantity_quote_backs(field, value, quote)
+        && email_quote_backs(field, value, quote)
+        && person_name_quote_backs(field, value, quote)
+}
+
+/// A claimed name or title needs to occur in the cited text, not merely in
+/// an invented value next to a valid source URL. Token boundaries reject
+/// "NotAda" and "Lovelacee"; Unicode case, whitespace, hyphens, apostrophes
+/// and title punctuation do not distinguish the same observed name.
+fn person_name_quote_backs(field: &str, value: &str, quote: &str) -> bool {
+    if !matches!(field, "person_vorname" | "person_nachname" | "person_titel") {
+        return true;
+    }
+    let words = |text: &str| {
+        text.to_lowercase()
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let wanted = words(value);
+    !wanted.is_empty()
+        && words(quote)
+            .windows(wanted.len())
+            .any(|observed| observed == wanted.as_slice())
+}
+
+/// BNT, 23.09.2026: `person_email` robert.suesse@bnt-chemicals.de was
+/// "verified" by a Kontakt-page quote naming info(at)bnt-chemicals.de and four
+/// other people, never Robert. An address pattern or a sibling's address is
+/// no evidence for this address. The quote must contain the exact address;
+/// the obfuscations first-party pages use ((at), [at], " at ", (dot)) count.
+fn email_quote_backs(field: &str, value: &str, quote: &str) -> bool {
+    if field != "person_email" {
+        return true;
+    }
+    let wanted = value.trim().to_ascii_lowercase();
+    if !wanted.contains('@') {
+        return true;
+    }
+    normalized_email_text(quote).contains(&wanted)
+}
+
+fn normalized_email_text(text: &str) -> String {
+    let lower = text.to_lowercase();
+    let at = regex::Regex::new(r"\s*(?:\(at\)|\[at\]|\{at\}|\(@\)|\[@\]|\sat\s)\s*")
+        .expect("at pattern");
+    let dot = regex::Regex::new(r"\s*(?:\(dot\)|\[dot\]|\{dot\}|\(punkt\)|\[punkt\]|\sdot\s)\s*")
+        .expect("dot pattern");
+    let lower = at.replace_all(&lower, "@");
+    dot.replace_all(&lower, ".").into_owned()
+}
+
+fn quantity_quote_backs(field: &str, value: &str, quote: &str) -> bool {
+    if !QUANTITY_FIELDS.contains(&field) {
+        return true;
+    }
+    let Some((wanted, _)) = numbers_in(value).into_iter().next() else {
+        return true;
+    };
+    let in_quote = numbers_in(quote);
+    if in_quote.is_empty() {
+        return false;
+    }
+    let range =
+        regex::Regex::new(r"(?i)\d[\d.,]*\s*(?:-|–|—|bis|to)\s*\d[\d.,]*").expect("range pattern");
+    let range_spans: Vec<std::ops::Range<usize>> =
+        range.find_iter(quote).map(|found| found.range()).collect();
+    let same = |a: f64, b: f64| (a - b).abs() <= 0.005 * a.abs().max(b.abs()).max(1e-9);
+    in_quote
+        .iter()
+        .filter(|(_, span)| {
+            !range_spans
+                .iter()
+                .any(|outer| outer.start <= span.start && span.end <= outer.end)
+        })
+        .any(|(number, _)| {
+            same(*number, wanted)
+                || same(*number, wanted * 1_000.0)
+                || same(*number, wanted * 1_000_000.0)
+                || same(*number * 1_000.0, wanted)
+                || same(*number * 1_000_000.0, wanted)
+        })
 }
 
 fn validate_field_status_keys(
@@ -2854,6 +3813,98 @@ pub(super) fn seed_rxdb_collection_table_for_tests(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_refuted_negative_reopens_only_its_current_writeback_and_person() {
+        let mut status = serde_json::json!({
+            "status": "no_match", "person_key": "person-a",
+            "revision": {"writeback_id": "wb-a", "command_id": "research-a"}
+        });
+        assert!(research_field_is_answered(&status));
+        status["review"] = serde_json::json!({
+            "schema": "ctox.outbound.field_review.v1", "verdict": "refuted",
+            "claim_status": "no_match", "command_id": "research-a",
+            "person_key": "person-a", "revision_ref": {"writeback_id": "wb-a"}
+        });
+        assert!(
+            research_field_is_answered(&status),
+            "partial metadata is not a typed native verdict"
+        );
+        status["review"]["review_attempt_id"] = serde_json::json!("review-a");
+        status["review"]["attempt"] = serde_json::json!(8);
+        status["review"]["reviewed_at_ms"] = serde_json::json!(2);
+        status["review"]["reason_code"] = serde_json::json!("contradicted_by_saved_source");
+        assert!(!research_field_is_answered(&status));
+        status["review"]["person_key"] = serde_json::json!("person-b");
+        assert!(research_field_is_answered(&status));
+        status["review"]["person_key"] = serde_json::json!("person-a");
+        status["revision"]["writeback_id"] = serde_json::json!("wb-new");
+        assert!(research_field_is_answered(&status));
+        status["review"] = Value::Null;
+        assert!(research_field_is_answered(&status));
+    }
+
+    #[test]
+    fn a_size_class_or_other_number_never_backs_an_exact_figure() {
+        // Carbosulf 23.09.2026: Leadfeeder's range cited for "30".
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "30 Vollzeitmitarbeiter (Stand 31.12.2024)",
+            "Leadfeeder employee range 11-100"
+        ));
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "30",
+            "D&B Hoovers: 31 Mitarbeiter"
+        ));
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "100",
+            "Größenklasse 11 bis 100"
+        ));
+        assert!(quantity_quote_backs(
+            "mitarbeiter",
+            "30",
+            "30 Mitarbeiter (Größenklasse 11-100)"
+        ));
+        assert!(quantity_quote_backs(
+            "mitarbeiter",
+            "1.500",
+            "rund 1500 Beschäftigte"
+        ));
+        assert!(quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatzerlöse 50.870.000 EUR"
+        ));
+        assert!(quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatz: 50,87 Mio. €"
+        ));
+        assert!(!quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatz 38,3 Mio. €"
+        ));
+        // A generic quote cannot verify a numeric value.
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "30",
+            "Mitarbeiterzahl laut Registerauszug"
+        ));
+        assert!(!quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatz laut Registerauszug"
+        ));
+        // Non-quantity fields do not require a numeric quote.
+        assert!(quantity_quote_backs(
+            "firma_plz",
+            "50735",
+            "Postleitzahl 12345"
+        ));
+    }
+
     fn create_gap_fixture(
         root: &Path,
         research_command_id: &str,
@@ -3326,6 +4377,7 @@ mod tests {
             result: ResearchWritebackResult {
                 fields: serde_json::json!({}),
                 person_records: Vec::new(),
+                person_field_status: Default::default(),
                 evidence: Vec::new(),
             },
         }
@@ -3412,6 +4464,646 @@ mod tests {
         assert_eq!(status.reason, "7");
     }
 
+    fn status(value: Value) -> FieldStatus {
+        parse_field_status_entry(value).expect("status")
+    }
+
+    fn no_crm() -> CrmBaseline {
+        CrmBaseline::from_research_payload(&serde_json::json!({}))
+    }
+
+    fn email_source(person_key: &str, address: &str) -> Value {
+        serde_json::json!({"source_id": "impressum", "url": "https://firma.test/team",
+            "quote": format!("Kontakt: {address}"), "person_key": person_key})
+    }
+
+    // Codex review 27.09.2026: contact B inherited A's no_match, B's own status
+    // had nowhere to live. Each person keeps its own status now.
+    #[test]
+    fn person_field_status_keeps_each_person_separate_and_projects_onto_contacts() {
+        let requested = vec!["person_email".to_string(), "person_geschlecht".to_string()];
+        let mut lead = serde_json::json!({
+            "contacts": [
+                {"id": "a", "person_key": "A", "name": "Person A"},
+                {"id": "b", "person_key": "B", "name": "Person B"},
+                {"id": "c", "sellify_person_id": 8235, "name": "Person C"}
+            ]
+        });
+        let incoming = serde_json::json!({
+            "A": {"person_email": {"status": "no_match", "reason": "Keine Adresse fuer A"}},
+            "B": {"person_email": {"status": "verified", "value": "b@firma.test",
+                  "sources": [email_source("B", "b@firma.test")]}},
+            "sellify-person-8235": {"person_geschlecht": {"status": "no_match", "reason": "keine Angabe"}}
+        });
+        let rejections = apply_person_field_status(
+            &mut lead,
+            &incoming,
+            &BTreeMap::new(),
+            &requested,
+            &no_crm(),
+            None,
+        );
+        assert!(rejections.is_empty(), "{rejections:?}");
+        project_person_field_status(&mut lead);
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "no_match"
+        );
+        assert_eq!(
+            lead["contacts"][1]["field_status"]["person_email"]["status"],
+            "verified"
+        );
+        assert_eq!(
+            lead["contacts"][1]["field_status"]["person_email"]["person_key"],
+            "B"
+        );
+        assert_eq!(
+            lead["contacts"][2]["field_status"]["person_geschlecht"]["status"],
+            "no_match"
+        );
+
+        // A later writeback rebuilds the contacts; the stored statuses return.
+        lead["contacts"] =
+            serde_json::json!([{"id": "a2", "person_key": "A"}, {"id": "b2", "person_key": "B"}]);
+        project_person_field_status(&mut lead);
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "no_match"
+        );
+        assert_eq!(
+            lead["contacts"][1]["field_status"]["person_email"]["status"],
+            "verified"
+        );
+    }
+
+    #[test]
+    fn person_names_and_titles_require_the_value_in_the_own_quote() {
+        let invalid = [
+            ("person_vorname", "Ada", "Grace Hopper"),
+            ("person_vorname", "Ada", "NotAda Lovelace"),
+            ("person_vorname", "Ada", "Adam Lovelace"),
+            ("person_nachname", "Lovelace", "Ada Lovelacee"),
+            ("person_titel", "Dr.", "Managing director"),
+        ];
+        for (field, value, quote) in invalid {
+            let requested = vec![field.to_string()];
+            let mut fields = serde_json::Map::new();
+            fields.insert(field.to_string(), serde_json::json!({
+                "status": "verified", "value": value,
+                "sources": [{"url": "https://firma.test/team", "quote": quote, "person_key": "A"}]
+            }));
+            let incoming = serde_json::json!({"A": fields});
+            let mut lead =
+                serde_json::json!({"contacts": [{"person_key": "A", "name": "Ada Lovelace"}]});
+            let rejections = apply_person_field_status(
+                &mut lead,
+                &incoming,
+                &BTreeMap::new(),
+                &requested,
+                &no_crm(),
+                None,
+            );
+            assert!(
+                rejections
+                    .iter()
+                    .any(|line| line.contains("verified ohne gueltigen Beleg")),
+                "{field} {value}: {rejections:?}"
+            );
+            assert!(lead.get("person_field_status").is_none(), "{field} {quote}");
+            assert_eq!(lead["contacts"][0]["name"], "Ada Lovelace");
+        }
+
+        // The existing single-external-source rule is sufficient. Title
+        // punctuation and equivalent compound-name punctuation remain usable.
+        for (field, value, quote) in [
+            ("person_vorname", "Ada", "Prof. Dr. Ada Lovelace"),
+            ("person_nachname", "Lovelace", "Prof. Dr. Ada Lovelace"),
+            ("person_titel", "Prof. Dr.", "Prof Dr Ada Lovelace"),
+            (
+                "person_vorname",
+                "Giselher Jürgen",
+                "Giselher Jürgen Bezler",
+            ),
+            ("person_vorname", "Jean-Luc", "Jean Luc Picard"),
+            ("person_nachname", "O'Neill", "Dr. Sara O’Neill"),
+        ] {
+            let requested = vec![field.to_string()];
+            let mut fields = serde_json::Map::new();
+            fields.insert(field.to_string(), serde_json::json!({
+                "status": "verified", "value": value,
+                "sources": [{"url": "https://firma.test/team", "quote": quote, "person_key": "A"}]
+            }));
+            let incoming = serde_json::json!({"A": fields});
+            let mut lead = serde_json::json!({"contacts": [{"person_key": "A"}]});
+            let rejections = apply_person_field_status(
+                &mut lead,
+                &incoming,
+                &BTreeMap::new(),
+                &requested,
+                &no_crm(),
+                None,
+            );
+            assert!(rejections.is_empty(), "{field} {value}: {rejections:?}");
+            project_person_field_status(&mut lead);
+            assert_eq!(
+                lead["person_field_status"]["A"][field]["status"],
+                "verified"
+            );
+            assert_eq!(lead["person_field_status"]["A"][field]["value"], value);
+            assert_eq!(
+                lead["person_field_status"]["A"][field]["sources"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                lead["contacts"][0]["field_status"][field]["status"],
+                "verified"
+            );
+        }
+    }
+
+    // Codex counterexample: key A, verified a@…, the source names b@… and B.
+    #[test]
+    fn a_person_status_needs_its_own_key_and_a_quote_naming_the_value() {
+        let requested = vec!["person_email".to_string()];
+        let mut lead = serde_json::json!({"contacts": [{"person_key": "A"}, {"person_key": "B"}]});
+        let incoming = serde_json::json!({
+            "A": {"person_email": {"status": "verified", "value": "a@firma.test",
+                  "sources": [email_source("B", "b@firma.test")]}}
+        });
+        let rejections = apply_person_field_status(
+            &mut lead,
+            &incoming,
+            &BTreeMap::new(),
+            &requested,
+            &no_crm(),
+            None,
+        );
+        assert!(
+            rejections
+                .iter()
+                .any(|line| line.contains("person_field_status[A].person_email")
+                    && line.contains("nicht identisch")),
+            "{rejections:?}"
+        );
+        assert!(lead.get("person_field_status").is_none());
+
+        // Right key, but the quote names another address: no evidence left.
+        let incoming = serde_json::json!({
+            "A": {"person_email": {"status": "verified", "value": "a@firma.test",
+                  "sources": [email_source("A", "b@firma.test")]}}
+        });
+        let rejections = apply_person_field_status(
+            &mut lead,
+            &incoming,
+            &BTreeMap::new(),
+            &requested,
+            &no_crm(),
+            None,
+        );
+        assert!(
+            rejections
+                .iter()
+                .any(|line| line.contains("verified ohne gueltigen Beleg")),
+            "{rejections:?}"
+        );
+        assert!(lead.get("person_field_status").is_none());
+
+        // Not requested, and a value next to no_match, follow the lead-level rules.
+        let incoming = serde_json::json!({
+            "A": {"person_telefon": {"status": "verified", "value": "+49 1", "sources": []},
+                  "person_email": {"status": "no_match", "value": "x@firma.test", "reason": "keine Quelle"}}
+        });
+        let rejections = apply_person_field_status(
+            &mut lead,
+            &incoming,
+            &BTreeMap::new(),
+            &requested,
+            &no_crm(),
+            None,
+        );
+        assert!(
+            rejections
+                .iter()
+                .any(|line| line.contains("person_telefon: nicht angefordert")),
+            "{rejections:?}"
+        );
+        assert!(
+            rejections
+                .iter()
+                .any(|line| line.contains("Wert auf nicht-verifiziertem Feld entfernt")),
+            "{rejections:?}"
+        );
+        assert_eq!(
+            lead["person_field_status"]["A"]["person_email"]["value"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn a_malformed_person_status_is_dropped_without_losing_the_others() {
+        let requested = vec!["person_email".to_string()];
+        let mut lead = serde_json::json!({"contacts": [{"person_key": "A"}, {"person_key": "B"}]});
+        let incoming = serde_json::json!({
+            "A": {"person_email": {"status": "no_match", "reason": "keine Quelle"}},
+            "B": {"person_email": {"status": "verified", "value": "b@firma.test", "sources": []},
+                  "firma_name": {"status": "verified", "value": "X"}}
+        });
+        let rejections = apply_person_field_status(
+            &mut lead,
+            &incoming,
+            &BTreeMap::new(),
+            &requested,
+            &no_crm(),
+            None,
+        );
+        assert_eq!(rejections.len(), 2, "{rejections:?}");
+        assert_eq!(
+            lead["person_field_status"]["A"]["person_email"]["status"],
+            "no_match"
+        );
+        assert!(lead["person_field_status"].get("B").is_none());
+    }
+
+    #[test]
+    fn a_lead_level_person_status_goes_only_to_its_bound_person() {
+        let requested = vec!["person_email".to_string(), "person_telefon".to_string()];
+        let mut lead = serde_json::json!({"contacts": [{"person_key": "A"}, {"person_key": "B"}]});
+        let mut lead_level = BTreeMap::new();
+        lead_level.insert("person_email".to_string(),
+            status(serde_json::json!({"status": "no_match", "reason": "No match for A", "person_key": "A"})));
+        lead_level.insert(
+            "person_telefon".to_string(),
+            status(serde_json::json!({"status": "no_match", "reason": "ungebunden"})),
+        );
+        let rejections = apply_person_field_status(
+            &mut lead,
+            &Value::Null,
+            &lead_level,
+            &requested,
+            &no_crm(),
+            None,
+        );
+        assert!(rejections.is_empty(), "{rejections:?}");
+        project_person_field_status(&mut lead);
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "no_match"
+        );
+        assert!(lead["contacts"][1].get("field_status").is_none());
+        assert!(lead["person_field_status"]["A"]
+            .get("person_telefon")
+            .is_none());
+    }
+
+    #[test]
+    fn projection_merges_canonical_and_alias_but_never_follows_a_foreign_or_ambiguous_key() {
+        // Same person under person_key and Sellify id: both entries, canonical wins.
+        let mut lead = serde_json::json!({
+            "contacts": [{"person_key": "p-anna", "sellify_person_id": 8235}],
+            "person_field_status": {
+                "p-anna": {"person_email": {"status": "verified", "value": "anna@firma.test"}},
+                "sellify-person-8235": {"person_geschlecht": {"status": "no_match", "reason": "x"},
+                                        "person_email": {"status": "no_match", "reason": "alt"}}
+            }
+        });
+        project_person_field_status(&mut lead);
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "verified"
+        );
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_geschlecht"]["status"],
+            "no_match"
+        );
+
+        // The key is another contact's own person_key: it stays there.
+        let mut lead = serde_json::json!({
+            "contacts": [{"person_key": "sellify-person-8235"}, {"person_key": "A", "sellify_person_id": 8235}],
+            "person_field_status": {"sellify-person-8235": {"person_email": {"status": "no_match", "reason": "x"}}}
+        });
+        project_person_field_status(&mut lead);
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "no_match"
+        );
+        assert!(lead["contacts"][1].get("field_status").is_none());
+
+        // Two contacts share the alias and nobody owns it: nobody gets it.
+        let mut lead = serde_json::json!({
+            "contacts": [{"person_key": "A", "sellify_person_id": 8235}, {"person_key": "B", "sellify_person_id": 8235}],
+            "person_field_status": {"sellify-person-8235": {"person_email": {"status": "no_match", "reason": "x"}}}
+        });
+        project_person_field_status(&mut lead);
+        assert!(lead["contacts"][0].get("field_status").is_none());
+        assert!(lead["contacts"][1].get("field_status").is_none());
+    }
+
+    #[test]
+    fn person_field_status_is_accepted_in_result_and_hoisted_from_the_top_level() {
+        let result: ResearchWritebackResult = serde_json::from_value(serde_json::json!({
+            "fields": {}, "person_records": [], "evidence": [],
+            "person_field_status": {"A": {"person_email": {"status": "no_match", "reason": "x"}}}
+        }))
+        .expect("result with person_field_status");
+        assert_eq!(
+            result.person_field_status["A"]["person_email"]["status"],
+            "no_match"
+        );
+        let hoisted = hoist_top_level_field_entries(serde_json::json!({
+            "record_id": "r", "field_status": {},
+            "person_field_status": {"A": {"person_email": {"status": "no_match", "reason": "x"}}}
+        }));
+        assert_eq!(
+            hoisted["result"]["person_field_status"]["A"]["person_email"]["reason"],
+            "x"
+        );
+    }
+
+    fn two_person_writeback(
+        record_id: &str,
+        research_command_id: &str,
+        person_status: Value,
+    ) -> BusinessCommand {
+        writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "field_status": {},
+                "result": {
+                    "fields": {},
+                    "person_records": [
+                        {"person_key": "A", "person_vorname": "Anna", "person_nachname": "Alt"},
+                        {"person_key": "B", "person_vorname": "Bernd", "person_nachname": "Beta"}
+                    ],
+                    "evidence": [],
+                    "person_field_status": person_status
+                }
+            }),
+        )
+    }
+
+    // Round trip through the real writeback: two persons (plus the Sellify
+    // person the fixture carries), statuses stored and shown per person,
+    // completion judged per person the assignment holds.
+    #[test]
+    fn a_two_person_writeback_is_stored_per_person_and_judged_per_person() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let (record_id, research_command_id) = ("lead-zwei-personen", "research-zwei-personen");
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &["person_email", "person_geschlecht"],
+        )?;
+        // Only A answered; B has no status object at all: B stays open.
+        let command = two_person_writeback(
+            record_id,
+            research_command_id,
+            serde_json::json!({
+                "A": {"person_email": {"status": "verified", "value": "anna.alt@firma.test", "sources": [email_source("A", "anna.alt@firma.test")]},
+                      "person_geschlecht": {"status": "no_match", "reason": "keine Angabe"}}
+            }),
+        );
+        let mut command = command;
+        let incoming = &mut command.payload["result"]["person_field_status"]["A"]["person_email"];
+        incoming["revision"] = serde_json::json!({"writeback_id": "forged-person"});
+        incoming["review"] = serde_json::json!({"verdict": "refuted"});
+        let result = handle_research_writeback(temp.path(), &command)?;
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(
+            result["open_fields"],
+            serde_json::json!(["person_email", "person_geschlecht"]),
+            "{result}"
+        );
+        let open: Vec<String> = serde_json::from_value(result["open_person_fields"].clone())?;
+        assert!(open.contains(&"B:person_email".to_string()), "{result}");
+        assert!(
+            open.contains(&"B:person_geschlecht".to_string()),
+            "{result}"
+        );
+        assert!(
+            !open.iter().any(|entry| entry.starts_with("A:")),
+            "{result}"
+        );
+        assert_eq!(result["research_status"], "needs_review");
+        let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead")?;
+        let contacts = lead["contacts"].as_array().cloned().unwrap_or_default();
+        let contact = |key: &str| {
+            contacts
+                .iter()
+                .find(|contact| contact_person_keys(contact).contains(&key.to_string()))
+                .cloned()
+                .unwrap_or(Value::Null)
+        };
+        assert_eq!(
+            contact("A")["field_status"]["person_email"]["status"],
+            "verified",
+            "{lead}"
+        );
+        let canonical = &lead["person_field_status"]["A"]["person_email"];
+        assert_eq!(
+            canonical["revision"]["writeback_id"],
+            result["writeback_id"]
+        );
+        assert_eq!(canonical["revision"]["command_id"], research_command_id);
+        assert!(
+            canonical["revision"]["attempt"].is_null(),
+            "unknown chat attempt stays unknown"
+        );
+        assert_eq!(canonical.get("review"), Some(&Value::Null));
+        assert_eq!(
+            contact("A")["field_status"]["person_email"]["revision"],
+            canonical["revision"]
+        );
+        assert!(
+            contact("B")["field_status"].get("person_email").is_none(),
+            "{lead}"
+        );
+
+        // Everybody the assignment holds answered: nothing open, no retry.
+        let others: Vec<String> = contacts
+            .iter()
+            .filter_map(|contact| contact_person_keys(contact).into_iter().next())
+            .filter(|key| key != "A" && key != "B")
+            .collect();
+        let mut statuses = serde_json::json!({
+            "B": {"person_email": {"status": "verified", "value": "bernd.beta@firma.test", "sources": [email_source("B", "bernd.beta@firma.test")]},
+                  "person_geschlecht": {"status": "no_match", "reason": "keine Angabe"}}
+        });
+        for key in &others {
+            statuses[key.as_str()] = serde_json::json!({
+                "person_email": {"status": "no_match", "reason": "keine Adresse veroeffentlicht"},
+                "person_geschlecht": {"status": "no_match", "reason": "keine Angabe"}
+            });
+        }
+        let result = handle_research_writeback(
+            temp.path(),
+            &two_person_writeback(record_id, research_command_id, statuses),
+        )?;
+        assert_eq!(result["open_fields"], serde_json::json!([]), "{result}");
+        assert_eq!(
+            result["open_person_fields"],
+            serde_json::json!([]),
+            "{result}"
+        );
+        assert_eq!(
+            result["accepted_fields"],
+            serde_json::json!(["person_email", "person_geschlecht"]),
+            "{result}"
+        );
+        let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead")?;
+        let emails: Vec<Value> = lead["contacts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|contact| contact["field_status"]["person_email"]["value"].clone())
+            .collect();
+        assert!(
+            emails.contains(&serde_json::json!("anna.alt@firma.test")),
+            "{lead}"
+        );
+        assert!(
+            emails.contains(&serde_json::json!("bernd.beta@firma.test")),
+            "{lead}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn person_scope_without_a_status_map_keeps_each_keyed_contact_open() {
+        for statuses in [None, Some(Value::Null), Some(serde_json::json!({}))] {
+            let mut lead = serde_json::json!({
+                "contacts": [{"person_key":"B"}, {"person_key":"A"}, {"person_key":"A"}],
+                "field_status":{"person_email":{"status":"no_match","reason":"unbound"}}
+            });
+            if let Some(statuses) = statuses {
+                lead["person_field_status"] = statuses;
+            }
+            assert_eq!(
+                open_persons_for_field(&lead, "person_email"),
+                Some(vec!["A".to_string(), "B".to_string()]),
+                "{lead}"
+            );
+            assert_eq!(open_persons_for_field(&lead, "firma_email"), None);
+        }
+    }
+
+    #[test]
+    fn person_scope_preserves_bound_answers_and_no_contact_negative_results() {
+        let mut lead = serde_json::json!({
+            "contacts":[{"person_key":"A","sellify_person_id":"8235"}, {"person_key":"B"}],
+            "person_field_status":{
+                "sellify-person-8235":{"person_email":{"status":"verified","value":"a@firma.test"}},
+                "B":{"person_email":{"status":"no_match","reason":"documented search"}}
+            }
+        });
+        project_person_field_status(&mut lead);
+        assert_eq!(open_persons_for_field(&lead, "person_email"), Some(vec![]));
+        for contacts in [
+            serde_json::json!([]),
+            serde_json::json!([{"name":"unkeyed legacy contact"}]),
+        ] {
+            lead["contacts"] = contacts;
+            lead["field_status"] = serde_json::json!({"person_email":{"status":"no_match"}});
+            assert_eq!(open_persons_for_field(&lead, "person_email"), None);
+            assert!(research_field_is_answered(
+                &lead["field_status"]["person_email"]
+            ));
+        }
+    }
+
+    #[test]
+    fn person_scope_blocks_native_email_completion_without_each_person_answer() {
+        let mut lead = serde_json::json!({
+            "research_status":"needs_review",
+            "contacts":[{"person_key":"A"}, {"person_key":"B"}],
+            "field_status":{"person_email":{"status":"verified","value":"unbound@firma.test"}},
+            "payload":{
+                "native_research_terminal_status":"needs_review",
+                "native_research_requested_fields":["person_email"],
+                "native_research_rejections_count":0
+            }
+        });
+        assert!(!complete_after_native_email_validation(&mut lead));
+        assert_eq!(lead["research_status"], "needs_review");
+    }
+
+    #[test]
+    fn person_scope_writeback_does_not_close_keyed_contacts_with_unbound_no_match(
+    ) -> anyhow::Result<()> {
+        for statuses in [None, Some(serde_json::json!({}))] {
+            let temp = tempfile::tempdir()?;
+            let (record_id, research_command_id) =
+                ("lead-unbound-person", "research-unbound-person");
+            create_chat_fixture_with_sellify(
+                temp.path(),
+                research_command_id,
+                record_id,
+                &["person_email"],
+            )?;
+            let mut command = two_person_writeback(record_id, research_command_id, Value::Null);
+            command.payload["field_status"] = serde_json::json!({
+                "person_email":{
+                    "status":"no_match", "reason":"No address was found for the lead",
+                    "attempts":[{"source_id":"official","url":"https://firma.test/team"}]
+                }
+            });
+            if let Some(statuses) = statuses {
+                command.payload["result"]["person_field_status"] = statuses;
+            } else {
+                command.payload["result"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("person_field_status");
+            }
+            let result = handle_research_writeback(temp.path(), &command)?;
+            assert_eq!(result["ok"], true, "{result}");
+            assert_eq!(result["accepted_fields"], serde_json::json!([]), "{result}");
+            assert_eq!(
+                result["open_fields"],
+                serde_json::json!(["person_email"]),
+                "{result}"
+            );
+            let open: Vec<String> = serde_json::from_value(result["open_person_fields"].clone())?;
+            for key in ["A:person_email", "B:person_email"] {
+                assert!(open.iter().any(|entry| entry == key), "{result}");
+            }
+            assert_eq!(result["research_status"], "needs_review", "{result}");
+            let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("persisted lead")?;
+            assert_eq!(lead["research_status"], "needs_review", "{lead}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn one_contact_with_the_same_id_twice_still_owns_its_alias() {
+        let mut lead = serde_json::json!({
+            "contacts": [{"person_key": "p-anna", "sellify_person_id": "8235", "person_id": 8235}],
+            "person_field_status": {"sellify-person-8235": {"person_email": {"status": "no_match", "reason": "x"}}}
+        });
+        assert_eq!(
+            contact_person_keys(&lead["contacts"][0]),
+            vec![
+                "p-anna".to_string(),
+                "sellify-person-8235".to_string(),
+                "8235".to_string()
+            ]
+        );
+        project_person_field_status(&mut lead);
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "no_match"
+        );
+    }
+
     #[test]
     fn follow_up_writeback_keeps_previous_field_status_and_unions_keys() {
         let mut lead = serde_json::json!({
@@ -3491,7 +5183,7 @@ mod tests {
     }
 
     #[test]
-    fn a_field_rejected_for_a_single_source_stays_open() -> anyhow::Result<()> {
+    fn a_field_with_one_external_source_is_accepted() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let record_id = "lead-einzelquelle";
         let research_command_id = "research-einzelquelle";
@@ -3521,30 +5213,15 @@ mod tests {
         );
         let result = handle_research_writeback(temp.path(), &command)?;
         assert_eq!(result["ok"], true);
-        let rejections = result["rejections"]
-            .as_array()
-            .context("rejections fehlen")?;
-        assert!(
-            rejections.iter().any(|entry| entry
-                .as_str()
-                .is_some_and(|text| text.contains("unabhaengige Quell-Hosts"))),
-            "the single-host claim must be rejected: {rejections:?}"
-        );
+        // Owner rule 23.09.2026: one external provider is enough. Two pages of
+        // northdata.de are still ONE source, and that one source now carries
+        // the field.
         assert_eq!(
             result["accepted_fields"],
-            serde_json::json!([]),
-            "a rejected field was never stored, so it is not accepted"
-        );
-        assert_eq!(
-            result["open_fields"],
             serde_json::json!(["umsatz"]),
-            "a rejected field stays open so the worker fetches a second source"
+            "one external source is enough: {result}"
         );
-        assert!(result["summary"]
-            .as_str()
-            .is_some_and(|text| text.contains("0 Feld(er) gespeichert")
-                && text.contains("1 Feld(er) noch offen")));
-        assert_eq!(result["research_status"], "needs_review");
+        assert_eq!(result["open_fields"], serde_json::json!([]), "{result}");
         Ok(())
     }
 
@@ -3689,6 +5366,26 @@ mod tests {
     }
 
     #[test]
+    fn bare_field_values_and_item_carriers_do_not_reject_the_writeback() {
+        // tenant 26.09.2026: "unknown field `firma_telefon`" and "unknown field
+        // `item`" rejected whole research writebacks.
+        let request: ResearchWritebackRequest =
+            serde_json::from_value(hoist_top_level_field_entries(serde_json::json!({
+                "record_id": "lead-x",
+                "module": "outbound-lead-generation",
+                "research_command_id": "research-x",
+                "field_status": {"firma_name": {"status": "verified", "value": "Beispiel GmbH"}},
+                "firma_telefon": "+49 30 123456",
+                "item": {"firma_domain": {"status": "verified", "value": "beispiel.de"}}
+            })))
+            .expect("bare values and an item carrier are normalized, not rejected");
+        assert_eq!(request.result.fields["firma_telefon"], "+49 30 123456");
+        assert!(!request.field_status.contains_key("firma_telefon"));
+        assert_eq!(request.field_status["firma_domain"].status, "verified");
+        assert_eq!(request.field_status["firma_name"].status, "verified");
+    }
+
+    #[test]
     fn a_writeback_without_any_evidence_is_rejected() {
         let error = reject_evidence_free_writeback(&evidence_free_request(0, false))
             .expect_err("32x no_match without a single source must not close a lead");
@@ -3772,7 +5469,7 @@ mod tests {
     /// Gemessen am 03.09.2026: 100 von 265 "verified" Feldern hatten weniger
     /// als zwei verschiedene Quell-Hosts. Auf dem Chatweg pruefte das niemand.
     #[test]
-    fn verified_mit_nur_einem_quell_host_wird_nicht_als_belegt_uebernommen() -> anyhow::Result<()> {
+    fn verified_mit_einem_externen_quell_host_wird_uebernommen() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let record_id = "lead-eine-quelle";
         let research_command_id = "research-eine-quelle";
@@ -3808,19 +5505,10 @@ mod tests {
         let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
             .context("lead missing after writeback")?;
         assert_eq!(
-            lead["field_status"]["umsatz"]["status"], "unsupported",
-            "ein einziger Quell-Host darf nicht als belegt durchgehen"
+            lead["field_status"]["umsatz"]["status"], "verified",
+            "ein externer Quell-Host genuegt seit 23.09.2026"
         );
-        assert_eq!(result["research_status"], "needs_review");
-        let ablehnungen = result["rejections"]
-            .as_array()
-            .context("rejections fehlen")?;
-        assert!(
-            ablehnungen.iter().any(|entry| entry
-                .as_str()
-                .is_some_and(|text| text.contains("unabhaengige Quell-Hosts"))),
-            "der Grund muss benannt sein: {ablehnungen:?}"
-        );
+        assert_eq!(result["research_status"], "completed");
         Ok(())
     }
 
@@ -3874,6 +5562,182 @@ mod tests {
                 "payload": {"last_research_command_id": research_command_id}
             }),
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_writeback_ignores_unissued_old_refutations_when_computing_open_fields(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-unissued-review";
+        let research_command_id = "research-unissued-review";
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &["firma_telefon", "firma_prokura"],
+        )?;
+        let unissued = serde_json::json!({
+            "status":"no_match", "value":null, "reason":"Documented prior negative",
+            "revision":{"writeback_id":"shaped-old-writeback", "command_id":research_command_id,
+                "attempt":7, "written_at_ms":1},
+            "review":{"schema":"ctox.outbound.field_review.v1", "verdict":"refuted",
+                "claim_status":"no_match", "command_id":research_command_id,
+                "review_attempt_id":"shaped-old-review", "attempt":8, "reviewed_at_ms":2,
+                "revision_ref":{"writeback_id":"shaped-old-writeback"},
+                "reason_code":"contradicted_by_saved_source"}
+        });
+        assert!(
+            super::super::outbound_field_review::is_refuted_no_match(&unissued),
+            "the old pure predicate would reopen this shape-valid metadata"
+        );
+        let mut prior =
+            store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("fixture lead")?;
+        prior["field_status"] = serde_json::json!({"firma_prokura":unissued});
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 1, prior)?;
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id":record_id, "module":"outbound-lead-generation",
+                "research_command_id":research_command_id, "gap_task_id":"",
+                "field_status":{"firma_telefon":{"status":"verified", "value":"+4940636841000",
+                    "sources":[{"source_id":"sasol.com", "url":"https://www.sasol.com/contact",
+                        "quote":"+4940636841000"}]}},
+                "result":{"fields":{"firma_telefon":{"value":"+4940636841000"}},
+                    "person_records":[], "evidence":[]}
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &command)?;
+        assert_eq!(result["open_fields"], serde_json::json!([]), "{result}");
+        assert!(result["accepted_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("firma_prokura")));
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("persisted native writeback")?;
+        assert_eq!(
+            saved["field_status"]["firma_prokura"], unissued,
+            "no historical record correction or invented receipt"
+        );
+        let conn = rusqlite::Connection::open(store::rxdb_store_path(temp.path()))?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM outbound_native_field_status_witnesses WHERE record_id=?1 AND field='firma_prokura'",
+            [record_id], |row| row.get(0))?;
+        assert_eq!(
+            count, 0,
+            "untouched shaped metadata never acquires native issuance"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_writeback_without_an_id_has_distinct_receipts_and_no_invented_attempt(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-native-receipt";
+        let research_command_id = "research-native-receipt";
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &["firma_telefon"],
+        )?;
+        assert!(channels::load_queue_task_for_business_os_command(
+            temp.path(),
+            research_command_id
+        )?
+        .is_none());
+        let mut prior =
+            store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("fixture lead")?;
+        prior["field_status"] = serde_json::json!({
+            "firma_telefon": {
+                "status": "no_match",
+                "revision": {"writeback_id": "old-receipt"},
+                "review": {"verdict": "refuted"}
+            },
+            "firma_name": {"status": "verified", "value": "Untouched AG"}
+        });
+        let untouched = prior["field_status"]["firma_name"].clone();
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 1, prior)?;
+        let mut command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": "",
+                "field_status": {
+                    "firma_telefon": {
+                        "status": "verified", "value": "+4940636841000",
+                        "sources": [{
+                            "source_id": "sasol.com",
+                            "url": "https://www.sasol.com/contact",
+                            "quote": "+4940636841000"
+                        }],
+                        "revision": {"writeback_id": "caller-forged", "attempt": 999},
+                        "review": {"verdict": "refuted"}
+                    }
+                },
+                "result": {
+                    "fields": {"firma_telefon": {"value": "+4940636841000"}},
+                    "person_records": [], "evidence": []
+                }
+            }),
+        );
+        command.id = None;
+        let mut previous_id = None;
+        for _ in 0..2 {
+            let result = handle_research_writeback(temp.path(), &command)?;
+            let id = result["writeback_id"]
+                .as_str()
+                .context("native receipt is missing")?;
+            let receipt_uuid = id
+                .strip_prefix("native-writeback:")
+                .context("native receipt namespace is missing")?;
+            assert_eq!(uuid::Uuid::parse_str(receipt_uuid)?.get_version_num(), 4);
+            assert_ne!(previous_id.as_deref(), Some(id));
+            let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("persisted native writeback")?;
+            let status = &lead["field_status"]["firma_telefon"];
+            assert_eq!(status["status"], "verified", "{result}");
+            assert_eq!(status["revision"]["writeback_id"], id);
+            assert_eq!(status["revision"]["command_id"], research_command_id);
+            assert_eq!(status["revision"].get("attempt"), Some(&Value::Null));
+            assert!(status["revision"]["written_at_ms"].as_i64().unwrap() > 0);
+            assert_eq!(status.get("review"), Some(&Value::Null));
+            assert_eq!(lead["field_status"]["firma_name"], untouched);
+            let conn = rusqlite::Connection::open(store::rxdb_store_path(temp.path()))?;
+            let raw: String = conn.query_row(
+                "SELECT status_json FROM outbound_native_field_status_witnesses WHERE record_id=?1 AND scope='lead' AND person_key='' AND field='firma_telefon'",
+                [record_id], |row| row.get(0))?;
+            assert_eq!(
+                serde_json::from_str::<Value>(&raw)?,
+                *status,
+                "the actual native handler must issue the exact stored status atomically"
+            );
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM outbound_native_field_status_witnesses WHERE record_id=?1",
+                [record_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(
+                count, 1,
+                "untouched legacy fields get no synthetic issuance"
+            );
+            previous_id = Some(id.to_string());
+        }
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead before rejected empty identifier")?;
+        command.id = Some(" ".to_string());
+        let error = handle_research_writeback(temp.path(), &command).unwrap_err();
+        assert!(error.to_string().contains("writeback command id is empty"));
+        assert_eq!(
+            store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?,
+            Some(saved),
+            "rejecting an empty supplied identifier must not publish another revision"
+        );
         Ok(())
     }
 
@@ -3960,8 +5824,10 @@ mod tests {
             lead["field_status"]["umsatz"]["status"], "unsupported",
             "{result}"
         );
+        // One external source (northdata) is enough since 23.09.2026; the
+        // forged Sellify citation next to it is still dropped.
         assert_eq!(
-            lead["field_status"]["wz_code"]["status"], "unsupported",
+            lead["field_status"]["wz_code"]["status"], "verified",
             "{result}"
         );
         assert_eq!(
@@ -3972,8 +5838,11 @@ mod tests {
             lead["field_status"]["person_vorname"]["status"], "verified",
             "{result}"
         );
+        // Sellify (192) is the old CRM value, not evidence; the external
+        // source (205) carries the field, the contradicting CRM citation is
+        // dropped and named in the rejections.
         assert_eq!(
-            lead["field_status"]["mitarbeiter"]["status"], "unsupported",
+            lead["field_status"]["mitarbeiter"]["status"], "verified",
             "{result}"
         );
         assert!(
@@ -4091,7 +5960,7 @@ mod tests {
         let status = |field: &str| lead["field_status"][field]["status"].clone();
         assert_eq!(status("firma_plz"), "verified", "{result}");
         assert_eq!(status("umsatz"), "verified", "{result}");
-        assert_eq!(status("wz_code"), "unsupported", "{result}");
+        assert_eq!(status("wz_code"), "verified", "{result}");
         assert_eq!(status("firma_telefon"), "unsupported", "{result}");
         assert_eq!(status("person_email"), "verified", "{result}");
         let sellify_urls = |field: &str| {
@@ -4268,13 +6137,38 @@ mod tests {
             }),
         );
 
-        handle_research_writeback(temp.path(), &command)?;
+        let mut prior =
+            store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("prior lead")?;
+        prior["field_status"] = serde_json::json!({
+            "firma_domain": {"status": "no_match", "revision": {"writeback_id": "previous"},
+                "review": {"verdict": "refuted", "revision_ref": {"writeback_id": "previous"}}},
+            "firma_name": {"status": "verified", "value": "Unchanged AG", "revision": {"writeback_id": "untouched"}}
+        });
+        let untouched = prior["field_status"]["firma_name"].clone();
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 1, prior)?;
+        let mut command = command;
+        command.payload["field_status"]["firma_domain"]["revision"] =
+            serde_json::json!({"writeback_id": "caller-forged", "attempt": 999});
+        command.payload["field_status"]["firma_domain"]["review"] = serde_json::json!({"verdict": "refuted", "revision_ref": {"writeback_id": "caller-forged"}});
+        let result = handle_research_writeback(temp.path(), &command)?;
         let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
             .context("lead missing after writeback")?;
+        let status = &lead["field_status"]["firma_domain"];
+        assert_eq!(result["writeback_id"], command.id.as_deref().unwrap());
+        assert_eq!(status["revision"]["writeback_id"], result["writeback_id"]);
+        assert_eq!(status["revision"]["command_id"], research_command_id);
+        assert_eq!(status["revision"]["attempt"], task.attempt);
+        assert!(status["revision"]["written_at_ms"].as_i64().unwrap() > 0);
+        assert!(
+            status.get("review") == Some(&Value::Null),
+            "a new native writeback expires reviews instead of accepting worker metadata: {lead}"
+        );
         assert_eq!(lead["research_status"], "needs_review");
         assert!(lead["research_phase"].is_null());
         assert_eq!(lead["gap_task_id"], task.message_key);
         assert_eq!(lead["field_status"]["firma_domain"]["status"], "no_match");
+        assert_eq!(lead["field_status"]["firma_name"], untouched);
         Ok(())
     }
 
@@ -4471,7 +6365,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_sources_must_use_different_hosts() {
+    fn one_verified_host_is_enough() {
         let status = |second_url: &str| FieldStatus {
             status: "verified".to_string(),
             value: serde_json::json!("example.test"),
@@ -4500,13 +6394,14 @@ mod tests {
             extra: BTreeMap::new(),
         };
         let temp = tempfile::tempdir().unwrap();
+        // One host is enough since 23.09.2026.
         assert!(validate_terminal_field(
             "umsatz",
             &status("https://example.test/b"),
             temp.path(),
             &serde_json::json!({})
         )
-        .is_err());
+        .is_ok());
         assert!(validate_terminal_field(
             "umsatz",
             &status("https://other.test/b"),
@@ -4561,6 +6456,56 @@ mod tests {
     }
 
     #[test]
+    fn a_numeric_writeback_needs_a_quote_containing_its_number() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-unbelegte-zahl";
+        let research_command_id = "research-unbelegte-zahl";
+        let (_, task) =
+            create_gap_fixture(temp.path(), research_command_id, record_id, "mitarbeiter")?;
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": task.message_key,
+                "field_status": {
+                    "mitarbeiter": {
+                        "status": "verified",
+                        "value": "30",
+                        "sources": [{
+                            "source_id": "company",
+                            "url": "https://company.test/about",
+                            "quote": "Unser Unternehmen beschäftigt viele Fachkräfte."
+                        }],
+                        "attempts": []
+                    }
+                },
+                "result": {
+                    "fields": {"mitarbeiter": {"value": "30"}},
+                    "person_records": [],
+                    "evidence": [{
+                        "field_key": "mitarbeiter",
+                        "value": "30",
+                        "source_id": "company",
+                        "url": "https://company.test/about",
+                        "quote": "Unser Unternehmen beschäftigt viele Fachkräfte."
+                    }]
+                }
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &command)?;
+        let rejections = result["rejections"].as_array().context("rejections")?;
+        assert!(rejections.iter().any(|entry| entry
+            .as_str()
+            .is_some_and(|text| text.contains("Zitat") && text.contains("mitarbeiter"))));
+        assert_eq!(result["accepted_fields"], serde_json::json!([]));
+        assert_eq!(result["research_status"], "needs_review");
+        assert_ne!(result["field_status"]["mitarbeiter"]["status"], "verified");
+        Ok(())
+    }
+
+    #[test]
     fn a_no_match_reason_of_test_does_not_overwrite_a_real_result() {
         let earlier = serde_json::json!({
             "firma_domain": {"status": "verified", "value": "aeroxon.de", "sources": [{"source_id": "a"}]}
@@ -4571,6 +6516,70 @@ mod tests {
         let merged = merge_field_status(Some(&earlier), probe);
         assert_eq!(merged["firma_domain"]["status"], "verified");
         assert_eq!(merged["firma_domain"]["value"], "aeroxon.de");
+    }
+
+    #[test]
+    fn an_email_quote_must_name_the_exact_address() {
+        // BNT, 23.09.2026: Robert's address was "verified" by a Kontakt-page
+        // quote that names info(at) and four colleagues, never Robert.
+        let bnt = "info(at)bnt-chemicals.de; firmeneigenes Adressmuster vorname.nachname@bnt-chemicals.de: Norman Quandt, Birgit Hessler, Sina Helfer, Grit Hartmann";
+        assert!(!quote_backs_value(
+            "person_email",
+            "robert.suesse@bnt-chemicals.de",
+            bnt
+        ));
+        assert!(quote_backs_value(
+            "person_email",
+            "norman.quandt@bnt-chemicals.de",
+            "Norman Quandt, Vertrieb, E-Mail: norman.quandt(at)bnt-chemicals.de"
+        ));
+        assert!(quote_backs_value(
+            "person_email",
+            "Grit.Hartmann@bnt-chemicals.de",
+            "grit.hartmann [at] bnt-chemicals [dot] de"
+        ));
+        // The same absent name must not verify Robert either.
+        assert!(!quote_backs_value("person_vorname", "Robert", bnt));
+        assert!(quote_backs_value("person_vorname", "Norman", bnt));
+    }
+
+    #[test]
+    fn one_malformed_field_entry_does_not_cost_the_person_records() {
+        // Carbosulf, 23.09.2026: four of six writebacks were rejected whole,
+        // one of them carrying the only person record, because a source said
+        // "requires_credential": "false" or an entry had no status.
+        let payload = serde_json::json!({
+            "record_id": "lead-a",
+            "module": "outbound-lead-generation",
+            "research_command_id": "cmd-a",
+            "field_status": {
+                "firma_name": {
+                    "status": "verified",
+                    "value": "Carbosulf Chemische Werke GmbH",
+                    "sources": {"item": [{
+                        "source_id": "online-handelsregister.de",
+                        "url": "https://www.online-handelsregister.de/x",
+                        "quote": "Carbosulf Chemische Werke GmbH HRB 1797",
+                        "requires_credential": "false",
+                        "person_key": ""
+                    }]}
+                },
+                "mitarbeiter": {"attempts": {"item": [{"kind": "web_read"}]}}
+            },
+            "result": {
+                "person_records": {"item": {
+                    "person_key": "p1",
+                    "person_vorname": "Hans-Robert",
+                    "person_nachname": "Jacob"
+                }}
+            }
+        });
+        let request: ResearchWritebackRequest =
+            serde_json::from_value(hoist_top_level_field_entries(unwrap_item_carriers(payload)))
+                .expect("a single malformed entry must not reject the payload");
+        assert_eq!(request.result.person_records.len(), 1);
+        assert!(!request.field_status["firma_name"].sources[0].requires_credential);
+        assert!(!request.field_status.contains_key("mitarbeiter"));
     }
 
     #[test]

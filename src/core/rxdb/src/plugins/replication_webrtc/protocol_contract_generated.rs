@@ -58,6 +58,20 @@ pub(super) const CTOX_FILE_RPC_CHUNK: &str = "rxdb.file.chunk";
 pub(super) const CTOX_FILE_RPC_ERROR: &str = "rxdb.file.error";
 pub(super) const CTOX_FILE_RPC_CANCEL: &str = "rxdb.file.cancel";
 pub(super) const CTOX_FILE_MAX_BYTES_PER_CHUNK: u32 = 262144;
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_FETCH_CAPABILITY: &str = "ctox-rxdb-rows-fetch-v1";
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_RPC_FETCH: &str = "rxdb.rows.fetch";
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_RPC_CHUNK: &str = "rxdb.rows.chunk";
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_RPC_ERROR: &str = "rxdb.rows.error";
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_RPC_CANCEL: &str = "rxdb.rows.cancel";
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_MAX_BYTES_PER_CHUNK: u32 = 262144;
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_MAX_ROWS_PER_WINDOW: u32 = 1000;
 pub(super) const CTOX_PRESENCE_CAPABILITY: &str = "ctox-presence-v1";
 pub(super) const CTOX_PRESENCE_RPC_UPDATE: &str = "rxdb.presence.update";
 pub(super) const CTOX_PRESENCE_STREAM_ID: &str = "presence$";

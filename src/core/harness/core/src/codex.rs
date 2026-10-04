@@ -5596,6 +5596,11 @@ pub(crate) async fn run_turn(
         .await;
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
+    // This evidence belongs to this turn, not to a matching call in retained
+    // conversation history. Keep the provider-compatible auto tool choice.
+    let mut pending_required_initial_tool = turn_context.required_initial_tool.clone();
+    let required_initial_tool_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut required_initial_tool_corrections = 0;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -5712,15 +5717,48 @@ pub(crate) async fn run_turn(
             &turn_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
+            pending_required_initial_tool.as_deref(),
+            Arc::clone(&required_initial_tool_called),
             cancellation_token.child_token(),
         )
         .await
         {
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
-                    needs_follow_up,
+                    mut needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
+                if required_initial_tool_called.load(std::sync::atomic::Ordering::Acquire) {
+                    pending_required_initial_tool = None;
+                }
+                if !needs_follow_up && let Some(tool) = pending_required_initial_tool.as_deref() {
+                    if required_initial_tool_corrections >= 2 {
+                        sess.send_event(
+                            &turn_context,
+                            EventMsg::Error(ErrorEvent {
+                                message: format!(
+                                    "required initial tool `{tool}` was not called after two corrections"
+                                ),
+                                codex_error_info: None,
+                            }),
+                        )
+                        .await;
+                        return None;
+                    }
+                    if cancellation_token.is_cancelled() {
+                        return None;
+                    }
+                    required_initial_tool_corrections += 1;
+                    let correction: ResponseItem = DeveloperInstructions::new(format!(
+                        "This turn cannot finish before calling `{tool}`. Call it now, even for a short answer-only task. Record only genuine work and its actual status; do not invent completed actions. Then finish the original request. This is correction {required_initial_tool_corrections} of 2."
+                    )).into();
+                    sess.record_conversation_items(
+                        &turn_context,
+                        std::slice::from_ref(&correction),
+                    )
+                    .await;
+                    needs_follow_up = true;
+                }
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
@@ -6205,6 +6243,8 @@ async fn run_sampling_request(
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
+    pending_required_initial_tool: Option<&str>,
+    required_initial_tool_called: Arc<std::sync::atomic::AtomicBool>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let router = built_tools(
@@ -6219,12 +6259,13 @@ async fn run_sampling_request(
 
     let base_instructions = sess.get_base_instructions().await;
 
-    let prompt = build_prompt(
+    let mut prompt = build_prompt(
         input,
         router.as_ref(),
         turn_context.as_ref(),
         base_instructions,
     );
+    prompt.required_initial_tool = pending_required_initial_tool.map(str::to_string);
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
@@ -6243,6 +6284,17 @@ async fn run_sampling_request(
         .await;
     let mut retries = 0;
     loop {
+        if prompt.required_initial_tool.is_some()
+            && required_initial_tool_called.load(std::sync::atomic::Ordering::Acquire)
+        {
+            // A successful tool and its output may have been recorded before
+            // a retryable stream failure. Keep that evidence in this turn.
+            prompt.required_initial_tool = None;
+            prompt.input = sess
+                .clone_history()
+                .await
+                .for_prompt(&turn_context.model_info.input_modalities);
+        }
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
@@ -6252,6 +6304,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
             server_model_warning_emitted_for_turn,
             &prompt,
+            Arc::clone(&required_initial_tool_called),
             cancellation_token.child_token(),
         )
         .await
@@ -7023,6 +7076,7 @@ async fn try_run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     server_model_warning_emitted_for_turn: &mut bool,
     prompt: &Prompt,
+    required_initial_tool_called: Arc<std::sync::atomic::AtomicBool>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     feedback_tags!(
@@ -7076,7 +7130,9 @@ async fn try_run_sampling_request(
         };
 
         let event = match event {
-            Some(res) => res?,
+            Some(Ok(event)) => event,
+            Some(Err(error)) if prompt.required_initial_tool.is_some() => break Err(error),
+            Some(Err(error)) => return Err(error),
             None => {
                 break Err(CodexErr::Stream(
                     "stream closed before response.completed".into(),
@@ -7093,6 +7149,12 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                let is_required_initial_tool = matches!(
+                    &item,
+                    ResponseItem::FunctionCall { name, .. }
+                        | ResponseItem::CustomToolCall { name, .. }
+                        if Some(name.as_str()) == prompt.required_initial_tool.as_deref()
+                );
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -7132,7 +7194,23 @@ async fn try_run_sampling_request(
                     .instrument(handle_responses)
                     .await?;
                 if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
+                    if is_required_initial_tool {
+                        let called = Arc::clone(&required_initial_tool_called);
+                        in_flight.push_back(Box::pin(async move {
+                            let output = tool_future.await?;
+                            if matches!(
+                                &output,
+                                ResponseInputItem::FunctionCallOutput { output, .. }
+                                    | ResponseInputItem::CustomToolCallOutput { output, .. }
+                                    if output.success == Some(true)
+                            ) {
+                                called.store(true, std::sync::atomic::Ordering::Release);
+                            }
+                            Ok(output)
+                        }));
+                    } else {
+                        in_flight.push_back(tool_future);
+                    }
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -7373,3 +7451,7 @@ pub(crate) use tests::make_session_configuration_for_tests;
 #[cfg(test)]
 #[path = "codex_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "codex_required_plan_tests.rs"]
+mod required_initial_tool_tests;

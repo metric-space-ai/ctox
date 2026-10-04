@@ -181,6 +181,7 @@ assert(status.queryFetchEvictedWindowMissCount === 1, 'evicted window miss is di
     collectionName: 'business_commands',
     schemaVersion: 1,
     clock: () => commandNow,
+    readPermissionDigest: () => 'command-test-digest',
     requestQueryFetch: async () => {
       commandFetches += 1;
       return {
@@ -241,6 +242,7 @@ assert(status.queryFetchDedupHitCount === 2, `dedup hits = 2 (got ${status.query
     sidecar: brokerSidecar,
     collectionName: 'business_commands',
     schemaVersion: 1,
+    readPermissionDigest: () => 'broker-test-digest',
     requestQueryFetch: async () => {
       brokerFetches += 1;
       await new Promise((resolve) => setTimeout(resolve, 20));

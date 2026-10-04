@@ -57,6 +57,24 @@ try {
     await journal.markMasterAcknowledged('tickets', { 'ticket-1': doc });
     const pendingAfterAck = await journal.getStatus();
 
+    const partialA = { id: 'ticket-partial-a', title: 'first', _meta: { ctoxHlc: 'abc:0:tab-a' } };
+    const partialB = { id: 'ticket-partial-b', title: 'second', _meta: { ctoxHlc: 'abd:0:tab-a' } };
+    const partialId = await journal.appendBatch({
+      collection: 'tickets', schemaHash: 'schema-a', operation: 'upsert', rows: [partialA, partialB],
+    });
+    await journal.commitBatch(partialId, { [partialA.id]: partialA, [partialB.id]: partialB });
+    const publishStatus = journal.publishStatus.bind(journal);
+    let ackStatusPublishes = 0;
+    journal.publishStatus = async () => { ackStatusPublishes += 1; return publishStatus(); };
+    await journal.markMasterAcknowledged('tickets', { [partialA.id]: partialA });
+    const pendingAfterPartialAck = await journal.getStatus();
+    await journal.markMasterAcknowledged('tickets', { [partialA.id]: partialA });
+    await journal.markMasterAcknowledged('tickets', { unrelated: { id: 'unrelated' } });
+    const noOpAckStatusPublishes = ackStatusPublishes;
+    await journal.markMasterAcknowledged('tickets', { [partialB.id]: partialB });
+    const pendingAfterPartialDrain = await journal.getStatus();
+    journal.publishStatus = publishStatus;
+
     const command = {
       id: 'cmd-1',
       command_id: 'cmd-1',
@@ -103,6 +121,94 @@ try {
       mismatchCode = error?.code || '';
     }
     other.close();
+
+    // Sanitized backlog fixture: 240 pending historical versions over 60 IDs
+    // and roughly 22 MB of payload, comparable in bytes but not known shape.
+    // Capture recovery, first-write and ACK costs without pretending this is
+    // the affected tenant's unknown batch mix or browser profile.
+    const backlogName = `${databaseName}-backlog`;
+    const backlogJournal = await openRecoveryJournal({ databaseName: backlogName });
+    const backlogTx = backlogJournal.db.transaction('batches', 'readwrite');
+    const backlogStore = backlogTx.objectStore('batches');
+    const backlogPayload = 'x'.repeat(90_000);
+    for (let index = 0; index < 240; index += 1) {
+      const id = `lead-${index % 60}`;
+      const doc = { id, payload: backlogPayload, _meta: { ctoxHlc: `${(index + 1).toString(36)}:0:tab-a` } };
+      backlogStore.put({
+        batchId: `backlog-${index}`, sequence: index + 1,
+        collection: 'outbound_leads', state: 'pending',
+        documentIds: [id], ackedIds: [], committedDocs: { [id]: doc },
+        primaryCommittedAtMs: Date.now(), createdAtMs: Date.now(),
+      });
+    }
+    await new Promise((resolveDone, rejectDone) => {
+      backlogTx.oncomplete = resolveDone;
+      backlogTx.onerror = () => rejectDone(backlogTx.error);
+      backlogTx.onabort = () => rejectDone(backlogTx.error);
+    });
+    const statusStarted = performance.now();
+    const backlogBefore = await backlogJournal.getStatus();
+    const backlogStatusMs = performance.now() - statusStarted;
+    const backlogPendingBefore = backlogBefore.pendingWrites;
+    const backlogBytesBefore = backlogBefore.pendingBytes;
+    backlogJournal.close();
+    const backlogStorage = await openCtoxIndexedDbStorage({ databaseName: backlogName });
+    const backlogCollection = backlogStorage.collection('outbound_leads', {
+      schema: {
+        version: 0, type: 'object', primaryKey: 'id',
+        properties: { id: { type: 'string' }, payload: { type: 'string' } },
+        required: ['id'],
+      },
+    });
+    const recoveryStarted = performance.now();
+    await backlogCollection.initializeRecovery();
+    const backlogRecoveryMs = performance.now() - recoveryStarted;
+    const writeStarted = performance.now();
+    await backlogCollection.bulkUpsert([{ id: 'lead-new', payload: 'new' }]);
+    const backlogFirstWriteMs = performance.now() - writeStarted;
+    const backlogPendingAfterFirstWrite = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
+    const ackStarted = performance.now();
+    await backlogStorage.recoveryJournal.markMasterAcknowledged('outbound_leads', {
+      'lead-0': { id: 'lead-0', payload: backlogPayload, _meta: { ctoxHlc: '51:0:tab-a' } },
+    });
+    const backlogAckMs = performance.now() - ackStarted;
+    const backlogPendingAfter = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
+    backlogCollection.close();
+    backlogStorage.close();
+
+    // Upgrade an existing v3 WAL in place: new indexes must not discard its
+    // only copy of an unacknowledged browser write.
+    const legacyStorageName = `${databaseName}-v3`;
+    const legacyRequest = indexedDB.open(`${legacyStorageName}__recovery_v2`, 3);
+    legacyRequest.onupgradeneeded = () => {
+      const legacyDb = legacyRequest.result;
+      const batches = legacyDb.createObjectStore('batches', { keyPath: 'batchId' });
+      batches.createIndex('stateCollection', ['state', 'collection'], { unique: false });
+      legacyDb.createObjectStore('conflicts', { keyPath: 'conflictId' });
+      legacyDb.createObjectStore('meta', { keyPath: 'key' });
+    };
+    const legacyDb = await new Promise((resolveOpen, rejectOpen) => {
+      legacyRequest.onsuccess = () => resolveOpen(legacyRequest.result);
+      legacyRequest.onerror = () => rejectOpen(legacyRequest.error);
+    });
+    const legacyTx = legacyDb.transaction('batches', 'readwrite');
+    legacyTx.objectStore('batches').put({
+      batchId: 'legacy-pending', collection: 'tickets', state: 'pending',
+      documentIds: ['ticket-legacy'], ackedIds: [], committedDocs: {},
+      createdAtMs: Date.now(),
+    });
+    await new Promise((resolveDone, rejectDone) => {
+      legacyTx.oncomplete = resolveDone;
+      legacyTx.onerror = () => rejectDone(legacyTx.error);
+      legacyTx.onabort = () => rejectDone(legacyTx.error);
+    });
+    legacyDb.close();
+    const upgraded = await openRecoveryJournal({ databaseName: legacyStorageName });
+    const upgradedStore = upgraded.db.transaction('batches', 'readonly').objectStore('batches');
+    const migratedIndexes = [...upgradedStore.indexNames];
+    const migratedBatches = await upgraded.listBatches('pending', 'tickets');
+    const migratedVersion = upgraded.db.version;
+    upgraded.close();
 
     const storageName = `${databaseName}-storage`;
     const storage = await openCtoxIndexedDbStorage({ databaseName: storageName });
@@ -209,6 +315,9 @@ try {
     journal.close();
     indexedDB.deleteDatabase(`${databaseName}__recovery_v2`);
     indexedDB.deleteDatabase(`${databaseName}-other__recovery_v2`);
+    indexedDB.deleteDatabase(backlogName);
+    indexedDB.deleteDatabase(`${backlogName}__recovery_v2`);
+    indexedDB.deleteDatabase(`${legacyStorageName}__recovery_v2`);
     indexedDB.deleteDatabase(storageName);
     indexedDB.deleteDatabase(`${storageName}__recovery_v2`);
     indexedDB.deleteDatabase(restartStorageName);
@@ -216,6 +325,20 @@ try {
     return {
       pendingBeforeReplay,
       pendingAfterAck,
+      pendingAfterPartialAck,
+      pendingAfterPartialDrain,
+      noOpAckStatusPublishes,
+      migratedIndexes,
+      migratedBatches,
+      migratedVersion,
+      backlogPendingBefore,
+      backlogBytesBefore,
+      backlogStatusMs,
+      backlogPendingAfterFirstWrite,
+      backlogPendingAfter,
+      backlogRecoveryMs,
+      backlogFirstWriteMs,
+      backlogAckMs,
       pendingAfterCommandAck,
       replay,
       replayed,
@@ -245,6 +368,24 @@ try {
   assert(result.replayed[0]?.[0]?.id === 'ticket-1', 'replay must preserve the complete local document');
   assert(result.primaryCommittedAtMs > 0, 'successful primary replay must be recorded durably');
   assert(result.pendingAfterAck.pendingWrites === 0, 'native acknowledgement must clear pending status');
+  assert(result.pendingAfterPartialAck.pendingWrites === 1 && result.pendingAfterPartialAck.pendingBatches === 1,
+    'a partly acknowledged batch counts only its still-unacknowledged document');
+  assert(result.noOpAckStatusPublishes === 1, 'repeat and unrelated master rows must not rewrite or republish the backlog');
+  assert(result.pendingAfterPartialDrain.pendingWrites === 0,
+    'the remaining exact master acknowledgement must drain the partial batch');
+  assert(result.migratedVersion >= 4 && result.migratedIndexes.includes('state')
+    && result.migratedIndexes.includes('documentIds'),
+  'v3 journals must gain the v4 lookup indexes');
+  assert(result.migratedBatches.length === 1 && result.migratedBatches[0].batchId === 'legacy-pending',
+    'v3 upgrade must preserve the pending write batch');
+  assert(result.backlogPendingBefore === 240 && result.backlogPendingAfterFirstWrite === 241
+    && result.backlogPendingAfter === 240,
+  'the new local write adds one pending version; the exact master HLC then drains one historical version');
+  assert(result.backlogBytesBefore >= 20_000_000,
+    'the sanitized backlog must exercise status and ACK costs at roughly the observed byte scale');
+  assert([result.backlogStatusMs, result.backlogRecoveryMs, result.backlogFirstWriteMs, result.backlogAckMs]
+    .every((value) => Number.isFinite(value) && value >= 0),
+  'sanitized backlog timings must be recorded for recovery, first write and ACK');
   assert(result.pendingAfterCommandAck.pendingWrites === 0, 'a completed native command must acknowledge the submitted command payload');
   assert(result.preview.pendingWrites === 1, 'encrypted export preview must report pending writes');
   assert(result.mismatchCode === 'recovery_instance_mismatch', 'instance remapping must be rejected');
@@ -262,7 +403,14 @@ try {
   assert(result.prunedAfterRetention >= 1, 'resolved conflicts past the retention window must be pruned');
   assert(result.pendingConflictsAfterGc === 1, 'a pending (unresolved) conflict must survive conflict GC');
   assert(result.batchesBeforeConflictGc === result.batchesAfterConflictGc, 'unsynced write batches must survive conflict GC');
-  console.log('ctox-rxdb recovery journal browser smoke OK');
+  console.log('ctox-rxdb recovery journal browser smoke OK', {
+    syntheticBacklog: '240 pending versions / 60 IDs / ~22 MB',
+    pendingBytes: result.backlogBytesBefore,
+    statusMs: result.backlogStatusMs,
+    recoveryMs: result.backlogRecoveryMs,
+    firstWriteMs: result.backlogFirstWriteMs,
+    ackMs: result.backlogAckMs,
+  });
 } finally {
   await browser.close();
   await new Promise((resolveClose) => server.close(resolveClose));

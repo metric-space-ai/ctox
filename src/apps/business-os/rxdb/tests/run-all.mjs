@@ -70,8 +70,18 @@ for (const name of tests) {
     results.push({ name, status: 'PASS', detail: `${Date.now() - startedAt}ms` });
   } catch (error) {
     failed += 1;
-    const stderr = String(error?.stderr || '').trim().split('\n').slice(-6).join('\n      ');
-    results.push({ name, status: 'FAIL', detail: stderr || String(error?.message || error) });
+    // A nested test may write its TAP assertion to stdout and then throw an
+    // execFileSync error on stderr. Showing only stderr's final six lines hid
+    // the actual failed assertion in CI (just pid/stdout:null/stderr:null).
+    const stdout = String(error?.stdout || '').trim().split('\n');
+    const failedAssertion = stdout.findIndex((line) => /^not ok\b/.test(line.trim()));
+    const stdoutExcerpt = failedAssertion >= 0
+      ? stdout.slice(failedAssertion, failedAssertion + 30)
+      : stdout.slice(-18);
+    const stderrExcerpt = String(error?.stderr || '').trim().split('\n').slice(0, 12);
+    const detail = [String(error?.message || error), ...stdoutExcerpt, ...stderrExcerpt]
+      .filter(Boolean).join('\n      ').slice(0, 12000);
+    results.push({ name, status: 'FAIL', detail });
     if (failFast) break;
   }
 }

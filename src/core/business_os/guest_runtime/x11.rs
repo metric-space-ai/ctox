@@ -7,6 +7,7 @@
 
 use super::{
     identifier, GuestDriver, GuestFrame, GuestInput, GuestKey, MouseButton, ScrollDirection,
+    GUEST_FRAME_LIMIT,
 };
 use anyhow::{ensure, Context, Result};
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
-const FRAME_LIMIT: usize = 16 * 1024 * 1024;
+const FRAME_LIMIT: usize = GUEST_FRAME_LIMIT;
 const EFFECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(in crate::business_os) struct X11GuestConfig {
@@ -168,22 +169,12 @@ fn validate_dimensions(width: u32, height: u32) -> Result<()> {
 }
 
 fn png_frame(png: Vec<u8>, dimensions: (u32, u32)) -> Result<GuestFrame> {
+    let frame = GuestFrame::from_png(png)?;
     ensure!(
-        png.len() >= 33
-            && png.len() <= FRAME_LIMIT
-            && &png[..8] == b"\x89PNG\r\n\x1a\n"
-            && &png[12..16] == b"IHDR"
-            && png[8..12] == 13u32.to_be_bytes(),
-        "guest capture is not a bounded PNG frame"
-    );
-    let width = u32::from_be_bytes(png[16..20].try_into()?);
-    let height = u32::from_be_bytes(png[20..24].try_into()?);
-    validate_dimensions(width, height)?;
-    ensure!(
-        (width, height) == dimensions,
+        (frame.width, frame.height) == dimensions,
         "guest display changed during capture"
     );
-    Ok(GuestFrame { png, width, height })
+    Ok(frame)
 }
 
 fn input_arguments(input: &GuestInput) -> (Vec<String>, Option<&str>) {

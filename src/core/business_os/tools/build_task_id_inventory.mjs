@@ -14,7 +14,7 @@ const sourceFiles = [
 ];
 const classifications = new Map(Object.entries({
   apply_outbound_adapter_reconciliation_reply: ['compatibility_mixed', 'execution_task_id'],
-  accept_rxdb_business_command_with_origin: ['compatibility_mixed', 'return explicit execution_task_id/target fields'],
+  accept_rxdb_business_command_with_guest_runtime: ['compatibility_mixed', 'return explicit execution_task_id/target fields'],
   complete_business_command_from_app_validation_success: ['execution_link', 'execution_task_id'],
   delete_ctox_task: ['target_task', 'target_task_id'],
   dispatch_business_command: ['compatibility_mixed', 'return explicit execution_task_id/target fields'],
@@ -22,6 +22,7 @@ const classifications = new Map(Object.entries({
   materialize_pending_business_chat: ['execution_link', 'execution_task_id; chat contract retains task_id'],
   business_chat_payload: ['execution_link', 'execution_task_id; chat contract retains task_id'],
   outbound_queue_research_scraper_generation: ['domain_queue_reference', 'target_task_id or a domain-specific queue reference'],
+  outbound_research_scrape_test_input: ['command_correlation', 'command_id; adapter input task_id is correlation only, never execution authority'],
   persist_systematic_research_failure: ['execution_link', 'execution_task_id'],
   persist_terminal_business_chat_command_projection: ['execution_link', 'execution_task_id'],
   process_business_chat_reply: ['execution_link', 'execution_task_id'],

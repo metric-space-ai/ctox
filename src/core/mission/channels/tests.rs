@@ -6,6 +6,208 @@ use std::fs;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
+#[cfg(unix)]
+#[test]
+fn queue_turn_fence_rejects_replaced_store_even_with_replayed_lease() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = resolve_db_path(root.path(), None);
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let create = |path: &Path| -> Result<()> {
+        let conn = Connection::open(path)?;
+        conn.execute_batch(
+            "CREATE TABLE communication_routing_state (
+                message_key TEXT, route_status TEXT, lease_worker_id TEXT
+             );
+             INSERT INTO communication_routing_state VALUES
+                ('queue:system::target', 'leased', 'worker-target');",
+        )?;
+        Ok(())
+    };
+    create(&path)?;
+    let fence = QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: vec!["queue:system::target".into()],
+        worker_id: "worker-target".into(),
+    };
+    let reader = fence.open_reader()?;
+    let retained_reader =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    assert!(fence.still_owned(&reader)?);
+    std::fs::rename(&path, path.with_extension("retired"))?;
+    create(&path)?;
+    // Both files contain the same lease. The retained SQLite connection
+    // still reads the retired file, so a row-only check would allow the turn.
+    let retired_still_leased: bool = retained_reader.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_routing_state
+         WHERE message_key='queue:system::target' AND route_status='leased'
+         AND lease_worker_id='worker-target')",
+        [],
+        |row| row.get(0),
+    )?;
+    assert!(retired_still_leased);
+    assert!(!fence.still_owned(&reader)?);
+    assert!(fence.still_owned(&fence.open_reader()?)?);
+    Ok(())
+}
+
+#[test]
+fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let create = |name: &str| {
+        create_queue_task(
+            root.path(),
+            QueueTaskCreateRequest {
+                title: name.into(),
+                prompt: name.into(),
+                thread_key: format!("queue/cancel/{name}"),
+                workspace_root: None,
+                priority: "normal".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+    };
+    let target = create("target")?;
+    let other = create("unrelated")?;
+    let sibling = create("same-worker-sibling")?;
+    let fence = |key: &str, worker: &str| QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: vec![key.to_owned()],
+        worker_id: worker.into(),
+    };
+    for (task, worker) in [
+        (&target, "worker-target"),
+        (&other, "worker-other"),
+        (&sibling, "worker-target"),
+    ] {
+        lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+        assert_eq!(
+            record_queue_lease_worker(
+                root.path(),
+                std::slice::from_ref(&task.message_key),
+                "ctox-service",
+                worker
+            )?,
+            1
+        );
+    }
+    let target_fence = fence(&target.message_key, "worker-target");
+    let other_fence = fence(&other.message_key, "worker-other");
+    let reader = target_fence.open_reader()?;
+    assert!(target_fence.still_owned(&reader)?);
+    assert!(other_fence.still_owned(&reader)?);
+    let batch_fence = QueueTurnLeaseFence {
+        message_keys: vec![target.message_key.clone(), other.message_key.clone()],
+        // A combined turn cannot adopt a task leased by a different worker.
+        ..target_fence.clone()
+    };
+    assert!(!batch_fence.still_owned(&reader)?);
+    let missing_member = QueueTurnLeaseFence {
+        message_keys: vec![target.message_key.clone(), "queue:system::missing".into()],
+        ..target_fence.clone()
+    };
+    assert!(!missing_member.still_owned(&reader)?);
+    let owned_batch = QueueTurnLeaseFence {
+        message_keys: vec![target.message_key.clone(), sibling.message_key.clone()],
+        ..target_fence.clone()
+    };
+    assert!(owned_batch.still_owned(&reader)?);
+    update_queue_task(
+        root.path(),
+        QueueTaskUpdateRequest {
+            message_key: target.message_key.clone(),
+            route_status: Some("cancelled".into()),
+            status_note: Some("operator cancellation".into()),
+            ..Default::default()
+        },
+    )?;
+    // The same open reader observes the committed cancellation, without a
+    // retained WAL snapshot, and cannot revive the cancelled row.
+    assert!(!target_fence.still_owned(&reader)?);
+    assert!(!owned_batch.still_owned(&reader)?);
+    assert!(fence(&sibling.message_key, "worker-target").still_owned(&reader)?);
+    assert!(other_fence.still_owned(&reader)?);
+    assert_eq!(
+        record_queue_lease_worker(
+            root.path(),
+            std::slice::from_ref(&target.message_key),
+            "ctox-service",
+            "worker-target"
+        )?,
+        0
+    );
+    assert!(!fence(&other.message_key, "stale-worker").still_owned(&reader)?);
+    assert!(!fence("queue:system::missing", "worker-target").still_owned(&reader)?);
+    assert!(fence(&other.message_key, "").open_reader().is_err());
+    assert!(reader
+        .connection
+        .execute("DELETE FROM communication_routing_state", [])
+        .is_err());
+    Ok(())
+}
+
+#[test]
+fn queue_turn_fence_cannot_interrupt_a_released_new_worker() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let task = create_queue_task(
+        root.path(),
+        QueueTaskCreateRequest {
+            title: "re-leased task".into(),
+            prompt: "re-leased task".into(),
+            thread_key: "queue/cancel/re-lease".into(),
+            workspace_root: None,
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        },
+    )?;
+    let keys = vec![task.message_key.clone()];
+    lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+    record_queue_lease_worker(root.path(), &keys, "ctox-service", "old-worker")?;
+    let old = QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: keys.clone(),
+        worker_id: "old-worker".into(),
+    };
+    let reader = old.open_reader()?;
+    assert!(old.still_owned(&reader)?);
+    let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+    conn.execute("UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+        [&task.message_key])?;
+    drop(conn);
+    let sweep = release_stale_queue_task_leases(root.path(), "ctox-service", &HashSet::new())?;
+    assert_eq!(sweep.released, keys);
+    lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+    record_queue_lease_worker(root.path(), &keys, "ctox-service", "new-worker")?;
+    assert!(!old.still_owned(&reader)?);
+    let new = QueueTurnLeaseFence {
+        worker_id: "new-worker".into(),
+        ..old
+    };
+    assert!(new.still_owned(&reader)?);
+    Ok(())
+}
+
+#[test]
+fn queue_turn_fence_fails_closed_without_creating_a_missing_store() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let fence = QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: vec!["queue:system::missing".into()],
+        worker_id: "worker-target".into(),
+    };
+    let db_path = resolve_db_path(root.path(), None);
+    assert!(!db_path.exists());
+    assert!(fence.open_reader().is_err());
+    assert!(
+        !db_path.exists(),
+        "lease probe must not initialize a new store"
+    );
+    Ok(())
+}
+
 fn unique_test_db_path(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{prefix}-{}.db",
@@ -14,6 +216,91 @@ fn unique_test_db_path(prefix: &str) -> PathBuf {
             .unwrap_or_default()
             .as_nanos()
     ))
+}
+
+#[test]
+fn email_send_profile_keeps_account_access_until_explicit_revocation() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = resolve_db_path(dir.path(), None);
+    let mut conn = open_channel_db(&db_path)?;
+    let account_key = "email:team@example.test";
+    let profile = |conn: &Connection| -> Result<Value> {
+        let raw: String = conn.query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            [account_key],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&raw)?)
+    };
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "ownerUserId": "alice", "shared_user_ids": ["bob"], "folder": "INBOX" }),
+    )?;
+    // Native send and provider self-test pass connector-only profiles through
+    // this same upsert path. Neither may erase Business OS access metadata.
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "folder": "Sent" }),
+    )?;
+    let after_send = profile(&conn)?;
+    assert_eq!(after_send["ownerUserId"], "alice");
+    assert_eq!(after_send["shared_user_ids"], json!(["bob"]));
+    assert_eq!(after_send["folder"], "Sent");
+
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "ownerUserId": "", "shared_user_ids": [] }),
+    )?;
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "folder": "Sent" }),
+    )?;
+    let after_revoke = profile(&conn)?;
+    assert_eq!(after_revoke["ownerUserId"], "");
+    assert_eq!(after_revoke["shared_user_ids"], json!([]));
+
+    // The email-only rule must not silently change another provider's profile
+    // replacement semantics.
+    upsert_communication_account(
+        &mut conn,
+        "jami:team",
+        "jami",
+        "team",
+        "jami",
+        json!({ "ownerUserId": "alice" }),
+    )?;
+    upsert_communication_account(
+        &mut conn,
+        "jami:team",
+        "jami",
+        "team",
+        "jami",
+        json!({ "folder": "inbox" }),
+    )?;
+    let jami_raw: String = conn.query_row(
+        "SELECT profile_json FROM communication_accounts WHERE account_key = 'jami:team'",
+        [],
+        |row| row.get(0),
+    )?;
+    let jami_profile: Value = serde_json::from_str(&jami_raw)?;
+    assert!(jami_profile.get("ownerUserId").is_none());
+    Ok(())
 }
 
 #[test]
@@ -2824,6 +3111,35 @@ fn founder_outbound_body_rejects_address_headers_in_body() {
             .contains("headers were placed in the message body"),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn reviewed_reply_removes_only_its_exact_leading_subject_header() -> Result<()> {
+    let subject = "Re: Import falsch gelandet";
+    let body = outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\r\n\r\nDanke, ich prüfe den Import.",
+        subject,
+    )?;
+    assert_eq!(body, "Danke, ich prüfe den Import.");
+    ensure_founder_outbound_body_text_clean(&body)?;
+
+    let wrong_subject = outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Anderer Vorgang\n\nDanke, ich prüfe den Import.",
+        subject,
+    )?;
+    assert!(ensure_founder_outbound_body_text_clean(&wrong_subject).is_err());
+
+    let addressed = outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\nTo: someone@example.test\n\nDanke.",
+        subject,
+    )?;
+    assert!(ensure_founder_outbound_body_text_clean(&addressed).is_err());
+    assert!(outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\n\n",
+        subject,
+    )
+    .is_err());
+    Ok(())
 }
 
 #[test]
@@ -5812,6 +6128,64 @@ fn business_command_claim(command_id: &str, payload_hash: &str) -> BusinessComma
 }
 
 #[test]
+fn native_app_origin_survives_children_and_rejects_metadata_spoofing() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let request = |title: &str, parent: Option<String>| QueueTaskCreateRequest {
+        title: title.to_string(),
+        prompt: "Perform the bounded task.".to_string(),
+        thread_key: format!("origin/{title}"),
+        workspace_root: None,
+        priority: "normal".to_string(),
+        suggested_skill: None,
+        parent_message_key: parent,
+        extra_metadata: Some(
+            json!({"business_os_origin":{"command_id":"forged","module":"foreign-app"}}),
+        ),
+    };
+    let mut claim = business_command_claim("origin-command", "sha256:origin");
+    claim.module = "inventory".to_string();
+    let admitted = claim_business_command_with_queue(root.path(), claim, request("root", None))?;
+    let expected = json!({"command_id":"origin-command","module":"inventory"});
+    assert_eq!(admitted.task.metadata["business_os_origin"], expected);
+    let child = create_queue_task(
+        root.path(),
+        request("review", Some(admitted.task.message_key.clone())),
+    )?;
+    let continuation = create_queue_task(
+        root.path(),
+        request("continue", Some(child.message_key.clone())),
+    )?;
+    assert_eq!(child.metadata["business_os_origin"], expected);
+    assert_eq!(continuation.metadata["business_os_origin"], expected);
+    let mut child_claim = business_command_claim("review-command", "sha256:review");
+    child_claim.module = "ctox".to_string();
+    let child_command = claim_business_command_with_queue(
+        root.path(),
+        child_claim,
+        request("linked-review", Some(child.message_key)),
+    )?;
+    let after_review = create_queue_task(
+        root.path(),
+        request("after-review", Some(child_command.task.message_key)),
+    )?;
+    assert_eq!(
+        after_review.metadata["business_os_origin"], expected,
+        "a child command's execution module must not replace the originating app"
+    );
+    // Older roots have a canonical command link but no new metadata stamp.
+    let conn = open_channel_db(&crate::paths::core_db(root.path()))?;
+    conn.execute("UPDATE communication_messages SET metadata_json=json_remove(metadata_json,'$.business_os_origin') WHERE message_key=?1", [&admitted.task.message_key])?;
+    let legacy_child = create_queue_task(
+        root.path(),
+        request("legacy", Some(admitted.task.message_key)),
+    )?;
+    assert_eq!(legacy_child.metadata["business_os_origin"], expected);
+    let unlinked = create_queue_task(root.path(), request("unlinked", None))?;
+    assert!(unlinked.metadata.get("business_os_origin").is_none());
+    Ok(())
+}
+
+#[test]
 fn business_command_queue_claim_is_atomic_and_idempotent() {
     let root = business_command_test_root("ctox-business-command-queue-claim");
     let request = || QueueTaskCreateRequest {
@@ -6541,6 +6915,93 @@ fn business_command_audit_does_not_recreate_retained_outbox_rows() {
         )
         .expect("count retained outbox rows");
     assert_eq!(outbox_count, 0);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn business_command_intake_failure_retains_first_and_last_durable_errors() {
+    for claimed in [false, true] {
+        let root = business_command_test_root("ctox-business-command-intake-error-history");
+        let claim = business_command_claim("command-intake-errors", "sha256:intake-errors");
+        if claimed {
+            claim_business_control_command(&root, claim.clone()).expect("claim control command");
+        }
+        let first_error = "native business command store execution failed: title is required";
+        let first = record_business_command_intake_failure(&root, claim.clone(), first_error, 3)
+            .expect("persist original rejection");
+        assert_eq!(first["attempt"], 1);
+        assert_eq!(first["exhausted"], false);
+        assert_eq!(first["canonical_failure_created"], false);
+
+        // Each invocation reopens the database: no process-local retry state
+        // may be needed to retain the handler failure after a restart.
+        let last_error = "canonical command replay remained nonterminal";
+        let second = record_business_command_intake_failure(&root, claim.clone(), last_error, 3)
+            .expect("persist first replay observation");
+        assert_eq!(second["attempt"], 2);
+        assert_eq!(second["canonical_failure_created"], false);
+        let terminal = record_business_command_intake_failure(&root, claim.clone(), last_error, 3)
+            .expect("exhaust persisted retry budget");
+        assert_eq!(terminal["attempt"], 3);
+        assert_eq!(terminal["canonical_failure_created"], true);
+        let projection = &terminal["failure_document"];
+        assert_eq!(projection["status"], "failed");
+        assert_eq!(projection["result"]["first_intake_error"], first_error);
+        assert_eq!(projection["result"]["last_intake_error"], last_error);
+        assert_eq!(
+            projection["error_message"],
+            format!("{last_error}; first intake failure: {first_error}")
+        );
+
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("reopen core db");
+        let errors: Vec<String> = conn
+            .prepare(
+                "SELECT error_message FROM business_command_intake_failures
+                 WHERE command_id = ?1 ORDER BY attempt",
+            )
+            .expect("prepare retry history")
+            .query_map(params![claim.command_id], |row| row.get(0))
+            .expect("read retry history")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect retry history");
+        assert_eq!(errors, [first_error, last_error, last_error]);
+        drop(conn);
+
+        let replay = record_business_command_intake_failure(
+            &root,
+            claim.clone(),
+            "later projection delivery failure",
+            3,
+        )
+        .expect("observe terminal command again");
+        assert_eq!(replay["canonical_failure_created"], false);
+        assert_eq!(replay["failure_document"], *projection);
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[test]
+fn business_command_intake_failure_keeps_unchanged_error_without_duplicate_text() {
+    let root = business_command_test_root("ctox-business-command-intake-same-error");
+    let claim = business_command_claim("command-intake-same-error", "sha256:same-error");
+    for attempt in 1..=2 {
+        let outcome =
+            record_business_command_intake_failure(&root, claim.clone(), "database is locked", 2)
+                .expect("persist repeated failure");
+        assert_eq!(outcome["attempt"], attempt);
+        if attempt == 2 {
+            let projection = &outcome["failure_document"];
+            assert_eq!(projection["error_message"], "database is locked");
+            assert_eq!(
+                projection["result"]["first_intake_error"],
+                "database is locked"
+            );
+            assert_eq!(
+                projection["result"]["last_intake_error"],
+                "database is locked"
+            );
+        }
+    }
     let _ = fs::remove_dir_all(root);
 }
 
@@ -7341,4 +7802,78 @@ fn projection_outbox_retries_with_backoff_then_dead_letters() {
         .expect("inspect dead letter");
     assert_eq!(terminal, ("dead_letter".to_string(), 2));
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn queue_task_update_keeps_its_place_unless_priority_changes() {
+    // tenant 26.09.2026: a review-feedback note recomputed sort_at, and a
+    // research task queued at 07:49 waited for hours behind later work.
+    let root = std::env::temp_dir().join(format!(
+        "ctox-queue-sort-keep-test-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).expect("failed to create temp test root");
+    let create = |title: &str, thread: &str| {
+        create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: title.to_string(),
+                prompt: format!("Work on {title}."),
+                thread_key: thread.to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task")
+    };
+    let older = create("older", "queue/sort-keep/older");
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    let newer = create("newer", "queue/sort-keep/newer");
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+
+    update_queue_task(
+        &root,
+        QueueTaskUpdateRequest {
+            message_key: older.message_key.clone(),
+            prompt: Some("Work on older.\n\nReview feedback: write back now.".to_string()),
+            status_note: Some("Review feedback applied to same queue task".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("failed to update queue task");
+    let pending = list_queue_tasks(&root, &["pending".to_string()], 10).expect("list");
+    assert_eq!(
+        pending
+            .iter()
+            .map(|task| task.message_key.as_str())
+            .collect::<Vec<_>>(),
+        vec![older.message_key.as_str(), newer.message_key.as_str()],
+        "a feedback update must not move the task behind later work"
+    );
+
+    update_queue_task(
+        &root,
+        QueueTaskUpdateRequest {
+            message_key: older.message_key.clone(),
+            priority: Some("low".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("failed to reprioritize queue task");
+    let pending = list_queue_tasks(&root, &["pending".to_string()], 10).expect("list");
+    assert_eq!(
+        pending
+            .iter()
+            .map(|task| task.message_key.as_str())
+            .collect::<Vec<_>>(),
+        vec![newer.message_key.as_str(), older.message_key.as_str()],
+        "an explicit priority change re-sorts the task"
+    );
+    let _ = fs::remove_dir_all(&root);
 }

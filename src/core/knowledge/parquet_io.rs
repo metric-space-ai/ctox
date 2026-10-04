@@ -77,6 +77,27 @@ pub(super) fn schema_hash(schema: &Schema) -> String {
     format!("{:x}", h.finalize())
 }
 
+/// Browser column types for each Parquet field, in schema order.
+///
+/// Bool maps to `boolean`, numeric types to `number`, everything else to
+/// `string`. The catalog projection appends any name that the static column
+/// list does not already carry, so a catalog document does not drop a field.
+pub(super) fn schema_column_labels(schema: &Schema) -> Vec<(String, String)> {
+    schema
+        .iter()
+        .map(|(name, dtype)| {
+            let kind = if dtype.is_bool() {
+                "boolean"
+            } else if dtype.is_numeric() {
+                "number"
+            } else {
+                "string"
+            };
+            (name.as_str().to_string(), kind.to_string())
+        })
+        .collect()
+}
+
 // ----- where-clause parsing ----------------------------------------------
 
 fn parse_value(v: &str) -> Expr {
@@ -219,9 +240,11 @@ pub(super) fn rows_to_df(rows: &[Value]) -> Result<DataFrame> {
 /// NDJSON-shaped `Vec<serde_json::Value>` objects together with the number of
 /// total rows in the parquet file.
 ///
-/// Used by the `knowledge_tables` RxDB projection to embed record-shape rows
-/// directly into the synced doc (no HTTP). Keeps all Polars usage contained in
-/// this helper module so callers do not have to depend on Polars types.
+/// Operational verbs still use this for a short preview. The `knowledge_tables`
+/// catalog projection does not: it reads the footer count through
+/// [`read_rows_window`] and does not embed rows. Keeps all Polars usage
+/// contained in this helper module so callers do not have to depend on Polars
+/// types.
 pub(super) fn read_rows_capped(path: &Path, cap: usize) -> Result<(Vec<Value>, i64)> {
     // This projection runs every 15 seconds in the long-lived native peer.
     // Polars' lazy `collect()` selects the new streaming executor in current
@@ -239,6 +262,48 @@ pub(super) fn read_rows_capped(path: &Path, cap: usize) -> Result<(Vec<Value>, i
     let capped_df = full_df.head(Some(cap));
     let rows = df_to_rows(&capped_df)?;
     Ok((rows, count))
+}
+
+/// Read a row window from `path` without loading the rest of the file.
+///
+/// The second value is the full row count from the Parquet footer, not the
+/// window length and not the catalog. An offset at or past the end returns an
+/// empty window rather than an error. This stays on the eager `ParquetReader`
+/// path: `LazyFrame::collect()` panics in this build because the streaming
+/// executor is not enabled.
+pub(super) fn read_rows_window(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<Value>, i64)> {
+    let file = File::open(path)
+        .with_context(|| format!("open parquet for row window {}", path.display()))?;
+    let (rows, count, _) = read_rows_window_from_file(file, offset, limit)?;
+    Ok((rows, count))
+}
+
+/// Read rows, schema and count from the same open file, even when its path is
+/// atomically replaced. Callers can clone a retained file for successive pages.
+pub(super) fn read_rows_window_from_file(
+    file: File,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<Value>, i64, String)> {
+    let mut reader = ParquetReader::new(file);
+    let count_usize = reader
+        .num_rows()
+        .map_err(cerr)
+        .context("read open parquet row count")?;
+    let count = i64::try_from(count_usize).context("open parquet row count exceeds i64")?;
+    // A zero-length slice still carries the schema without loading table rows.
+    let offset = offset.min(count_usize);
+    let limit = limit.min(count_usize - offset);
+    let df = reader
+        .with_slice(Some((offset, limit)))
+        .finish()
+        .map_err(cerr)
+        .context("read open parquet row window")?;
+    Ok((df_to_rows(&df)?, count, schema_hash(df.schema())))
 }
 
 /// Convert a DataFrame to NDJSON-shaped `Vec<serde_json::Value>` of objects.

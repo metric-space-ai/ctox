@@ -18,6 +18,40 @@ The core design rule is still durable-state first: prompts may describe work,
 but completion, review, retries, durable spawn edges, and outcome
 evidence must be explainable from persisted state, not from assistant prose.
 
+## Queue Cancellation and Live Turns
+
+Durable queue cancellation also revokes the running in-process harness turn's
+native lease. Service-owned queue turns bind the exact message keys and
+instance-unique `lease_worker_id` before model execution. One read-only SQLite
+connection checks that identity every 250 ms without retaining a read
+transaction or performing schema repair. On Unix, the reader also fences the
+native file's device/inode before and after its reads: a replacement store
+cannot authorize the old turn through a retained connection, even if it replays
+the same lease rows. Other platforms reopen the current path for each check.
+Cancellation, a missing row, a replaced store or a replacement worker stops the
+old turn; unrelated workers and a new lease are not interrupted. An unverifiable
+lease fails closed.
+
+The direct-session adapter submits `TurnInterrupt` for its actual thread and
+turn while continuing to drain events, with a ten-second bound. Only a terminal
+event matching both identities is a stop witness. An acknowledgement alone is
+not one. The cancelled session is discarded even when that witness is missing;
+its bounded existing teardown remains the fallback. Pre-start and pre-reply
+checks reject revoked work, including cancellation during context preparation.
+Usage already observed before interruption remains recorded even though the
+reply is suppressed. This does not undo writes committed before the interrupt
+or implement cancellation for a separately owned external executor.
+
+The public `ctox_harness_status.current_queue_workers` array binds each
+advertised queue worker to its task, current boot, instance-unique lease worker,
+durable routing attempt and lease timestamps. The service publishes instances
+only after native lease attachment. Projection includes a binding only while
+the current process owns that exact unexpired native lease; task IDs, counts,
+cached routing rows and persisted snapshots alone are insufficient. Replacement,
+cancellation and expiry remove the binding on the next status projection.
+This lossy observation is not a completion receipt or cancellation stop witness.
+Consumers still need freshness and their normal native authorization.
+
 ## Runtime State
 
 Core runtime state lives in `runtime/ctox.sqlite3`. The central path helper is
@@ -39,10 +73,10 @@ for example `runtime/ticket_local.db` and `runtime/ctox_scraping.db`.
 Every service-owned queue attempt starts with `update_plan` as its required
 initial harness tool. Until that call succeeds, the fork exposes no other tool
 to the model. A plan contains at least one ordered step and is valid only as a
-completed prefix, at most one active step, and a pending suffix. Successful
-assistant persistence fails closed unless the latest durable plan exists and
-all model-owned steps are completed; only then may the native CTOX review
-begin.
+completed prefix, at most one active step, and a pending suffix. Assistant
+persistence requires a durable plan, but incomplete plans may enter review so
+blocked work can retain honest pending steps. Only validated completion with
+all model-owned steps completed may reach terminal success and 100 percent.
 
 `task_execution_plan_revisions` is the authoritative plan history. Status-only
 updates rewrite the current revision, while changed labels, count, or order
@@ -52,6 +86,22 @@ stable event id. Each model tool start, including `update_plan`, and each new
 reasoning section contributes one activity turn. Streaming deltas, tool ends,
 and transport replays do not. Reasoning contents are never copied into this
 store.
+
+The direct-session adapter accepts both typed `TurnPlanUpdated` notifications
+and legacy `PlanUpdate` events. Typed plans require the current thread and turn
+ids; their explicit identity does not depend on receiving a legacy turn-start
+event first. Both forms normalize to the same plan payload and deduplicate
+within the turn before progress counters and durable persistence. A real plan
+is still required before review: the adapter never invents completed steps
+from a reply or a writeback receipt.
+
+The completion reviewer receives the latest durable plan revision for the
+stable work key, including its task and command identities, phase, review
+status and step statuses. This is a latest-work-key query, not an attempt-local
+filter: retries can create a newer revision while prior revisions remain
+evidence. Completed plan steps do not establish review approval or prove a
+requested side effect. Missing, incomplete and failed-review evidence remains
+subject to the deterministic completion and recovery gates.
 
 Plan steps own the first 90 percent of progress, divided equally and rounded:
 `round(90 * completed_steps / total_steps)`. Completed model work remains at
@@ -398,7 +448,27 @@ only and do not decide refresh behavior.
 A successful model turn does not automatically close work. The service starts a
 completion review unless the source is internal queue-guard maintenance. The
 reviewer runs as a separate skeptical pass over the worker result and returns a
-typed disposition:
+typed disposition. Review reports separately declare
+`TASK_OUTCOME: completed|blocked|unverified`. Only `completed` with acceptable
+independent proof can pass. Missing, unknown, or conflicting declarations fail
+closed. A truthful blocker report does not complete requested execution; a
+verified query with zero matches can complete it. Review admission preserves
+incomplete plan steps and their actual progress.
+
+When an otherwise accepted Business OS chat queue result still has incomplete
+durable plan steps, finalization records a terminal failure with the same
+attempt/work key and plan revision/counts. It does not complete those steps,
+replay research/writebacks, or enqueue an automatic recovery prompt. Partial
+writeback receipts are retained evidence, not completion proof. Reconciliation
+of the saved result and plan must precede an explicit retry. Storage failures
+remain recoverable from the stored attempt.
+
+The failure transition checks current plan and lease ownership under an
+Immediate transaction. A prior nonterminal hold's effect marker is preserved;
+it cannot swallow this terminal transition. Cancellation and other terminal
+owners are retained. A changed lease or plan is not overwritten.
+
+The supported dispositions are:
 
 - `Approved`
 - `Hold`
@@ -544,6 +614,15 @@ persisted reviewer provenance.
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
 fails terminally instead of creating unbounded review/rework cascades.
+
+Founder communication rework spends its existing two-attempt review-rejection
+budget from the durable routing `attempt` count, scoped to the same self-work
+item. Re-leasing one queue row therefore cannot bypass the budget by keeping
+the message count at one. Legacy or not-yet-leased rows still reserve at least
+one attempt each. Exhaustion fails the matching rework rows and item once;
+unrelated work and the original email are not sent or mutated by this counter.
+The separate reviewed-send evidence gate still prevents an unsent rework from
+closing successfully.
 
 Transient model/API failures also keep the original durable identity. A typed
 Business OS command moves from `running` to `retry_wait` before its linked queue
@@ -809,7 +888,15 @@ Fehlschläge in der Tätigkeit nur ohne Alternative. Die Antwort ist JSON
 (`member_id`, `reason`); ein unbrauchbares oder unerreichbares Urteil fällt auf
 die deterministische Punktzahl (`crew::select`) zurück, und die Begründung sagt
 das. Archivierte Mitglieder werden nicht neu ausgewählt. Ein wiederaufgenommener
-Versuch behält seine ursprüngliche Identität. Die wörtliche Begründung steht im
+Versuch behält seine ursprüngliche Identität. Die Zulassung prüft die bestehende
+Attempt-Zeile innerhalb derselben Schreibtransaktion wie die Crew-Bindung:
+Aufgabe und Mitglied müssen übereinstimmen, und der Attempt darf noch nicht
+finalisiert sein. Ein Konflikt verbraucht keine manuelle Zuweisung und schreibt
+keine neue Auswahl. Ein neuer Versuch benötigt eine neue Attempt-ID. Diese
+Prüfung ist eine Voraussetzung für die externe Crew-Anbindung, noch keine
+externe Laufzulassungs-API. Der separate [MCP-Kontextabruf](docs/workjet-crew-context.md)
+liefert nur den gebundenen Kontext eines bereits zugelassenen Versuchs unter
+bestehenden privaten Crew-Leserechten. Die wörtliche Begründung steht im
 Harness-Flow-Ereignis `crew_selected` (`selection_kind` routed/selected/
 assigned/continuity) und in dessen Cockpit-Projektion; das Lesen des
 Gedächtnisses erzeugt `crew.memory_read`. In Tests ist kein Router-Urteil

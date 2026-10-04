@@ -894,24 +894,42 @@ pub(super) fn embed_texts_via_local_socket(
     if line.trim().is_empty() {
         anyhow::bail!("embedding socket returned an empty response");
     }
-    match serde_json::from_str::<LocalEmbeddingSocketResponse>(line.trim())
-        .context("failed to parse embedding socket response")?
-    {
-        LocalEmbeddingSocketResponse::Embeddings {
-            model: response_model,
-            data,
-            _prompt_tokens: _,
-            _total_tokens: _,
-        } => {
-            let _ = response_model;
-            Ok(data
+    // Decode the tag before the typed payload: Serde's tagged-enum buffer
+    // cannot replay fractional numbers with serde_json/arbitrary_precision.
+    // https://github.com/serde-rs/json/issues/721
+    #[derive(serde::Deserialize)]
+    struct EmbeddingsReply {
+        #[serde(rename = "model")]
+        _model: String,
+        data: Vec<Vec<f32>>,
+        #[serde(rename = "prompt_tokens")]
+        _prompt_tokens: u32,
+        #[serde(rename = "total_tokens")]
+        _total_tokens: u32,
+    }
+    #[derive(serde::Deserialize)]
+    struct ErrorReply {
+        code: String,
+        message: String,
+    }
+    let response: LocalEmbeddingSocketResponse =
+        serde_json::from_str(line.trim()).context("failed to parse embedding socket response")?;
+    match response.kind.as_str() {
+        "embeddings" => {
+            let reply: EmbeddingsReply = serde_json::from_str(line.trim())
+                .context("failed to parse embedding vector payload")?;
+            Ok(reply
+                .data
                 .into_iter()
                 .map(|values| values.into_iter().map(|value| value as f64).collect())
                 .collect())
         }
-        LocalEmbeddingSocketResponse::Error { code, message } => {
-            anyhow::bail!("{code}: {message}");
+        "error" => {
+            let reply: ErrorReply = serde_json::from_str(line.trim())
+                .context("failed to parse embedding socket error")?;
+            anyhow::bail!("{}: {}", reply.code, reply.message);
         }
+        kind => anyhow::bail!("unknown embedding socket response kind: {kind}"),
     }
 }
 
