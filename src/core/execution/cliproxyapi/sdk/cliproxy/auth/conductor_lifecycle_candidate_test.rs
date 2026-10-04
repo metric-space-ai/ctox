@@ -296,6 +296,40 @@ fn candidate_manager_normalizes_registration_update_reload_and_prepared_persiste
 }
 
 #[test]
+fn candidate_refreshed_model_deletions_survive_publication_and_preserve_concurrent_changes() {
+    for user_changed in [false, true] {
+        let (store, lifecycle, base) = setup();
+        let mut base = base;
+        base.model_states
+            .insert("muse".into(), ModelState::default());
+        let base = lifecycle
+            .update(base, AuthMutationOptions::default(), now())
+            .unwrap()
+            .unwrap();
+        if user_changed {
+            let mut concurrent = base.clone();
+            concurrent.model_states.get_mut("muse").unwrap().unavailable = true;
+            lifecycle
+                .update(concurrent, AuthMutationOptions::default(), now())
+                .unwrap();
+        }
+        let mut refreshed = mint(&base);
+        refreshed.model_states.clear();
+        let published = publish(&lifecycle, &base, refreshed, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(published.model_states.contains_key("muse"), user_changed);
+        assert_eq!(
+            store.list().unwrap()[0].model_states.contains_key("muse"),
+            user_changed
+        );
+        if user_changed {
+            assert!(published.model_states["muse"].unavailable);
+        }
+    }
+}
+
+#[test]
 fn candidate_registration_epoch_overflow_fails_before_any_durable_write() {
     let store = Arc::new(Store::default());
     let lifecycle = AuthLifecycle::new(

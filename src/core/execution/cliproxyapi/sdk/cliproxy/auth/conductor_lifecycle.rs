@@ -266,7 +266,10 @@ impl AuthLifecycle {
         {
             // Disabled transitions deliberately do not resurrect stale
             // per-model cooldown state.
-        } else if auth.model_states.is_empty() && !existing.model_states.is_empty() {
+        } else if base.is_none()
+            && auth.model_states.is_empty()
+            && !existing.model_states.is_empty()
+        {
             auth.model_states = existing.model_states;
         }
         let _ = auth.ensure_index();
