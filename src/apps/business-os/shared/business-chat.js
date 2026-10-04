@@ -368,24 +368,26 @@ async function loadCrewHarnessStatus(db) {
   }
 }
 
-async function loadCrewAppTasks(db, liveKeys = null) {
+async function loadCrewAppTasks(db, liveKeys = null, isCurrent = () => true) {
   const collection = db?.raw?.ctox_queue_tasks;
   if (!liveKeys || !collection || typeof collection.find !== 'function') return [];
   try {
     const ids = [...liveKeys].map(String).filter(Boolean);
     const tasks = [];
     for (let offset = 0; offset < ids.length; offset += CREW_APP_PRESENCE_TASK_LIMIT) {
+      if (!isCurrent()) return null;
       const docs = await collection.find({
         selector: { id: { $in: ids.slice(offset, offset + CREW_APP_PRESENCE_TASK_LIMIT) },
           status: { $in: [...CREW_APP_PRESENCE_STATUSES] }, updated_at_ms: { $gt: 0 } },
         sort: [{ updated_at_ms: 'desc' }],
         limit: CREW_APP_PRESENCE_TASK_LIMIT,
       }).exec();
+      if (!isCurrent()) return null;
       for (const doc of Array.isArray(docs) ? docs : []) {
         const task = doc?.toJSON?.() || doc;
         if (!task) continue;
         tasks.push({
-          id: task.id, task_id: task.task_id, message_key: task.message_key,
+          id: task.id, task_id: task.id, message_key: task.id,
           command_id: task.command_id, status: task.status, module: task.module,
           source_module: task.source_module, crew_member_id: task.crew_member_id,
           attempt: task.attempt, lease_worker_id: task.lease_worker_id,
@@ -424,7 +426,7 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     if (disposed) return;
     const members = state.crewMembers || [];
     const currentTasks = liveKeys ? tasks.filter(task => {
-      const worker = liveWorkers.get(String(task.task_id || task.message_key || task.id || ''));
+      const worker = liveWorkers.get(String(task.id || ''));
       return worker && Number(task.attempt) === worker.attempt && task.lease_worker_id === worker.lease_worker_id;
     }) : [];
     const appPresence = liveKeys ? crewAppPresenceFromTasks(currentTasks, members, liveKeys) : new Map();
@@ -456,9 +458,13 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
         const harness = nativeFresh() ? await loadCrewHarnessStatus(db) : null;
         if (disposed) return;
         liveKeys = nativeFresh() ? crewAppLiveKeys(harness) : null;
-        liveWorkers = new Map((Array.isArray(harness?.current_queue_workers) ? harness.current_queue_workers : [])
-          .filter(worker => liveKeys?.has(String(worker.task_id)))
+        const nextWorkers = new Map((Array.isArray(harness?.current_queue_workers) ? harness.current_queue_workers : [])
+          .filter(worker => worker && liveKeys?.has(String(worker.task_id)))
           .map(worker => [String(worker.task_id), { attempt: Number(worker.attempt), lease_worker_id: String(worker.lease_worker_id) }]));
+        if (liveWorkers.size !== nextWorkers.size || [...nextWorkers].some(([id, worker]) => {
+          const previous = liveWorkers.get(id);
+          return !previous || previous.attempt !== worker.attempt || previous.lease_worker_id !== worker.lease_worker_id;
+        })) liveWorkers = nextWorkers;
         if (tasks.length || presenceHosts.length) apply();
       } while (nativeRequested && !disposed);
     })().catch(() => {
@@ -477,7 +483,9 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
         reloadRequested = false;
         await refreshNativeTruth();
         if (disposed) return;
-        const next = await loadCrewAppTasks(db, liveKeys);
+        const queryWorkers = liveWorkers;
+        const next = await loadCrewAppTasks(db, liveKeys, () =>
+          !disposed && nativeFresh() && liveKeys !== null && liveWorkers === queryWorkers);
         if (disposed) return;
         if (!nativeFresh()) tasks = [];
         else if (next !== null) tasks = next;

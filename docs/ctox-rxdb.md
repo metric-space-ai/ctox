@@ -75,8 +75,11 @@ be attributed. Native source_module supplies the app origin; opening an app
 does not count as execution. Presence queries select the native task identities
 in batches of at most 200, so newer historical rows cannot hide current work.
 Retained rows contain bounded public title/status, navigation and lease join
-fields rather than task payloads. Queue reads stay single-flight and coalesce
-notifications. Native truth refreshes independently of a pending queue read;
+fields rather than task payloads. The native queue message key supplies task
+navigation; a payload alias cannot replace it. Queue reads stay single-flight
+and coalesce notifications. Disposal or a changed native lease join stops
+remaining batches; an unchanged heartbeat preserves the in-flight read.
+Native truth refreshes independently of a pending queue read;
 a stop, new attempt or loss of confirmed freshness immediately retires old
 counts. A cancelled queue read retains its rows only while current native
 lease truth still confirms them.

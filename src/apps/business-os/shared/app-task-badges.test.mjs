@@ -390,3 +390,86 @@ test('app presence joins the current native attempt and worker before attributin
     globalThis.document = previousDocument;
   }
 });
+
+test('the native presence loader uses the projected queue primary key for task navigation', async () => {
+  const source = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
+  const body = source.match(/^async function loadCrewAppTasks\([^]*?^\}/m)?.[0];
+  const load = runInNewContext(body + '\nloadCrewAppTasks', {
+    CREW_APP_PRESENCE_STATUSES: new Set(['running']), CREW_APP_PRESENCE_TASK_LIMIT: 200, console,
+  });
+  const rows = await load({ raw: { ctox_queue_tasks: { find: () => ({ exec: async () => [
+    task('actual', { task_id: 'old-alias', message_key: 'old-message' }),
+  ] }) } } }, new Set(['actual']));
+  assert.equal(crewAppTasksFromTasks(rows, new Set(['actual'])).get('documents')[0].id, 'actual');
+});
+
+test('disposing native presence stops later batches after an already pending queue read finishes', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const ids = Array.from({ length: 301 }, (_, index) => 'active-' + index);
+  let reads = 0;
+  let finish;
+  globalThis.window = { setTimeout: callback => callback, clearTimeout() {} };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+  let dispose;
+  try {
+    dispose = __businessChatTestInternals.wireCrewAppPresence({ state: { crewMembers: [] },
+      db: { raw: {
+        ctox_queue_tasks: { find: query => ({ exec: () => {
+          reads++;
+          const rows = query.selector.id.$in.map(id => task(id));
+          return reads === 1 ? new Promise(resolve => { finish = () => resolve(rows); }) : Promise.resolve(rows);
+        } }) },
+        ctox_harness_status: { find: () => ({ exec: async () => [liveHarness(ids)] }) },
+      } },
+      syncFacade: { collectionFreshness: () => ({ ready: true }) },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 1, 'the first batch is actually pending');
+    dispose();
+    finish();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 1, 'no second storage batch starts for a disposed presence owner');
+  } finally {
+    dispose?.(); finish?.();
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
+test('an unchanged native heartbeat preserves an in-flight batched presence read', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const ids = Array.from({ length: 301 }, (_, index) => 'active-' + index);
+  const state = { crewMembers: [{ id: 'luma', name: 'Luma' }] };
+  let reads = 0;
+  let finish;
+  let changed;
+  globalThis.window = { setTimeout: callback => callback, clearTimeout() {} };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+  let dispose;
+  try {
+    dispose = __businessChatTestInternals.wireCrewAppPresence({ state,
+      db: { raw: {
+        ctox_queue_tasks: { find: query => ({ exec: () => {
+          reads++;
+          const rows = query.selector.id.$in.map(id => task(id, { crew_member_id: 'luma' }));
+          return reads === 1 ? new Promise(resolve => { finish = () => resolve(rows); }) : Promise.resolve(rows);
+        } }) },
+        ctox_harness_status: { find: () => ({ exec: async () => [liveHarness(ids)] }),
+          $: { subscribe: callback => { changed = callback; return { unsubscribe() {} }; } } },
+      } },
+      syncFacade: { collectionFreshness: () => ({ ready: true }) },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    await changed();
+    finish();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 2, 'same task/attempt/worker truth still permits the remaining batch');
+    assert.equal(state.crewWorkload.get('luma'), 301);
+  } finally {
+    dispose?.(); finish?.();
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
