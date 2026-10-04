@@ -25,7 +25,7 @@ const avg=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:null,known=a=>a.filter(v=>
 const all=[...D.assessments.map(a=>({...a,rubric:a.schema})),...D.legacy];
 const stageModel=(a,s)=>a[s]&&typeof a[s]==='object'?(Object.hasOwn(a[s],'model')?a[s].model:a[s].provenance?.model??a.model):Object.hasOwn(a,s+'_model')?a[s+'_model']:a.model;
 const parentScore=a=>a.parent_completion?.weighted_total??null;
-const actorModels=a=>[...new Set((a.role==='parent'?['parent_completion','first','corrected']:['first','corrected']).map(s=>stageModel(a,s)).filter(Boolean))];
+const actorModels=a=>[...new Set((a.role==='parent'&&parentScore(a)!=null?['parent_completion']:['first','corrected']).map(s=>stageModel(a,s)).filter(Boolean))];
 const matchesModel=(a,m)=>!m||actorModels(a).includes(m)||(m==='unknown'&&actorModels(a).length===0);
 const value=(a,s)=>a.rubric==='unified-actor-v1'?a[s]?.weighted_total??null:a[s]??null;
 const scoreBar=v=>v==null?'<span class="unknown">—</span>':'<div class="scorebar '+(v<=4?'low':v<7?'mid':'')+'" aria-label="'+F(v)+' von 10"><b>'+F(v)+'</b><span class="track"><span class="fill" style="width:'+Math.max(0,Math.min(100,v*10))+'%"></span></span></div>';
@@ -42,16 +42,18 @@ function compare(a,b,dir=1){
  return dir*(typeof a==='number'&&typeof b==='number'?a-b:String(a).localeCompare(String(b),'de',{numeric:true,sensitivity:'base'}));
 }
 function sorted(rows,state,get=(r,k)=>r[k]){return rows.map((row,index)=>({row,index})).sort((a,b)=>compare(get(a.row,state.key),get(b.row,state.key),state.dir)||a.index-b.index).map(x=>x.row)}
-function current(p,role){
+function current(p,role,completionOnly=true){
  let a=all.filter(a=>a.pr_url===p.url&&a.role===role);
  const unified=new Set(a.filter(a=>a.rubric==='unified-actor-v1').map(a=>a.actor_id));
  a=a.filter(a=>a.rubric==='unified-actor-v1'||!unified.has(a.actor_id));
  const retro=new Set(a.filter(a=>a.rubric==='legacy-retrospective-v1').map(a=>a.actor_id));
- return a.filter(a=>a.rubric!=='legacy-delivery-v1'||!retro.has(a.actor_id));
+ a=a.filter(a=>a.rubric!=='legacy-delivery-v1'||!retro.has(a.actor_id));
+ const completed=role==='parent'&&completionOnly?a.filter(a=>parentScore(a)!=null):[];
+ return completed.length?completed:a;
 }
 function reworkCount(p){
  if(Number.isInteger(p.rework_iterations)&&p.rework_iterations>=0)return p.rework_iterations;
- const rows=[...current(p,'parent'),...current(p,'worker')];
+ const rows=[...current(p,'parent',false),...current(p,'worker')];
  const whole=rows.filter(a=>a.iteration_scope==='pr'&&reworkIterations(a)!=null);
  if(whole.length&&new Set(whole.map(a=>a.rework_iterations)).size===1)return whole[0].rework_iterations;
  // Actor counts can overlap: an aggregate requires disjoint evidence or a PR-level count.

@@ -30,7 +30,7 @@ const document={
 document.getElementById('report-data').textContent=data;
 document.getElementById('size').value='25';
 const context=vm.createContext({document,console,Set,Map,JSON,Number,String,Math,Object,Blob,URL,setTimeout});
-const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,prKey,parentScore,reworkCount,getAll:()=>all,getVisible:()=>visible,getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
+const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,prKey,parentScore,reworkCount,current,actorCell,scoreCell,getAll:()=>all,getVisible:()=>visible,getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
 vm.runInContext(scripts[0][1]+capture,context,{timeout:10000});
 const api=context.testAPI;
 assert.equal(headers.parent.length,4);assert.equal(headers.worker.length,5);assert.equal(headers.pr.length,7);
@@ -54,6 +54,23 @@ for(const role of ['parent','worker'])for(const actual of api.getBoards()[role])
  assert.ok(expected,actual.label);
  assert.equal(actual.rework,expected.rework.mean,'Leaderboard must show average corrections per PR');
  if(actual.rework!=null){assert.equal(actual.rework,expected.rework.iterations/actual.prs);assert.ok(document.getElementById(role+'board').innerHTML.includes('>'+actual.rework.toFixed(1)+'</td>'));}
+}
+// One closing Parent label/score; earlier source actors remain in JSON and iteration evidence.
+const parentFixture={url:'fixture-parent-pr'};
+const earlierParent={pr_url:parentFixture.url,role:'parent',actor_id:'source-parent',rubric:'unified-actor-v1',model:'gpt-6-sol',harness:'Codex Desktop',first:null,corrected:{model:'gpt-6-sol',weighted_total:7.2},parent_completion:null,rework_iterations:2,iteration_scope:'pr'};
+const closingParent={pr_url:parentFixture.url,role:'parent',actor_id:'closing-parent',rubric:'unified-actor-v1',model:'gpt-6-sol',harness:'Codex Desktop',first:null,corrected:null,parent_completion:{model:'gpt-6.1-sol',weighted_total:7.7},rework_iterations:null};
+api.getAll().push(earlierParent,closingParent);
+assert.equal(api.current(parentFixture,'parent').length,1);
+assert.equal(api.current(parentFixture,'parent')[0].actor_id,'closing-parent');
+assert.match(api.actorCell(api.current(parentFixture,'parent'),'P'),/gpt-6\.1-sol \(@codex\)/);
+assert.ok(!api.actorCell(api.current(parentFixture,'parent'),'P').includes('gpt-6-sol'));
+assert.equal((api.scoreCell(api.current(parentFixture,'parent'),'parent_completion').match(/class="scorebar/g)||[]).length,1);
+assert.equal(api.reworkCount(parentFixture),2,'Hidden earlier source evidence must still support the complete PR iteration count');
+assert.equal(api.current(parentFixture,'parent',false).length,2);
+api.getAll().pop();api.getAll().pop();
+for(const pr of JSON.parse(data).prs){
+ const parents=api.current(pr,'parent');
+ if(parents.some(a=>api.parentScore(a)!=null))assert.ok(parents.every(a=>api.parentScore(a)!=null),'No historical source-only parent rows beside a completion score');
 }
 // A worker's known count does not prove the whole PR correction history.
 const fixture={url:'fixture-pr'},actor={pr_url:'fixture-pr',role:'worker',actor_id:'fixture-worker',rubric:'unified-actor-v1',model:'m',rework_iterations:2,iteration_scope:'actor',iteration_evidence:[{kind:'correction',head:'one'},{kind:'correction',head:'two'}]};
