@@ -258,6 +258,16 @@ impl NativeGuestExecution {
                     == entry.assignment.destination.controller_generation,
             "native child effect changed"
         );
+        #[cfg(target_os = "linux")]
+        ensure!(
+            entry
+                .desktop
+                .as_ref()
+                .context("native child missing")?
+                .process_instance_id()
+                == effect.process_instance_id,
+            "native child differs from its registered effect"
+        );
         let job = super::super::guest_commands::block_on_guest(async {
             Ok(self
                 .registry
