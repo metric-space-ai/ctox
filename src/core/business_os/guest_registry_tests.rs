@@ -205,6 +205,15 @@ fn native_registry_enrollment_uses_canonical_owner_project_profile_and_chat() {
         )
         .is_err());
     assert!(registry.registration("unregistered").is_err());
+    assert!(registry
+        .bound_execution(&session("foreign"), &assignment.destination.guest_id)
+        .is_err());
+    assert!(registry
+        .bound_execution(&session("owner"), &assignment.destination.guest_id)
+        .is_err());
+    assert!(registry
+        .bound_execution(&session("owner"), "unregistered")
+        .is_err());
 }
 #[test]
 fn native_registry_policy_writer_cannot_interleave_and_revocation_denies_publication() {
