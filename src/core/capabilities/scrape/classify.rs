@@ -11,6 +11,9 @@ pub(crate) enum ScrapeRunStatus {
     Succeeded,
     /// A current provider query completed with a validated empty-result receipt.
     CompletedEmpty,
+    /// The adapter cannot run the query because required input is missing or
+    /// invalid. Repairing the registered script cannot supply that input.
+    InvalidInput,
     TemporaryUnreachable,
     PortalDrift,
     Blocked,
@@ -51,6 +54,13 @@ pub(super) fn classify_outcome(
         .get("detail")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    if explicit_failure == "invalid_input" {
+        return Classification {
+            status: ScrapeRunStatus::InvalidInput,
+            should_queue_repair: false,
+            reason: "explicit_failure_mode_invalid_input".to_string(),
+        };
+    }
     // Checked before temporary_unreachable/blocked: adapters report the
     // provider's account refusal under those modes, and neither may queue a
     // script repair for it.

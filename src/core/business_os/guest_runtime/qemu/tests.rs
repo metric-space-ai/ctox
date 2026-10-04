@@ -118,6 +118,25 @@ async fn real_prepared_guest_starts_paused_and_owned_exit_preserves_disks() -> R
             !guest.connect_monitor().await?.running,
             "guest was not paused"
         );
+        guest.connect_guest_channel().await?;
+        ensure!(
+            guest.guest_channel().is_ok(),
+            "owned QEMU did not connect the guest channel"
+        );
+        ensure!(
+            guest.bind_guest_driver("".into()).is_err(),
+            "empty guest identity bound a driver"
+        );
+        ensure!(
+            guest.guest_channel().is_ok(),
+            "invalid bind consumed the guest channel"
+        );
+        let driver = guest.bind_guest_driver("isolated-ci-guest".into())?;
+        ensure!(driver.guest_id() == "isolated-ci-guest");
+        ensure!(
+            guest.guest_channel().is_err(),
+            "guest channel remained after driver bind"
+        );
         guest.resume().await?;
         ensure!(guest.status().await?.running, "guest did not resume");
         guest.pause().await?;
@@ -240,5 +259,90 @@ async fn startup_exit_is_observed_without_waiting_for_monitor_timeout() -> Resul
         guest.child.try_wait()?.is_some(),
         "failed startup child was not reaped"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spawn_binds_a_private_guest_channel_socket() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut input = config(root.path())?;
+    input.program = sleeping_program(root.path())?;
+    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let result = async {
+        let runtime = guest.runtime_directory();
+        ensure!(
+            runtime.join("guest.sock").exists(),
+            "guest channel socket missing"
+        );
+        ensure!(
+            std::fs::metadata(runtime)?.permissions().mode() & 0o777 == 0o700,
+            "guest channel directory is not private"
+        );
+        ensure!(
+            guest.guest_listener.is_some() && guest.guest_channel.is_none(),
+            "guest channel handshake started before connect"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    let stopped = guest.stop().await;
+    result?;
+    stopped?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn guest_channel_rejects_a_peer_other_than_the_spawned_child() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut input = config(root.path())?;
+    input.program = sleeping_program(root.path())?;
+    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let result = async {
+        let impostor = UnixStream::connect(guest.runtime_directory().join("guest.sock")).await?;
+        ensure!(
+            guest.connect_guest_channel().await.is_err(),
+            "foreign guest-channel peer was accepted"
+        );
+        drop(impostor);
+        ensure!(
+            guest.guest_channel.is_none(),
+            "foreign guest channel was retained"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    let stopped = guest.stop().await;
+    result?;
+    stopped?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_retires_guest_channel_handshake_but_keeps_child_owned() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut input = config(root.path())?;
+    input.program = sleeping_program(root.path())?;
+    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let result = async {
+        let mut connecting = Box::pin(guest.connect_guest_channel());
+        ensure!(
+            futures_util::poll!(connecting.as_mut()).is_pending(),
+            "fixture connected guest channel"
+        );
+        drop(connecting);
+        ensure!(
+            guest.connect_guest_channel().await.is_err(),
+            "cancelled guest-channel handshake was retried"
+        );
+        ensure!(
+            guest.child.try_wait()?.is_none(),
+            "live fixture lost its owner"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    let stopped = guest.stop().await;
+    result?;
+    stopped?;
     Ok(())
 }
