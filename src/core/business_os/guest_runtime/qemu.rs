@@ -24,7 +24,7 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Resolved by the native image/lifecycle owner, never deserialized from a
 /// renderer or model request. Image provenance and host admission belong there.
-pub(super) struct PreparedQemuGuest {
+pub(in crate::business_os) struct PreparedQemuGuest {
     pub program: PathBuf,
     pub runtime_parent: PathBuf,
     /// A verified, immutable, standalone raw base image.
