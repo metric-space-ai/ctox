@@ -74,7 +74,8 @@ pub struct StagedGuestRestore {
     staging: tempfile::TempDir,
 }
 impl StagedGuestRestore {
-    /// Native importers may inspect/reconstruct this state while it is private.
+    /// Inspection only: these checkpoint bytes remain immutable.
+    /// Reconstruct runtime state in a separate native-owned path after import.
     /// This directory is never exposed as a ready guest or execution workspace.
     pub fn staged_directory(&self) -> PathBuf {
         self.staging.path().join("state")
@@ -305,6 +306,8 @@ pub async fn commit_guest_restore(
             }
             invoked = true;
             validate_destination(&staged.destination, &staged.destination.guest_id)?;
+            verify_staged_tree(&staged)?;
+            sync_tree(&staged.staged_directory())?;
             // Reserve a new name without replacing any existing user content.
             // The owner's cross-process fence owns this directory through rename.
             fs::create_dir(&target)?;
@@ -438,6 +441,180 @@ pub async fn confirm_guest_ready(
         import: imported,
         endpoint: endpoint.ok_or_else(|| denied("native guest readiness was not observed"))?,
     })
+}
+
+// Validate the immutable restored payload again at publication. Native runtime
+// reconstruction belongs in a separate path, never in these checkpoint bytes.
+fn verify_staged_tree(staged: &StagedGuestRestore) -> io::Result<()> {
+    use crate::contracts::{ArtifactRef, WorkspaceEntryKind};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        io::Read,
+        os::unix::fs::OpenOptionsExt,
+    };
+    struct ExpectedFile {
+        artifact: ArtifactRef,
+        symlink: bool,
+        executable: Option<bool>,
+    }
+    let root = staged.staged_directory();
+    let root_metadata = fs::symlink_metadata(&root)?;
+    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+        return Err(denied("staged root changed"));
+    }
+    let mut files = BTreeMap::<PathBuf, ExpectedFile>::new();
+    let mut dirs = BTreeSet::from(
+        ["workspace", "provider", "history", "attachments", "git"].map(|name| root.join(name)),
+    );
+    for (prefix, entries) in [
+        ("workspace", &staged.manifest.workspace),
+        (
+            "workspace",
+            &staged.manifest.workspace_state.required_untracked,
+        ),
+        ("provider", &staged.manifest.provider_state),
+    ] {
+        for entry in entries {
+            files.insert(
+                root.join(prefix).join(&entry.path),
+                ExpectedFile {
+                    artifact: entry.artifact.clone(),
+                    symlink: entry.kind == WorkspaceEntryKind::Symlink,
+                    executable: Some(entry.executable),
+                },
+            );
+        }
+    }
+    for (prefix, artifacts) in [
+        ("history", &staged.manifest.history),
+        ("attachments", &staged.manifest.attachments),
+    ] {
+        for artifact in artifacts {
+            files.insert(
+                root.join(prefix).join(&artifact.sha256),
+                ExpectedFile {
+                    artifact: artifact.clone(),
+                    symlink: false,
+                    executable: None,
+                },
+            );
+        }
+    }
+    for (name, artifact) in [
+        ("index.patch", &staged.manifest.workspace_state.index_patch),
+        (
+            "worktree.patch",
+            &staged.manifest.workspace_state.worktree_patch,
+        ),
+    ] {
+        files.insert(
+            root.join("git").join(name),
+            ExpectedFile {
+                artifact: artifact.clone(),
+                symlink: false,
+                executable: None,
+            },
+        );
+    }
+    let manifest_bytes = serde_json::to_vec(&staged.manifest).map_err(io::Error::other)?;
+    let base_bytes = format!("{}\n", staged.manifest.workspace_state.base_commit);
+    for (name, bytes) in [
+        ("checkpoint.json", manifest_bytes.as_slice()),
+        ("git/base-commit", base_bytes.as_bytes()),
+    ] {
+        files.insert(
+            root.join(name),
+            ExpectedFile {
+                artifact: ArtifactRef {
+                    sha256: format!("{:x}", Sha256::digest(bytes)),
+                    size_bytes: bytes.len() as u64,
+                },
+                symlink: false,
+                executable: None,
+            },
+        );
+    }
+    for path in files.keys() {
+        let mut parent = path.parent();
+        while let Some(directory) = parent.filter(|directory| *directory != root) {
+            dirs.insert(directory.to_path_buf());
+            parent = directory.parent();
+        }
+    }
+    let mut pending = vec![root.clone()];
+    let mut seen = BTreeSet::new();
+    let mut seen_dirs = BTreeSet::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            let path = entry?.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.is_dir() {
+                if !dirs.contains(&path) {
+                    return Err(denied("unexpected staged directory"));
+                }
+                seen_dirs.insert(path.clone());
+                pending.push(path);
+                continue;
+            }
+            let expected = files
+                .get(&path)
+                .ok_or_else(|| denied("unexpected staged file"))?;
+            let mut hash = Sha256::new();
+            let size;
+            if expected.symlink {
+                if !metadata.file_type().is_symlink() {
+                    return Err(denied("staged link changed"));
+                }
+                let text = fs::read_link(&path)?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| denied("staged link is not UTF-8"))?;
+                hash.update(text.as_bytes());
+                size = text.len() as u64;
+            } else {
+                if !metadata.is_file() || metadata.file_type().is_symlink() {
+                    return Err(denied("staged file type changed"));
+                }
+                use std::os::unix::fs::MetadataExt;
+                if expected
+                    .executable
+                    .is_some_and(|executable| (metadata.mode() & 0o111 != 0) != executable)
+                {
+                    return Err(denied("staged file executable state changed"));
+                }
+                let mut input = fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(&path)?;
+                let mut count = 0u64;
+                let mut buffer = [0u8; 65536];
+                loop {
+                    let n = input.read(&mut buffer)?;
+                    if n == 0 {
+                        break;
+                    }
+                    count = count
+                        .checked_add(n as u64)
+                        .ok_or_else(|| denied("staged file overflow"))?;
+                    if count > expected.artifact.size_bytes {
+                        return Err(denied("staged file grew"));
+                    }
+                    hash.update(&buffer[..n]);
+                }
+                size = count;
+            }
+            if size != expected.artifact.size_bytes
+                || format!("{:x}", hash.finalize()) != expected.artifact.sha256
+            {
+                return Err(denied("staged checkpoint content changed"));
+            }
+            seen.insert(path);
+        }
+    }
+    if seen.len() != files.len() || seen_dirs != dirs {
+        return Err(denied("staged checkpoint entry is missing"));
+    }
+    Ok(())
 }
 
 // Flush nested directory entries too; a top-level fsync alone is insufficient.

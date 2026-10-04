@@ -24,6 +24,129 @@ async fn successful_import_does_not_synthesize_guest_readiness() {
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 }
 
+#[tokio::test]
+async fn cancelled_admission_retains_unknown_effect_without_publication() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    let private_path = staged.staging.path().to_owned();
+    *f.authority.hold_begin.lock().unwrap() = true;
+    assert!(tokio::time::timeout(
+        std::time::Duration::from_millis(20),
+        commit_guest_restore(&f.authority, &*f.authority.owner, staged),
+    )
+    .await
+    .is_err());
+    assert!(!private_path.exists());
+    assert!(imports(&f).is_empty());
+    assert_eq!(
+        f.authority.state.lock().unwrap().jobs["job"]
+            .pending_effects
+            .len(),
+        1
+    );
+    assert!(stage(&f).await.is_err());
+}
+
+#[tokio::test]
+async fn uncertain_completion_preserves_published_state_and_pending_effect() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    *f.authority.fail_complete.lock().unwrap() = true;
+    assert!(
+        commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+            .await
+            .is_err()
+    );
+    let published = imports(&f);
+    assert_eq!(published.len(), 1);
+    assert_eq!(
+        fs::read(published[0].join("workspace/nested/work.txt")).unwrap(),
+        b"retained work"
+    );
+    let state = f.authority.state.lock().unwrap();
+    assert_eq!(state.jobs["job"].pending_effects.len(), 1);
+    assert!(state.jobs["job"].completed_effects.is_empty());
+}
+
+#[tokio::test]
+async fn existing_destination_is_never_replaced() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    let identity = format!(
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        staged.spec.job_id,
+        staged.destination.instance_id,
+        staged.destination.guest_id,
+        staged.destination.controller_id,
+        staged.destination.controller_generation,
+        staged.ownership.generation,
+        staged.digest
+    );
+    let effect_id = format!("guest-import:{:x}", Sha256::digest(identity.as_bytes()));
+    let target = staged
+        .destination
+        .import_parent
+        .join(format!("import-{:x}", Sha256::digest(effect_id.as_bytes())));
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("user-content"), b"preserve").unwrap();
+    assert!(
+        commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+            .await
+            .is_err()
+    );
+    assert_eq!(fs::read(target.join("user-content")).unwrap(), b"preserve");
+    assert!(!target.join("workspace").exists());
+    assert_eq!(
+        f.authority.state.lock().unwrap().jobs["job"]
+            .pending_effects
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn staged_payload_mutations_deny_publication_and_retain_pending_effect() {
+    for mutation in 0..8 {
+        let f = fixture();
+        let staged = stage(&f).await.unwrap();
+        let root = staged.staged_directory();
+        let work = root.join("workspace/nested/work.txt");
+        match mutation {
+            0 => fs::write(&work, b"changed work").unwrap(),
+            1 => fs::write(root.join("workspace/extra"), b"unexpected").unwrap(),
+            2 => fs::create_dir(root.join("workspace/extra")).unwrap(),
+            3 => fs::remove_file(&work).unwrap(),
+            4 => fs::remove_dir(root.join("attachments")).unwrap(),
+            5 => {
+                fs::remove_file(&work).unwrap();
+                std::os::unix::fs::symlink("../../../outside", &work).unwrap();
+            }
+            6 => fs::set_permissions(&work, fs::Permissions::from_mode(0o700)).unwrap(),
+            7 => fs::write(root.join("checkpoint.json"), b"{}").unwrap(),
+            _ => unreachable!(),
+        }
+        let error = commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::PermissionDenied,
+            "mutation {mutation}"
+        );
+        assert!(imports(&f).is_empty(), "mutation {mutation}");
+        let state = f.authority.state.lock().unwrap();
+        assert_eq!(
+            state.jobs["job"].pending_effects.len(),
+            1,
+            "mutation {mutation}"
+        );
+        assert!(
+            state.jobs["job"].completed_effects.is_empty(),
+            "mutation {mutation}"
+        );
+    }
+}
+
 use super::*;
 use crate::{
     authority::{Peer, ProtectedCheckpoint, State, WorkerMembership},
@@ -41,6 +164,8 @@ struct NativeFixture {
     state: Mutex<State>,
     owner: Arc<TestOwner>,
     revoke_on_begin: Mutex<bool>,
+    hold_begin: Mutex<bool>,
+    fail_complete: Mutex<bool>,
 }
 #[async_trait]
 impl ExecutionAuthority for NativeFixture {
@@ -66,6 +191,11 @@ impl ExecutionAuthority for NativeFixture {
     }
     async fn submit(&self, request: Request) -> io::Result<Receipt> {
         let is_begin = matches!(request.command, Command::BeginEffect { .. });
+        if matches!(request.command, Command::CompleteEffect { .. })
+            && *self.fail_complete.lock().unwrap()
+        {
+            return Err(io::Error::other("unknown completion outcome"));
+        }
         let peers = BTreeMap::from([(
             1,
             Peer {
@@ -77,6 +207,10 @@ impl ExecutionAuthority for NativeFixture {
         let receipt = self.state.lock().unwrap().apply(&request, &peers);
         if is_begin && *self.revoke_on_begin.lock().unwrap() {
             self.owner.binding.lock().unwrap().controller_generation += 1;
+        }
+        let hold = is_begin && *self.hold_begin.lock().unwrap();
+        if hold {
+            std::future::pending::<()>().await;
         }
         Ok(receipt)
     }
@@ -253,6 +387,8 @@ fn fixture() -> Fixture {
             state: Mutex::new(state),
             owner,
             revoke_on_begin: Mutex::new(false),
+            hold_begin: Mutex::new(false),
+            fail_complete: Mutex::new(false),
         },
     }
 }
