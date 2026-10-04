@@ -53,7 +53,11 @@ not persist a token or infer a gateway account, harness version, project,
 instance or Raft generation. Only the private live provider owner plus the exact
 execution fence can read that witness as a current observation. Owner teardown,
 lease replacement/cancellation/expiry, record tampering and replay deny retained
-consumers. The actual TurnStart response binds the turn separately.
+consumers. The actual TurnStart response binds the turn separately. Native
+policy reads and frame/import publication can borrow the same held SQLite
+transaction through the provider guard; the simpler observation callback
+reuses these exact checks. Neither callback may reopen the channel store,
+await, escape its transaction reference or re-enter the lifecycle guards.
 
 A native guest producer can install its explicit admission hook on the session.
 The hook must resolve native destination/policy/account/version and persist real

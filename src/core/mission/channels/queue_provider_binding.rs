@@ -270,6 +270,21 @@ impl NativeProviderBinding {
         &self,
         publish: impl FnOnce(&NativeProviderFacts, Option<&str>) -> Result<T>,
     ) -> Result<T> {
+        self.with_live_provider_transaction(|_, facts, turn| publish(facts, turn))
+    }
+
+    /// Native policy reads and frame/import writes may use this exact held
+    /// channel transaction. Never reopen the same store, await, retain a
+    /// transaction reference, or re-enter worker/provider lifecycle callbacks.
+    /// The borrowed transaction cannot be returned as a future permit.
+    pub(crate) fn with_live_provider_transaction<T>(
+        &self,
+        publish: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &NativeProviderFacts,
+            Option<&str>,
+        ) -> Result<T>,
+    ) -> Result<T> {
         self.record.execution.with_current_transaction(|tx| {
             let state = self
                 .record
@@ -290,7 +305,7 @@ impl NativeProviderBinding {
                 json == self.record.facts_json && turn == state.turn_id && finished.is_none(),
                 "native provider witness changed, ended or was replayed"
             );
-            publish(&self.record.facts, state.turn_id.as_deref())
+            publish(tx, &self.record.facts, state.turn_id.as_deref())
         })
     }
 }
@@ -570,6 +585,77 @@ mod tests {
                 owner.bind_turn("actual-thread", "actual-turn")?;
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn native_provider_transaction_keeps_policy_and_publication_under_one_guard() -> Result<()> {
+        let (root, execution, _) = admitted()?;
+        let owner = prepare(&execution)?;
+        let binding = owner.binding();
+        let path = resolve_db_path(root.path(), None);
+        let conn = Connection::open(&path)?;
+        conn.execute_batch(
+            "CREATE TABLE test_native_policy (allowed INTEGER NOT NULL);
+             INSERT INTO test_native_policy VALUES (1);
+             CREATE TABLE test_native_publication (binding_id TEXT NOT NULL);",
+        )?;
+        binding.with_live_provider_transaction(|tx, facts, turn| {
+            assert!(turn.is_none());
+            let allowed: i64 =
+                tx.query_row("SELECT allowed FROM test_native_policy", [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(allowed, 1);
+            // A competing native policy change cannot interleave after the
+            // policy read and before publication in this same transaction.
+            let competing = Connection::open(&path)?;
+            competing.busy_timeout(std::time::Duration::ZERO)?;
+            let error = competing
+                .execute("UPDATE test_native_policy SET allowed=0", [])
+                .unwrap_err();
+            assert_eq!(
+                error.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::DatabaseBusy)
+            );
+            tx.execute(
+                "INSERT INTO test_native_publication VALUES (?1)",
+                [&facts.binding_id],
+            )?;
+            Ok(())
+        })?;
+        let count: i64 =
+            conn.query_row("SELECT count(*) FROM test_native_publication", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(count, 1);
+
+        assert!(binding
+            .with_live_provider_transaction::<()>(|tx, facts, _| {
+                tx.execute(
+                    "INSERT INTO test_native_publication VALUES (?1)",
+                    [&facts.binding_id],
+                )?;
+                anyhow::bail!("native controller refused publication")
+            })
+            .is_err());
+        let count: i64 =
+            conn.query_row("SELECT count(*) FROM test_native_publication", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(
+            count, 1,
+            "failed callback must roll back native publication"
+        );
+        drop(owner);
+        let mut invoked = false;
+        assert!(binding
+            .with_live_provider_transaction(|_, _, _| {
+                invoked = true;
+                Ok(())
+            })
+            .is_err());
+        assert!(!invoked);
         Ok(())
     }
 
