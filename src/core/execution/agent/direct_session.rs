@@ -1926,14 +1926,14 @@ impl PersistentSession {
         // until bind_turn has the actual TurnStart response. Only a guest
         // admission installs this native path; ordinary MCP stays unchanged.
         #[cfg(unix)]
-        let _native_mcp_registration = native_provider_admission
-            .map(|admission| {
-                let owner = provider_owner
-                    .as_ref()
-                    .context("native MCP dispatch requires the actual worker/provider owner")?;
-                native_guest_mcp::register(owner, std::sync::Arc::clone(admission))
-            })
-            .transpose()?;
+        let _native_mcp_registration = if let Some(admission) = native_provider_admission {
+            let owner = provider_owner
+                .as_ref()
+                .context("native MCP dispatch requires the actual worker/provider owner")?;
+            Some(native_guest_mcp::register(client, owner, std::sync::Arc::clone(admission)).await?)
+        } else {
+            None
+        };
         #[cfg(unix)]
         if let Some(admission) = native_provider_admission {
             let provider = provider_owner.as_ref().ok_or_else(|| {
