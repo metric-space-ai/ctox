@@ -13,17 +13,16 @@ use super::home_execution_paths_test::{request, runtime, TestExecutor, TestHomeT
 use super::*;
 
 fn oauth_auth(provider: &str, plan: &str) -> Auth {
-    Auth {
-        id: "selected-oauth".into(),
-        provider: provider.into(),
-        attributes: [
-            ("auth_kind".into(), "oauth".into()),
-            ("plan_type".into(), plan.into()),
-        ]
-        .into_iter()
-        .collect(),
-        ..Auth::default()
-    }
+    let mut auth = Auth::default();
+    auth.id = "selected-oauth".into();
+    auth.provider = provider.into();
+    auth.attributes = [
+        ("auth_kind".into(), "oauth".into()),
+        ("plan_type".into(), plan.into()),
+    ]
+    .into_iter()
+    .collect();
+    auth
 }
 
 #[test]

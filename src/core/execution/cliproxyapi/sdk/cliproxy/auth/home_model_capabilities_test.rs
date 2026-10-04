@@ -57,10 +57,8 @@ use super::super::home_execution_paths_test::{request, runtime, TestExecutor, Te
 use super::*;
 
 fn auth_with_options(raw: Option<&str>) -> Auth {
-    let mut auth = Auth {
-        prefix: "tenant".to_owned(),
-        ..Auth::default()
-    };
+    let mut auth = Auth::default();
+    auth.prefix = "tenant".to_owned();
     if let Some(raw) = raw {
         auth.metadata.insert(
             "credential_options".to_owned(),
