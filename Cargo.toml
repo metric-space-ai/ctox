@@ -135,6 +135,7 @@ exclude = [
     "src/core/transfers",
     "src/tools/appsec-pentest",
     "src/tools/doc-stack",
+    "src/tools/google-fetch",
     "src/tools/pdf-parse",
     "src/tools/sqlserver-mcp",
     "src/tools/web-stack",

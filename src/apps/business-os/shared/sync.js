@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20261003-shell-v2-transfer-composed-v441';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261003-shell-v2-transfer-composed-v441';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261003-shell-v2-transfer-composed-v441';
+} from './sync-contract.js?v=20261004-shell-v2-transfer-acks-v442';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261004-shell-v2-transfer-acks-v442';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261004-shell-v2-transfer-acks-v442';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20261003-shell-v2-transfer-composed-v441';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261004-shell-v2-transfer-acks-v442';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -2805,6 +2805,10 @@ function sanitizeReplicationTransportStatus(status) {
     lowPriorityQueueDepth: numberField('lowPriorityQueueDepth'),
     lastSendPriority: stringField('lastSendPriority', 'normal', 20),
     lastAckLagMs: numberField('lastAckLagMs'),
+    pageHidden: status.pageHidden === true,
+    throttled: status.throttled === true,
+    lastPageTimerDelayMs: numberField('lastPageTimerDelayMs'),
+    lastPageTimerSampleAtMs: numberField('lastPageTimerSampleAtMs'),
     lastBufferedAmount: numberField('lastBufferedAmount'),
     collectionReadinessState: normalizeCollectionReadinessState(status.collectionReadinessState),
     collectionFreshnessState: normalizeCollectionReadinessState(status.collectionFreshnessState),
