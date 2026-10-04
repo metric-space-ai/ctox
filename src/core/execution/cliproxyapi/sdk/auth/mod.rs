@@ -11,6 +11,7 @@ mod filestore;
 mod interfaces;
 mod kimi;
 mod manager;
+mod meta;
 mod refresh_registry;
 mod store_registry;
 mod xai;
@@ -28,6 +29,7 @@ pub use interfaces::{
 };
 pub use kimi::{KimiAuthenticator, KimiDevicePresentation, KimiHandleFactory, KimiLoginPresenter};
 pub use manager::{Manager, ManagerError, ManagerErrorKind};
+pub use meta::{MetaAuthenticator, MetaDevicePresentation, MetaLoginPresenter};
 pub use refresh_registry::{AuthenticatorFactory, RefreshLeadRegistry};
 pub use store_registry::TokenStoreRegistry;
 pub use xai::{XaiAuthenticator, XaiDevicePresentation, XaiHandleFactory, XaiLoginPresenter};

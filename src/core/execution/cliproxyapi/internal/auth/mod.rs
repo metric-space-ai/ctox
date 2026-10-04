@@ -8,6 +8,7 @@ pub mod devin;
 pub mod empty;
 pub mod kimi;
 pub(crate) mod loopback_http;
+pub mod meta;
 pub mod models;
 pub mod vertex;
 pub mod xai;

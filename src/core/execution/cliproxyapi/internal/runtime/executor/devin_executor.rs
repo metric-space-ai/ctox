@@ -302,6 +302,8 @@ impl ProviderExecutor for DevinExecutor {
     }
     fn count_tokens<'a>(&'a self, request: ExecutorRequest) -> PluginFuture<'a, ExecutorResponse> {
         Box::pin(async move {
+            // ref: internal/runtime/executor/devin_executor.go:230-235
+            // Upstream has no standalone count endpoint and uses this byte-length estimate.
             let count = request.payload.len() / 4;
             Ok(ExecutorResponse {
                 payload: format!(r#"{{"total_tokens":{count},"input_tokens":{count}}}"#)
