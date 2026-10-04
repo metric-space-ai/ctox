@@ -7855,7 +7855,9 @@ fn start_prompt_worker(
                                     founder_send_error.as_ref().cloned().unwrap_or_else(|| {
                                         outcome_witness_recovery_message(&root, &job, &reply, err)
                                     });
-                                match prepare_outcome_witness_recovery(&root, &job, recovery) {
+                                match prepare_outcome_witness_recovery(
+                                    &root, &job, worker_activity.lease_worker_id.as_deref(), recovery,
+                                ) {
                                     Ok(queued) => outcome_recovery_prompt = queued,
                                     Err(error) => push_event_locked(
                                         &mut shared,
@@ -14687,6 +14689,7 @@ fn outcome_witness_outbound_recovery_requeue_allowed(root: &Path, job: &QueuedPr
 fn prepare_outcome_witness_recovery(
     root: &Path,
     job: &QueuedPrompt,
+    lease_worker_id: Option<&str>,
     recovery: String,
 ) -> Result<Option<QueuedPrompt>> {
     if job.ticket_self_work_id.is_some() {
@@ -14718,11 +14721,14 @@ fn prepare_outcome_witness_recovery(
     {
         // Finalization releases this lease and applies retry budget/backoff.
         // The router must obtain a fresh lease before executing the feedback.
-        apply_review_feedback_to_leased_queue(
+        let worker_id =
+            lease_worker_id.context("artifact recovery has no native worker lease identity")?;
+        apply_review_feedback_to_queue(
             root,
             job,
             &recovery,
             "Required artifact was not witnessed after review",
+            Some(worker_id),
         )?;
     }
     Ok(None)
@@ -24116,6 +24122,16 @@ fn apply_review_feedback_to_leased_queue(
     feedback_prompt: &str,
     review_summary: &str,
 ) -> Result<usize> {
+    apply_review_feedback_to_queue(root, job, feedback_prompt, review_summary, None)
+}
+
+fn apply_review_feedback_to_queue(
+    root: &Path,
+    job: &QueuedPrompt,
+    feedback_prompt: &str,
+    review_summary: &str,
+    worker_id: Option<&str>,
+) -> Result<usize> {
     const REVIEW_FEEDBACK_MARKER: &str = "\n\n==== CTOX review feedback for next attempt ====\n";
     let note = format!(
         "Review feedback applied to same queue task: {}",
@@ -24136,16 +24152,18 @@ fn apply_review_feedback_to_leased_queue(
             "{original_prompt}{REVIEW_FEEDBACK_MARKER}{}",
             feedback_prompt.trim()
         );
-        channels::update_queue_task(
-            root,
-            channels::QueueTaskUpdateRequest {
-                message_key: message_key.clone(),
-                prompt: Some(next_prompt),
-                workspace_root: job.workspace_root.clone(),
-                status_note: Some(note.clone()),
-                ..Default::default()
-            },
-        )?;
+        let request = channels::QueueTaskUpdateRequest {
+            message_key: message_key.clone(),
+            prompt: Some(next_prompt),
+            workspace_root: job.workspace_root.clone(),
+            status_note: Some(note.clone()),
+            ..Default::default()
+        };
+        if let Some(worker_id) = worker_id {
+            channels::update_queue_recovery_feedback(root, request, worker_id)?;
+        } else {
+            channels::update_queue_task(root, request)?;
+        }
         updated += 1;
     }
     Ok(updated)
@@ -38450,10 +38468,22 @@ Business OS command:
             outbound_email: None,
             outbound_anchor: None,
         };
+        channels::record_queue_lease_worker(
+            root,
+            &job.leased_message_keys,
+            CHANNEL_ROUTER_LEASE_OWNER,
+            "artifact-worker",
+        )?;
         let feedback = "The required result.txt is missing; create and verify it.";
         assert!(outcome_witness_artifact_recovery_allowed(root, &job));
         assert!(
-            prepare_outcome_witness_recovery(root, &job, feedback.to_string())?.is_none(),
+            prepare_outcome_witness_recovery(
+                root,
+                &job,
+                Some("artifact-worker"),
+                feedback.to_string()
+            )?
+            .is_none(),
             "durable artifact recovery must not create an in-memory retry with released lease keys"
         );
         let db_path = crate::paths::core_db(root);
@@ -38483,6 +38513,17 @@ Business OS command:
         assert_eq!(held.route_status, "pending");
         assert!(held.prompt.starts_with(&task.prompt));
         assert!(held.prompt.contains(feedback));
+        assert!(prepare_outcome_witness_recovery(
+            root,
+            &job,
+            Some("artifact-worker"),
+            "stale feedback".into()
+        )
+        .is_err());
+        assert_eq!(
+            channels::load_queue_task(root, &task_id)?.unwrap().prompt,
+            held.prompt
+        );
         let conn = channels::open_channel_db(&db_path)?;
         let (owner, expiry, backoff, failures): (
             Option<String>,

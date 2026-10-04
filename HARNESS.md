@@ -284,7 +284,7 @@ stamp, without returning to continuous full-router scans.
 
 When a reviewed queue attempt fails its artifact witness, recovery feedback is
 persisted on the same durable queue item. Finalization retains the normal hold,
-retry budget and backoff. The router must acquire a fresh lease before executing
+retry budget and backoff. Artifact feedback writes require the exact unexpired\nnative worker lease inside the same Immediate transaction. The router must\nacquire a fresh lease before executing
 that feedback; the service does not enqueue an in-memory artifact retry with
 the released attempt's message keys. Proactive outbound work without queue keys
 retains its existing bounded in-process recovery path.
