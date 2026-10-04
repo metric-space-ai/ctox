@@ -34,6 +34,15 @@ hashed filenames, and unsafe/oversized profile names cannot escape a filename.
 The native owner still persists the returned Auth; no new credential store or
 background OAuth listener is created here.
 
-Account-bound callback/state validation, native AuthRefresher/context binding
-and production provider registration remain unfinished. Synthetic component
-regressions do not prove real browser OAuth, provider or app acceptance.
+The callback component binds only IPv4 loopback and accepts `/callback` with the
+owner-supplied state. It checks state in constant time before accepting either
+a code or a provider error; unrelated requests cannot consume the login. A valid
+callback claims the session once. The five-minute deadline starts at listener
+creation. Both the listener and bounded connection tasks belong to the consuming
+wait and close on completion, timeout, cancellation or drop. No detached listener,
+browser launcher, credential store or background poller is created.
+
+The native owner still needs to connect its PKCE/login-session lifecycle to this
+callback component, AuthRefresher/context/status binding and production provider
+registration. Synthetic component regressions do not prove real browser OAuth,
+provider or app acceptance.
