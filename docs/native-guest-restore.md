@@ -24,7 +24,12 @@ GuestRestoreOwner::with_current_fence must invoke publication exactly once under
 the REAL shared controller AND live execution/attempt guard, with all
 revoke/takeover/expiry/shutdown paths using that same guard. A preflight boolean
 or an independent mutex is insufficient. The callback reserves a fresh import
-name, publishes the stage and flushes the parent. A failed/cancelled/uncertain
+name only after revalidating the exact manifest layout, file hashes, lengths,
+types, symlink targets and executable state of the immutable staged payload.
+It flushes the final nested tree under the same publication fence, publishes
+the stage and flushes the parent. Missing or added entries and changed content
+deny publication. The native owner must exclude concurrent mutation throughout
+this callback. A failed/cancelled/uncertain
 operation after admission leaves the effect pending. Recovery must reconcile its
 actual files and old process/effect stop witness; it must not automatically retry
 or mark completion from directory presence. Normal authority TakeOver and Stop
@@ -42,6 +47,12 @@ current observation, not a reusable capability: subsequent input/observation
 still uses the native guest authorization and frame lifetime.
 
 ## Integration responsibilities
+
+The staging path is inspection-only. Git/provider reconstruction writes to a
+separate native-owned runtime path after verified import and before readiness;
+it must not modify the signed checkpoint payload or treat reconstruction as
+execution authority. Reconstruction failures retain the verified import for
+reconciliation and cannot synthesize a ready guest.
 
 - Architecture owns this staging/import/readiness orchestration and component
   checks. Publication must run on the native owner's supervised blocking
