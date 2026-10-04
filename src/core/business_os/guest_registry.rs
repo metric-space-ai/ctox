@@ -302,13 +302,7 @@ pub(crate) struct NativeGuestRegistry {
     guests: Mutex<HashMap<String, Arc<Mutex<Registration>>>>,
     frame_budget: Arc<frames::FrameBudget>,
     frame_guests: Mutex<HashMap<String, String>>,
-    frame_transport: Mutex<
-        Option<
-            std::sync::Weak<
-                rxdb::plugins::replication_webrtc::file_fetch_handler::FileFetchRegistry,
-            >,
-        >,
-    >,
+    frame_transport: Mutex<Option<std::sync::Weak<frames::Pool>>>,
 }
 
 pub(crate) struct NativeGuestExecution {

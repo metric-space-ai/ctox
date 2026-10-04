@@ -11,6 +11,7 @@ fn observation() -> Observation {
             guest_session_id: "fixture-session".into(),
             endpoint_id: "fixture-endpoint".into(),
         },
+        transport: Weak::new(),
         frame: GuestFrame {
             png: vec![1, 2, 3],
             width: 2,
