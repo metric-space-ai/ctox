@@ -36,7 +36,9 @@ pub mod codex_websockets_executor;
 pub mod codex_websockets_request;
 pub mod codex_websockets_session;
 pub mod codex_websockets_stream;
+pub mod devin_executor;
 pub mod devin_executor_history;
+
 pub mod devin_executor_request;
 pub mod devin_executor_response;
 pub mod devin_executor_stream;
