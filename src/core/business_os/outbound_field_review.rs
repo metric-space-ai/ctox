@@ -260,6 +260,13 @@ pub(super) fn native_review_view(
     lead: &Value,
 ) -> anyhow::Result<Value> {
     let witnesses = store::load_current_native_field_status_witnesses(root, record_id)?;
+    Ok(native_review_view_from_witnesses(lead, &witnesses))
+}
+
+pub(super) fn native_review_view_from_witnesses(
+    lead: &Value,
+    witnesses: &NativeFieldStatusWitnesses,
+) -> Value {
     let mut view = lead.clone();
     let retain = |scope: &str, person: &str, fields: &mut Value| {
         for (field, status) in fields.as_object_mut().into_iter().flatten() {
@@ -299,7 +306,56 @@ pub(super) fn native_review_view(
             }
         }
     }
-    Ok(view)
+    view
+}
+
+pub(super) const NATIVE_FIELD_REVIEW_VIEW_METHOD: &str = "ctox.outbound.field_review_view.v1";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FieldReviewViewRequest {
+    record_id: String,
+}
+
+/// Read the canonical, witness-filtered view with the existing WebRTC grant.
+pub(super) fn native_field_review_view_response(
+    root: &Path,
+    capability_token: &str,
+    params: Vec<Value>,
+) -> Result<Value, String> {
+    let may_read = || {
+        store::capability_allows_collection_permission(
+            root,
+            capability_token,
+            COLLECTION,
+            super::policy::BusinessOsPermission::DataRead,
+        )
+    };
+    if !may_read() {
+        return Err("native field review view requires lead data.read".into());
+    }
+    if params.len() != 1 || serde_json::to_vec(&params).map_or(true, |bytes| bytes.len() > 2048) {
+        return Err("invalid native field review view request".into());
+    }
+    let request: FieldReviewViewRequest =
+        serde_json::from_value(params.into_iter().next().unwrap())
+            .map_err(|_| "invalid native field review view request".to_owned())?;
+    if !valid_id(&request.record_id) {
+        return Err("invalid native field review view record".into());
+    }
+    let view = store::load_current_native_field_review_view(root, &request.record_id)
+        .map_err(|_| "native field review view is unavailable".to_owned())?;
+    // A revocation during the snapshot read must still prevent publication.
+    if !may_read() {
+        return Err("native field review view requires lead data.read".into());
+    }
+    let response = serde_json::json!({
+        "schema": NATIVE_FIELD_REVIEW_VIEW_METHOD, "record_id": request.record_id, "view": view,
+    });
+    if serde_json::to_vec(&response).map_or(true, |bytes| bytes.len() > 256 * 1024) {
+        return Err("native field review view exceeds byte budget".into());
+    }
+    Ok(response)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -763,6 +819,86 @@ mod tests {
             "writeback_id": "wb-a", "command_id": "research-a", "attempt": 8,
             "written_at_ms": 1
         }})
+    }
+
+    #[test]
+    fn native_field_review_view_is_read_only_bounded_and_uses_current_authority(
+    ) -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        assert!(store::load_current_native_field_review_view(root, "lead-a")?.is_none());
+        assert!(!store::rxdb_store_path(root).exists());
+        store::tests::seed_business_user(root, "operator", "admin")?;
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root, COLLECTION,
+        )?;
+        let (token, _) = store::issue_business_os_capability_token(
+            root,
+            "operator",
+            super::super::person_research_command::now_ms(),
+        )?;
+        let mut legacy = json!({"id": "lead-a", "field_status": {"firma_prokura": negative()}});
+        assert!(apply_refutation(
+            &mut legacy,
+            &claim(None),
+            &binding(),
+            "review-a",
+            2
+        ));
+        store::upsert_rxdb_collection_record(root, COLLECTION, "lead-a", 1, legacy)?;
+        let before = store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap();
+        let response =
+            native_field_review_view_response(root, &token, vec![json!({"record_id": "lead-a"})])
+                .map_err(anyhow::Error::msg)?;
+        assert_eq!(response["schema"], NATIVE_FIELD_REVIEW_VIEW_METHOD);
+        assert_eq!(
+            response["view"]["field_status"]["firma_prokura"]["status"],
+            "no_match"
+        );
+        assert!(response["view"]["field_status"]["firma_prokura"]["review"].is_null());
+        assert_eq!(
+            store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap(),
+            before
+        );
+        for params in [
+            vec![],
+            vec![
+                json!({"record_id": "lead-a"}),
+                json!({"record_id": "lead-b"}),
+            ],
+            vec![json!({"record_id": "lead-a", "actor": "other"})],
+            vec![json!({"record_id": "x".repeat(4096)})],
+            vec![json!({"record_id": ""})],
+        ] {
+            assert!(native_field_review_view_response(root, &token, params).is_err());
+        }
+        assert!(native_field_review_view_response(
+            root,
+            "forged",
+            vec![json!({"record_id": "lead-a"})]
+        )
+        .is_err());
+        assert!(native_field_review_view_response(
+            root,
+            &token,
+            vec![json!({"record_id": "missing"})]
+        )
+        .map_err(anyhow::Error::msg)?["view"]
+            .is_null());
+        let conn = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+        conn.execute("UPDATE ctox_business_os__outbound_lead_generation_leads__v0 SET deleted=1 WHERE id='lead-a'", [])?;
+        assert!(store::load_current_native_field_review_view(root, "lead-a")?.is_none());
+        store::open_store(root)?.execute(
+            "UPDATE business_users SET active=0 WHERE user_id='operator'",
+            [],
+        )?;
+        assert!(native_field_review_view_response(
+            root,
+            &token,
+            vec![json!({"record_id": "lead-a"})]
+        )
+        .is_err());
+        Ok(())
     }
 
     #[test]
@@ -1306,6 +1442,11 @@ mod tests {
             &reviewed["field_status"]["firma_prokura"]
         ));
         let native_view = native_review_view(root, "lead-a", &reviewed)?;
+        let response =
+            native_field_review_view_response(root, &token, vec![json!({"record_id": "lead-a"})])
+                .map_err(anyhow::Error::msg)?;
+        assert_eq!(response["record_id"], "lead-a");
+        assert_eq!(response["view"], native_view);
         assert_eq!(
             native_view["field_status"]["firma_prokura"],
             reviewed["field_status"]["firma_prokura"]

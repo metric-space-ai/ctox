@@ -1,5 +1,23 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Native field-review view
+
+Outbound App consumers can request `ctox.outbound.field_review_view.v1` over the
+existing WebRTC auxiliary channel with exactly one `{record_id}` parameter.
+Current `data.read` on `outbound_lead_generation_leads` is required before and
+after the read. Requests are bounded to 2 KiB and replies to 256 KiB; SQLite
+work runs outside the transport executor. No new permission is granted.
+
+The reply is `{schema, record_id, view}`. Missing/deleted leads have `view:null`.
+The canonical lead and private current native field-status witnesses come from
+one read-only snapshot. Unissued historical review metadata is nulled only in
+the view: stored evidence is unchanged and no historical receipt is invented.
+Honest negatives remain answered. The App must bind the response to the same
+record, person and exact current field status before trusting its refutation.
+Raw JSON shape or matching IDs alone is not issuer proof. A stale/different
+view cannot confirm a newer local status. App integration and installed user
+acceptance remain separate from native tests.
+
 ### Browser live-query single-flight
 
 Each `RxQuery.$` subscription keeps at most one executing snapshot and one
