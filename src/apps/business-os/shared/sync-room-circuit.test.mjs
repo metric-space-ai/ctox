@@ -78,7 +78,9 @@ test('a slow module catalog never tears down the complete browser data plane', (
   const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
   const bootstrapStart = appSource.indexOf('async function bootstrap()');
   const moduleCatalogStart = appSource.indexOf('  let modules;', bootstrapStart);
-  const moduleCatalogEnd = appSource.indexOf('  modules = await waitForRequestedHashModule', moduleCatalogStart);
+  const moduleCatalogEnd = appSource.indexOf("  modules = await traceShellPhase('requested-app-catalog', () => waitForRequestedHashModule", moduleCatalogStart);
+  assert.ok(moduleCatalogStart > bootstrapStart, 'module catalog startup must exist');
+  assert.ok(moduleCatalogEnd > moduleCatalogStart, 'isolate the complete catalog retry path');
   const moduleCatalogBlock = appSource.slice(moduleCatalogStart, moduleCatalogEnd);
   assert.match(moduleCatalogBlock, /restartCollection\?\.\('business_module_catalog'\)/);
   assert.doesNotMatch(moduleCatalogBlock, /resetBusinessDb|state\.db = null|state\.sync = null/);

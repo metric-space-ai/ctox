@@ -264,6 +264,37 @@ mod tests {
     }
 
     #[test]
+    fn metadata_session_preserves_a_later_crew_only_restriction() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let (token, trusted) = admitted_metadata_session(root, "admin")?;
+        enforce_internal_command_session_scope(TOOL, &serde_json::json!({}), Some(&trusted))?;
+
+        // A signed later narrowing must not be bypassed by the metadata
+        // early-return, and must not drop its exact selectors during resigning.
+        let narrowed = restrict_internal_command_session_to_crew(root, &token)?;
+        let context = verify_internal_command_session_token(root, &narrowed)?;
+        assert_eq!(
+            context["metadata_read_contract"],
+            trusted["metadata_read_contract"]
+        );
+        assert_eq!(context["crew_only"], true);
+        assert!(enforce_internal_command_session_scope(
+            TOOL,
+            &serde_json::json!({}),
+            Some(&context)
+        )
+        .is_err());
+        assert!(enforce_internal_command_session_scope(
+            "business_os.claim_crew_execution",
+            &serde_json::json!({"command_id": "metadata-command"}),
+            Some(&context)
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
     fn metadata_session_requires_native_credential_permission() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         assert!(admitted_metadata_session(temp.path(), "user").is_err());

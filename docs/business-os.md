@@ -1,5 +1,125 @@
 # CTOX Business OS
 
+## Native research field writeback provenance
+
+Research writebacks stamp each delivered company status and accepted person-bound
+status with `revision: {writeback_id, command_id, attempt, written_at_ms}`.
+`writeback_id` is the native writeback receipt ID, `command_id` the correlated
+research command, and `attempt` the durable gap/research queue-task attempt.
+A chat assignment without such a task records `null`, rather than fabricating
+an attempt number.
+Trusted local calls without an envelope ID receive a native-generated ID which
+is returned with the writeback and persisted in the field revision.
+
+Worker-supplied `revision` is replaced and `review` is explicitly set to `null`.
+Omission would retain an old review through the native store object merge.
+The existing field evidence, person binding and native email verdict guards
+still decide what is accepted. Partial writebacks retain untouched field
+statuses; a replacement status expires its previous review. The contact view
+copies the same revision from the canonical person status.
+
+An Outbound completion review can additionally publish one typed `FIELD_REVIEWS`
+JSON array. Only `refuted` / `no_match` / `contradicted_by_saved_source` is
+supported. Each entry names the task's record, field, exact writeback ID, and
+the exact `person_key` for person fields. The native service binds the verdict
+to the persisted rejecting review audit, original research command, durable
+task attempt and native timestamp, and rechecks the command's execution
+authority. Reviewer-supplied authority fields and cross-record entries fail
+closed; ordinary review prose cannot change a field.
+
+Publication compares the current field revision and writes its review inside
+one SQLite IMMEDIATE transaction. Missing/deleted records, changed writebacks,
+different research parents and ambiguous person identities are never changed.
+Canonical person statuses and matching contact projections share the verdict.
+The native reopening predicate requires the complete audit ID, reason, nonnegative
+attempt and positive review timestamp, alongside the current writeback/parent/person
+identity. Contact projections with a newer parent or native verified verdict retain
+their current result. An exactly bound refutation reopens native gap closure; honest
+`no_match` remains answered, and a replacement writeback expires the review.
+Remote replication cannot create, remove, modify, or transplant a stamped
+field status (including its claim/value/person binding). The host guard compares
+lead, canonical person, and keyed-contact statuses against the actual master
+snapshot used by the storage CAS. A concurrent native write produces a conflict;
+it cannot be overwritten using a separately read stale authority snapshot.
+Unmarked legacy fields, ordinary lead edits and tombstones retaining protected
+statuses remain allowed. Generic MCP app-record patches use the same guard on
+the effective merged document and the actual staged document after projection
+normalization/budget clamping inside an IMMEDIATE transaction. A status-damaging
+projection rolls back before canonical commit or any core-mirror side effect;
+wire budgets remain unchanged. These patches reject deleted lead resurrection
+and cannot issue native receipts even for a DataWrite actor.
+Validated native writebacks and audit publication additionally commit one private
+native-store witness per exact Lead/field/person location with the normalized
+field status. This evidence is not replicated, is not another command claim or
+lifecycle store, and keeps only the current witnessed status. Publication requires
+that exact prior writeback witness, as well as the existing persisted audit and
+current native task authority. Both the new review and its witness commit in the
+same IMMEDIATE transaction; a projection that damages status rolls back both.
+Native writeback and email producers pass their complete pre-derivation master
+snapshot into final persistence. Inside the IMMEDIATE transaction that snapshot
+must equal the actual current row; otherwise the producer rejects the stale
+write before changing either document or witness. The publisher does not share
+the in-process research guard, so that guard alone is not this fence. A fresh
+producer can update another field while retaining the newer untouched verdict
+and witness. Email persistence preserves matching witnesses but cannot issue a
+writeback or review witness; no replay, receipt or attempt is manufactured.
+The native computation view recognizes a refutation only when the full current
+status matches its record/field/person witness. Copying IDs, changing a claim,
+or transplanting a status cannot confer authority. Legacy review metadata gets
+no historical receipt or fabricated attempt: computation ignores its unsupported
+review while its stored evidence remains unchanged. Actual writeback completion
+and asynchronous email completion use this native view; pure JSON shape predicates
+alone are not issuer authentication. Browser app acceptance remains separate.
+
+Browser rendering/selection and the installed end-to-end review workflow still
+require their app integration and acceptance; source code and provenance alone
+do not establish product acceptance.
+
+## Operator coding presets and daemon readiness
+
+`ctox coding-agent models` reads the public `ctox.coding.models.v1`
+document through the existing private service socket for the selected root.
+It includes opaque preset IDs and `subscription_listener_ready`; it does not
+return tokens or configure accounts. This inspection skips the short-lived
+CLI database ledger. A present but unreachable, rejected or incompatible
+daemon is an error, not permission to invent a local model route.
+
+`ctox coding-agent turn --preset <id>` resolves that exact daemon-published
+preset immediately before the existing bounded embedded-pi turn. The
+daemon's process-local subscription readiness remains authoritative. An
+offline root retains its existing local capability rules; no subscription
+listener or account is synthesized. Business OS commands retain their native
+policy checks and daemon-local resolver. The IPC addition reads metadata only:
+it cannot forward an arbitrary turn, raw model, header or credential.
+
+Use an actually advertised model ID. A Desktop worker label or missing static
+catalogue entry does not establish account eligibility or provider availability.
+This correction neither adds a GPT model alias nor selects a fallback provider.
+
+For an identified root, use `ctox coding-agent models --root <root>` and
+`ctox coding-agent turn --module <id> --prompt <text> --preset <id> --root <root>`.
+The global root is selected by main. Coding handlers accept its one validated
+argument pair without reselecting the root; missing or duplicate pairs and
+unknown options fail. Only valid catalogue inspection skips the CLI ledger;
+turns retain their existing lifecycle and policy checks.
+
+## Queue instruction boundary
+
+Native queue admission preserves the complete selected `payload.instruction`
+or fallback `payload.prompt` up to 8,000 Unicode characters after trimming.
+An instruction above that boundary returns
+`business_command_instruction_too_large` before attachment materialization,
+workspace creation or queue admission. The error includes only the size and
+limit, never the instruction content. Queue retry-prompt reconstruction uses
+the same boundary; it does not rebuild a shortened executable instruction.
+The dedicated CV-print parsing prompt keeps its separate existing contract.
+
+Callers must split larger requests into bounded commands or put structured
+data in suitably bounded payload chunks. The JSON/context preview remains a
+bounded preview; this instruction guard does not claim that every oversized
+data payload is fully present in a worker prompt. Existing queued tasks and
+production records are not rewritten by this change.
+
 This document describes the architecture, data-flow, and operational commands of **Business OS**, the browser-based client surface for CTOX.
 
 The Business OS is built as a native CTOX surface, served directly from the active CTOX daemon instance, rather than a separate external SaaS stack.
@@ -40,7 +160,7 @@ flowchart LR
   CTOX -. "join room" .-> Signaling
 ```
 
-1. **Signaling Pairing**: Both the browser client and the Rust daemon connect outbound to a configured signaling server (e.g. `wss://signaling.ctox.dev`, configured via `CTOX_BUSINESS_OS_SIGNALING_URLS` or persisted in `runtime/business-os-signaling-urls.json`) and join a deterministic pairing room (`ctox-business-os:...`) secured by a room password.
+1. **Signaling Pairing**: Both the browser client and the Rust daemon connect outbound to a configured signaling server (e.g. `wss://signaling.ctox.dev`, configured durably in `runtime/business-os-signaling-urls.json`; `CTOX_BUSINESS_OS_SIGNALING_URLS` overrides it for the current process only and is never written back) and join a deterministic pairing room (`ctox-business-os:...`) secured by a room password.
 2. **P2P Channel**: Once paired, a direct WebRTC channel carries all data sync.
 3. **Rust Core Authority**: The Rust daemon remains the authority for command execution and state-machine transitions. The browser writes command documents to RxDB; the daemon peer consumes, validates, and applies them to the authoritative SQLite database, and replicates the resulting projections back to the client.
 
@@ -191,6 +311,43 @@ paths. A successful `business_os.write_app_file` response includes the target
 and fingerprint, and `live=true`. The agent validates with
 `business_os.validate_app` and can run
 `business_os.smoke_app` / `business_os.e2e_app` for browser behavior.
+
+Module coding uses the existing action tools, not generic task delegation.
+An authorized actor sees `ctox.coding.models` (`apps.view`) and
+`ctox.coding.turn` (`apps.modify`) in `business_os.list_module_actions`.
+Propose/execute `ctox.coding.models` with `payload: {}` for the exact module;
+the execution response carries the durable native result in `coding_result`.
+This avoids granting collection-wide command reads just to select a preset.
+The existing daemon IPC dispatch owns both actions when its socket is present;
+connection/protocol errors fail closed. Only an advertised opaque preset may
+be selected. Propose/execute
+`ctox.coding.turn` with `payload: {prompt, preset_id}`. Native admission binds
+`module_id` from the action scope; conflicting module IDs, raw model/URL/header
+objects, faux mode and record scope are rejected. The existing native handler
+re-resolves the preset and runs one bounded embedded-pi leaf turn. No account,
+listener, permission or source root is synthesized by this bridge.
+
+Managed tokens still need the corresponding tool allowlist and module scope.
+Source inspection separately requires `business_os.list_app_files` /
+`business_os.read_app_file` and `apps.source.view` for that module. In the managed
+MCP control plane, only the tenant Owner/Admin can issue a token via
+`POST /api/instances/<tenant-id>/managed-mcp`. The existing
+`issue_app_development_token` action supplies source tools but its fixed tool
+list does not include the coding action tools. For this route, use the existing
+`rotate_token` action with explicit scopes: `allowedModules: [module_id]`,
+`allowedCollections: ["__ctox_no_access__"]`, reads/writes enabled, approvals and
+external effects disabled, and only the needed metadata/source tools plus
+`business_os.list_module_actions`, `business_os.propose_action`,
+`business_os.execute_action`. Verify that the deployed control plane accepts,
+retains and enforces `allowedModules` before issuing: an older schema may strip
+that unknown field, producing an unrestricted module scope. Such deployments
+need the module-scope control-plane update first. Keep a short expiry and revoke
+after acceptance. The native actor separately needs the exact module app permissions; an assigned
+Founder can hold these capabilities without a global Admin grant.
+`allowedTools` rejection cannot be bypassed with the operator CLI
+or by copying another runtime's credentials. Local CLI execution additionally
+requires an actually prepared source root and its authorized native account;
+a retained binary alone supplies neither.
 
 `business_os.create_app` and `business_os.modify_app` remain delegated app-work
 actions. They enqueue CTOX app work and return `command_id`, `task_id`,

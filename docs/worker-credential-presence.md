@@ -41,6 +41,12 @@ selectors remain pending the existing Leadfeeder implementation owner's final
 contract. Do not run the old terminal preflight again or grant catalog access
 from a module name or natural-language objective.
 
+Integration with main 5e61b08 preserves signed Crew attempt bindings and checks
+Crew-only restrictions before metadata scope; metadata-only grants cannot widen
+a Crew-only session. The queue path retains ordinary writeback and Crew-only
+sessions while admitting only the exact declared metadata contract for delegated
+tasks. A regression signs, narrows and re-verifies a real metadata session.
+
 Verification pending: the new native tests cover exact presence across scopes,
 value/description/metadata canaries, malformed contracts, untrusted callers,
 selector widening, actor substitution, permission denial, expiry, terminal reuse

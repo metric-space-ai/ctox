@@ -28,9 +28,15 @@ fn incomplete_plan_can_be_reviewed_without_fabricating_completed_steps() -> Resu
     let reviewing = engine.prepare_task_execution_review(work_key)?;
     assert_eq!(reviewing["percent"], 30);
     assert_eq!(reviewing["completed_steps"], 1);
-    assert!(engine
+    let rejection = engine
         .set_task_execution_review_status(work_key, "completed")
-        .is_err());
+        .expect_err("incomplete plan must never complete");
+    let incomplete = rejection
+        .downcast_ref::<IncompleteTaskExecutionPlan>()
+        .expect("deterministic plan rejection must remain distinguishable from store failure");
+    assert_eq!(incomplete.work_key, work_key);
+    assert_eq!(incomplete.revision, reviewing["revision"].as_i64().unwrap());
+    assert_eq!((incomplete.completed, incomplete.total), (1, 3));
     assert_eq!(
         engine.task_execution_progress(work_key)?.unwrap(),
         reviewing

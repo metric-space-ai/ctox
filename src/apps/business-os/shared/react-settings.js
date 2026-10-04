@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20260909-shell-v2-crew-chat-guards-v370';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261003-shell-v2-backend-version-v440';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {

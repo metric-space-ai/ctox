@@ -35,9 +35,21 @@ use super::policy::{
 use super::store;
 #[path = "mcp_writeback.rs"]
 mod command_writeback;
+#[path = "mcp_crew_context.rs"]
+mod crew_context;
+#[path = "mcp_crew_execution.rs"]
+mod crew_execution;
+#[path = "mcp_crew_plan.rs"]
+mod crew_plan;
 #[path = "mcp_metadata_read.rs"]
 mod metadata_read;
+#[path = "mcp_project_crew.rs"]
+mod project_crew_request;
 pub(crate) use command_writeback::supports_command_writeback;
+#[path = "mcp_app_authority.rs"]
+mod app_authority;
+pub(super) use app_authority::AuthenticatedMcpAppCommand;
+pub(crate) use crew_execution::run as run_external_crew_turn;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;
@@ -95,9 +107,9 @@ pub struct McpChannelRequestContext {
     pub tool: String,
     pub request_id: String,
     pub confirmation_state: McpConfirmationState,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub trusted_role: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub trusted_role_source: Option<String>,
 }
 
@@ -267,6 +279,8 @@ pub struct BusinessOsActionExecution {
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coding_result: Option<Value>,
     pub confirmation_required: bool,
     pub client_context: Value,
 }
@@ -510,6 +524,12 @@ struct BusinessOsMcpInternalSessionClaims {
     allowed_collections: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     metadata_read_contract: Option<metadata_read::ReadContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    crew_binding: Option<crew_context::SessionBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    crew_work_key: Option<String>,
+    #[serde(default)]
+    crew_only: bool,
     issued_at_ms: i64,
     expires_at_ms: i64,
 }
@@ -679,17 +699,80 @@ pub(crate) fn issue_internal_command_session_token(
         allowed_actions: allowed_actions_from_writeback_contract(writeback_contract)?,
         allowed_collections: normalized_string_array(writeback_contract.get("allowed_collections")),
         metadata_read_contract,
+        crew_binding: None,
+        crew_work_key: None,
+        crew_only: false,
         issued_at_ms,
         expires_at_ms: issued_at_ms.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
+    sign_internal_command_session_claims(root, &claims)
+}
+
+fn sign_internal_command_session_claims(
+    root: &Path,
+    claims: &BusinessOsMcpInternalSessionClaims,
+) -> anyhow::Result<String> {
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims)?);
     let secret = mcp_internal_session_signing_secret(root)?;
     let key = hmac::Key::new(hmac::HMAC_SHA256, &secret);
     let signature = URL_SAFE_NO_PAD.encode(hmac::sign(&key, payload.as_bytes()).as_ref());
     Ok(format!("{payload}.{signature}"))
 }
 
-fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Result<Value> {
+/// Narrow an existing command grant to Crew coordination only.
+/// This never adds app, data, shell, or writeback authority.
+pub(crate) fn restrict_internal_command_session_to_crew(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<String> {
+    verify_internal_command_session_token(root, token)?;
+    let mut claims = decode_internal_command_session_token(root, token)?;
+    claims.crew_only = true;
+    sign_internal_command_session_claims(root, &claims)
+}
+
+fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bool {
+    let restricted = context.is_some_and(|context| {
+        string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
+            && context.get("crew_only").and_then(Value::as_bool) == Some(true)
+    });
+    !restricted
+        || matches!(
+            tool_name,
+            "business_os.get_crew_context"
+                | "business_os.update_crew_plan"
+                | "business_os.list_crew_executions"
+                | "business_os.claim_crew_execution"
+                | "business_os.report_crew_execution"
+        )
+}
+
+/// Bind a native command session to the explicitly admitted attempt and lease.
+pub(crate) fn bind_internal_command_session_to_crew_attempt(
+    root: &Path,
+    token: &str,
+    attempt_id: &str,
+    work_key: &str,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(!work_key.trim().is_empty(), "crew work key is empty");
+    verify_internal_command_session_token(root, token)?;
+    let mut claims = decode_internal_command_session_token(root, token)?;
+    anyhow::ensure!(
+        claims.crew_binding.is_none(),
+        "crew session is already bound"
+    );
+    claims.crew_work_key = Some(work_key.to_owned());
+    let conn = crew_context::open_read_connection(root)?;
+    claims.crew_binding = Some(
+        crew_context::live_binding(&conn, &claims.command_id, &claims.payload_hash, attempt_id)?.0,
+    );
+    sign_internal_command_session_claims(root, &claims)
+}
+
+pub(crate) fn verify_internal_command_session_token(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<Value> {
     let claims = decode_internal_command_session_token(root, token)?;
     let command = crate::mission::channels::inspect_business_command(root, &claims.command_id)?
         .context("Business OS internal command session references an unknown command")?;
@@ -719,7 +802,23 @@ fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Re
                 == Some(claims.role.as_str()),
         "Business OS internal command authorization changed"
     );
+    if let Some(expected) = claims.crew_binding.as_ref() {
+        let conn = crew_context::open_read_connection(root)?;
+        let (current, _) = crew_context::live_binding(
+            &conn,
+            &claims.command_id,
+            &claims.payload_hash,
+            &expected.attempt_id,
+        )?;
+        anyhow::ensure!(
+            &current == expected,
+            "crew session lease or identity changed"
+        );
+    }
     Ok(serde_json::json!({
+        "crew_binding": claims.crew_binding,
+        "crew_work_key": claims.crew_work_key,
+        "crew_only": claims.crew_only,
         "auth_source": MCP_INTERNAL_SESSION_AUTH_SOURCE,
         "channel": "ctox_internal_business_command",
         "surface": "business_os_command_session",
@@ -1119,6 +1218,47 @@ fn gateway_json_rpc_error(
 
 pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
     let mut tools = vec![
+        project_crew_request::descriptor(),
+        project_crew_request::native_project_descriptor(),
+        project_crew_request::native_project_cancel_descriptor(),
+        read_tool(
+            "business_os.list_crew_executions",
+            "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
+            object_schema(vec![required_string("command_id"), required_string("executor_id")]),
+        ),
+        write_tool(
+            "business_os.claim_crew_execution",
+            "Claim an external Crew execution offered by the native worker for this command and executor. Requires the command owner and private Crew access. Returns scoped execution authority; it does not admit new work.",
+            object_schema(vec![required_string("command_id"), required_string("executor_id"), required_string("attempt_id")]),
+        ),
+        write_tool(
+            "business_os.report_crew_execution",
+            "Report a reply or failure candidate for this signed external Crew execution. Native review decides completion. Repeating identical evidence is idempotent.",
+            serde_json::json!({"type":"object","additionalProperties":false,
+                "properties":{"reply":{"type":"string"},"error":{"type":"string"}},
+                "oneOf":[{"required":["reply"]},{"required":["error"]}]}),
+        ),
+        write_tool(
+            "business_os.update_crew_plan",
+            "Update steps for the exact Crew execution bound to this signed session. Native runtime owns progress and review; this does not complete the task or learn from it.",
+            serde_json::json!({
+                "type": "object", "additionalProperties": false, "required": ["steps"],
+                "properties": {
+                    "steps": {"type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "object", "additionalProperties": false,
+                            "required": ["label", "status"], "properties": {
+                                "label": {"type": "string", "minLength": 1},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+                            }}},
+                    "explanation": {"type": "string"}
+                }
+            }),
+        ),
+        read_tool(
+            "business_os.get_crew_context",
+            "Restore the bounded persona, memory and current execution plan of an open crew attempt belonging to this signed command session. Requires private crew-read permission and a live native lease. Does not admit, renew, complete or learn from an execution.",
+            object_schema(vec![required_string("attempt_id")]),
+        ),
         read_tool(
             "business_os.status",
             "Use this when you need CTOX Business OS MCP channel and runtime status.",
@@ -1476,13 +1616,24 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("record_id"),
                 optional_string("title"),
                 optional_string("objective"),
+                optional_string("idempotency_key"),
                 optional_action_payload("payload"),
             ]),
         ),
         write_tool(
             "business_os.execute_writeback",
-            "Persist completed lead research via its contracted native business_command. Requires the signed research task session. The server binds module and research_command_id; no CLI, shell or SQLite access is needed. Check the returned status; failed writeback means the task is not complete. A response with ok:true is accepted and stored: accepted_fields were taken over, open_fields lists what is still missing (not an error: research them and send them together in one further call), rejections lists defective entries only. Send many fields per call, never resend an accepted field, never send probe or debug calls. Exact shape (all keys lowercase, lists are JSON arrays, never strings): {\"record_id\": \"<lead id>\", \"payload\": {\"field_status\": {\"<field>\": {\"status\": \"verified|no_match|unsupported|action_required\", \"value\": <only for verified>, \"reason\": \"<why, for non-verified>\", \"sources\": [{\"source_id\": \"host\", \"url\": \"https://…\", \"quote\": \"verbatim\"}], \"person_key\": \"<for person_* fields>\"}}, \"result\": {\"fields\": {\"<verified field>\": {\"value\": <same as field_status>, \"sources\": [...]}}, \"person_records\": [{\"person_key\": \"…\", \"person_vorname\": \"…\", \"person_nachname\": \"…\", \"person_funktion\": \"…\", \"sources\": [...]}], \"evidence\": [{\"field_key\": \"…\", \"source_id\": \"…\", \"url\": \"…\", \"quote\": \"…\"}]}}}. Do not wrap the payload in \"item\", do not put field keys at the top level, and cover every requested field in field_status.",
-            object_schema(vec![required_string("record_id"), required_object("payload")]),
+            "Persist completed lead research via its contracted native business_command. Requires the signed research task session. The server binds module and research_command_id; no CLI, shell or SQLite access is needed. Check the returned status; failed writeback means the task is not complete. A response with ok:true is accepted and stored: accepted_fields were taken over, open_fields lists what is still missing (not an error: research them and send them together in one further call), rejections lists defective entries only. Send many fields per call, never resend an accepted field, never send probe or debug calls. Send payload as ONE JSON string that encodes the payload object (MiniMax drops large object arguments; a string arrives intact and the server decodes it and names the exact position of any JSON error). Payload object shape (all keys lowercase, lists are JSON arrays, never strings): {\"field_status\": {\"<field>\": {\"status\": \"verified|no_match|unsupported|action_required\", \"value\": <only for verified>, \"reason\": \"<why, for non-verified>\", \"sources\": [{\"source_id\": \"host\", \"url\": \"https://…\", \"quote\": \"verbatim\"}], \"person_key\": \"<for person_* fields>\"}}, \"result\": {\"fields\": {\"<verified field>\": {\"value\": <same as field_status>, \"sources\": [...]}}, \"person_records\": [{\"person_key\": \"…\", \"person_vorname\": \"…\", \"person_nachname\": \"…\", \"person_funktion\": \"…\", \"sources\": [...]}], \"evidence\": [{\"field_key\": \"…\", \"source_id\": \"…\", \"url\": \"…\", \"quote\": \"…\"}]}}. Do not wrap the payload in \"item\", do not put field keys at the top level, and cover every requested field in field_status. Call shape: {\"record_id\": \"<lead id>\", \"payload\": \"{\\\"field_status\\\": {...}, \\\"result\\\": {...}}\"}.",
+            object_schema(vec![
+                required_string("record_id"),
+                (
+                    "payload",
+                    serde_json::json!({
+                        "type": "string",
+                        "description": "The writeback payload object (field_status, result) encoded as one JSON string."
+                    }),
+                    true,
+                ),
+            ]),
         ),
         read_tool(
             "business_os.get_command_status",
@@ -1793,6 +1944,18 @@ fn workjet_record_visible_with_reader(
         .unwrap_or(true))
 }
 
+fn mcp_app_collection_uses_rxdb_authority(collection: &str) -> bool {
+    !collection_requires_typed_mcp_tool(collection)
+        && !super::project_chats::is_owned_collection(collection)
+        && !matches!(
+            collection,
+            "communication_accounts"
+                | "communication_threads"
+                | "communication_messages"
+                | "business_workspace_branding"
+        )
+}
+
 pub fn query_records(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -1804,7 +1967,11 @@ pub fn query_records(
     enforce_collection_policy(root, collection)?;
     let public_crew = crew_read_is_public(root, context, collection)?;
     let limit = bounded_limit(limit);
-    let payload = store::pull_latest_collection_records(root, collection, Some(limit))?;
+    let payload = if mcp_app_collection_uses_rxdb_authority(collection) {
+        store::pull_mcp_app_collection_records(root, collection, Some(limit))?
+    } else {
+        store::pull_latest_collection_records(root, collection, Some(limit))?
+    };
     let documents = payload
         .get("documents")
         .and_then(Value::as_array)
@@ -1899,7 +2066,7 @@ pub fn upsert_record(
     ensure_non_empty("record_id", &record_id)?;
 
     let updated_at_ms = now_ms() as i64;
-    store::upsert_projection_record(root, &collection, &record_id, updated_at_ms, record)?;
+    store::upsert_external_projection_record(root, &collection, &record_id, updated_at_ms, record)?;
 
     let record = get_record(root, context, &collection, &record_id)?.record;
     Ok(BusinessOsMcpMutationResponse {
@@ -1975,8 +2142,9 @@ pub fn create_app(
         "install_target": "runtime-installed-module",
         "required_skills": ["business-os-app-module-development"]
     });
-    let accepted = store::record_command(
+    let accepted = store::record_mcp_app_command(
         root,
+        AuthenticatedMcpAppCommand::from_context(context)?,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
             id: None,
@@ -2035,6 +2203,7 @@ pub fn modify_app(
     enforce_module_policy(root, &module_id)?;
     enforce_business_os_mcp_policy(root, context, "business_os.modify_app", arguments)?;
     let _module = get_module(root, context, &module_id)?;
+    store::ensure_delegated_app_modify_target_supported(root, &module_id)?;
     let title = optional_string_arg(arguments, "title")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("Modify {}", title_from_module_id(&module_id)));
@@ -2055,8 +2224,9 @@ pub fn modify_app(
         "install_target": "runtime-installed-module",
         "required_skills": ["business-os-app-module-development"]
     });
-    let accepted = store::record_command(
+    let accepted = store::record_mcp_app_command(
         root,
+        AuthenticatedMcpAppCommand::from_context(context)?,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
             id: None,
@@ -2432,7 +2602,8 @@ pub fn write_app_file(
         store::runtime_app_delivery_evidence(root, &module_id)?;
     Ok(BusinessOsAppSourceWrite {
         ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(false),
-        app_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        app_directory: string_field(&outcome, "app_directory")
+            .context("source write did not report its actual directory")?,
         module_id,
         path,
         source_file_id: string_field(&outcome, "source_file_id").unwrap_or_default(),
@@ -2763,6 +2934,26 @@ fn call_tool_inner(
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
         metadata_read::TOOL => metadata_read::read(root, trusted_gateway_context, &arguments)?,
+        "business_os.start_project_task" => {
+            project_crew_request::start_native_project(root, &context, &arguments)?
+        }
+        "business_os.cancel_project_task" => {
+            project_crew_request::cancel_native_project(root, &context, &arguments)?
+        }
+        "business_os.start_crew_execution" => {
+            project_crew_request::start(root, &context, &arguments)?
+        }
+        "business_os.list_crew_executions" => crew_execution::list(root, &context, &arguments)?,
+        "business_os.claim_crew_execution" => crew_execution::claim(root, &context, &arguments)?,
+        "business_os.report_crew_execution" => {
+            crew_execution::report(root, &context, &arguments, trusted_gateway_context)?
+        }
+        "business_os.update_crew_plan" => {
+            crew_plan::update(root, &context, &arguments, trusted_gateway_context)?
+        }
+        "business_os.get_crew_context" => {
+            crew_context::read(root, &context, &arguments, trusted_gateway_context)?
+        }
         "business_os.execute_writeback" => {
             command_writeback::execute(root, &context, &arguments, trusted_gateway_context)?
         }
@@ -4069,7 +4260,12 @@ pub fn get_record(
     ensure_non_empty("collection", collection)?;
     enforce_collection_policy(root, collection)?;
     let public_crew = crew_read_is_public(root, context, collection)?;
-    let payload = store::pull_collection_record(root, collection, record_id)?.ok_or_else(|| {
+    let payload = if mcp_app_collection_uses_rxdb_authority(collection) {
+        store::pull_mcp_app_collection_record(root, collection, record_id)?
+    } else {
+        store::pull_collection_record(root, collection, record_id)?
+    }
+    .ok_or_else(|| {
         BusinessOsMcpError::not_found(
             BusinessOsMcpErrorCode::RecordNotFound,
             format!("Business OS record `{record_id}` was not found in `{collection}`"),
@@ -4501,6 +4697,22 @@ pub fn list_module_actions(
 ) -> anyhow::Result<BusinessOsMcpList<BusinessOsActionDescriptor>> {
     let module = get_module(root, context, module_id)?;
     let mut actions = vec![generic_delegate_action(&module.id)];
+    for (action_id, permission) in [
+        ("ctox.coding.models", BusinessOsPermission::AppsView),
+        ("ctox.coding.turn", BusinessOsPermission::AppsModify),
+    ] {
+        if trusted_mcp_actor_policy_decision(
+            root,
+            context,
+            permission,
+            BusinessOsScopeType::Module,
+            Some(&module.id),
+        )?
+        .allowed
+        {
+            actions.push(module_coding_action_descriptor(&module.id, action_id));
+        }
+    }
     actions.extend(match module.id.as_str() {
         "tickets" => vec![
             action_descriptor(
@@ -4675,6 +4887,13 @@ pub fn propose_action(
             .cloned()
             .unwrap_or_else(|| serde_json::json!({})),
     );
+    if matches!(action_id, "ctox.coding.models" | "ctox.coding.turn") {
+        anyhow::ensure!(
+            record_id.is_none(),
+            "coding actions are module-scoped, not record-scoped"
+        );
+        payload = module_coding_action_payload(module_id, action_id, payload)?;
+    }
     if action.action_id == "web_stack.person_research" {
         validate_person_research_action_arguments(arguments, &payload)?;
         let scoped_record_id = record_id
@@ -4716,6 +4935,8 @@ pub fn propose_action(
                 "proposal_only": true,
                 "writeback_contract": if action.action_id == "web_stack.person_research" {
                     "person_research/native"
+                } else if action.action_id.starts_with("ctox.coding.") {
+                    "coding/module"
                 } else {
                     "external_sql"
                 }
@@ -4778,6 +4999,62 @@ pub fn propose_action(
     })
 }
 
+fn delegate_action_command_id(
+    module_id: &str,
+    action_id: &str,
+    arguments: &Value,
+    actor: &Value,
+) -> anyhow::Result<Option<String>> {
+    if action_id != "ctox.delegate_task" {
+        return Ok(None);
+    }
+    // Older callers without a key retain their existing one-shot behavior.
+    // A supplied key must never silently fall back to a random command ID.
+    let Some(value) = arguments.get("idempotency_key") else {
+        return Ok(None);
+    };
+    let key = value
+        .as_str()
+        .context("delegation idempotency key must be a string")?;
+    let bytes = key.as_bytes();
+    anyhow::ensure!(
+        !bytes.is_empty()
+            && bytes.len() <= 256
+            && bytes[0].is_ascii_alphanumeric()
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric()
+                    || matches!(*byte, b'.' | b'_' | b':' | b'-')),
+        "invalid delegation idempotency key"
+    );
+    let actor_id = actor
+        .pointer("/id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .context("delegation actor identity is required")?;
+    let identity = serde_json::to_vec(&(actor_id, module_id, action_id, key))?;
+    Ok(Some(format!(
+        "ctox_delegate_{}",
+        URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, &identity).as_ref())
+    )))
+}
+
+fn ensure_delegate_action_intent(
+    canonical: &Value,
+    module_id: &str,
+    proposal: &BusinessOsActionProposal,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        canonical["module"].as_str() == Some(module_id)
+            && canonical["command_type"].as_str() == Some(proposal.command_type.as_str())
+            && canonical["record_id"].as_str().filter(|id| !id.is_empty())
+                == proposal.record_id.as_deref()
+            && canonical["payload"] == proposal.payload,
+        "delegation key conflicts with existing intent"
+    );
+    Ok(())
+}
+
 pub fn execute_action(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -4785,7 +5062,10 @@ pub fn execute_action(
     action_id: &str,
     arguments: &Value,
 ) -> anyhow::Result<BusinessOsActionExecution> {
-    let policy_arguments = arguments_with_module_id(arguments, module_id);
+    let mut policy_arguments = arguments_with_module_id(arguments, module_id);
+    // Bind authorization to the action selected by this typed API, never to
+    // an action_id supplied inside an argument object by the caller.
+    policy_arguments["action_id"] = Value::String(action_id.to_string());
     enforce_business_os_mcp_policy(
         root,
         context,
@@ -4815,6 +5095,8 @@ pub fn execute_action(
     }
     let writeback_contract = if action_id == "web_stack.person_research" {
         "person_research/native"
+    } else if action_id.starts_with("ctox.coding.") {
+        "coding/module"
     } else if is_native_mcp_control_action(module_id, action_id) {
         "external_sql"
     } else {
@@ -4828,10 +5110,12 @@ pub fn execute_action(
     } else {
         None
     };
+    let actor = resolved_mcp_actor_context(root, context)?;
+    let delegate_command_id = delegate_action_command_id(module_id, action_id, arguments, &actor)?;
     let mut client_context = serde_json::json!({
         "channel": &context.channel,
         "surface": &context.surface,
-        "actor": resolved_mcp_actor_context(root, context)?,
+        "actor": actor,
         "mcp_actor": &context.actor,
         "workspace": &context.workspace,
         "request_id": &context.request_id,
@@ -4846,24 +5130,31 @@ pub fn execute_action(
     if let Some(key) = person_research_key {
         client_context["idempotency_key"] = serde_json::json!(key);
     }
+    if delegate_command_id.is_some() {
+        client_context["idempotency_key"] = arguments["idempotency_key"].clone();
+    }
     if is_native_mcp_control_action(module_id, action_id) {
         let command_id = if action_id == "web_stack.person_research" {
             person_research_command_id(context, &proposal, arguments)?
         } else {
             native_mcp_control_command_id(context, module_id, action_id, &proposal.payload)
         };
-        let outcome = store::accept_rxdb_business_command(
-            root,
-            serde_json::json!({
-                "id": command_id,
-                "command_id": command_id,
-                "module": module_id,
-                "command_type": proposal.command_type,
-                "record_id": proposal.record_id,
-                "payload": proposal.payload,
-                "client_context": client_context,
-            }),
-        )?;
+        let document = serde_json::json!({
+            "id": command_id,
+            "command_id": command_id,
+            "module": module_id,
+            "command_type": proposal.command_type,
+            "record_id": proposal.record_id,
+            "payload": proposal.payload,
+            "client_context": client_context,
+        });
+        let outcome = if matches!(action_id, "ctox.coding.models" | "ctox.coding.turn") {
+            // Presets and account readiness belong to the running daemon, not
+            // the short-lived MCP connector. A present socket fails closed.
+            crate::service::dispatch_business_command(root, document)?
+        } else {
+            store::accept_rxdb_business_command(root, document)?
+        };
         let status = outcome
             .get("status")
             .and_then(Value::as_str)
@@ -4880,7 +5171,8 @@ pub fn execute_action(
             .filter(|value| !value.trim().is_empty())
             .map(str::to_string);
         return Ok(BusinessOsActionExecution {
-            ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(true),
+            ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(true)
+                && (!action_id.starts_with("ctox.coding.") || status != "failed"),
             action: proposal.action,
             module_id: module_id.to_string(),
             record_id: proposal.record_id,
@@ -4889,15 +5181,60 @@ pub fn execute_action(
             status,
             task_id,
             task_status,
+            coding_result: action_id
+                .starts_with("ctox.coding.")
+                .then(|| outcome.get("result").cloned())
+                .flatten(),
             confirmation_required: proposal.confirmation_required,
             client_context,
         });
+    }
+    if let Some(command_id) = delegate_command_id.as_deref() {
+        if let Some(existing) =
+            crate::mission::channels::inspect_business_command(root, command_id)?
+        {
+            let canonical =
+                crate::mission::channels::business_command_projection(root, command_id)?;
+            ensure_delegate_action_intent(&canonical, module_id, &proposal)?;
+            let status_record = store::pull_business_command_status_record(root, command_id)?;
+            let task_id = existing
+                .get("execution_task_id")
+                .and_then(Value::as_str)
+                .or_else(|| status_record.as_ref()?.get("task_id")?.as_str())
+                .map(str::to_string);
+            let status = status_record
+                .as_ref()
+                .and_then(|record| record.get("status"))
+                .and_then(Value::as_str)
+                .or_else(|| canonical.get("status").and_then(Value::as_str))
+                .unwrap_or("accepted")
+                .to_string();
+            let task_status = status_record
+                .as_ref()
+                .and_then(|record| record.get("task_status"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return Ok(BusinessOsActionExecution {
+                ok: true,
+                action: proposal.action,
+                module_id: module_id.to_string(),
+                record_id: proposal.record_id,
+                command_type: proposal.command_type,
+                command_id: command_id.to_string(),
+                status,
+                task_id,
+                task_status,
+                coding_result: None,
+                confirmation_required: proposal.confirmation_required,
+                client_context,
+            });
+        }
     }
     let accepted = store::record_command(
         root,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
-            id: None,
+            id: delegate_command_id.clone(),
             module: module_id.to_string(),
             command_type: proposal.command_type.clone(),
             record_id: proposal.record_id.clone(),
@@ -4905,6 +5242,11 @@ pub fn execute_action(
             client_context: client_context.clone(),
         },
     )?;
+    if accepted.ok && delegate_command_id.is_some() {
+        let canonical =
+            crate::mission::channels::business_command_projection(root, &accepted.command_id)?;
+        ensure_delegate_action_intent(&canonical, module_id, &proposal)?;
+    }
     Ok(BusinessOsActionExecution {
         ok: accepted.ok,
         action: proposal.action,
@@ -4915,6 +5257,7 @@ pub fn execute_action(
         status: accepted.status.to_string(),
         task_id: accepted.task_id,
         task_status: accepted.task_status,
+        coding_result: None,
         confirmation_required: proposal.confirmation_required,
         client_context,
     })
@@ -4924,7 +5267,11 @@ fn is_native_mcp_control_action(module_id: &str, action_id: &str) -> bool {
     !module_id.trim().is_empty()
         && matches!(
             action_id,
-            "external_sql.sync.refresh" | "external_sql.write" | "web_stack.person_research"
+            "external_sql.sync.refresh"
+                | "external_sql.write"
+                | "web_stack.person_research"
+                | "ctox.coding.models"
+                | "ctox.coding.turn"
         )
 }
 
@@ -5134,7 +5481,9 @@ fn handle_json_rpc_with_gateway_context(
             }
         })),
         "tools/list" => Ok(serde_json::json!({
-            "tools": tool_descriptors()
+            "tools": tool_descriptors().into_iter()
+                .filter(|tool| crew_only_session_allows_tool(&tool.name, trusted_gateway_context))
+                .collect::<Vec<_>>()
         })),
         "tools/call" => {
             let params = body
@@ -5572,6 +5921,13 @@ fn business_os_mcp_policy_decision(
     arguments: &Value,
 ) -> anyhow::Result<Option<PolicyDecision>> {
     match tool_name {
+        "business_os.start_project_task" => Ok(Some(trusted_mcp_actor_policy_decision(
+            root,
+            context,
+            BusinessOsPermission::CtoxTaskCreate,
+            BusinessOsScopeType::Record,
+            Some(&required_arg(arguments, "project_id")?),
+        )?)),
         "meeting.status" | "meeting.get_transcript" => Ok(Some(trusted_mcp_actor_policy_decision(
             root,
             context,
@@ -5717,6 +6073,20 @@ fn business_os_mcp_policy_decision(
         )?)),
         "business_os.execute_action" => {
             let module_id = required_arg(arguments, "module_id")?;
+            let permission = match arguments.get("action_id").and_then(Value::as_str) {
+                Some("ctox.coding.models") => Some(BusinessOsPermission::AppsView),
+                Some("ctox.coding.turn") => Some(BusinessOsPermission::AppsModify),
+                _ => None,
+            };
+            if let Some(permission) = permission {
+                return Ok(Some(trusted_mcp_actor_policy_decision(
+                    root,
+                    context,
+                    permission,
+                    BusinessOsScopeType::Module,
+                    Some(&module_id),
+                )?));
+            }
             Ok(Some(business_os_mcp_module_data_decision(
                 root,
                 context,
@@ -6386,6 +6756,12 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         }
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "web_browser_prepare"
+        | "business_os.start_project_task"
+        | "business_os.cancel_project_task"
+        | "business_os.start_crew_execution"
+        | "business_os.claim_crew_execution"
+        | "business_os.report_crew_execution"
+        | "business_os.update_crew_plan"
         | "business_os.execute_writeback"
         | "business_os.execute_action"
         | "appsec_assessment_create"
@@ -6548,6 +6924,7 @@ fn argument_business_scope_metadata(tool_name: &str, arguments: &Value) -> Value
             "kind",
             "id",
             "command_id",
+            "target_command_id",
             "run_id",
             "artifact_id",
             "approval_id",
@@ -6611,7 +6988,10 @@ fn context_from_arguments_with_trusted_gateway_context(
     arguments: &Value,
     trusted_gateway_context: Option<&Value>,
 ) -> anyhow::Result<McpChannelRequestContext> {
-    let context = arguments.get("_context").unwrap_or(&Value::Null);
+    // The role and its actor/workspace must have the same provenance. Never
+    // combine a verified gateway role with caller-selected identity fields.
+    let context = trusted_gateway_context
+        .unwrap_or_else(|| arguments.get("_context").unwrap_or(&Value::Null));
     let trusted_role = trusted_managed_gateway_role(trusted_gateway_context);
     let internal_context = trusted_gateway_context.filter(|context| {
         string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
@@ -6676,6 +7056,10 @@ fn enforce_internal_command_session_scope(
     }) else {
         return Ok(());
     };
+    anyhow::ensure!(
+        crew_only_session_allows_tool(tool_name, Some(context)),
+        "tool is outside this Crew-only command session"
+    );
     if let Some(contract) = context
         .get("metadata_read_contract")
         .filter(|value| !value.is_null())
@@ -6697,6 +7081,34 @@ fn enforce_internal_command_session_scope(
         .filter_map(|action| string_field(action, "module_id"))
         .collect::<BTreeSet<_>>();
     match tool_name {
+        "business_os.start_project_task"
+        | "business_os.cancel_project_task"
+        | "business_os.start_crew_execution" => {
+            anyhow::bail!("a command-scoped session cannot admit independent project work")
+        }
+        "business_os.list_crew_executions" | "business_os.claim_crew_execution" => {
+            anyhow::ensure!(
+                required_arg(arguments, "command_id")? == required_arg(context, "command_id")?,
+                "external Crew command is outside this signed session"
+            );
+            let collections = normalized_string_array(context.get("allowed_collections"));
+            anyhow::ensure!(
+                collections.is_empty()
+                    || collections.iter().any(|name| name == "ctox_crew_members"),
+                "external Crew is outside this signed collection scope"
+            );
+            if tool_name == "business_os.claim_crew_execution" {
+                if let Some(attempt) = context
+                    .pointer("/crew_binding/attempt_id")
+                    .and_then(Value::as_str)
+                {
+                    anyhow::ensure!(
+                        required_arg(arguments, "attempt_id")? == attempt,
+                        "external Crew attempt is outside this signed session"
+                    );
+                }
+            }
+        }
         "business_os.propose_action" | "business_os.execute_action" => {
             let module_id = required_arg(arguments, "module_id")?;
             let action_id = required_arg(arguments, "action_id")?;
@@ -7314,8 +7726,85 @@ fn required_object(name: &'static str) -> (&'static str, Value, bool) {
     )
 }
 
+fn module_coding_action_payload(
+    module_id: &str,
+    action_id: &str,
+    payload: Value,
+) -> anyhow::Result<Value> {
+    let object = payload
+        .as_object()
+        .context("coding payload must be an object")?;
+    let is_turn = action_id == "ctox.coding.turn";
+    for key in object.keys() {
+        anyhow::ensure!(
+            key == "module_id" || (is_turn && matches!(key.as_str(), "prompt" | "preset_id")),
+            "unsupported coding payload field: {key}"
+        );
+    }
+    if let Some(claimed) = object.get("module_id") {
+        anyhow::ensure!(
+            claimed.as_str() == Some(module_id),
+            "coding module scope mismatch"
+        );
+    }
+    let mut bound = serde_json::json!({"module_id": module_id});
+    if is_turn {
+        let prompt = object
+            .get("prompt")
+            .and_then(Value::as_str)
+            .context("coding prompt is required")?;
+        anyhow::ensure!(
+            !prompt.trim().is_empty() && prompt.len() <= 32_768,
+            "coding prompt must be nonempty and at most 32768 bytes"
+        );
+        let preset_id = object
+            .get("preset_id")
+            .and_then(Value::as_str)
+            .context("an advertised coding preset_id is required")?;
+        anyhow::ensure!(
+            !preset_id.trim().is_empty() && preset_id.len() <= 512,
+            "invalid coding preset_id"
+        );
+        bound["prompt"] = Value::String(prompt.to_string());
+        bound["preset_id"] = Value::String(preset_id.to_string());
+    }
+    Ok(bound)
+}
+
+fn module_coding_action_descriptor(module_id: &str, action_id: &str) -> BusinessOsActionDescriptor {
+    let is_turn = action_id == "ctox.coding.turn";
+    let mut descriptor = action_descriptor(
+        action_id,
+        module_id,
+        if is_turn {
+            "Run bounded module coding turn"
+        } else {
+            "Read native coding presets"
+        },
+        if is_turn {
+            "Run the existing embedded pi leaf turn for this module using an explicitly advertised native preset."
+        } else {
+            "Read the selected native root's nonsecret model presets and readiness through a durable command."
+        },
+        if is_turn { "write" } else { "read" },
+        false,
+        false,
+    );
+    let payload = if is_turn {
+        serde_json::json!({"type":"object","properties":{
+            "prompt":{"type":"string","minLength":1,"maxLength":32768},
+            "preset_id":{"type":"string","minLength":1,"maxLength":512}
+        },"required":["prompt","preset_id"],"additionalProperties":false})
+    } else {
+        serde_json::json!({"type":"object","additionalProperties":false})
+    };
+    descriptor.input_schema = serde_json::json!({"type":"object","properties":{"payload":payload},
+        "required":["payload"],"additionalProperties":false});
+    descriptor
+}
+
 fn generic_delegate_action(module_id: &str) -> BusinessOsActionDescriptor {
-    action_descriptor(
+    let mut descriptor = action_descriptor(
         "ctox.delegate_task",
         module_id,
         "Delegate CTOX task",
@@ -7323,7 +7812,11 @@ fn generic_delegate_action(module_id: &str) -> BusinessOsActionDescriptor {
         "write",
         false,
         false,
-    )
+    );
+    descriptor.input_schema["properties"]["idempotency_key"] = serde_json::json!({
+        "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    });
+    descriptor
 }
 
 fn action_descriptor(
@@ -7718,20 +8211,22 @@ fn validate_person_research_record_binding(
         }
     }
     let record_string = |fields: &[&str]| {
-        fields
-            .iter()
-            .find_map(|field| record_object.get(*field).and_then(Value::as_str))
-            .or_else(|| {
-                record_object
-                    .get("data")
-                    .and_then(Value::as_object)
-                    .and_then(|data| {
-                        fields
-                            .iter()
-                            .find_map(|field| data.get(*field).and_then(Value::as_str))
-                    })
-            })
-            .map(str::trim)
+        let find_in = |object: &serde_json::Map<String, Value>| {
+            fields
+                .iter()
+                .find_map(|field| object.get(*field).and_then(Value::as_str))
+                .map(ToOwned::to_owned)
+        };
+        // Prefer the bound lead payload. Some records expose a technical
+        // `title` (often the record id) alongside the human company name.
+        // Looking at the outer object first would bind the request to that id
+        // and reject an otherwise valid research call.
+        record_object
+            .get("data")
+            .and_then(Value::as_object)
+            .and_then(find_in)
+            .or_else(|| find_in(record_object))
+            .map(|value| value.trim().to_owned())
             .unwrap_or_default()
     };
     let company = payload
@@ -7739,9 +8234,42 @@ fn validate_person_research_record_binding(
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    let bound_company = record_string(&["company", "company_name", "firma_name", "name", "title"]);
+
+    // Runtime Outbound leads store their identity in `name` and
+    // `data.firma_name`; an MCP descriptor's derived title is not a raw field.
+    // All present identity aliases must agree, so a matching display name
+    // cannot override a conflicting canonical company on the stored record.
+    let mut has_bound_company = false;
+    for value in [
+        record_object.get("company"),
+        record_object.get("company_name"),
+        record_object
+            .get("title")
+            .filter(|value| value.as_str().map(str::trim) != Some(record_id)),
+        record_object.get("name"),
+        record_object.get("firma_name"),
+        record.pointer("/data/company"),
+        record.pointer("/data/company_name"),
+        record.pointer("/data/title"),
+        record.pointer("/data/name"),
+        record.pointer("/data/firma_name"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let bound_company = value.as_str().map(str::trim).unwrap_or_default();
+        anyhow::ensure!(
+            !bound_company.is_empty() && company == bound_company,
+            BusinessOsMcpError::validation(
+                "payload.company",
+                "payload.company must match every declared company identity on the existing lead record",
+            )
+        );
+        has_bound_company = true;
+    }
+
     anyhow::ensure!(
-        !bound_company.is_empty() && company == bound_company,
+        has_bound_company,
         BusinessOsMcpError::validation(
             "payload.company",
             "payload.company must match the existing lead record",
@@ -7941,6 +8469,7 @@ fn is_sensitive_mcp_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::tempdir;
 
     #[test]
@@ -8633,6 +9162,223 @@ mod tests {
     }
 
     #[test]
+    fn mcp_app_reads_prefer_rxdb_rows_and_tombstones_over_shadow() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "documents": [
+                    {"id": "stale", "name": "Newer live shadow", "updated_at_ms": 500},
+                    {"id": "fallback", "name": "Shadow only", "updated_at_ms": 90},
+                    {"id": "recent-fallback", "name": "Recent shadow only", "updated_at_ms": 375}
+                ]
+            }),
+        )?;
+        let path = store::rxdb_store_path(root);
+        std::fs::create_dir_all(path.parent().expect("RxDB path has a parent"))?;
+        let conn = rusqlite::Connection::open(&path)?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os__customer_accounts__v2 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL,
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );",
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__customer_accounts__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "stale",
+                "2-stale",
+                1,
+                300.0,
+                serde_json::json!({
+                    "id": "stale",
+                    "name": "Tombstoned in RxDB",
+                    "_deleted": false,
+                    "deleted": false,
+                    "is_deleted": false,
+                    "updated_at_ms": 100
+                })
+                .to_string()
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__customer_accounts__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "new",
+                "1-new",
+                0,
+                400.0,
+                serde_json::json!({
+                    "id": "new",
+                    "name": "New RxDB only",
+                    "_deleted": false,
+                    "updated_at_ms": 200
+                })
+                .to_string()
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__customer_accounts__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "json-deleted",
+                "1-json-deleted",
+                0,
+                350.0,
+                serde_json::json!({
+                    "id": "json-deleted",
+                    "name": "JSON tombstone",
+                    "_deleted": true,
+                    "updated_at_ms": 150
+                })
+                .to_string()
+            ],
+        )?;
+        drop(conn);
+
+        let context = test_context("business_os.query_records");
+        let top_two = query_records(root, &context, "customer_accounts", Some(2))?;
+        assert_eq!(top_two.count, 2);
+        assert_eq!(top_two.items[0].id, "new");
+        assert_eq!(top_two.items[1].id, "json-deleted");
+
+        let top_three = query_records(root, &context, "customer_accounts", Some(3))?;
+        assert_eq!(top_three.count, 3);
+        assert_eq!(top_three.items[0].id, "new");
+        assert_eq!(top_three.items[1].id, "json-deleted");
+        assert_eq!(top_three.items[1].data["_deleted"], true);
+        assert_eq!(top_three.items[2].id, "stale");
+
+        let native_only = query_records(root, &context, "customer_accounts", Some(5))?;
+        assert_eq!(native_only.count, 3);
+        assert_eq!(native_only.items[2].id, "stale");
+        assert_eq!(native_only.items[2].data["_deleted"], true);
+        assert_eq!(native_only.items[2].data["deleted"], true);
+        assert_eq!(native_only.items[2].data["is_deleted"], true);
+        assert_eq!(native_only.items[2].data["name"], "Tombstoned in RxDB");
+        assert!(!native_only
+            .items
+            .iter()
+            .any(|item| item.id == "fallback" || item.id == "recent-fallback"));
+
+        let get_context = test_context("business_os.get_record");
+        let stale = get_record(root, &get_context, "customer_accounts", "stale")?;
+        assert_eq!(stale.record.data["_deleted"], true);
+        assert_eq!(stale.record.data["name"], "Tombstoned in RxDB");
+        let new = get_record(root, &get_context, "customer_accounts", "new")?;
+        assert_eq!(new.record.data["name"], "New RxDB only");
+        let json_deleted = get_record(root, &get_context, "customer_accounts", "json-deleted")?;
+        assert_eq!(json_deleted.record.data["_deleted"], true);
+        assert!(get_record(root, &get_context, "customer_accounts", "fallback").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_absence_is_authoritative_after_rxdb_tombstone_purge() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "documents": [{"id":"purged", "name":"Old live shadow", "updated_at_ms":500}]
+            }),
+        )?;
+        let path = store::rxdb_store_path(root);
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let conn = rusqlite::Connection::open(&path)?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os__customer_accounts__v2 (
+                id TEXT PRIMARY KEY NOT NULL, revision TEXT,
+                deleted INTEGER NOT NULL, lastWriteTime REAL NOT NULL, data TEXT NOT NULL
+            );",
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__customer_accounts__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "purged",
+                "2-deleted",
+                1,
+                300.0,
+                serde_json::json!({"id":"purged","name":"Native tombstone","_deleted":true})
+                    .to_string()
+            ],
+        )?;
+        let get_context = test_context("business_os.get_record");
+        let tombstone = get_record(root, &get_context, "customer_accounts", "purged")?;
+        assert_eq!(tombstone.record.data["_deleted"], true);
+        // Physical retention cleanup removes the tombstone, not native
+        // collection ownership. Reopening must not revive its older shadow.
+        conn.execute(
+            "DELETE FROM ctox_business_os__customer_accounts__v2 WHERE id=?1",
+            ["purged"],
+        )?;
+        drop(conn);
+        assert!(
+            store::pull_mcp_app_collection_record(root, "customer_accounts", "purged")?.is_none()
+        );
+        assert!(get_record(root, &get_context, "customer_accounts", "purged").is_err());
+        let query_context = test_context("business_os.query_records");
+        let empty = query_records(root, &query_context, "customer_accounts", Some(5))?;
+        assert_eq!(empty.count, 0);
+        assert!(empty.items.is_empty());
+        let reopened = rusqlite::Connection::open(&path)?;
+        assert_eq!(
+            reopened.query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__customer_accounts__v2",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?,
+            0
+        );
+        drop(reopened);
+        assert!(
+            store::pull_mcp_app_collection_record(root, "customer_accounts", "purged")?.is_none()
+        );
+        assert_eq!(
+            query_records(root, &query_context, "customer_accounts", Some(5))?.count,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_legacy_shadow_reads_require_no_native_collection() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "documents": [
+                    {"id":"older","name":"Legacy older","updated_at_ms":90},
+                    {"id":"recent","name":"Legacy recent","updated_at_ms":375}
+                ]
+            }),
+        )?;
+        let query_context = test_context("business_os.query_records");
+        let latest = query_records(root, &query_context, "customer_accounts", Some(1))?;
+        assert_eq!(latest.count, 1);
+        assert_eq!(latest.items[0].id, "recent");
+        let get_context = test_context("business_os.get_record");
+        assert_eq!(
+            get_record(root, &get_context, "customer_accounts", "older")?
+                .record
+                .data["name"],
+            "Legacy older"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn upsert_record_persists_app_data_for_admin_mcp_actor() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -8708,6 +9454,123 @@ mod tests {
             projected.get("status").and_then(Value::as_str),
             Some("active")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn upsert_record_cannot_issue_or_change_native_research_receipts() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let collection = "outbound_lead_generation_leads";
+        write_module(root, "outbound-lead-generation", "Outbound", &[collection])?;
+        seed_default_mcp_admin(root)?;
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root, collection,
+        )?;
+        let status = serde_json::json!({"status": "no_match", "value": null,
+            "reason": "native evidence ".repeat(160),
+            "revision": {"writeback_id": "native-a", "command_id": "research-a"}});
+        store::upsert_projection_record(
+            root,
+            collection,
+            "lead-a",
+            1,
+            serde_json::json!({"id": "lead-a", "field_status": {"firma_prokura": status.clone()}}),
+        )?;
+        let call = |id: &str, record: Value| {
+            call_tool(
+                root,
+                "business_os.upsert_record",
+                serde_json::json!({"collection": collection, "record_id": id, "record": record,
+                "_context": {"actor": "chatgpt:test-user", "workspace": "test"}}),
+            )
+        };
+        let before = store::load_rxdb_collection_record(root, collection, "lead-a")?.unwrap();
+        let mirror_snapshot = || -> anyhow::Result<Vec<(String, String, i64, i64, String)>> {
+            let conn = store::open_store(root)?;
+            let mut query = conn.prepare("SELECT record_id, rev, deleted, updated_at_ms, payload_json FROM business_records WHERE collection = ?1 ORDER BY record_id")?;
+            let rows = query
+                .query_map([collection], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        };
+        let mirror_before = mirror_snapshot()?;
+        assert_eq!(mirror_before.len(), 1);
+        for patch in [
+            serde_json::json!({"field_status": {"firma_prokura": {"revision": null}}}),
+            serde_json::json!({"field_status": {"firma_prokura": {"review": {"verdict": "refuted"}}}}),
+            serde_json::json!({"field_status": {"firma_prokura": {"value": "fabricated"}}}),
+            serde_json::json!({"person_field_status": {"person-a": {"person_email": status.clone()}}}),
+            serde_json::json!({"contacts": [{"person_key": "person-a", "field_status": {"person_email": status.clone()}}]}),
+        ] {
+            assert!(call("lead-a", patch).is_err());
+            assert_eq!(
+                store::load_rxdb_collection_record(root, collection, "lead-a")?.unwrap(),
+                before
+            );
+            assert_eq!(mirror_snapshot()?, mirror_before);
+        }
+        // The patch preserves native status, but the existing projection
+        // clamp would trim that >1KiB field before committing the document.
+        // Small ordinary fields are deliberately ineligible for trimming.
+        let mut oversized = serde_json::json!({});
+        let mut projected = before.clone();
+        for index in 0..1000 {
+            let key = format!("ordinary_{index}");
+            let value = serde_json::json!("x".repeat(900));
+            oversized[&key] = value.clone();
+            projected[&key] = value;
+            if serde_json::to_vec(&projected)?.len() > store::MAX_PROJECTED_DOCUMENT_BYTES + 128 {
+                break;
+            }
+        }
+        assert!(
+            super::super::outbound_field_review::peer_preserves_native_field_status(
+                collection,
+                &projected,
+                Some(&before),
+            )
+        );
+        let mut clamped = projected.clone();
+        store::clamp_projected_document_to_wire_budget(
+            "ctox_business_os__outbound_lead_generation_leads__v0",
+            "lead-a",
+            &mut clamped,
+        )?;
+        assert_eq!(clamped["field_status"]["_omitted"], true);
+        assert!(call("lead-a", oversized).is_err());
+        assert_eq!(
+            store::load_rxdb_collection_record(root, collection, "lead-a")?.unwrap(),
+            before
+        );
+        assert_eq!(mirror_snapshot()?, mirror_before);
+        assert!(call(
+            "new-lead",
+            serde_json::json!({"field_status": {"firma_prokura": status}})
+        )
+        .is_err());
+        assert!(store::load_rxdb_collection_record(root, collection, "new-lead")?.is_none());
+        assert_eq!(mirror_snapshot()?, mirror_before);
+        assert!(call("legacy", serde_json::json!({"name": "Legacy", "field_status": {"firma_prokura": {"status": "pending"}}})).is_ok());
+        assert!(call(
+            "lead-a",
+            serde_json::json!({"campaign_id": "ordinary-edit"})
+        )
+        .is_ok());
+        let edited = store::load_rxdb_collection_record(root, collection, "lead-a")?.unwrap();
+        assert_eq!(edited["campaign_id"], "ordinary-edit");
+        assert_eq!(edited["field_status"], before["field_status"]);
+        let conn = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+        conn.execute("UPDATE ctox_business_os__outbound_lead_generation_leads__v0 SET deleted=1 WHERE id='lead-a'", [])?;
+        assert!(call("lead-a", serde_json::json!({"campaign_id": "resurrect"})).is_err());
         Ok(())
     }
 
@@ -8979,6 +9842,27 @@ mod tests {
             assert_eq!(decision.scope_type, "workspace");
             assert_eq!(decision.scope_id, None);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn native_project_task_uses_ctox_task_create_on_the_requested_project() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        let tool = "business_os.start_project_task";
+        assert_eq!(tool_policy_class(tool), McpToolPolicyClass::Write);
+        let decision = business_os_mcp_policy_decision(
+            root,
+            &test_context(tool),
+            tool,
+            &serde_json::json!({"project_id":"project-alpha"}),
+        )?
+        .context("native project policy decision")?;
+        assert!(decision.allowed);
+        assert_eq!(decision.permission, "ctox.task.create");
+        assert_eq!(decision.scope_type, "record");
+        assert_eq!(decision.scope_id.as_deref(), Some("project-alpha"));
         Ok(())
     }
 
@@ -12458,6 +13342,329 @@ mod tests {
     }
 
     #[test]
+    fn module_coding_actions_propose_exact_native_scope_without_delegation() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "spreadsheets", "Tables", &["spreadsheets"])?;
+        seed_default_mcp_admin(root)?;
+        let actions = list_module_actions(
+            root,
+            &test_context("business_os.list_module_actions"),
+            "spreadsheets",
+        )?;
+        assert!(actions
+            .items
+            .iter()
+            .any(|action| action.action_id == "ctox.coding.models"));
+        assert!(actions
+            .items
+            .iter()
+            .any(|action| action.action_id == "ctox.coding.turn"));
+        let context = test_context("business_os.propose_action");
+        let models = propose_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.models",
+            &json!({"payload":{}}),
+        )?;
+        assert_eq!(models.command_type, "ctox.coding.models");
+        assert_eq!(models.payload, json!({"module_id":"spreadsheets"}));
+        let turn = propose_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.turn",
+            &json!({"payload":{
+                "prompt":"Repair the existing snapshot boundary.","preset_id":"opaque-native-preset"
+            }}),
+        )?;
+        assert_eq!(turn.command_type, "ctox.coding.turn");
+        assert_eq!(turn.payload["module_id"], "spreadsheets");
+        assert_eq!(turn.payload["preset_id"], "opaque-native-preset");
+        assert!(turn.payload.get("input").is_none());
+        assert!(!turn.would_execute && !models.would_execute);
+        assert_eq!(turn.client_context["writeback_contract"], "coding/module");
+        Ok(())
+    }
+
+    #[test]
+    fn module_coding_actions_return_the_durable_native_result() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "spreadsheets", "Tables", &["spreadsheets"])?;
+        seed_default_mcp_admin(root)?;
+        let context = test_context("business_os.execute_action");
+        let models = execute_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.models",
+            &json!({"payload":{}}),
+        )?;
+        assert!(models.ok);
+        assert_eq!(models.status, "completed");
+        let result = models.coding_result.context("native preset result")?;
+        assert_eq!(result["schema"], "ctox.coding.models.v1");
+        let stored = store::pull_business_command_status_record(root, &models.command_id)?
+            .context("persisted coding model command")?;
+        assert_eq!(stored["status"], "completed");
+        assert_eq!(stored["result"], result);
+
+        // An unadvertised preset fails before any provider or sidecar starts.
+        let failed = execute_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.turn",
+            &json!({"payload":{"prompt":"fix","preset_id":"unadvertised-preset"}}),
+        )?;
+        assert!(!failed.ok);
+        assert_eq!(failed.status, "failed");
+        assert!(failed.coding_result.is_some());
+        let stored = store::pull_business_command_status_record(root, &failed.command_id)?
+            .context("persisted failed coding turn")?;
+        assert_eq!(stored["status"], "failed");
+        Ok(())
+    }
+
+    #[test]
+    fn module_coding_actions_reject_scope_and_route_injection() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "spreadsheets", "Tables", &["spreadsheets"])?;
+        seed_default_mcp_admin(root)?;
+        let context = test_context("business_os.propose_action");
+        for payload in [
+            json!({"prompt":"fix","preset_id":"ctox","module_id":"mail"}),
+            json!({"prompt":"fix","preset_id":"ctox","model":{"id":"forged"}}),
+            json!({"prompt":"fix","preset_id":"ctox","baseUrl":"https://foreign.invalid"}),
+            json!({"prompt":"fix","preset_id":"ctox","faux":true}),
+            json!({"prompt":"fix"}),
+            json!({"prompt":" ","preset_id":"ctox"}),
+            json!({"prompt":"x".repeat(32_769),"preset_id":"ctox"}),
+        ] {
+            assert!(propose_action(
+                root,
+                &context,
+                "spreadsheets",
+                "ctox.coding.turn",
+                &json!({"payload":payload})
+            )
+            .is_err());
+        }
+        assert!(propose_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.models",
+            &json!({"payload":{"preset_id":"ctox"}})
+        )
+        .is_err());
+        assert!(propose_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.turn",
+            &json!({"record_id":"lead","payload":{"prompt":"fix","preset_id":"ctox"}})
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn module_coding_actions_require_native_app_permission_before_admission() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "spreadsheets", "Tables", &["spreadsheets"])?;
+        seed_business_user(root, "chatgpt:test-user", "user")?;
+        let context = test_context("business_os.execute_action");
+        for action_id in ["ctox.coding.models", "ctox.coding.turn"] {
+            let decision = business_os_mcp_policy_decision(
+                root,
+                &context,
+                "business_os.execute_action",
+                &json!({
+                    "module_id":"spreadsheets","action_id":action_id
+                }),
+            )?
+            .context("coding permission decision")?;
+            assert!(!decision.allowed);
+        }
+        // The actual action argument wins over an injected weaker policy ID.
+        let error = execute_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.turn",
+            &json!({
+                "action_id":"ctox.coding.models",
+                "payload":{"prompt":"fix","preset_id":"ctox"}
+            }),
+        )
+        .unwrap_err();
+        let policy_error = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .context("native app policy error")?;
+        assert_eq!(policy_error.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(policy_error.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn delegate_action_retry_uses_one_native_command_and_rejects_changed_intent(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "tickets", "Tickets", &["tickets"])?;
+        write_module(root, "notes", "Notes", &["notes"])?;
+        seed_default_mcp_admin(root)?;
+        seed_business_user(root, "chatgpt:other", "admin")?;
+
+        let execute_tool = tool_descriptors()
+            .into_iter()
+            .find(|tool| tool.name == "business_os.execute_action")
+            .context("execute action tool descriptor")?;
+        assert_eq!(
+            execute_tool
+                .input_schema
+                .pointer("/properties/idempotency_key/type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+        let actions = list_module_actions(
+            root,
+            &test_context("business_os.list_module_actions"),
+            "tickets",
+        )?;
+        let delegate = actions
+            .items
+            .iter()
+            .find(|action| action.action_id == "ctox.delegate_task")
+            .context("native delegation action")?;
+        assert!(delegate
+            .input_schema
+            .pointer("/properties/idempotency_key/pattern")
+            .and_then(Value::as_str)
+            .is_some());
+
+        let request = serde_json::json!({
+            "module_id":"tickets", "action_id":"ctox.delegate_task",
+            "title":"Resolve the ticket", "objective":"Inspect the ticket and report",
+            "idempotency_key":"workjet-native-turn-1",
+            "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+        });
+        let submit = |request: Value| call_tool(root, "business_os.execute_action", request);
+        let mut malformed = request.clone();
+        malformed["idempotency_key"] = serde_json::json!("not a valid key");
+        assert!(submit(malformed).is_err());
+        let first = submit(request.clone())?;
+        let replay = submit(request.clone())?;
+        let command_id = first["command_id"].as_str().context("first command id")?;
+        let task_id = first["task_id"].as_str().context("first task id")?;
+        assert_eq!(replay["command_id"], command_id);
+        assert_eq!(replay["task_id"], task_id);
+        let before = crate::mission::channels::business_command_projection(root, command_id)?;
+
+        let mut changed = request.clone();
+        changed["objective"] = serde_json::json!("Run an unrelated task");
+        assert!(submit(changed).is_err());
+        let after = crate::mission::channels::business_command_projection(root, command_id)?;
+        assert_eq!(
+            after, before,
+            "changed retry must not mutate the native command"
+        );
+        let conn = rusqlite::Connection::open(crate::paths::core_db(root))?;
+        let links: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_command_task_links WHERE command_id=?1",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(links, 1, "one native task link for repeated intent");
+
+        let mut other_actor = request.clone();
+        other_actor["_context"]["actor"] = serde_json::json!("chatgpt:other");
+        let foreign = submit(other_actor)?;
+        assert_ne!(foreign["command_id"], command_id);
+        let mut other_module = request;
+        other_module["module_id"] = serde_json::json!("notes");
+        let scoped = submit(other_module)?;
+        assert_ne!(scoped["command_id"], command_id);
+        assert_ne!(scoped["command_id"], foreign["command_id"]);
+        Ok(())
+    }
+
+    #[test]
+    fn keyed_delegate_action_cancel_replays_and_warns_after_lease() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "tickets", "Tickets", &["tickets"])?;
+        seed_default_mcp_admin(root)?;
+        seed_business_user(root, "chatgpt:other", "admin")?;
+        let start = |key: &str| {
+            call_tool(
+                root,
+                "business_os.execute_action",
+                serde_json::json!({
+                    "module_id":"tickets", "action_id":"ctox.delegate_task",
+                    "title":"Resolve the ticket", "objective":"Inspect the ticket and report",
+                    "idempotency_key":key,
+                    "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+                }),
+            )
+        };
+        let cancel = |request: Value| call_tool(root, "business_os.cancel_project_task", request);
+        let queued = start("app-cancel-queued")?;
+        let queued_id = queued["command_id"].as_str().context("queued command id")?;
+        let queued_task = queued["task_id"].as_str().context("queued task id")?;
+        let cancel_queued = serde_json::json!({
+            "target_command_id":queued_id,"idempotency_key":"stop-app-queued",
+            "reason":"stop before lease",
+            "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+        });
+        let mut foreign = cancel_queued.clone();
+        foreign["_context"]["actor"] = serde_json::json!("chatgpt:other");
+        assert!(cancel(foreign).is_err());
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root, queued_id)?["status"],
+            "accepted"
+        );
+        let stopped = cancel(cancel_queued.clone())?;
+        assert_eq!(stopped["task_id"], queued_task);
+        assert_eq!(stopped["target_status"], "cancelled");
+        assert_eq!(stopped["side_effects_may_have_started"], false);
+        assert_eq!(
+            cancel(cancel_queued.clone())?["command_id"],
+            stopped["command_id"]
+        );
+        let mut changed = cancel_queued;
+        changed["reason"] = serde_json::json!("different cancellation intent");
+        assert!(cancel(changed).is_err());
+
+        let leased = start("app-cancel-leased")?;
+        let leased_id = leased["command_id"].as_str().context("leased command id")?;
+        let leased_task = leased["task_id"].as_str().context("leased task id")?;
+        let lease =
+            crate::mission::channels::lease_queue_task(root, leased_task, "project-worker")?;
+        assert!(lease.attempt > 0);
+        let cancel_leased = serde_json::json!({
+            "target_command_id":leased_id,"idempotency_key":"stop-app-leased",
+            "reason":"stop after lease",
+            "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+        });
+        let leased_stopped = cancel(cancel_leased.clone())?;
+        assert_eq!(leased_stopped["task_id"], leased_task);
+        assert_eq!(leased_stopped["target_status"], "cancelled");
+        assert_eq!(leased_stopped["side_effects_may_have_started"], true);
+        assert_eq!(
+            cancel(cancel_leased)?["command_id"],
+            leased_stopped["command_id"]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn support_module_actions_expose_agent_writeback_contract() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -12661,6 +13868,241 @@ mod tests {
     }
 
     #[test]
+    fn person_research_binding_accepts_runtime_lead_name_fields() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "outbound-lead-generation",
+            "Outbound Lead Generation",
+            "1.0.5",
+            &["outbound_lead_generation_leads"],
+            Some(serde_json::json!({ "public": true })),
+        )?;
+        seed_default_mcp_admin(root)?;
+        for (index, identity) in [
+            serde_json::json!({
+                "name": "Beiersdorf Manufacturing Leipzig GmbH",
+                "data": { "firma_name": "Beiersdorf Manufacturing Leipzig GmbH" }
+            }),
+            serde_json::json!({ "name": "Beiersdorf Manufacturing Leipzig GmbH" }),
+            serde_json::json!({
+                "data": { "firma_name": "Beiersdorf Manufacturing Leipzig GmbH" }
+            }),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let record_id = format!("runtime_lead_{index}");
+            let mut record = identity;
+            record["id"] = serde_json::json!(record_id);
+            record["country"] = serde_json::json!("DE");
+            record["workspace"] = serde_json::json!("test-workspace");
+            store::push_collection_records(
+                root,
+                serde_json::json!({
+                    "collection": "outbound_lead_generation_leads",
+                    "documents": [record]
+                }),
+            )?;
+            let proposal = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({
+                    "record_id": record_id,
+                    "payload": {
+                        "operation_id": record_id,
+                        "company": "Beiersdorf Manufacturing Leipzig GmbH",
+                        "country": "DE",
+                        "mode": "update_firm",
+                        "include_private": []
+                    }
+                }),
+            )?;
+            assert_eq!(proposal.record_id.as_deref(), Some(record_id.as_str()));
+            assert_eq!(proposal.payload["operation_id"], record_id);
+            assert_eq!(
+                proposal.payload["writeback_contract"]["record_ids"],
+                serde_json::json!([record_id])
+            );
+            assert_eq!(
+                proposal.payload["writeback_contract"]["workspace"],
+                "test-workspace"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn person_research_binding_runtime_leads_preserve_identity_and_scope() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "outbound-lead-generation",
+            "Outbound Lead Generation",
+            "1.0.5",
+            &["outbound_lead_generation_leads"],
+            Some(serde_json::json!({ "public": true })),
+        )?;
+        seed_default_mcp_admin(root)?;
+        let valid_record = serde_json::json!({
+            "id": "runtime_scoped_lead",
+            "name": "Beiersdorf Manufacturing Leipzig GmbH",
+            "country": "DE",
+            "workspace": "test-workspace",
+            "data": { "firma_name": "Beiersdorf Manufacturing Leipzig GmbH" }
+        });
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "outbound_lead_generation_leads",
+                "documents": [valid_record]
+            }),
+        )?;
+        for (field, value) in [
+            ("operation_id", "another_record"),
+            ("company", "Other GmbH"),
+            ("country", "AT"),
+        ] {
+            let mut payload = serde_json::json!({
+                "operation_id": "runtime_scoped_lead",
+                "company": "Beiersdorf Manufacturing Leipzig GmbH",
+                "country": "DE",
+                "mode": "update_firm"
+            });
+            payload[field] = serde_json::json!(value);
+            let error = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({ "record_id": "runtime_scoped_lead", "payload": payload }),
+            )
+            .expect_err("a valid runtime lead must not admit another request identity");
+            let typed = error
+                .downcast_ref::<BusinessOsMcpError>()
+                .context("typed request binding error")?;
+            assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
+            assert_eq!(typed.field, Some(format!("payload.{field}")));
+        }
+        for (index, (path, value, expected_field)) in [
+            (
+                "/company",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/company_name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            ("/title", serde_json::json!("Other GmbH"), "payload.company"),
+            ("/name", serde_json::json!("Other GmbH"), "payload.company"),
+            (
+                "/firma_name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/company",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/company_name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/title",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/firma_name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/firma_name",
+                serde_json::json!(false),
+                "payload.company",
+            ),
+            ("/name", serde_json::json!(""), "payload.company"),
+            ("/country", serde_json::json!("AT"), "payload.country"),
+            (
+                "/workspace",
+                serde_json::json!("other-workspace"),
+                "workspace",
+            ),
+            ("/module_id", serde_json::json!("other-module"), "module_id"),
+            (
+                "/collection",
+                serde_json::json!("other_leads"),
+                "collection",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let record_id = format!("runtime_mismatch_{index}");
+            let mut record = serde_json::json!({
+                "id": record_id,
+                "name": "Beiersdorf Manufacturing Leipzig GmbH",
+                "country": "DE",
+                "workspace": "test-workspace",
+                "data": { "firma_name": "Beiersdorf Manufacturing Leipzig GmbH" }
+            });
+            if let Some(field) = path.strip_prefix("/data/") {
+                record["data"][field] = value;
+            } else {
+                record[path.trim_start_matches('/')] = value;
+            }
+            store::push_collection_records(
+                root,
+                serde_json::json!({
+                    "collection": "outbound_lead_generation_leads",
+                    "documents": [record]
+                }),
+            )?;
+            let error = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({
+                    "record_id": record_id,
+                    "payload": {
+                        "operation_id": record_id,
+                        "company": "Beiersdorf Manufacturing Leipzig GmbH",
+                        "country": "DE",
+                        "mode": "update_firm"
+                    }
+                }),
+            )
+            .expect_err("runtime lead aliases must not weaken identity or scope binding");
+            let typed = error
+                .downcast_ref::<BusinessOsMcpError>()
+                .context("typed binding error")?;
+            assert_eq!(
+                typed.code,
+                BusinessOsMcpErrorCode::ValidationFailed,
+                "{path}"
+            );
+            assert_eq!(typed.field.as_deref(), Some(expected_field), "{path}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn person_research_execute_is_idempotent_and_record_bound() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -12774,6 +14216,30 @@ mod tests {
                 .map(|error| &error.code),
             Some(&BusinessOsMcpErrorCode::RecordNotFound)
         );
+
+        let mismatch = execute_action(
+            root,
+            &context,
+            "outbound-lead-generation",
+            "web_stack.person_research",
+            &serde_json::json!({
+                "record_id": "lead_1",
+                "idempotency_key": "mismatch-1",
+                "payload": {
+                    "operation_id": "lead_1",
+                    "company": "Other GmbH",
+                    "country": "DE",
+                    "mode": "update_person"
+                }
+            }),
+        )
+        .expect_err("company mismatch must be rejected before command acceptance");
+        assert_eq!(
+            mismatch
+                .downcast_ref::<BusinessOsMcpError>()
+                .map(|error| &error.code),
+            Some(&BusinessOsMcpErrorCode::ValidationFailed)
+        );
         Ok(())
     }
 
@@ -12796,6 +14262,7 @@ mod tests {
                 "collection": "outbound_lead_generation_leads",
                 "documents": [{
                     "id": "lead_nested",
+                    "title": "lead_nested",
                     "data": {
                         "name": "Nested GmbH",
                         "country": "DE"
