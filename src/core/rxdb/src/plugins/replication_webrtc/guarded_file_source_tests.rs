@@ -27,6 +27,7 @@ impl Source {
 }
 impl GuardedFileSource for Source {
     fn byte_len(&self, _: &str) -> RxResult<u64> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
         Ok(self.bytes.len() as u64)
     }
     fn with_current_chunk(
@@ -57,6 +58,7 @@ struct Handler {
     source: Arc<Source>,
     sent: Mutex<Vec<WebRTCWireFrame>>,
     capability: bool,
+    backpressured: bool,
     policy: bool,
     fail_at: Option<usize>,
     revoke_after_first: bool,
@@ -67,6 +69,7 @@ impl Handler {
             source,
             sent: Mutex::new(Vec::new()),
             capability: true,
+            backpressured: false,
             policy: true,
             fail_at: None,
             revoke_after_first: false,
@@ -93,6 +96,13 @@ impl WebRTCConnectionHandler for Handler {
     }
     fn document_fields_for_peer(&self, _: &String, _: &str) -> Option<Vec<String>> {
         None
+    }
+    fn buffered_bytes(&self, _: &String) -> usize {
+        if self.backpressured {
+            WEBRTC_BUFFERED_HIGH_WATER + 1
+        } else {
+            0
+        }
     }
     fn peer_capability_token(&self, _: &String) -> Option<String> {
         self.capability.then(|| "authenticated-fixture".into())
@@ -187,18 +197,58 @@ async fn missing_peer_policy_or_capability_never_sends_bytes() {
 }
 #[tokio::test]
 async fn failed_send_and_midstream_revocation_cannot_complete_frame() {
-    for revoke in [false, true] {
+    for (fail_at, revoke) in [
+        (Some(0), false),
+        (Some(1), false),
+        (Some(2), false),
+        (None, true),
+    ] {
         let source = Source::new();
         let handler = Arc::new(Handler {
-            fail_at: (!revoke).then_some(1),
+            fail_at,
             revoke_after_first: revoke,
             ..Handler::new(source.clone())
         });
         assert!(run(handler.clone(), request()).await.is_err());
-        assert_eq!(handler.sent.lock().len(), 1);
+        assert_eq!(handler.sent.lock().len(), fail_at.unwrap_or(1));
         assert!(!source.delivered.load(Ordering::SeqCst));
     }
 }
+#[tokio::test]
+async fn dropping_backpressured_delivery_cancels_without_late_chunks() {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let source = Source::new();
+        let handler = Arc::new(Handler {
+            backpressured: true,
+            ..Handler::new(source.clone())
+        });
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let task_handler = handler.clone();
+        let task_cancelled = cancelled.clone();
+        let task = tokio::spawn(async move {
+            stream_guarded_file(
+                task_handler.clone(),
+                "peer-generation".into(),
+                request(),
+                task_handler.source.clone(),
+                task_cancelled,
+            )
+            .await
+        });
+        while source.reads.load(Ordering::SeqCst) == 0 {
+            assert!(!task.is_finished());
+            tokio::task::yield_now().await;
+        }
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(handler.sent.lock().is_empty());
+        assert!(!source.delivered.load(Ordering::SeqCst));
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn partial_or_cached_fetch_never_reads_native_frame() {
     for ranged in [false, true] {
