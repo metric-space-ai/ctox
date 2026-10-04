@@ -72,7 +72,11 @@ guest-controller guards.
 
 On native-admitted sessions, an in-process MCP dispatcher receives the actual
 core Session/TurnContext after existing argument, configuration, approval and
-safety checks. It intercepts only native guest observe/input actions. Verified
+safety checks. Registration resolves the already loaded Core thread and binds
+the Session allocation, not its persistent thread label. Before invoking the
+bounded synchronous callback, Core holds its active-turn mutex and checks the
+actual task context and uncancelled token; finish, replacement and abort share
+that fence. It intercepts only native guest observe/input actions. Verified
 initiating actor/workspace remain attribution; native invocation IDs mint the
 new command ID, and a private one-shot command witness binds its full envelope
 to the live worker and bound turn. Event labels and session tokens cannot mint

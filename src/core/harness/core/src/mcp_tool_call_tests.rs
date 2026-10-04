@@ -94,11 +94,9 @@ async fn native_mcp_emission_uses_actual_session_and_turn_after_argument_validat
         turn: turn.sub_id.clone(),
         calls: std::sync::atomic::AtomicUsize::new(0),
     });
-    let registration = crate::native_mcp_dispatch::register_native_mcp_dispatch(
-        probe.thread.clone(),
-        probe.clone(),
-    )
-    .unwrap();
+    let registration =
+        crate::native_mcp_dispatch::register_native_mcp_dispatch(&session, probe.clone()).unwrap();
+    crate::native_mcp_dispatch::tests::start_live_turn(&session, &turn).await;
     let invalid = handle_mcp_tool_call(
         session.clone(),
         &turn,
@@ -124,6 +122,7 @@ async fn native_mcp_emission_uses_actual_session_and_turn_after_argument_validat
         Some(serde_json::json!({"native": true}))
     );
     assert_eq!(probe.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(session.abort_turn(&turn.sub_id).await);
     drop(registration);
     let absent = dispatch_mcp_tool(
         &session,

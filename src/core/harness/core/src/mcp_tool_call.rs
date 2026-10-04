@@ -70,7 +70,9 @@ async fn dispatch_mcp_tool(
         server,
         tool,
         arguments.as_ref(),
-    ) {
+    )
+    .await
+    {
         return result;
     }
     session
