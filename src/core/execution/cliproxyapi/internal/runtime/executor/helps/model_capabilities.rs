@@ -25,6 +25,7 @@ pub struct RequestThinkingInput<'a> {
     pub from_format: &'a str,
     pub to_format: &'a str,
     pub provider: &'a str,
+    pub normalized_updates_changed: bool,
     pub resolved_model_info: Option<&'a ModelInfo>,
     /// Manager-selected owned capability. When present this takes precedence
     /// over the static registry view, without leaking dynamic strings.
@@ -65,6 +66,21 @@ pub fn apply_request_thinking<Engine>(
 where
     Engine: RequestThinkingEngine + ?Sized,
 {
+    apply_request_thinking_with_update_intent(engine, body, request, options, route, false)
+}
+
+/// Carries the actual translator/plugin update decision into canonical thinking.
+pub fn apply_request_thinking_with_update_intent<Engine>(
+    engine: &Engine,
+    body: &[u8],
+    request: &Request,
+    options: &Options,
+    route: RequestThinkingRoute<'_>,
+    normalized_updates_changed: bool,
+) -> Result<Vec<u8>, ThinkingError>
+where
+    Engine: RequestThinkingEngine + ?Sized,
+{
     let original_source_payload = if options.original_request.is_empty() {
         request.payload.as_slice()
     } else {
@@ -78,6 +94,7 @@ where
         from_format: route.from_format,
         to_format: route.to_format,
         provider: route.provider,
+        normalized_updates_changed,
         resolved_model_info: route.resolved_model_info,
         resolved_config_model_info: route.resolved_config_model_info,
     })
@@ -136,6 +153,7 @@ impl RequestThinkingEngine for RequestThinkingPipeline {
                 provider_key: input.provider,
                 model_info: view.as_ref(),
                 model_info_resolved: view.is_some(),
+                normalized_updates_changed: input.normalized_updates_changed,
             },
             &summary,
         )

@@ -201,7 +201,8 @@ pub use logging_helpers::{
 };
 pub use meta_tools::sanitize_meta_web_search_tools;
 pub use model_capabilities::{
-    apply_request_thinking, RequestThinkingEngine, RequestThinkingInput, RequestThinkingRoute,
+    apply_request_thinking, apply_request_thinking_with_update_intent, RequestThinkingEngine,
+    RequestThinkingInput, RequestThinkingRoute,
 };
 pub use openai_compat_tool_results::{
     normalize_openai_tool_results_text_only, should_normalize_openai_tool_results_for_model,

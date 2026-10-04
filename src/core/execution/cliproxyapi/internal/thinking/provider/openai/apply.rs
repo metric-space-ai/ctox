@@ -2,16 +2,13 @@
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use serde_json::Value;
-
 use crate::internal::{
     registry::ModelInfo,
     thinking::ModelInfoView,
     thinking::{
         convert_budget_to_level, has_level,
-        json::{serialize_if_changed, set_path},
-        model_view::is_user_defined_model_view as is_user_defined_model,
-        ProviderApplier, ThinkingConfig, ThinkingError, ThinkingMode, LEVEL_AUTO, LEVEL_NONE,
+        model_view::is_user_defined_model_view as is_user_defined_model, ProviderApplier,
+        ThinkingConfig, ThinkingError, ThinkingMode, LEVEL_AUTO, LEVEL_NONE,
     },
 };
 
@@ -120,7 +117,7 @@ fn apply_compatible(body: &[u8], config: &ThinkingConfig, path: &str) -> Vec<u8>
 }
 
 fn normalize_body(body: &[u8]) -> Vec<u8> {
-    if !body.is_empty() && serde_json::from_slice::<Value>(body).is_ok() {
+    if !body.is_empty() && std::str::from_utf8(body).ok().is_some_and(gjson::valid) {
         body.to_vec()
     } else {
         b"{}".to_vec()
@@ -128,10 +125,25 @@ fn normalize_body(body: &[u8]) -> Vec<u8> {
 }
 
 fn set_effort(body: &[u8], path: &str, effort: &str) -> Vec<u8> {
-    let Ok(mut document) = serde_json::from_slice::<Value>(body) else {
+    use crate::internal::translator::common::{set_json_string, set_raw_path};
+    let Ok(document) = std::str::from_utf8(body) else {
         return body.to_vec();
     };
-    let original = document.clone();
-    set_path(&mut document, path, Value::String(effort.to_owned()));
-    serialize_if_changed(body, &original, &document)
+    let root = gjson::parse(document);
+    let mut output = match root.kind() {
+        gjson::Kind::Object | gjson::Kind::Array => body.to_vec(),
+        _ => b"{}".to_vec(),
+    };
+    if path == "reasoning.effort" {
+        let reasoning = crate::internal::util::get_gjson_bytes_no_copy(&output, "reasoning");
+        if reasoning.kind() == gjson::Kind::Array {
+            return output;
+        }
+        if reasoning.kind() != gjson::Kind::Object {
+            output = set_raw_path(&output, "reasoning", b"{}");
+        }
+    }
+    // Raw mutation preserves duplicate input members, arbitrary numeric
+    // lexemes and unrelated fields while changing only the effort path.
+    set_json_string(&output, path, effort)
 }

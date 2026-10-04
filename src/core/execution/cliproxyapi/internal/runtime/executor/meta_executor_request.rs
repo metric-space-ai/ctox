@@ -60,7 +60,7 @@ impl MetaRequestOwner {
                     .is_some_and(|i| i.is_compat)
             });
         let translate = |payload: &[u8]| {
-            translate_request_with_api_key_model_compatibility_for_executor(
+            translate_request_with_api_key_model_compatibility_and_update_intent_for_executor(
                 self.processor.as_ref(),
                 &request.headers,
                 "meta",
@@ -72,8 +72,8 @@ impl MetaRequestOwner {
                 compat,
             )
         };
-        let declarations = translate(&original);
-        let translated = translate(&request.payload);
+        let (declarations, _baseline_updates_changed) = translate(&original);
+        let (translated, normalized_updates_changed) = translate(&request.payload);
         let body = self
             .thinking
             .apply_request_thinking(RequestThinkingInput {
@@ -84,6 +84,7 @@ impl MetaRequestOwner {
                 from_format: from.as_str(),
                 to_format: to.as_str(),
                 provider: "meta",
+                normalized_updates_changed,
                 resolved_model_info: None,
                 resolved_config_model_info: request.resolved_model_info.as_deref(),
             })

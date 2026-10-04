@@ -100,9 +100,23 @@
   guards cover all native appliers, configured/static precedence, custom levels,
   source/summary ownership, lookup/owner/provider isolation, live replacement,
   Claude ceilings, plugin metadata and signed/unsigned extremes.
-  Native execution and production bridge registration
-  remain open. Canonical configuration-update/SSE intent still needs the complete
-  v8 semantic port; this bridge does not establish that parity.
+  The canonical Responses amount/update path now preserves supported native
+  baseline/input bytes, reads the latest nonempty update for usage, and removes
+  unsupported updates before validation. Suffixes control the baseline without
+  replacing effective in-turn effort. No-thinking models retain summary and
+  unrelated fields. The plugin-normalized working update decision reaches the
+  pipeline and actual Meta preparation; changed intent never falls back to stale
+  source effort. Raw mutation retains surviving item order, duplicate members
+  and numeric lexemes. Validation errors retain the cleaned target separately
+  from public diagnostics. Twelve additional prepared guards cover native/selected
+  cache baselines, suffix/summary/usage precedence, unsupported/no-thinking
+  cleanup, normalizer removal, malformed targets, raw data, failure bodies and
+  the Meta preparation consumer. Primary references: frozen d7914afd
+  internal/thinking/{configuration_update.go,apply.go,apply_codex_usage_test.go}
+  and internal/thinking/provider/{codex,xai}/apply.go.
+  Native execution, five frozen-Go reasoning parent oracles, native effective
+  reasoning diagnostics, production bridge registration and committed-SSE
+  parity remain open. Prepared source cases do not establish full v8 parity.
 - Further native Meta request-time integration supplies an owned asynchronous
 
   preparation/401-refresh capability, sharing one per-account conductor lock and
@@ -120,8 +134,9 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires at least201 actual native tests across25 groups, including nine Google
-  request-preparation cases, twelve owned-thinking pipeline cases and39 new Meta
+  requires at least213 actual native tests across26 groups, including nine Google
+  request-preparation cases, twelve owned-thinking pipeline cases, twelve Responses
+  update/usage cases and39 new Meta
   tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
   three new shared cancellation-publication guards,15 existing background-worker
   guards and six retained

@@ -18,15 +18,21 @@ use crate::internal::{
 };
 
 use super::{
+    configuration_update::{
+        extract_configuration_update_config, is_responses_format, strip_configuration_updates,
+        strip_responses_effort, valid_document,
+    },
     convert_budget_to_level, convert_level_to_budget, extract_summary_config,
-    is_budget_capable_provider, model_view::is_user_defined_model_view as is_user_defined_model,
+    is_budget_capable_provider,
+    model_view::is_user_defined_model_view as is_user_defined_model,
     parse_level_suffix, parse_numeric_suffix, parse_special_suffix, parse_suffix,
     strip_thinking_config,
     summary::strip_inferred_claude_summary_activation_view as strip_inferred_claude_summary_activation,
-    validate::validate_config_view as validate_config, AntigravityApplier, ClaudeApplier,
-    CodexApplier, GeminiApplier, InteractionsApplier, KimiApplier, ModelInfoView, OpenAiApplier,
-    ProviderApplier, SummaryConfig, SummaryMode, ThinkingConfig, ThinkingError, ThinkingLevel,
-    ThinkingMode, XaiApplier, LEVEL_AUTO, LEVEL_HIGH, LEVEL_MAX, LEVEL_NONE, LEVEL_XHIGH,
+    validate::validate_config_view as validate_config,
+    AntigravityApplier, ClaudeApplier, CodexApplier, GeminiApplier, InteractionsApplier,
+    KimiApplier, ModelInfoView, OpenAiApplier, ProviderApplier, SummaryConfig, SummaryMode,
+    ThinkingConfig, ThinkingError, ThinkingLevel, ThinkingMode, XaiApplier, LEVEL_AUTO, LEVEL_HIGH,
+    LEVEL_MAX, LEVEL_NONE, LEVEL_XHIGH,
 };
 
 /// Instance-owned model capability lookup used by [`ThinkingEngine`].
@@ -163,6 +169,7 @@ pub struct ResolvedCapabilityThinkingRequest<'a> {
     pub provider_key: &'a str,
     pub model_info: Option<&'a ModelInfoView<'a>>,
     pub model_info_resolved: bool,
+    pub normalized_updates_changed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -175,6 +182,7 @@ struct ApplyRequest<'a> {
     provider_key: &'a str,
     resolved_model_info: Option<&'a ModelInfoView<'a>>,
     model_info_resolved: bool,
+    normalized_updates_changed: bool,
     summary: &'a SummaryConfig,
 }
 
@@ -185,6 +193,8 @@ struct UserDefinedRequest<'a> {
     to_format: &'a str,
     provider_key: &'a str,
     suffix: &'a super::SuffixResult,
+    source_config: ThinkingConfig,
+    native_responses: bool,
     summary: &'a SummaryConfig,
 }
 
@@ -289,6 +299,7 @@ impl ThinkingEngine {
             provider_key: request.provider_key,
             resolved_model_info: None,
             model_info_resolved: false,
+            normalized_updates_changed: false,
             summary: &summary,
         })
     }
@@ -307,6 +318,7 @@ impl ThinkingEngine {
             provider_key: request.provider_key,
             resolved_model_info: None,
             model_info_resolved: false,
+            normalized_updates_changed: false,
             summary,
         })
     }
@@ -339,6 +351,7 @@ impl ThinkingEngine {
                 provider_key: request.provider_key,
                 model_info: view.as_ref(),
                 model_info_resolved: true,
+                normalized_updates_changed: false,
             },
             summary,
         )
@@ -358,6 +371,7 @@ impl ThinkingEngine {
             provider_key: request.provider_key,
             resolved_model_info: request.model_info,
             model_info_resolved: request.model_info_resolved,
+            normalized_updates_changed: request.normalized_updates_changed,
             summary,
         })
     }
@@ -377,9 +391,6 @@ impl ThinkingEngine {
             from_format.clone_from(&provider_format);
         }
 
-        let Some(applier) = self.provider_applier(&provider_format) else {
-            return Ok(request.body.to_vec());
-        };
         let suffix = parse_suffix(request.model);
         let looked_up_owned = if request.model_info_resolved {
             None
@@ -403,46 +414,98 @@ impl ThinkingEngine {
             looked_up_view.as_ref()
         };
 
+        // ref: internal/thinking/apply.go::applyThinking @ d7914afd
+        // Resolve current source intent before removing unsupported target updates.
+        let source_config = if is_responses_format(&from_format)
+            && (!request.normalized_updates_changed
+                || matches!(provider_format.as_str(), "codex" | "xai"))
+        {
+            let source = if !request.normalized_updates_changed && !request.source_body.is_empty() {
+                request.source_body
+            } else {
+                request.body
+            };
+            extract_codex_usage_config(source)
+        } else {
+            ThinkingConfig::default()
+        };
+        let response_target = matches!(provider_format.as_str(), "codex" | "xai");
+        let supports_updates = model_info.is_some_and(|info| info.support_configuration_update);
+        let body = if response_target && !supports_updates {
+            strip_configuration_updates(request.body)
+        } else {
+            request.body.to_vec()
+        };
+        let native_responses =
+            response_target && is_responses_format(&from_format) && supports_updates;
+        let Some(applier) = self.provider_applier(&provider_format) else {
+            return Ok(body);
+        };
+        if !suffix.has_suffix
+            && !request.source_body.is_empty()
+            && is_responses_format(&from_format)
+            && valid_document(&body).is_none()
+            && has_thinking_config(&extract_configuration_update_config(request.source_body))
+        {
+            // A separate source update cannot repair a malformed target request.
+            return Ok(body);
+        }
+        if native_responses && !suffix.has_suffix {
+            // Preserve the baseline and input bytes for native prompt-prefix caching.
+            return Ok(body);
+        }
+
         if is_user_defined_model(model_info) {
             return self.apply_user_defined_model(UserDefinedRequest {
-                body: request.body,
+                body: &body,
                 model_info,
                 from_format: &from_format,
                 to_format: &provider_format,
                 provider_key: &provider_key,
                 suffix: &suffix,
+                source_config,
+                native_responses,
                 summary: request.summary,
             });
         }
         let model_info = model_info.expect("registered model established above");
         if model_info.thinking.is_none() {
-            let config = extract_thinking_config(request.body, &provider_format);
+            let config = extract_thinking_config(&body, &provider_format);
             return if has_thinking_config(&config)
                 || request.summary.mode != SummaryMode::Unspecified
             {
-                Ok(strip_thinking_config(request.body, &provider_format))
+                Ok(if response_target {
+                    strip_responses_effort(&body)
+                } else {
+                    strip_thinking_config(&body, &provider_format)
+                })
             } else {
-                Ok(request.body.to_vec())
+                Ok(body)
             };
         }
 
         let mut config = if suffix.has_suffix {
             parse_suffix_to_config(&suffix.raw_suffix)
         } else {
-            let source = if request.model_info_resolved && !request.source_body.is_empty() {
-                extract_source_thinking_config(request.source_body, &from_format)
-            } else {
-                ThinkingConfig::default()
-            };
-            if has_thinking_config(&source) {
-                source
-            } else {
-                extract_thinking_config(request.body, &provider_format)
+            let mut config = source_config;
+            if !has_thinking_config(&config)
+                && !request.normalized_updates_changed
+                && request.model_info_resolved
+                && !request.source_body.is_empty()
+            {
+                config = extract_source_thinking_config(request.source_body, &from_format);
             }
+            if !has_thinking_config(&config) {
+                config = extract_thinking_config(&body, &provider_format);
+            }
+            config
         };
 
         if !has_thinking_config(&config) {
-            let mut output = request.body.to_vec();
+            if native_responses {
+                return Ok(body);
+            }
+            let mut output = body.clone();
             if request.model_info_resolved
                 && provider_format == "claude"
                 && from_format != provider_format
@@ -474,9 +537,12 @@ impl ThinkingEngine {
             &from_format,
             &provider_format,
             suffix.has_suffix,
-        )?;
-        let applied = applier.apply_model_info(request.body, &validated, Some(model_info))?;
-        if thinking_is_fully_disabled(&validated) {
+        )
+        .map_err(|error| error.with_target_body(&body))?;
+        let applied = applier
+            .apply_model_info(&body, &validated, Some(model_info))
+            .map_err(|error| error.with_target_body(&body))?;
+        if thinking_is_fully_disabled(&validated) || native_responses {
             return Ok(applied);
         }
         Ok(super::summary::apply_summary_config_for_provider_view(
@@ -500,12 +566,14 @@ impl ThinkingEngine {
         let mut config = if request.suffix.has_suffix {
             parse_suffix_to_config(&request.suffix.raw_suffix)
         } else {
-            let source = extract_thinking_config(request.body, request.from_format);
-            if !has_thinking_config(&source) && request.from_format != request.to_format {
-                extract_thinking_config(request.body, request.to_format)
-            } else {
-                source
+            let mut config = request.source_config;
+            if !has_thinking_config(&config) {
+                config = extract_thinking_config(request.body, request.from_format);
             }
+            if !has_thinking_config(&config) && request.from_format != request.to_format {
+                config = extract_thinking_config(request.body, request.to_format);
+            }
+            config
         };
         if !has_thinking_config(&config) {
             return Ok(super::summary::apply_summary_config_for_provider_view(
@@ -521,8 +589,10 @@ impl ThinkingEngine {
             return Ok(request.body.to_vec());
         };
         config = normalize_user_defined_config(config, request.from_format, request.to_format);
-        let applied = applier.apply_model_info(request.body, &config, request.model_info)?;
-        if thinking_is_fully_disabled(&config) {
+        let applied = applier
+            .apply_model_info(request.body, &config, request.model_info)
+            .map_err(|error| error.with_target_body(request.body))?;
+        if thinking_is_fully_disabled(&config) || request.native_responses {
             return Ok(applied);
         }
         Ok(super::summary::apply_summary_config_for_provider_view(
@@ -642,15 +712,23 @@ fn normalize_user_defined_config(
 }
 
 fn extract_thinking_config(body: &[u8], provider: &str) -> ThinkingConfig {
+    let provider = normalized_provider_name(provider);
+    if valid_document(body).is_none() {
+        return ThinkingConfig::default();
+    }
+    match provider.as_str() {
+        "codex" | "xai" => return extract_codex_config(body),
+        "openai" => return extract_openai_config_raw(body),
+        _ => {}
+    }
     let Ok(document) = serde_json::from_slice::<Value>(body) else {
         return ThinkingConfig::default();
     };
-    match provider.trim().to_ascii_lowercase().as_str() {
+    match provider.as_str() {
         "claude" => extract_claude_config(&document),
-        "gemini" | "antigravity" => extract_gemini_config(&document, provider),
+        "gemini" | "antigravity" => extract_gemini_config(&document, &provider),
         "interactions" => extract_interactions_config(&document),
         "openai" => extract_openai_config(&document),
-        "codex" | "xai" => extract_codex_config_value(&document),
         "kimi" => extract_kimi_config(&document),
         _ => ThinkingConfig::default(),
     }
@@ -660,9 +738,17 @@ fn has_thinking_config(config: &ThinkingConfig) -> bool {
     config.mode != ThinkingMode::Budget || config.budget != 0 || !config.level.is_empty()
 }
 
-/// Returns the source request's canonical reasoning-effort label. A valid
-/// model suffix has the same precedence as application.
+/// Returns the effective source effort. For Responses, a nonempty in-turn
+/// update takes precedence over the model suffix; the suffix still controls
+/// the baseline sent by a suffix-specific applier.
 pub fn extract_reasoning_effort(body: &[u8], provider: &str, model: &str) -> String {
+    let provider = normalized_provider_name(provider);
+    if is_responses_format(&provider) {
+        let effort = reasoning_effort_from_config(&extract_configuration_update_config(body));
+        if !effort.is_empty() {
+            return effort;
+        }
+    }
     let suffix = parse_suffix(model);
     if suffix.has_suffix {
         let effort = reasoning_effort_from_config(&parse_suffix_to_config(&suffix.raw_suffix));
@@ -670,28 +756,44 @@ pub fn extract_reasoning_effort(body: &[u8], provider: &str, model: &str) -> Str
             return effort;
         }
     }
-    let provider = normalized_provider_name(provider);
-    let mut config = extract_thinking_config(body, &provider);
+    let mut config = extract_thinking_config_for_usage(body, &provider);
     if !has_thinking_config(&config) && matches!(provider.as_str(), "openai" | "openai-response") {
-        config = extract_codex_config(body);
+        config = extract_codex_usage_config(body);
     }
     reasoning_effort_from_config(&config)
 }
 
-/// Returns the final translated payload's canonical reasoning-effort label.
+/// Returns the final payload's last effective update, falling back to baseline.
 pub fn extract_translated_reasoning_effort(body: &[u8], provider: &str) -> String {
     let provider = normalized_provider_name(provider);
-    let mut config = extract_thinking_config(body, &provider);
+    let mut config = extract_thinking_config_for_usage(body, &provider);
     if !has_thinking_config(&config) && matches!(provider.as_str(), "openai" | "openai-response") {
-        config = extract_codex_config(body);
+        config = extract_codex_usage_config(body);
         if !has_thinking_config(&config) {
-            let Ok(document) = serde_json::from_slice::<Value>(body) else {
-                return String::new();
-            };
-            config = extract_openai_config(&document);
+            config = extract_openai_config_raw(body);
         }
     }
     reasoning_effort_from_config(&config)
+}
+
+fn extract_thinking_config_for_usage(body: &[u8], provider: &str) -> ThinkingConfig {
+    if matches!(provider, "codex" | "xai" | "openai-response") {
+        extract_codex_usage_config(body)
+    } else {
+        extract_thinking_config(body, provider)
+    }
+}
+
+fn extract_codex_usage_config(body: &[u8]) -> ThinkingConfig {
+    if valid_document(body).is_none() {
+        return ThinkingConfig::default();
+    }
+    let config = extract_configuration_update_config(body);
+    if has_thinking_config(&config) {
+        config
+    } else {
+        extract_codex_config(body)
+    }
 }
 
 fn reasoning_effort_from_config(config: &ThinkingConfig) -> String {
@@ -805,17 +907,27 @@ fn extract_kimi_config(document: &Value) -> ThinkingConfig {
 }
 
 fn extract_codex_config(body: &[u8]) -> ThinkingConfig {
-    serde_json::from_slice::<Value>(body)
-        .ok()
-        .as_ref()
-        .map(extract_codex_config_value)
-        .unwrap_or_default()
+    extract_raw_effort(body, "reasoning.effort")
 }
 
-fn extract_codex_config_value(document: &Value) -> ThinkingConfig {
-    path(document, "reasoning.effort")
-        .map(|value| raw_level_value_config(&gjson_string(value), false))
-        .unwrap_or_default()
+fn extract_openai_config_raw(body: &[u8]) -> ThinkingConfig {
+    extract_raw_effort(body, "reasoning_effort")
+}
+
+fn extract_raw_effort(body: &[u8], path: &str) -> ThinkingConfig {
+    let value = crate::internal::util::get_gjson_bytes_no_copy(body, path);
+    if !value.exists() {
+        return ThinkingConfig::default();
+    }
+    if value.str() == LEVEL_NONE {
+        none_config()
+    } else {
+        ThinkingConfig {
+            mode: ThinkingMode::Level,
+            level: ThinkingLevel::new(value.str()),
+            ..Default::default()
+        }
+    }
 }
 
 fn normalized_level_value_config(value: &str, accepts_auto: bool) -> ThinkingConfig {

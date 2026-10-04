@@ -2,6 +2,7 @@
 // License: AGPL-3.0-only
 
 mod apply;
+mod configuration_update;
 mod convert;
 mod errors;
 mod json;
@@ -74,3 +75,6 @@ pub use apply::{
 
 #[cfg(test)]
 mod request_pipeline_candidate_test;
+
+#[cfg(test)]
+mod configuration_update_candidate_test;
