@@ -2084,7 +2084,7 @@ pub fn upsert_user(
     store::upsert_user(root, &session, mutation)
 }
 
-/// Scope app and delegated-task retry keys to the resolved actor and workspace,
+/// Scope app create/modify retry keys to the resolved actor and workspace,
 /// not to the per-transport request id. The queue atomically rejects changed
 /// intent for the resulting command id. No key preserves legacy new requests.
 fn mcp_app_command_id(
@@ -11535,17 +11535,26 @@ mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         seed_default_mcp_admin(root)?;
-        let arguments = serde_json::json!({
-            "module_id": "mcp-create-retry",
-            "instruction": "Create an inventory app with reorder review.",
-            "idempotency_key": "create-request-1",
-            "_context": { "actor": "chatgpt:test-user", "workspace": "test" }
-        });
-        let first = call_tool(root, "business_os.create_app", arguments.clone())?;
-        let retry = call_tool(root, "business_os.create_app", arguments)?;
-        assert!(first["task_id"].as_str().is_some());
-        assert_eq!(retry["command_id"], first["command_id"]);
-        assert_eq!(retry["task_id"], first["task_id"]);
+        for (key, module_id) in [
+            ("create-default-request", None),
+            ("create-explicit-request", Some("mcp-create-retry")),
+        ] {
+            let mut arguments = serde_json::json!({
+                "instruction": "Create an inventory app with reorder review.",
+                "idempotency_key": key,
+                "_context": { "actor": "chatgpt:test-user", "workspace": "test", "request_id": "transport-first" }
+            });
+            if let Some(module_id) = module_id {
+                arguments["module_id"] = serde_json::json!(module_id);
+            }
+            let first = call_tool(root, "business_os.create_app", arguments.clone())?;
+            arguments["_context"]["request_id"] = serde_json::json!("transport-retry");
+            let retry = call_tool(root, "business_os.create_app", arguments)?;
+            assert!(first["task_id"].as_str().is_some());
+            assert_eq!(retry["module_id"], first["module_id"]);
+            assert_eq!(retry["command_id"], first["command_id"]);
+            assert_eq!(retry["task_id"], first["task_id"]);
+        }
         Ok(())
     }
 
