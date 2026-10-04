@@ -198,7 +198,10 @@ pub struct SecretRecordWrite<'a> {
 /// Reads a credential tuple from one SQLite snapshot. No partially rotated
 /// combination can be observed between the individual values.
 pub fn read_secret_values(root: &Path, keys: &[(&str, &str)]) -> Result<Vec<String>> {
-    let (key_bytes, _) = ensure_secret_master_key(root)?;
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (key_bytes, _) = load_existing_secret_master_key(root)?;
     let mut conn = open_secret_db(root)?;
     let tx = conn.transaction()?;
     let mut values = Vec::with_capacity(keys.len());
@@ -1772,6 +1775,13 @@ mod tests {
             !key_path.exists(),
             "required-value wrapper must also remain read-only for key creation"
         );
+        assert!(read_secret_values(root.path(), &[(scope, name)]).is_err());
+        assert!(read_secret_values(root.path(), &[])?.is_empty());
+        assert!(
+            !key_path.exists(),
+            "tuple reads must never create a replacement master key"
+        );
+        assert_eq!(ciphertext()?, original_ciphertext);
         conn.execute(
             &format!("INSERT INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2)"),
             params![MASTER_KEY_STORAGE_KEY, original_key.trim()],
@@ -1781,6 +1791,10 @@ mod tests {
             Some(canary.to_string())
         );
         assert_eq!(fs::read_to_string(&key_path)?.trim(), original_key.trim());
+        assert_eq!(
+            read_secret_values(root.path(), &[(scope, name)])?,
+            vec![canary.to_string()]
+        );
         assert_eq!(ciphertext()?, original_ciphertext);
         Ok(())
     }
