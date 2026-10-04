@@ -143,6 +143,7 @@ pub struct RecentRequestBucket {
     pub failed: i64,
 }
 
+// ref: sdk/cliproxy/auth/types.go:175-205 @ d7914afdedca7af95ee974a42453dc49fc1388ce
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct QuotaState {
@@ -152,6 +153,11 @@ pub struct QuotaState {
     pub next_recover_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "is_zero_i64")]
     pub backoff_level: i64,
+    // Go encoding/json retains a zero time.Time despite its omitempty tag.
+    pub observed_at: DateTime<Utc>,
+    // One upstream observation, independent of cooldown transitions.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub signals: BTreeMap<String, String>,
 }
 
 impl Default for QuotaState {
@@ -161,7 +167,19 @@ impl Default for QuotaState {
             reason: String::new(),
             next_recover_at: go_zero_time(),
             backoff_level: 0,
+            observed_at: go_zero_time(),
+            signals: BTreeMap::new(),
         }
+    }
+}
+
+impl QuotaState {
+    /// Clear routing cooldown without discarding the last quota observation.
+    pub(crate) fn clear_cooldown(&mut self) {
+        self.exceeded = false;
+        self.reason.clear();
+        self.next_recover_at = go_zero_time();
+        self.backoff_level = 0;
     }
 }
 
@@ -173,6 +191,8 @@ impl fmt::Debug for QuotaState {
             .field("reason_len", &self.reason.len())
             .field("next_recover_at", &self.next_recover_at)
             .field("backoff_level", &self.backoff_level)
+            .field("observed_at", &self.observed_at)
+            .field("signals_len", &self.signals.len())
             .finish()
     }
 }

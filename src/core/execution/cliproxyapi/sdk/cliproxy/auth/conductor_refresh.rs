@@ -14,7 +14,7 @@ use super::store::{AuthStore, AuthStoreError};
 use super::types::{go_zero_time, is_go_zero_time, parse_time_value};
 use super::{
     access_token_sha256, Auth, AuthError, AuthKind, AuthStatus, HomeAuthRuntime,
-    HomeDispatchSelection, ModelState, QuotaState,
+    HomeDispatchSelection, ModelState,
 };
 
 pub const REFRESH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
@@ -655,7 +655,7 @@ fn reset_model_state(state: &mut ModelState, now: DateTime<Utc>) {
     state.status_message.clear();
     state.next_retry_after = go_zero_time();
     state.last_error = None;
-    state.quota = QuotaState::default();
+    state.quota.clear_cooldown();
     state.updated_at = now;
 }
 
@@ -718,12 +718,16 @@ fn update_aggregated_availability(auth: &mut Auth, now: DateTime<Utc>) {
         auth.quota.next_recover_at = quota_recover.unwrap_or_else(go_zero_time);
         auth.quota.backoff_level = max_backoff_level;
     } else {
-        auth.quota = QuotaState::default();
+        auth.quota.clear_cooldown();
     }
 }
 
 fn clear_aggregated_availability(auth: &mut Auth) {
     auth.unavailable = false;
     auth.next_retry_after = go_zero_time();
-    auth.quota = QuotaState::default();
+    auth.quota.clear_cooldown();
 }
+
+#[cfg(test)]
+#[path = "quota_observation_test.rs"]
+mod quota_observation_test;
