@@ -52,13 +52,10 @@ fn complete(frames: &[Vec<u8>]) -> Vec<u8> {
     envelope(&mut bytes, CONNECT_FLAG_END_STREAM, b"{}");
     bytes
 }
-fn ordinary_tool(_: &[u8]) -> bool {
-    false
-}
 fn context() -> DevinAggregateContext<'static> {
     DevinAggregateContext {
         model: "devin/swe-2",
-        is_apply_patch_tool: &ordinary_tool,
+        original_request: b"",
     }
 }
 fn accept(state: &mut DevinInteractionAccumulator, payload: Vec<u8>) {
@@ -359,16 +356,13 @@ fn candidate_devin_aggregate_stop_reasons_and_no_usage_do_not_fabricate_tokens()
 
 #[test]
 fn candidate_devin_aggregate_legacy_guard_signature_only_and_sticky_byte_budget() {
-    fn original_patch_declaration(name: &[u8]) -> bool {
-        name == b"patch_via_namespace"
-    }
     let guarded = DevinAggregateContext {
         model: "devin/swe-2",
-        is_apply_patch_tool: &original_patch_declaration,
+        original_request: br#"{"tools":[{"type":"namespace","name":"patch","tools":[{"type":"custom","name":"apply_patch"}]}]}"#,
     };
     let legacy = tool(
         b"patch",
-        b"patch_via_namespace",
+        b"patch__apply_patch",
         b"",
         b"not valid patch JSON",
     );
@@ -379,6 +373,15 @@ fn candidate_devin_aggregate_legacy_guard_signature_only_and_sticky_byte_budget(
         state.finish(&guarded).unwrap_err().error,
         DevinAggregateError::LegacyApplyPatch
     ));
+    let ordinary = DevinAggregateContext {
+        model: "devin/swe-2",
+        original_request: br#"{"tools":[{"type":"function","name":"patch__apply_patch"}]}"#,
+    };
+    assert!(consume_devin_frames_to_interactions(
+        &mut Cursor::new(complete(&[legacy.clone()])),
+        &ordinary,
+    )
+    .is_ok());
     let output =
         consume_devin_frames_to_interactions(&mut Cursor::new(complete(&[legacy])), &context())
             .unwrap();
@@ -454,4 +457,17 @@ fn candidate_devin_aggregate_raw_arguments_and_utf8_boundaries_are_preserved() {
         [0xf0, 0x9f, 0x9a, 0x80, 0xe2, 0x82]
     );
     assert_eq!(output.observation.tool_calls[0].arguments, raw);
+
+    let mut deep = vec![b'['; 20_000];
+    deep.extend_from_slice(b"null");
+    deep.extend(std::iter::repeat_n(b']', 20_000));
+    let frame = tool(b"deep", b"exec_command", &deep, b"");
+    let output =
+        consume_devin_frames_to_interactions(&mut Cursor::new(complete(&[frame])), &context())
+            .unwrap();
+    assert_eq!(output.observation.tool_calls[0].arguments, deep);
+    assert!(output
+        .payload
+        .windows(deep.len())
+        .any(|window| window == deep));
 }

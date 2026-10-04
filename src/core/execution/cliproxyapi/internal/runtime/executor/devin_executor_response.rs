@@ -14,6 +14,7 @@ use super::helps::devin_wire::{
 use crate::internal::translator::common::{
     join_raw_array, set_json_string, set_raw_path, set_string_without_html_escape,
 };
+use crate::internal::util::{responses_tool_reverse_identity_map, valid_json_bytes};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::Read;
@@ -141,11 +142,11 @@ impl fmt::Debug for DevinAggregateOutput {
     }
 }
 
-/// Native request preparation supplies the original declaration classification.
+/// The winning original declaration determines the tool contract.
 /// It cannot be inferred from untrusted response headers or a model's tool name.
 pub struct DevinAggregateContext<'a> {
     pub model: &'a str,
-    pub is_apply_patch_tool: &'a (dyn Fn(&[u8]) -> bool + Send + Sync),
+    pub original_request: &'a [u8],
 }
 
 pub struct DevinInteractionAccumulator {
@@ -383,12 +384,16 @@ impl DevinInteractionAccumulator {
         if let Some(error) = &self.terminal_error {
             return Err(self.failure(error.clone()));
         }
-        if self
-            .tools
-            .iter()
-            .any(|tool| tool.legacy && (context.is_apply_patch_tool)(&tool.name))
-        {
-            return Err(self.failure(DevinAggregateError::LegacyApplyPatch));
+        if self.tools.iter().any(|tool| tool.legacy) {
+            let original_tools = responses_tool_reverse_identity_map(context.original_request);
+            if self.tools.iter().any(|tool| {
+                tool.legacy
+                    && original_tools
+                        .get(&go_utf8_text(&tool.name))
+                        .is_some_and(|identity| identity.apply_patch)
+            }) {
+                return Err(self.failure(DevinAggregateError::LegacyApplyPatch));
+            }
         }
         if !self.saw_eos {
             return Err(self.failure(DevinAggregateError::PrematureEof));
@@ -419,7 +424,7 @@ impl DevinInteractionAccumulator {
             call = set_json_string(&call, "call_id", &go_utf8_text(&tool.id));
             if !tool.arguments.is_empty() {
                 let arguments = go_utf8_text(&tool.arguments);
-                call = if gjson::valid(&arguments) {
+                call = if valid_json_bytes(arguments.as_bytes()) {
                     set_raw_path(&call, "arguments", arguments.as_bytes())
                 } else {
                     set_string_without_html_escape(&call, "arguments", &arguments)

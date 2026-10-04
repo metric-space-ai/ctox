@@ -30,6 +30,12 @@ mod provider;
 mod proxy;
 #[cfg(test)]
 mod proxy_test;
+mod raw_json;
+#[cfg(test)]
+mod raw_json_test;
+mod responses_tools;
+#[cfg(test)]
+mod responses_tools_test;
 #[cfg(test)]
 mod sanitize_test;
 pub mod ssh_helper;
@@ -79,6 +85,12 @@ pub use provider::{
     OpenAiCompatibilityEntryView, OpenAiCompatibilityModelView,
 };
 pub use proxy::{set_proxy, ProxyTransportTarget};
+pub use raw_json::valid_json_bytes;
+pub use responses_tools::{
+    collect_responses_tool_descriptors, collect_responses_tool_winners,
+    qualify_responses_namespace_tool_name, responses_tool_reverse_identity_map,
+    ResponsesToolDescriptor, ResponsesToolIdentity,
+};
 pub use translator::{
     canonical_tool_name, deduplicate_function_declarations, disambiguated_tool_name_map, fix_json,
     map_sanitized_function_name, map_tool_name, rename_key, restore_sanitized_tool_name,

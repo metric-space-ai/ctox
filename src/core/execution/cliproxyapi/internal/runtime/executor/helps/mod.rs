@@ -2,6 +2,7 @@
 // License: AGPL-3.0-only
 
 mod antigravity_grounding_urls;
+mod apply_patch;
 mod apply_patch_responses;
 mod cache_helpers;
 mod claude_builtin_tools;
@@ -117,6 +118,10 @@ mod vertex_payload_helpers_test;
 pub use antigravity_grounding_urls::{
     is_antigravity_vertex_search_redirect, resolve_antigravity_grounding_urls,
     GroundingRedirectError, GroundingRedirectResponse, GroundingRedirectTransport,
+};
+pub use apply_patch::{
+    apply_patch_original_request, apply_patch_requested, is_apply_patch_upstream_tool,
+    APPLY_PATCH_UPSTREAM_ERROR_MESSAGE,
 };
 pub use apply_patch_responses::normalize_apply_patch_responses_request;
 pub use cache_helpers::{codex_prompt_cache_key, CodexCache, CodexPromptCacheStore};
