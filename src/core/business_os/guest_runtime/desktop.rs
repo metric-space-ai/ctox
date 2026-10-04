@@ -25,7 +25,7 @@ enum DesktopPhase {
 /// Native-only owner; neither image metadata nor a successful QMP reply is ready.
 /// Keep this value outside cancellable futures and confirm stop before releasing
 /// controller/execution ownership. This does not authenticate the caller.
-pub(super) struct RetainedQemuDesktop {
+pub(in crate::business_os) struct RetainedQemuDesktop {
     process: QemuProcess,
     guest_id: String,
     process_instance_id: String,
@@ -35,7 +35,10 @@ pub(super) struct RetainedQemuDesktop {
 }
 
 impl RetainedQemuDesktop {
-    pub(super) fn spawn_paused(config: &PreparedQemuGuest, guest_id: String) -> Result<Self> {
+    pub(in crate::business_os) fn spawn_paused(
+        config: &PreparedQemuGuest,
+        guest_id: String,
+    ) -> Result<Self> {
         ensure!(identifier(&guest_id), "guest identity is invalid");
         // Actual process ownership exists before the first asynchronous operation.
         let process = QemuProcess::spawn_paused(config)?;
@@ -52,7 +55,7 @@ impl RetainedQemuDesktop {
 
     /// One bootstrap attempt. Failure/cancellation retains the process; it never
     /// recreates the channel, replays an input or promotes an image to readiness.
-    pub(super) async fn boot(&mut self) -> Result<GuestLiveEndpoint> {
+    pub(in crate::business_os) async fn boot(&mut self) -> Result<GuestLiveEndpoint> {
         ensure!(
             self.phase == DesktopPhase::Spawned,
             "guest bootstrap is retired"
@@ -80,7 +83,7 @@ impl RetainedQemuDesktop {
     /// A fresh real endpoint/capture observation under the native live guard.
     /// No bytes are returned to an unchecked publisher. A changed guest service
     /// session retires this owner even when the QEMU PID is still alive.
-    pub(super) async fn probe_live(&mut self) -> Result<GuestLiveEndpoint> {
+    pub(in crate::business_os) async fn probe_live(&mut self) -> Result<GuestLiveEndpoint> {
         ensure!(self.phase == DesktopPhase::Ready, "guest is not ready");
         // Set the state before awaiting. Cancelled probes cannot leave cached Ready.
         self.phase = DesktopPhase::EndpointUnavailable;
@@ -116,21 +119,25 @@ impl RetainedQemuDesktop {
         })
     }
 
-    pub(super) fn driver(&self) -> Result<&RemoteGuestDriver<UnixStream>> {
+    pub(in crate::business_os) fn driver(&self) -> Result<&RemoteGuestDriver<UnixStream>> {
         ensure!(self.phase == DesktopPhase::Ready, "guest is not ready");
         self.driver
             .as_ref()
             .context("guest endpoint is unavailable")
     }
 
-    pub(super) fn pid(&self) -> u32 {
+    pub(in crate::business_os) fn process_instance_id(&self) -> &str {
+        &self.process_instance_id
+    }
+
+    pub(in crate::business_os) fn pid(&self) -> u32 {
         self.process.pid()
     }
 
     /// Reconciliation may call stop again on the SAME retained child. Only a
     /// confirmed exit returns; timeout/cancellation never releases its fence.
     /// A forced stop is not an application-consistent checkpoint.
-    pub(super) async fn stop(&mut self) -> Result<ExitStatus> {
+    pub(in crate::business_os) async fn stop(&mut self) -> Result<ExitStatus> {
         self.phase = DesktopPhase::Stopping;
         let status = self.process.stop().await?;
         self.phase = DesktopPhase::Stopped;

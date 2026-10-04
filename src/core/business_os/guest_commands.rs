@@ -264,7 +264,7 @@ fn receipt(command: &BusinessCommand, scope: &GuestScope, outcome: GuestOutcome)
 }
 
 #[allow(dead_code)]
-fn block_on_guest<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+pub(super) fn block_on_guest<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => match handle.runtime_flavor() {
             tokio::runtime::RuntimeFlavor::CurrentThread => {
