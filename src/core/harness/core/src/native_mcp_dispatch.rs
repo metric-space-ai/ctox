@@ -43,6 +43,8 @@ impl NativeMcpInvocation<'_> {
 /// Some is a native result after the existing MCP approval/safety boundary.
 /// The callback must be bounded and enforce its own live worker, actual turn,
 /// policy and controller guards. It cannot treat these identifiers as permits.
+/// It must not register/drop dispatchers or re-enter Core turn lifecycle APIs
+/// from inside the callback; both lifecycle fences remain held until it returns.
 pub trait NativeMcpDispatch: Send + Sync {
     fn dispatch(
         &self,
@@ -50,59 +52,83 @@ pub trait NativeMcpDispatch: Send + Sync {
     ) -> Option<Result<CallToolResult, String>>;
 }
 
-type Registry = HashMap<String, Weak<dyn NativeMcpDispatch>>;
+struct RegistrationLifetime {
+    live: Mutex<bool>,
+}
+
+struct RegistryEntry {
+    // Keeping a weak allocation alive prevents pointer reuse while registered.
+    session: Weak<Session>,
+    dispatcher: Weak<dyn NativeMcpDispatch>,
+    lifetime: Weak<RegistrationLifetime>,
+}
+type Registry = HashMap<usize, RegistryEntry>;
 fn registry() -> &'static Mutex<Registry> {
     static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Only this live registration retains the dispatcher. In-flight calls must
-/// additionally obey the native owner's lifetime; cloning its Arc is no permit.
+/// Native Rust capability bound to one actual Core Session allocation.
+/// Thread/turn strings, JSON and retained dispatcher Arcs cannot register it.
 pub struct NativeMcpRegistration {
-    thread_id: String,
+    session: Weak<Session>,
     dispatcher: Arc<dyn NativeMcpDispatch>,
+    lifetime: Arc<RegistrationLifetime>,
 }
 
-pub fn register_native_mcp_dispatch(
-    actual_thread_id: String,
+pub(crate) fn register_native_mcp_dispatch(
+    session: &Arc<Session>,
     dispatcher: Arc<dyn NativeMcpDispatch>,
 ) -> Result<NativeMcpRegistration, String> {
-    if actual_thread_id.trim().is_empty()
-        || actual_thread_id.len() > 256
-        || actual_thread_id.chars().any(char::is_control)
-    {
-        return Err("native MCP registration requires an actual thread".into());
-    }
+    let key = Arc::as_ptr(session) as usize;
     let mut entries = registry()
         .lock()
         .map_err(|_| "native MCP registry poisoned")?;
     if entries
-        .get(&actual_thread_id)
-        .and_then(Weak::upgrade)
+        .get(&key)
+        .and_then(|entry| entry.dispatcher.upgrade())
         .is_some()
     {
-        return Err("native MCP dispatcher already registered for thread".into());
+        return Err("native MCP dispatcher already registered for session".into());
     }
-    entries.insert(actual_thread_id.clone(), Arc::downgrade(&dispatcher));
+    let session = Arc::downgrade(session);
+    let lifetime = Arc::new(RegistrationLifetime {
+        live: Mutex::new(true),
+    });
+    entries.insert(
+        key,
+        RegistryEntry {
+            session: session.clone(),
+            dispatcher: Arc::downgrade(&dispatcher),
+            lifetime: Arc::downgrade(&lifetime),
+        },
+    );
     Ok(NativeMcpRegistration {
-        thread_id: actual_thread_id,
+        session,
         dispatcher,
+        lifetime,
     })
 }
 impl Drop for NativeMcpRegistration {
     fn drop(&mut self) {
+        // No registry lock while waiting for a bounded in-flight callback.
+        // Dispatch acquires this per-registration fence only after Core's await.
+        if let Ok(mut live) = self.lifetime.live.lock() {
+            *live = false;
+        }
         if let Ok(mut entries) = registry().lock() {
-            if entries
-                .get(&self.thread_id)
-                .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(&self.dispatcher)))
-            {
-                entries.remove(&self.thread_id);
+            let key = self.session.as_ptr() as usize;
+            if entries.get(&key).is_some_and(|entry| {
+                entry.session.ptr_eq(&self.session)
+                    && entry.dispatcher.ptr_eq(&Arc::downgrade(&self.dispatcher))
+            }) {
+                entries.remove(&key);
             }
         }
     }
 }
 
-pub(crate) fn dispatch_native_mcp(
+pub(crate) async fn dispatch_native_mcp(
     session: &Session,
     turn: &TurnContext,
     call_id: &str,
@@ -110,51 +136,118 @@ pub(crate) fn dispatch_native_mcp(
     tool: &str,
     arguments: Option<&Value>,
 ) -> Option<Result<CallToolResult, String>> {
-    let thread_id = session.conversation_id.to_string();
-    dispatch_registered(&thread_id, &turn.sub_id, call_id, server, tool, arguments)
-}
-
-fn dispatch_registered(
-    thread_id: &str,
-    turn_id: &str,
-    call_id: &str,
-    server: &str,
-    tool: &str,
-    arguments: Option<&Value>,
-) -> Option<Result<CallToolResult, String>> {
-    let dispatcher = match registry().lock() {
-        Ok(entries) => entries.get(thread_id).and_then(Weak::upgrade),
+    let key = session as *const Session as usize;
+    let (dispatcher, lifetime) = match registry().lock() {
+        Ok(entries) => entries
+            .get(&key)
+            .and_then(|entry| Some((entry.dispatcher.upgrade()?, entry.lifetime.upgrade()?))),
         Err(_) => return Some(Err("native MCP registry poisoned".into())),
     }?;
-    // No registry lock crosses the effect callback or its native guards.
-    dispatcher.dispatch(NativeMcpInvocation {
-        thread_id,
-        turn_id,
+    // Release the registry lock before taking Core's lifecycle fence. Ordinary
+    // unregistered MCP transport remains independent of this native check.
+    let active = session.active_turn.lock().await;
+    let task = active
+        .as_ref()
+        .and_then(|active| active.tasks.get(&turn.sub_id));
+    if !task.is_some_and(|task| {
+        std::ptr::eq(task.turn_context.as_ref(), turn) && !task.cancellation_token.is_cancelled()
+    }) {
+        return Some(Err(
+            "native MCP emission requires the actual live Core turn".into(),
+        ));
+    }
+    // The registration may have been dropped/replaced while awaiting Core.
+    // Its own fence prevents a retained dispatcher Arc from prolonging it,
+    // without serializing callbacks for unrelated Sessions on the registry.
+    let live = match lifetime.live.lock() {
+        Ok(live) if *live => live,
+        _ => return Some(Err("native MCP registration ended".into())),
+    };
+    let thread_id = session.conversation_id.to_string();
+    // Keep the lifecycle fence across the bounded synchronous effect callback:
+    // finish, replacement and abort all remove tasks under this same mutex.
+    let result = dispatcher.dispatch(NativeMcpInvocation {
+        thread_id: &thread_id,
+        turn_id: &turn.sub_id,
         call_id,
         server,
         tool,
         arguments,
-    })
+    });
+    drop(live);
+    drop(active);
+    result
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::state::TaskKind;
+    use crate::tasks::{SessionTask, SessionTaskContext};
+    use ctox_protocol::user_input::UserInput;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio_util::sync::CancellationToken;
 
+    struct LiveTask {
+        finish: CancellationToken,
+    }
+    #[async_trait::async_trait]
+    impl SessionTask for LiveTask {
+        fn kind(&self) -> TaskKind {
+            TaskKind::Regular
+        }
+        fn span_name(&self) -> &'static str {
+            "native_mcp_test"
+        }
+        async fn run(
+            self: Arc<Self>,
+            _session: Arc<SessionTaskContext>,
+            _ctx: Arc<TurnContext>,
+            _input: Vec<UserInput>,
+            cancellation: CancellationToken,
+        ) -> Option<String> {
+            tokio::select! {
+                _ = cancellation.cancelled() => {},
+                _ = self.finish.cancelled() => {},
+                _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {},
+            }
+            None
+        }
+    }
+    pub(crate) async fn start_live_turn(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+    ) -> CancellationToken {
+        let finish = CancellationToken::new();
+        session
+            .spawn_task(
+                turn.clone(),
+                vec![],
+                LiveTask {
+                    finish: finish.clone(),
+                },
+            )
+            .await;
+        finish
+    }
     struct Dispatch {
         calls: Arc<AtomicUsize>,
-        turn: String,
+        session: Weak<Session>,
     }
     impl NativeMcpDispatch for Dispatch {
         fn dispatch(
             &self,
             invocation: NativeMcpInvocation<'_>,
         ) -> Option<Result<CallToolResult, String>> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            if invocation.turn_id() != self.turn {
-                return Some(Err("foreign actual turn".into()));
-            }
+            // Regression: the callback itself must run inside the lifecycle fence.
+            assert!(
+                self.session
+                    .upgrade()
+                    .unwrap()
+                    .active_turn
+                    .try_lock()
+                    .is_err()
+            );
             assert_eq!(invocation.call_id(), "actual-call");
             assert_eq!(invocation.server(), "actual-server");
             assert_eq!(invocation.tool(), "actual-tool");
@@ -162,6 +255,7 @@ mod tests {
                 invocation.arguments(),
                 Some(&serde_json::json!({"payload": 17}))
             );
+            self.calls.fetch_add(1, Ordering::SeqCst);
             Some(Ok(CallToolResult {
                 content: vec![],
                 structured_content: None,
@@ -170,67 +264,143 @@ mod tests {
             }))
         }
     }
+    async fn invoke(
+        session: &Session,
+        turn: &TurnContext,
+    ) -> Option<Result<CallToolResult, String>> {
+        dispatch_native_mcp(
+            session,
+            turn,
+            "actual-call",
+            "actual-server",
+            "actual-tool",
+            Some(&serde_json::json!({"payload": 17})),
+        )
+        .await
+    }
 
-    #[test]
-    fn native_mcp_registration_scopes_dispatch_and_teardown() {
-        let thread = uuid::Uuid::new_v4().to_string();
+    #[tokio::test]
+    async fn native_mcp_registration_scopes_dispatch_and_teardown() {
+        let (session, turn, _events) = crate::codex::make_session_and_context_with_rx().await;
         let calls = Arc::new(AtomicUsize::new(0));
         let dispatcher = Arc::new(Dispatch {
             calls: calls.clone(),
-            turn: "actual-turn".into(),
+            session: Arc::downgrade(&session),
         });
-        let registration =
-            register_native_mcp_dispatch(thread.clone(), dispatcher.clone()).unwrap();
-        assert!(register_native_mcp_dispatch(thread.clone(), dispatcher.clone()).is_err());
-        assert!(
-            dispatch_registered(
-                "foreign-thread",
-                "actual-turn",
-                "actual-call",
-                "actual-server",
-                "actual-tool",
-                Some(&serde_json::json!({"payload":17}))
-            )
-            .is_none()
-        );
-        assert!(
-            dispatch_registered(
-                &thread,
-                "foreign-turn",
-                "actual-call",
-                "actual-server",
-                "actual-tool",
-                Some(&serde_json::json!({"payload":17}))
-            )
-            .unwrap()
-            .is_err()
-        );
-        assert!(
-            dispatch_registered(
-                &thread,
-                "actual-turn",
-                "actual-call",
-                "actual-server",
-                "actual-tool",
-                Some(&serde_json::json!({"payload":17}))
-            )
-            .unwrap()
-            .is_ok()
-        );
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let registration = register_native_mcp_dispatch(&session, dispatcher.clone()).unwrap();
+        assert!(register_native_mcp_dispatch(&session, dispatcher.clone()).is_err());
+        assert!(invoke(&session, &turn).await.unwrap().is_err());
+        start_live_turn(&session, &turn).await;
+        assert!(invoke(&session, &turn).await.unwrap().is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(session.abort_turn(&turn.sub_id).await);
+        assert!(invoke(&session, &turn).await.unwrap().is_err());
         drop(registration);
-        // Retaining a dispatcher Arc cannot keep a removed registration live.
-        assert!(
-            dispatch_registered(
-                &thread,
-                "actual-turn",
-                "actual-call",
-                "actual-server",
-                "actual-tool",
-                None
-            )
-            .is_none()
-        );
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(invoke(&session, &turn).await.is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn native_mcp_registration_drop_fences_dispatch_waiting_for_core() {
+        let (session, turn, _events) = crate::codex::make_session_and_context_with_rx().await;
+        let old_calls = Arc::new(AtomicUsize::new(0));
+        let old_dispatcher = Arc::new(Dispatch {
+            calls: old_calls.clone(),
+            session: Arc::downgrade(&session),
+        });
+        let registration = register_native_mcp_dispatch(&session, old_dispatcher.clone()).unwrap();
+        start_live_turn(&session, &turn).await;
+        let active = session.active_turn.lock().await;
+        let pending = invoke(&session, &turn);
+        tokio::pin!(pending);
+        // Poll through the registry lookup, then deterministically stop at the
+        // actual Core lifecycle mutex. Retain the old dispatcher as well.
+        assert!(matches!(
+            futures::poll!(pending.as_mut()),
+            std::task::Poll::Pending
+        ));
+        drop(registration);
+        let new_calls = Arc::new(AtomicUsize::new(0));
+        let new_dispatcher = Arc::new(Dispatch {
+            calls: new_calls.clone(),
+            session: Arc::downgrade(&session),
+        });
+        let replacement = register_native_mcp_dispatch(&session, new_dispatcher).unwrap();
+        drop(active);
+        let stale = tokio::time::timeout(std::time::Duration::from_secs(5), pending)
+            .await
+            .unwrap();
+        assert!(stale.unwrap().is_err());
+        assert_eq!(old_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(new_calls.load(Ordering::SeqCst), 0);
+        assert!(invoke(&session, &turn).await.unwrap().is_ok());
+        assert_eq!(new_calls.load(Ordering::SeqCst), 1);
+        assert!(session.abort_turn(&turn.sub_id).await);
+        drop(replacement);
+    }
+
+    #[tokio::test]
+    async fn native_mcp_registration_does_not_cross_sessions_with_identical_labels() {
+        let (session, turn, _events) = crate::codex::make_session_and_context_with_rx().await;
+        let (mut other, mut other_turn, _other_events) =
+            crate::codex::make_session_and_context_with_rx().await;
+        Arc::get_mut(&mut other).unwrap().conversation_id = session.conversation_id;
+        Arc::get_mut(&mut other_turn).unwrap().sub_id = turn.sub_id.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dispatcher = Arc::new(Dispatch {
+            calls: calls.clone(),
+            session: Arc::downgrade(&session),
+        });
+        let _registration = register_native_mcp_dispatch(&session, dispatcher).unwrap();
+        start_live_turn(&session, &turn).await;
+        start_live_turn(&other, &other_turn).await;
+        assert!(invoke(&other, &other_turn).await.is_none());
+        assert!(invoke(&session, &turn).await.unwrap().is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(session.abort_turn(&turn.sub_id).await);
+        assert!(other.abort_turn(&other_turn.sub_id).await);
+    }
+
+    #[tokio::test]
+    async fn native_mcp_rejects_finished_replaced_and_cancelled_turns() {
+        let (session, turn, _events) = crate::codex::make_session_and_context_with_rx().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dispatcher = Arc::new(Dispatch {
+            calls: calls.clone(),
+            session: Arc::downgrade(&session),
+        });
+        let _registration = register_native_mcp_dispatch(&session, dispatcher).unwrap();
+        let finish = start_live_turn(&session, &turn).await;
+        finish.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while session
+                .turn_context_for_sub_id(&turn.sub_id)
+                .await
+                .is_some()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(invoke(&session, &turn).await.unwrap().is_err());
+        // Reuse the label with a distinct real context; the old context is stale.
+        let (_, mut replacement, _replacement_events) =
+            crate::codex::make_session_and_context_with_rx().await;
+        Arc::get_mut(&mut replacement).unwrap().sub_id = turn.sub_id.clone();
+        start_live_turn(&session, &replacement).await;
+        assert!(invoke(&session, &turn).await.unwrap().is_err());
+        assert!(invoke(&session, &replacement).await.unwrap().is_ok());
+        {
+            let active = session.active_turn.lock().await;
+            active.as_ref().unwrap().tasks[&replacement.sub_id]
+                .cancellation_token
+                .cancel();
+        }
+        assert!(invoke(&session, &replacement).await.unwrap().is_err());
+        session
+            .abort_all_tasks(crate::protocol::TurnAbortReason::Interrupted)
+            .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

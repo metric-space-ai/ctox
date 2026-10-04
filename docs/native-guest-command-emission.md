@@ -6,14 +6,25 @@ started the worker; it does not authorize later guest commands. A signed
 Business OS session token likewise does not prove an individual later call.
 
 For a native-admitted direct session, the native turn owner now registers an
-in-process dispatcher for its actual harness thread before `turn/start`.
+in-process dispatcher for its already loaded Core Session before `turn/start`.
+The native Rust registration API accepts the actual Core thread handle; a
+persistent thread ID alone cannot register a dispatcher. Two Session instances
+with identical thread and turn labels remain distinct. Core verifies the exact
+active task context and uncancelled token while holding its turn-lifecycle mutex
+across the bounded synchronous dispatch, so finish/replacement/abort cannot
+interleave between that check and the callback.
 The fork's MCP handler consults it after the existing configuration, argument,
 approval and safety checks, immediately before ordinary MCP transport. Both the
 approved and no-approval paths use this boundary; refused calls never reach it.
 `NativeMcpInvocation` is constructed privately from the actual core Session and
 TurnContext. Model arguments and asynchronous tool-begin events cannot construct
 this invocation. Dropping the registration removes it; retaining a dispatcher
-Arc cannot prolong registration or the separate native owner lifetime.
+Arc cannot prolong registration or the separate native owner lifetime. After
+awaiting the Core turn mutex, dispatch also checks a private registration
+lifetime fence and holds it across the callback. A registration removed or
+replaced during that await rejects the already-looked-up call; it never calls
+the retained old dispatcher or switches that call to the replacement. The
+registry mutex is not held across callbacks for independent Sessions.
 
 The direct-session guest dispatcher intercepts only
 `ctox-business-os/business_os.execute_action` for `ctox.guest.observe` and
@@ -55,6 +66,9 @@ this retained per-command witness must remain denied.
 
 Source regressions cover the real core MCP handler's actual Session/TurnContext,
 invalid JSON before dispatch, model identity labels, registry scoping/teardown,
+identically labelled distinct Sessions, inactive/finished/replaced/cancelled
+turn rejection, the held Core lifecycle mutex, registration removal/replacement
+while a looked-up call waits for that mutex,
 native owner revocation, default-consumer denial, envelope mutation, canonical
 JSON equivalence, uncertain admission and shared one-shot consumption. Compiler
 and test results must be recorded on the final source separately; these tests

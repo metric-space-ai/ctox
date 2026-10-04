@@ -66,6 +66,14 @@ impl CodexThread {
         }
     }
 
+    /// Register against this loaded Core Session, never a caller-supplied label.
+    pub fn register_native_mcp_dispatch(
+        &self,
+        dispatcher: std::sync::Arc<dyn crate::native_mcp_dispatch::NativeMcpDispatch>,
+    ) -> Result<crate::native_mcp_dispatch::NativeMcpRegistration, String> {
+        crate::native_mcp_dispatch::register_native_mcp_dispatch(&self.codex.session, dispatcher)
+    }
+
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
     }

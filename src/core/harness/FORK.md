@@ -50,8 +50,12 @@ safety-blocked calls do not dispatch. Public registration is a Rust capability;
 its invocation has private fields and is built only from the actual Session,
 TurnContext and MCP call. JSON labels and asynchronous events cannot construct it.
 
-Registrations are scoped to the real thread and removed on drop. The registry
-lock is released before the native callback. Native callbacks separately enforce
+Registrations are scoped to the actual Session allocation, obtained from the
+already loaded Core thread, and removed on drop. A weak Session reference prevents
+allocation reuse while registered. The registry lock is released before taking
+the active-turn mutex. Core checks the exact task context and uncancelled token
+and holds that mutex across the bounded synchronous callback, serializing it
+with turn finish, replacement and abort. Native callbacks separately enforce
 their retained worker/turn lifetime and current policy/controller; these strings
 are not permits. Unhandled calls preserve ordinary MCP transport. CTOX installs
 this seam only on explicitly native-admitted guest sessions; the default guest

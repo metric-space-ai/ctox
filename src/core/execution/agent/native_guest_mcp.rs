@@ -1,7 +1,7 @@
 //! Actual in-process MCP guest emission, installed only on native-admitted turns.
 use anyhow::{ensure, Context, Result};
 use ctox_core::native_mcp_dispatch::{
-    register_native_mcp_dispatch, NativeMcpDispatch, NativeMcpInvocation, NativeMcpRegistration,
+    NativeMcpDispatch, NativeMcpInvocation, NativeMcpRegistration,
 };
 use ctox_protocol::mcp::CallToolResult;
 use serde_json::{json, Value};
@@ -21,7 +21,8 @@ struct GuestDispatch {
     workspace: String,
 }
 
-pub(super) fn register(
+pub(super) async fn register(
+    client: &ctox_app_server_client::InProcessAppServerClient,
     owner: &NativeProviderTurnOwner,
     consumer: Arc<dyn NativeProviderAdmission>,
 ) -> Result<NativeMcpRegistration> {
@@ -48,18 +49,20 @@ pub(super) fn register(
                 workspace.to_owned(),
             ))
         })?;
-    register_native_mcp_dispatch(
-        thread_id.clone(),
-        Arc::new(GuestDispatch {
+    let actual_thread = client
+        .thread_manager()
+        .get_thread(ctox_protocol::ThreadId::from_string(&thread_id).map_err(anyhow::Error::msg)?)
+        .await?;
+    actual_thread
+        .register_native_mcp_dispatch(Arc::new(GuestDispatch {
             emitter: owner.command_emitter(),
             consumer,
             binding_id,
             thread_id,
             actor,
             workspace,
-        }),
-    )
-    .map_err(anyhow::Error::msg)
+        }))
+        .map_err(anyhow::Error::msg)
 }
 
 fn valid_id(value: &str) -> bool {
