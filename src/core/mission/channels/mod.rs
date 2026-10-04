@@ -3123,6 +3123,44 @@ fn create_queue_task_with_metadata_tx(
     tx: &Transaction<'_>,
     request: QueueTaskCreateRequest,
 ) -> Result<QueueTaskView> {
+    create_queue_task_with_native_app_origin_tx(tx, request, None)
+}
+
+fn queue_task_native_app_origin(conn: &Connection, task_id: &str) -> Result<Option<Value>> {
+    if let Some(task) = load_queue_task_from_conn(conn, task_id)? {
+        if let Some(origin) = task.metadata.get("business_os_origin") {
+            if let (Some(command_id), Some(module)) = (
+                origin.get("command_id").and_then(Value::as_str),
+                origin.get("module").and_then(Value::as_str),
+            ) {
+                let admitted: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM business_command_aggregates WHERE command_id=?1 AND module=?2)",
+                    params![command_id, module], |row| row.get(0),
+                )?;
+                if admitted {
+                    return Ok(Some(origin.clone()));
+                }
+            }
+        }
+    }
+    // A legacy root has a canonical link but no origin stamp yet.
+    let linked = conn
+        .query_row(
+            "SELECT l.command_id, a.module FROM business_command_task_links l
+         JOIN business_command_aggregates a ON a.command_id=l.command_id
+         WHERE l.task_id=?1",
+            [task_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    Ok(linked.map(|(command_id, module)| json!({"command_id":command_id,"module":module})))
+}
+
+fn create_queue_task_with_native_app_origin_tx(
+    tx: &Transaction<'_>,
+    request: QueueTaskCreateRequest,
+    native_origin: Option<Value>,
+) -> Result<QueueTaskView> {
     let title = request.title.trim();
     let prompt = request.prompt.trim();
     if title.is_empty() {
@@ -3163,6 +3201,19 @@ fn create_queue_task_with_metadata_tx(
     });
     if let Some(extra) = request.extra_metadata {
         merge_object_metadata(&mut metadata, extra);
+    }
+    // App provenance comes from native admission or an admitted parent in this
+    // same tenant store. A caller-supplied metadata value is never authority.
+    metadata
+        .as_object_mut()
+        .unwrap()
+        .remove("business_os_origin");
+    let inherited = match request.parent_message_key.as_deref() {
+        Some(parent) => queue_task_native_app_origin(tx, parent)?,
+        None => None,
+    };
+    if let Some(origin) = inherited.or(native_origin) {
+        metadata["business_os_origin"] = origin;
     }
     enforce_queue_task_spawn(
         tx,
@@ -4154,6 +4205,91 @@ pub fn renew_message_leases(
         )?;
     }
     Ok(renewed)
+}
+
+/// Exact native lease identity supplied to a service-owned harness turn.
+/// A cancelled, missing or re-leased row revokes the old turn's authority.
+#[derive(Debug, Clone)]
+pub(crate) struct QueueTurnLeaseFence {
+    pub(crate) root: PathBuf,
+    pub(crate) message_keys: Vec<String>,
+    pub(crate) worker_id: String,
+}
+
+pub(crate) struct QueueTurnLeaseReader {
+    connection: Connection,
+    #[cfg(unix)]
+    identity: (u64, u64),
+}
+
+#[cfg(unix)]
+fn queue_turn_store_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+impl QueueTurnLeaseFence {
+    pub(crate) fn open_reader(&self) -> Result<QueueTurnLeaseReader> {
+        anyhow::ensure!(
+            !self.message_keys.is_empty() && !self.worker_id.trim().is_empty(),
+            "queue turn cancelled: missing native lease identity"
+        );
+        let path = resolve_db_path(&self.root, None);
+        #[cfg(unix)]
+        let identity = queue_turn_store_identity(&path)?;
+        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        #[cfg(unix)]
+        anyhow::ensure!(
+            queue_turn_store_identity(&path)? == identity,
+            "queue turn cancelled: native store changed while opening lease reader"
+        );
+        // Keep one read-only connection per bounded turn, without schema
+        // repair, write transactions or a long-lived WAL read transaction.
+        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        Ok(QueueTurnLeaseReader {
+            connection: conn,
+            #[cfg(unix)]
+            identity,
+        })
+    }
+
+    pub(crate) fn still_owned(&self, reader: &QueueTurnLeaseReader) -> Result<bool> {
+        let path = resolve_db_path(&self.root, None);
+        #[cfg(unix)]
+        let conn = {
+            if queue_turn_store_identity(&path)? != reader.identity {
+                return Ok(false);
+            }
+            &reader.connection
+        };
+        // Platforms without a stable file identity read the current path on
+        // every check rather than trusting the retained connection's file.
+        #[cfg(not(unix))]
+        let conn = {
+            let _ = &reader.connection;
+            let conn =
+                Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            conn.busy_timeout(std::time::Duration::from_millis(100))?;
+            conn
+        };
+        for key in &self.message_keys {
+            let owned: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM communication_routing_state
+                 WHERE message_key=?1 AND route_status='leased' AND lease_worker_id=?2)",
+                params![key, self.worker_id],
+                |row| row.get(0),
+            )?;
+            if !owned {
+                return Ok(false);
+            }
+        }
+        #[cfg(unix)]
+        if queue_turn_store_identity(&path)? != reader.identity {
+            return Ok(false);
+        }
+        Ok(true)
+    }
 }
 
 /// lease-3 (F-002): durable worker identity for queue-task leases. The worker

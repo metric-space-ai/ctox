@@ -278,22 +278,32 @@ pub(super) fn read_rows_window(
 ) -> Result<(Vec<Value>, i64)> {
     let file = File::open(path)
         .with_context(|| format!("open parquet for row window {}", path.display()))?;
+    let (rows, count, _) = read_rows_window_from_file(file, offset, limit)?;
+    Ok((rows, count))
+}
+
+/// Read rows, schema and count from the same open file, even when its path is
+/// atomically replaced. Callers can clone a retained file for successive pages.
+pub(super) fn read_rows_window_from_file(
+    file: File,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<Value>, i64, String)> {
     let mut reader = ParquetReader::new(file);
     let count_usize = reader
         .num_rows()
         .map_err(cerr)
-        .with_context(|| format!("read parquet row count {}", path.display()))?;
-    let count = i64::try_from(count_usize)
-        .with_context(|| format!("parquet row count exceeds i64 for {}", path.display()))?;
-    if limit == 0 || offset >= count_usize {
-        return Ok((Vec::new(), count));
-    }
+        .context("read open parquet row count")?;
+    let count = i64::try_from(count_usize).context("open parquet row count exceeds i64")?;
+    // A zero-length slice still carries the schema without loading table rows.
+    let offset = offset.min(count_usize);
+    let limit = limit.min(count_usize - offset);
     let df = reader
         .with_slice(Some((offset, limit)))
         .finish()
         .map_err(cerr)
-        .with_context(|| format!("read parquet row window {}", path.display()))?;
-    Ok((df_to_rows(&df)?, count))
+        .context("read open parquet row window")?;
+    Ok((df_to_rows(&df)?, count, schema_hash(df.schema())))
 }
 
 /// Convert a DataFrame to NDJSON-shaped `Vec<serde_json::Value>` of objects.

@@ -395,6 +395,7 @@ impl ScrapeRunStatus {
         match self {
             Self::Succeeded => "succeeded",
             Self::CompletedEmpty => "completed_empty",
+            Self::InvalidInput => "invalid_input",
             Self::TemporaryUnreachable => "temporary_unreachable",
             Self::PortalDrift => "portal_drift",
             Self::Blocked => "blocked",
@@ -1702,20 +1703,8 @@ enum LocalEmbeddingSocketRequest<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum LocalEmbeddingSocketResponse {
-    Embeddings {
-        model: String,
-        data: Vec<Vec<f32>>,
-        #[serde(rename = "prompt_tokens")]
-        _prompt_tokens: u32,
-        #[serde(rename = "total_tokens")]
-        _total_tokens: u32,
-    },
-    Error {
-        code: String,
-        message: String,
-    },
+struct LocalEmbeddingSocketResponse {
+    kind: String,
 }
 
 fn load_last_successful_run(conn: &Connection, target_id: &str) -> Result<Option<Value>> {

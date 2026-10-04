@@ -214,6 +214,14 @@ are listed in `payload.unbound_person_field_keys`, outside the researched-field
 list. Existing imported names and contact details remain unchanged. Initial
 legacy discovery from an empty contact list and explicit keyed updates remain
 supported; this does not certify the source quality of those values.
+Completion of a requested person field is judged for every keyed contact,
+including contacts for which the worker supplied no status. An absent or empty
+`person_field_status` map cannot let an unbound Lead-level answer close those
+people. Repeated rows for one key produce one open-person entry. Leads without
+keyed contacts retain the documented Lead-level negative-result path. The same
+rule applies when native email validation considers promoting a research result
+from `needs_review`; this does not create a new person-selection contract or
+validate a worker's evidence.
 Contact deduplication also preserves two distinct nonempty person keys even
 when imported contacts share a local row ID. Duplicate rows with the same
 person key still coalesce; unkeyed legacy row-ID matching remains supported.
@@ -1507,6 +1515,12 @@ empty window is one final chunk. Extra error codes: `ROWS_TABLE_NOT_FOUND`
   `ParquetReader::with_slice`, evidence receipts, `row_id` enrichment from the
   absolute offset). The capability is advertised only when a rows source is
   registered.
+  A row window binds its content hash, schema and rows to one open Parquet
+  file. Native all-row reads retain that file across every page, so atomic
+  replacement cannot mix revisions; an incomplete count fails instead of
+  yielding a partial completion manifest. Independent browser requests can
+  observe newer revisions and still carry their own hashes. File-handle
+  identity guards the digest cache; reads keep the existing bounded page size.
 - Browser: `rows-demand-loader.mjs`, reachable from modules as
   `bridge.state.knowledgeRowsLoader` after
   `ctx.sync.startCollection('knowledge_tables')` (`fetchRows`,
@@ -2554,6 +2568,30 @@ Each has shipped (or would ship) real production breakage.
 
 
 ### Cockpit projections (PR-1)
+
+#### App origin and current execution
+
+`ctox_queue_tasks.source_module` identifies the originating app; `module=ctox`
+identifies the queue surface and must not be used as that origin. Native command
+admission stamps private queue metadata with its accepted command ID and module.
+Child/review/continuation tasks with an explicit parent inherit that stamp in
+the same tenant's core transaction. Legacy parent roots resolve through their
+canonical command/task link. Caller-supplied origin metadata is discarded.
+Queue edits and retry/terminal transitions retain the origin; unrelated tasks
+without an admitted parent remain unattributed rather than adopting an open app.
+
+The existing command projection associates `command_id`, `module`,
+`task_id`/`execution_task_id` and `execution_phase`. Queue rows associate their
+task ID, numeric `attempt`, `crew_member_id`, `lease_worker_id` and expiring lease.
+`status=running` alone means leased. Current worker snapshots publish
+`ctox_harness_status.active_task_ids`; finalized `ctox_runs.id` is an attempt ID,
+not evidence of current execution. Replaying a persisted status keeps diagnostics
+but clears service/busy/active-worker/task claims until a live worker publication.
+These existing projections do not yet expose
+a per-attempt live snapshot fence. A consumer must show unknown when it cannot
+bind the current task/attempt, lease, terminal state and fresh connected native
+generation; app visibility, queue length or process liveness cannot fill that
+gap. No new collection, permission grant or HTTP bridge is introduced here.
 
 The cockpit uses only the existing native-store → CTOX DB → WebRTC path. There
 are no browser HTTP data endpoints. Source ledgers remain durable; retention
