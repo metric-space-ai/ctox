@@ -247,52 +247,12 @@ impl DevinInteractionAccumulator {
                 self.unknown_fields.push(number);
             }
         }
-        if let Some(usage) = frame.usage {
-            if let Some(current) = &mut self.usage {
-                if usage.prompt_tokens > 0 {
-                    current.prompt_tokens = usage.prompt_tokens;
-                }
-                if usage.completion_tokens > 0 {
-                    current.completion_tokens = usage.completion_tokens;
-                }
-                if usage.cached_tokens > 0 {
-                    current.cached_tokens = usage.cached_tokens;
-                }
-                if usage.cache_write_tokens > 0 {
-                    current.cache_write_tokens = usage.cache_write_tokens;
-                }
-                if !usage.request_id.is_empty() {
-                    current.request_id = usage.request_id;
-                }
-                if !usage.model_name.is_empty() {
-                    current.model_name = usage.model_name;
-                }
-                current.headers.extend(usage.headers);
-                // Status code remains the first usage's value, matching upstream.
-            } else {
-                self.usage = Some(usage);
-            }
-        }
-        if !frame.response_dimension_groups.is_empty()
-            && self.usage.as_ref().is_none_or(|usage| {
-                usage.prompt_tokens == 0 || usage.completion_tokens == 0 || usage.cached_tokens == 0
-            })
-        {
-            let dimensions =
-                parse_devin_response_dimension_groups(&frame.response_dimension_groups);
-            if dimensions.found {
-                let usage = self.usage.get_or_insert_with(DevinUsage::default);
-                if usage.prompt_tokens == 0 {
-                    usage.prompt_tokens = dimensions.prompt_tokens;
-                }
-                if usage.completion_tokens == 0 {
-                    usage.completion_tokens = dimensions.completion_tokens;
-                }
-                if usage.cached_tokens == 0 {
-                    usage.cached_tokens = dimensions.cached_tokens;
-                }
-            }
-        }
+        update_devin_usage(
+            &mut self.usage,
+            frame.usage,
+            &frame.response_dimension_groups,
+        );
+
         self.signature.extend(frame.delta_signature);
         if !frame.delta_signature_type.is_empty() {
             self.signature_type = frame.delta_signature_type;
@@ -495,9 +455,63 @@ fn text_step(text: &[u8]) -> Vec<u8> {
     )
 }
 
+/// Merge observed usage without replacing known counts with missing values.
+pub(super) fn update_devin_usage(
+    current: &mut Option<DevinUsage>,
+    incoming: Option<DevinUsage>,
+    dimensions: &[Vec<u8>],
+) {
+    // ref: devin_executor.go:843-906 — later positive counts replace; zero
+    // dimensions only fill missing values; the first HTTP status is retained.
+    if let Some(usage) = incoming {
+        if let Some(previous) = current {
+            if usage.prompt_tokens > 0 {
+                previous.prompt_tokens = usage.prompt_tokens;
+            }
+            if usage.completion_tokens > 0 {
+                previous.completion_tokens = usage.completion_tokens;
+            }
+            if usage.cached_tokens > 0 {
+                previous.cached_tokens = usage.cached_tokens;
+            }
+            if usage.cache_write_tokens > 0 {
+                previous.cache_write_tokens = usage.cache_write_tokens;
+            }
+            if !usage.request_id.is_empty() {
+                previous.request_id = usage.request_id;
+            }
+            if !usage.model_name.is_empty() {
+                previous.model_name = usage.model_name;
+            }
+            previous.headers.extend(usage.headers);
+        } else {
+            *current = Some(usage);
+        }
+    }
+    if !dimensions.is_empty()
+        && current.as_ref().is_none_or(|usage| {
+            usage.prompt_tokens == 0 || usage.completion_tokens == 0 || usage.cached_tokens == 0
+        })
+    {
+        let dimensions = parse_devin_response_dimension_groups(dimensions);
+        if dimensions.found {
+            let usage = current.get_or_insert_with(DevinUsage::default);
+            if usage.prompt_tokens == 0 {
+                usage.prompt_tokens = dimensions.prompt_tokens;
+            }
+            if usage.completion_tokens == 0 {
+                usage.completion_tokens = dimensions.completion_tokens;
+            }
+            if usage.cached_tokens == 0 {
+                usage.cached_tokens = dimensions.cached_tokens;
+            }
+        }
+    }
+}
+
 /// Go's JSON writer replaces each invalid UTF-8 byte independently. Rust's
 /// from_utf8_lossy may replace several bytes at once, so preserve Go's boundary.
-fn go_utf8_text(bytes: &[u8]) -> String {
+pub(super) fn go_utf8_text(bytes: &[u8]) -> String {
     let mut result = String::new();
     let mut position = 0;
     while position < bytes.len() {
