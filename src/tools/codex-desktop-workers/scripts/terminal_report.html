@@ -64,9 +64,18 @@ function reworkCount(p){
  for(const e of ee)events.set(e.head,e);}
  return events.size;
 }
+function reworkLowerBound(p){
+ const rows=[p,...current(p,'parent',false),...current(p,'worker')];
+ const bounds=rows.map(a=>a.whole_pr_rework_iterations_lower_bound).filter(n=>Number.isInteger(n)&&n>0);
+ return bounds.length?Math.max(...bounds):null;
+}
+function reworkDisplay(p){
+ const exact=reworkCount(p),lower=reworkLowerBound(p);
+ return exact!=null?String(exact):lower!=null?'≥'+lower:'—';
+}
 function prKey(p,k){
  if(k==='pr')return p.repository+' #'+p.number+' '+p.title;if(k==='status')return p.state;
- if(k==='date')return p.closedAt||p.mergedAt||'';if(k==='rework')return reworkCount(p);
+ if(k==='date')return p.closedAt||p.mergedAt||'';if(k==='rework')return reworkCount(p)??reworkLowerBound(p);
  if(k==='actors')return ['parent','worker'].flatMap(r=>current(p,r).map(a=>(a.harness||'')+' / '+actorModels(a).join(' → '))).join(' ');
  const role=k==='parent'?'parent':'worker',aa=current(p,role).filter(a=>a.rubric==='unified-actor-v1');
  return avg(known(aa.map(a=>k==='parent'?parentScore(a):value(a,k==='first'?'first':'corrected'))));
@@ -117,7 +126,7 @@ function draw(){
  const size=Number($('size').value),pages=Math.max(1,Math.ceil(visible.length/size));page=Math.max(0,Math.min(page,pages-1));
  $('prlist').innerHTML=visible.slice(page*size,(page+1)*size).map(p=>{
  const parent=current(p,'parent'),worker=current(p,'worker');
- return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>'+E(p.repository.split('/').pop())+' #'+p.number+'</strong> '+E(p.title)+'</a></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt'+(mergeTarget(p)?' → '+E(mergeTarget(p)):''):'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'</td><td class="actors">'+actorCell(parent,'P')+actorCell(worker,'W')+'</td><td>'+scoreCell(parent,'parent_completion')+'</td><td>'+scoreCell(worker,'first')+'</td><td>'+scoreCell(worker,'corrected')+'</td><td class="number">'+(reworkCount(p)??'—')+'</td></tr>';
+ return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>'+E(p.repository.split('/').pop())+' #'+p.number+'</strong> '+E(p.title)+'</a></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt'+(mergeTarget(p)?' → '+E(mergeTarget(p)):''):'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'</td><td class="actors">'+actorCell(parent,'P')+actorCell(worker,'W')+'</td><td>'+scoreCell(parent,'parent_completion')+'</td><td>'+scoreCell(worker,'first')+'</td><td>'+scoreCell(worker,'corrected')+'</td><td class="number">'+reworkDisplay(p)+'</td></tr>';
  }).join('')||'<tr><td colspan="7" class="empty">Keine passenden PRs.</td></tr>';
  $('page').textContent='Seite '+(page+1)+' von '+pages+' · '+(visible.length?page*size+1:0)+'–'+Math.min((page+1)*size,visible.length)+' von '+visible.length;
  $('prev').disabled=page===0;$('next').disabled=page+1>=pages;
