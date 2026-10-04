@@ -407,6 +407,10 @@ fn aggregate_error_for_request(
         plugin_error(DevinExecutorError::Aggregate(error))
     }
 }
+fn is_interaction_event(bytes: &[u8], kind: &str) -> bool {
+    std::str::from_utf8(bytes).is_ok_and(|json| gjson::get(json, "event_type").str() == kind)
+}
+
 fn response_format(request: &ExecutorRequest) -> Format {
     Format::from(if request.format.is_empty() {
         request.source_format.as_str()
@@ -570,7 +574,7 @@ impl StreamTranslation {
             if let Some(reporter) = &self.usage {
                 reporter.observe_response_chunk(&event);
             }
-            if gjson::get_bytes(&event, "event_type").str() == "interaction.completed" {
+            if is_interaction_event(&event, "interaction.completed") {
                 completion_usage = Some(parse_interactions_usage(&event));
             }
             if let Err(error) = self.send(sender, &event).await {

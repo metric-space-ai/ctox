@@ -437,12 +437,12 @@ async fn candidate_devin_transport_patch_failure_prevents_positive_terminal_and_
     let fixture = Fixture::new(200, Headers::new());
     fixture.registry.register(Format::from("openai-response"), Format::from("interactions"), None,
         ResponseTransform { stream: Some(Arc::new(|_, _, _, _, body, _| {
-            if gjson::get_bytes(body, "event_type").str() == "interaction.created" {
+            if is_interaction_event(body, "interaction.created") {
                 return vec![br#"data: {"type":"response.created","response":{"id":"r"}}
 
 "#.to_vec()];
             }
-            if gjson::get_bytes(body, "event_type").str() == "interaction.completed" {
+            if is_interaction_event(body, "interaction.completed") {
                 return vec![br#"data: {"type":"response.completed","response":{"id":"r","output":[{"type":"function_call","id":"item","call_id":"call","name":"apply_patch","arguments":"invalid"}]}}
 
 "#.to_vec()];
