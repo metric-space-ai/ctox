@@ -64,3 +64,33 @@ not actual quorum/provider/QEMU/two-host acceptance. Tests are UNRUN until the
 source-bound shared resource gate admits them. Root compilation, final producer
 composition, Linux compilation/real image startup, command/frame delivery,
 confirmed-stop effect reconciliation and real two-host acceptance remain required.
+
+## Atomic process checkpoint transition
+
+The native quorum operation `CommitEffectCheckpoint` validates the exact sole
+pending effect, current ownership and independently signed durable copies from
+at least two eligible replicas, including the owner. The checkpoint sequence
+must advance. It installs that fresh checkpoint and completes the effect in one
+committed Raft entry and one SQLite state-machine transaction. Rejection leaves
+both checkpoint and effect unchanged; a repeated request returns evidence only.
+
+Every newly begun effect persists `checkpointRequiresRefresh`. Completing an
+effect alone does not clear this flag and cannot authorize takeover from the old
+checkpoint. Ordinary checkpoint protection clears it only with no pending
+effects and a strictly newer authenticated checkpoint. Legacy serialized jobs
+without the flag default to requiring refresh, never to an invented freshness
+proof. The previous protected checkpoint remains available as evidence while
+the process is running.
+
+The native lifecycle owner must prove the exact retained child's exit and
+capture an actually consistent stopped-guest checkpoint before invoking the
+atomic operation. Signed copy receipts prove durable bytes and execution binding;
+they do not prove guest shutdown or application consistency. No browser/IPC
+operation is added, and the registry still retains its effect after stop until
+this real lifecycle reconciliation is connected.
+
+New signed-RPC/independent-SQLite regressions race old-checkpoint takeover against
+the atomic commit, reject old/forged/incomplete copies and foreign/additional
+effects, verify replay and restart persistence, and deny stale takeover after
+ordinary effect completion. These source regressions remain UNRUN at this
+revision while the existing DevOps resource unit owns the admission gate.

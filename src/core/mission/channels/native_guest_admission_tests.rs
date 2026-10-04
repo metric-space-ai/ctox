@@ -83,6 +83,7 @@ mod tests {
                         generation: 91,
                     },
                     checkpoint: None,
+                    checkpoint_requires_refresh: true,
                     pending_effects: BTreeSet::new(),
                     completed_effects: BTreeSet::new(),
                     stopped: false,

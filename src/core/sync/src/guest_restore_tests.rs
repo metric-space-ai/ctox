@@ -175,11 +175,15 @@ async fn readiness_retains_registered_process_effect_and_denies_takeover() {
         .submit(takeover("takeover-after-confirmed-stop"))
         .await
         .unwrap();
-    let Receipt::Applied(job) = moved else {
-        panic!("eligible takeover must proceed only after stop");
-    };
-    assert_eq!(job.ownership.node_id, 2);
-    assert_eq!(job.ownership.generation, imported.ownership.generation + 1);
+    assert_eq!(
+        moved,
+        Receipt::Rejected(crate::authority::Rejection::ReconciliationRequired),
+        "even confirmed stop cannot authorize takeover from the pre-boot checkpoint"
+    );
+    assert_eq!(
+        f.authority.state.lock().unwrap().jobs["job"].ownership,
+        imported.ownership
+    );
     assert!(confirm_guest_ready(&f.authority, &owner, imported)
         .await
         .is_err());
@@ -675,6 +679,7 @@ fn fixture() -> Fixture {
             replicas: BTreeSet::from([1, 2]),
             receipts: vec![],
         }),
+        checkpoint_requires_refresh: false,
         pending_effects: BTreeSet::new(),
         completed_effects: BTreeSet::new(),
         stopped: false,
