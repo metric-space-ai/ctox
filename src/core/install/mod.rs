@@ -2449,7 +2449,7 @@ fn recover_previous_release_preserving_state(
 }
 
 fn stop_background_for_release_switch(root: &Path) -> Result<()> {
-    service::stop_background_guarded(root, false)
+    service::stop_background_for_release_switch_guarded(root)
         .map(|_| ())
         .map_err(|err| {
             anyhow::anyhow!("refusing to switch CTOX release while service stop is not safe: {err}")
@@ -4240,12 +4240,13 @@ fn refresh_service_unit(
         .map(|entry| format!("Environment=CTOX_INSTALL_ROOT={}\n", entry.display()))
         .unwrap_or_default();
     let contents = format!(
-        "[Unit]\nDescription=CTOX Background Service\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nWorkingDirectory={}\nEnvironment=CTOX_ROOT={}\nEnvironment=CTOX_STATE_ROOT={}\n{}EnvironmentFile=-%h/.config/ctox/business-os.env\nEnvironmentFile=-%h/.config/ctox/business-bridge.env\nExecStart={} service --foreground\nRestart=always\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec=20\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=CTOX Background Service\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nWorkingDirectory={}\nEnvironment=CTOX_ROOT={}\nEnvironment=CTOX_STATE_ROOT={}\n{}EnvironmentFile=-%h/.config/ctox/business-os.env\nEnvironmentFile=-%h/.config/ctox/business-bridge.env\nExecStart={} service --foreground\nRestart=always\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec={}\n\n[Install]\nWantedBy=default.target\n",
         current_root.display(),
         current_root.display(),
         state_root.display(),
         install_root_export,
-        wrapper.display()
+        wrapper.display(),
+        service::SERVICE_LIFECYCLE_TIMEOUTS.release_switch_shutdown().as_secs()
     );
     fs::write(&service_file, contents)
         .with_context(|| format!("failed to write {}", service_file.display()))?;
