@@ -2142,6 +2142,13 @@ private cockpit projections (`ctox_runs`, `ctox_crew_learnings`,
 Module starts skip those collections without recording a transport failure.
 The native actor, grant and scope decision remains authoritative.
 
+Cockpit run and harness-event histories use demand-only pull bridges instead of
+replicating every task's ledger during startup. The selected-task view requests
+at most 32 runs and 200 events through the native WebRTC query bridge. Both
+collections remain module-startable; initial readiness still requires the
+authenticated native session and an open data channel. Maintenance continues
+to wait for that readiness rather than skipping the collections.
+
 ### Crew identity contracts (PR-2)
 
 The existing channel migration seeds four stable members in `crew_members` and
