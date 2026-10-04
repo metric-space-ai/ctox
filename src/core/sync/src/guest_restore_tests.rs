@@ -147,6 +147,50 @@ async fn staged_payload_mutations_deny_publication_and_retain_pending_effect() {
     }
 }
 
+#[tokio::test]
+async fn checkpoint_advanced_after_staging_denies_before_effect_admission() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    f.authority
+        .state
+        .lock()
+        .unwrap()
+        .jobs
+        .get_mut("job")
+        .unwrap()
+        .checkpoint
+        .as_mut()
+        .unwrap()
+        .sequence += 1;
+    assert!(
+        commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+            .await
+            .is_err()
+    );
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+    assert!(f.authority.state.lock().unwrap().jobs["job"]
+        .pending_effects
+        .is_empty());
+}
+
+#[tokio::test]
+async fn changed_checkpoint_in_admission_reply_denies_publication() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    *f.authority.changed_checkpoint_reply.lock().unwrap() = true;
+    assert!(
+        commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+            .await
+            .is_err()
+    );
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+    let state = f.authority.state.lock().unwrap();
+    assert_eq!(state.jobs["job"].pending_effects.len(), 1);
+    assert!(state.jobs["job"].completed_effects.is_empty());
+}
+
 use super::*;
 use crate::{
     authority::{Peer, ProtectedCheckpoint, State, WorkerMembership},
@@ -166,6 +210,7 @@ struct NativeFixture {
     revoke_on_begin: Mutex<bool>,
     hold_begin: Mutex<bool>,
     fail_complete: Mutex<bool>,
+    changed_checkpoint_reply: Mutex<bool>,
 }
 #[async_trait]
 impl ExecutionAuthority for NativeFixture {
@@ -204,7 +249,12 @@ impl ExecutionAuthority for NativeFixture {
                 data_replica: true,
             },
         )]);
-        let receipt = self.state.lock().unwrap().apply(&request, &peers);
+        let mut receipt = self.state.lock().unwrap().apply(&request, &peers);
+        if is_begin && *self.changed_checkpoint_reply.lock().unwrap() {
+            if let Receipt::Applied(job) = &mut receipt {
+                job.checkpoint.as_mut().unwrap().sequence += 1;
+            }
+        }
         if is_begin && *self.revoke_on_begin.lock().unwrap() {
             self.owner.binding.lock().unwrap().controller_generation += 1;
         }
@@ -389,6 +439,7 @@ fn fixture() -> Fixture {
             revoke_on_begin: Mutex::new(false),
             hold_begin: Mutex::new(false),
             fail_complete: Mutex::new(false),
+            changed_checkpoint_reply: Mutex::new(false),
         },
     }
 }

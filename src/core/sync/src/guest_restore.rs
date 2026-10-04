@@ -250,6 +250,7 @@ pub async fn commit_guest_restore(
         &staged.digest,
     )?;
     if job.spec != staged.spec
+        || !matches_manifest(&job, &staged.manifest)
         || owner.resolve_destination(
             &staged.destination.guest_id,
             &staged.spec,
@@ -285,6 +286,11 @@ pub async fn commit_guest_restore(
             if admitted.spec == staged.spec
                 && admitted.ownership == staged.ownership
                 && !admitted.stopped
+                && matches_manifest(admitted, &staged.manifest)
+                && admitted
+                    .checkpoint
+                    .as_ref()
+                    .is_some_and(|checkpoint| checkpoint.digest == staged.digest)
                 && admitted.pending_effects.len() == 1
                 && admitted.pending_effects.contains(&effect_id) => {}
         // Replayed is evidence of a prior admission, never permission to repeat it.
@@ -341,6 +347,12 @@ pub async fn commit_guest_restore(
             if complete.spec == staged.spec
                 && complete.ownership == staged.ownership
                 && !complete.stopped
+                && complete.pending_effects.is_empty()
+                && matches_manifest(complete, &staged.manifest)
+                && complete
+                    .checkpoint
+                    .as_ref()
+                    .is_some_and(|checkpoint| checkpoint.digest == staged.digest)
                 && complete.completed_effects.contains(&effect_id) => {}
         _ => return Err(denied("guest import completion requires reconciliation")),
     }
