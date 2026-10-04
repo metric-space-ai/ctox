@@ -514,6 +514,11 @@ impl NativeProviderCommandEmitter {
 }
 
 impl NativeProviderCommand {
+    /// Observation of the actual retained provider root, never a wire claim.
+    pub(crate) fn runtime_root(&self) -> &Path {
+        self.provider.runtime_root()
+    }
+
     /// Consume at the actual effect boundary. Current policy/controller checks
     /// and the bounded effect belong in this callback, under the same guard.
     /// Returning identity and applying an effect later is not an admission.

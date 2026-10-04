@@ -15,9 +15,55 @@ mod tests {
 
     struct Owner {
         revoked: AtomicBool,
+        command_calls: AtomicUsize,
         destination: NativeGuestAdmissionDestination,
     }
     impl NativeGuestAdmissionOwner for Owner {
+        fn execute_current_guest_command(
+            &self,
+            tx: &Transaction<'_>,
+            runtime_root: &std::path::Path,
+            facts: &NativeProviderFacts,
+            actual_turn: &str,
+            command: &crate::business_os::store::BusinessCommand,
+        ) -> Result<ctox_protocol::mcp::CallToolResult> {
+            self.command_calls.fetch_add(1, Ordering::SeqCst);
+            ensure!(
+                !self.revoked.load(Ordering::Acquire),
+                "fixture policy revoked"
+            );
+            assert_eq!(actual_turn, "actual-turn");
+            assert_eq!(facts.provider_session_id, "actual-thread");
+            assert_eq!(
+                std::path::Path::new(tx.path().expect("held native store")),
+                crate::resolve_db_path(runtime_root, None)
+            );
+            let competing = rusqlite::Connection::open(tx.path().unwrap())?;
+            competing.busy_timeout(std::time::Duration::from_millis(10))?;
+            let error = competing
+                .execute(
+                    "UPDATE communication_routing_state SET attempt=attempt+1",
+                    [],
+                )
+                .expect_err("native consumer lost the held worker writer");
+            assert!(
+                matches!(error, rusqlite::Error::SqliteFailure(failure, _)
+                    if matches!(failure.code, rusqlite::ErrorCode::DatabaseBusy
+                        | rusqlite::ErrorCode::DatabaseLocked)),
+                "competing write failed for a reason other than the held native writer"
+            );
+            tx.execute(
+                "INSERT INTO test_guest_consumer_effects VALUES (?1)",
+                [&command.id],
+            )?;
+            Ok(ctox_protocol::mcp::CallToolResult {
+                content: vec![],
+                structured_content: None,
+                is_error: None,
+                meta: None,
+            })
+        }
+
         fn with_current_destination(
             &self,
             _tx: &Transaction<'_>,
@@ -128,6 +174,84 @@ mod tests {
         }
     }
 
+    #[test]
+    fn actual_native_command_consumer_holds_worker_transaction_and_burns_refused_witness(
+    ) -> Result<()> {
+        let (root, execution, _) = super::super::super::queue_provider_binding::tests::admitted()?;
+        let provider = NativeProviderTurnOwner::prepare(
+            &execution,
+            "actual-thread",
+            "actual-model",
+            None,
+            None,
+            None,
+        )?;
+        provider.bind_turn("actual-thread", "actual-turn")?;
+        let owner = Arc::new(Owner {
+            revoked: AtomicBool::new(false),
+            command_calls: AtomicUsize::new(0),
+            destination: NativeGuestAdmissionDestination {
+                instance_id: "native-instance".into(),
+                project_id: "native-project".into(),
+                human_owner_id: "native-principal".into(),
+                guest_id: "native-guest".into(),
+                worker_profile_id: "native-profile".into(),
+                controller_id: "native-controller".into(),
+                controller_generation: 8,
+                policy_revision: "native-policy".into(),
+                scope_id: "native-scope".into(),
+                required_capabilities: BTreeSet::from(["native-guest".into()]),
+            },
+        });
+        let quorum = Arc::new(Quorum {
+            owner: owner.clone(),
+            revoke_after_create: false,
+            replay: false,
+            calls: AtomicUsize::new(0),
+            job: Mutex::new(None),
+        });
+        let admission = NativeGuestAdmission::new(quorum.clone(), owner.clone())?;
+        let conn = rusqlite::Connection::open(crate::resolve_db_path(root.path(), None))?;
+        conn.execute(
+            "CREATE TABLE test_guest_consumer_effects (id TEXT PRIMARY KEY)",
+            [],
+        )?;
+        let mut command = crate::business_os::store::BusinessCommand {
+            id: Some("actual-command".into()),
+            module: "guest".into(),
+            command_type: "ctox.guest.observe".into(),
+            record_id: Some("native-guest".into()),
+            payload: serde_json::json!({"guest_id":"native-guest"}),
+            client_context: serde_json::json!({"actor":{"id":"attribution-only"}}),
+            origin: crate::business_os::store::CommandOrigin::TrustedLocal,
+        };
+        let witness =
+            provider.admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| Ok(()))?;
+        let clone = witness.clone();
+        admission.execute_guest_command(&command, witness)?;
+        assert!(admission.execute_guest_command(&command, clone).is_err());
+        assert_eq!(owner.command_calls.load(Ordering::SeqCst), 1);
+        owner.revoked.store(true, Ordering::Release);
+        command.id = Some("refused-command".into());
+        let witness =
+            provider.admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| Ok(()))?;
+        let clone = witness.clone();
+        assert!(admission.execute_guest_command(&command, witness).is_err());
+        owner.revoked.store(false, Ordering::Release);
+        assert!(admission.execute_guest_command(&command, clone).is_err());
+        assert_eq!(owner.command_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM test_guest_consumer_effects",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            1
+        );
+        assert_eq!(quorum.calls.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn actual_native_admission_keeps_uncertain_or_revoked_create_pending() -> Result<()> {
         for (revoke, replay) in [(false, false), (true, false), (false, true)] {
@@ -151,6 +275,7 @@ mod tests {
             )?;
             let owner = Arc::new(Owner {
                 revoked: AtomicBool::new(false),
+                command_calls: AtomicUsize::new(0),
                 destination: NativeGuestAdmissionDestination {
                     instance_id: "native-instance".into(),
                     project_id: "native-project".into(),
@@ -220,6 +345,7 @@ mod tests {
         )?;
         let owner = Arc::new(Owner {
             revoked: AtomicBool::new(false),
+            command_calls: AtomicUsize::new(0),
             destination: NativeGuestAdmissionDestination {
                 instance_id: "native-instance".into(),
                 project_id: "native-project".into(),

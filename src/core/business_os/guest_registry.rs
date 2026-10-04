@@ -86,6 +86,85 @@ fn validate_provider(
     );
 }
 impl NativeGuestAdmissionOwner for NativeGuestAdmissionResolver {
+    fn execute_current_guest_command(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        runtime_root: &Path,
+        facts: &NativeProviderFacts,
+        actual_turn: &str,
+        command: &super::store::BusinessCommand,
+    ) -> Result<ctox_protocol::mcp::CallToolResult> {
+        self.registry.verify_runtime_root(runtime_root)?;
+        ensure!(
+            identifier(actual_turn),
+            "native guest command has no actual turn"
+        );
+        let request = super::guest_commands::parse_guest_command(command)?;
+        ensure!(
+            request.guest_id == self.guest_id
+                && command
+                    .record_id
+                    .as_deref()
+                    .is_none_or(|id| id == self.guest_id),
+            "native command targets another enrolled guest"
+        );
+        let registration = self.registry.registration(&self.guest_id)?;
+        let (provider, binding) = {
+            let entry = registration
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+            (
+                entry
+                    .provider
+                    .clone()
+                    .context("guest has no actual producer")?,
+                entry
+                    .execution
+                    .clone()
+                    .context("guest has no admitted execution")?,
+            )
+        };
+        let execution = NativeGuestExecution {
+            registry: Arc::clone(&self.registry),
+            provider,
+            guest_id: self.guest_id.clone(),
+            binding,
+        };
+        // The witness already holds the provider transaction. Re-entering
+        // with_current here would lock it again rather than protect an effect.
+        execution.with_held_worker(tx, facts, |entry, verify| {
+            let destination = &entry.assignment.destination;
+            let scope = super::guest_runtime::GuestScope {
+                instance_id: destination.instance_id.clone(),
+                user_id: destination.human_owner_id.clone(),
+                project_id: destination.project_id.clone(),
+                thread_id: destination.thread_id.clone(),
+                worker_profile_id: destination.worker_profile_id.clone(),
+                guest_id: destination.guest_id.clone(),
+            };
+            super::guest_commands::apply_scope_claims(&scope, command)?;
+            verify()?;
+            // No bytes or input can bypass the absent real delivery owner.
+            // In particular, MCP JSON/image content is not a substitute for
+            // the revocation-fenced native P2P frame path.
+            #[cfg(not(target_os = "linux"))]
+            anyhow::bail!("native guest command effects require retained Linux QEMU");
+            #[cfg(target_os = "linux")]
+            {
+                ensure!(
+                    entry.imported.is_some() && entry.registered_process.is_some(),
+                    "native guest has no registered import/child"
+                );
+                entry
+                    .desktop
+                    .as_ref()
+                    .context("native guest has no retained child")?
+                    .driver()?;
+                anyhow::bail!("native guest frame delivery owner is not installed")
+            }
+        })
+    }
+
     fn with_current_destination(
         &self,
         tx: &rusqlite::Transaction<'_>,
@@ -815,65 +894,91 @@ impl NativeGuestExecution {
     ) -> Result<T> {
         self.registry
             .verify_runtime_root(self.provider.runtime_root())?;
-        let entry = self.registry.registration(&self.guest_id)?;
         self.provider
             .with_live_provider_transaction(|worker_tx, facts, _| {
-                self.registry.with_policy(|tx| {
-                    let mut entry = entry
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
-                    ensure!(
-                        !entry.revoked
-                            && entry.execution.as_ref() == Some(&self.binding)
-                            && facts.binding_id == self.binding.provider_binding_id,
-                        "guest controller/execution revoked or replaced"
-                    );
-                    ensure!(
-                        self.registry.admission_destination(tx, &entry)? == self.binding.admission,
-                        "native guest policy/controller changed since admission"
-                    );
-                    let provenance = facts
-                        .command_provenance
-                        .as_ref()
-                        .context("native command authority missing")?;
-                    ensure!(
-                        provenance.get("actor").and_then(serde_json::Value::as_str)
-                            == Some(entry.assignment.destination.human_owner_id.as_str())
-                            && provenance
-                                .get("expires_at_ms")
-                                .and_then(serde_json::Value::as_u64)
-                                .is_some_and(|expiry| u128::from(expiry) > super::store::now_ms()),
-                        "native guest principal/lifetime changed"
-                    );
-                    ensure!(
-                        private_directory(&entry.assignment.destination.import_parent)?
-                            == entry.import_identity,
-                        "native import parent replaced"
-                    );
-                    let verify = || {
-                        verify_worker_current(worker_tx, facts)?;
-                        validate_provider(facts, &entry.assignment.destination)
-                    };
-                    verify()?;
-                    // Capture a destination clone so the checker can be borrowed
-                    // while the retained process changes under this controller.
-                    if let Some(imported) = &entry.imported {
-                        ensure!(
-                            Some(private_directory(&imported.imported_directory)?)
-                                == entry.imported_identity,
-                            "registered import directory was replaced"
-                        );
-                    }
-                    let destination = entry.assignment.destination.clone();
-                    let verify = || {
-                        verify_worker_current(worker_tx, facts)?;
-                        validate_provider(facts, &destination)
-                    };
-                    let result = apply(&mut entry, &verify)?;
-                    verify()?;
-                    Ok(result)
-                })
+                self.with_held_worker(worker_tx, facts, apply)
             })
+    }
+
+    /// The command witness already owns the real worker/provider transaction.
+    /// This shared path acquires only current policy and controller guards.
+    fn with_held_worker<T>(
+        &self,
+        worker_tx: &Connection,
+        facts: &NativeProviderFacts,
+        apply: impl FnOnce(&mut Registration, &dyn Fn() -> Result<()>) -> Result<T>,
+    ) -> Result<T> {
+        self.registry
+            .verify_runtime_root(self.provider.runtime_root())?;
+        let contract = facts
+            .checkpoint_contract
+            .as_ref()
+            .context("native guest account/harness contract missing")?;
+        ensure!(
+            self.binding.spec.session_id == facts.provider_session_id
+                && self.binding.spec.model_id == facts.model_id
+                && self.binding.spec.harness == contract.harness
+                && self.binding.spec.harness_version == contract.harness_version
+                && self.binding.spec.model_route_id == contract.model_route_id
+                && self.binding.spec.gateway_account_id == contract.gateway_account_id,
+            "native guest provider/account/harness contract changed"
+        );
+        let entry = self.registry.registration(&self.guest_id)?;
+        self.registry.with_policy(|tx| {
+            let mut entry = entry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+            ensure!(
+                !entry.revoked
+                    && entry.execution.as_ref() == Some(&self.binding)
+                    && facts.binding_id == self.binding.provider_binding_id,
+                "guest controller/execution revoked or replaced"
+            );
+            ensure!(
+                self.registry.admission_destination(tx, &entry)? == self.binding.admission,
+                "native guest policy/controller changed since admission"
+            );
+            let provenance = facts
+                .command_provenance
+                .as_ref()
+                .context("native command authority missing")?;
+            ensure!(
+                provenance.get("actor").and_then(serde_json::Value::as_str)
+                    == Some(entry.assignment.destination.human_owner_id.as_str())
+                    && provenance
+                        .get("expires_at_ms")
+                        .and_then(serde_json::Value::as_u64)
+                        .is_some_and(|expiry| u128::from(expiry) > super::store::now_ms()),
+                "native guest principal/lifetime changed"
+            );
+            ensure!(
+                private_directory(&entry.assignment.destination.import_parent)?
+                    == entry.import_identity,
+                "native import parent replaced"
+            );
+            let verify = || {
+                verify_worker_current(worker_tx, facts)?;
+                validate_provider(facts, &entry.assignment.destination)
+            };
+            verify()?;
+            // Capture a destination clone so the checker can be borrowed
+            // while the retained process changes under this controller.
+            if let Some(imported) = &entry.imported {
+                ensure!(
+                    Some(private_directory(&imported.imported_directory)?)
+                        == entry.imported_identity,
+                    "registered import directory was replaced"
+                );
+            }
+            let destination = entry.assignment.destination.clone();
+            let verify = || {
+                verify_worker_current(worker_tx, facts)?;
+                validate_provider(facts, &destination)
+            };
+            let result = apply(&mut entry, &verify)?;
+            verify()?;
+            Ok(result)
+        })
     }
 
     /// Receipt registration revalidates completed quorum effect; presence of an

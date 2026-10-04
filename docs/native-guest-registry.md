@@ -1,5 +1,22 @@
 # Native guest registry and controller integration
 
+Retained Linux capture and input now recheck the actual child and guest-service
+session around each bounded operation. Capture keeps bytes private for a guarded
+publisher. Input requires the exact observed process/endpoint/session. Failure or
+cancellation retires cached readiness; a surviving PID is not a replay permit.
+These Linux methods remain uncompiled and unexercised until approved platform
+capacity is available.
+
+The real native MCP consumer reaches this scoped registry through
+NativeGuestAdmission under the private one-shot command witness. The shared
+with_held_worker path checks current policy/controller without opening the
+already-held provider transaction again. A component regression uses the real
+native worker/provider guard to prove the owner callback retains its SQLite
+writer, commits only the successful fixture effect and burns a refused witness
+across clones. This is not a VM or two-host test. Production effects still deny
+when Linux QEMU or the actual revocation-fenced P2P frame delivery owner is absent;
+publisher integration and installed acceptance remain open.
+
 The native lifecycle constructor is `business_os::NativeGuestRegistry::new` with
 the actual already-running ExecutionAuthority and native capability requirements.
 It pins the canonical Business OS SQLite file and instance identity. Capability
@@ -71,7 +88,8 @@ consumer allows exactly that pending effect and rejects foreign/additional effec
 Unknown old effects, uncertain starts,
 missing/replaced guests and non-Linux runtimes deny readiness.
 
-Five source regressions use canonical native policy records and SQLite locking:
+Seven source regressions use canonical native policy records and SQLite locking:
+foreign provider root and replaced root directory even with original pinned files;
 foreign/duplicate/unregistered enrollment; competing policy writer and changed
 policy/controller; replaced store/import directory; missing/replaced native instance
 identity without automatic recreation; archived project/removed member/closed

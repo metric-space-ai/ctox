@@ -44,6 +44,8 @@ guard: those acquire the same transaction/lifetime locks. Clones share one
 consumption flag. An uncertain effect burns the witness and requires
 reconciliation, rather than repeating the effect.
 
+The concrete NativeGuestAdmission now consumes that witness and calls the scoped native registry using its actual retained runtime root and held worker transaction. The shared registry path rechecks the provider/account/harness contract, canonical current policy, controller binding, principal lifetime and pinned native files without reacquiring the provider transaction. Payload scope and record claims must match this enrolled guest. This source still denies effects on non-Linux hosts and when the real native P2P frame delivery owner is absent; no capture bytes become an MCP or HTTP data fallback.
+
 The in-process callback proves emission, not durable guest admission or a
 successful VM effect. The initiating provenance is not current account
 authorization. The VM caller/controller, authenticated Raft job, atomic effect
