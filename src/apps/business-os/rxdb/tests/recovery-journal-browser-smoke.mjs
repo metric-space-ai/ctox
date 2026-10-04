@@ -312,6 +312,52 @@ try {
     const pendingAfterRestartReconciliation = await reopenedStorage.recoveryJournal.getStatus();
     reopenedCommands.close();
     reopenedStorage.close();
+    // Keep an older journal handle open so the real browser reports blocked.
+    // Higher-version opens then prove that neither failed-startup handle leaks.
+    const lifecycleName = `${databaseName}-open-lifecycle`;
+    const lifecycleJournalName = `${lifecycleName}__recovery_v2`;
+    const openFixtureVersion = (name, version) => new Promise((resolveOpen, rejectOpen) => {
+      const request = indexedDB.open(name, version);
+      let retired = false;
+      const fail = (error) => {
+        retired = true;
+        clearTimeout(timer);
+        rejectOpen(error);
+      };
+      const timer = setTimeout(() => fail(new Error('lifecycle probe timed out')), 5000);
+      request.onsuccess = () => {
+        clearTimeout(timer);
+        if (retired) request.result.close();
+        else resolveOpen(request.result);
+      };
+      request.onerror = () => fail(request.error || new Error('lifecycle probe failed'));
+      request.onblocked = () => fail(new Error('failed startup retained an IndexedDB handle'));
+    });
+    const blocker = await openFixtureVersion(lifecycleJournalName, 3);
+    blocker.onversionchange = () => {};
+    let lifecycleJournalCode = '';
+    let lifecyclePrimaryReleased = false;
+    try {
+      try {
+        await openCtoxIndexedDbStorage({ databaseName: lifecycleName });
+      } catch (error) {
+        lifecycleJournalCode = error.code || '';
+        if (!String(error.message).includes('blocked')) throw error;
+      }
+      if (lifecycleJournalCode !== 'indexeddb_journal_unavailable') {
+        throw new Error('blocked journal startup must reject with its original code');
+      }
+      const primaryProbe = await openFixtureVersion(lifecycleName, 5);
+      primaryProbe.close();
+      lifecyclePrimaryReleased = true;
+    } finally {
+      blocker.close();
+    }
+    const journalProbe = await openFixtureVersion(lifecycleJournalName, 5);
+    journalProbe.close();
+    const lifecycleLateJournalReleased = true;
+    indexedDB.deleteDatabase(lifecycleName);
+    indexedDB.deleteDatabase(lifecycleJournalName);
     journal.close();
     indexedDB.deleteDatabase(`${databaseName}__recovery_v2`);
     indexedDB.deleteDatabase(`${databaseName}-other__recovery_v2`);
@@ -323,6 +369,9 @@ try {
     indexedDB.deleteDatabase(restartStorageName);
     indexedDB.deleteDatabase(`${restartStorageName}__recovery_v2`);
     return {
+      lifecycleJournalCode,
+      lifecyclePrimaryReleased,
+      lifecycleLateJournalReleased,
       pendingBeforeReplay,
       pendingAfterAck,
       pendingAfterPartialAck,
@@ -363,6 +412,9 @@ try {
     };
   });
 
+  assert(result.lifecycleJournalCode === 'indexeddb_journal_unavailable', 'blocked journal startup must retain its error code');
+  assert(result.lifecyclePrimaryReleased, 'failed journal startup must release its primary IndexedDB handle');
+  assert(result.lifecycleLateJournalReleased, 'a late journal open must not block the next schema version');
   assert(result.pendingBeforeReplay.pendingWrites === 1, 'journal commit must precede primary replay');
   assert(result.replay[0]?.status === 'replayed', 'pending batch must replay on startup');
   assert(result.replayed[0]?.[0]?.id === 'ticket-1', 'replay must preserve the complete local document');
