@@ -93,6 +93,7 @@ pub struct GeminiExecutor {
     registry: Arc<Registry>,
     cancellation: TranslationContext,
     usage_manager: Option<Arc<Manager>>,
+    payload_config: Arc<super::helps::PayloadApplyConfig>,
     request_processor: Option<Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>>,
 }
 
@@ -111,6 +112,7 @@ impl GeminiExecutor {
         Self {
             identifier: "gemini".into(),
             protocol: GeminiProtocol::GenerateContent,
+            payload_config: Arc::new(payload_config_from_legacy(&config)),
             config,
             registry,
             cancellation,
@@ -124,6 +126,7 @@ impl GeminiExecutor {
         Self {
             identifier: "gemini-interactions".into(),
             protocol: GeminiProtocol::Interactions,
+            payload_config: Arc::new(payload_config_from_legacy(&config)),
             config,
             registry,
             cancellation: TranslationContext::default(),
@@ -145,6 +148,12 @@ impl GeminiExecutor {
         processor: Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>,
     ) -> Self {
         self.request_processor = Some(processor);
+        self
+    }
+
+    #[must_use]
+    pub fn with_payload_config(mut self, config: Arc<super::helps::PayloadApplyConfig>) -> Self {
+        self.payload_config = config;
         self
     }
 
@@ -187,7 +196,20 @@ impl GeminiExecutor {
         let model = base_model(&request.model);
         let from = source_format(request);
         let to = self.request_to_format(request);
-        let mut body = self.translate_body(request, &from, &to, &model, stream);
+        let (original, mut body) = if action == "countTokens" {
+            (
+                Vec::new(),
+                self.translate_body(request, &from, &to, &model, stream, &request.payload),
+            )
+        } else {
+            self.translate_pair(request, &from, &to, &model, stream)
+        };
+        if to.as_str() != "interactions" {
+            body = fix_gemini_image_aspect_ratio(&model, &body);
+            if action != "countTokens" {
+                body = self.apply_request_payload(request, &from, &to, &model, &body, &original);
+            }
+        }
         let mut json = parse_object(&body)?;
         json.remove("session_id");
         if to.as_str() == "interactions" {
@@ -197,7 +219,6 @@ impl GeminiExecutor {
             } else {
                 json.insert("model".into(), Value::String(model.clone()));
             }
-            apply_payload_rules(&mut json, &self.config.payload_rules, &model, &from, &to);
             apply_interactions_thinking_suffix(&mut json, &request.model);
             if stream {
                 json.insert("stream".into(), Value::Bool(true));
@@ -215,11 +236,87 @@ impl GeminiExecutor {
                     self.config.output_token_limits.get(&model).copied(),
                 );
             }
-            fix_gemini_image_aspect_ratio_value(&mut json, &model);
         }
         body = serde_json::to_vec(&json)
             .map_err(|error| plugin_error(GeminiExecutorError::InvalidJson(error.to_string())))?;
+        if to.as_str() == "interactions" && action != "countTokens" {
+            body = self.apply_request_payload(request, &from, &to, &model, &body, &original);
+        }
         Ok((body, to))
+    }
+
+    // ref: gemini_executor.go:153-154,895-918 @ d7914afd
+    fn translate_pair(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        stream: bool,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let original = original_request(request);
+        let same = original.len() == request.payload.len()
+            && std::ptr::eq(original.as_ptr(), request.payload.as_ptr());
+        let translate =
+            |payload: &[u8]| self.translate_body(request, from, to, model, stream, payload);
+        if to.as_str() == "interactions" {
+            let working = translate(&request.payload);
+            let baseline = if same {
+                working.clone()
+            } else {
+                translate(original)
+            };
+            (baseline, working)
+        } else {
+            let baseline = translate(original);
+            let working = if same {
+                baseline.clone()
+            } else {
+                translate(&request.payload)
+            };
+            (baseline, working)
+        }
+    }
+
+    fn apply_request_payload(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        body: &[u8],
+        original: &[u8],
+    ) -> Vec<u8> {
+        let requested = request
+            .metadata
+            .get("requested_model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&request.model);
+        let path = request
+            .metadata
+            .get("request_path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let source = if request.source_format.is_empty() && to.as_str() == "interactions" {
+            ""
+        } else {
+            from.as_str()
+        };
+        super::helps::apply_payload_config_with_request(
+            &self.payload_config,
+            model,
+            to.as_str(),
+            source,
+            "",
+            body,
+            Some(original),
+            requested,
+            path,
+            &request.headers,
+        )
     }
 
     // ref: gemini_executor.go:153-154,279-280,684,888-892 @ d7914afd
@@ -230,12 +327,13 @@ impl GeminiExecutor {
         to: &Format,
         model: &str,
         stream: bool,
+        payload: &[u8],
     ) -> Vec<u8> {
         // Native Interactions input bypasses translators and plugin hooks.
         if to.as_str() == "interactions"
             && (request.source_format.is_empty() || from.as_str() == "interactions")
         {
-            return request.payload.clone();
+            return payload.to_vec();
         }
         let translate = |processor: &dyn super::helps::CodexMultiAgentV2Processor| {
             super::helps::translate_request_with_api_key_model_compatibility_for_executor(
@@ -245,7 +343,7 @@ impl GeminiExecutor {
                 from,
                 to,
                 model,
-                &request.payload,
+                payload,
                 stream,
                 request
                     .resolved_home_model_options
@@ -782,36 +880,48 @@ fn embedded_output_limit(model: &str) -> Option<u64> {
     }
 }
 
-fn apply_payload_rules(
-    body: &mut Map<String, Value>,
-    rules: &[GeminiPayloadRule],
-    model: &str,
-    from: &Format,
-    to: &Format,
-) {
-    for rule in rules {
-        if !rule.models.is_empty()
-            && !rule
-                .models
-                .iter()
-                .any(|item| item.eq_ignore_ascii_case(model))
-        {
-            continue;
+fn payload_config_from_legacy(config: &GeminiExecutorConfig) -> super::helps::PayloadApplyConfig {
+    let mut output = super::helps::PayloadApplyConfig::default();
+    for rule in &config.payload_rules {
+        let names = if rule.models.is_empty() {
+            vec!["*".to_owned()]
+        } else {
+            rule.models.clone()
+        };
+        let models: Vec<_> = names
+            .into_iter()
+            .map(|name| super::helps::PayloadModelRule {
+                name,
+                protocol: rule.protocol.clone(),
+                from_protocol: rule.from_protocol.clone(),
+                ..Default::default()
+            })
+            .collect();
+        if !rule.defaults.is_empty() {
+            output.rules.default.push(super::helps::PayloadRule {
+                models: models.clone(),
+                params: rule
+                    .defaults
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            });
         }
-        if !rule.protocol.is_empty() && !rule.protocol.eq_ignore_ascii_case(to.as_str()) {
-            continue;
-        }
-        if !rule.from_protocol.is_empty() && !rule.from_protocol.eq_ignore_ascii_case(from.as_str())
-        {
-            continue;
-        }
-        for (path, value) in &rule.defaults {
-            set_json_path(body, path, value.clone(), false);
-        }
-        for (path, value) in &rule.overrides {
-            set_json_path(body, path, value.clone(), true);
+        if !rule.overrides.is_empty() {
+            output
+                .rules
+                .override_values
+                .push(super::helps::PayloadRule {
+                    models,
+                    params: rule
+                        .overrides
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect(),
+                });
         }
     }
+    output
 }
 
 fn apply_interactions_thinking_suffix(body: &mut Map<String, Value>, model: &str) {
@@ -852,24 +962,6 @@ fn normalize_interactions_input(body: &mut Map<String, Value>) {
             item.insert("type".into(), Value::String("user_input".into()));
             item.remove("role");
         }
-    }
-}
-
-fn set_json_path(root: &mut Map<String, Value>, path: &str, value: Value, overwrite: bool) {
-    let mut segments = path.split('.').filter(|part| !part.is_empty()).peekable();
-    let mut current = root;
-    while let Some(segment) = segments.next() {
-        if segments.peek().is_none() {
-            if overwrite || !current.contains_key(segment) {
-                current.insert(segment.into(), value);
-            }
-            return;
-        }
-        current = current
-            .entry(segment)
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .unwrap_or_else(|| unreachable!("payload rule path collides with scalar"));
     }
 }
 

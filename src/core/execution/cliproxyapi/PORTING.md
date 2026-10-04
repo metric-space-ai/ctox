@@ -67,8 +67,18 @@
   host's existing owned processor rather than introducing process-global state.
   Five source-level regressions are prepared for dispatch precedence, native
   bypass, normalization order and injected owner use across preparation modes.
-  They have not executed. Canonical thinking, complete original/working payload
-  configuration, signature and content-shape parity, production owner binding,
+  Further preparation now uses the complete payload-rule helper, the original
+  translated baseline, requested aliases and headers. Gemini translates identical
+  backing slices once, but keeps distinct equal copies separate; GenerateContent
+  translates original first, while converted Interactions translates working first.
+  Vertex retains upstream's original-first two-pass inference translation. Both
+  token-count paths stay single-pass and skip payload rules. Existing Gemini
+  typed rules are adapted into the canonical configuration; injected configuration
+  is instance-owned. Four more cases cover original explicit defaults, aliases,
+  header gates, backing identity, call order, legacy rule adaptation and count
+  isolation. These nine Google guards have not executed. Canonical thinking,
+  signature and content-shape parity, production owner binding,
+
   HTTP workflows and full-provider acceptance remain open; this is not full
   Gemini/Vertex parity. Primary references at the frozen d7914afd commit:
   gemini_executor.go:153-154,279-280,684,888-920;
@@ -90,7 +100,7 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires185 actual native tests across23 groups, including five Google request-preparation cases and39 new Meta
+  requires189 actual native tests across24 groups, including nine Google request-preparation cases and39 new Meta
   tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
   three new shared cancellation-publication guards,15 existing background-worker
   guards and six retained

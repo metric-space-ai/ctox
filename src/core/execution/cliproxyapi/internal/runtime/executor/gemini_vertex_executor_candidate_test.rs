@@ -1,5 +1,70 @@
 // ref: internal/runtime/executor/gemini_vertex_executor.go @ d7914afdedca7af95ee974a42453dc49fc1388ce
 // License: MIT (upstream); modifications AGPL-3.0-only
+use super::super::helps::{PayloadApplyConfig, PayloadModelRule, PayloadRule};
+
+#[test]
+fn candidate_google_payload_vertex_translates_original_first_and_keeps_count_single_pass() {
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let registry = Arc::new(Registry::new());
+    let observed = calls.clone();
+    registry.register(
+        Format::from("gemini"),
+        Format::from("gemini"),
+        Some(Arc::new(move |_, payload, _| {
+            let body: Value = serde_json::from_slice(payload).unwrap();
+            observed
+                .lock()
+                .unwrap()
+                .push(body["marker"].as_str().unwrap().to_owned());
+            payload.to_vec()
+        })),
+        ResponseTransform::default(),
+    );
+    let mut config = PayloadApplyConfig::default();
+    config.rules.default.push(PayloadRule {
+        models: vec![PayloadModelRule {
+            name: "public-alias".into(),
+            protocol: "gemini".into(),
+            from_protocol: "gemini".into(),
+            headers: BTreeMap::from([("X-Scope".into(), "blue".into())]),
+            ..Default::default()
+        }],
+        params: BTreeMap::from([
+            (
+                "generationConfig.temperature".into(),
+                serde_json::json!(0.3),
+            ),
+            ("central_default".into(), Value::Bool(true)),
+        ]),
+    });
+    let executor = GeminiVertexExecutor::new(registry, None).with_payload_config(Arc::new(config));
+    let request = ExecutorRequest {
+        model: "upstream-name".into(),
+        source_format: "gemini".into(),
+        payload: br#"{"contents":[],"marker":"working"}"#.to_vec(),
+        original_request:
+            br#"{"contents":[],"marker":"original","generationConfig":{"temperature":0.9}}"#
+                .to_vec(),
+        metadata: BTreeMap::from([(
+            "requested_model".into(),
+            Value::String(" public-alias ".into()),
+        )]),
+        headers: BTreeMap::from([("x-scope".into(), vec!["blue".into()])]),
+        ..Default::default()
+    };
+    let (body, _) = executor.prepare_body(&request, false, false).unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert!(body.pointer("/generationConfig/temperature").is_none());
+    assert_eq!(body["central_default"], true);
+    let (count, _) = executor.prepare_body(&request, false, true).unwrap();
+    let count: Value = serde_json::from_slice(&count).unwrap();
+    assert!(count.get("central_default").is_none());
+    assert!(count.get("generationConfig").is_none());
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        ["original", "working", "working"]
+    );
+}
 use super::*;
 use crate::internal::modelconfig::{HomeModelOptions, ModelInfo};
 use crate::sdk::translator::ResponseTransform;
@@ -35,7 +100,7 @@ fn candidate_google_request_vertex_keeps_ordinary_translation_and_normalizes_bef
         assert_eq!(body.get("generationConfig").is_some(), !count);
         assert_eq!(body.get("safetySettings").is_some(), !count);
     }
-    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(calls.load(Ordering::SeqCst), 5);
 }
 
 struct Owner(AtomicUsize);
@@ -83,5 +148,5 @@ fn candidate_google_request_vertex_uses_the_host_owned_processor() {
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["owner_translation"], true);
     }
-    assert_eq!(owner.0.load(Ordering::SeqCst), 3);
+    assert_eq!(owner.0.load(Ordering::SeqCst), 5);
 }

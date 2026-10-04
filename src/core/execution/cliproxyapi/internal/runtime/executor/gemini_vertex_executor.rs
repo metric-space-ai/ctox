@@ -83,6 +83,7 @@ pub struct GeminiVertexExecutor {
     token_provider: Option<Arc<dyn VertexAccessTokenProvider>>,
     cancellation: TranslationContext,
     response_sequence: AtomicU64,
+    payload_config: Arc<super::helps::PayloadApplyConfig>,
     request_processor: Option<Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>>,
 }
 
@@ -97,6 +98,7 @@ impl GeminiVertexExecutor {
             token_provider,
             cancellation: TranslationContext::default(),
             response_sequence: AtomicU64::new(1),
+            payload_config: Arc::new(super::helps::PayloadApplyConfig::default()),
             request_processor: None,
         }
     }
@@ -112,6 +114,7 @@ impl GeminiVertexExecutor {
             token_provider,
             cancellation,
             response_sequence: AtomicU64::new(1),
+            payload_config: Arc::new(super::helps::PayloadApplyConfig::default()),
             request_processor: None,
         }
     }
@@ -123,6 +126,12 @@ impl GeminiVertexExecutor {
         processor: Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>,
     ) -> Self {
         self.request_processor = Some(processor);
+        self
+    }
+
+    #[must_use]
+    pub fn with_payload_config(mut self, config: Arc<super::helps::PayloadApplyConfig>) -> Self {
+        self.payload_config = config;
         self
     }
 
@@ -164,8 +173,25 @@ impl GeminiVertexExecutor {
         }
         let from = source_format(request);
         let to = Format::from("gemini");
-        let mut body = self.translate_body(request, &from, &to, &model, stream);
+        // Vertex upstream translates the baseline first, including when the
+        // original and working slices are identical. Token counting is single-pass.
+        let original = if count {
+            Vec::new()
+        } else {
+            self.translate_body(
+                request,
+                &from,
+                &to,
+                &model,
+                stream,
+                original_request(request),
+            )
+        };
+        let mut body = self.translate_body(request, &from, &to, &model, stream, &request.payload);
         body = fix_gemini_image_aspect_ratio(&model, &body);
+        if !count {
+            body = self.apply_request_payload(request, &from, &to, &model, &body, &original);
+        }
         let mut value: Value = serde_json::from_slice(&body)
             .map_err(|error| plugin_error(VertexExecutorError::InvalidJson(error.to_string())))?;
         let object = value.as_object_mut().ok_or_else(|| {
@@ -186,6 +212,42 @@ impl GeminiVertexExecutor {
         Ok((body, to))
     }
 
+    fn apply_request_payload(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        body: &[u8],
+        original: &[u8],
+    ) -> Vec<u8> {
+        let requested = request
+            .metadata
+            .get("requested_model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&request.model);
+        let path = request
+            .metadata
+            .get("request_path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        super::helps::apply_payload_config_with_request(
+            &self.payload_config,
+            model,
+            to.as_str(),
+            from.as_str(),
+            "",
+            body,
+            Some(original),
+            requested,
+            path,
+            &request.headers,
+        )
+    }
+
     // ref: gemini_vertex_executor.go:334-335,471-472,928,1022 @ d7914afd
     fn translate_body(
         &self,
@@ -194,6 +256,7 @@ impl GeminiVertexExecutor {
         to: &Format,
         model: &str,
         stream: bool,
+        payload: &[u8],
     ) -> Vec<u8> {
         // Vertex uses ordinary Codex translation for both credential kinds.
         let translate = |processor: &dyn super::helps::CodexMultiAgentV2Processor| {
@@ -204,7 +267,7 @@ impl GeminiVertexExecutor {
                 from,
                 to,
                 model,
-                &request.payload,
+                payload,
                 stream,
             )
         };
