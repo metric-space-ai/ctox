@@ -155,26 +155,33 @@ async fn endpoint_stale_session_never_captures_or_applies_input() {
             };
             let stale = uuid::Uuid::new_v4().to_string();
             assert_ne!(session, stale);
-            for request in [
-                WireRequest::ObserveSession {
-                    id: 2,
-                    session_id: stale.clone(),
-                },
-                WireRequest::InputSession {
-                    id: 3,
-                    session_id: stale,
-                    input: key(),
-                },
+            for (expected_id, request) in [
+                (
+                    2,
+                    WireRequest::ObserveSession {
+                        id: 2,
+                        session_id: stale.clone(),
+                    },
+                ),
+                (
+                    3,
+                    WireRequest::InputSession {
+                        id: 3,
+                        session_id: stale,
+                        input: key(),
+                    },
+                ),
             ] {
                 write_json(&mut host, &request, MAX_CONTROL_BYTES)
                     .await
                     .unwrap();
-                assert!(matches!(
-                    read_json::<_, WireReply>(&mut host, MAX_CONTROL_BYTES)
-                        .await
-                        .unwrap(),
-                    WireReply::Failed { .. }
-                ));
+                match read_json::<_, WireReply>(&mut host, MAX_CONTROL_BYTES)
+                    .await
+                    .unwrap()
+                {
+                    WireReply::Failed { id } => assert_eq!(id, expected_id),
+                    _ => panic!("stale session must receive its exact correlated denial"),
+                }
             }
             drop(host);
         },
