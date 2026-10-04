@@ -55,10 +55,11 @@ consumer allows exactly that pending effect and rejects foreign/additional effec
 Unknown old effects, uncertain starts,
 missing/replaced guests and non-Linux runtimes deny readiness.
 
-Four source regressions use canonical native policy records and SQLite locking:
+Five source regressions use canonical native policy records and SQLite locking:
 foreign/duplicate/unregistered enrollment; competing policy writer and changed
-policy/controller; replaced store/import directory; archived project/removed
-member/closed thread/expired worker. The authority fixture rejects all operations,
+policy/controller; replaced store/import directory; missing/replaced native instance
+identity without automatic recreation; archived project/removed member/closed
+thread/expired worker. The authority fixture rejects all operations,
 and provider metadata is a component fixture: these are policy/controller checks,
 not actual quorum/provider/QEMU/two-host acceptance. Tests are UNRUN until the
 source-bound shared resource gate admits them. Root compilation, final producer
