@@ -111,7 +111,7 @@ impl fmt::Debug for DevinFrameResult {
     }
 }
 
-enum WireValue<'a> {
+pub(crate) enum WireValue<'a> {
     Varint(u64),
     Fixed64(u64),
     Bytes(&'a [u8]),
@@ -119,18 +119,18 @@ enum WireValue<'a> {
     Group,
 }
 
-struct WireField<'a> {
-    number: u32,
-    value: WireValue<'a>,
+pub(crate) struct WireField<'a> {
+    pub(crate) number: u32,
+    pub(crate) value: WireValue<'a>,
 }
 
-struct WireReader<'a> {
+pub(crate) struct WireReader<'a> {
     bytes: &'a [u8],
     position: usize,
 }
 
 impl<'a> WireReader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, position: 0 }
     }
     fn error(&self, kind: DevinProtoErrorKind) -> DevinProtoError {
@@ -223,7 +223,7 @@ impl<'a> WireReader<'a> {
         }
         Ok(())
     }
-    fn next(&mut self) -> Result<Option<WireField<'a>>, DevinProtoError> {
+    pub(crate) fn next(&mut self) -> Result<Option<WireField<'a>>, DevinProtoError> {
         if self.position == self.bytes.len() {
             return Ok(None);
         }

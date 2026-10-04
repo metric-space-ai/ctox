@@ -511,7 +511,7 @@ pub(super) fn update_devin_usage(
 
 /// Go's JSON writer replaces each invalid UTF-8 byte independently. Rust's
 /// from_utf8_lossy may replace several bytes at once, so preserve Go's boundary.
-pub(super) fn go_utf8_text(bytes: &[u8]) -> String {
+pub(crate) fn go_utf8_text(bytes: &[u8]) -> String {
     let mut result = String::new();
     let mut position = 0;
     while position < bytes.len() {
