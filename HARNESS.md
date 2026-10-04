@@ -70,6 +70,18 @@ production guest owner, and its witness is neither a guest permit nor an OS
 process-stop receipt. Effect publication still requires the held execution and
 guest-controller guards.
 
+On native-admitted sessions, an in-process MCP dispatcher receives the actual
+core Session/TurnContext after existing argument, configuration, approval and
+safety checks. It intercepts only native guest observe/input actions. Verified
+initiating actor/workspace remain attribution; native invocation IDs mint the
+new command ID, and a private one-shot command witness binds its full envelope
+to the live worker and bound turn. Event labels and session tokens cannot mint
+it. The default guest consumer denies effects. A registered VM consumer must
+check current account/policy/controller and perform its bounded effect through
+the witness's held worker transaction, without reopening that store or nesting
+another provider guard. See `docs/native-guest-command-emission.md`. This source
+integration does not establish production guest admission or installed acceptance.
+
 The direct-session adapter submits `TurnInterrupt` for its actual thread and
 turn while continuing to drain events, with a ten-second bound. Only a terminal
 event matching both identities is a stop witness. An acknowledgement alone is

@@ -77,6 +77,7 @@ pub mod mention_syntax;
 mod mentions;
 mod message_history;
 mod model_provider_info;
+pub mod native_mcp_dispatch;
 pub mod path_utils;
 pub mod personality_migration;
 pub mod plugins;

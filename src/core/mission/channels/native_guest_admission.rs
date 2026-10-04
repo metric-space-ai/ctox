@@ -38,6 +38,7 @@ pub(crate) trait NativeGuestAdmissionOwner: Send + Sync {
     fn with_current_destination(
         &self,
         tx: &Transaction<'_>,
+        runtime_root: &std::path::Path,
         facts: &NativeProviderFacts,
         expected: Option<&NativeGuestAdmissionDestination>,
         publish: &mut dyn FnMut(&NativeGuestAdmissionDestination) -> Result<()>,
@@ -72,8 +73,12 @@ impl NativeGuestAdmission {
                 .as_ref()
                 .context("native guest has no actual provider account contract")?;
             let mut resolved = None;
-            self.owner
-                .with_current_destination(tx, facts, None, &mut |destination| {
+            self.owner.with_current_destination(
+                tx,
+                provider.runtime_root(),
+                facts,
+                None,
+                &mut |destination| {
                     ensure!(
                         resolved.is_none(),
                         "native resolver published more than once"
@@ -119,7 +124,8 @@ impl NativeGuestAdmission {
                     )?;
                     resolved = Some((destination.clone(), spec));
                     Ok(())
-                })?;
+                },
+            )?;
             resolved.context("native owner did not resolve a destination")
         })?;
 
@@ -161,8 +167,12 @@ impl NativeGuestAdmission {
             let expected_json = serde_json::to_string(&destination)?;
             let spec_json = serde_json::to_string(&spec)?;
             let mut published = false;
-            self.owner
-                .with_current_destination(tx, facts, Some(&destination), &mut |current| {
+            self.owner.with_current_destination(
+                tx,
+                provider.runtime_root(),
+                facts,
+                Some(&destination),
+                &mut |current| {
                     ensure!(
                         !published && current == &destination,
                         "native destination/policy/controller changed during admission"
@@ -190,7 +200,8 @@ impl NativeGuestAdmission {
                     );
                     published = true;
                     Ok(())
-                })?;
+                },
+            )?;
             ensure!(published, "native owner did not fence admitted publication");
             Ok(())
         })

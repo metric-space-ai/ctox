@@ -181,8 +181,10 @@ fn validate_job(
     digest: &str,
 ) -> io::Result<()> {
     validate_job_binding(job, authority, job_id, ownership, digest)?;
-    if !job.pending_effects.is_empty() {
-        return Err(denied("guest restore cannot overlap unresolved effects"));
+    if !job.pending_effects.is_empty() || job.checkpoint_requires_refresh {
+        return Err(denied(
+            "guest restore requires a refreshed checkpoint and no unresolved effects",
+        ));
     }
     Ok(())
 }

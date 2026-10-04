@@ -152,6 +152,10 @@ const EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR: i64 = 4;
 const CTOX_PERSISTENT_WORKER_THREAD_NAME: &str = "ctox-service-worker";
 const BUSINESS_OS_MCP_ADDR_KEY: &str = "CTOX_BUSINESS_OS_MCP_ADDR";
 const BUSINESS_OS_MCP_DEFAULT_ADDR: &str = "127.0.0.1:8788";
+#[cfg(unix)]
+#[path = "native_guest_mcp.rs"]
+mod native_guest_mcp;
+
 const BUSINESS_OS_MCP_SESSION_SERVER_NAME: &str = "ctox-business-os";
 const BUSINESS_OS_MCP_SESSION_TOOLS: &[&str] = &[
     "business_os.get_module",
@@ -1516,7 +1520,7 @@ impl PersistentSession {
                 #[cfg(unix)]
                 native_command_context.as_ref(),
                 #[cfg(unix)]
-                native_provider_admission.as_deref(),
+                native_provider_admission.as_ref(),
                 #[cfg(unix)]
                 native_guest_registry.as_ref(),
                 #[cfg(unix)]
@@ -1933,7 +1937,7 @@ impl PersistentSession {
         #[cfg(unix)] native_command_session_token: Option<&str>,
         #[cfg(unix)] native_command_context: Option<&JsonValue>,
         #[cfg(unix)] native_provider_admission: Option<
-            &dyn crate::channels::NativeProviderAdmission,
+            &std::sync::Arc<dyn crate::channels::NativeProviderAdmission>,
         >,
         #[cfg(unix)] native_guest_registry: Option<&(
             std::sync::Arc<crate::business_os::NativeGuestRegistry>,
@@ -2109,6 +2113,18 @@ impl PersistentSession {
                 )
             })
             .transpose()?;
+        // Register before start so an early sensitive MCP call fails closed
+        // until bind_turn has the actual TurnStart response. Only a guest
+        // admission installs this native path; ordinary MCP stays unchanged.
+        #[cfg(unix)]
+        let _native_mcp_registration = native_provider_admission
+            .map(|admission| {
+                let owner = provider_owner
+                    .as_ref()
+                    .context("native MCP dispatch requires the actual worker/provider owner")?;
+                native_guest_mcp::register(owner, std::sync::Arc::clone(admission))
+            })
+            .transpose()?;
         #[cfg(unix)]
         if let Some(admission) = native_provider_admission {
             let (registry, guest_id) = native_guest_registry.ok_or_else(|| {
@@ -2134,7 +2150,11 @@ impl PersistentSession {
                 native_command_context == Some(&current),
                 "native guest command authority changed"
             );
-            if let Err(error) = provider.binding().admit_before_start(admission).await {
+            if let Err(error) = provider
+                .binding()
+                .admit_before_start(admission.as_ref())
+                .await
+            {
                 return Err(SessionPoisoned(format!(
                     "native guest admission requires reconciliation: {error}"
                 ))

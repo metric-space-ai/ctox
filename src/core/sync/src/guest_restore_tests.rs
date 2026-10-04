@@ -961,14 +961,90 @@ async fn pending_external_effect_blocks_guest_staging() {
     assert!(imports(&f).is_empty());
 }
 
+async fn complete_component_effect(f: &Fixture) {
+    let ownership = f.authority.state.lock().unwrap().jobs["job"]
+        .ownership
+        .clone();
+    for (id, command) in [
+        (
+            "component-effect-start",
+            Command::BeginEffect {
+                job_id: "job".into(),
+                ownership: ownership.clone(),
+                effect_id: "completed-process".into(),
+            },
+        ),
+        (
+            "component-effect-complete",
+            Command::CompleteEffect {
+                job_id: "job".into(),
+                ownership,
+                effect_id: "completed-process".into(),
+            },
+        ),
+    ] {
+        assert!(matches!(
+            f.authority
+                .submit(Request {
+                    request_id: id.into(),
+                    actor: 1,
+                    command,
+                })
+                .await
+                .unwrap(),
+            Receipt::Applied(_)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn completed_effect_blocks_old_checkpoint_staging_without_publication() {
+    let f = fixture();
+    complete_component_effect(&f).await;
+    assert!(stage(&f).await.is_err());
+    let job = f.authority.state.lock().unwrap().jobs["job"].clone();
+    assert!(job.pending_effects.is_empty());
+    assert!(job.checkpoint_requires_refresh);
+    assert_eq!(
+        job.completed_effects,
+        BTreeSet::from(["completed-process".into()])
+    );
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn effect_completed_after_staging_denies_old_import_before_admission() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    let private = staged.staging.path().to_owned();
+    complete_component_effect(&f).await;
+    assert!(
+        commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+            .await
+            .is_err()
+    );
+    assert!(!private.exists());
+    let job = f.authority.state.lock().unwrap().jobs["job"].clone();
+    assert!(job.pending_effects.is_empty());
+    assert!(job.checkpoint_requires_refresh);
+    assert_eq!(
+        job.completed_effects,
+        BTreeSet::from(["completed-process".into()])
+    );
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+}
+
 #[tokio::test]
 async fn repeated_completed_import_cannot_replay_publication() {
     let f = fixture();
     let first = stage(&f).await.unwrap();
+    let second = stage(&f).await.unwrap();
     let receipt = commit_guest_restore(&f.authority, &*f.authority.owner, first)
         .await
         .unwrap();
-    let second = stage(&f).await.unwrap();
+    assert!(stage(&f).await.is_err());
     assert!(
         commit_guest_restore(&f.authority, &*f.authority.owner, second)
             .await

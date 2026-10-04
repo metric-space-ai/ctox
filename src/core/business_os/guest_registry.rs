@@ -89,11 +89,13 @@ impl NativeGuestAdmissionOwner for NativeGuestAdmissionResolver {
     fn with_current_destination(
         &self,
         tx: &rusqlite::Transaction<'_>,
+        runtime_root: &Path,
         facts: &NativeProviderFacts,
         expected: Option<&NativeGuestAdmissionDestination>,
         publish: &mut dyn FnMut(&NativeGuestAdmissionDestination) -> Result<()>,
     ) -> Result<()> {
         verify_worker_current(tx, facts)?;
+        self.registry.verify_runtime_root(runtime_root)?;
         let registration = self.registry.registration(&self.guest_id)?;
         self.registry.with_policy(|policy| {
             let entry = registration
@@ -223,6 +225,8 @@ enum PublicationState {
 }
 
 pub(crate) struct NativeGuestRegistry {
+    runtime_root: PathBuf,
+    root_directory: std::fs::File,
     instance_id: String,
     authority: Arc<dyn ExecutionAuthority>,
     required_capabilities: BTreeSet<String>,
@@ -269,12 +273,19 @@ impl NativeGuestRegistry {
             "native host authority/capability requirements are missing"
         );
         let root = std::fs::canonicalize(root)?;
+        use std::os::unix::fs::OpenOptionsExt;
+        let root_directory = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&root)?;
         let instance_id = stable_instance_id(&root)?;
         let policy_path = business_os_store_path(&root);
         let policy_identity = identity(&policy_path)?;
         let instance_path = root.join("runtime/business-os-instance-id");
         let instance_file_identity = identity(&instance_path)?;
         Ok(Arc::new(Self {
+            runtime_root: root,
+            root_directory,
             instance_id,
             authority,
             required_capabilities,
@@ -286,6 +297,24 @@ impl NativeGuestRegistry {
         }))
     }
 
+    fn verify_runtime_root(&self, runtime_root: &Path) -> Result<()> {
+        ensure!(
+            std::fs::canonicalize(runtime_root)? == self.runtime_root,
+            "native provider belongs to another runtime root"
+        );
+        let current = std::fs::symlink_metadata(&self.runtime_root)?;
+        let retained = self.root_directory.metadata()?;
+        ensure!(
+            current.is_dir()
+                && !current.file_type().is_symlink()
+                && retained.is_dir()
+                && current.dev() == retained.dev()
+                && current.ino() == retained.ino(),
+            "native runtime root was replaced"
+        );
+        Ok(())
+    }
+
     /// The actual policy store is separate from the channel worker database.
     /// Lock it before the controller, without opening/creating/migrating state.
     /// Cross-store commit failure is uncertain, never an atomic-success claim.
@@ -293,6 +322,7 @@ impl NativeGuestRegistry {
         &self,
         apply: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
     ) -> Result<T> {
+        self.verify_runtime_root(&self.runtime_root)?;
         ensure!(
             identity(&self.policy_path)? == self.policy_identity,
             "native policy store was replaced"
@@ -311,6 +341,7 @@ impl NativeGuestRegistry {
             "native policy store changed before publication"
         );
         let result = apply(&tx)?;
+        self.verify_runtime_root(&self.runtime_root)?;
         ensure!(
             identity(&self.policy_path)? == self.policy_identity,
             "policy store changed during effect; reconcile"
@@ -429,6 +460,7 @@ impl NativeGuestRegistry {
         guest_id: &str,
         apply: impl FnOnce(&rusqlite::Transaction<'_>, &NativeGuestAssignment) -> Result<T>,
     ) -> Result<T> {
+        self.verify_runtime_root(provider.runtime_root())?;
         let entry = self.registration(guest_id)?;
         provider.with_live_provider_transaction(|worker_tx, facts, _| {
             self.with_policy(|policy_tx| {
@@ -743,6 +775,8 @@ fn validate_policy(conn: &Connection, destination: &GuestRestoreDestination) -> 
 
 impl NativeGuestExecution {
     fn install_binding(&self) -> Result<()> {
+        self.registry
+            .verify_runtime_root(self.provider.runtime_root())?;
         let entry = self.registry.registration(&self.guest_id)?;
         self.provider.with_live_provider_transaction(|_, facts, _| {
             self.registry.with_policy(|tx| {
@@ -779,6 +813,8 @@ impl NativeGuestExecution {
         &self,
         apply: impl FnOnce(&mut Registration, &dyn Fn() -> Result<()>) -> Result<T>,
     ) -> Result<T> {
+        self.registry
+            .verify_runtime_root(self.provider.runtime_root())?;
         let entry = self.registry.registration(&self.guest_id)?;
         self.provider
             .with_live_provider_transaction(|worker_tx, facts, _| {
