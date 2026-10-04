@@ -50,7 +50,14 @@ detached blocking thread. Cancellation or any winning result drops the callback
 listener and prompt future. Only the existing SDK Manager's injected AuthStore
 persists a completed record. Session tokens have no fabricated refresh expiry.
 
-The native owner still needs to supply the host UI/prompt adapter and register
-this authenticator in production, plus AuthRefresher/context/status binding.
-Synthetic component regressions do not prove real browser OAuth, provider or app
-acceptance.
+The SDK service's DevinExecutorFactory now binds the real native Devin executor
+to the existing provider registry, together with explicitly supplied refresh,
+credential-preparation and optional session-closure capabilities. Other provider
+keys, including a namespaced OpenAI-compatible provider named Devin, retain the
+original factory. Invalid or disabled native credentials cannot fall through to
+that factory. Re-registering the same capability owners retains existing sessions.
+
+The production owner still needs to instantiate this factory with its selected
+transport, refresh/status and session/usage context, supply the host UI/prompt
+adapter and register the authenticator. Synthetic component and factory guards
+do not prove real browser OAuth, provider or app acceptance.

@@ -15,6 +15,7 @@ pub mod rtprovider;
 pub mod service;
 pub mod service_auth;
 pub mod service_config;
+pub mod service_devin;
 pub mod service_executors;
 pub mod service_home;
 mod service_lifecycle;
