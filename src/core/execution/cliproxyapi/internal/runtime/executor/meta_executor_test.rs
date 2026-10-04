@@ -1,3 +1,57 @@
+struct ThinkingWithOwnedModel(Arc<crate::internal::modelconfig::ModelInfo>, AtomicUsize);
+impl RequestThinkingEngine for ThinkingWithOwnedModel {
+    fn apply_request_thinking(
+        &self,
+        input: RequestThinkingInput<'_>,
+    ) -> Result<Vec<u8>, ThinkingError> {
+        let selected = input
+            .resolved_config_model_info
+            .expect("selected capability must reach the canonical engine");
+        assert!(std::ptr::eq(selected, self.0.as_ref()));
+        assert!(
+            input.resolved_model_info.is_none(),
+            "configured capabilities cannot be replaced by a static registry guess"
+        );
+        assert_eq!(
+            selected.thinking.as_ref().unwrap().levels,
+            vec!["owned-level"]
+        );
+        assert_eq!(selected.context_length, 123_456);
+        self.1.fetch_add(1, Ordering::SeqCst);
+        Ok(input.body.to_vec())
+    }
+}
+#[tokio::test]
+async fn candidate_meta_transport_thinking_receives_exact_manager_owned_model_capability() {
+    let fixture = Fixture::new(200, TERMINAL);
+    let model = Arc::new(crate::internal::modelconfig::ModelInfo {
+        id: "muse-test".into(),
+        context_length: 123_456,
+        thinking: Some(crate::internal::modelconfig::ThinkingSupport {
+            min: 37,
+            max: 99,
+            levels: vec!["owned-level".into()],
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let thinking = Arc::new(ThinkingWithOwnedModel(model.clone(), AtomicUsize::new(0)));
+    let owner = Arc::new(MetaRequestOwner {
+        processor: Arc::new(Processor),
+        thinking: thinking.clone(),
+        config: Arc::new(PayloadApplyConfig::default()),
+    });
+    let executor = MetaExecutor::new(
+        fixture.executor.registry.clone(),
+        owner,
+        fixture.executor.context.clone(),
+    );
+    let mut request = fixture.request();
+    request.resolved_model_info = Some(model);
+    executor.execute(request).await.unwrap();
+    assert_eq!(thinking.1.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.transport.requests.lock().unwrap().len(), 1);
+}
 #[tokio::test]
 async fn candidate_meta_transport_read_failure_preserves_final_partial_event_and_failure_usage() {
     let fixture = Fixture::new(200, &[]);

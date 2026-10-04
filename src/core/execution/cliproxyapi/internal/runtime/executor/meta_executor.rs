@@ -532,7 +532,11 @@ impl StreamTranslation {
         }
         Ok(())
     }
-    async fn fail(&self, sender: &mpsc::Sender<ExecutorStreamChunk>, error: PluginExecutionError) {
+    async fn fail(
+        &mut self,
+        sender: &mpsc::Sender<ExecutorStreamChunk>,
+        error: PluginExecutionError,
+    ) {
         publish_failure(self.usage.as_deref(), &error);
         let _ = sender
             .send(ExecutorStreamChunk {

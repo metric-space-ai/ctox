@@ -21,6 +21,9 @@ pub struct RequestThinkingInput<'a> {
     pub to_format: &'a str,
     pub provider: &'a str,
     pub resolved_model_info: Option<&'a ModelInfo>,
+    /// Manager-selected owned capability. When present this takes precedence
+    /// over the static registry view, without leaking dynamic strings.
+    pub resolved_config_model_info: Option<&'a crate::internal::modelconfig::ModelInfo>,
 }
 
 /// Adapter implemented by the canonical top-level thinking pipeline once it is
@@ -39,6 +42,9 @@ pub struct RequestThinkingRoute<'a> {
     pub to_format: &'a str,
     pub provider: &'a str,
     pub resolved_model_info: Option<&'a ModelInfo>,
+    /// Manager-selected owned capability. When present this takes precedence
+    /// over the static registry view, without leaking dynamic strings.
+    pub resolved_config_model_info: Option<&'a crate::internal::modelconfig::ModelInfo>,
 }
 
 /// Preserves the upstream executor routing rule: an explicitly selected API
@@ -68,5 +74,6 @@ where
         to_format: route.to_format,
         provider: route.provider,
         resolved_model_info: route.resolved_model_info,
+        resolved_config_model_info: route.resolved_config_model_info,
     })
 }

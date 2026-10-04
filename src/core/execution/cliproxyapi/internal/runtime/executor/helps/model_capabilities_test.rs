@@ -105,6 +105,7 @@ fn request_thinking_forwards_exact_capability_and_original_source_precedence() {
             to_format: "claude",
             provider: "claude-api-key",
             resolved_model_info: Some(&model),
+            resolved_config_model_info: None,
         },
     )
     .unwrap();
@@ -142,6 +143,7 @@ fn request_thinking_falls_back_to_current_payload_without_fabricating_capability
             to_format: "xai",
             provider: "xai",
             resolved_model_info: None,
+            resolved_config_model_info: None,
         },
     )
     .unwrap();

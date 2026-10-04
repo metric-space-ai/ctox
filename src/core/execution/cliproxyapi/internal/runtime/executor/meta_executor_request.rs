@@ -84,7 +84,8 @@ impl MetaRequestOwner {
                 from_format: from.as_str(),
                 to_format: to.as_str(),
                 provider: "meta",
-                resolved_model_info: request.resolved_model_info.as_deref(),
+                resolved_model_info: None,
+                resolved_config_model_info: request.resolved_model_info.as_deref(),
             })
             .map_err(|error| Arc::new(error) as PluginExecutionError)?;
         let requested = request

@@ -68,7 +68,7 @@
   fixed O200k token counting. Raw output items and missing IDs survive terminal
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
-  and committed-stream cooldown consumers. The added26 regression functions
+  and committed-stream cooldown consumers. The added27 regression functions
   are prepared, not executed. Production transport/thinking/session/usage-owner
   and presenter registration, scheduled refresh, full native/default-transport/
   Go validation and promotion remain open.
