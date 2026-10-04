@@ -1,3 +1,89 @@
+// Canonical host construction must exercise the real preparation/HTTP path;
+// passthrough test engines cannot stand in for production capability rules.
+#[tokio::test]
+async fn candidate_meta_transport_canonical_owner_applies_selected_updates_before_http() {
+    let fixture = Fixture::new(200, TERMINAL);
+    let executor = MetaExecutor::with_canonical_thinking(
+        fixture.executor.registry.clone(),
+        Arc::new(crate::internal::thinking::ThinkingEngine::default()),
+        Arc::new(Processor),
+        Arc::new(PayloadApplyConfig::default()),
+        fixture.executor.context.clone(),
+    )
+    .with_clock(Arc::new(Clock));
+    let mut request = fixture.request();
+    request.payload = br#"{"reasoning":{"effort":"xhigh","summary":"auto"},"input":[{"type":"configuration_update","reasoning":{"effort":"low"}},{"type":"message","content":[{"type":"input_text","text":"retained"}]}]}"#.to_vec();
+    request.resolved_model_info = Some(Arc::new(crate::internal::modelconfig::ModelInfo {
+        id: "muse-test".into(),
+        provider_type: "meta".into(),
+        thinking: Some(crate::internal::modelconfig::ThinkingSupport {
+            levels: vec!["low".into()],
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+    executor.execute(request).await.unwrap();
+    let requests = fixture.transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let body = &requests[0].body;
+    assert_eq!(
+        crate::internal::util::get_gjson_bytes_no_copy(body, "reasoning.effort").str(),
+        "low"
+    );
+    assert_eq!(
+        crate::internal::util::get_gjson_bytes_no_copy(body, "reasoning.summary").str(),
+        "auto"
+    );
+    assert_eq!(
+        crate::internal::util::get_gjson_bytes_no_copy(body, "input.#").json(),
+        "1"
+    );
+    assert_eq!(
+        crate::internal::util::get_gjson_bytes_no_copy(body, "input.0.content.0.text").str(),
+        "retained"
+    );
+}
+
+#[tokio::test]
+async fn candidate_meta_transport_canonical_owner_rejects_invalid_capability_before_http() {
+    let fixture = Fixture::new(200, TERMINAL);
+    let executor = MetaExecutor::with_canonical_thinking(
+        fixture.executor.registry.clone(),
+        Arc::new(crate::internal::thinking::ThinkingEngine::default()),
+        Arc::new(Processor),
+        Arc::new(PayloadApplyConfig::default()),
+        fixture.executor.context.clone(),
+    );
+    let mut request = fixture.request();
+    request.payload = br#"{"input":[{"type":"configuration_update","reasoning":{"effort":"unsupported-private-level"}},{"type":"message","content":[{"type":"input_text","text":"retained"}]}]}"#.to_vec();
+    request.resolved_model_info = Some(Arc::new(crate::internal::modelconfig::ModelInfo {
+        id: "muse-test".into(),
+        provider_type: "meta".into(),
+        thinking: Some(crate::internal::modelconfig::ThinkingSupport {
+            levels: vec!["low".into()],
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+    let error = executor.execute(request).await.err().unwrap();
+    let error = error.downcast_ref::<ThinkingError>().unwrap();
+    assert_eq!(
+        error.code,
+        crate::internal::thinking::ErrorCode::LevelNotSupported
+    );
+    let cleaned = error
+        .target_body()
+        .expect("canonical cleanup must reach the execution error");
+    assert_eq!(
+        crate::internal::util::get_gjson_bytes_no_copy(cleaned, "input.#").json(),
+        "1"
+    );
+    assert_eq!(
+        crate::internal::util::get_gjson_bytes_no_copy(cleaned, "input.0.content.0.text").str(),
+        "retained"
+    );
+    assert!(fixture.transport.requests.lock().unwrap().is_empty());
+}
 struct ThinkingWithOwnedModel(Arc<crate::internal::modelconfig::ModelInfo>, AtomicUsize);
 impl RequestThinkingEngine for ThinkingWithOwnedModel {
     fn apply_request_thinking(

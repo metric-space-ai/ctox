@@ -8,9 +8,13 @@
 - Accepted pin: **617/617 production + 442/442 tests strict**, complete
 - Upstream candidate `a88197f`: **111/111 reviews**, **10/10 gates**,
   promotion **YES**, post-promotion full gate **YES**
-- Track B, CTOX provider integration: **tracked independently** in
-  `src/core/execution/cliproxyapi_integration/provider-integration.json`; its open gates do not
-  reduce or inherit Track A's percentage
+- Track B, CTOX provider integration: **tracked independently** from Track A.
+  The previously referenced generated `provider-integration.json` is absent
+  from this checkout; it is not current acceptance evidence. Actual host
+  adapters live in `src/core/execution/cliproxyapi_host.rs`. The current v8
+  Meta/Devin service factories and canonical thinking bridge still require
+  outer-host registration. None of this changes historical accepted-pin
+  Track A evidence or proves current production integration.
 - Historical accepted-pin capability ledger: **1,000 / 1,000 points**; this is
   explicitly not a project-completion percentage
 - Current gate: frozen candidate `d7914afdedca7af95ee974a42453dc49fc1388ce`
@@ -142,9 +146,9 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires at least217 actual native tests across27 groups, including nine Google
+  requires at least219 actual native tests across27 groups, including nine Google
   request-preparation cases, twelve owned-thinking pipeline cases, twelve Responses
-  update/usage cases, four native-reasoning diagnostic cases and39 new Meta
+  update/usage cases, four native-reasoning diagnostic cases and41 new Meta
   tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
   three new shared cancellation-publication guards,15 existing background-worker
   guards and six retained
@@ -165,6 +169,14 @@
   including27 Meta executor and10 tool/usage parents; the previously counted
   stale-mint parent is included once. Controller syntax/count validation passed,
   but current native/default-transport/Go/provider checks are pending.
+  The Meta executor now also offers canonical owner assembly using the same
+  injected translator registry for request-summary preservation and response
+  translation. The host supplies its thinking engine/model resolver, processor,
+  payload rules and usage context; this creates no transport or credential
+  authority. Two prepared real preparation/selected-HTTP guards cover selected
+  model update cleanup and rejection before HTTP, including cleaned error-body
+  retention. Outer-host construction/registration remains open; this constructor
+  alone is not a deployed production binding.
   The native factory now constructs preparation, request-time recovery and
   scheduled refresh from one Meta capability. The scheduled bridge uses the
   host's existing Tokio handle on the existing blocking worker boundary;

@@ -62,6 +62,28 @@ impl MetaExecutor {
             clock: Arc::new(SystemMetaClock),
         }
     }
+    /// Construct the request-thinking bridge with the same instance-owned
+    /// translator registry used for responses. Hosts retain authority over
+    /// the thinking engine/model resolver, processor, payload rules and usage.
+    /// This does not discover transports, credentials or process-global state.
+    pub fn with_canonical_thinking(
+        registry: Arc<Registry>,
+        thinking: Arc<crate::internal::thinking::ThinkingEngine>,
+        processor: Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>,
+        config: Arc<super::helps::PayloadApplyConfig>,
+        context: Arc<dyn MetaAttemptContextProvider>,
+    ) -> Self {
+        let owner = Arc::new(MetaRequestOwner {
+            processor,
+            thinking: Arc::new(super::helps::RequestThinkingPipeline::new(
+                thinking,
+                registry.clone(),
+            )),
+            config,
+        });
+        Self::new(registry, owner, context)
+    }
+
     pub fn with_clock(mut self, clock: Arc<dyn MetaClock>) -> Self {
         self.clock = clock;
         self
