@@ -53,6 +53,18 @@
   the accepted pin is unchanged.
 
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.13.
+- Further native Meta request-time integration supplies an owned asynchronous
+  preparation/401-refresh capability, sharing one per-account conductor lock and
+  the guarded epoch/three-way manager publication. The injected DCA mint
+  coordinator coalesces concurrent accounts and releases abandoned operations;
+  later 401s do not reuse completed mint results. Configured API keys cannot
+  treat DCA values as inference keys. Newly prepared regressions cover selected
+  transport, failure/cancellation/deadline and content preservation, coalescing,
+  actual unary/stream bootstrap replay, committed-stream non-replay and account
+  replacement/disabling/user-edit races. These guards are not executed yet.
+  Actual Meta inference executor/factory, production host binding, scheduled
+  refresh, full native/default-transport/Go validation and promotion remain open.
+
 - Parent continuation after bounded Grok runs: all six candidate request
   compatibility facades are now exported, with24 prepared regressions:
   Claude→Codex/OpenAI Chat/Interactions/Gemini and OpenAI Chat/Responses→Claude.

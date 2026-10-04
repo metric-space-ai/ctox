@@ -236,6 +236,15 @@ pub struct GenericAuthRuntime {
     max_credentials: usize,
 }
 
+fn disabled_preparation_error() -> AuthPreparationError {
+    Arc::new(AuthError {
+        code: "account_disabled".into(),
+        message: "Selected account is disabled".into(),
+        retryable: false,
+        http_status: 403,
+    })
+}
+
 impl GenericAuthRuntime {
     #[must_use]
     pub fn new(
@@ -344,7 +353,10 @@ impl GenericAuthRuntime {
                 .err()
                 .is_some_and(is_unauthorized_plugin_error)
             {
-                if let Some(refreshed) = self.refresh_after_unauthorized(&auth, &registration)? {
+                if let Some(refreshed) = self
+                    .refresh_after_unauthorized(&auth, &registration)
+                    .await?
+                {
                     auth = refreshed;
                     self.prepare(&registration, &mut auth)
                         .await
@@ -429,6 +441,9 @@ impl GenericAuthRuntime {
             .ok_or_else(|| {
                 Arc::new(super::AuthLifecycleError::AuthNotRegistered) as AuthPreparationError
             })?;
+        if auth.disabled {
+            return Err(disabled_preparation_error());
+        }
         if !preparer.should_prepare(auth) {
             return Ok(());
         }
@@ -446,6 +461,9 @@ impl GenericAuthRuntime {
         *auth = published.ok_or_else(|| {
             Arc::new(super::AuthLifecycleError::AuthNotRegistered) as AuthPreparationError
         })?;
+        if auth.disabled {
+            return Err(disabled_preparation_error());
+        }
         Ok(())
     }
 
@@ -460,13 +478,49 @@ impl GenericAuthRuntime {
             .clone()
     }
 
-    pub(crate) fn refresh_after_unauthorized(
+    pub(crate) async fn refresh_after_unauthorized(
         &self,
         auth: &Auth,
         registration: &ProviderExecutorRegistration,
     ) -> Result<Option<Auth>, GenericExecutionError> {
         if auth.auth_kind() != Some(AuthKind::OAuth) {
             return Ok(None);
+        }
+        if let Some(refresher) = registration.async_auth_refresher() {
+            // Preparation and a 401 mint share one credential-scoped owner.
+            // No synchronous runtime bridge or detached refresh is needed.
+            let _guard = self.prepare_lock(&auth.id).lock_owned().await;
+            let current = self
+                .manager
+                .lifecycle()
+                .get_cached(&auth.id)
+                .ok_or(GenericExecutionError::AuthUnavailable)?;
+            if current.disabled || current.registration_epoch != auth.registration_epoch {
+                return Err(GenericExecutionError::AuthUnavailable);
+            }
+            // Another request already replaced the failed credential while
+            // this attempt waited. Reuse it without minting the old key again.
+            if access_token(&current) != access_token(auth) {
+                return Ok(Some(current));
+            }
+            let candidate = refresher
+                .refresh(&current)
+                .await
+                .map_err(GenericExecutionError::Preparation)?;
+            let published = self
+                .manager
+                .update_refreshed_auth(
+                    &current,
+                    candidate,
+                    AuthMutationOptions::default(),
+                    self.clock.now(),
+                )
+                .map_err(|error| GenericExecutionError::Preparation(Arc::new(error)))?
+                .ok_or(GenericExecutionError::AuthUnavailable)?;
+            if published.disabled {
+                return Err(GenericExecutionError::AuthUnavailable);
+            }
+            return Ok(Some(published));
         }
         let failed_token = access_token(auth).map(str::to_owned);
         match self.manager.lifecycle().refresh(

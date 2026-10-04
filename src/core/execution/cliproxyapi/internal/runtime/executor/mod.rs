@@ -47,6 +47,7 @@ pub mod gemini_vertex_executor;
 pub mod helps;
 pub mod kimi_executor;
 pub mod kimi_thinking_replay;
+pub mod meta_executor_auth;
 pub mod openai_compat_executor;
 pub mod openai_responses_signature;
 pub mod xai_executor;

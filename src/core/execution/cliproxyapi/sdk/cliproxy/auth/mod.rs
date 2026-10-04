@@ -55,10 +55,10 @@ pub use auto_refresh_loop::{
 };
 pub use classification::{AuthKind, AuthSourceKind};
 pub use conductor::{
-    AuthManager, AuthManagerError, AuthPreparationError, AuthPreparer, ExecutionSessionCloser,
-    ManagerRefreshPublicationSink, ProviderDispatchError, ProviderExecutorRegistration,
-    ProviderExecutorRegistrationError, ProviderExecutorRegistry, UnauthorizedReplayDecision,
-    UnauthorizedReplayState, CLOSE_ALL_EXECUTION_SESSIONS_ID,
+    AsyncAuthRefresher, AuthManager, AuthManagerError, AuthPreparationError, AuthPreparer,
+    ExecutionSessionCloser, ManagerRefreshPublicationSink, ProviderDispatchError,
+    ProviderExecutorRegistration, ProviderExecutorRegistrationError, ProviderExecutorRegistry,
+    UnauthorizedReplayDecision, UnauthorizedReplayState, CLOSE_ALL_EXECUTION_SESSIONS_ID,
 };
 pub use conductor_cooldown::{AccountExecutionResult, CooldownConductor};
 #[cfg(test)]

@@ -46,6 +46,17 @@ and active cooldowns. Validation, durable save and installation share the same
 manager/lifecycle locks. Request preparation must use that accepted result and
 fails if the account disappears during minting.
 
-Production host/presenter registration, the Meta executor and its selected
-on-demand mint/refresh capability binding still need integration. Synthetic native guards
-and frozen Go oracles do not establish live Meta, provider hub or App acceptance.
+The native Meta request-auth capability now mints from an owned DCA snapshot
+only when preparation needs an inference key, and can refresh an existing key
+after a 401. Preparation and asynchronous refresh share the generic conductor's
+account lock and guarded manager publication. A shared, injected mint coordinator
+coalesces simultaneous calls for the same DCA token without retaining abandoned
+HTTP futures or serving later refreshes from a completed result. Config API keys
+cannot use DCA values as inference keys. Concurrent replacement, disabling,
+cancellation and user edits remain manager-owned.
+
+Production host/presenter registration and the Meta inference executor/factory
+still need integration. Scheduled refresh remains on the existing synchronous
+capability; these request-time operations use the new explicit async capability.
+Prepared synthetic native guards and frozen Go oracles do not establish live
+Meta, provider hub or App acceptance.

@@ -20,6 +20,9 @@ use super::*;
 #[path = "request_auth_prepare_race_test.rs"]
 mod prepared_race_tests;
 
+#[path = "request_auth_refresh_race_test.rs"]
+mod refresh_race_tests;
+
 #[derive(Default)]
 struct MemoryAuthStore(Mutex<BTreeMap<String, Auth>>);
 

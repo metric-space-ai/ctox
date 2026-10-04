@@ -4,6 +4,60 @@
 use super::*;
 use tokio::sync::Semaphore;
 
+#[tokio::test]
+async fn candidate_held_preparation_observes_disabled_before_mint() {
+    let (runtime, executor, manager, _) = runtime(Mode::Success, &["auth-a"]);
+    let held = HeldPreparer::new();
+    let registration = registration(executor, held.clone());
+    let mut snapshot = manager.lifecycle().get_cached("auth-a").unwrap();
+    let mut current = snapshot.clone();
+    current.disabled = true;
+    manager
+        .update(
+            current,
+            AuthMutationOptions::default(),
+            DateTime::parse_from_rfc3339("2026-08-04T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        )
+        .unwrap();
+    let error = runtime
+        .prepare(&registration, &mut snapshot)
+        .await
+        .unwrap_err();
+    assert_eq!(error.downcast_ref::<AuthError>().unwrap().http_status, 403);
+    assert_eq!(held.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn candidate_held_preparation_concurrent_disable_prevents_inference() {
+    let (runtime, executor, manager, _) = runtime(Mode::Success, &["auth-a"]);
+    let held = HeldPreparer::new();
+    manager.register_executor(registration(executor.clone(), held.clone()));
+    let operation =
+        tokio::spawn(async move { runtime.execute(&["claude".into()], request()).await });
+    tokio::time::timeout(Duration::from_secs(5), held.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    let mut current = manager.lifecycle().get_cached("auth-a").unwrap();
+    current.disabled = true;
+    manager
+        .update(
+            current,
+            AuthMutationOptions::default(),
+            DateTime::parse_from_rfc3339("2026-08-04T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        )
+        .unwrap();
+    held.release.add_permits(1);
+    assert!(operation.await.unwrap().is_err());
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    assert!(manager.lifecycle().get_cached("auth-a").unwrap().disabled);
+}
+
 struct HeldPreparer {
     entered: Semaphore,
     release: Semaphore,
