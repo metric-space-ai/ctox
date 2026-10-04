@@ -68,15 +68,18 @@ The existing catalog subscription opens the requested app only after it appears
 in the filtered projection. Cold shell-seed startup retains its existing bounded
 wait; a URL cannot add an app or grant access.
 
-App-icon task counts require the native harness's active task identities as
-well as active queue status. They use the native source_module as the app
-origin, deduplicate task identities, and expose only bounded title/status and
-the existing task navigation keys. Opening an app does not count as execution.
-The shared presence query selects active statuses before its 200-row window;
-the count reflects the confirmed projected tasks in that bounded snapshot.
-An unavailable harness snapshot supplies no confirmed count. Presence reloads
-keep one read active and coalesce subsequent notifications. A cancelled queue
-read retains its rows, while fresh harness truth still retires stopped tasks.
+App-icon task counts require a current-pull-confirmed native harness snapshot
+and its current-boot, unexpired worker lease projection. The queue row must match
+that worker's task ID, attempt and lease worker ID before its member or app can
+be attributed. Native source_module supplies the app origin; opening an app
+does not count as execution. Presence queries select the native task identities
+in batches of at most 200, so newer historical rows cannot hide current work.
+Retained rows contain bounded public title/status, navigation and lease join
+fields rather than task payloads. Queue reads stay single-flight and coalesce
+notifications. Native truth refreshes independently of a pending queue read;
+a stop, new attempt or loss of confirmed freshness immediately retires old
+counts. A cancelled queue read retains its rows only while current native
+lease truth still confirms them.
 The task chooser rechecks its selected identity against the latest snapshot
 before navigation and is removed when the chat/presence owner is disposed.
 This browser consumption does not replace Crew's native projection authority
@@ -569,11 +572,12 @@ way only for harness status and triggers its existing authoritative row read;
 it does not render the changed-document payload as a fully loaded collection.
 The shell's scoped collection facade preserves this subscription option.
 
-Crew app presence keeps its last valid queue snapshot when a read fails.
+Crew app presence retains the last valid queue snapshot when a read fails.
 An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;
-other read failures retain their diagnostic. The existing collection-readiness
-callback retries the read, and only a successful empty response clears the
-presence and workload. Cancellation is never evidence that the queue is empty.
+other read failures retain their diagnostic. Collection readiness retries the
+read. Native stop, attempt changes or unconfirmed harness freshness independently
+retire presence and workload; cancellation alone is never evidence that the
+queue is empty.
 
 The Rust side is a byte-correct port of RxDB 16.20.0 (upstream pin
 `c69c94bb…`, see `src/core/rxdb/PORTING.md` and `vendor/rxdb.version`),
@@ -2609,18 +2613,21 @@ canonical command/task link. Caller-supplied origin metadata is discarded.
 Queue edits and retry/terminal transitions retain the origin; unrelated tasks
 without an admitted parent remain unattributed rather than adopting an open app.
 
-The existing command projection associates `command_id`, `module`,
+The command projection associates `command_id`, `module`,
 `task_id`/`execution_task_id` and `execution_phase`. Queue rows associate their
 task ID, numeric `attempt`, `crew_member_id`, `lease_worker_id` and expiring lease.
-`status=running` alone means leased. Current worker snapshots publish
-`ctox_harness_status.active_task_ids`; finalized `ctox_runs.id` is an attempt ID,
-not evidence of current execution. Replaying a persisted status keeps diagnostics
-but clears service/busy/active-worker/task claims until a live worker publication.
-These existing projections do not yet expose
-a per-attempt live snapshot fence. A consumer must show unknown when it cannot
-bind the current task/attempt, lease, terminal state and fresh connected native
-generation; app visibility, queue length or process liveness cannot fill that
-gap. No new collection, permission grant or HTTP bridge is introduced here.
+`status=running` alone means leased. Native `ctox_harness_status.current_queue_workers`
+publishes `task_id`, `lease_worker_id`, `attempt`, `boot_id`, `leased_at` and
+`lease_expires_at` only for a current live worker in the current boot, joined
+to its exact unexpired CTOX service lease. `active_task_ids` alone and a finalized
+`ctox_runs.id` are not evidence of current execution. Replaying persisted status
+keeps diagnostics but clears activity until a live worker publication.
+Consumers must show unknown when the current task/attempt, lease, terminal state
+or confirmed connected native generation cannot be bound. App presence joins
+these worker fields to queue fields; this does not establish a live fence for
+other per-attempt progress projections. App visibility, queue length or process
+liveness cannot fill a missing authority join. No new collection, permission
+grant or HTTP bridge is introduced here.
 
 The cockpit uses only the existing native-store → CTOX DB → WebRTC path. There
 are no browser HTTP data endpoints. Source ledgers remain durable; retention
