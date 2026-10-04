@@ -346,7 +346,7 @@ mod tests {
         lifetime.revoke();
         assert!(!guard.is_live());
         assert!(guard
-            .with_current_execution(|| panic!("revoked callback"))
+            .with_current_execution::<()>(|| panic!("revoked callback"))
             .is_err());
         assert!(QueueExecutionFence::capture(&fence, "native-attempt", lifetime).is_err());
         Ok(())
@@ -364,7 +364,7 @@ mod tests {
         std::fs::rename(&path, &retained)?;
         std::fs::copy(&retained, &path)?;
         assert!(guard
-            .with_current_execution(|| panic!("replaced store callback"))
+            .with_current_execution::<()>(|| panic!("replaced store callback"))
             .is_err());
         drop(conn);
 
