@@ -14,6 +14,8 @@ pub mod checkpoint;
 #[path = "contracts.generated.rs"]
 pub mod contracts;
 pub mod credential_ipc;
+#[cfg(unix)]
+pub mod guest_restore;
 pub mod host_config;
 #[cfg(feature = "webrtc")]
 pub mod host_runtime;
