@@ -124,6 +124,7 @@ pub use apply_patch::{
     APPLY_PATCH_UPSTREAM_ERROR_MESSAGE,
 };
 pub use apply_patch_responses::normalize_apply_patch_responses_request;
+pub(crate) use apply_patch_responses::ApplyPatchResponsesState;
 pub use cache_helpers::{codex_prompt_cache_key, CodexCache, CodexPromptCacheStore};
 pub use claude_builtin_tools::{augment_claude_builtin_tool_registry, is_claude_server_tool_type};
 pub use claude_client_detection::{detect_claude_code_request, ClaudeCodeRequestDetection};

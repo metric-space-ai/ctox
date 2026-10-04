@@ -4,13 +4,13 @@
 // License: MIT (upstream); modifications AGPL-3.0-only
 
 use super::devin_executor_history::parse_devin_interactions_payload;
-use super::helps::cloak_obfuscate::SensitiveWordMatcher;
 use super::helps::devin_models::resolve_devin_chat_model_uid;
 use super::helps::devin_request::{
     build_devin_get_chat_message_request, generate_devin_sentry_trace, DevinChatRequest,
     DevinSessionTurns, DEVIN_CHAT_PATH, DEVIN_DEFAULT_BASE_URL,
 };
 use super::helps::devin_wire::{wrap_connect_envelope, ConnectFrameError};
+use super::helps::SensitiveWordMatcher;
 use crate::internal::registry::{DevinModelsStore, StaticModelsCatalog};
 use crate::internal::thinking::parse_suffix;
 use crate::internal::util::{apply_custom_headers_from_attrs, HeaderRequest};
