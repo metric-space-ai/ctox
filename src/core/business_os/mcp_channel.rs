@@ -11550,6 +11550,54 @@ mod tests {
     }
 
     #[test]
+    fn mcp_app_retry_preserves_native_cancellation() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        write_module(
+            root,
+            "mcp-cancel-retry",
+            "MCP Cancel Retry",
+            &["cancel_items"],
+        )?;
+        let mut arguments = serde_json::json!({
+            "module_id": "mcp-cancel-retry",
+            "instruction": "Add a bounded inventory review action.",
+            "idempotency_key": "cancelled-app-request",
+            "_context": { "actor": "chatgpt:test-user", "workspace": "test-workspace", "request_id": "http-start" }
+        });
+        let first = call_tool(root, "business_os.modify_app", arguments.clone())?;
+        let command_id = first["command_id"].as_str().context("command id")?;
+        let task_id = first["task_id"].as_str().context("task id")?;
+        let stopped = call_tool(
+            root,
+            "business_os.cancel_project_task",
+            serde_json::json!({
+                "target_command_id": command_id,
+                "idempotency_key": "stop-cancelled-app-request",
+                "reason": "Owner cancelled this app modification.",
+                "_context": { "actor": "chatgpt:test-user", "workspace": "test-workspace" }
+            }),
+        )?;
+        assert_eq!(stopped["target_status"], "cancelled");
+        let before = crate::mission::channels::business_command_projection(root, command_id)?;
+        assert_eq!(before["status"], "cancelled");
+        arguments["_context"]["request_id"] = serde_json::json!("http-retry");
+        let retry = call_tool(root, "business_os.modify_app", arguments)?;
+        assert_eq!(retry["command_id"], command_id);
+        assert_eq!(retry["task_id"], task_id);
+        assert_eq!(retry["status"], "cancelled");
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root, command_id)?,
+            before
+        );
+        let task = crate::mission::channels::load_queue_task(root, task_id)?
+            .context("cancelled durable task")?;
+        assert_eq!(task.route_status, "cancelled");
+        Ok(())
+    }
+
+    #[test]
     fn modify_app_tool_rejects_unknown_module_without_recording_command() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
