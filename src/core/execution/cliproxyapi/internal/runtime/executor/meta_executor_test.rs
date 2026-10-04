@@ -163,6 +163,52 @@ fn factory(
 }
 
 #[tokio::test]
+async fn candidate_meta_factory_native_owner_shares_preparation_and_refresh_and_honors_stop() {
+    use crate::internal::auth::meta::MetaAuth;
+    use crate::internal::runtime::executor::meta_executor_auth::MetaRequestAuthPreparer;
+    use crate::sdk::cliproxy::auth::{RefreshCancellation, RefreshExecutorError};
+    let fixture = Fixture::new(200, &[]);
+    let native = Arc::new(MetaRequestAuthPreparer::new(Arc::new(MetaAuth::new(
+        fixture.transport.clone(),
+    ))));
+    let execution = Arc::new(MetaExecutor::new(
+        fixture.executor.registry.clone(),
+        fixture.executor.request_owner.clone(),
+        fixture.executor.context.clone(),
+    ));
+    let factory = MetaExecutorFactory::with_native_auth(
+        Arc::new(Fallback::default()),
+        execution,
+        native.clone(),
+        tokio::runtime::Handle::current(),
+    );
+    let mut account = Auth::default();
+    account.id = "test-only-meta-native".into();
+    account.provider = "meta".into();
+    let registration = factory.registration_for("meta", &account).unwrap();
+    let expected_async: Arc<dyn AsyncAuthRefresher> = native.clone();
+    let expected_prepare: Arc<dyn AuthPreparer> = native;
+    assert!(Arc::ptr_eq(
+        &registration.async_auth_refresher().unwrap(),
+        &expected_async
+    ));
+    assert!(Arc::ptr_eq(
+        &registration.auth_preparer().unwrap(),
+        &expected_prepare
+    ));
+    let scheduled = registration.refresher();
+    let cancellation = RefreshCancellation::default();
+    cancellation.cancel();
+    let result = tokio::task::spawn_blocking(move || {
+        scheduled.refresh_with_cancellation(&mut account, &cancellation)
+    })
+    .await
+    .unwrap();
+    assert!(matches!(result, Err(RefreshExecutorError::Cancelled)));
+    assert!(fixture.transport.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn candidate_meta_factory_keeps_all_owned_capabilities_and_dispatches_real_selected_http() {
     let fixture = Fixture::new(403, b"owned reply");
     let fallback = Arc::new(Fallback::default());

@@ -3,7 +3,8 @@
 ## State
 
 - Upstream: `a88197f845c979132c8978ea223c6af05cc81536`
-- Track A, standalone Rust-port release: **COMPLETE**
+- Track A, accepted v7.2.116 standalone Rust-port release: **COMPLETE**
+- Current v8.0.13 update and promotion: **INCOMPLETE**
 - Accepted pin: **617/617 production + 442/442 tests strict**, complete
 - Upstream candidate `a88197f`: **111/111 reviews**, **10/10 gates**,
   promotion **YES**, post-promotion full gate **YES**
@@ -12,9 +13,11 @@
   reduce or inherit Track A's percentage
 - Historical accepted-pin capability ledger: **1,000 / 1,000 points**; this is
   explicitly not a project-completion percentage
-- Current gate: open candidate `e2bff0107bb307337aaa19018ccddd55f64253d5`
-  (tag `v8.0.11`, verified 2026-10-02). The accepted pin is still
-  `a88197f845c979132c8978ea223c6af05cc81536`. This candidate is not promoted.
+- Current gate: frozen candidate `d7914afdedca7af95ee974a42453dc49fc1388ce`
+  (tag `v8.0.13`, latest-release page rechecked 2026-10-04). The accepted
+  production pin remains `a88197f845c979132c8978ea223c6af05cc81536`.
+  The earlier v8.0.11 and v8.0.12 reviews remain historical prerequisites;
+  none of these candidates is promoted.
 - Previous observed upstream release: `v8.0.12`, published 2026-10-02 20:21:45 UTC,
   commit `2044a01f422998de79a5da8015141b878886534d`. This is an additional
   required follow-up candidate for the requested current-upstream outcome,
@@ -68,10 +71,29 @@
   fixed O200k token counting. Raw output items and missing IDs survive terminal
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
-  and committed-stream cooldown consumers. The added27 regression functions
-  are prepared, not executed. Production transport/thinking/session/usage-owner
-  and presenter registration, scheduled refresh, full native/default-transport/
-  Go validation and promotion remain open.
+  and committed-stream cooldown consumers. The finite targeted controller
+  requires177 actual native tests across22 groups, including36 new Meta
+  tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
+  three new shared cancellation-publication guards,15 existing background-worker
+  guards and six retained
+  canonical thinking-route guards. The current corrected source has not run.
+  Two recent native attempts failed compilation before executing tests:
+  4cf3 found a non-Send stream borrow and an owned/static capability mismatch;
+  774c found five private Auth-field initializers. The subsequent corrections
+  use mutable owned stream state, explicit owned capability forwarding and
+  public Auth::default construction. Format checks do not prove compilation.
+  The full controller also requires169 unique frozen-Go parent tests,
+  including27 Meta executor and10 tool/usage parents; the previously counted
+  stale-mint parent is included once. Controller syntax/count validation passed,
+  but current native/default-transport/Go/provider checks are pending.
+  The native factory now constructs preparation, request-time recovery and
+  scheduled refresh from one Meta capability. The scheduled bridge uses the
+  host's existing Tokio handle on the existing blocking worker boundary;
+  cancellation wakes active futures without a polling loop or detached task.
+  The shared coordinator checks cancellation before recording either success
+  or failure and before saving a candidate. Its new regressions are prepared,
+  not executed. Production transport/thinking/session/usage-owner, presenter
+  and scheduled-worker registration, plus reviewed promotion, remain open.
 
 - Parent continuation after bounded Grok runs: all six candidate request
   compatibility facades are now exported, with24 prepared regressions:
@@ -142,10 +164,11 @@
   lifecycle, stable item/summary indexes and completed reasoning items with one
   concatenated summary. Two regressions cover empty/multiple summaries and
   overlapping text/reasoning with a late complete signature; existing guards remain.
-  The v8.0.13 audit also confirms that a full Devin inference/frame executor is
-  absent from the Rust tree. Catalog/store support does not supply that executor;
-  its provider/runtime integration and stream ordering/signature accumulation
-  are concrete remaining implementation work, not only an acceptance wait.
+  The initial v8.0.13 audit found no Devin inference/frame executor. The
+  candidate now includes native request preparation, aggregate and streaming
+  response consumers, selected-client HTTP execution and an explicit service
+  factory. Those implementations do not establish production UI/prompt,
+  refresher/context/status ownership or live-provider acceptance.
   The Connect framing layer now decodes fragmented async body chunks and exact
   single-reader frames, preserves original flags and earlier emitted frames,
   validates gzip CRC/concatenated members, bounds both wire/inflated sizes and
@@ -185,13 +208,17 @@
   precedence, zero/null configuration, namespaced automation filtering and native
   signature detection/base64 grammar follow the pin. Six more regressions cover this
   owned preparation. Inbound JSON uses Rust's UTF-8 string boundary; valid UTF-8 raw
-  JSON spelling is retained. Auth/refresh, the actual provider caller and async
-  streaming consumer still require implementation. These helpers are not provider acceptance.
+  JSON spelling is retained. Native auth/refresh, the selected-client provider
+  caller and async streaming consumer are now implemented in the candidate.
+  Production owner binding and live-provider acceptance remain open.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are142 prepared candidate test
-  functions in total; no candidate Rust or Go tests have executed. The first
-  source-pinned Cargo attempt at a5d8 passed formatting and then stopped with23
+  capability refresh and built-in metadata. Earlier candidate0d2bfa compiled and
+  passed24 scoped groups before the history group reported five passes and one
+  incorrect oracle; that oracle was corrected later. Its immutable results retain
+  their original source/dependency scope. They do not prove the latest aggregate
+  candidate: its177 targeted native requirements and full Go checks are unrun.
+  The first source-pinned Cargo attempt at a5d8 passed formatting and stopped with23
   compiler errors. Source repairs now address temporary GJSON/path lifetimes,
   raw-byte conversions, control-character hex formatting, local catalog iterator
   drop order, nested cancellation borrows and sibling/public access boundaries.
@@ -266,7 +293,7 @@ used as the current completion metric for either lane. New upstream work must
 not add Business OS, secret-store or Pi integration points to Track A; those
 changes update Track B only.
 
-## Open candidate v8.0.11 (not promoted)
+## Frozen v8.0.11 review (historical, not promoted)
 
 Verified on 2026-10-02 against `https://github.com/router-for-me/CLIProxyAPI.git`:
 tag `v8.0.11` and `refs/heads/main` both resolved to
@@ -281,8 +308,12 @@ other 581 modified Go files, plus 492 added Go files, still need a semantic
 port. This section awards zero points. The accepted pin, source anchors, and
 `upstream-lock.json` stay on `a88197f` until the promotion gates pass.
 
-Slices whose Rust behavior was updated in this candidate, with anchors left on
-the accepted pin:
+The following slice ledger records the initial v8.0.11 review state. Later
+implementations and check status appear above; the historical statements below
+must not be interpreted as the current candidate's implementation inventory.
+Source anchors intentionally retain the accepted pin until reviewed promotion.
+
+Slices whose Rust behavior was updated in that initial candidate:
 
 - Responses stream error chunks are nested `error` objects. Status 408 reports
   code `request_timeout` and type `server_error`, so a cut Codex stream stays

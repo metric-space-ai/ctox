@@ -275,17 +275,37 @@ fn elapsed_at_least(now: DateTime<Utc>, earlier: DateTime<Utc>, duration: Durati
         .is_ok_and(|elapsed| elapsed >= duration)
 }
 
+#[derive(Default)]
+struct RefreshCancellationState {
+    cancelled: AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
 #[derive(Clone, Default)]
-pub struct RefreshCancellation(Arc<AtomicBool>);
+pub struct RefreshCancellation(Arc<RefreshCancellationState>);
 
 impl RefreshCancellation {
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        if !self.0.cancelled.swap(true, Ordering::AcqRel) {
+            self.0.wake.notify_waiters();
+        }
     }
 
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Wakes all active refresh awaits, and also completes when cancellation
+    /// preceded registration. Enable before checking to prevent a lost wake.
+    pub async fn cancelled(&self) {
+        let notified = self.0.wake.notified();
+        tokio::pin!(notified);
+        let _ = notified.as_mut().enable();
+        if self.is_cancelled() {
+            return;
+        }
+        notified.await;
     }
 }
 
@@ -501,8 +521,16 @@ impl RefreshCoordinator {
             }
         }
 
+        if cancellation.is_cancelled() {
+            return Err(RefreshTransactionError::Cancelled);
+        }
         let mut cloned = auth.clone();
         let result = refresher.refresh_with_cancellation(&mut cloned, cancellation);
+        // A provider may finish with a candidate or an error while shutdown is
+        // requested. Neither result may publish after the cancellation signal.
+        if cancellation.is_cancelled() {
+            return Err(RefreshTransactionError::Cancelled);
+        }
         let mut updated = match result {
             Err(RefreshExecutorError::Cancelled) => return Err(RefreshTransactionError::Cancelled),
             Err(RefreshExecutorError::Failed(error)) => {
@@ -531,6 +559,9 @@ impl RefreshCoordinator {
         if ineffective {
             updated.next_refresh_after = add_std(now, REFRESH_INEFFECTIVE_BACKOFF)
                 .ok_or(RefreshTransactionError::InvalidRefreshedIdentity)?;
+        }
+        if cancellation.is_cancelled() {
+            return Err(RefreshTransactionError::Cancelled);
         }
         self.store
             .save(&updated)

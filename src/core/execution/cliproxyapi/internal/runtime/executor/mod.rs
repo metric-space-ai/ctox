@@ -51,6 +51,7 @@ pub mod meta_executor;
 pub mod meta_executor_auth;
 pub mod meta_executor_request;
 pub mod meta_executor_response;
+pub mod meta_executor_scheduled;
 pub mod openai_compat_executor;
 pub mod openai_responses_signature;
 pub mod xai_executor;

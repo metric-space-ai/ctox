@@ -11,6 +11,154 @@ use serde_json::json;
 use std::sync::Mutex;
 use tokio::sync::{mpsc, Semaphore};
 
+#[tokio::test]
+async fn candidate_meta_scheduled_refresh_returns_owned_candidate_without_mutating_input() {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::AuthRefresher;
+    let client = Transport::new(200, minted());
+    let scheduled = MetaScheduledRefresher::new(
+        Arc::new(capability(client.clone())),
+        tokio::runtime::Handle::current(),
+    );
+    let original = auth();
+    let before = (original.metadata.clone(), original.attributes.clone());
+    let (unchanged, result) = tokio::task::spawn_blocking(move || {
+        let mut selected = original;
+        let result = scheduled.refresh(&mut selected);
+        (selected, result)
+    })
+    .await
+    .unwrap();
+    let candidate = result.unwrap().unwrap();
+    assert_eq!((unchanged.metadata, unchanged.attributes), before);
+    assert_eq!(candidate.registration_epoch, 7);
+    assert_eq!(candidate.attributes["api_key"], "LLM|test-only-minted");
+    assert_eq!(
+        candidate.attributes["base_url"],
+        "https://regional.fixture.invalid/v1"
+    );
+    assert_eq!(candidate.metadata["subs_tier_name"], json!("Muse Pro"));
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_refresh_skips_cancelled_and_disabled_accounts() {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::{AuthRefresher, RefreshCancellation, RefreshExecutorError};
+    for disabled in [false, true] {
+        let client = Transport::new(200, minted());
+        let scheduled = MetaScheduledRefresher::new(
+            Arc::new(capability(client.clone())),
+            tokio::runtime::Handle::current(),
+        );
+        let cancellation = RefreshCancellation::default();
+        if !disabled {
+            cancellation.cancel();
+        }
+        let result = tokio::task::spawn_blocking(move || {
+            let mut selected = auth();
+            selected.disabled = disabled;
+            scheduled.refresh_with_cancellation(&mut selected, &cancellation)
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(RefreshExecutorError::Cancelled)));
+        assert!(client.requests.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_refresh_cancellation_closes_the_owned_mint_receiver() {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::{AuthRefresher, RefreshCancellation, RefreshExecutorError};
+    let client = Transport::held();
+    let scheduled = MetaScheduledRefresher::new(
+        Arc::new(capability(client.clone())),
+        tokio::runtime::Handle::current(),
+    );
+    let cancellation = RefreshCancellation::default();
+    let cancel = cancellation.clone();
+    let worker = tokio::task::spawn_blocking(move || {
+        scheduled.refresh_with_cancellation(&mut auth(), &cancellation)
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), client.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    cancel.cancel();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(result, Err(RefreshExecutorError::Cancelled)));
+    assert!(client.sender.lock().unwrap().as_ref().unwrap().is_closed());
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_refresh_preserves_typed_failure_and_original_credentials() {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::{AuthRefresher, RefreshExecutorError};
+    let client = Transport::new(401, json!({"error":"unauthorized"}));
+    let scheduled = MetaScheduledRefresher::new(
+        Arc::new(capability(client.clone())),
+        tokio::runtime::Handle::current(),
+    );
+    let (selected, result) = tokio::task::spawn_blocking(move || {
+        let mut selected = auth();
+        let result = scheduled.refresh(&mut selected);
+        (selected, result)
+    })
+    .await
+    .unwrap();
+    let Err(RefreshExecutorError::Failed(error)) = result else {
+        panic!("expected the typed mint failure");
+    };
+    assert_eq!(error.http_status, 401);
+    assert!(!error.retryable);
+    assert!(!error.message.contains("test-only-device"));
+    assert_eq!(
+        selected.metadata["access_token"],
+        json!("dca:test-only-device")
+    );
+    assert!(!selected.attributes.contains_key("api_key"));
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn candidate_meta_scheduled_cancellation_wakes_all_waiters_and_remembers_earlier_stop() {
+    use crate::sdk::cliproxy::auth::RefreshCancellation;
+    use futures_util::task::{waker, ArcWake};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::Context;
+    struct Wake(AtomicUsize);
+    impl ArcWake for Wake {
+        fn wake_by_ref(wake: &Arc<Self>) {
+            wake.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let cancellation = RefreshCancellation::default();
+    let signal = Arc::new(Wake(AtomicUsize::new(0)));
+    let waker = waker(signal.clone());
+    let mut context = Context::from_waker(&waker);
+    let mut waiting = (0..4)
+        .map(|_| Box::pin(cancellation.cancelled()))
+        .collect::<Vec<_>>();
+    for waiter in &mut waiting {
+        assert!(waiter.as_mut().poll(&mut context).is_pending());
+    }
+    cancellation.clone().cancel();
+    assert!(signal.0.load(Ordering::SeqCst) > 0);
+    for waiter in &mut waiting {
+        assert!(waiter.as_mut().poll(&mut context).is_ready());
+    }
+    assert!(Box::pin(cancellation.cancelled())
+        .as_mut()
+        .poll(&mut context)
+        .is_ready());
+}
+
 #[test]
 fn candidate_meta_request_auth_file_key_with_dca_retains_oauth_refresh_capability() {
     let client = Transport::new(200, minted());

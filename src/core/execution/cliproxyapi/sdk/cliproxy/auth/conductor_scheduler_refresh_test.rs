@@ -128,6 +128,111 @@ fn oauth(id: &str, provider: &str) -> Auth {
     auth
 }
 
+#[derive(Clone, Copy)]
+enum CancelledRefreshOutcome {
+    Before,
+    Success,
+    Unauthorized,
+}
+
+struct CancellingRefresher {
+    cancellation: super::RefreshCancellation,
+    outcome: CancelledRefreshOutcome,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+impl AuthRefresher for CancellingRefresher {
+    fn refresh(&self, auth: &mut Auth) -> Result<Option<Auth>, RefreshExecutorError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        auth.metadata
+            .insert("access_token".into(), json!("must-not-publish"));
+        self.cancellation.cancel();
+        match self.outcome {
+            CancelledRefreshOutcome::Unauthorized => Err(RefreshExecutorError::Failed(AuthError {
+                code: "unauthorized".into(),
+                message: "test-only rejection".into(),
+                retryable: false,
+                http_status: 401,
+            })),
+            _ => Ok(None),
+        }
+    }
+}
+fn assert_cancelled_refresh_is_unpublished(outcome: CancelledRefreshOutcome) {
+    let provider = match outcome {
+        CancelledRefreshOutcome::Before => "worker-candidate-cancel-before",
+        CancelledRefreshOutcome::Success => "worker-candidate-cancel-success",
+        CancelledRefreshOutcome::Unauthorized => "worker-candidate-cancel-error",
+    };
+    register_refresh_lead_provider(provider, || Some(Duration::from_secs(600)));
+    let now = at("2026-10-04T12:00:00Z");
+    let store = Arc::new(SchedulerRefreshStore::default());
+    let schedule = Arc::new(RefreshSchedule::default());
+    let lifecycle = AuthLifecycle::new(store.clone(), schedule.clone(), Duration::from_secs(1));
+    lifecycle
+        .register(
+            oauth(provider, provider),
+            AuthMutationOptions::default(),
+            now,
+        )
+        .unwrap();
+    let before = lifecycle.get_cached(provider).unwrap();
+    let before_schedule = schedule.peek();
+    let cancellation = super::RefreshCancellation::default();
+    if matches!(outcome, CancelledRefreshOutcome::Before) {
+        cancellation.cancel();
+    }
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let publication = PublicationRecorder::default();
+    let result = lifecycle.refresh_with_cancellation(
+        provider,
+        None,
+        now,
+        &CancellingRefresher {
+            cancellation: cancellation.clone(),
+            outcome,
+            calls: calls.clone(),
+        },
+        &publication,
+        &cancellation,
+    );
+    assert!(matches!(
+        result,
+        Err(AuthLifecycleRefreshError::Refresh(
+            RefreshTransactionError::Cancelled
+        ))
+    ));
+    let cached = lifecycle.get_cached(provider).unwrap();
+    let persisted = store.0.lock().unwrap().get(provider).unwrap().clone();
+    for record in [cached, persisted] {
+        assert_eq!(record.metadata, before.metadata);
+        assert_eq!(record.status, before.status);
+        assert_eq!(record.last_error, before.last_error);
+        assert_eq!(record.last_refreshed_at, before.last_refreshed_at);
+    }
+    assert_eq!(schedule.peek(), before_schedule);
+    assert!(publication.0.lock().unwrap().is_empty());
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        if matches!(outcome, CancelledRefreshOutcome::Before) {
+            0
+        } else {
+            1
+        }
+    );
+}
+#[test]
+fn candidate_refresh_cancellation_before_attempt_skips_provider_and_publication() {
+    assert_cancelled_refresh_is_unpublished(CancelledRefreshOutcome::Before);
+}
+#[test]
+fn candidate_refresh_cancellation_after_success_does_not_publish_new_credentials() {
+    assert_cancelled_refresh_is_unpublished(CancelledRefreshOutcome::Success);
+}
+#[test]
+fn candidate_refresh_cancellation_after_failure_does_not_publish_auth_rejection() {
+    assert_cancelled_refresh_is_unpublished(CancelledRefreshOutcome::Unauthorized);
+}
+
 #[test]
 fn successful_refresh_republishes_cache_schedule_and_model_resumption() {
     register_refresh_lead_provider("worker-18bl-success", || Some(Duration::from_secs(10 * 60)));

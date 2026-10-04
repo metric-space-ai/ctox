@@ -7,7 +7,10 @@ use super::auth::{
 use super::service_executors::{
     openai_compat_info_from_auth, ExecutorFactoryError, ServiceExecutorFactory,
 };
-use crate::internal::runtime::executor::meta_executor::MetaExecutor;
+use crate::internal::runtime::executor::{
+    meta_executor::MetaExecutor, meta_executor_auth::MetaRequestAuthPreparer,
+    meta_executor_scheduled::MetaScheduledRefresher,
+};
 use std::{fmt, sync::Arc};
 
 /// Runtime owners supply both scheduled and async request-time refresh. The
@@ -20,6 +23,24 @@ pub struct MetaExecutorFactory {
     preparer: Arc<dyn AuthPreparer>,
 }
 impl MetaExecutorFactory {
+    /// Build all refresh/preparation roles from one native owner. Scheduled
+    /// refresh runs on the existing worker's blocking boundary; request-time
+    /// preparation and 401 recovery retain their asynchronous interface.
+    pub fn with_native_auth(
+        fallback: Arc<dyn ServiceExecutorFactory>,
+        execution: Arc<MetaExecutor>,
+        native: Arc<MetaRequestAuthPreparer>,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
+        Self::new(
+            fallback,
+            execution,
+            Arc::new(MetaScheduledRefresher::new(native.clone(), runtime)),
+            native.clone(),
+            native,
+        )
+    }
+
     pub fn new(
         fallback: Arc<dyn ServiceExecutorFactory>,
         execution: Arc<MetaExecutor>,
