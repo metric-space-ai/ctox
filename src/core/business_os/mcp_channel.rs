@@ -11435,8 +11435,8 @@ mod tests {
     fn mcp_app_retry_keeps_task_and_terminal_outcome() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        seed_default_mcp_admin(root)?;
         write_module(root, "mcp-retry", "MCP Retry", &["retry_items"])?;
+        seed_default_mcp_admin(root)?;
         let mut arguments = serde_json::json!({
             "module_id": "mcp-retry",
             "instruction": "Add an inventory review action without changing existing data.",
@@ -11483,8 +11483,8 @@ mod tests {
     fn mcp_app_retry_delegation_keeps_native_task_and_failure() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        seed_default_mcp_admin(root)?;
         write_module(root, "mcp-delegate", "MCP Delegate", &["delegate_items"])?;
+        seed_default_mcp_admin(root)?;
         let mut arguments = serde_json::json!({
             "module_id": "mcp-delegate",
             "action_id": "ctox.delegate_task",
@@ -11562,13 +11562,13 @@ mod tests {
     fn mcp_app_retry_preserves_native_cancellation() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        seed_default_mcp_admin(root)?;
         write_module(
             root,
             "mcp-cancel-retry",
             "MCP Cancel Retry",
             &["cancel_items"],
         )?;
+        seed_default_mcp_admin(root)?;
         let mut arguments = serde_json::json!({
             "module_id": "mcp-cancel-retry",
             "instruction": "Add a bounded inventory review action.",

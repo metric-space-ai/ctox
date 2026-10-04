@@ -552,7 +552,7 @@ mod tests {
             [],
         )?;
         assert!(binding
-            .with_live_provider(|_, _| panic!("dead owner callback"))
+            .with_live_provider::<()>(|_, _| panic!("dead owner callback"))
             .is_err());
         assert!(
             lookup_native_provider_binding(root.path(), "provider-attempt", "actual-thread")
@@ -583,7 +583,7 @@ mod tests {
         drop(conn);
         std::fs::rename(&replacement, &path)?;
         assert!(binding
-            .with_live_provider(|_, _| panic!("replacement store callback"))
+            .with_live_provider::<()>(|_, _| panic!("replacement store callback"))
             .is_err());
         drop(owner);
         let conn = Connection::open(&path)?;
@@ -594,7 +594,7 @@ mod tests {
         )?;
         assert!(finished.is_none(), "Drop wrote into the replacement store");
         assert!(binding
-            .with_live_provider(|_, _| panic!("dead owner after replacement"))
+            .with_live_provider::<()>(|_, _| panic!("dead owner after replacement"))
             .is_err());
         Ok(())
     }
@@ -615,7 +615,7 @@ mod tests {
         )?;
         assert!(owner
             .binding()
-            .with_live_provider(|_, _| panic!("tampered witness"))
+            .with_live_provider::<()>(|_, _| panic!("tampered witness"))
             .is_err());
         conn.execute(
             "UPDATE native_worker_provider_bindings SET provider_turn_id=NULL",
@@ -624,7 +624,7 @@ mod tests {
         lifetime.revoke();
         assert!(owner
             .binding()
-            .with_live_provider(|_, _| panic!("revoked worker"))
+            .with_live_provider::<()>(|_, _| panic!("revoked worker"))
             .is_err());
         assert!(owner.bind_turn("actual-thread", "actual-turn").is_err());
         Ok(())
@@ -823,7 +823,7 @@ mod tests {
     fn native_provider_cancellation_and_attempt_replacement_deny_publication() -> Result<()> {
         for mutation in [
             "route_status='cancelled'",
-            "attempt_count=attempt_count+1",
+            "attempt=attempt+1",
             "lease_expires_at='2000-01-01T00:00:00Z'",
         ] {
             let (root, execution, _) = admitted()?;
@@ -835,7 +835,7 @@ mod tests {
             )?;
             assert!(owner
                 .binding()
-                .with_live_provider(|_, _| panic!("replaced lease"))
+                .with_live_provider::<()>(|_, _| panic!("replaced lease"))
                 .is_err());
             assert!(owner.bind_turn("actual-thread", "actual-turn").is_err());
         }
