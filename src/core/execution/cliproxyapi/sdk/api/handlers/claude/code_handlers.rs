@@ -16,8 +16,8 @@ use crate::internal::client::claude::models::{
 };
 use crate::internal::runtime::executor::{
     normalize_codex_tool_integer_types_for_executor, AntigravityAccountPoolError,
-    AntigravityExecutionError, AntigravitySubscriptionAccountPool,
-    AntigravityTrackedResponsesStream,
+    AntigravityExecutionError, AntigravityGenerateTransportFailure,
+    AntigravitySubscriptionAccountPool, AntigravityTrackedResponsesStream,
 };
 
 pub type ClaudeAntigravityCapabilityResolver =
@@ -191,7 +191,6 @@ pub enum ClaudeMessagesRouteResponse {
 pub struct ClaudeMessagesAntigravityStream {
     upstream: AntigravityTrackedResponsesStream,
     terminal: bool,
-    emitted_failure: bool,
 }
 
 impl ClaudeMessagesAntigravityStream {
@@ -199,7 +198,6 @@ impl ClaudeMessagesAntigravityStream {
         Self {
             upstream,
             terminal: false,
-            emitted_failure: false,
         }
     }
 
@@ -207,22 +205,51 @@ impl ClaudeMessagesAntigravityStream {
         if self.terminal {
             return None;
         }
-        match self.upstream.next_event().await {
-            Some(Ok(chunk)) => {
-                if chunk.starts_with(b"event: message_stop\n") {
-                    self.terminal = true;
+        let next = self.upstream.next_event().await;
+        forward_claude_stream_event(next, &mut self.terminal)
+    }
+}
+
+// ref: sdk/api/handlers/claude/code_handlers.go:313-332,448-473 @ d7914afd
+// Once HTTP/SSE has started, a failure belongs in a terminal Claude error
+// event. Preserve the typed timeout classification without exposing raw
+// transport errors or attempting to replay the committed response.
+fn forward_claude_stream_event(
+    next: Option<Result<Vec<u8>, AntigravityGenerateTransportFailure>>,
+    terminal: &mut bool,
+) -> Option<Vec<u8>> {
+    if *terminal {
+        return None;
+    }
+    match next {
+        Some(Ok(chunk)) => {
+            if chunk.starts_with(b"event: message_stop\n") {
+                *terminal = true;
+            }
+            Some(chunk)
+        }
+        Some(Err(error)) => {
+            *terminal = true;
+            let (status, message) = match error {
+                AntigravityGenerateTransportFailure::Timeout => (408, "Request Timeout"),
+                AntigravityGenerateTransportFailure::Connect
+                | AntigravityGenerateTransportFailure::Protocol => {
+                    (502, "Antigravity upstream stream failed")
                 }
-                Some(chunk)
-            }
-            Some(Err(_)) if !self.emitted_failure => {
-                self.emitted_failure = true;
-                self.terminal = true;
-                Some(b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Antigravity upstream stream failed\"}}\n\n".to_vec())
-            }
-            Some(Err(_)) | None => {
-                self.terminal = true;
-                None
-            }
+            };
+            let response = ClaudeMessagesHttpResponse::error(status, message);
+            Some(
+                [
+                    b"event: error\ndata: ".as_slice(),
+                    response.body(),
+                    b"\n\n".as_slice(),
+                ]
+                .concat(),
+            )
+        }
+        None => {
+            *terminal = true;
+            None
         }
     }
 }
@@ -478,6 +505,9 @@ fn pool_error_response(error: AntigravityAccountPoolError) -> ClaudeMessagesHttp
             },
             "Antigravity upstream rejected the request",
         ),
+        AntigravityAccountPoolError::Execution(AntigravityExecutionError::Transport(
+            AntigravityGenerateTransportFailure::Timeout,
+        )) => (408, "Request Timeout"),
         AntigravityAccountPoolError::Execution(_) => (502, "Antigravity upstream transport failed"),
         AntigravityAccountPoolError::OutcomePersistence => {
             (503, "Antigravity account outcome could not be persisted")

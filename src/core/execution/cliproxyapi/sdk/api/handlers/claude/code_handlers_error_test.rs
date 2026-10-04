@@ -4,7 +4,92 @@
 
 use serde_json::Value;
 
-use super::{claude_error_response, ClaudeMessagesHttpResponse};
+use super::{
+    claude_error_response, forward_claude_stream_event, pool_error_response,
+    AntigravityAccountPoolError, AntigravityExecutionError, AntigravityGenerateTransportFailure,
+    ClaudeMessagesHttpResponse,
+};
+
+#[test]
+fn candidate_v13_claude_timeout_before_stream_returns_json_without_committing_sse() {
+    let response = pool_error_response(AntigravityAccountPoolError::Execution(
+        AntigravityExecutionError::Transport(AntigravityGenerateTransportFailure::Timeout),
+    ));
+    assert_eq!(response.status(), 408);
+    assert_eq!(response.content_type(), "application/json");
+    let error: Value = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["error"]["type"], "timeout_error");
+    assert_eq!(error["error"]["message"], "Request Timeout");
+    assert!(!response.body().starts_with(b"event:"));
+}
+
+#[test]
+fn candidate_v13_claude_committed_stream_timeout_closes_after_one_error() {
+    let mut terminal = false;
+    let started = b"event: message_start\ndata: {\"type\":\"message_start\"}\n\n".to_vec();
+    assert_eq!(
+        forward_claude_stream_event(Some(Ok(started.clone())), &mut terminal),
+        Some(started)
+    );
+    assert!(!terminal);
+    let delta = b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n".to_vec();
+    assert_eq!(
+        forward_claude_stream_event(Some(Ok(delta.clone())), &mut terminal),
+        Some(delta)
+    );
+    let failure = forward_claude_stream_event(
+        Some(Err(AntigravityGenerateTransportFailure::Timeout)),
+        &mut terminal,
+    )
+    .unwrap();
+    assert!(terminal);
+    let data = failure.strip_prefix(b"event: error\ndata: ").unwrap();
+    let data = data.strip_suffix(b"\n\n").unwrap();
+    let error: Value = serde_json::from_slice(data).unwrap();
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["error"]["type"], "timeout_error");
+    assert_eq!(error["error"]["message"], "Request Timeout");
+    assert!(forward_claude_stream_event(
+        Some(Err(AntigravityGenerateTransportFailure::Timeout)),
+        &mut terminal
+    )
+    .is_none());
+    assert!(forward_claude_stream_event(
+        Some(Ok(b"event: message_stop\ndata: {}\n\n".to_vec())),
+        &mut terminal
+    )
+    .is_none());
+}
+
+#[test]
+fn candidate_v13_claude_committed_stream_keeps_protocol_errors_and_clean_stop() {
+    for failure in [
+        AntigravityGenerateTransportFailure::Connect,
+        AntigravityGenerateTransportFailure::Protocol,
+    ] {
+        let mut terminal = false;
+        let event = forward_claude_stream_event(Some(Err(failure)), &mut terminal).unwrap();
+        assert_eq!(
+            event.as_slice(),
+            b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Antigravity upstream stream failed\"}}\n\n"
+        );
+        assert!(terminal);
+        assert!(forward_claude_stream_event(None, &mut terminal).is_none());
+    }
+    let mut terminal = false;
+    let stopped = b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_vec();
+    assert_eq!(
+        forward_claude_stream_event(Some(Ok(stopped.clone())), &mut terminal),
+        Some(stopped)
+    );
+    assert!(terminal);
+    assert!(forward_claude_stream_event(
+        Some(Err(AntigravityGenerateTransportFailure::Timeout)),
+        &mut terminal
+    )
+    .is_none());
+}
 
 // ref: sdk/api/handlers/claude/code_handlers_error_test.go:18-93 @ d7914afd
 #[test]

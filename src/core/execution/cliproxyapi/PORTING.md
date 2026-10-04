@@ -52,8 +52,14 @@
   Meta models and current headers; Codex/xAI built-in image/video records match
   the pinned Go metadata and order. Internal native/update capabilities decode
   into owned Rust snapshots, stay absent from public model JSON and participate
-  in refresh detection. Prepared cases cover buffered JSON errors;
-  the committed-SSE timeout lifecycle remains unverified.
+  in refresh detection. Prepared cases cover buffered JSON errors. The actual
+  Claude stream forwarder
+  now preserves typed transport timeouts as a terminal timeout_error event after
+  partial output, closes after one failure and keeps Connect/Protocol errors
+  redacted. A timeout before the first stream chunk instead returns HTTP408
+  with the shared Claude JSON envelope. Two forwarder-state guards and one
+  bootstrap guard are prepared; native execution and an actual HTTP/SSE timeout
+  acceptance remain unverified.
   The bounded controller materializes the Go oracle at this exact commit and
   requires five integer and two Claude-error upstream parent tests; execution, remaining
   semantic deltas and promotion remain open. Preserve both earlier reviews;
@@ -146,7 +152,8 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires at least219 actual native tests across27 groups, including nine Google
+  requires at least228 actual native tests across28 groups, including all nine
+  Claude error/lifecycle cases and nine Google
   request-preparation cases, twelve owned-thinking pipeline cases, twelve Responses
   update/usage cases, four native-reasoning diagnostic cases and41 new Meta
   tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
