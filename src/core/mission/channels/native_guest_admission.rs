@@ -7,7 +7,7 @@ use super::queue_provider_binding::{
 };
 use anyhow::{ensure, Context, Result};
 use ctox_sync::{
-    authority::{client::ExecutionAuthority, Command, Job, Ownership, Receipt, Request},
+    authority::{client::ExecutionAuthority, Command, Job, Receipt, Request},
     contracts::ExecutionSpec,
 };
 use rusqlite::{params, Transaction};

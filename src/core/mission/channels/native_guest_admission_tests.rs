@@ -4,7 +4,7 @@ mod tests {
     // fence. Quorum/controller are bounded fixtures, not two-host acceptance.
     use super::super::super::{NativeProviderCheckpointBinding, NativeProviderTurnOwner};
     use super::super::*;
-    use ctox_sync::authority::WorkerMembership;
+    use ctox_sync::authority::{Ownership, WorkerMembership};
     use std::{
         io,
         sync::{
