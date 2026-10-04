@@ -886,6 +886,22 @@ mod tests {
         .map_err(anyhow::Error::msg)?["view"]
             .is_null());
         let conn = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+        // A retained row from before the document clamp must not escape the
+        // response budget either. This corrupt fixture is never a live write.
+        let mut oversized = before.clone();
+        oversized["retained_legacy_padding"] = json!("x".repeat(256 * 1024));
+        conn.execute(
+            "UPDATE ctox_business_os__outbound_lead_generation_leads__v0 SET data=?1 WHERE id='lead-a'",
+            [serde_json::to_string(&oversized)?],
+        )?;
+        let error =
+            native_field_review_view_response(root, &token, vec![json!({"record_id": "lead-a"})])
+                .unwrap_err();
+        assert_eq!(error, "native field review view exceeds byte budget");
+        conn.execute(
+            "UPDATE ctox_business_os__outbound_lead_generation_leads__v0 SET data=?1 WHERE id='lead-a'",
+            [serde_json::to_string(&before)?],
+        )?;
         conn.execute("UPDATE ctox_business_os__outbound_lead_generation_leads__v0 SET deleted=1 WHERE id='lead-a'", [])?;
         assert!(store::load_current_native_field_review_view(root, "lead-a")?.is_none());
         store::open_store(root)?.execute(
