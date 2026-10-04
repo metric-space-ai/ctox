@@ -230,6 +230,14 @@ impl QemuProcess {
         })
     }
 
+    pub(super) fn ensure_alive(&mut self) -> Result<()> {
+        ensure!(
+            self.child.try_wait()?.is_none(),
+            "owned QEMU process has exited"
+        );
+        Ok(())
+    }
+
     pub(super) fn pid(&self) -> u32 {
         self.pid
     }

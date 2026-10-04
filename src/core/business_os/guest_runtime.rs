@@ -16,6 +16,8 @@ use std::future::Future;
 
 mod channel;
 #[cfg(target_os = "linux")]
+mod desktop;
+#[cfg(target_os = "linux")]
 mod image;
 #[cfg(target_os = "linux")]
 mod qemu;
