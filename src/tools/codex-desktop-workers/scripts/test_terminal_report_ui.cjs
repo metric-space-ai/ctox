@@ -30,7 +30,7 @@ const document={
 document.getElementById('report-data').textContent=data;
 document.getElementById('size').value='25';
 const context=vm.createContext({document,console,Set,Map,JSON,Number,String,Math,Object,Blob,URL,setTimeout});
-const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,prKey,mergeTarget,parentScore,reworkCount,current,actorCell,scoreCell,getAll:()=>all,getVisible:()=>visible,setVisible:rows=>{visible=rows;draw();},getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
+const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,chartEntries,prKey,mergeTarget,parentScore,reworkCount,current,actorCell,scoreCell,getAll:()=>all,getAssessments:()=>D.assessments,getPRs:()=>D.prs,getVisible:()=>visible,setVisible:rows=>{visible=rows;draw();},getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
 vm.runInContext(scripts[0][1]+capture,context,{timeout:10000});
 const api=context.testAPI;
 assert.equal(headers.parent.length,4);assert.equal(headers.worker.length,5);assert.equal(headers.pr.length,7);
@@ -110,24 +110,58 @@ for(const p of api.getPairs()){
  assert.ok(p.parent_score>=0&&p.parent_score<=10);
 }
 assert.ok(api.getPairs().length>0,'Actual report must exercise paired scores');
+const actualData=JSON.parse(data),allPRs=actualData.prs.map(p=>p.url).sort();
 const realPairs=api.getPairs().filter(p=>p.first_end_scope_comparable!==false&&p.worker_first!=null&&p.worker_end!=null);
-assert.equal((svg.match(/class="plotpoint"/g)||[]).length,realPairs.length*2);
-assert.equal((svg.match(/class="arrow"/g)||[]).length,realPairs.filter(p=>p.worker_first!==p.worker_end).length);
-// Changed assignments retain standalone scores without implying improvement by correction.
-const expandedPair={...realPairs[0],pr_url:'expanded-scope-fixture',worker_first:7.3,worker_end:7.8,first_end_scope_comparable:false};
-api.getPairs().push(expandedPair);
+function markers(){
+ return [...document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint" data-pr="([^"]+)" data-kind="([^"]+)" data-stage="([^"]+)" data-score="([^"]*)" data-parent="([^"]*)"/g)].map(m=>({pr:m[1],kind:m[2],stage:m[3],score:m[4],parent:m[5]}));
+}
 for(const name of ['first','end','arrows']){
  modes.find(m=>m.dataset.mode===name).onclick();
- const pointCount=(document.getElementById('scatter').innerHTML.match(/class="plotpoint"/g)||[]).length;
- const expected=name==='arrows'?realPairs.length*2:api.getPairs().filter(p=>p.parent_score!=null&&(name==='first'?p.worker_first:p.worker_end)!=null).length;
- assert.equal(pointCount,expected,'Incomparable scores remain individual points, never an improvement arrow');
+ const points=markers();
+ assert.deepEqual([...new Set(points.map(p=>p.pr))].sort(),allPRs,'Every terminal PR must be represented, independent of mode and table pagination');
+ assert.equal(document.getElementById('chart-count').textContent,allPRs.length+' / '+allPRs.length+' PRs');
+ for(const point of points){
+  if(point.kind==='missing'||point.kind==='pending'){assert.equal(point.score,'');assert.equal(point.parent,'');continue}
+  assert.ok(Number(point.score)>=0&&Number(point.score)<=10);
+ }
+ const expected=name==='arrows'?api.getPairs().reduce((n,p)=>n+Number(p.worker_first!=null)+Number(p.worker_end!=null),0):api.getPairs().filter(p=>(name==='first'?p.worker_first:p.worker_end)!=null).length;
+ assert.equal(points.filter(p=>p.kind==='pair').length,expected);
+ assert.equal((document.getElementById('scatter').innerHTML.match(/class="arrow"/g)||[]).length,name==='arrows'?realPairs.filter(p=>p.worker_first!==p.worker_end).length:0);
+ assert.ok(points.filter(p=>p.kind==='parent').length>200,'Single-parent results must not disappear because there is no source-proved Worker edge');
+ assert.equal(points.filter(p=>p.kind==='missing').length,allPRs.length-actualData.summary.unified_assessed_prs);
+ // All displayed grades must match retained rubric results, not displaced SVG coordinates.
+ for(const point of points.filter(p=>!['missing','pending'].includes(p.kind))){
+  const stages=actualData.assessments.filter(a=>a.pr_url===point.pr);
+  const score=Number(point.score);
+  assert.ok(stages.some(a=>point.stage==='parent'?a.parent_completion?.weighted_total===score:a[point.stage==='first'?'first':'corrected']?.weighted_total===score));
+ }
 }
-api.getPairs().pop();modes.find(m=>m.dataset.mode==='arrows').onclick();
+const expandedPair={...realPairs[0],pr_url:'expanded-scope-fixture',worker_first:7.3,worker_end:7.8,first_end_scope_comparable:false};
+api.getPairs().push(expandedPair);
+modes.find(m=>m.dataset.mode==='arrows').onclick();
+assert.equal(markers().filter(p=>p.pr===expandedPair.pr_url).length,2,'Assignment expansion retains both independent points');
+assert.equal((document.getElementById('scatter').innerHTML.match(/class="arrow"/g)||[]).length,realPairs.filter(p=>p.worker_first!==p.worker_end).length,'Assignment expansion must never create an improvement arrow');
+api.getPairs().pop();api.drawChart();
+const svgCoverage=markers();
+const pendingFixture={url:'unpaired-stage-fixture',repository:'fixture/repo',number:1,title:'only one Worker endpoint'};
+api.getPRs().push(pendingFixture);
+api.getAssessments().push({pr_url:pendingFixture.url,record_id:'pending-record',actor_id:'pending-worker',role:'worker',first:null,corrected:{weighted_total:7,model:'m'}});
+modes.find(m=>m.dataset.mode==='first').onclick();
+assert.ok(markers().some(p=>p.pr===pendingFixture.url&&p.kind==='pending'&&p.score===''),'Absent selected endpoint stays visible without an invented grade');
+modes.find(m=>m.dataset.mode==='end').onclick();
+assert.ok(markers().some(p=>p.pr===pendingFixture.url&&p.kind==='worker'&&p.score==='7'));
+api.getAssessments().pop();api.getPRs().pop();modes.find(m=>m.dataset.mode==='arrows').onclick();
+for(const m of document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint" data-pr="[^"]+" data-kind="parent"[^>]* data-parent="([^"]+)" cx="([^"]+)"/g))assert.ok(Math.abs(Number(m[2])-(95+Number(m[1])*78))<1e-8,'Parent marginal X remains the exact score');
+
+for(const lane of ['pair','parent','worker']){
+ const coords=[...document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint" data-pr="[^"]+" data-kind="([^"]+)"[^>]* cx="([^"]+)" cy="([^"]+)"/g)].filter(m=>m[1]===lane).map(m=>[Number(m[2]),Number(m[3])]);
+ for(let i=0;i<coords.length;i++)for(let j=i+1;j<coords.length;j++)assert.ok(Math.hypot(coords[i][0]-coords[j][0],coords[i][1]-coords[j][1])>=(lane==='parent'?3.99:6.99),'Identical scores must not hide each other');
+}
 const selector=document.getElementById('pair'),color=document.getElementById('pair-color');
 const options=[...selector.innerHTML.matchAll(/<option value="[^"]*">([^<]+)<\/option>/g)].map(m=>m[1]);
 assert.equal(new Set(options).size,options.length,'Identical visible model/harness pairs must share one classification');
 assert.equal(options.length,api.getStyles().size+1);
-assert.equal(options[0],'Alle Kombinationen');
+assert.equal(options[0],'Alle PRs');
 assert.equal(color.disabled,true);
 assert.ok(!html.includes('id="legend"'));
 assert.ok(options.slice(1).every(label=>(label.match(/\(@[^)]+\)/g)||[]).length===2));
@@ -138,9 +172,9 @@ if(nativeClaude.length){
 }
 if(options.length>1){
  selector.value=realPairs[0].combination;selector.onchange();
- assert.equal(color.disabled,false);assert.ok(document.getElementById('scatter').innerHTML.includes('opacity="0.16"'));
+ assert.equal(color.disabled,false);assert.deepEqual([...new Set(markers().map(p=>p.pr))].sort(),[...new Set(api.getPairs().filter(p=>p.combination===selector.value).map(p=>p.pr_url))].sort());
  color.value='#123456';color.oninput();assert.ok(document.getElementById('scatter').innerHTML.includes('#123456'));
- selector.value='';selector.onchange();assert.equal(color.disabled,true);assert.ok(!document.getElementById('scatter').innerHTML.includes('opacity="0.16"'));
+ selector.value='';selector.onchange();assert.equal(color.disabled,true);assert.deepEqual([...new Set(markers().map(p=>p.pr))].sort(),allPRs);
 }
 assert.ok(!document.getElementById('parentboard').innerHTML.includes('Codex Desktop'));
 assert.ok(!document.getElementById('workerboard').innerHTML.includes('Codex Desktop'));

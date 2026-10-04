@@ -56,11 +56,17 @@ used only when the review explicitly attests complete PR correction history.
 
 Scatter X is parent completion, Y is worker. Switch first/final points/arrows.
 The global filter bar is removed. One compact combination dropdown and color field
-replace a repeated legend. All combinations displays all points equally;
-selecting a combination highlights its points and fades the others.
+replace a repeated legend. All PRs displays every terminal PR. Selecting a combination filters to that
+proved pair; clearing it restores the complete dataset.
 Absent first/final model endpoints normalize to the same visible combination.
-The JSON contains computed pairs/record IDs/stage models. Require a proved
-parent-child edge on the same PR; never fabricate missing points/arrows.
+The JSON contains computed pairs/record IDs/stage models and all PR assessments.
+Require a proved parent-child edge for two-axis points/arrows. Scores without a
+proved edge remain visible in separate Parent/Worker marginal lanes outside the
+other actor scale; PRs with no numeric result get a separate unscored lane.
+No invented Worker values or zero placeholders. The chart PR count always
+reports unique represented PRs, independent of pagination and score mode.
+Deterministic collision placement and exact-value leader lines/tooltips preserve
+coincident results instead of drawing them directly over each other.
 
 terminal_provenance.py reads candidates through Greppy/read-only Codex metadata.
 A PR/head mention or registry assignment is not authorship proof. Native actors

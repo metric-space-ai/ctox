@@ -3,14 +3,14 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PR-Auswertung</title>
 <style>
 :root{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#242a31;background:#f6f6f3;--border:#dfe2dc;--muted:#737b77;--accent:#27614b}
-*{box-sizing:border-box}body{margin:0}main{max-width:1580px;margin:auto;padding:28px 32px}h1{font-size:28px;letter-spacing:-.7px;margin:0}h2{font-size:17px;margin:0;font-weight:650}header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:22px}button,select,input{font:inherit;color:inherit;background:white;border:1px solid #cbd0c8;border-radius:5px;padding:7px 10px}button{cursor:pointer}button:hover{background:#ecf2eb}button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}label{font-size:12px;color:var(--muted);display:grid;gap:4px}.filters{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:22px}.filters label{flex:1;min-width:140px}.filters label.search{flex:2}.leaderboards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}.box{background:white;border:1px solid var(--border);border-radius:9px;overflow:hidden}.boxhead{padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center;gap:12px}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;font-size:12px}th{font-weight:550;text-align:left;color:var(--muted);border-bottom:1px solid var(--border);padding:10px 14px;white-space:nowrap}th button{border:0;border-radius:3px;background:transparent;color:inherit;padding:2px 0;font-weight:inherit;text-align:left}th button:hover{color:var(--accent);background:transparent}.sortmark{display:inline-block;min-width:12px;margin-left:4px;color:var(--accent)}td{padding:12px 14px;border-bottom:1px solid #eceee9;vertical-align:middle}tbody tr:last-child td{border-bottom:0}.number{font-variant-numeric:tabular-nums;white-space:nowrap}.scorebar{display:flex;align-items:center;gap:8px;min-width:108px;height:24px}.scorebar b{font-weight:600;min-width:26px;text-align:right}.track{width:72px;height:7px;background:#edf1ed;border-radius:9px;overflow:hidden}.fill{display:block;height:100%;background:#348269;border-radius:9px}.scorebar.low .fill{background:#ba7653}.scorebar.mid .fill{background:#a29c52}.empty{color:var(--muted);padding:22px}.pager{display:flex;gap:10px;align-items:center;font-size:12px;margin:16px 0 22px}.pager button:disabled{opacity:.35;cursor:default}.prtitle{max-width:360px;min-width:230px}.actors{min-width:200px;max-width:285px}.actor{display:flex;gap:8px}.actor+.actor{margin-top:4px}.actor span{color:var(--muted);width:14px;flex-shrink:0}.tag{display:inline-block;font-size:10px;font-weight:600;padding:2px 5px;border-radius:3px;background:#f0f1ec;color:#677169}.merged{background:#e9f1eb;color:#37644a}.closed{background:#f5ece7;color:#905b42}.advanced{display:none;gap:12px;flex-wrap:wrap;margin:-10px 0 20px}.advanced.open{display:flex}.advanced label{flex:1;min-width:130px}.chartbox{max-width:820px;margin:0 auto 22px}.charthead{padding-bottom:12px;flex-wrap:wrap}.modes{display:flex;gap:5px}.modes button{font-size:12px;padding:5px 10px}.modes button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:white}.chartlayout{padding:0 18px 16px}.chartlayout svg{display:block;width:100%;height:auto}.pair-controls{display:flex;gap:8px;align-items:center}.pair-controls select{font-size:12px;max-width:330px}.pair-controls input{width:28px;height:28px;padding:0;border:0;cursor:pointer}.plotlabel{font-size:12px;fill:#56635c}.tick{font-size:11px;fill:#758078}.grid{stroke:#edf0eb}.axis{stroke:#aab3ab}.plotpoint:hover{stroke:#242a31;stroke-width:2}.arrow{fill:none;stroke-width:2;opacity:.75}.unknown{color:var(--muted)}
+*{box-sizing:border-box}body{margin:0}main{max-width:1580px;margin:auto;padding:28px 32px}h1{font-size:28px;letter-spacing:-.7px;margin:0}h2{font-size:17px;margin:0;font-weight:650}header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:22px}button,select,input{font:inherit;color:inherit;background:white;border:1px solid #cbd0c8;border-radius:5px;padding:7px 10px}button{cursor:pointer}button:hover{background:#ecf2eb}button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}label{font-size:12px;color:var(--muted);display:grid;gap:4px}.filters{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:22px}.filters label{flex:1;min-width:140px}.filters label.search{flex:2}.leaderboards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}.box{background:white;border:1px solid var(--border);border-radius:9px;overflow:hidden}.boxhead{padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center;gap:12px}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;font-size:12px}th{font-weight:550;text-align:left;color:var(--muted);border-bottom:1px solid var(--border);padding:10px 14px;white-space:nowrap}th button{border:0;border-radius:3px;background:transparent;color:inherit;padding:2px 0;font-weight:inherit;text-align:left}th button:hover{color:var(--accent);background:transparent}.sortmark{display:inline-block;min-width:12px;margin-left:4px;color:var(--accent)}td{padding:12px 14px;border-bottom:1px solid #eceee9;vertical-align:middle}tbody tr:last-child td{border-bottom:0}.number{font-variant-numeric:tabular-nums;white-space:nowrap}.scorebar{display:flex;align-items:center;gap:8px;min-width:108px;height:24px}.scorebar b{font-weight:600;min-width:26px;text-align:right}.track{width:72px;height:7px;background:#edf1ed;border-radius:9px;overflow:hidden}.fill{display:block;height:100%;background:#348269;border-radius:9px}.scorebar.low .fill{background:#ba7653}.scorebar.mid .fill{background:#a29c52}.empty{color:var(--muted);padding:22px}.pager{display:flex;gap:10px;align-items:center;font-size:12px;margin:16px 0 22px}.pager button:disabled{opacity:.35;cursor:default}.prtitle{max-width:360px;min-width:230px}.actors{min-width:200px;max-width:285px}.actor{display:flex;gap:8px}.actor+.actor{margin-top:4px}.actor span{color:var(--muted);width:14px;flex-shrink:0}.tag{display:inline-block;font-size:10px;font-weight:600;padding:2px 5px;border-radius:3px;background:#f0f1ec;color:#677169}.merged{background:#e9f1eb;color:#37644a}.closed{background:#f5ece7;color:#905b42}.advanced{display:none;gap:12px;flex-wrap:wrap;margin:-10px 0 20px}.advanced.open{display:flex}.advanced label{flex:1;min-width:130px}.chartbox{max-width:1050px;margin:0 auto 22px}.charthead{padding-bottom:12px;flex-wrap:wrap}.modes{display:flex;gap:5px}.modes button{font-size:12px;padding:5px 10px}.modes button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:white}.chartlayout{padding:0 18px 16px}.chartlayout svg{display:block;width:100%;height:auto}.pair-controls{display:flex;gap:8px;align-items:center}.pair-controls select{font-size:12px;max-width:330px}.pair-controls input{width:28px;height:28px;padding:0;border:0;cursor:pointer}.plotlabel{font-size:12px;fill:#56635c}.tick{font-size:11px;fill:#758078}.grid{stroke:#edf0eb}.axis{stroke:#aab3ab}.plotpoint:hover{stroke:#242a31;stroke-width:2}.arrow{fill:none;stroke-width:1.5;opacity:.75;pointer-events:none}.point-anchor{stroke:#adb4ae;stroke-width:.7;fill:none;pointer-events:none}.chart-count{font-size:12px;color:var(--muted)}.unknown{color:var(--muted)}
 @media(max-width:1000px){main{padding:22px 16px}.leaderboards{grid-template-columns:1fr}.pair-controls select{max-width:270px}.filters label{min-width:120px}.prtitle{min-width:180px}}@media print{button,.filters,.advanced,.pager,.pair-controls{display:none}.scroll{overflow:visible}main{padding:0}.leaderboards{grid-template-columns:1fr}}
 </style></head>
 <body><main>
 <header><h1>PR-Auswertung</h1><button id="export">JSON herunterladen</button></header>
 <div class="leaderboards"><section class="box"><div class="boxhead"><h2>Parents</h2></div><div class="scroll"><table id="parenttable"><thead><tr><th data-sort="label">Modell / Harness</th><th data-sort="prs">PRs</th><th data-sort="score">Score</th><th data-sort="rework">Ø Nacharbeiten</th></tr></thead><tbody id="parentboard"></tbody></table></div></section>
 <section class="box"><div class="boxhead"><h2>Worker</h2></div><div class="scroll"><table id="workertable"><thead><tr><th data-sort="label">Modell / Harness</th><th data-sort="prs">PRs</th><th data-sort="first">Erstscore</th><th data-sort="end">Endscore</th><th data-sort="rework">Ø Nacharbeiten</th></tr></thead><tbody id="workerboard"></tbody></table></div></section></div>
-<section class="box chartbox"><div class="boxhead charthead"><h2>Parent × Worker</h2><div class="modes"><button data-mode="first" aria-pressed="false">Erstscore</button><button data-mode="end" aria-pressed="false">Endscore</button><button data-mode="arrows" aria-pressed="true">Erst → End</button></div><div class="pair-controls"><select id="pair" aria-label="Parent / Worker"></select><input id="pair-color" type="color" aria-label="Farbe der Kombination"></div></div><div class="chartlayout"><svg id="scatter" viewBox="0 0 620 460" role="img" aria-label="Parent-Score auf der X-Achse, Worker-Score auf der Y-Achse"></svg></div></section>
+<section class="box chartbox"><div class="boxhead charthead"><h2>Parent × Worker <span id="chart-count" class="chart-count"></span></h2><div class="modes"><button data-mode="first" aria-pressed="false">Erstscore</button><button data-mode="end" aria-pressed="false">Endscore</button><button data-mode="arrows" aria-pressed="true">Erst → End</button></div><div class="pair-controls"><select id="pair" aria-label="Kombination filtern"></select><input id="pair-color" type="color" aria-label="Farbe der Kombination"></div></div><div class="chartlayout"><svg id="scatter" viewBox="0 0 930 996" role="img" aria-label="Parent-Score auf der X-Achse, Worker-Score auf der Y-Achse"></svg></div></section>
 <div class="box scroll"><table id="prtable"><thead><tr><th data-sort="pr">PR</th><th data-sort="status">Status</th><th data-sort="actors">Parent / Worker</th><th data-sort="parent">Parent Score</th><th data-sort="first">Worker Erst</th><th data-sort="end">Worker End</th><th data-sort="rework">Nacharbeiten</th></tr></thead><tbody id="prlist"></tbody></table></div>
 <div class="pager"><button id="prev">← Zurück</button><span id="page"></span><button id="next">Weiter →</button><label><select id="size"><option value="25">25 PRs pro Seite</option><option value="50">50 PRs pro Seite</option><option value="100">100 PRs pro Seite</option></select></label></div>
 </main>
@@ -123,36 +123,75 @@ function draw(){
  $('prev').disabled=page===0;$('next').disabled=page+1>=pages;
 }
 const palette=['#287c66','#d3843f','#576fb2','#ba5983','#8b7b3c','#5399a3','#8a60a1','#a5574f'],pairStyles=new Map();
+function chartEntries(){
+ const entries=[...(D.parent_worker_pairs||[]).map(p=>({...p,kind:'pair'}))];
+ const parentIDs=new Set(entries.map(p=>p.parent_record_id)),workerIDs=new Set(entries.map(p=>p.worker_record_id));
+ const byURL=new Map(D.prs.map(p=>[p.url,p]));
+ for(const a of D.assessments){
+  const pr=byURL.get(a.pr_url);if(!pr)continue;
+  const base={pr_url:pr.url,repository:pr.repository,number:pr.number,title:pr.title};
+  if(a.role==='parent'&&parentScore(a)!=null&&!parentIDs.has(a.record_id))
+   entries.push({...base,kind:'parent',parent_score:parentScore(a),parent_model:stageModel(a,'parent_completion'),parent_harness:harnessLabel(a.harness),parent_record_id:a.record_id});
+  if(a.role==='worker'&&!workerIDs.has(a.record_id)&&['first','corrected'].some(s=>a[s]?.weighted_total!=null))
+   entries.push({...base,kind:'worker',worker_first:a.first?.weighted_total??null,worker_end:a.corrected?.weighted_total??null,worker_first_model:stageModel(a,'first'),worker_end_model:stageModel(a,'corrected'),worker_record_id:a.record_id,worker_harness:harnessLabel(a.harness),first_end_scope_comparable:a.first_end_scope_comparable!==false});
+ }
+ const represented=new Set(entries.map(p=>p.pr_url));
+ for(const p of D.prs)if(!represented.has(p.url))entries.push({kind:'missing',pr_url:p.url,repository:p.repository,number:p.number,title:p.title});
+ return entries.sort((a,b)=>a.pr_url.localeCompare(b.pr_url)||String(a.worker_record_id||a.parent_record_id||'').localeCompare(String(b.worker_record_id||b.parent_record_id||'')));
+}
 function drawChart(){
- const pairs=D.parent_worker_pairs||[];
- const combinations=[...new Map(pairs.map(p=>[p.combination,p])).values()].sort((a,b)=>a.combination.localeCompare(b.combination));
+ const pairs=D.parent_worker_pairs||[],combinations=[...new Map(pairs.map(p=>[p.combination,p])).values()].sort((a,b)=>a.combination.localeCompare(b.combination));
  for(const p of combinations)if(!pairStyles.has(p.combination))pairStyles.set(p.combination,{color:palette[pairStyles.size%palette.length]});
  const selection=$('pair').value;
- $('pair').innerHTML='<option value="">Alle Kombinationen</option>'+combinations.map(p=>{
- const worker=[p.worker_first_model,p.worker_end_model].filter((v,i,a)=>v&&a.indexOf(v)===i).join(' → ');
- const label=p.parent_model+' (@'+p.parent_harness+') × '+worker+' (@'+p.worker_harness+')';
- return '<option value="'+E(p.combination)+'">'+E(label)+'</option>';
+ $('pair').innerHTML='<option value="">Alle PRs</option>'+combinations.map(p=>{
+  const worker=[p.worker_first_model,p.worker_end_model].filter((v,i,a)=>v&&a.indexOf(v)===i).join(' → ');
+  return '<option value="'+E(p.combination)+'">'+E(p.parent_model+' (@'+p.parent_harness+') × '+worker+' (@'+p.worker_harness+')')+'</option>';
  }).join('');
  $('pair').value=combinations.some(p=>p.combination===selection)?selection:'';
- $('pair').disabled=combinations.length===0;$('pair-color').disabled=!$('pair').value;
+ $('pair').disabled=!combinations.length;$('pair-color').disabled=!$('pair').value;
  $('pair-color').value=$('pair').value?pairStyles.get($('pair').value).color:'#999999';
- const X=v=>58+v*52,Y=v=>400-v*36,parts=[];
- for(let n=0;n<=10;n++)parts.push('<line class="grid" x1="'+X(n)+'" y1="40" x2="'+X(n)+'" y2="400"/><line class="grid" x1="58" y1="'+Y(n)+'" x2="578" y2="'+Y(n)+'"/><text class="tick" x="'+X(n)+'" y="420" text-anchor="middle">'+n+'</text><text class="tick" x="45" y="'+(Y(n)+4)+'" text-anchor="end">'+n+'</text>');
- parts.push('<path class="axis" fill="none" d="M58 40V400H578"/><text class="plotlabel" x="318" y="447" text-anchor="middle">Parent Score</text><text class="plotlabel" transform="translate(17 220) rotate(-90)" text-anchor="middle">Worker Score</text>');
- const shown=pairs.filter(p=>p.parent_score!=null);
+ const X=v=>95+v*78,Y=v=>530-v*48,parts=[],placed=new Map();
+ const position=(x,y,lane)=>{
+  if(!placed.has(lane))placed.set(lane,[]);
+  const occupied=placed.get(lane),candidates=[];
+  if(lane==='parent')for(let dy=-128;dy<=128;dy+=4)candidates.push([0,dy]);
+  else for(let n=0;n<300;n++){const radius=2.6*Math.sqrt(n),angle=n*2.39996323;candidates.push([radius*Math.cos(angle),radius*Math.sin(angle)])}
+  candidates.sort((a,b)=>a[0]*a[0]+a[1]*a[1]-b[0]*b[0]-b[1]*b[1]);
+  const offset=candidates.find(([dx,dy])=>occupied.every(p=>Math.hypot(p[0]-x-dx,p[1]-y-dy) >=(lane==='parent'?4:7)))||[0,0];
+  const point=[x+offset[0],y+offset[1]];occupied.push(point);return point;
+ };
+ for(let n=0;n<=10;n++)parts.push('<line class="grid" x1="'+X(n)+'" y1="50" x2="'+X(n)+'" y2="530"/><line class="grid" x1="95" y1="'+Y(n)+'" x2="875" y2="'+Y(n)+'"/><text class="tick" x="'+X(n)+'" y="550" text-anchor="middle">'+n+'</text><text class="tick" x="82" y="'+(Y(n)+4)+'" text-anchor="end">'+n+'</text>');
+ parts.push('<path class="axis" fill="none" d="M95 50V530H875"/><text class="plotlabel" x="485" y="576" text-anchor="middle">Parent Score</text><text class="plotlabel" transform="translate(18 290) rotate(-90)" text-anchor="middle">Worker Score</text>');
+ const shown=chartEntries().filter(p=>!$('pair').value||p.combination===$('pair').value);
+ $('chart-count').textContent=new Set(shown.map(p=>p.pr_url)).size+' / '+D.prs.length+' PRs';
+ const marker=(p,x,y,color,hollow,lane,stage,score)=>{
+  const [cx,cy]=position(x,y,lane),title=E(p.repository+' #'+p.number+' · '+(p.title||'')+' · '+(stage==='parent'?'Parent '+F(score):stage==='missing'?'Kein belegter Score': 'Parent '+F(p.parent_score)+' · Worker '+(stage==='first'?'Erst ':'End ')+F(score)));
+  if(lane==='pair'&&(Math.abs(cx-x)>.1||Math.abs(cy-y)>.1))parts.push('<path class="point-anchor" d="M'+x+' '+y+'L'+cx+' '+cy+'"/>');
+  parts.push('<a href="'+E(p.pr_url)+'" target="_blank" rel="noopener"><circle class="plotpoint" data-pr="'+E(p.pr_url)+'" data-kind="'+lane+'" data-stage="'+stage+'" data-score="'+(score??'')+'" data-parent="'+(p.parent_score??'')+'" cx="'+cx+'" cy="'+cy+'" r="'+(lane==='parent'?1.8:3)+'" fill="'+(hollow?'white':color)+'" stroke="'+color+'"><title>'+title+'</title></circle></a>');
+  return [cx,cy];
+ };
+ let parentOnly=0,workerOnly=0,missing=0,pending=0;
  for(const p of shown){
- parts.push('<g opacity="'+(!$('pair').value||p.combination===$('pair').value?'1':'0.16')+'">');
- const c=pairStyles.get(p.combination).color,x=X(p.parent_score),title=E(p.repository+' #'+p.number+' · P '+F(p.parent_score)+' · W '+F(p.worker_first)+' → '+F(p.worker_end));
- const point=(v,hollow)=>'<circle class="plotpoint" cx="'+x+'" cy="'+Y(v)+'" r="4.5" fill="'+(hollow?'white':c)+'" stroke="'+c+'"><title>'+title+'</title></circle>';
- if(mode==='first'&&p.worker_first!=null)parts.push(point(p.worker_first,false));
- if(mode==='end'&&p.worker_end!=null)parts.push(point(p.worker_end,false));
- if(mode==='arrows'&&p.first_end_scope_comparable!==false&&p.worker_first!=null&&p.worker_end!=null){
- const y0=Y(p.worker_first),y1=Y(p.worker_end);
- if(y0!==y1){const direction=Math.sign(y1-y0);parts.push('<path class="arrow" stroke="'+c+'" d="M'+x+' '+y0+'V'+y1+'M'+(x-4)+' '+(y1-direction*7)+'L'+x+' '+y1+'L'+(x+4)+' '+(y1-direction*7)+'"><title>'+title+'</title></path>')}
- parts.push(point(p.worker_first,true),point(p.worker_end,false));
+  const color=p.kind==='pair'?pairStyles.get(p.combination).color:p.kind==='parent'?'#27614b':p.kind==='worker'?'#576fb2':'#9ca39d';
+  let stages=mode==='first'?['first']:mode==='end'?['end']:['first','end'];
+  stages=stages.filter(s=>p['worker_'+s]!=null);
+  if(p.kind==='missing'){marker(p,105+(missing%78)*10,933+Math.floor(missing/78)*10,color,false,'missing','missing',null);missing++;continue}
+  if(p.kind==='parent'||(p.kind==='pair'&&!stages.length)){marker(p,X(p.parent_score),755,color,false,'parent','parent',p.parent_score);parentOnly++;continue}
+  if(p.kind==='worker'){
+   if(!stages.length){marker(p,105+(pending%78)*10,972+Math.floor(pending/78)*10,color,true,'pending','missing-'+mode,null);pending++;}
+   for(const s of stages)marker(p,48,Y(p['worker_'+s]),color,mode==='arrows'&&s==='first','worker',s,p['worker_'+s]);
+   workerOnly++;continue;
+  }
+  const coords=stages.map(s=>marker(p,X(p.parent_score),Y(p['worker_'+s]),color,mode==='arrows'&&s==='first','pair',s,p['worker_'+s]));
+  if(mode==='arrows'&&p.first_end_scope_comparable!==false&&stages.length===2&&p.worker_first!==p.worker_end){
+   const [a,b]=coords,dx=b[0]-a[0],dy=b[1]-a[1],len=Math.hypot(dx,dy),ux=dx/len,uy=dy/len;
+   parts.push('<path class="arrow" stroke="'+color+'" d="M'+a[0]+' '+a[1]+'L'+b[0]+' '+b[1]+'M'+(b[0]-ux*8-uy*4)+' '+(b[1]-uy*8+ux*4)+'L'+b[0]+' '+b[1]+'L'+(b[0]-ux*8+uy*4)+' '+(b[1]-uy*8-ux*4)+'"/>');
+  }
  }
- parts.push('</g>');
- }
+ if(parentOnly)parts.push('<line class="grid" x1="95" y1="592" x2="875" y2="592"/><text class="plotlabel" x="95" y="610">Nur Parent · '+parentOnly+'</text>');
+ if(workerOnly)parts.push('<text class="tick" transform="translate(35 290) rotate(-90)" text-anchor="middle">Nur Worker</text>');
+ if(missing)parts.push('<line class="grid" x1="95" y1="900" x2="875" y2="900"/><text class="plotlabel" x="95" y="920">Ohne belegten Score · '+missing+'</text>');
+ if(pending)parts.push('<text class="tick" x="95" y="958">'+(mode==='first'?'Erstscore':'Endscore')+' fehlt · '+pending+'</text>');
  $('scatter').innerHTML=parts.join('');
 }
 for(const name of ['parent','worker','pr'])document.querySelectorAll('#'+name+'table th[data-sort]').forEach(th=>{
