@@ -2880,23 +2880,19 @@ pub fn stop_background_for_release_switch_guarded(root: &Path) -> Result<String>
                 launchd_disable()?;
             }
         }
-        let backend_error = supervisor::shutdown_persistent_backends(root).err();
         let mut pids = matching_service_processes(root, None)?;
         pids.extend(matching_business_os_surface_processes(root)?);
+        pids.extend(supervisor::persistent_backend_release_stop_pids(root)?);
         pids.sort_unstable();
         pids.dedup();
         release_shutdown::stop_processes(&pids, deadline)?;
+        supervisor::finish_persistent_backend_release_stop(root)?;
         anyhow::ensure!(
             wait_for_service_shutdown(root, deadline.saturating_duration_since(Instant::now()))?,
             "refusing release switch: shutdown residue: {}",
             service_shutdown_residue(root)?.join("; ")
         );
-        if let Some(error) = backend_error {
-            anyhow::ensure!(
-                supervisor::persistent_backends_idle(root)?,
-                "refusing release switch: backend shutdown residue: {error}"
-            );
-        }
+
         if launchd
             .as_ref()
             .is_some_and(|unit| unit.active || unit.pid.is_some())
