@@ -891,6 +891,10 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
 }
 
 #[cfg(test)]
+#[path = "in_process_interrupt_tests.rs"]
+mod interrupt_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use ctox_app_server_protocol::ClientInfo;

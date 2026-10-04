@@ -17,11 +17,6 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-type PendingInterruptQueue = Vec<(
-    ConnectionRequestId,
-    crate::codex_message_processor::ApiVersion,
-)>;
-
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
     pub(crate) rollout_path: PathBuf,
@@ -51,7 +46,6 @@ pub(crate) struct TurnSummary {
 
 #[derive(Default)]
 pub(crate) struct ThreadState {
-    pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,

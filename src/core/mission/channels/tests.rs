@@ -28,6 +28,8 @@ fn queue_turn_fence_rejects_replaced_store_even_with_replayed_lease() -> Result<
         root: root.path().to_owned(),
         message_keys: vec!["queue:system::target".into()],
         worker_id: "worker-target".into(),
+        #[cfg(unix)]
+        execution: None,
     };
     let reader = fence.open_reader()?;
     let retained_reader =
@@ -75,6 +77,8 @@ fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
         root: root.path().to_owned(),
         message_keys: vec![key.to_owned()],
         worker_id: worker.into(),
+        #[cfg(unix)]
+        execution: None,
     };
     for (task, worker) in [
         (&target, "worker-target"),
@@ -170,6 +174,8 @@ fn queue_turn_fence_cannot_interrupt_a_released_new_worker() -> Result<()> {
         root: root.path().to_owned(),
         message_keys: keys.clone(),
         worker_id: "old-worker".into(),
+        #[cfg(unix)]
+        execution: None,
     };
     let reader = old.open_reader()?;
     assert!(old.still_owned(&reader)?);
@@ -197,6 +203,8 @@ fn queue_turn_fence_fails_closed_without_creating_a_missing_store() -> Result<()
         root: root.path().to_owned(),
         message_keys: vec!["queue:system::missing".into()],
         worker_id: "worker-target".into(),
+        #[cfg(unix)]
+        execution: None,
     };
     let db_path = resolve_db_path(root.path(), None);
     assert!(!db_path.exists());
@@ -6125,6 +6133,97 @@ fn business_command_claim(command_id: &str, payload_hash: &str) -> BusinessComma
         intent: json!({"command_id": command_id, "payload": {"value": 1}}),
         created_at_ms: 1_700_000_000_000,
     }
+}
+
+#[test]
+fn recovery_feedback_requires_the_exact_live_worker_lease() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let task = create_queue_task(
+        root.path(),
+        QueueTaskCreateRequest {
+            title: "Recovery ownership".into(),
+            prompt: "Original task".into(),
+            thread_key: "recovery/ownership".into(),
+            workspace_root: None,
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        },
+    )?;
+    lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+    record_queue_lease_worker(
+        root.path(),
+        std::slice::from_ref(&task.message_key),
+        "ctox-service",
+        "old-worker",
+    )?;
+    let request = |prompt: &str| QueueTaskUpdateRequest {
+        message_key: task.message_key.clone(),
+        prompt: Some(prompt.into()),
+        ..Default::default()
+    };
+    update_queue_recovery_feedback(root.path(), request("Owned feedback"), "old-worker")?;
+    let conn = open_channel_db(&crate::paths::core_db(root.path()))?;
+    for (status, owner, worker, expiry) in [
+        (
+            "leased",
+            "ctox-service",
+            "replacement-worker",
+            "9999-01-01T00:00:00Z",
+        ),
+        (
+            "cancelled",
+            "ctox-service",
+            "old-worker",
+            "9999-01-01T00:00:00Z",
+        ),
+        (
+            "pending",
+            "ctox-service",
+            "old-worker",
+            "9999-01-01T00:00:00Z",
+        ),
+        (
+            "leased",
+            "another-owner",
+            "old-worker",
+            "9999-01-01T00:00:00Z",
+        ),
+        (
+            "leased",
+            "ctox-service",
+            "old-worker",
+            "2000-01-01T00:00:00Z",
+        ),
+    ] {
+        conn.execute("UPDATE communication_routing_state SET route_status=?2, lease_owner=?3, lease_worker_id=?4, lease_expires_at=?5 WHERE message_key=?1", params![task.message_key, status, owner, worker, expiry])?;
+        assert!(
+            update_queue_recovery_feedback(root.path(), request("Stale feedback"), "old-worker")
+                .is_err(),
+            "{status}/{owner}/{worker}/{expiry}"
+        );
+        assert_eq!(
+            load_queue_task(root.path(), &task.message_key)?
+                .unwrap()
+                .prompt,
+            "Owned feedback"
+        );
+    }
+    conn.execute("UPDATE communication_routing_state SET route_status='leased', lease_owner='ctox-service', lease_worker_id='replacement-worker', lease_expires_at='9999-01-01T00:00:00Z' WHERE message_key=?1", [&task.message_key])?;
+    update_queue_recovery_feedback(
+        root.path(),
+        request("Replacement feedback"),
+        "replacement-worker",
+    )?;
+    assert_eq!(
+        load_queue_task(root.path(), &task.message_key)?
+            .unwrap()
+            .prompt,
+        "Replacement feedback"
+    );
+    assert!(update_queue_recovery_feedback(root.path(), request("Missing identity"), "").is_err());
+    Ok(())
 }
 
 #[test]

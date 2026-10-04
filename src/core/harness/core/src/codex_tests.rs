@@ -96,6 +96,9 @@ use std::time::Duration as StdDuration;
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
 
+#[path = "codex_interrupt_tests.rs"]
+mod interrupt_tests;
+
 use ctox_protocol::models::function_call_output_content_items_to_text;
 
 fn expect_text_tool_output(output: &FunctionToolOutput) -> String {
@@ -2561,6 +2564,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        interrupt_receipts: std::sync::Mutex::new(HashMap::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3355,6 +3359,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        interrupt_receipts: std::sync::Mutex::new(HashMap::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,

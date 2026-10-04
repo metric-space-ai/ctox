@@ -70,6 +70,10 @@ impl CodexThread {
         self.codex.submit(op).await
     }
 
+    pub async fn interrupt_turn(&self, turn_id: String) -> CodexResult<bool> {
+        self.codex.interrupt_turn(turn_id).await
+    }
+
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
     }
@@ -153,6 +157,10 @@ impl CodexThread {
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
         self.codex.state_db()
+    }
+
+    pub async fn rollout_materialization_pending(&self) -> bool {
+        self.codex.rollout_materialization_pending().await
     }
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
