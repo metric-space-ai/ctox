@@ -292,6 +292,11 @@ impl NativeProviderTurnOwner {
 }
 
 impl NativeProviderBinding {
+    /// Actual worker store root, not a value reconstructed from witness JSON.
+    pub(crate) fn runtime_root(&self) -> &Path {
+        self.record.execution.root()
+    }
+
     pub(crate) async fn admit_before_start(
         &self,
         admission: &dyn NativeProviderAdmission,

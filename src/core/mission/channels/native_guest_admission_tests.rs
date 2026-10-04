@@ -21,6 +21,7 @@ mod tests {
         fn with_current_destination(
             &self,
             _tx: &Transaction<'_>,
+            _runtime_root: &std::path::Path,
             _facts: &NativeProviderFacts,
             expected: Option<&NativeGuestAdmissionDestination>,
             publish: &mut dyn FnMut(&NativeGuestAdmissionDestination) -> Result<()>,

@@ -215,6 +215,65 @@ fn native_registry_enrollment_uses_canonical_owner_project_profile_and_chat() {
         .bound_execution(&session("owner"), "unregistered")
         .is_err());
 }
+
+#[test]
+fn native_registry_denies_foreign_worker_root_before_publication() {
+    let (_directory, registry, assignment) = fixture();
+    let foreign = tempfile::tempdir().unwrap();
+    let resolver = NativeGuestAdmissionResolver {
+        registry: Arc::clone(&registry),
+        guest_id: assignment.destination.guest_id.clone(),
+    };
+    let mut worker = worker_store();
+    let tx = worker
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    let mut published = false;
+    assert!(resolver
+        .with_current_destination(&tx, foreign.path(), &facts(), None, &mut |_| {
+            published = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!published);
+    resolver
+        .with_current_destination(&tx, &registry.runtime_root, &facts(), None, &mut |_| {
+            published = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(published);
+}
+
+#[test]
+fn native_registry_root_replacement_denies_even_with_original_pinned_files() {
+    let (directory, registry, _assignment) = fixture();
+    let recovery = tempfile::tempdir().unwrap();
+    let old = recovery.path().join("retained-original-root");
+    std::fs::rename(directory.path(), &old).unwrap();
+    std::fs::create_dir(directory.path()).unwrap();
+    for path in [&registry.policy_path, &registry.instance_path] {
+        let relative = path.strip_prefix(&registry.runtime_root).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::hard_link(old.join(relative), path).unwrap();
+    }
+    // Both original file pins still match. The retained root descriptor is
+    // what rejects this replacement directory, before any policy callback.
+    assert!(identity(&registry.policy_path).unwrap() == registry.policy_identity);
+    assert!(identity(&registry.instance_path).unwrap() == registry.instance_file_identity);
+    let mut published = false;
+    assert!(registry
+        .with_policy(|_| {
+            published = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!published);
+    std::fs::remove_dir_all(directory.path()).unwrap();
+    std::fs::rename(&old, directory.path()).unwrap();
+    registry.with_policy(|_| Ok(())).unwrap();
+}
+
 #[test]
 fn native_registry_policy_writer_cannot_interleave_and_revocation_denies_publication() {
     let (_directory, registry, assignment) = fixture();
@@ -229,7 +288,7 @@ fn native_registry_policy_writer_cannot_interleave_and_revocation_denies_publica
     let facts = facts();
     let mut destination = None;
     resolver
-        .with_current_destination(&tx, &facts, None, &mut |current| {
+        .with_current_destination(&tx, &registry.runtime_root, &facts, None, &mut |current| {
             let competing = Connection::open_with_flags(
                 &registry.policy_path,
                 OpenFlags::SQLITE_OPEN_READ_WRITE,
@@ -263,10 +322,16 @@ fn native_registry_policy_writer_cannot_interleave_and_revocation_denies_publica
     );
     let mut invoked = false;
     assert!(resolver
-        .with_current_destination(&tx, &facts, Some(&previous), &mut |_| {
-            invoked = true;
-            Ok(())
-        })
+        .with_current_destination(
+            &tx,
+            &registry.runtime_root,
+            &facts,
+            Some(&previous),
+            &mut |_| {
+                invoked = true;
+                Ok(())
+            }
+        )
         .is_err());
     assert!(!invoked);
     assert!(registry
@@ -276,7 +341,7 @@ fn native_registry_policy_writer_cannot_interleave_and_revocation_denies_publica
         .revoke(&session("owner"), &assignment.destination.guest_id)
         .unwrap();
     assert!(resolver
-        .with_current_destination(&tx, &facts, None, &mut |_| {
+        .with_current_destination(&tx, &registry.runtime_root, &facts, None, &mut |_| {
             invoked = true;
             Ok(())
         })
@@ -312,7 +377,7 @@ fn native_registry_replaced_policy_store_or_import_parent_never_invokes_callback
     let mut worker = worker_store();
     let tx = worker.transaction().unwrap();
     assert!(resolver
-        .with_current_destination(&tx, &facts(), None, &mut |_| {
+        .with_current_destination(&tx, &registry.runtime_root, &facts(), None, &mut |_| {
             invoked = true;
             Ok(())
         })
@@ -393,7 +458,7 @@ fn native_registry_archived_project_removed_member_or_expired_worker_deny_callba
         let tx = worker.transaction().unwrap();
         let mut invoked = false;
         assert!(resolver
-            .with_current_destination(&tx, &facts(), None, &mut |_| {
+            .with_current_destination(&tx, &registry.runtime_root, &facts(), None, &mut |_| {
                 invoked = true;
                 Ok(())
             })
@@ -415,7 +480,7 @@ fn native_registry_archived_project_removed_member_or_expired_worker_deny_callba
     let tx = worker.transaction().unwrap();
     let mut invoked = false;
     assert!(resolver
-        .with_current_destination(&tx, &facts(), None, &mut |_| {
+        .with_current_destination(&tx, &registry.runtime_root, &facts(), None, &mut |_| {
             invoked = true;
             Ok(())
         })

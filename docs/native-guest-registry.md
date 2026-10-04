@@ -23,7 +23,11 @@ Business OS IMMEDIATE transaction, then the shared controller lock. The worker
 and policy stores are different files: the held worker transaction alone cannot
 fence policy. Policy opens READ_WRITE without CREATE/migration, pins device/inode
 before/inside/after publication and rejects replaced instance/store/import-parent
-identities. Policy revision hashes the actual project/profile/computer/member/chat/
+identities. The registry retains the actual runtime-root directory descriptor and
+compares it with the live path before/after publication. Admission receives the
+opaque provider's actual worker root and rejects another root even when principal,
+account and row IDs match. Binding and subsequent guest operations recheck this
+same relationship; a claim or witness JSON does not supply it. Policy revision hashes the actual project/profile/computer/member/chat/
 thread records. The signed principal, command lifetime and exact admitted native
 attempt must match; fresh resolver checks happen around quorum admission.
 
@@ -90,7 +94,9 @@ both checkpoint and effect unchanged; a repeated request returns evidence only.
 Every newly begun effect persists `checkpointRequiresRefresh`. Completing an
 effect alone does not clear this flag and cannot authorize takeover from the old
 checkpoint. Ordinary checkpoint protection clears it only with no pending
-effects and a strictly newer authenticated checkpoint. Legacy serialized jobs
+effects and a strictly newer authenticated checkpoint. Guest staging and commit
+also require this freshness flag to be clear: completion between staging and
+admission cannot publish the old checkpoint. Legacy serialized jobs
 without the flag default to requiring refresh, never to an invented freshness
 proof. The previous protected checkpoint remains available as evidence while
 the process is running.
