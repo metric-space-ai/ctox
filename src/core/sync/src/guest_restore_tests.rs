@@ -105,6 +105,20 @@ fn component_process_effect_id() -> String {
 async fn readiness_retains_registered_process_effect_and_denies_takeover() {
     let f = fixture();
     let (imported, owner) = registered_live_process(&f).await;
+    // The alternative executor is eligible for this protected checkpoint.
+    // This remains a deterministic authority fixture, not signed-copy/quorum proof.
+    f.authority
+        .state
+        .lock()
+        .unwrap()
+        .jobs
+        .get_mut("job")
+        .unwrap()
+        .checkpoint
+        .as_mut()
+        .unwrap()
+        .replicas
+        .insert(2);
     let ready = confirm_guest_ready(&f.authority, &owner, imported.clone())
         .await
         .unwrap();
@@ -113,31 +127,62 @@ async fn readiness_retains_registered_process_effect_and_denies_takeover() {
         .pending_effects
         .clone();
     assert_eq!(pending, BTreeSet::from([owner.effect.effect_id.clone()]));
-    // Readiness is an observation, never completion or permission to stage a
-    // second import over a live child.
     assert!(stage(&f).await.is_err());
-    let takeover = f
+    let takeover = |id: &str| Request {
+        request_id: id.into(),
+        actor: 2,
+        command: Command::TakeOver {
+            job_id: imported.spec.job_id.clone(),
+            expected: imported.ownership.clone(),
+            checkpoint_digest: imported.checkpoint_digest.clone(),
+            owner: 2,
+        },
+    };
+    let blocked = f
         .authority
-        .submit(Request {
-            request_id: "takeover-with-live-child".into(),
-            actor: 1,
-            command: Command::TakeOver {
-                job_id: imported.spec.job_id,
-                expected: imported.ownership,
-                checkpoint_digest: imported.checkpoint_digest,
-                owner: 1,
-            },
-        })
+        .submit(takeover("takeover-with-live-child"))
         .await
         .unwrap();
-    assert!(matches!(
-        takeover,
-        Receipt::Rejected(crate::authority::Rejection::ReconciliationRequired)
-    ));
+    assert!(
+        matches!(
+            blocked,
+            Receipt::Rejected(crate::authority::Rejection::ReconciliationRequired)
+        ),
+        "eligible distinct executor must be denied by the pending effect: {blocked:?}"
+    );
     assert_eq!(
         f.authority.state.lock().unwrap().jobs["job"].pending_effects,
         pending
     );
+    // Simulate the lifecycle owner's already-proven exact stop. Production must
+    // obtain that proof from the actual retained child, never from QMP/readiness.
+    let completed = f
+        .authority
+        .submit(Request {
+            request_id: "confirmed-component-child-stop".into(),
+            actor: 1,
+            command: Command::CompleteEffect {
+                job_id: imported.spec.job_id.clone(),
+                ownership: imported.ownership.clone(),
+                effect_id: owner.effect.effect_id.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(completed, Receipt::Applied(_)));
+    let moved = f
+        .authority
+        .submit(takeover("takeover-after-confirmed-stop"))
+        .await
+        .unwrap();
+    let Receipt::Applied(job) = moved else {
+        panic!("eligible takeover must proceed only after stop");
+    };
+    assert_eq!(job.ownership.node_id, 2);
+    assert_eq!(job.ownership.generation, imported.ownership.generation + 1);
+    assert!(confirm_guest_ready(&f.authority, &owner, imported)
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -450,14 +495,24 @@ impl ExecutionAuthority for NativeFixture {
         {
             return Err(io::Error::other("unknown completion outcome"));
         }
-        let peers = BTreeMap::from([(
-            1,
-            Peer {
-                identity: "fixture".into(),
-                executor: true,
-                data_replica: true,
-            },
-        )]);
+        let peers = BTreeMap::from([
+            (
+                1,
+                Peer {
+                    identity: "fixture".into(),
+                    executor: true,
+                    data_replica: true,
+                },
+            ),
+            (
+                2,
+                Peer {
+                    identity: "fixture-target".into(),
+                    executor: true,
+                    data_replica: true,
+                },
+            ),
+        ]);
         let mut receipt = self.state.lock().unwrap().apply(&request, &peers);
         if is_begin && *self.changed_checkpoint_reply.lock().unwrap() {
             if let Receipt::Applied(job) = &mut receipt {
