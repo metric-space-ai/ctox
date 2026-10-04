@@ -7,7 +7,7 @@ use anyhow::{ensure, Result};
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -41,6 +41,7 @@ struct ProviderRecord {
     facts: NativeProviderFacts,
     facts_json: String,
     state: Mutex<ProviderState>,
+    emitted_commands: Mutex<HashSet<String>>,
 }
 
 type Registry = HashMap<(PathBuf, String), Weak<ProviderRecord>>;
@@ -58,6 +59,49 @@ pub(crate) struct NativeProviderTurnOwner {
 #[derive(Clone)]
 pub(crate) struct NativeProviderBinding {
     record: Arc<ProviderRecord>,
+}
+
+/// A single native guest command admitted by the retained turn owner. It is
+/// neither deserializable nor constructible from provider facts/session JSON.
+/// Clones share consumption; a failed or uncertain effect cannot be repeated.
+#[derive(Clone)]
+pub(crate) struct NativeProviderCommand {
+    provider: NativeProviderBinding,
+    turn_id: String,
+    canonical_command: Vec<u8>,
+    consumed: Arc<Mutex<bool>>,
+}
+
+fn canonical_guest_command(
+    command: &crate::business_os::store::BusinessCommand,
+) -> Result<Vec<u8>> {
+    use crate::business_os::store::CommandOrigin;
+    ensure!(
+        command.origin == CommandOrigin::TrustedLocal
+            && command.id.as_deref().is_some_and(valid_id)
+            && matches!(
+                command.command_type.as_str(),
+                "ctox.guest.observe" | "ctox.guest.input"
+            ),
+        "native guest emission requires an exact trusted command identity"
+    );
+    fn sorted(value: Value) -> Value {
+        match value {
+            Value::Object(object) => {
+                let mut entries = object.into_iter().collect::<Vec<_>>();
+                entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                Value::Object(entries.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+            }
+            Value::Array(array) => Value::Array(array.into_iter().map(sorted).collect()),
+            other => other,
+        }
+    }
+    let bytes = serde_json::to_vec(&sorted(serde_json::to_value(command)?))?;
+    ensure!(
+        bytes.len() <= 32 * 1024,
+        "native guest command is oversized"
+    );
+    Ok(bytes)
 }
 
 /// Installed only by the native guest producer after it resolves its actual
@@ -187,6 +231,7 @@ impl NativeProviderTurnOwner {
                     committed: false,
                     turn_id: None,
                 }),
+                emitted_commands: Mutex::new(HashSet::new()),
             });
             entries.insert(key.clone(), Arc::downgrade(&record));
             Ok(record)
@@ -207,6 +252,57 @@ impl NativeProviderTurnOwner {
         NativeProviderBinding {
             record: Arc::clone(&self.record),
         }
+    }
+
+    /// Producer primitive, called only at actual native command emission.
+    /// The callback must admit this exact command and reject a refused/replayed
+    /// admission. It runs synchronously inside the live worker/provider guard;
+    /// it may not await, reopen this store or re-enter lifecycle callbacks.
+    /// The witness is returned only after that transaction commits. An ID is
+    /// burned even on admission error, since an external effect may be uncertain.
+    /// A session token, model payload or observed asynchronous tool-begin event
+    /// is NOT a caller for this primitive. Wiring the real emitter is separate.
+    #[allow(dead_code)]
+    pub(crate) fn admit_emitted_guest_command(
+        &self,
+        actual_turn_id: &str,
+        command: &crate::business_os::store::BusinessCommand,
+        admit: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &NativeProviderFacts,
+            &str,
+            &crate::business_os::store::BusinessCommand,
+        ) -> Result<()>,
+    ) -> Result<NativeProviderCommand> {
+        let canonical_command = canonical_guest_command(command)?;
+        let provider = self.binding();
+        provider.with_live_provider_transaction(|tx, facts, turn| {
+            ensure!(
+                turn == Some(actual_turn_id),
+                "command emission does not belong to the actual bound turn"
+            );
+            let mut emitted = self
+                .record
+                .emitted_commands
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native command emission state poisoned"))?;
+            ensure!(
+                emitted.len() < 1024,
+                "native guest emission budget exhausted"
+            );
+            ensure!(
+                emitted.insert(command.id.as_ref().expect("validated command ID").clone()),
+                "native guest command emission was already attempted"
+            );
+            admit(tx, facts, actual_turn_id, command)?;
+            Ok(())
+        })?;
+        Ok(NativeProviderCommand {
+            provider,
+            turn_id: actual_turn_id.to_owned(),
+            canonical_command,
+            consumed: Arc::new(Mutex::new(false)),
+        })
     }
 
     /// The actual TurnStart result may bind only the prepared provider session.
@@ -310,6 +406,42 @@ impl NativeProviderBinding {
             );
             publish(tx, &self.record.facts, state.turn_id.as_deref())
         })
+    }
+}
+
+impl NativeProviderCommand {
+    /// Consume at the actual effect boundary. Current policy/controller checks
+    /// and the bounded effect belong in this callback, under the same guard.
+    /// Returning identity and applying an effect later is not an admission.
+    /// The complete admitted envelope is compared, including client_context;
+    /// those labels cannot mint or replace this private native witness.
+    #[allow(dead_code)]
+    pub(crate) fn with_current_command_transaction<T>(
+        &self,
+        command: &crate::business_os::store::BusinessCommand,
+        effect: impl FnOnce(&rusqlite::Transaction<'_>, &NativeProviderFacts, &str) -> Result<T>,
+    ) -> Result<T> {
+        ensure!(
+            canonical_guest_command(command)? == self.canonical_command,
+            "native guest command does not match its admitted envelope"
+        );
+        self.provider
+            .with_live_provider_transaction(|tx, facts, turn| {
+                ensure!(
+                    turn == Some(self.turn_id.as_str()),
+                    "native guest command turn changed"
+                );
+                let mut consumed = self
+                    .consumed
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("native command consumption state poisoned"))?;
+                ensure!(
+                    !*consumed,
+                    "native guest command witness was already consumed"
+                );
+                *consumed = true;
+                effect(tx, facts, &self.turn_id)
+            })
     }
 }
 
@@ -572,6 +704,215 @@ mod tests {
             .with_live_provider::<()>(|_, _| panic!("revoked worker"))
             .is_err());
         assert!(owner.bind_turn("actual-thread", "actual-turn").is_err());
+        Ok(())
+    }
+
+    fn guest_command(id: &str) -> crate::business_os::store::BusinessCommand {
+        crate::business_os::store::BusinessCommand {
+            id: Some(id.into()),
+            module: "guest".into(),
+            command_type: "ctox.guest.observe".into(),
+            record_id: Some("guest-1".into()),
+            payload: serde_json::json!({"guest_id": "guest-1", "project_id": "project-1"}),
+            client_context: serde_json::json!({"actor": {"id": "native-actor"}}),
+            origin: crate::business_os::store::CommandOrigin::TrustedLocal,
+        }
+    }
+
+    #[test]
+    fn native_guest_command_binds_exact_envelope_and_consumes_all_clones() -> Result<()> {
+        let (_root, execution, _) = admitted()?;
+        let owner = prepare(&execution)?;
+        owner.bind_turn("actual-thread", "actual-turn")?;
+        let command = guest_command("new-command");
+        let witness = owner.admit_emitted_guest_command(
+            "actual-turn",
+            &command,
+            |_, facts, turn, actual| {
+                assert_eq!(facts.worker_id, "provider-worker");
+                assert_eq!(turn, "actual-turn");
+                assert_eq!(actual.id.as_deref(), Some("new-command"));
+                Ok(())
+            },
+        )?;
+        for field in ["id", "module", "type", "record", "payload", "context"] {
+            let mut foreign = command.clone();
+            match field {
+                "id" => foreign.id = Some("another-command".into()),
+                "module" => foreign.module = "another-module".into(),
+                "type" => foreign.command_type = "ctox.guest.input".into(),
+                "record" => foreign.record_id = Some("another-guest".into()),
+                "payload" => foreign.payload["guest_id"] = serde_json::json!("another-guest"),
+                "context" => {
+                    foreign.client_context["actor"]["id"] = serde_json::json!("another-actor")
+                }
+                _ => unreachable!(),
+            }
+            assert!(witness
+                .with_current_command_transaction::<()>(&foreign, |_, _, _| panic!(
+                    "changed command reached effect"
+                ))
+                .is_err());
+        }
+        let mut equivalent = command.clone();
+        equivalent.payload =
+            serde_json::from_str(r#"{"project_id":"project-1","guest_id":"guest-1"}"#)?;
+        let clone = witness.clone();
+        assert_eq!(
+            witness.with_current_command_transaction(&equivalent, |_, facts, turn| {
+                assert_eq!(facts.provider_session_id, "actual-thread");
+                assert_eq!(turn, "actual-turn");
+                Ok(17)
+            })?,
+            17
+        );
+        assert!(clone
+            .with_current_command_transaction::<()>(&command, |_, _, _| panic!("replayed effect"))
+            .is_err());
+        assert!(owner
+            .admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| panic!(
+                "replayed admission"
+            ))
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn native_guest_command_requires_bound_turn_and_trusted_identity() -> Result<()> {
+        let (_root, execution, _) = admitted()?;
+        let owner = prepare(&execution)?;
+        let command = guest_command("new-command");
+        assert!(owner
+            .admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| panic!(
+                "pre-turn command admitted"
+            ))
+            .is_err());
+        owner.bind_turn("actual-thread", "actual-turn")?;
+        assert!(owner
+            .admit_emitted_guest_command("foreign-turn", &command, |_, _, _, _| panic!(
+                "foreign turn admitted"
+            ))
+            .is_err());
+        for invalid in ["peer", "missing-id", "other-type", "oversized"] {
+            let mut rejected = command.clone();
+            match invalid {
+                "peer" => {
+                    rejected.origin = crate::business_os::store::CommandOrigin::ReplicatedPeer
+                }
+                "missing-id" => rejected.id = None,
+                "other-type" => rejected.command_type = "ctox.business_os.app.modify".into(),
+                "oversized" => rejected.payload = serde_json::json!("x".repeat(33 * 1024)),
+                _ => unreachable!(),
+            }
+            assert!(owner
+                .admit_emitted_guest_command("actual-turn", &rejected, |_, _, _, _| panic!(
+                    "invalid command admitted"
+                ))
+                .is_err());
+        }
+        owner.admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| Ok(()))?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_guest_command_failed_admission_rolls_back_and_cannot_remint() -> Result<()> {
+        let (root, execution, _) = admitted()?;
+        let owner = prepare(&execution)?;
+        owner.bind_turn("actual-thread", "actual-turn")?;
+        let conn = Connection::open(resolve_db_path(root.path(), None))?;
+        conn.execute("CREATE TABLE test_command_admission (id TEXT)", [])?;
+        let command = guest_command("uncertain-command");
+        assert!(owner
+            .admit_emitted_guest_command("actual-turn", &command, |tx, _, _, actual| {
+                tx.execute(
+                    "INSERT INTO test_command_admission VALUES (?1)",
+                    [actual.id.as_deref()],
+                )?;
+                anyhow::bail!("native admission refused")
+            })
+            .is_err());
+        let count: i64 =
+            conn.query_row("SELECT count(*) FROM test_command_admission", [], |r| {
+                r.get(0)
+            })?;
+        assert_eq!(count, 0);
+        assert!(owner
+            .admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| panic!(
+                "uncertain admission repeated"
+            ))
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn native_guest_command_revoked_owner_and_lease_deny_effect() -> Result<()> {
+        for mutation in [
+            "owner-drop",
+            "worker-revoke",
+            "route_status='cancelled'",
+            "attempt=attempt+1",
+            "lease_expires_at='2000-01-01T00:00:00Z'",
+            "provider-turn",
+        ] {
+            let (root, execution, lifetime) = admitted()?;
+            let owner = prepare(&execution)?;
+            owner.bind_turn("actual-thread", "actual-turn")?;
+            let command = guest_command("new-command");
+            let witness =
+                owner.admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| Ok(()))?;
+            let mut owner = Some(owner);
+            if mutation == "owner-drop" {
+                drop(owner.take());
+            } else if mutation == "worker-revoke" {
+                lifetime.revoke();
+            } else {
+                let conn = Connection::open(resolve_db_path(root.path(), None))?;
+                if mutation == "provider-turn" {
+                    conn.execute(
+                        "UPDATE native_worker_provider_bindings SET provider_turn_id='foreign'",
+                        [],
+                    )?;
+                } else {
+                    conn.execute(
+                        &format!("UPDATE communication_routing_state SET {mutation}"),
+                        [],
+                    )?;
+                }
+            }
+            assert!(witness
+                .with_current_command_transaction::<()>(&command, |_, _, _| panic!(
+                    "revoked command reached effect"
+                ))
+                .is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_guest_command_failed_effect_is_consumed_and_rolls_back() -> Result<()> {
+        let (root, execution, _) = admitted()?;
+        let owner = prepare(&execution)?;
+        owner.bind_turn("actual-thread", "actual-turn")?;
+        let command = guest_command("new-command");
+        let witness =
+            owner.admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| Ok(()))?;
+        let clone = witness.clone();
+        let conn = Connection::open(resolve_db_path(root.path(), None))?;
+        conn.execute("CREATE TABLE test_command_effect (id TEXT)", [])?;
+        assert!(witness
+            .with_current_command_transaction::<()>(&command, |tx, _, _| {
+                tx.execute("INSERT INTO test_command_effect VALUES ('new-command')", [])?;
+                anyhow::bail!("native effect requires reconciliation")
+            })
+            .is_err());
+        let count: i64 =
+            conn.query_row("SELECT count(*) FROM test_command_effect", [], |r| r.get(0))?;
+        assert_eq!(count, 0);
+        assert!(clone
+            .with_current_command_transaction::<()>(&command, |_, _, _| panic!(
+                "uncertain effect repeated"
+            ))
+            .is_err());
         Ok(())
     }
 
