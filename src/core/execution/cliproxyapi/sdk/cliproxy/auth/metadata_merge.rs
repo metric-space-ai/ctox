@@ -7,6 +7,36 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+// ref: sdk/cliproxy/auth/metadata_keys.go:3-45 @ d7914afdedca7af95ee974a42453dc49fc1388ce
+pub fn canonical_credential_metadata_key(key: &str) -> &str {
+    match key {
+        "api-key" => "api_key",
+        "base-url" => "base_url",
+        "disable-cooling" => "disable_cooling",
+        "excluded-models" => "excluded_models",
+        "fingerprint-profile" => "fingerprint_profile",
+        "model-aliases" => "model_aliases",
+        "proxy-url" => "proxy_url",
+        "request-retry" => "request_retry",
+        "request-scoped-errors" => "request_scoped_errors",
+        "tool-prefix-disabled" => "tool_prefix_disabled",
+        _ => key,
+    }
+}
+pub fn normalize_credential_metadata(metadata: &mut BTreeMap<String, Value>) {
+    let aliases: Vec<String> = metadata
+        .keys()
+        .filter(|key| canonical_credential_metadata_key(key) != key.as_str())
+        .cloned()
+        .collect();
+    for key in aliases {
+        let canonical = canonical_credential_metadata_key(&key).to_owned();
+        if let Some(value) = metadata.remove(&key) {
+            metadata.entry(canonical).or_insert(value);
+        }
+    }
+}
+
 pub fn is_auth_token_payload_key(key: &str) -> bool {
     matches!(
         key.trim().to_ascii_lowercase().as_str(),
@@ -36,7 +66,7 @@ pub fn merge_existing_auth_metadata(target: &mut Auth, existing: &BTreeMap<Strin
         if is_auth_token_payload_key(key)
             || (target.provider.trim().eq_ignore_ascii_case("meta")
                 && matches!(
-                    key.trim().to_ascii_lowercase().as_str(),
+                    canonical_credential_metadata_key(key),
                     "api_key" | "dca_token" | "dca_expired" | "dca_expires_at"
                 ))
         {

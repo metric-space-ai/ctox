@@ -117,6 +117,7 @@ impl AuthLifecycle {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut loaded = BTreeMap::new();
         for mut auth in self.store.list().map_err(AuthLifecycleError::Store)? {
+            super::normalize_credential_metadata(&mut auth.metadata);
             let id = auth.id.trim().to_owned();
             if id.is_empty() {
                 continue;
@@ -136,6 +137,7 @@ impl AuthLifecycle {
         options: AuthMutationOptions,
         now: DateTime<Utc>,
     ) -> Result<Auth, AuthLifecycleError> {
+        super::normalize_credential_metadata(&mut auth.metadata);
         auth.id = if auth.id.trim().is_empty() {
             Uuid::new_v4().to_string()
         } else {
@@ -205,6 +207,7 @@ impl AuthLifecycle {
         now: DateTime<Utc>,
         refreshed: bool,
     ) -> Result<Option<Auth>, AuthLifecycleError> {
+        super::normalize_credential_metadata(&mut auth.metadata);
         let id = auth.id.trim().to_owned();
         if id.is_empty() {
             return Ok(None);
@@ -235,13 +238,14 @@ impl AuthLifecycle {
         if cached_persistent != incoming_persistent {
             return Err(AuthLifecycleError::PersistenceClassChange);
         }
-        let existing = if cached_persistent {
+        let mut existing = if cached_persistent {
             self.load_one(&id)?
                 .ok_or(AuthLifecycleError::DurableRecordMissing)?
         } else {
             cached.clone()
         };
 
+        super::normalize_credential_metadata(&mut existing.metadata);
         if let Some(base) = base {
             let mut current = existing.clone();
             current.preserve_runtime_state_from(&cached);

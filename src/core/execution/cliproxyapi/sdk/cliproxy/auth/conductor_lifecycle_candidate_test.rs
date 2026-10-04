@@ -248,6 +248,54 @@ fn candidate_preparation_cannot_publish_under_a_different_account_identity() {
 }
 
 #[test]
+fn candidate_manager_normalizes_registration_update_reload_and_prepared_persistence() {
+    let store = Arc::new(Store::default());
+    let lifecycle = AuthLifecycle::new(
+        store.clone(),
+        Arc::new(RefreshSchedule::default()),
+        Duration::from_secs(1),
+    );
+    let mut incoming = auth();
+    incoming.metadata.insert("request-retry".into(), json!(3));
+    incoming.metadata.insert("request_retry".into(), json!(0));
+    let base = lifecycle
+        .register(incoming, AuthMutationOptions::default(), now())
+        .unwrap();
+    assert_eq!(base.metadata["request_retry"], 0);
+    assert!(!base.metadata.contains_key("request-retry"));
+    assert!(!store.list().unwrap()[0]
+        .metadata
+        .contains_key("request-retry"));
+    let mut changed = base.clone();
+    changed.metadata.insert("request-retry".into(), json!(9));
+    let changed = lifecycle
+        .update(changed, AuthMutationOptions::default(), now())
+        .unwrap()
+        .unwrap();
+    assert_eq!(changed.metadata["request_retry"], 0);
+    let mut durable = store.list().unwrap().remove(0);
+    durable.metadata.remove("request_retry");
+    durable.metadata.insert("request-retry".into(), json!(4));
+    store
+        .records
+        .lock()
+        .unwrap()
+        .insert(durable.id.clone(), durable);
+    lifecycle.load(now()).unwrap();
+    let current = lifecycle.get_cached("one").unwrap();
+    assert_eq!(current.metadata["request_retry"], 4);
+    assert!(!current.metadata.contains_key("request-retry"));
+    let prepared = publish(&lifecycle, &current, mint(&current), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(prepared.metadata["request_retry"], 4);
+    assert_eq!(store.list().unwrap()[0].metadata["request_retry"], 4);
+    assert!(!store.list().unwrap()[0]
+        .metadata
+        .contains_key("request-retry"));
+}
+
+#[test]
 fn candidate_registration_epoch_overflow_fails_before_any_durable_write() {
     let store = Arc::new(Store::default());
     let lifecycle = AuthLifecycle::new(

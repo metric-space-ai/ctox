@@ -160,7 +160,7 @@ fn candidate_login_metadata_never_restores_old_meta_credentials() {
     target.metadata.insert("api_key".into(), json!("new-key"));
     let existing = BTreeMap::from([
         ("access_token".into(), json!("old")),
-        ("API_KEY".into(), json!("old")),
+        ("api-key".into(), json!("old")),
         ("dca_token".into(), json!("old")),
         ("dca_expired".into(), json!("old")),
         ("dca_expires_at".into(), json!(12)),
@@ -174,7 +174,7 @@ fn candidate_login_metadata_never_restores_old_meta_credentials() {
     assert!(target.disabled);
     for key in [
         "access_token",
-        "API_KEY",
+        "api-key",
         "dca_token",
         "dca_expired",
         "dca_expires_at",
@@ -337,6 +337,57 @@ fn candidate_refresh_can_clear_next_refresh_while_preparation_preserves_it() {
     let prepared = merge_prepared_auth(&base, &base, &updated);
     assert_eq!(prepared.next_refresh_after, base.next_refresh_after);
     assert_eq!(prepared.last_refreshed_at, base.last_refreshed_at);
+}
+
+#[test]
+fn candidate_normalized_legacy_settings_keep_canonical_zero_false_and_null() {
+    let mut metadata = BTreeMap::from([
+        ("api-key".into(), json!("legacy-secret")),
+        ("base-url".into(), json!("https://regional.example")),
+        ("request-retry".into(), json!(3)),
+        ("request_retry".into(), json!(0)),
+        ("disable-cooling".into(), json!(true)),
+        ("disable_cooling".into(), json!(false)),
+        (
+            "model-aliases".into(),
+            json!([{"name":"upstream","alias":"public"}]),
+        ),
+        ("model_aliases".into(), Value::Null),
+        ("provider-specific-key".into(), json!({"nested":[1,2]})),
+    ]);
+    normalize_credential_metadata(&mut metadata);
+    assert_eq!(metadata["api_key"], "legacy-secret");
+    assert_eq!(metadata["base_url"], "https://regional.example");
+    assert_eq!(metadata["request_retry"], 0);
+    assert_eq!(metadata["disable_cooling"], false);
+    assert_eq!(metadata["model_aliases"], Value::Null);
+    assert_eq!(metadata["provider-specific-key"], json!({"nested":[1,2]}));
+    for legacy in [
+        "api-key",
+        "base-url",
+        "request-retry",
+        "disable-cooling",
+        "model-aliases",
+    ] {
+        assert!(!metadata.contains_key(legacy));
+    }
+    let snapshot = metadata.clone();
+    normalize_credential_metadata(&mut metadata);
+    assert_eq!(metadata, snapshot);
+}
+
+#[test]
+fn candidate_canonical_keys_preserve_unknown_provider_key_spelling() {
+    for key in ["API_KEY", " api-key ", "provider-specific-key"] {
+        assert_eq!(canonical_credential_metadata_key(key), key);
+    }
+    let mut metadata = BTreeMap::from([
+        ("API_KEY".into(), json!("provider data")),
+        (" api-key ".into(), json!(false)),
+    ]);
+    let snapshot = metadata.clone();
+    normalize_credential_metadata(&mut metadata);
+    assert_eq!(metadata, snapshot);
 }
 
 #[test]
