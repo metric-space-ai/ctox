@@ -288,6 +288,15 @@ impl AuthPreparer for MetaRequestAuthPreparer {
     }
 }
 impl AsyncAuthRefresher for MetaRequestAuthPreparer {
+    fn should_refresh(&self, auth: &Auth) -> bool {
+        auth.provider.trim().eq_ignore_ascii_case("meta")
+            && !is_config_api_key_auth(Some(auth))
+            && (auth.auth_kind() == Some(crate::sdk::cliproxy::auth::AuthKind::OAuth)
+                || !meta_dca_token(auth).is_empty())
+    }
+    fn credential_changed(&self, current: &Auth, failed: &Auth) -> bool {
+        meta_credentials(current).api_key() != meta_credentials(failed).api_key()
+    }
     fn refresh<'a>(
         &'a self,
         auth: &'a Auth,

@@ -483,10 +483,10 @@ impl GenericAuthRuntime {
         auth: &Auth,
         registration: &ProviderExecutorRegistration,
     ) -> Result<Option<Auth>, GenericExecutionError> {
-        if auth.auth_kind() != Some(AuthKind::OAuth) {
-            return Ok(None);
-        }
         if let Some(refresher) = registration.async_auth_refresher() {
+            if !refresher.should_refresh(auth) {
+                return Ok(None);
+            }
             // Preparation and a 401 mint share one credential-scoped owner.
             // No synchronous runtime bridge or detached refresh is needed.
             let _guard = self.prepare_lock(&auth.id).lock_owned().await;
@@ -500,7 +500,7 @@ impl GenericAuthRuntime {
             }
             // Another request already replaced the failed credential while
             // this attempt waited. Reuse it without minting the old key again.
-            if access_token(&current) != access_token(auth) {
+            if refresher.credential_changed(&current, auth) {
                 return Ok(Some(current));
             }
             let candidate = refresher
@@ -521,6 +521,9 @@ impl GenericAuthRuntime {
                 return Err(GenericExecutionError::AuthUnavailable);
             }
             return Ok(Some(published));
+        }
+        if auth.auth_kind() != Some(AuthKind::OAuth) {
+            return Ok(None);
         }
         let failed_token = access_token(auth).map(str::to_owned);
         match self.manager.lifecycle().refresh(

@@ -54,6 +54,14 @@ pub type AuthPreparationError = Arc<dyn Error + Send + Sync + 'static>;
 /// Request-time credential refresh over the selected asynchronous transport.
 /// The returned snapshot is a candidate: only the manager may publish it.
 pub trait AsyncAuthRefresher: Send + Sync {
+    fn should_refresh(&self, auth: &Auth) -> bool {
+        auth.auth_kind() == Some(super::AuthKind::OAuth)
+    }
+
+    fn credential_changed(&self, current: &Auth, failed: &Auth) -> bool {
+        super::access_token(current) != super::access_token(failed)
+    }
+
     fn refresh<'a>(
         &'a self,
         auth: &'a Auth,

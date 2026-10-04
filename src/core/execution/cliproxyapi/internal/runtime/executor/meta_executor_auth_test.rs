@@ -11,7 +11,54 @@ use serde_json::json;
 use std::sync::Mutex;
 use tokio::sync::{mpsc, Semaphore};
 
+#[test]
+fn candidate_meta_request_auth_file_key_with_dca_retains_oauth_refresh_capability() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    record.attributes.remove("auth_kind");
+    record
+        .attributes
+        .insert("api_key".into(), "LLM|file-key".into());
+    record.attributes.insert("source".into(), "file".into());
+    assert_eq!(
+        record.auth_kind(),
+        Some(crate::sdk::cliproxy::auth::AuthKind::ApiKey)
+    );
+    assert!(AsyncAuthRefresher::should_refresh(&preparer, &record));
+    record
+        .attributes
+        .insert("source".into(), "config:meta-api-key".into());
+    assert!(!AsyncAuthRefresher::should_refresh(&preparer, &record));
+    assert!(client.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn candidate_meta_request_auth_changed_api_key_is_detected_without_access_token_edit() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client);
+    let mut failed = auth();
+    failed
+        .attributes
+        .insert("api_key".into(), "LLM|failed".into());
+    let mut current = failed.clone();
+    current
+        .attributes
+        .insert("api_key".into(), "LLM|user-edit".into());
+    assert_eq!(
+        current.metadata["access_token"],
+        failed.metadata["access_token"]
+    );
+    assert!(AsyncAuthRefresher::credential_changed(
+        &preparer, &current, &failed
+    ));
+    assert!(!AsyncAuthRefresher::credential_changed(
+        &preparer, &failed, &failed
+    ));
+}
+
 struct Clock;
+
 impl MetaClock for Clock {
     fn now(&self) -> DateTime<Utc> {
         DateTime::from_timestamp(1_700_000_000, 0).unwrap()
