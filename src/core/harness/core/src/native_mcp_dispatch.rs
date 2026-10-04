@@ -43,6 +43,8 @@ impl NativeMcpInvocation<'_> {
 /// Some is a native result after the existing MCP approval/safety boundary.
 /// The callback must be bounded and enforce its own live worker, actual turn,
 /// policy and controller guards. It cannot treat these identifiers as permits.
+/// It must not register/drop dispatchers or re-enter Core turn lifecycle APIs
+/// from inside the callback; both lifecycle fences remain held until it returns.
 pub trait NativeMcpDispatch: Send + Sync {
     fn dispatch(
         &self,
@@ -50,10 +52,15 @@ pub trait NativeMcpDispatch: Send + Sync {
     ) -> Option<Result<CallToolResult, String>>;
 }
 
+struct RegistrationLifetime {
+    live: Mutex<bool>,
+}
+
 struct RegistryEntry {
     // Keeping a weak allocation alive prevents pointer reuse while registered.
     session: Weak<Session>,
     dispatcher: Weak<dyn NativeMcpDispatch>,
+    lifetime: Weak<RegistrationLifetime>,
 }
 type Registry = HashMap<usize, RegistryEntry>;
 fn registry() -> &'static Mutex<Registry> {
@@ -66,6 +73,7 @@ fn registry() -> &'static Mutex<Registry> {
 pub struct NativeMcpRegistration {
     session: Weak<Session>,
     dispatcher: Arc<dyn NativeMcpDispatch>,
+    lifetime: Arc<RegistrationLifetime>,
 }
 
 pub(crate) fn register_native_mcp_dispatch(
@@ -84,20 +92,30 @@ pub(crate) fn register_native_mcp_dispatch(
         return Err("native MCP dispatcher already registered for session".into());
     }
     let session = Arc::downgrade(session);
+    let lifetime = Arc::new(RegistrationLifetime {
+        live: Mutex::new(true),
+    });
     entries.insert(
         key,
         RegistryEntry {
             session: session.clone(),
             dispatcher: Arc::downgrade(&dispatcher),
+            lifetime: Arc::downgrade(&lifetime),
         },
     );
     Ok(NativeMcpRegistration {
         session,
         dispatcher,
+        lifetime,
     })
 }
 impl Drop for NativeMcpRegistration {
     fn drop(&mut self) {
+        // No registry lock while waiting for a bounded in-flight callback.
+        // Dispatch acquires this per-registration fence only after Core's await.
+        if let Ok(mut live) = self.lifetime.live.lock() {
+            *live = false;
+        }
         if let Ok(mut entries) = registry().lock() {
             let key = self.session.as_ptr() as usize;
             if entries.get(&key).is_some_and(|entry| {
@@ -119,10 +137,10 @@ pub(crate) async fn dispatch_native_mcp(
     arguments: Option<&Value>,
 ) -> Option<Result<CallToolResult, String>> {
     let key = session as *const Session as usize;
-    let dispatcher = match registry().lock() {
+    let (dispatcher, lifetime) = match registry().lock() {
         Ok(entries) => entries
             .get(&key)
-            .and_then(|entry| entry.dispatcher.upgrade()),
+            .and_then(|entry| Some((entry.dispatcher.upgrade()?, entry.lifetime.upgrade()?))),
         Err(_) => return Some(Err("native MCP registry poisoned".into())),
     }?;
     // Release the registry lock before taking Core's lifecycle fence. Ordinary
@@ -138,6 +156,13 @@ pub(crate) async fn dispatch_native_mcp(
             "native MCP emission requires the actual live Core turn".into(),
         ));
     }
+    // The registration may have been dropped/replaced while awaiting Core.
+    // Its own fence prevents a retained dispatcher Arc from prolonging it,
+    // without serializing callbacks for unrelated Sessions on the registry.
+    let live = match lifetime.live.lock() {
+        Ok(live) if *live => live,
+        _ => return Some(Err("native MCP registration ended".into())),
+    };
     let thread_id = session.conversation_id.to_string();
     // Keep the lifecycle fence across the bounded synchronous effect callback:
     // finish, replacement and abort all remove tasks under this same mutex.
@@ -149,6 +174,7 @@ pub(crate) async fn dispatch_native_mcp(
         tool,
         arguments,
     });
+    drop(live);
     drop(active);
     result
 }
@@ -272,6 +298,45 @@ pub(crate) mod tests {
         drop(registration);
         assert!(invoke(&session, &turn).await.is_none());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn native_mcp_registration_drop_fences_dispatch_waiting_for_core() {
+        let (session, turn, _events) = crate::codex::make_session_and_context_with_rx().await;
+        let old_calls = Arc::new(AtomicUsize::new(0));
+        let old_dispatcher = Arc::new(Dispatch {
+            calls: old_calls.clone(),
+            session: Arc::downgrade(&session),
+        });
+        let registration = register_native_mcp_dispatch(&session, old_dispatcher.clone()).unwrap();
+        start_live_turn(&session, &turn).await;
+        let active = session.active_turn.lock().await;
+        let pending = invoke(&session, &turn);
+        tokio::pin!(pending);
+        // Poll through the registry lookup, then deterministically stop at the
+        // actual Core lifecycle mutex. Retain the old dispatcher as well.
+        assert!(matches!(
+            futures::poll!(pending.as_mut()),
+            std::task::Poll::Pending
+        ));
+        drop(registration);
+        let new_calls = Arc::new(AtomicUsize::new(0));
+        let new_dispatcher = Arc::new(Dispatch {
+            calls: new_calls.clone(),
+            session: Arc::downgrade(&session),
+        });
+        let replacement = register_native_mcp_dispatch(&session, new_dispatcher).unwrap();
+        drop(active);
+        let stale = tokio::time::timeout(std::time::Duration::from_secs(5), pending)
+            .await
+            .unwrap();
+        assert!(stale.unwrap().is_err());
+        assert_eq!(old_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(new_calls.load(Ordering::SeqCst), 0);
+        assert!(invoke(&session, &turn).await.unwrap().is_ok());
+        assert_eq!(new_calls.load(Ordering::SeqCst), 1);
+        assert!(session.abort_turn(&turn.sub_id).await);
+        drop(replacement);
     }
 
     #[tokio::test]
