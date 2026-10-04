@@ -242,6 +242,17 @@ impl GeminiExecutor {
         if to.as_str() == "interactions" && action != "countTokens" {
             body = self.apply_request_payload(request, &from, &to, &model, &body, &original);
         }
+        // ref: gemini_executor.go:167-177,293-294,697-698 @ d7914afd
+        // Native Interactions uses a different wire contract and bypasses these
+        // GenerateContent history/signature repairs.
+        if to.as_str() != "interactions" {
+            body = crate::internal::signature::sanitize_gemini_request_thought_signatures(&body);
+            body = if action == "countTokens" {
+                super::helps::ensure_gemini_leading_user_content(&body, "contents").into_owned()
+            } else {
+                super::helps::ensure_gemini_boundary_user_content(&body, "contents").into_owned()
+            };
+        }
         Ok((body, to))
     }
 

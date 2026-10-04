@@ -86,9 +86,17 @@
   typed rules are adapted into the canonical configuration; injected configuration
   is instance-owned. Four more cases cover original explicit defaults, aliases,
   header gates, backing identity, call order, legacy rule adaptation and count
-  isolation. These nine Google guards have not executed. Signature and content-shape
-  parity, production owner binding, HTTP workflows and full-provider acceptance remain open; this is not full
-  Gemini/Vertex parity. Primary references at the frozen d7914afd commit:
+  isolation. These nine Google guards have not executed. Gemini/Vertex now also
+  run the existing thought-signature sanitizer and frozen leading/trailing-user
+  content rules in actual GenerateContent preparation. Inference fixes both
+  conversation boundaries; token counting fixes only the leading boundary, and
+  native Interactions bypasses both helpers. Raw boundary mutation retains nested
+  paths, item bytes, duplicate fields and numeric lexemes; valid large media
+  remains borrowed by the content helper. Five helper and three actual-preparation
+  guards are prepared, alongside four existing sanitizer guards and five frozen-Go
+  parent oracles. Canonical Google thinking/normalizer-intent binding, remaining
+  signature/content and metadata-counting semantics, actual HTTP workflows and
+  full-provider acceptance remain open; this is not full Gemini/Vertex parity. Primary references at the frozen d7914afd commit:
   gemini_executor.go:153-154,279-280,684,888-920;
   gemini_vertex_executor.go:334-335,471-472,928,1022.
 - The canonical request-thinking bridge now owns the thinking and translator
@@ -152,7 +160,8 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires at least228 actual native tests across28 groups, including all nine
+  requires at least240 actual native tests across31 groups, including eight new
+  Google content/preflight and four existing sanitizer cases, plus all nine
   Claude error/lifecycle cases and nine Google
   request-preparation cases, twelve owned-thinking pipeline cases, twelve Responses
   update/usage cases, four native-reasoning diagnostic cases and41 new Meta

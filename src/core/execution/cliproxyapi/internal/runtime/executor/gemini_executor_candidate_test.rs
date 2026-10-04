@@ -1,6 +1,76 @@
 // ref: internal/runtime/executor/gemini_executor.go @ d7914afdedca7af95ee974a42453dc49fc1388ce
 // License: MIT (upstream); modifications AGPL-3.0-only
 use super::super::helps::{PayloadApplyConfig, PayloadModelRule, PayloadRule};
+#[test]
+fn candidate_google_preflight_gemini_repairs_signatures_and_count_boundaries() {
+    let executor = GeminiExecutor::new(
+        Arc::new(GeminiExecutorConfig::default()),
+        Arc::new(Registry::new()),
+    );
+    let request = ExecutorRequest {
+        model:"gemini-test".into(),
+        source_format:"gemini".into(),
+        payload:br#"{"contents":[{"role":"model","parts":[{"functionCall":{"name":"run"},"thoughtSignature":"claude#invalid"}]}],"tools":[],"generationConfig":{"temperature":0.7},"safetySettings":[]}"#.to_vec(),
+        ..Default::default()
+    };
+    for (stream, action, len) in [
+        (false, "generateContent", 3),
+        (true, "streamGenerateContent", 3),
+        (false, "countTokens", 2),
+    ] {
+        let (body, format) = executor.prepare_body(&request, stream, action).unwrap();
+        assert_eq!(format.as_str(), "gemini");
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["contents"].as_array().unwrap().len(), len);
+        assert_eq!(body["contents"][0]["role"], "user");
+        assert_eq!(
+            body["contents"][1]["parts"][0]["thoughtSignature"],
+            crate::internal::signature::GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR
+        );
+        assert_eq!(
+            body["contents"][1]["parts"][0]["functionCall"]["name"],
+            "run"
+        );
+        if action == "countTokens" {
+            assert_eq!(body["contents"][1]["role"], "model");
+            assert!(body.get("tools").is_none());
+            assert!(body.get("generationConfig").is_none());
+        } else {
+            assert_eq!(body["contents"][2]["role"], "user");
+        }
+    }
+}
+
+#[test]
+fn candidate_google_preflight_native_interactions_keeps_its_own_history_contract() {
+    for source in ["", "interactions"] {
+        let executor = GeminiExecutor::interactions(
+            Arc::new(GeminiExecutorConfig::default()),
+            Arc::new(Registry::new()),
+        );
+        let request = ExecutorRequest {
+            auth_provider:"gemini-interactions".into(),
+            model:"gemini-test".into(),
+            source_format:source.into(),
+            payload:br#"{"input":"hello","contents":[{"role":"model","parts":[{"functionCall":{"name":"run"},"thoughtSignature":"claude#invalid"}]}]}"#.to_vec(),
+            ..Default::default()
+        };
+        for stream in [false, true] {
+            let (body, format) = executor
+                .prepare_body(&request, stream, "generateContent")
+                .unwrap();
+            assert_eq!(format.as_str(), "interactions");
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["contents"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                body["contents"][0]["parts"][0]["thoughtSignature"],
+                "claude#invalid"
+            );
+            assert_eq!(body["contents"][0]["role"], "model");
+        }
+    }
+}
+
 use crate::sdk::translator::RequestTransform;
 
 #[test]

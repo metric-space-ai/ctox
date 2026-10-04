@@ -1,5 +1,38 @@
 // ref: internal/runtime/executor/gemini_vertex_executor.go @ d7914afdedca7af95ee974a42453dc49fc1388ce
 // License: MIT (upstream); modifications AGPL-3.0-only
+#[test]
+fn candidate_google_preflight_vertex_repairs_signatures_and_count_boundaries() {
+    let executor = GeminiVertexExecutor::new(Arc::new(Registry::new()), None);
+    let request = ExecutorRequest {
+        model:"gemini-test".into(),
+        source_format:"gemini".into(),
+        payload:br#"{"contents":[{"role":"model","parts":[{"functionCall":{"name":"run"},"thoughtSignature":"claude#invalid"}]}],"tools":[],"generationConfig":{"temperature":0.7},"safetySettings":[]}"#.to_vec(),
+        ..Default::default()
+    };
+    for (stream, count, len) in [(false, false, 3), (true, false, 3), (false, true, 2)] {
+        let (body, format) = executor.prepare_body(&request, stream, count).unwrap();
+        assert_eq!(format.as_str(), "gemini");
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["contents"].as_array().unwrap().len(), len);
+        assert_eq!(body["contents"][0]["role"], "user");
+        assert_eq!(
+            body["contents"][1]["parts"][0]["thoughtSignature"],
+            crate::internal::signature::GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR
+        );
+        assert_eq!(
+            body["contents"][1]["parts"][0]["functionCall"]["name"],
+            "run"
+        );
+        if count {
+            assert_eq!(body["contents"][1]["role"], "model");
+            assert!(body.get("tools").is_none());
+            assert!(body.get("generationConfig").is_none());
+        } else {
+            assert_eq!(body["contents"][2]["role"], "user");
+        }
+    }
+}
+
 use super::super::helps::{PayloadApplyConfig, PayloadModelRule, PayloadRule};
 
 #[test]

@@ -209,6 +209,14 @@ impl GeminiVertexExecutor {
         }
         body = serde_json::to_vec(&value)
             .map_err(|error| plugin_error(VertexExecutorError::InvalidJson(error.to_string())))?;
+        // ref: gemini_vertex_executor.go:348-359,612-615,940-941 @ d7914afd
+        // Both API-key and service-account paths share this preparation.
+        body = crate::internal::signature::sanitize_gemini_request_thought_signatures(&body);
+        body = if count {
+            super::helps::ensure_gemini_leading_user_content(&body, "contents").into_owned()
+        } else {
+            super::helps::ensure_gemini_boundary_user_content(&body, "contents").into_owned()
+        };
         Ok((body, to))
     }
 

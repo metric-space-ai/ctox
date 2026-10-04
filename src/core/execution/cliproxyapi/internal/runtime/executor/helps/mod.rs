@@ -24,7 +24,12 @@ pub mod devin_models;
 pub mod devin_proto;
 pub mod devin_request;
 pub mod devin_wire;
+mod gemini_content_turns;
 mod home_refresh;
+pub use gemini_content_turns::{
+    ensure_gemini_boundary_user_content, ensure_gemini_leading_user_content,
+    ensure_gemini_trailing_user_content,
+};
 mod json_retry_helpers;
 mod kimi_responses;
 mod logging_helpers;
@@ -87,6 +92,8 @@ mod devin_proto_test;
 mod devin_request_test;
 #[cfg(test)]
 mod devin_wire_test;
+#[cfg(test)]
+mod gemini_content_turns_test;
 #[cfg(test)]
 mod home_refresh_test;
 #[cfg(test)]
