@@ -26,6 +26,7 @@ pub(crate) struct NativeProviderFacts {
     pub(crate) api_provider_id: Option<String>,
     /// Verified at preparation, not a future permission or account identity.
     pub(crate) command_provenance: Option<Value>,
+    pub(crate) checkpoint_contract: Option<super::NativeProviderCheckpointContract>,
 }
 
 struct ProviderState {
@@ -40,6 +41,7 @@ struct ProviderRecord {
     execution: QueueExecutionFence,
     facts: NativeProviderFacts,
     facts_json: String,
+    checkpoint: Option<super::NativeProviderCheckpointBinding>,
     state: Mutex<ProviderState>,
 }
 
@@ -85,6 +87,41 @@ impl NativeProviderTurnOwner {
         api_provider_id: Option<&str>,
         verified_command_context: Option<&Value>,
     ) -> Result<Self> {
+        Self::prepare_with_checkpoint(
+            execution,
+            provider_session_id,
+            model_id,
+            model_provider_id,
+            api_provider_id,
+            verified_command_context,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_with_checkpoint(
+        execution: &QueueExecutionFence,
+        provider_session_id: &str,
+        model_id: &str,
+        model_provider_id: Option<&str>,
+        api_provider_id: Option<&str>,
+        verified_command_context: Option<&Value>,
+        checkpoint: Option<&super::NativeProviderCheckpointBinding>,
+    ) -> Result<Self> {
+        let _account_guard = checkpoint
+            .map(|binding| binding.auth.current_runtime_account_guard())
+            .transpose()?;
+        if let Some(binding) = checkpoint {
+            ensure!(
+                binding.auth.runtime_account_binding()
+                    == Some(binding.contract.gateway_account_id.as_str())
+                    && binding.contract.harness == ctox_core::native_harness_name()
+                    && binding.contract.harness_version == ctox_core::native_harness_version()
+                    && model_provider_id == Some(binding.contract.model_route_id.as_str()),
+                "native checkpoint provider contract no longer matches its actual source"
+            );
+        }
+
         ensure!(
             valid_id(provider_session_id) && valid_id(model_id),
             "native provider preparation has no actual session/model identity"
@@ -129,6 +166,7 @@ impl NativeProviderTurnOwner {
             model_provider_id: model_provider_id.map(str::to_owned),
             api_provider_id: api_provider_id.map(str::to_owned),
             command_provenance,
+            checkpoint_contract: checkpoint.map(|binding| binding.contract.clone()),
         };
         let facts_json = serde_json::to_string(&facts)?;
         ensure!(
@@ -182,6 +220,7 @@ impl NativeProviderTurnOwner {
                 execution: execution.clone(),
                 facts,
                 facts_json,
+                checkpoint: checkpoint.cloned(),
                 state: Mutex::new(ProviderState {
                     live: true,
                     committed: false,
@@ -225,6 +264,12 @@ impl NativeProviderTurnOwner {
                 state.live && state.committed && state.turn_id.is_none(),
                 "native provider turn already bound/closed"
             );
+            let _account_guard = self
+                .record
+                .checkpoint
+                .as_ref()
+                .map(|binding| binding.auth.current_runtime_account_guard())
+                .transpose()?;
             let updated = tx.execute(
                 "UPDATE native_worker_provider_bindings
                 SET provider_turn_id=?2
@@ -251,7 +296,11 @@ impl NativeProviderBinding {
         &self,
         admission: &dyn NativeProviderAdmission,
     ) -> Result<()> {
-        self.with_live_provider(|_, turn| {
+        self.with_live_provider(|facts, turn| {
+            ensure!(
+                facts.checkpoint_contract.is_some(),
+                "native guest admission requires actual account and harness binding"
+            );
             ensure!(
                 turn.is_none(),
                 "provider turn already started before admission"
@@ -308,6 +357,12 @@ impl NativeProviderBinding {
                 json == self.record.facts_json && turn == state.turn_id && finished.is_none(),
                 "native provider witness changed, ended or was replayed"
             );
+            let _account_guard = self
+                .record
+                .checkpoint
+                .as_ref()
+                .map(|binding| binding.auth.current_runtime_account_guard())
+                .transpose()?;
             publish(tx, &self.record.facts, state.turn_id.as_deref())
         })
     }
@@ -575,6 +630,30 @@ mod tests {
         Ok(())
     }
 
+    fn prepare_guest(
+        execution: &QueueExecutionFence,
+        root: &Path,
+    ) -> Result<(NativeProviderTurnOwner, Arc<ctox_core::AuthManager>)> {
+        let auth = ctox_core::AuthManager::from_account_bound_runtime_auth(
+            ctox_core::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            root.to_owned(),
+        )?;
+        let checkpoint = super::super::NativeProviderCheckpointBinding::from_pinned_auth(
+            auth.clone(),
+            "actual-model-route",
+        )?;
+        let owner = NativeProviderTurnOwner::prepare_with_checkpoint(
+            execution,
+            "actual-thread",
+            "actual-model",
+            Some("actual-model-route"),
+            Some("actual-api-route"),
+            None,
+            Some(&checkpoint),
+        )?;
+        Ok((owner, auth))
+    }
+
     struct Admission {
         calls: Arc<AtomicUsize>,
         revoke: Option<Arc<QueueWorkerLifetime>>,
@@ -605,8 +684,8 @@ mod tests {
     async fn native_provider_admission_revalidates_after_await_and_denies_before_start(
     ) -> Result<()> {
         for (revoke, deny) in [(false, false), (true, false), (false, true)] {
-            let (_root, execution, lifetime) = admitted()?;
-            let owner = prepare(&execution)?;
+            let (root, execution, lifetime) = admitted()?;
+            let (owner, _) = prepare_guest(&execution, root.path())?;
             let calls = Arc::new(AtomicUsize::new(0));
             let admission = Admission {
                 calls: calls.clone(),
@@ -620,6 +699,52 @@ mod tests {
                 owner.bind_turn("actual-thread", "actual-turn")?;
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_guest_admission_requires_real_account_source_before_owner_callback(
+    ) -> Result<()> {
+        let (_root, execution, _) = admitted()?;
+        let owner = prepare(&execution)?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let admission = Admission {
+            calls: calls.clone(),
+            revoke: None,
+            deny: false,
+        };
+        assert!(owner
+            .binding()
+            .admit_before_start(&admission)
+            .await
+            .is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn native_account_removal_fences_provider_publication_and_turn_binding() -> Result<()> {
+        let (root, execution, _) = admitted()?;
+        let (owner, auth) = prepare_guest(&execution, root.path())?;
+        owner.binding().with_live_provider(|facts, _| {
+            assert_eq!(
+                facts
+                    .checkpoint_contract
+                    .as_ref()
+                    .unwrap()
+                    .gateway_account_id,
+                "account_id"
+            );
+            Ok(())
+        })?;
+        // Real file-backed logout/reload removes the account while the native
+        // worker and its committed provider witness remain alive.
+        auth.reload();
+        assert!(owner
+            .binding()
+            .with_live_provider(|_, _| panic!("removed account published"))
+            .is_err());
+        assert!(owner.bind_turn("actual-thread", "actual-turn").is_err());
         Ok(())
     }
 

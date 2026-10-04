@@ -1,3 +1,43 @@
+/// Server-resolved provider facts for a portable native guest session.
+/// The public account ID is not an entitlement or a replacement policy grant.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct NativeProviderCheckpointContract {
+    pub(crate) harness: String,
+    pub(crate) harness_version: String,
+    pub(crate) model_route_id: String,
+    pub(crate) gateway_account_id: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct NativeProviderCheckpointBinding {
+    contract: NativeProviderCheckpointContract,
+    auth: std::sync::Arc<ctox_core::AuthManager>,
+}
+impl NativeProviderCheckpointBinding {
+    pub(crate) fn from_pinned_auth(
+        auth: std::sync::Arc<ctox_core::AuthManager>,
+        model_route_id: &str,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !model_route_id.trim().is_empty(),
+            "native model route is missing"
+        );
+        let guard = auth.current_runtime_account_guard()?;
+        let account_id = auth
+            .runtime_account_binding()
+            .ok_or_else(|| anyhow::anyhow!("native provider account is not bound"))?
+            .to_owned();
+        let contract = NativeProviderCheckpointContract {
+            harness: ctox_core::native_harness_name().into(),
+            harness_version: ctox_core::native_harness_version().into(),
+            model_route_id: model_route_id.into(),
+            gateway_account_id: account_id,
+        };
+        drop(guard);
+        Ok(Self { contract, auth })
+    }
+}
+
 mod account_helpers;
 #[cfg(unix)]
 mod queue_execution_fence;

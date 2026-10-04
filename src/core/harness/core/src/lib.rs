@@ -5,6 +5,16 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+/// Actual compiled harness identity; no caller-supplied version/alias.
+pub const fn native_harness_name() -> &'static str {
+    env!("CARGO_PKG_NAME")
+}
+
+/// Actual build version written into this harness's portable SessionMeta.
+pub const fn native_harness_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;

@@ -1036,6 +1036,134 @@ pub struct AuthManager {
     enable_ctox_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
+    // Only the explicitly native account-bound lane sets this immutable pin.
+    runtime_account_binding: Option<String>,
+    runtime_account_storage: Option<AuthCredentialsStoreMode>,
+}
+
+/// Keeps account replacement/reload serialized with a bounded native callback.
+/// Credentials remain private; holding this is not a Business OS policy grant.
+pub struct RuntimeAccountBindingGuard<'a> {
+    _auth: std::sync::RwLockReadGuard<'a, CachedAuth>,
+}
+
+#[cfg(test)]
+mod native_account_binding_tests {
+    use super::*;
+
+    fn account(id: &str) -> CodexAuth {
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        if let CodexAuth::Chatgpt(inner) = &auth {
+            inner
+                .state
+                .auth_dot_json
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .tokens
+                .as_mut()
+                .unwrap()
+                .account_id = Some(id.to_owned());
+        }
+        auth
+    }
+
+    #[test]
+    fn account_bound_runtime_rejects_api_key_and_foreign_reload() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            AuthManager::from_account_bound_runtime_auth(
+                CodexAuth::from_api_key("test-placeholder"),
+                root.path().into(),
+            )
+            .is_err()
+        );
+        let manager = AuthManager::from_account_bound_runtime_auth(
+            account("native-account"),
+            root.path().into(),
+        )
+        .unwrap();
+        assert_eq!(manager.runtime_account_binding(), Some("native-account"));
+        assert!(manager.current_runtime_account_guard().is_ok());
+        manager.set_cached_auth(Some(account("foreign-account")));
+        assert!(manager.auth_cached().is_none());
+        assert!(manager.current_runtime_account_guard().is_err());
+        assert_eq!(manager.runtime_account_binding(), Some("native-account"));
+    }
+
+    #[test]
+    fn account_bound_runtime_detects_removed_native_auth() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = AuthManager::from_account_bound_runtime_auth(
+            account("native-account"),
+            root.path().into(),
+        )
+        .unwrap();
+        // Exercise the real file-backed reload path with no credentials present.
+        assert!(manager.reload());
+        assert!(manager.auth_cached().is_none());
+        assert!(manager.current_runtime_account_guard().is_err());
+    }
+
+    #[test]
+    fn native_storage_binding_detects_external_logout_and_foreign_account() {
+        let root = tempfile::tempdir().unwrap();
+        let mode = AuthCredentialsStoreMode::File;
+        save_auth(
+            root.path(),
+            &account("native-account").get_current_auth_json().unwrap(),
+            mode,
+        )
+        .unwrap();
+        let manager = AuthManager::from_account_bound_storage(root.path().into(), mode).unwrap();
+        assert!(manager.current_runtime_account_guard().is_ok());
+        logout(root.path(), mode).unwrap();
+        // The local manager cache is intentionally still populated; real source
+        // removal must deny without asking that manager to reload.
+        assert!(manager.auth_cached().is_some());
+        assert!(manager.current_runtime_account_guard().is_err());
+        save_auth(
+            root.path(),
+            &account("foreign-account").get_current_auth_json().unwrap(),
+            mode,
+        )
+        .unwrap();
+        assert!(manager.current_runtime_account_guard().is_err());
+        assert_eq!(manager.runtime_account_binding(), Some("native-account"));
+    }
+
+    #[test]
+    fn retained_account_guard_serializes_foreign_auth_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = AuthManager::from_account_bound_runtime_auth(
+            account("native-account"),
+            root.path().into(),
+        )
+        .unwrap();
+        let guard = manager.current_runtime_account_guard().unwrap();
+        let other = manager.clone();
+        let (started, start) = std::sync::mpsc::channel();
+        let (finished, finish) = std::sync::mpsc::channel();
+        let task = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            other.set_cached_auth(Some(account("foreign-account")));
+            finished.send(()).unwrap();
+        });
+        start
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(matches!(
+            finish.recv_timeout(std::time::Duration::from_millis(20)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(guard);
+        finish
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        task.join().unwrap();
+        assert!(manager.current_runtime_account_guard().is_err());
+    }
 }
 
 impl AuthManager {
@@ -1064,6 +1192,8 @@ impl AuthManager {
             enable_ctox_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            runtime_account_binding: None,
+            runtime_account_storage: None,
         }
     }
 
@@ -1080,6 +1210,8 @@ impl AuthManager {
             enable_ctox_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            runtime_account_binding: None,
+            runtime_account_storage: None,
         })
     }
 
@@ -1098,6 +1230,8 @@ impl AuthManager {
             enable_ctox_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            runtime_account_binding: None,
+            runtime_account_storage: None,
         })
     }
 
@@ -1114,7 +1248,115 @@ impl AuthManager {
             enable_ctox_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            runtime_account_binding: None,
+            runtime_account_storage: None,
         })
+    }
+
+    /// Retain a native session's actual ChatGPT account. No API-key or storage
+    /// alias is an account identity. Foreign/removed auth clears this manager;
+    /// it can never silently switch this session to another account.
+    pub fn from_account_bound_runtime_auth(
+        auth: CodexAuth,
+        codex_home: PathBuf,
+    ) -> std::io::Result<Arc<Self>> {
+        Self::account_bound(auth, codex_home, None)
+    }
+
+    /// Resolve the actual native credential source rather than retain only a
+    /// startup snapshot. Each publication callback rechecks this store. This
+    /// detects external removal/replacement; it is not an atomic external
+    /// policy or credential-store mutation fence.
+    pub fn from_account_bound_storage(
+        codex_home: PathBuf,
+        mode: AuthCredentialsStoreMode,
+    ) -> std::io::Result<Arc<Self>> {
+        let auth = load_auth(&codex_home, false, mode)?.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "native provider credential source is unavailable",
+            )
+        })?;
+        Self::account_bound(auth, codex_home, Some(mode))
+    }
+
+    fn account_bound(
+        auth: CodexAuth,
+        codex_home: PathBuf,
+        source: Option<AuthCredentialsStoreMode>,
+    ) -> std::io::Result<Arc<Self>> {
+        let account_id = auth
+            .get_account_id()
+            .filter(|id| {
+                !id.is_empty()
+                    && id.trim() == id
+                    && id.len() <= 256
+                    && !id.chars().any(char::is_control)
+            })
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "native provider requires an actual authenticated account",
+                )
+            })?;
+        Ok(Arc::new(Self {
+            codex_home,
+            inner: RwLock::new(CachedAuth {
+                auth: Some(auth),
+                external_refresher: None,
+            }),
+            enable_ctox_api_key_env: false,
+            auth_credentials_store_mode: source.unwrap_or(AuthCredentialsStoreMode::File),
+            forced_chatgpt_workspace_id: RwLock::new(Some(account_id.clone())),
+            runtime_account_binding: Some(account_id),
+            runtime_account_storage: source,
+        }))
+    }
+
+    pub fn runtime_account_binding(&self) -> Option<&str> {
+        self.runtime_account_binding.as_deref()
+    }
+
+    pub fn current_runtime_account_guard(&self) -> std::io::Result<RuntimeAccountBindingGuard<'_>> {
+        let expected = self.runtime_account_binding.as_deref().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "provider account is not pinned",
+            )
+        })?;
+        let auth = self.inner.read().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "provider auth is poisoned",
+            )
+        })?;
+        if auth
+            .auth
+            .as_ref()
+            .and_then(CodexAuth::get_account_id)
+            .as_deref()
+            != Some(expected)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "native provider account is unavailable",
+            ));
+        }
+        if let Some(mode) = self.runtime_account_storage {
+            let current = load_auth(&self.codex_home, false, mode)?;
+            if current
+                .as_ref()
+                .and_then(CodexAuth::get_account_id)
+                .as_deref()
+                != Some(expected)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "native credential source changed or was removed",
+                ));
+            }
+        }
+        Ok(RuntimeAccountBindingGuard { _auth: auth })
     }
 
     /// Current cached auth (clone) without attempting a refresh.
@@ -1207,6 +1449,20 @@ impl AuthManager {
     }
 
     fn set_cached_auth(&self, new_auth: Option<CodexAuth>) -> bool {
+        // Foreign refresh/reload invalidates this lane; it must not retain stale
+        // credentials or adopt the newly loaded account.
+        let new_auth = match self.runtime_account_binding.as_deref() {
+            Some(expected)
+                if new_auth
+                    .as_ref()
+                    .and_then(CodexAuth::get_account_id)
+                    .as_deref()
+                    != Some(expected) =>
+            {
+                None
+            }
+            _ => new_auth,
+        };
         if let Ok(mut guard) = self.inner.write() {
             let previous = guard.auth.as_ref();
             let changed = !AuthManager::auths_equal(previous, new_auth.as_ref());

@@ -895,6 +895,9 @@ pub(crate) struct PersistentSession {
     additional_writable_roots: Vec<PathBuf>,
     additional_readable_roots: Vec<PathBuf>,
     persistent_worker: bool,
+    native_checkpoint_binding: Option<crate::channels::NativeProviderCheckpointBinding>,
+    #[cfg(unix)]
+    native_command_session_token: Option<String>,
     #[cfg(unix)]
     native_command_context: Option<JsonValue>,
     #[cfg(unix)]
@@ -964,8 +967,65 @@ impl PersistentSession {
     pub(crate) fn require_native_provider_admission(
         &mut self,
         admission: std::sync::Arc<dyn crate::channels::NativeProviderAdmission>,
-    ) {
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.native_checkpoint_binding.is_some() && !self.poisoned,
+            "native admission requires a fresh durable account-bound guest session"
+        );
+        anyhow::ensure!(
+            self.native_provider_admission.is_none(),
+            "native admission owner already installed"
+        );
         self.native_provider_admission = Some(admission);
+        Ok(())
+    }
+
+    /// Create a fresh durable native guest session with actual pinned account
+    /// and policy-verified command provenance. No named legacy worker is reused.
+    /// This creates no model turn and does not itself grant Raft/guest execution.
+    #[cfg(unix)]
+    pub(crate) fn start_native_guest_with_business_os_mcp(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        command_session_token: &str,
+        persona: Option<&str>,
+        admission: std::sync::Arc<dyn crate::channels::NativeProviderAdmission>,
+    ) -> Result<Self> {
+        let context = crate::business_os::mcp_channel::verify_internal_command_session_token(
+            root,
+            command_session_token,
+        )?;
+        let addr = settings
+            .get(BUSINESS_OS_MCP_ADDR_KEY)
+            .map(String::as_str)
+            .unwrap_or(BUSINESS_OS_MCP_DEFAULT_ADDR);
+        let token = crate::business_os::mcp_channel::mcp_operator_auth_token(root)?;
+        let config = business_os_mcp_thread_config(addr, &token, command_session_token)?;
+        let mut session = Self::start_with_native_mode(
+            root,
+            settings,
+            None,
+            persona,
+            false,
+            false,
+            false,
+            Some(config),
+            false,
+            false,
+            true,
+        )?;
+        let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
+            root,
+            command_session_token,
+        )?;
+        anyhow::ensure!(
+            current == context,
+            "native guest command authority changed during startup"
+        );
+        session.native_command_context = Some(current);
+        session.native_command_session_token = Some(command_session_token.to_owned());
+        session.require_native_provider_admission(admission)?;
+        Ok(session)
     }
 
     /// Start a fresh worker session that cannot resume the process-wide
@@ -1146,6 +1206,35 @@ impl PersistentSession {
         read_only_sandbox: bool,
         persistent_worker: bool,
     ) -> Result<Self> {
+        Self::start_with_native_mode(
+            root,
+            settings,
+            base_instructions,
+            persona,
+            disable_compaction,
+            disable_active_tools,
+            disable_mcp_servers,
+            thread_config,
+            read_only_sandbox,
+            persistent_worker,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_with_native_mode(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        base_instructions: Option<&str>,
+        persona: Option<&str>,
+        disable_compaction: bool,
+        disable_active_tools: bool,
+        disable_mcp_servers: bool,
+        thread_config: Option<HashMap<String, JsonValue>>,
+        read_only_sandbox: bool,
+        persistent_worker: bool,
+        native_guest: bool,
+    ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -1165,14 +1254,24 @@ impl PersistentSession {
                 thread_config.as_ref(),
                 read_only_sandbox,
                 persistent_worker,
+                native_guest,
             )
             .await
         });
-        let (client, thread_id, cwd, seq, model, model_provider, api_provider, reasoning_effort) =
-            match start_result {
-                Ok(started) => started,
-                Err(err) => return Err(err),
-            };
+        let (
+            client,
+            thread_id,
+            cwd,
+            seq,
+            model,
+            model_provider,
+            api_provider,
+            reasoning_effort,
+            native_checkpoint_binding,
+        ) = match start_result {
+            Ok(started) => started,
+            Err(err) => return Err(err),
+        };
 
         let mut policy = CompactPolicy::from_settings(
             settings.get("CTOX_COMPACT_TRIGGER").map(String::as_str),
@@ -1244,6 +1343,9 @@ impl PersistentSession {
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             persistent_worker,
+            native_checkpoint_binding,
+            #[cfg(unix)]
+            native_command_session_token: None,
             #[cfg(unix)]
             native_command_context: None,
             #[cfg(unix)]
@@ -1362,6 +1464,9 @@ impl PersistentSession {
             .runtime
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("session runtime already shut down"))?;
+        let native_checkpoint_binding = self.native_checkpoint_binding.clone();
+        #[cfg(unix)]
+        let native_command_session_token = self.native_command_session_token.clone();
         let result = runtime.block_on(async {
             Self::run_turn_async(
                 client,
@@ -1390,6 +1495,9 @@ impl PersistentSession {
                 progress,
                 required_initial_tool.as_deref(),
                 queue_turn_lease,
+                native_checkpoint_binding.as_ref(),
+                #[cfg(unix)]
+                native_command_session_token.as_deref(),
                 #[cfg(unix)]
                 native_command_context.as_ref(),
                 #[cfg(unix)]
@@ -1428,6 +1536,7 @@ impl PersistentSession {
         thread_config: Option<&HashMap<String, JsonValue>>,
         read_only_sandbox: bool,
         persistent_worker: bool,
+        native_guest: bool,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -1437,6 +1546,7 @@ impl PersistentSession {
         Option<String>,
         Option<String>,
         Option<ReasoningEffort>,
+        Option<crate::channels::NativeProviderCheckpointBinding>,
     )> {
         let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
         let runtime_local_preset = resolved_runtime
@@ -1523,6 +1633,14 @@ impl PersistentSession {
             .map_err(|err| anyhow::anyhow!("load config.toml: {err}"))?;
         let auth_credentials_store_mode =
             config_toml.cli_auth_credentials_store.unwrap_or_default();
+        if native_guest {
+            anyhow::ensure!(
+                config_toml.chatgpt_base_url.as_deref().is_none_or(
+                    |url| url.trim_end_matches('/') == "https://chatgpt.com/backend-api"
+                ),
+                "native account-bound guest cannot use a replacement ChatGPT endpoint"
+            );
+        }
         if use_chatgpt_subscription_auth {
             let _ = restore_chatgpt_subscription_auth_from_instance(
                 root,
@@ -1531,7 +1649,16 @@ impl PersistentSession {
             );
         }
 
-        let auth_manager = if let Some(ref key) = api_key {
+        let auth_manager = if native_guest {
+            anyhow::ensure!(
+                use_chatgpt_subscription_auth && !use_provider_subscription_proxy,
+                "native guest requires an account-bound direct provider; proxy account selection is unresolved"
+            );
+            AuthManager::from_account_bound_storage(
+                codex_home.clone(),
+                auth_credentials_store_mode,
+            )?
+        } else if let Some(ref key) = api_key {
             AuthManager::from_runtime_auth(
                 ctox_core::CodexAuth::from_api_key(key),
                 codex_home.clone(),
@@ -1560,11 +1687,17 @@ impl PersistentSession {
         );
 
         // Resolve model-provider BEFORE building overrides
-        let api_provider = super::turn_loop::resolve_api_model_provider_spec(
-            &model,
-            settings,
-            resolved_runtime.as_ref(),
-        );
+        let api_provider = if native_guest {
+            // Native account-bound ChatGPT uses the canonical authenticated
+            // harness route, never a no-auth CTOX API/proxy adapter.
+            None
+        } else {
+            super::turn_loop::resolve_api_model_provider_spec(
+                &model,
+                settings,
+                resolved_runtime.as_ref(),
+            )
+        };
         let local_provider =
             super::turn_loop::resolve_local_model_provider_spec(resolved_runtime.as_ref());
         if api_provider.is_some()
@@ -1586,14 +1719,18 @@ impl PersistentSession {
                 "CTOX local runtime requires socket-based Responses transport; no managed socket path is available"
             );
         }
-        let selected_provider_id = local_provider
-            .as_ref()
-            .map(|provider| provider.provider_id.to_string())
-            .or_else(|| {
-                api_provider
-                    .as_ref()
-                    .map(|provider| provider.provider_id.to_string())
-            });
+        let selected_provider_id = if native_guest {
+            Some("openai".to_owned())
+        } else {
+            local_provider
+                .as_ref()
+                .map(|provider| provider.provider_id.to_string())
+                .or_else(|| {
+                    api_provider
+                        .as_ref()
+                        .map(|provider| provider.provider_id.to_string())
+                })
+        };
         let tracking_api_provider =
             if use_chatgpt_subscription_auth || use_provider_subscription_proxy {
                 None
@@ -1621,7 +1758,7 @@ impl PersistentSession {
                 SandboxMode::WorkspaceWrite
             }),
             include_apply_patch_tool: Some(true),
-            ephemeral: Some(true),
+            ephemeral: Some(!native_guest),
             disable_mcp_servers,
             ..Default::default()
         };
@@ -1658,6 +1795,29 @@ impl PersistentSession {
             .build()
             .await
             .map_err(|err| anyhow::anyhow!("config build: {err}"))?;
+        let native_checkpoint_binding = if native_guest {
+            anyhow::ensure!(
+                local_provider.is_none(),
+                "native guest account is not a local model route"
+            );
+            anyhow::ensure!(
+                config.model_provider.requires_openai_auth
+                    && config.model_provider.wire_api.to_string() == "responses"
+                    && config.model_provider.base_url.is_none()
+                    && config.model_provider.transport_endpoint.is_none()
+                    && config.model_provider.env_key.is_none()
+                    && config.model_provider.experimental_bearer_token.is_none(),
+                "native provider route must use its pinned direct account"
+            );
+            Some(
+                crate::channels::NativeProviderCheckpointBinding::from_pinned_auth(
+                    auth_manager.clone(),
+                    &config.model_provider_id,
+                )?,
+            )
+        } else {
+            None
+        };
         let config = Arc::new(config);
         let session_source = SessionSource::Exec;
         let thread_manager = Arc::new(ThreadManager::new(
@@ -1704,6 +1864,7 @@ impl PersistentSession {
             disable_mcp_servers,
             thread_config,
             persistent_worker,
+            durable_guest: native_guest,
             persistent_thread_name: persistent_thread_name.as_deref(),
         };
         let timeouts = production_session_control_timeouts();
@@ -1718,6 +1879,7 @@ impl PersistentSession {
             selected_provider_id,
             tracking_api_provider,
             reasoning_effort,
+            native_checkpoint_binding,
         ))
     }
 
@@ -1748,11 +1910,14 @@ impl PersistentSession {
         progress: &mut dyn FnMut(&JsonValue),
         required_initial_tool: Option<&str>,
         queue_turn_lease: Option<&crate::channels::QueueTurnLeaseFence>,
+        native_checkpoint_binding: Option<&crate::channels::NativeProviderCheckpointBinding>,
+        #[cfg(unix)] native_command_session_token: Option<&str>,
         #[cfg(unix)] native_command_context: Option<&JsonValue>,
         #[cfg(unix)] native_provider_admission: Option<
             &dyn crate::channels::NativeProviderAdmission,
         >,
     ) -> Result<String> {
+        let native_guest = native_checkpoint_binding.is_some();
         let lease_reader = queue_turn_lease
             .map(|fence| fence.open_reader())
             .transpose()?;
@@ -1892,6 +2057,7 @@ impl PersistentSession {
             disable_mcp_servers,
             thread_config,
             persistent_worker,
+            durable_guest: native_guest,
             persistent_thread_name: persistent_thread_name.as_deref(),
         };
         let timeouts = production_session_control_timeouts();
@@ -1908,13 +2074,14 @@ impl PersistentSession {
         #[cfg(unix)]
         let mut provider_owner = execution
             .map(|execution| {
-                crate::channels::NativeProviderTurnOwner::prepare(
+                crate::channels::NativeProviderTurnOwner::prepare_with_checkpoint(
                     execution,
                     session_thread_id,
                     model,
                     model_provider,
                     api_provider,
                     native_command_context,
+                    native_checkpoint_binding,
                 )
             })
             .transpose()?;
@@ -1925,7 +2092,34 @@ impl PersistentSession {
                     "guest provider admission requires the actual native worker execution"
                 )
             })?;
-            provider.binding().admit_before_start(admission).await?;
+            let token = native_command_session_token.ok_or_else(|| {
+                anyhow::anyhow!("native guest has no retained command authorization")
+            })?;
+            let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
+                root, token,
+            )?;
+            anyhow::ensure!(
+                native_command_context == Some(&current),
+                "native guest command authority changed"
+            );
+            if let Err(error) = provider.binding().admit_before_start(admission).await {
+                return Err(SessionPoisoned(format!(
+                    "native guest admission requires reconciliation: {error}"
+                ))
+                .into());
+            }
+            let current =
+                crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)
+                    .map_err(|error| {
+                        SessionPoisoned(format!(
+                "native guest authority changed after admission; reconciliation required: {error}"
+            ))
+                    })?;
+            if native_command_context != Some(&current) {
+                return Err(SessionPoisoned(
+                    "native guest command authority changed after admission; reconciliation required".into()
+                ).into());
+            }
         }
         // Only the explicitly native-admitted guest lane forbids isolated
         // fallback. Ordinary isolated sessions retain their existing rotation.
@@ -1969,14 +2163,17 @@ impl PersistentSession {
                     if !prepared {
                         anyhow::ensure!(!prepared_guest, "admitted provider session rotated");
                         drop(provider_owner.take());
-                        provider_owner = Some(crate::channels::NativeProviderTurnOwner::prepare(
-                            execution.expect("provider owner requires execution"),
-                            &thread_id,
-                            model,
-                            model_provider,
-                            api_provider,
-                            native_command_context,
-                        )?);
+                        provider_owner = Some(
+                            crate::channels::NativeProviderTurnOwner::prepare_with_checkpoint(
+                                execution.expect("provider owner requires execution"),
+                                &thread_id,
+                                model,
+                                model_provider,
+                                api_provider,
+                                native_command_context,
+                                native_checkpoint_binding,
+                            )?,
+                        );
                     }
                 }
                 if let Some(owner) = provider_owner.as_ref() {

@@ -76,6 +76,27 @@ reconciliation and cannot synthesize a ready guest.
 - Workjet Main owns the single composed installed client and whole workflow
   acceptance; this API does not enable the VM capability catalog.
 
+The native producer constructor is
+`PersistentSession::start_native_guest_with_business_os_mcp`. It requests a fresh
+persisted harness thread before any model turn, retains the actual compiled
+harness/version and configured model route, and pins the account resolved from
+the configured native credential store. Its current supported profile is the
+direct authenticated ChatGPT Responses route; API-key, local and proxy-selected
+accounts are rejected because their account binding is not implemented.
+The provider callback holds the local account guard and rechecks the credential
+store, detecting external logout or a foreign account without relying on a cached
+startup snapshot. This read does not atomically fence external credential or
+SQLite policy mutation. Verified command authority is checked before and after
+admission; an uncertain or rejected admission poisons the session. A generic
+legacy provider witness cannot acquire guest admission.
+
+The constructor and its account checks do not replace canonical instance,
+project, principal, worker-profile or controller resolution. The concrete
+PendingCreate / quorum Create / fresh native policy revalidation / Admitted
+consumer and production registration remain unfinished. No capability is enabled
+by these producer changes. New account, durable-thread and provider regressions
+are source coverage until executed on the composed revision.
+
 There is deliberately no default/permissive production lifecycle owner or
 readiness probe in this module. Production registration remains unavailable
 until VM/Crew connect those actual authorities. The component tests exercise

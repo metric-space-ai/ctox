@@ -125,6 +125,8 @@ pub(crate) struct SessionThreadSpec<'a> {
     pub disable_mcp_servers: bool,
     pub thread_config: Option<&'a HashMap<String, JsonValue>>,
     pub persistent_worker: bool,
+    /// Persist a fresh guest thread without adopting the root's named worker.
+    pub durable_guest: bool,
     pub persistent_thread_name: Option<&'a str>,
 }
 
@@ -329,8 +331,8 @@ pub(crate) async fn start_session_thread<C: DirectSessionControlClient>(
             base_instructions: Some(spec.base_instructions.to_string()),
             dynamic_tools: spec.disable_active_tools.then(Vec::new),
             disable_mcp_servers: Some(spec.disable_mcp_servers),
-            ephemeral: Some(!spec.persistent_worker),
-            persist_extended_history: spec.persistent_worker,
+            ephemeral: Some(!(spec.persistent_worker || spec.durable_guest)),
+            persist_extended_history: spec.persistent_worker || spec.durable_guest,
             ..ThreadStartParams::default()
         },
     });
@@ -339,6 +341,16 @@ pub(crate) async fn start_session_thread<C: DirectSessionControlClient>(
         Ok(result) => result.map_err(|err| anyhow::anyhow!("thread/start: {err}"))?,
         Err(_) => anyhow::bail!("thread/start timed out after {}s", timeout.as_secs().max(1)),
     };
+    if spec.durable_guest {
+        anyhow::ensure!(
+            !response.thread.ephemeral
+                && uuid::Uuid::parse_str(&response.thread.id).is_ok()
+                && response.model == spec.model
+                && spec.model_provider == Some(response.model_provider.as_str())
+                && spec.model_provider == Some(response.thread.model_provider.as_str()),
+            "native guest startup did not return its durable provider/session contract"
+        );
+    }
     let thread_id = response.thread.id;
     if let Some(persistent_thread_name) = spec.persistent_thread_name {
         let set_name_fut =
@@ -460,7 +472,9 @@ where
         )) => Err(anyhow::Error::new(SessionPoisoned(format!(
             "turn/start ended ambiguously ({err}); session poisoned instead of retried to avoid a duplicate turn"
         )))),
-        Ok(Err(err @ TypedRequestError::Server { .. })) if spec.persistent_worker || !allow_rotation => {
+        Ok(Err(err @ TypedRequestError::Server { .. }))
+            if spec.persistent_worker || !allow_rotation =>
+        {
             eprintln!(
                 "[ctox direct-session] turn/start on persistent thread {thread_id} was rejected ({err}); refusing replacement"
             );
@@ -470,10 +484,9 @@ where
             eprintln!(
                 "[ctox direct-session] turn/start on session thread {thread_id} was rejected by the server ({err}); rotating isolated thread"
             );
-            let rotated_thread_id =
-                start_session_thread(client, seq, spec, timeouts.start)
-                    .await
-                    .map_err(|err| anyhow::anyhow!("thread/start (rotation): {err}"))?;
+            let rotated_thread_id = start_session_thread(client, seq, spec, timeouts.start)
+                .await
+                .map_err(|err| anyhow::anyhow!("thread/start (rotation): {err}"))?;
             eprintln!("[ctox direct-session] rotated session thread: {rotated_thread_id}");
             *session_thread_id = rotated_thread_id.clone();
             // The rotation retry is likewise timeout-poisoned: a fresh
@@ -703,6 +716,7 @@ mod tests {
             disable_mcp_servers: false,
             thread_config: None,
             persistent_worker: true,
+            durable_guest: false,
             persistent_thread_name: Some(name),
         }
     }
@@ -717,8 +731,61 @@ mod tests {
             disable_mcp_servers: false,
             thread_config: None,
             persistent_worker: false,
+            durable_guest: false,
             persistent_thread_name: None,
         }
+    }
+
+    #[tokio::test]
+    async fn durable_guest_starts_fresh_with_persisted_history() -> Result<()> {
+        let id = "00000000-0000-0000-0000-000000000001";
+        let mut reply = start_ok(id);
+        let ScriptedReply::Ok(value) = &mut reply else {
+            unreachable!()
+        };
+        value["thread"]["ephemeral"] = JsonValue::Bool(false);
+        let client = ScriptedControlClient::new(vec![reply]);
+        let mut spec = isolated_spec();
+        spec.durable_guest = true;
+        let mut seq = RequestIdSeq::new();
+        assert_eq!(
+            bind_session_thread(&client, &mut seq, &spec, &fast_timeouts()).await?,
+            id
+        );
+        assert_eq!(client.methods(), ["thread/start"]);
+        let params = client.params();
+        assert_eq!(params[0]["ephemeral"], JsonValue::Bool(false));
+        assert_eq!(params[0]["persistExtendedHistory"], JsonValue::Bool(true));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn durable_guest_rejects_ephemeral_foreign_provider_model_or_session() -> Result<()> {
+        for mutation in 0..4 {
+            let mut reply = start_ok("00000000-0000-0000-0000-000000000001");
+            let ScriptedReply::Ok(value) = &mut reply else {
+                unreachable!()
+            };
+            value["thread"]["ephemeral"] = JsonValue::Bool(false);
+            match mutation {
+                0 => value["thread"]["ephemeral"] = JsonValue::Bool(true),
+                1 => value["modelProvider"] = JsonValue::String("foreign".into()),
+                2 => value["model"] = JsonValue::String("foreign".into()),
+                3 => value["thread"]["id"] = JsonValue::String("not-a-session".into()),
+                _ => unreachable!(),
+            }
+            let client = ScriptedControlClient::new(vec![reply]);
+            let mut spec = isolated_spec();
+            spec.durable_guest = true;
+            let mut seq = RequestIdSeq::new();
+            assert!(
+                bind_session_thread(&client, &mut seq, &spec, &fast_timeouts())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(client.methods(), ["thread/start"]);
+        }
+        Ok(())
     }
 
     fn fast_timeouts() -> SessionControlTimeouts {
