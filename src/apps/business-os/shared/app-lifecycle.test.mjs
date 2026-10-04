@@ -386,7 +386,7 @@ test('lifecycle badge exposes version and business-facing state labels', () => {
       version: appLifecycleBadge(draftApp).version,
       state: appLifecycleBadge(draftApp).state,
     },
-    { text: 'Privat', version: 'v0.1.0', state: 'private' }
+    { text: 'App privat', version: 'v0.1.0', state: 'private' }
   );
   assert.deepEqual(
     {
@@ -396,6 +396,31 @@ test('lifecycle badge exposes version and business-facing state labels', () => {
     },
     { text: 'Team', version: 'v1.0.0', state: 'team' }
   );
+});
+
+test('Mail badge identifies app publication without granting access to mail data', () => {
+  const mail = {
+    ...draftApp,
+    id: 'mail',
+    version: '1.0.0',
+    lifecycle: {
+      source: 'native_catalog_projection',
+      runtime_installed: true,
+      current_semver: '1.0.0',
+      visibility_state: 'private',
+      release_status: 'unreleased',
+    },
+  };
+  const options = { session: session('team_member'), governance };
+  const badge = appLifecycleBadge(mail, options);
+  assert.equal(badge.text, 'App privat');
+  assert.match(badge.title, /App-Sichtbarkeit: Privat/);
+  assert.match(badge.title, /Datenrechte werden separat geprüft/);
+  assert.equal(badge.public, false);
+  assert.equal(canSeeModuleForAppVersion(mail, options), false);
+  const released = { ...mail, lifecycle: { ...mail.lifecycle, visibility_state: 'team', release_status: 'released' } };
+  assert.equal(appLifecycleBadge(released, options).text, 'Team');
+  assert.equal(canSeeModuleForAppVersion(released, options), true);
 });
 
 test('lifecycle state separates app visibility from app management permission', () => {
