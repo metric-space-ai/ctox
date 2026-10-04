@@ -62,8 +62,16 @@
   transport, failure/cancellation/deadline and content preservation, coalescing,
   actual unary/stream bootstrap replay, committed-stream non-replay and account
   replacement/disabling/user-edit races. These guards are not executed yet.
-  Actual Meta inference executor/factory, production host binding, scheduled
-  refresh, full native/default-transport/Go validation and promotion remain open.
+  The native Meta ProviderExecutor and service factory now consume the owned
+  preparation contract, selected HTTP client, unary terminal translation,
+  bounded streaming lines, apply_patch state, Claude token translation and
+  fixed O200k token counting. Raw output items and missing IDs survive terminal
+  reconstruction; Responses usage defaults preserve measured cache/reasoning
+  values. Typed quota/reset evidence reaches generic unary, stream bootstrap
+  and committed-stream cooldown consumers. The added26 regression functions
+  are prepared, not executed. Production transport/thinking/session/usage-owner
+  and presenter registration, scheduled refresh, full native/default-transport/
+  Go validation and promotion remain open.
 
 - Parent continuation after bounded Grok runs: all six candidate request
   compatibility facades are now exported, with24 prepared regressions:

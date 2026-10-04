@@ -55,8 +55,17 @@ HTTP futures or serving later refreshes from a completed result. Config API keys
 cannot use DCA values as inference keys. Concurrent replacement, disabling,
 cancellation and user edits remain manager-owned.
 
-Production host/presenter registration and the Meta inference executor/factory
-still need integration. Scheduled refresh remains on the existing synchronous
-capability; these request-time operations use the new explicit async capability.
+The native Meta ProviderExecutor and service factory now expose actual unary,
+streaming, local O200k counting and selected-client HTTP capabilities. Translation,
+thinking, payload configuration and usage identity are explicit host dependencies.
+Streaming preserves fragmented SSE and terminal raw items, publishes observed
+usage once, and releases its upstream receiver when the downstream owner closes.
+Provider reset hints and subscription quota scope reach the generic conductor's
+unary, bootstrap and committed-stream cooldown paths without text-based inference.
+
+Production host/presenter and per-account transport/thinking/session/usage-owner
+registration still need integration. The factory requires an owned synchronous
+scheduled refresher and the explicit async request-time capability; it creates
+no runtime or refresh bridge itself.
 Prepared synthetic native guards and frozen Go oracles do not establish live
 Meta, provider hub or App acceptance.

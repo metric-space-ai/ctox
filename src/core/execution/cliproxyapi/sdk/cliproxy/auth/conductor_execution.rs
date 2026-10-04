@@ -19,6 +19,38 @@ use super::{
     RefreshTransactionError,
 };
 
+#[cfg(test)]
+#[path = "conductor_meta_error_test.rs"]
+mod meta_error_tests;
+
+/// Only selected Meta accounts may consume Meta's typed credential-wide quota.
+/// Arbitrary error text and caller metadata cannot broaden another provider's scope.
+fn provider_error_retry_policy(
+    auth: &Auth,
+    model: &str,
+    error: &PluginExecutionError,
+) -> (Option<String>, Option<u64>) {
+    let model = (!model.trim().is_empty()).then(|| model.trim().to_owned());
+    if !auth.provider.trim().eq_ignore_ascii_case("meta") {
+        return (model, None);
+    }
+    let mut current: &(dyn std::error::Error + 'static) = error.as_ref();
+    loop {
+        if let Some(error) = current.downcast_ref::<
+            crate::internal::runtime::executor::meta_executor_response::MetaHttpStatusError,
+        >() {
+            let delay = error.retry_after.map(|value| {
+                value.as_millis().min(u128::from(u64::MAX)) as u64
+            });
+            return (if error.credential_scoped { None } else { model }, delay);
+        }
+        let Some(source) = current.source() else {
+            return (model, None);
+        };
+        current = source;
+    }
+}
+
 #[must_use]
 pub(crate) fn plugin_error_status(error: &PluginExecutionError) -> u16 {
     let mut current: &(dyn std::error::Error + 'static) = error.as_ref();
@@ -380,7 +412,7 @@ impl GenericAuthRuntime {
                     {
                         self.record_availability_neutral_outcome(&auth.id, false);
                     } else {
-                        self.record_outcome(&auth, &route_model, status, false)?;
+                        self.record_plugin_error_outcome(&auth, &route_model, &error)?;
                     }
                     if matches!(status, 400 | 422) {
                         return Err(GenericExecutionError::Provider(error));
@@ -548,14 +580,47 @@ impl GenericAuthRuntime {
         status: u16,
         success: bool,
     ) -> Result<(), GenericExecutionError> {
+        self.record_outcome_with_policy(
+            auth,
+            (!model.trim().is_empty()).then(|| model.trim().to_owned()),
+            status,
+            success,
+            None,
+        )
+    }
+
+    pub(crate) fn record_plugin_error_outcome(
+        &self,
+        auth: &Auth,
+        model: &str,
+        error: &PluginExecutionError,
+    ) -> Result<(), GenericExecutionError> {
+        let (model, retry_delay_ms) = provider_error_retry_policy(auth, model, error);
+        self.record_outcome_with_policy(
+            auth,
+            model,
+            plugin_error_status(error),
+            false,
+            retry_delay_ms,
+        )
+    }
+
+    fn record_outcome_with_policy(
+        &self,
+        auth: &Auth,
+        model: Option<String>,
+        status: u16,
+        success: bool,
+        retry_delay_ms: Option<u64>,
+    ) -> Result<(), GenericExecutionError> {
         let observed_at = self.clock.now();
         self.cooldown
             .record(AccountExecutionResult {
                 provider: auth.provider.clone(),
                 auth_id: auth.id.clone(),
-                model: (!model.trim().is_empty()).then(|| model.trim().to_owned()),
+                model,
                 status,
-                retry_delay_ms: None,
+                retry_delay_ms,
                 observed_at_ms: observed_at.timestamp_millis(),
             })
             .map_err(GenericExecutionError::Cooldown)?;

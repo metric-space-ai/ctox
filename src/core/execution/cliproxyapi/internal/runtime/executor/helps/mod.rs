@@ -34,6 +34,8 @@ mod openai_compat_tool_results;
 pub mod payload_helpers;
 mod payload_mutations;
 mod proxy_helpers;
+mod responses_usage_helpers;
+pub use responses_usage_helpers::ensure_responses_usage_details;
 mod session_id_cache;
 mod thinking;
 mod thinking_providers;

@@ -122,7 +122,7 @@ impl GenericAuthRuntime {
                     }
                     Err(error) => {
                         let status = plugin_error_status(&error);
-                        self.record_outcome(&auth, &route_model, status, false)?;
+                        self.record_plugin_error_outcome(&auth, &route_model, &error)?;
                         if matches!(status, 400 | 422) {
                             return Err(GenericExecutionError::Provider(error));
                         }
@@ -172,7 +172,7 @@ impl GenericAuthRuntime {
                         BootstrapFailureKind::Provider(error) => {
                             drain_stream(failure.remaining);
                             let status = plugin_error_status(&error);
-                            self.record_outcome(&auth, &route_model, status, false)?;
+                            self.record_plugin_error_outcome(&auth, &route_model, &error)?;
                             if matches!(status, 400 | 422) {
                                 return Ok(stream_error_response(failure.headers, error));
                             }
@@ -220,12 +220,7 @@ impl GenericAuthRuntime {
                     if stream_tail_is_availability_neutral(error) {
                         self.record_availability_neutral_outcome(&auth.id, false);
                     } else {
-                        let _ = self.record_outcome(
-                            &auth,
-                            &route_model,
-                            plugin_error_status(error),
-                            false,
-                        );
+                        let _ = self.record_plugin_error_outcome(&auth, &route_model, error);
                     }
                     let _ = sender.send(chunk).await;
                     drain_stream(remaining);
