@@ -1,7 +1,10 @@
 //! Native provider preparation and turn witness. A persisted row alone is not authority.
-use super::{resolve_db_path, QueueExecutionFence};
+#[cfg(test)]
+use super::resolve_db_path;
+use super::QueueExecutionFence;
 use anyhow::{ensure, Result};
-use rusqlite::{Connection, OpenFlags};
+#[cfg(test)]
+use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -337,12 +340,12 @@ impl Drop for NativeProviderTurnOwner {
         }
         // Marking closed is best-effort evidence; a row is never a stop witness
         // or permission without the retained live native object.
-        if let Ok(conn) = Connection::open_with_flags(
-            resolve_db_path(self.record.execution.root(), None),
-            OpenFlags::SQLITE_OPEN_READ_WRITE,
-        ) {
-            let _ = conn.busy_timeout(std::time::Duration::from_millis(100));
-            let _ = conn.execute(
+        // The path may now name a replacement store. Closing evidence must
+        // obey the same retained store/worker binding as other native writes.
+        // Cancellation/expiry may deny this optional marker; live=false above
+        // remains the authority revocation even when no marker can be written.
+        let _ = self.record.execution.with_current_transaction(|tx| {
+            tx.execute(
                 "UPDATE native_worker_provider_bindings SET finished_at_ms=?2
                 WHERE binding_id=?1 AND facts_json=?3",
                 rusqlite::params![
@@ -350,8 +353,9 @@ impl Drop for NativeProviderTurnOwner {
                     chrono::Utc::now().timestamp_millis(),
                     self.record.facts_json
                 ],
-            );
-        }
+            )?;
+            Ok(())
+        });
         if let Ok(mut entries) = registry().lock() {
             let key = (
                 self.record.execution.root().to_owned(),
@@ -506,6 +510,37 @@ mod tests {
             assert!(turn.is_none());
             Ok(())
         })?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_provider_drop_does_not_write_a_replaced_store() -> Result<()> {
+        let (root, execution, _) = admitted()?;
+        let owner = prepare(&execution)?;
+        let binding = owner.binding();
+        let binding_id = binding.record.facts.binding_id.clone();
+        let path = resolve_db_path(root.path(), None);
+        let replacement = root.path().join("replacement.sqlite3");
+        let conn = Connection::open(&path)?;
+        // A real consistent snapshot preserves the witness while changing
+        // the store inode; no connection remains open across replacement.
+        conn.execute("VACUUM INTO ?1", [replacement.to_string_lossy().as_ref()])?;
+        drop(conn);
+        std::fs::rename(&replacement, &path)?;
+        assert!(binding
+            .with_live_provider(|_, _| panic!("replacement store callback"))
+            .is_err());
+        drop(owner);
+        let conn = Connection::open(&path)?;
+        let finished: Option<i64> = conn.query_row(
+            "SELECT finished_at_ms FROM native_worker_provider_bindings WHERE binding_id=?1",
+            [&binding_id],
+            |row| row.get(0),
+        )?;
+        assert!(finished.is_none(), "Drop wrote into the replacement store");
+        assert!(binding
+            .with_live_provider(|_, _| panic!("dead owner after replacement"))
+            .is_err());
         Ok(())
     }
 
