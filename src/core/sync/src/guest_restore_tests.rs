@@ -2,12 +2,220 @@ impl GuestReadinessOwner for TestOwner {
     fn with_live_guest(
         &self,
         _: &GuestImportReceipt,
-        _: &mut dyn FnMut(GuestLiveEndpoint) -> io::Result<()>,
+        _: &mut dyn FnMut(GuestReadyObservation) -> io::Result<()>,
     ) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "no registered guest process",
         ))
+    }
+}
+
+/// Component lifecycle owner. It deliberately does not claim a real QEMU child.
+struct LiveTestOwner {
+    inner: Arc<TestOwner>,
+    effect: GuestProcessEffect,
+    endpoint: GuestLiveEndpoint,
+}
+impl GuestRestoreOwner for LiveTestOwner {
+    fn resolve_destination(
+        &self,
+        guest: &str,
+        spec: &ExecutionSpec,
+        ownership: &Ownership,
+    ) -> io::Result<GuestRestoreDestination> {
+        self.inner.resolve_destination(guest, spec, ownership)
+    }
+    fn with_current_fence(
+        &self,
+        expected: &GuestRestoreDestination,
+        spec: &ExecutionSpec,
+        ownership: &Ownership,
+        publish: &mut dyn FnMut() -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.inner
+            .with_current_fence(expected, spec, ownership, publish)
+    }
+}
+impl GuestReadinessOwner for LiveTestOwner {
+    fn with_live_guest(
+        &self,
+        imported: &GuestImportReceipt,
+        publish: &mut dyn FnMut(GuestReadyObservation) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.inner.with_current_fence(
+            &imported.destination,
+            &imported.spec,
+            &imported.ownership,
+            &mut || {
+                publish(GuestReadyObservation {
+                    endpoint: self.endpoint.clone(),
+                    process_effect: self.effect.clone(),
+                })
+            },
+        )
+    }
+}
+async fn registered_live_process(f: &Fixture) -> (GuestImportReceipt, LiveTestOwner) {
+    let receipt = commit_guest_restore(&f.authority, &*f.authority.owner, stage(f).await.unwrap())
+        .await
+        .unwrap();
+    let effect = GuestProcessEffect {
+        effect_id: component_process_effect_id(),
+        job_id: receipt.spec.job_id.clone(),
+        ownership: receipt.ownership.clone(),
+        controller_id: receipt.destination.controller_id.clone(),
+        controller_generation: receipt.destination.controller_generation,
+        process_instance_id: "registered-native-child".into(),
+    };
+    let result = f
+        .authority
+        .submit(Request {
+            request_id: "native-process-begin".into(),
+            actor: 1,
+            command: Command::BeginEffect {
+                job_id: effect.job_id.clone(),
+                ownership: effect.ownership.clone(),
+                effect_id: effect.effect_id.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result, Receipt::Applied(_)));
+    let owner = LiveTestOwner {
+        inner: f.authority.owner.clone(),
+        endpoint: GuestLiveEndpoint {
+            process_instance_id: effect.process_instance_id.clone(),
+            guest_session_id: "actual-component-guest-session".into(),
+            endpoint_id: "actual-component-endpoint".into(),
+        },
+        effect,
+    };
+    (receipt, owner)
+}
+fn component_process_effect_id() -> String {
+    // Distinct native-generated fixture effect; never the import effect.
+    format!(
+        "native-process-{:x}",
+        Sha256::digest(b"component child lifetime")
+    )
+}
+
+#[tokio::test]
+async fn readiness_retains_registered_process_effect_and_denies_takeover() {
+    let f = fixture();
+    let (imported, owner) = registered_live_process(&f).await;
+    let ready = confirm_guest_ready(&f.authority, &owner, imported.clone())
+        .await
+        .unwrap();
+    assert_eq!(ready.process_effect, owner.effect);
+    let pending = f.authority.state.lock().unwrap().jobs["job"]
+        .pending_effects
+        .clone();
+    assert_eq!(pending, BTreeSet::from([owner.effect.effect_id.clone()]));
+    // Readiness is an observation, never completion or permission to stage a
+    // second import over a live child.
+    assert!(stage(&f).await.is_err());
+    let takeover = f
+        .authority
+        .submit(Request {
+            request_id: "takeover-with-live-child".into(),
+            actor: 1,
+            command: Command::TakeOver {
+                job_id: imported.spec.job_id,
+                expected: imported.ownership,
+                checkpoint_digest: imported.checkpoint_digest,
+                owner: 1,
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        takeover,
+        Receipt::Rejected(crate::authority::Rejection::ReconciliationRequired)
+    ));
+    assert_eq!(
+        f.authority.state.lock().unwrap().jobs["job"].pending_effects,
+        pending
+    );
+}
+
+#[tokio::test]
+async fn readiness_rejects_missing_completed_foreign_and_extra_process_effects() {
+    for case in 0..4 {
+        let f = fixture();
+        let (imported, mut owner) = registered_live_process(&f).await;
+        match case {
+            0 => {
+                f.authority
+                    .state
+                    .lock()
+                    .unwrap()
+                    .jobs
+                    .get_mut("job")
+                    .unwrap()
+                    .pending_effects
+                    .clear();
+            }
+            1 => {
+                let reply = f
+                    .authority
+                    .submit(Request {
+                        request_id: "premature-process-complete".into(),
+                        actor: 1,
+                        command: Command::CompleteEffect {
+                            job_id: imported.spec.job_id.clone(),
+                            ownership: imported.ownership.clone(),
+                            effect_id: owner.effect.effect_id.clone(),
+                        },
+                    })
+                    .await
+                    .unwrap();
+                assert!(matches!(reply, Receipt::Applied(_)));
+            }
+            2 => {
+                owner.effect.effect_id = "foreign-pending-effect".into();
+            }
+            _ => {
+                f.authority
+                    .state
+                    .lock()
+                    .unwrap()
+                    .jobs
+                    .get_mut("job")
+                    .unwrap()
+                    .pending_effects
+                    .insert("unknown-old-effect".into());
+            }
+        }
+        assert!(
+            confirm_guest_ready(&f.authority, &owner, imported)
+                .await
+                .is_err(),
+            "case {case} must not produce readiness"
+        );
+    }
+}
+
+#[tokio::test]
+async fn readiness_rejects_foreign_process_controller_and_execution_registration() {
+    for case in 0..6 {
+        let f = fixture();
+        let (imported, mut owner) = registered_live_process(&f).await;
+        match case {
+            0 => owner.effect.job_id = "foreign-job".into(),
+            1 => owner.effect.ownership.generation += 1,
+            2 => owner.effect.controller_id = "foreign-controller".into(),
+            3 => owner.effect.controller_generation += 1,
+            4 => owner.effect.process_instance_id = "foreign-child".into(),
+            _ => owner.effect.effect_id = imported.effect_id.clone(),
+        }
+        assert!(
+            confirm_guest_ready(&f.authority, &owner, imported)
+                .await
+                .is_err(),
+            "case {case} must not produce readiness"
+        );
     }
 }
 

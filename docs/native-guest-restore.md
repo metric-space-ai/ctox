@@ -44,7 +44,15 @@ full native destination, execution contract/ownership, digest, sequence, target
 and effect. It establishes imported state, not guest startup or execution rights.
 
 `confirm_guest_ready` revalidates current quorum ownership, protected checkpoint
-and completed import effect. GuestReadinessOwner::with_live_guest must resolve
+and completed import effect. The native owner retains a distinct BeginEffect for
+the exact live guest child until confirmed stop. Readiness permits only this
+single registered process effect to remain pending; missing/completed/foreign
+process effects or any additional unknown effect deny readiness. The returned
+GuestProcessEffect binds job, ownership, controller/generation and exact process
+instance to the actual endpoint. Readiness never completes this lifetime effect,
+so normal takeover remains blocked while the old child may still run.
+GuestReadinessOwner::with_live_guest supplies GuestReadyObservation (endpoint plus
+that native registration) under the same real fences and must resolve
 the import against canonical registration and observe the actual retained guest
 process, guest session and endpoint while holding the same current native
 fences. It returns GuestReadyReceipt only after that observation. Image presence,

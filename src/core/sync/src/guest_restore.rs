@@ -152,7 +152,7 @@ fn validate_import_parent(
     Ok(())
 }
 
-fn validate_job(
+fn validate_job_binding(
     job: &Job,
     authority: &dyn ExecutionAuthority,
     job_id: &str,
@@ -164,12 +164,25 @@ fn validate_job(
         || job.ownership != *ownership
         || ownership.node_id != authority.node_id()
         || job.stopped
-        || !job.pending_effects.is_empty()
         || job.checkpoint.as_ref().is_none_or(|c| c.digest != digest)
     {
         return Err(denied(
             "guest restore requires current protected execution state",
         ));
+    }
+    Ok(())
+}
+
+fn validate_job(
+    job: &Job,
+    authority: &dyn ExecutionAuthority,
+    job_id: &str,
+    ownership: &Ownership,
+    digest: &str,
+) -> io::Result<()> {
+    validate_job_binding(job, authority, job_id, ownership, digest)?;
+    if !job.pending_effects.is_empty() {
+        return Err(denied("guest restore cannot overlap unresolved effects"));
     }
     Ok(())
 }
@@ -401,10 +414,30 @@ pub struct GuestLiveEndpoint {
     pub endpoint_id: String,
 }
 
+/// Native-registered BeginEffect retained for the exact actual child lifetime.
+/// These fields are observations from the retained lifecycle owner, never
+/// supplied by the caller. Completion requires confirmed exact-child stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestProcessEffect {
+    pub effect_id: String,
+    pub job_id: String,
+    pub ownership: Ownership,
+    pub controller_id: String,
+    pub controller_generation: u64,
+    pub process_instance_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestReadyObservation {
+    pub endpoint: GuestLiveEndpoint,
+    pub process_effect: GuestProcessEffect,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestReadyReceipt {
     pub import: GuestImportReceipt,
     pub endpoint: GuestLiveEndpoint,
+    pub process_effect: GuestProcessEffect,
 }
 
 /// Implemented by the owner that actually retains the prepared guest process,
@@ -413,11 +446,14 @@ pub trait GuestReadinessOwner: GuestRestoreOwner {
     /// Resolve the import against native registration, prove the actual live
     /// process and guest endpoint, and publish once while holding the SAME
     /// fences used by input, revoke, takeover, expiry and shutdown.
-    /// Unknown old effects/stop outcomes and unregistered guests must be denied.
+    /// Supply the exact registered live child/process effect under these guards.
+    /// Its BeginEffect remains pending until confirmed stop; readiness must not
+    /// complete it. Unknown old effects/stop outcomes and unregistered guests
+    /// must be denied. This callback cannot select an arbitrary pending ID.
     fn with_live_guest(
         &self,
         imported: &GuestImportReceipt,
-        publish: &mut dyn FnMut(GuestLiveEndpoint) -> io::Result<()>,
+        publish: &mut dyn FnMut(GuestReadyObservation) -> io::Result<()>,
     ) -> io::Result<()>;
 }
 
@@ -431,7 +467,7 @@ pub async fn confirm_guest_ready(
     let job = authority
         .validate_ownership(&imported.spec.job_id, &imported.ownership)
         .await?;
-    validate_job(
+    validate_job_binding(
         &job,
         authority,
         &imported.spec.job_id,
@@ -454,29 +490,44 @@ pub async fn confirm_guest_ready(
             "guest readiness does not match the completed native import",
         ));
     }
-    let mut endpoint = None;
+    let mut observation = None;
     owner.with_live_guest(&imported, &mut |live| {
-        if endpoint.is_some() {
+        if observation.is_some() {
             return Err(denied("guest readiness published twice"));
         }
+        let endpoint = &live.endpoint;
+        let effect = &live.process_effect;
         if [
-            &live.process_instance_id,
-            &live.guest_session_id,
-            &live.endpoint_id,
+            &endpoint.process_instance_id,
+            &endpoint.guest_session_id,
+            &endpoint.endpoint_id,
+            &effect.effect_id,
         ]
         .iter()
         .any(|id| !valid_id(id))
+            || effect.job_id != imported.spec.job_id
+            || effect.ownership != imported.ownership
+            || effect.controller_id != imported.destination.controller_id
+            || effect.controller_generation != imported.destination.controller_generation
+            || effect.process_instance_id != endpoint.process_instance_id
+            || effect.effect_id == imported.effect_id
+            || job.pending_effects.len() != 1
+            || !job.pending_effects.contains(&effect.effect_id)
+            || job.completed_effects.contains(&effect.effect_id)
         {
             return Err(denied(
-                "guest readiness requires a live process and endpoint identity",
+                "guest readiness requires exactly its registered unresolved live process effect",
             ));
         }
-        endpoint = Some(live);
+        observation = Some(live);
         Ok(())
     })?;
+    let observation =
+        observation.ok_or_else(|| denied("native guest readiness was not observed"))?;
     Ok(GuestReadyReceipt {
         import: imported,
-        endpoint: endpoint.ok_or_else(|| denied("native guest readiness was not observed"))?,
+        endpoint: observation.endpoint,
+        process_effect: observation.process_effect,
     })
 }
 
