@@ -146,11 +146,21 @@
   bounded LRU turn counters retain upstream user-boundary behavior without another
   mutable global. Pinned system/tool-description normalization and the raw-byte
   UTF-8 boundary buffer are implemented; seven regressions cover these contracts.
-  Auth/refresh, request-history normalization and the actual Devin executor/stream
-  consumer still require implementation. These helpers are not provider acceptance.
+  The aggregate response consumer now preserves ordered thought/text/tool steps,
+  interleaved raw call IDs, the128-call creation cap, late signatures and original
+  argument JSON (including duplicate keys and large numbers). It merges actual
+  positive usage updates, fills only missing counts from dimension groups and keeps
+  cache-write tokens separate. Success requires a clean EOS; trailer/transport/
+  premature-EOF/legacy-patch failures retain redacted partial observations. A fixed
+  64MiB decoded-response budget and sticky terminal errors are host adaptations.
+  Original apply-patch declaration classification is an explicit typed native hook;
+  actual provider request preparation must bind it rather than trust output names.
+  Seven more prepared regressions cover these aggregate contracts. Auth/refresh,
+  request-history normalization, the provider caller and async streaming consumer
+  still require implementation. These helpers are not provider acceptance.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are129 prepared candidate test
+  capability refresh and built-in metadata. There are136 prepared candidate test
   functions in total; no candidate Rust or Go tests have executed. The first
   source-pinned Cargo attempt at a5d8 passed formatting and then stopped with23
   compiler errors. Source repairs now address temporary GJSON/path lifetimes,
