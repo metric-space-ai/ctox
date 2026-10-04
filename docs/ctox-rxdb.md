@@ -19,6 +19,22 @@ Raw JSON shape or matching IDs alone is not issuer proof. A stale/different
 view cannot confirm a newer local status. App integration and installed user
 acceptance remain separate from native tests.
 
+### Recovery journal startup payload bounds
+
+Recovery status scans one IndexedDB record at a time and preserves the exact
+UTF-8 byte count of pending batches and conflicts, including JSON delimiters.
+Startup replay retains only batch IDs and sequence numbers, then re-reads each
+candidate before applying it; primary-committed or newly acknowledged batches
+are skipped. Schema and application failures retain their recoverable conflicts.
+Startup reconciliation collects outstanding document IDs through the compound
+state/collection index and reads primary documents in groups of at most200.
+Acknowledgement-triggered retention scans also retain only eligible IDs and
+timestamps; pending writes/conflicts and the24-hour retention window survive.
+These paths no longer hold the complete pending WAL payload in memory. Batch
+atomicity and the v4 schema are unchanged; individual batch payloads and the
+ID/order summaries still consume memory. This source repair does not establish
+the THESEN renderer-crash cause or actual Windows8GiB startup acceptance.
+
 ### Browser live-query single-flight
 
 Each `RxQuery.$` subscription keeps at most one executing snapshot and one
@@ -70,6 +86,14 @@ phase records bound retention; the existing Shell diagnostics expose them.
 Legacy/superseded replica inventory runs after initial module/restore handling,
 outside the critical startup wait. It still preserves all old primaries and
 recovery journals; slow metadata enumeration is not a deletion authorization.
+
+Recovery-journal opening has its own four-second deadline, matching the primary
+IndexedDB open bound. A blocked, failed or timed-out journal attempt closes a
+late successful journal handle; failure also closes the primary handle already
+opened for that attempt. Cleanup retains the original journal error and changes
+no persisted data, schema version or recovery payload. These lifecycle guards
+prove failed-startup handle retirement, not the cause of an observed browser
+renderer crash or installed startup/memory acceptance.
 
 Window placement hydrates from the scoped localStorage cache synchronously after
 core schema registration. Its optional IndexedDB refresh runs in the background,

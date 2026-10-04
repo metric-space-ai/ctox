@@ -36,12 +36,19 @@ export async function openCtoxIndexedDbStorage({ databaseName = 'ctox_business_o
   const quotaCoordinator = {
     recover: (context = {}) => recoverQueryMetaQuota(databaseName, context),
   };
-  const recoveryJournal = await openRecoveryJournal({
-    databaseName,
-    instanceId: databaseName,
-    quotaCoordinator,
-  });
-  return new CtoxIndexedDbStorage(db, { recoveryJournal, quotaCoordinator });
+  try {
+    const recoveryJournal = await openRecoveryJournal({
+      databaseName,
+      instanceId: databaseName,
+      quotaCoordinator,
+    });
+    return new CtoxIndexedDbStorage(db, { recoveryJournal, quotaCoordinator });
+  } catch (error) {
+    // No caller owns this primary handle until the journal also opens. A
+    // failed journal must not leave it pinning the next startup attempt.
+    try { db.close(); } catch {}
+    throw error;
+  }
 }
 
 export class CtoxIndexedDbStorage {
@@ -234,32 +241,26 @@ export class CtoxIndexedDbCollection {
   }
 
   async acknowledgePersistedMasterRecovery() {
-    // This runs on the foreground path before the collection's first write.
-    // Use the compound state+collection index; scanning every pending batch
-    // for every collection can stall command insertion on mature profiles.
-    const batches = await this.recoveryJournal?.listBatches?.('pending', this.name) || [];
-    const ids = [...new Set(batches
-      .filter((batch) => batch.collection === this.name)
-      .flatMap((batch) => {
-        const acked = new Set(batch.ackedIds || []);
-        return (batch.documentIds || []).filter((id) => !acked.has(id));
-      }))];
+    // Keep only outstanding IDs from the indexed WAL scan. Primary documents
+    // are read/acknowledged in bounded groups before the first local write.
+    const ids = await this.recoveryJournal?.pendingDocumentIds?.(this.name) || [];
     if (!ids.length) return;
-    const documents = {};
-    // One read-only transaction replaces one transaction per historical ID on
-    // the collection's first write. All requests are queued before awaiting.
-    const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
-    const done = idbTransactionDone(tx);
-    const store = tx.objectStore(DOCUMENT_STORE);
-    const records = await Promise.all(ids.map((id) => idbRequest(store.get([this.name, id]))));
-    await done;
-    for (let index = 0; index < ids.length; index += 1) {
-      const id = ids[index];
-      const record = records[index];
-      if (record?.replicationOriginRole && record.doc) documents[id] = record.doc;
-    }
-    if (Object.keys(documents).length) {
-      await this.recoveryJournal.markMasterAcknowledged(this.name, documents);
+    const readBatchSize = 200;
+    for (let offset = 0; offset < ids.length; offset += readBatchSize) {
+      const readIds = ids.slice(offset, offset + readBatchSize);
+      const documents = {};
+      const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+      const done = idbTransactionDone(tx);
+      const store = tx.objectStore(DOCUMENT_STORE);
+      const records = await Promise.all(readIds.map((id) => idbRequest(store.get([this.name, id]))));
+      await done;
+      for (let index = 0; index < readIds.length; index += 1) {
+        const record = records[index];
+        if (record?.replicationOriginRole && record.doc) documents[readIds[index]] = record.doc;
+      }
+      if (Object.keys(documents).length) {
+        await this.recoveryJournal.markMasterAcknowledged(this.name, documents);
+      }
     }
   }
 
