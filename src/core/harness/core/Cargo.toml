@@ -16,6 +16,11 @@ path = "src/bin/config_schema.rs"
 [lints]
 workspace = true
 
+# Allows out-of-crate integration tests to drive the crate-private recorder queue
+# without widening production recorder APIs.
+[features]
+integration-test-support = []
+
 [dependencies]
 anyhow = { workspace = true }
 arc-swap = "1.8.2"

@@ -142,7 +142,22 @@ fn fixture() -> Fixture {
         store.ingest_blob(&reference, data).unwrap();
         reference
     };
-    let history = artifact(b"history");
+    let metadata = serde_json::json!({
+        "timestamp": "2026-10-04T10:00:00Z", "type": "session_meta",
+        "payload": {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "timestamp": "2026-10-04T10:00:00Z", "cwd": "/original/workspace",
+            "originator": "codex_cli_rs", "cli_version": "1.0.0", "source": "exec",
+            "model_provider": "test-provider", "base_instructions": {"text": "test"},
+            "capability_profile": "workspace_worker"
+        }
+    });
+    let event = serde_json::json!({
+        "timestamp": "2026-10-04T10:00:00Z", "type": "event_msg",
+        "payload": {"type": "user_message", "message": "ready"}
+    });
+    let journal = format!("{metadata}\n{event}\n");
+    let history = artifact(journal.as_bytes());
     let empty = artifact(b"");
     let state_blob = artifact(b"portable provider state");
     let file = artifact(b"retained work");
@@ -151,7 +166,7 @@ fn fixture() -> Fixture {
         session: SessionManifest {
             version: 1,
             scope_id: "scope".into(),
-            session_id: "session".into(),
+            session_id: "00000000-0000-0000-0000-000000000001".into(),
             harness: "codex".into(),
             harness_version: "1".into(),
             model_route_id: "route".into(),
@@ -187,7 +202,7 @@ fn fixture() -> Fixture {
     let digest = store.publish(&manifest).unwrap();
     let spec = ExecutionSpec {
         job_id: "job".into(),
-        session_id: "session".into(),
+        session_id: "00000000-0000-0000-0000-000000000001".into(),
         scope_id: "scope".into(),
         harness: "codex".into(),
         harness_version: "1".into(),
