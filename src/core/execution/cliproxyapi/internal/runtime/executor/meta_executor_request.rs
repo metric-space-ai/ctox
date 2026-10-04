@@ -191,6 +191,31 @@ pub(crate) fn meta_http_request(
     );
     Ok(outgoing)
 }
+pub(crate) fn prepare_meta_http_headers(
+    request: &mut HttpRequest,
+    attributes: &std::collections::BTreeMap<String, String>,
+    token: &str,
+) {
+    fn set(request: &mut HttpRequest, key: &str, value: String) {
+        request.headers.retain(|k, _| !k.eq_ignore_ascii_case(key));
+        request.headers.insert(key.into(), vec![value]);
+    }
+    request
+        .headers
+        .retain(|k, _| !k.eq_ignore_ascii_case("Authorization"));
+    if !token.trim().is_empty() {
+        set(request, "Authorization", format!("Bearer {token}"));
+    }
+    set(request, "User-Agent", META_USER_AGENT.into());
+    set(request, "X-Client-Id", "tbh:tui".into());
+    let mut custom = HeaderRequest {
+        headers: std::mem::take(&mut request.headers),
+        ..HeaderRequest::default()
+    };
+    apply_custom_headers_from_attrs(&mut custom, attributes);
+    request.headers = custom.headers;
+}
+
 pub(crate) fn apply_meta_headers(
     request: &mut HttpRequest,
     attributes: &std::collections::BTreeMap<String, String>,

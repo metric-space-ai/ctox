@@ -657,7 +657,8 @@ async fn candidate_meta_transport_rejects_compact_wrong_provider_and_unprepared_
 #[tokio::test]
 async fn candidate_meta_transport_token_count_is_local_and_fixed_o200k() {
     let fixture = Fixture::new(200, &[]);
-    let request = fixture.request();
+    let mut request = fixture.request();
+    request.alt = "responses/compact".into();
     let prepared = fixture
         .executor
         .request_owner
@@ -688,6 +689,9 @@ async fn candidate_meta_transport_passthrough_uses_selected_key_and_preserves_me
         headers: BTreeMap::from([
             ("authorization".into(), vec!["must-be-replaced".into()]),
             ("X-Test-Input".into(), vec!["retained".into()]),
+            ("Accept".into(), vec!["application/octet-stream".into()]),
+            ("Content-Type".into(), vec!["text/plain".into()]),
+            ("Cache-Control".into(), vec!["private".into()]),
         ]),
         http_client: Some(fixture.transport.clone()),
         ..ExecutorHttpRequest::default()
@@ -703,6 +707,12 @@ async fn candidate_meta_transport_passthrough_uses_selected_key_and_preserves_me
         vec!["Bearer test-only-key"]
     );
     assert!(!requests[0].headers.contains_key("authorization"));
+    assert_eq!(
+        requests[0].headers["Accept"],
+        vec!["application/octet-stream"]
+    );
+    assert_eq!(requests[0].headers["Content-Type"], vec!["text/plain"]);
+    assert_eq!(requests[0].headers["Cache-Control"], vec!["private"]);
     assert_eq!(requests[0].headers["X-Test-Input"], vec!["retained"]);
 }
 

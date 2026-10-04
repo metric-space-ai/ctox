@@ -9,7 +9,7 @@ use super::helps::{
 };
 use super::meta_executor_auth::meta_credentials;
 use super::meta_executor_request::{
-    apply_meta_headers, meta_error, meta_http_request, MetaPreparedRequest, MetaRequestOwner,
+    meta_error, meta_http_request, prepare_meta_http_headers, MetaPreparedRequest, MetaRequestOwner,
 };
 use super::meta_executor_response::{
     meta_as_completed_event, meta_stream_event_error, meta_upstream_error, MetaHttpStatusError,
@@ -66,13 +66,17 @@ impl MetaExecutor {
         self.clock = clock;
         self
     }
-    fn validate(request: &ExecutorRequest) -> Result<(), PluginExecutionError> {
+    fn validate_provider(request: &ExecutorRequest) -> Result<(), PluginExecutionError> {
         if !request.auth_provider.eq_ignore_ascii_case("meta") {
             return Err(meta_error(
                 400,
                 "meta executor: selected account is not a Meta provider",
             ));
         }
+        Ok(())
+    }
+    fn validate(request: &ExecutorRequest) -> Result<(), PluginExecutionError> {
+        Self::validate_provider(request)?;
         if request.alt == "responses/compact" {
             return Err(meta_error(501, "/responses/compact not supported"));
         }
@@ -222,7 +226,7 @@ impl ProviderExecutor for MetaExecutor {
     }
     fn count_tokens<'a>(&'a self, request: ExecutorRequest) -> PluginFuture<'a, ExecutorResponse> {
         Box::pin(async move {
-            Self::validate(&request)?;
+            Self::validate_provider(&request)?;
             let prepared = self.request_owner.prepare(&request, false)?;
             // Validate the manager's inference credential; counting makes no HTTP request.
             meta_http_request(&request, Vec::new(), false)?;
@@ -278,12 +282,7 @@ impl ProviderExecutor for MetaExecutor {
                 headers: request.headers,
                 body: request.body,
             };
-            apply_meta_headers(
-                &mut outgoing,
-                &request.attributes,
-                credential.api_key(),
-                false,
-            );
+            prepare_meta_http_headers(&mut outgoing, &request.attributes, credential.api_key());
             let response = client.execute(outgoing).await?;
             Ok(ExecutorHttpResponse {
                 status_code: response.status_code,
