@@ -652,6 +652,78 @@ fn backend_runtime_descriptor(
     }
 }
 
+/// Release cutover discovers only this workspace's managed processes.
+/// A configured port is never sufficient authority to signal a foreign listener.
+#[cfg(unix)]
+pub fn persistent_backend_release_stop_pids(root: &Path) -> Result<Vec<u32>> {
+    let mut pids = workspace_managed_runtime_pids(root)?;
+    for path in managed_pid_paths(root) {
+        if let Some(pid) = read_pid(&path).filter(|pid| process_is_alive(*pid)) {
+            let command = process_command(root, pid)?.unwrap_or_default();
+            anyhow::ensure!(
+                pid != std::process::id()
+                    && (command.contains(&root.display().to_string())
+                        || process_current_dir_matches_root(pid, root))
+                    && (command_is_managed_runtime_launcher(&command)
+                        || managed_engine_process_command(&command)),
+                "refusing release stop: unverified live backend PID {pid} at {}",
+                path.display()
+            );
+            pids.push(pid);
+        }
+    }
+    pids.sort_unstable();
+    pids.dedup();
+    Ok(pids)
+}
+
+/// Remove stale metadata only after all backend processes and listeners are gone.
+#[cfg(unix)]
+pub fn finish_persistent_backend_release_stop(root: &Path) -> Result<()> {
+    for path in managed_pid_paths(root) {
+        if let Some(pid) = read_pid(&path) {
+            anyhow::ensure!(
+                !process_is_alive(pid),
+                "refusing release switch: live backend PID {pid} at {}",
+                path.display()
+            );
+        }
+    }
+    anyhow::ensure!(
+        workspace_managed_runtime_pids(root)?.is_empty(),
+        "refusing release switch: live managed backend processes"
+    );
+    for port in managed_runtime_ports(root)? {
+        anyhow::ensure!(
+            listening_pids_for_port(root, port)?.is_empty(),
+            "refusing release switch: remaining listener on tcp/{port}"
+        );
+    }
+    clear_managed_pid_files(root);
+    clear_managed_socket_files(root);
+    clear_backend_startup_locks(root)?;
+    for role in MANAGED_BACKEND_ROLES {
+        release_backend_runtime_ownership(root, role);
+    }
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod release_stop_tests {
+    use super::*;
+
+    #[test]
+    fn release_backend_cleanup_preserves_live_pid_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let pid_path = managed_pid_paths(root.path()).remove(0);
+        std::fs::create_dir_all(pid_path.parent().unwrap()).unwrap();
+        let marker = std::process::id().to_string();
+        std::fs::write(&pid_path, &marker).unwrap();
+        let error = finish_persistent_backend_release_stop(root.path()).unwrap_err();
+        assert!(error.to_string().contains("live backend PID"));
+        assert_eq!(std::fs::read_to_string(pid_path).unwrap(), marker);
+    }
+}
 pub fn shutdown_persistent_backends(root: &Path) -> Result<()> {
     let mut failures = Vec::new();
 

@@ -1299,7 +1299,7 @@ ExecStart=$BIN_DIR/ctox service --foreground
 Restart=always
 RestartSec=5
 KillMode=control-group
-TimeoutStopSec=20
+TimeoutStopSec=315
 
 [Install]
 WantedBy=default.target
