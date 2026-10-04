@@ -68,6 +68,10 @@ test('full text remains visible when HTML is unavailable or has no safe visible 
   const variants = [
     undefined,
     { childNodes: [
+      parsedElement('head', {}, [parsedElement('title', {}, [parsedText('Mail metadata')])]),
+      parsedElement('title', {}, [parsedText('Fragment metadata')]),
+    ] },
+    { childNodes: [
       parsedElement('script', {}, [parsedText('hidden script')]),
       parsedElement('style', {}, [parsedText('hidden CSS')]),
       parsedElement('p', {}, [parsedText('   ')]),

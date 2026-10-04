@@ -61,7 +61,7 @@ const SAFE_URL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 // Tags whose presence would break the isolation guarantees. Even if the
 // underlying attribute allowlist would let them through, we drop them.
 const FORBIDDEN_TAGS = new Set([
-  'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed',
+  'script', 'style', 'head', 'title', 'iframe', 'frame', 'frameset', 'object', 'embed',
   'applet', 'form', 'input', 'textarea', 'select', 'option', 'button',
   'link', 'meta', 'base', 'noscript', 'template', 'slot', 'svg', 'math',
   'video', 'audio', 'source', 'track', 'picture', 'canvas', 'map', 'area',
