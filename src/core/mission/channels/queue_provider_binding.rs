@@ -83,6 +83,15 @@ impl NativeProviderTurnOwner {
             valid_id(provider_session_id) && valid_id(model_id),
             "native provider preparation has no actual session/model identity"
         );
+        if let Some(binding) = verified_command_context
+            .and_then(|context| context.get("crew_binding"))
+            .filter(|binding| !binding.is_null())
+        {
+            ensure!(
+                binding.get("attempt_id").and_then(Value::as_str) == Some(execution.attempt_id()),
+                "verified command session belongs to another native worker attempt"
+            );
+        }
         let command_provenance = verified_command_context.map(|context| {
             let keys = [
                 "auth_source",
@@ -398,9 +407,20 @@ mod tests {
         let context = serde_json::json!({
             "actor": "native-actor", "workspace": "native-workspace",
             "command_id": "native-command", "payload_hash": "native-payload-hash",
-            "crew_binding": "provider-attempt", "secret_token": "never-persist",
+            "crew_binding": {"attempt_id": "provider-attempt"}, "secret_token": "never-persist",
             "allowed_actions": ["not-a-future-grant"],
         });
+        let mut foreign_context = context.clone();
+        foreign_context["crew_binding"]["attempt_id"] = Value::String("foreign-attempt".into());
+        assert!(NativeProviderTurnOwner::prepare(
+            &execution,
+            "actual-thread",
+            "actual-model",
+            None,
+            None,
+            Some(&foreign_context),
+        )
+        .is_err());
         let owner = NativeProviderTurnOwner::prepare(
             &execution,
             "actual-thread",
