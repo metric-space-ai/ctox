@@ -5,6 +5,7 @@ mod antigravity;
 mod claude;
 mod codex;
 mod codex_device;
+mod devin;
 mod errors;
 mod filestore;
 mod interfaces;
@@ -14,6 +15,11 @@ mod refresh_registry;
 mod store_registry;
 mod xai;
 
+pub use devin::{
+    DevinAuthenticator, DevinClock, DevinLoginPresentation, DevinLoginPresenter, DevinPromptFuture,
+    DevinStateGenerator, RandomDevinStateGenerator, SystemDevinClock, DEVIN_LOGIN_TIMEOUT,
+    DEVIN_MANUAL_PROMPT_DELAY,
+};
 pub use errors::{email_required_message, EmailRequiredError, DEFAULT_EMAIL_REQUIRED_MESSAGE};
 pub use filestore::InjectedTokenStore;
 pub use interfaces::{

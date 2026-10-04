@@ -42,7 +42,15 @@ creation. Both the listener and bounded connection tasks belong to the consuming
 wait and close on completion, timeout, cancellation or drop. No detached listener,
 browser launcher, credential store or background poller is created.
 
-The native owner still needs to connect its PKCE/login-session lifecycle to this
-callback component, AuthRefresher/context/status binding and production provider
-registration. Synthetic component regressions do not prove real browser OAuth,
-provider or app acceptance.
+The SDK DevinAuthenticator now owns browser and headless login over these
+components: the same PKCE verifier and random state, an optional manual-paste
+fallback after five seconds, and a fixed five-minute login deadline. Prompt/UI
+work is injected as a cancellable future; it does not use misc::async_prompt's
+detached blocking thread. Cancellation or any winning result drops the callback
+listener and prompt future. Only the existing SDK Manager's injected AuthStore
+persists a completed record. Session tokens have no fabricated refresh expiry.
+
+The native owner still needs to supply the host UI/prompt adapter and register
+this authenticator in production, plus AuthRefresher/context/status binding.
+Synthetic component regressions do not prove real browser OAuth, provider or app
+acceptance.
