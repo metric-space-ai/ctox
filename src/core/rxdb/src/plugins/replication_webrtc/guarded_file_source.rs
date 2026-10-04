@@ -8,10 +8,12 @@ use super::webrtc_types::{
 use crate::rx_error::{new_rx_error, RxResult};
 use base64::Engine;
 use serde_json::{json, Value};
+use std::future::Future;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 /// Implemented by the retained native lifecycle owner. Metadata is native
@@ -20,6 +22,9 @@ pub trait GuardedFileSource: Send + Sync {
     fn byte_len(&self, file_id: &str) -> RxResult<u64>;
     /// Invoke send exactly once while current worker/policy/controller authority
     /// is held. A terminal send succeeds only after all requested bytes were sent.
+    /// The borrowed current checker stays inside this callback's native guards.
+    /// Send may call it repeatedly on the same blocking worker while awaiting
+    /// transport. Neither checker nor data slices may escape the callback.
     fn with_current_chunk(
         &self,
         file_id: &str,
@@ -27,7 +32,7 @@ pub trait GuardedFileSource: Send + Sync {
         max_bytes: usize,
         terminal: bool,
         capability_token: &str,
-        send: &mut dyn FnMut(&Value, &[u8]) -> RxResult<()>,
+        send: &mut dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
     ) -> RxResult<()>;
 }
 
@@ -110,29 +115,42 @@ pub(super) async fn stream_guarded_file<H: WebRTCConnectionHandler + 'static>(
                 count,
                 terminal,
                 &capability_token,
-                &mut |metadata, bytes| {
-                    if invoked
-                        || bytes.len() != count
-                        || current_cancelled.load(Ordering::SeqCst)
-                        || Instant::now() >= deadline
-                        || !current_handler.is_peer_current(&current_peer)
-                        || current_handler
-                            .peer_capability_token(&current_peer)
-                            .as_deref()
-                            != Some(capability_token.as_str())
-                        || !current_handler.is_collection_authorized_for_peer(
-                            &current_peer,
-                            &current_request.collection_name,
-                        )
-                    {
-                        return Err(denied("native frame send authority changed"));
+                &mut |metadata, bytes, current| {
+                    if invoked || bytes.len() != count {
+                        return Err(denied("native frame send callback is invalid"));
                     }
-                    let filter = current_handler
-                        .document_filter_for_peer(&current_peer, &current_request.collection_name)
-                        .ok_or_else(|| denied("native frame peer document policy is missing"))?;
-                    if !filter(metadata) {
-                        return Err(denied("peer cannot read this native frame"));
-                    }
+                    let mut authorize = || {
+                        current()?;
+                        if current_cancelled.load(Ordering::SeqCst)
+                            || Instant::now() >= deadline
+                            || !current_handler.is_peer_current(&current_peer)
+                            || current_handler
+                                .peer_capability_token(&current_peer)
+                                .as_deref()
+                                != Some(capability_token.as_str())
+                            || !current_handler.is_collection_authorized_for_peer(
+                                &current_peer,
+                                &current_request.collection_name,
+                            )
+                        {
+                            return Err(denied("native frame send authority changed"));
+                        }
+                        let filter = current_handler
+                            .document_filter_for_peer(
+                                &current_peer,
+                                &current_request.collection_name,
+                            )
+                            .ok_or_else(|| {
+                                denied("native frame peer document policy is missing")
+                            })?;
+                        if !filter(metadata) {
+                            return Err(denied("peer cannot read this native frame"));
+                        }
+                        // The peer checks may have consumed time. Native lease,
+                        // principal and frame expiry are checked again before IO.
+                        current()
+                    };
+                    authorize()?;
                     invoked = true;
                     let frame = WebRTCWireFrame::Message(WebRTCMessage {
                         id: format!("{}-f{}", current_request.request_id, sequence),
@@ -149,12 +167,27 @@ pub(super) async fn stream_guarded_file<H: WebRTCConnectionHandler + 'static>(
                         .map_err(|_| denied("native frame encoding failed"))?],
                     });
                     current_runtime.block_on(async {
+                        let mut sending = Box::pin(current_handler.send(&current_peer, frame));
+                        // Dropping spawn_blocking's JoinHandle does not stop it.
+                        // Poll cancellation/current native authority even if the
+                        // transport never wakes its own Pending future.
+                        let mut watchdog = tokio::time::interval(Duration::from_millis(16));
+                        watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                         tokio::time::timeout(
                             deadline.saturating_duration_since(Instant::now()),
-                            current_handler.send(&current_peer, frame),
+                            std::future::poll_fn(|cx| {
+                                while watchdog.poll_tick(cx).is_ready() {}
+                                if let Err(error) = authorize() {
+                                    return Poll::Ready(Err(error));
+                                }
+                                sending.as_mut().poll(cx)
+                            }),
                         )
                         .await
-                        .map_err(|_| denied("native frame send timed out"))?
+                        .map_err(|_| denied("native frame send timed out"))??;
+                        // Cancellation/expiry while send returned cannot publish
+                        // a completed observation or grant a later input.
+                        authorize()
                     })
                 },
             )?;

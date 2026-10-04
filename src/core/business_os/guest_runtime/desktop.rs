@@ -217,6 +217,17 @@ impl RetainedQemuDesktop {
         result
     }
 
+    /// Used inside the retained controller guard before polling a frame send.
+    /// A dead owned child retires readiness even if the transport is pending.
+    pub(in crate::business_os) fn ensure_live_process(&mut self) -> Result<()> {
+        ensure!(self.phase == DesktopPhase::Ready, "guest is not ready");
+        if let Err(error) = self.process.ensure_alive() {
+            self.phase = DesktopPhase::EndpointUnavailable;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub(in crate::business_os) fn driver(&self) -> Result<&RemoteGuestDriver<UnixStream>> {
         ensure!(self.phase == DesktopPhase::Ready, "guest is not ready");
         self.driver

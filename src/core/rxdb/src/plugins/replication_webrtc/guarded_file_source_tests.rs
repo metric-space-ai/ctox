@@ -1,3 +1,111 @@
+#[tokio::test]
+async fn cancelled_pending_terminal_send_never_completes_native_observation() {
+    let source = Source::new();
+    let handler = Arc::new(Handler {
+        hold_terminal: true,
+        ..Handler::new(source.clone())
+    });
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let task = tokio::spawn(stream_guarded_file(
+        handler.clone(),
+        "peer-generation".into(),
+        request(),
+        source.clone(),
+        cancelled.clone(),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), handler.terminal_started.notified())
+        .await
+        .unwrap();
+    cancelled.store(true, Ordering::SeqCst);
+    // Do not wake the transport. The cancellation checker must wake itself.
+    assert!(tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert_eq!(handler.sent.lock().len(), 2);
+    assert!(!source.delivered.load(Ordering::SeqCst));
+    assert!(source.lock.try_lock().is_some());
+}
+
+#[tokio::test]
+async fn dropped_guarded_fetch_releases_pending_send_without_completing_observation() {
+    let source = Source::new();
+    let handler = Arc::new(Handler {
+        hold_terminal: true,
+        ..Handler::new(source.clone())
+    });
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let task = tokio::spawn(stream_guarded_file(
+        handler.clone(),
+        "peer-generation".into(),
+        request(),
+        source.clone(),
+        cancelled.clone(),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), handler.terminal_started.notified())
+        .await
+        .unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(cancelled.load(Ordering::SeqCst));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while source.lock.try_lock().is_none() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(handler.sent.lock().len(), 2);
+    assert!(!source.delivered.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn native_expiry_fences_pending_send_before_transport_deadline() {
+    let mut source = Source::new();
+    Arc::get_mut(&mut source).unwrap().deadline = Instant::now() + Duration::from_millis(500);
+    let handler = Arc::new(Handler {
+        hold_terminal: true,
+        ..Handler::new(source.clone())
+    });
+    // The native deadline is much earlier than the transport's query deadline.
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), run(handler.clone(), request()))
+            .await
+            .unwrap()
+            .is_err()
+    );
+    assert!(handler.sent.lock().len() <= 2);
+    assert!(!source.delivered.load(Ordering::SeqCst));
+    assert!(source.lock.try_lock().is_some());
+}
+
+#[tokio::test]
+async fn native_revocation_fences_pending_terminal_send_without_transport_wake() {
+    let source = Source::new();
+    let handler = Arc::new(Handler {
+        hold_terminal: true,
+        ..Handler::new(source.clone())
+    });
+    let task = tokio::spawn(stream_guarded_file(
+        handler.clone(),
+        "peer-generation".into(),
+        request(),
+        source.clone(),
+        Arc::new(AtomicBool::new(false)),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), handler.terminal_started.notified())
+        .await
+        .unwrap();
+    source.live.store(false, Ordering::SeqCst);
+    assert!(tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert_eq!(handler.sent.lock().len(), 2);
+    assert!(!source.delivered.load(Ordering::SeqCst));
+}
 use super::super::file_fetch_handler::FileRange;
 use super::super::webrtc_types::{PeerWithMessage, PeerWithResponse, WebRTCDocumentFilter};
 use super::*;
@@ -13,6 +121,7 @@ struct Source {
     delivered: AtomicBool,
     reads: AtomicUsize,
     bytes: Vec<u8>,
+    deadline: Instant,
 }
 impl Source {
     fn new() -> Arc<Self> {
@@ -22,6 +131,7 @@ impl Source {
             delivered: AtomicBool::new(false),
             reads: AtomicUsize::new(0),
             bytes: vec![7; 8 * 1024 + 1],
+            deadline: Instant::now() + Duration::from_secs(30),
         })
     }
 }
@@ -37,7 +147,7 @@ impl GuardedFileSource for Source {
         max: usize,
         terminal: bool,
         _capability_token: &str,
-        send: &mut dyn FnMut(&Value, &[u8]) -> RxResult<()>,
+        send: &mut dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
     ) -> RxResult<()> {
         let _guard = self.lock.lock();
         if !self.live.load(Ordering::SeqCst) {
@@ -47,6 +157,13 @@ impl GuardedFileSource for Source {
         send(
             &json!({"owner_user_id":"actual-owner"}),
             &self.bytes[offset as usize..offset as usize + max],
+            &mut || {
+                if self.live.load(Ordering::SeqCst) && Instant::now() < self.deadline {
+                    Ok(())
+                } else {
+                    Err(denied("native source authority expired or revoked"))
+                }
+            },
         )?;
         if terminal {
             self.delivered.store(true, Ordering::SeqCst);
@@ -62,6 +179,9 @@ struct Handler {
     policy: bool,
     fail_at: Option<usize>,
     revoke_after_first: bool,
+    hold_terminal: bool,
+    terminal_started: tokio::sync::Notify,
+    terminal_release: tokio::sync::Notify,
 }
 impl Handler {
     fn new(source: Arc<Source>) -> Self {
@@ -73,6 +193,9 @@ impl Handler {
             policy: true,
             fail_at: None,
             revoke_after_first: false,
+            hold_terminal: false,
+            terminal_started: tokio::sync::Notify::new(),
+            terminal_release: tokio::sync::Notify::new(),
         }
     }
 }
@@ -117,6 +240,21 @@ impl WebRTCConnectionHandler for Handler {
             self.source.lock.try_lock().is_none(),
             "actual send escaped native guard"
         );
+        let terminal = match &frame {
+            WebRTCWireFrame::Message(message) => {
+                message
+                    .params
+                    .first()
+                    .and_then(|params| params.get("complete"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            }
+            _ => false,
+        };
+        if terminal && self.hold_terminal {
+            self.terminal_started.notify_one();
+            self.terminal_release.notified().await;
+        }
         let mut sent = self.sent.lock();
         if self.fail_at == Some(sent.len()) {
             return Err(denied("actual send failed"));

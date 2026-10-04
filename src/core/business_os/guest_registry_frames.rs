@@ -336,7 +336,7 @@ impl NativeGuestExecution {
     fn with_frame<T>(
         &self,
         id: &str,
-        apply: impl FnOnce(&mut Observation) -> Result<T>,
+        apply: impl FnOnce(&mut Observation, &mut dyn FnMut() -> Result<()>) -> Result<T>,
     ) -> Result<T> {
         let transport = self.registry.current_transport()?;
         self.provider
@@ -370,8 +370,28 @@ impl NativeGuestExecution {
                         verify()?;
                         // Ownership cannot be handed over while the exact registered
                         // process effect is pending. Revoke/stop use this controller.
-                        let result =
-                            apply(entry.frame.as_mut().context("native observation retired")?);
+                        let result = {
+                            let frame =
+                                entry.frame.as_mut().context("native observation retired")?;
+                            let deadline = frame.deadline;
+                            let mut current = || {
+                                verify()?;
+                                self.registry
+                                    .verify_runtime_root(self.provider.runtime_root())?;
+                                ensure!(
+                                    !transport.canceled.load(Ordering::SeqCst)
+                                        && deadline > Instant::now(),
+                                    "native frame authority expired or pool closed"
+                                );
+                                desktop.ensure_live_process()
+                            };
+                            let result = apply(frame, &mut current);
+                            if let Err(error) = current() {
+                                frame.consumed = true;
+                                return Err(error);
+                            }
+                            result
+                        };
                         if transport.canceled.load(Ordering::SeqCst) {
                             if let Some(frame) = entry.frame.as_mut() {
                                 frame.consumed = true;
@@ -491,7 +511,10 @@ impl GuardedFileSource for NativeFrameSource {
             .with_current(|entry, _| execution.current_job(entry))
             .map_err(transport_error)?;
         execution
-            .with_frame(id, |frame| Ok(frame.frame.png.len() as u64))
+            .with_frame(id, |frame, current| {
+                current()?;
+                Ok(frame.frame.png.len() as u64)
+            })
             .map_err(transport_error)
     }
     fn with_current_chunk(
@@ -501,7 +524,7 @@ impl GuardedFileSource for NativeFrameSource {
         max: usize,
         terminal: bool,
         capability_token: &str,
-        send: &mut dyn FnMut(&Value, &[u8]) -> RxResult<()>,
+        send: &mut dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
     ) -> RxResult<()> {
         let registry = self.current_registry().map_err(transport_error)?;
         let execution = registry.frame_execution(id).map_err(transport_error)?;
@@ -514,17 +537,29 @@ impl GuardedFileSource for NativeFrameSource {
         .context("native frame peer is not authenticated by this instance")
         .map_err(transport_error)?;
         execution
-            .with_frame(id, |frame| {
-                let (actor, _) = super::super::store::verify_webrtc_capability_actor(
-                    &registry.runtime_root,
-                    capability_token,
-                )
-                .context("native frame peer capability revoked")?;
-                ensure!(
-                    frame.metadata["owner_user_id"].as_str() == Some(actor.as_str()),
-                    "native frame belongs to another authenticated owner"
-                );
-                frame.send_chunk(offset, max, terminal, send)
+            .with_frame(id, |frame, native_current| {
+                let owner = frame.metadata["owner_user_id"]
+                    .as_str()
+                    .context("native frame owner missing")?
+                    .to_owned();
+                let mut current = || {
+                    native_current()?;
+                    let (actor, _) = super::super::store::verify_webrtc_capability_actor(
+                        &registry.runtime_root,
+                        capability_token,
+                    )
+                    .context("native frame peer capability revoked")?;
+                    ensure!(
+                        actor == owner,
+                        "native frame belongs to another authenticated owner"
+                    );
+                    Ok(())
+                };
+                current()?;
+                frame.send_chunk(offset, max, terminal, &mut |metadata, bytes| {
+                    let mut check = || current().map_err(transport_error);
+                    send(metadata, bytes, &mut check)
+                })
             })
             .map_err(transport_error)
     }
