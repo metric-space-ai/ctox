@@ -445,6 +445,8 @@ class RunnerTests(unittest.TestCase):
         self.assertNotEqual(receipt["build-mutated"]["sha256"], receipt["build-initial"]["sha256"])
         self.assertEqual(receipt["build-restored"]["sha256"], receipt["build-initial"]["sha256"])
         self.assertTrue(any("--config" in command and "--locked" in command for command in self.commands))
+        self.assertFalse(any(command[:2] == ["cargo", "clean"] for command in self.commands))
+        self.assertEqual(sum(command[:2] == ["cargo", "build"] for command in self.commands), 3)
 
     def test_malformed_negative_still_runs_restored_positive_and_fails(self):
         result, error, receipt = self.run_fake(negative="malformed")

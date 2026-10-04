@@ -366,12 +366,11 @@ def run_mutation(root, binding, sidecar_build_receipt=None):
         record["isolated_lock_sha256"] = digest_file(directory / "ctox/Cargo.lock")
         record["original_asset_sha256"] = digest_file(asset)
 
-        # wha-proto's cached build script embeds its source directory. A clone
-        # needs a fresh package build script; unrelated dependencies stay cached.
-        code, _ = execute("clear-relocated-protobuf-build", ["cargo", "clean", "--locked",
-                          "-p", "wha-proto", "--target-dir", str(target)] + cargo, 120)
-        if code:
-            raise BindingError("relocated protobuf package cache reset failed")
+        # wha-proto resolves CARGO_MANIFEST_DIR when Cargo invokes its build
+        # script. A relocated clone can reuse the checked executable; Cargo
+        # still tracks and rebuilds changed package inputs normally.
+        record["protobuf_cache_strategy"] = "invocation-time source root; no package clean"
+        save()
 
         def build(label):
             code, output = execute(label, ["cargo", "build", "--locked", "--bin", "ctox",
