@@ -28,6 +28,7 @@ mod home_refresh;
 mod json_retry_helpers;
 mod kimi_responses;
 mod logging_helpers;
+mod meta_tools;
 mod model_capabilities;
 mod openai_compat_tool_results;
 pub mod payload_helpers;
@@ -196,6 +197,7 @@ pub use logging_helpers::{
     websocket_upgrade_request_url, ApiLogClock, ApiLogContext, DeferredApiRequest, LogHeaders,
     RequestLogPolicy, SystemApiLogClock, UpstreamRequestLog, MAX_DEFERRED_API_REQUEST_BODY_BYTES,
 };
+pub use meta_tools::sanitize_meta_web_search_tools;
 pub use model_capabilities::{
     apply_request_thinking, RequestThinkingEngine, RequestThinkingInput, RequestThinkingRoute,
 };

@@ -41,6 +41,19 @@ struct CountText<'a> {
 /// Counts the same semantic Codex request segments as upstream while keeping
 /// JSON-valued arguments and schemas in their original lexical order.
 pub fn count_codex_input_tokens(model: &str, body: &[u8]) -> Result<i64, CodexTokenCountError> {
+    count_codex_input_tokens_with_encoder(tokenizer_for_codex_model(model), body)
+}
+
+/// Meta always uses upstream O200kBase, independently of its model identifier.
+/// ref: internal/runtime/executor/meta_executor_execute.go:247-272 @ d7914afdedca7af95ee974a42453dc49fc1388ce
+pub fn count_meta_input_tokens(body: &[u8]) -> Result<i64, CodexTokenCountError> {
+    count_codex_input_tokens_with_encoder(o200k_base_singleton(), body)
+}
+
+fn count_codex_input_tokens_with_encoder(
+    encoder: &CoreBPE,
+    body: &[u8],
+) -> Result<i64, CodexTokenCountError> {
     if body.is_empty() {
         return Ok(0);
     }
@@ -106,7 +119,7 @@ pub fn count_codex_input_tokens(model: &str, body: &[u8]) -> Result<i64, CodexTo
     if joined.is_empty() {
         return Ok(0);
     }
-    Ok(tokenizer_for_codex_model(model).count_ordinary(&joined) as i64)
+    Ok(encoder.count_ordinary(&joined) as i64)
 }
 
 /// Builds the internal Responses-shaped usage payload returned by upstream's
@@ -208,6 +221,23 @@ mod tests {
         let legacy = count_codex_input_tokens("gpt-4", body).unwrap();
         assert_ne!(modern, legacy);
         assert_eq!(count_codex_input_tokens("unknown", body).unwrap(), legacy);
+    }
+
+    #[test]
+    fn candidate_meta_tokens_always_use_o200k_and_semantic_codex_segments() {
+        let body = r#"{"instructions":"こんにちは世界","input":[{"type":"message","content":[{"type":"input_text","text":"hello"}]},{"type":"function_call","name":"lookup","arguments":{"q":"世界"}}],"tools":[{"name":"lookup","description":"lookup data","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}]}"#.as_bytes();
+        let count = count_meta_input_tokens(body).unwrap();
+        assert_eq!(count, count_codex_input_tokens("gpt-5", body).unwrap());
+        let short = r#"{"instructions":"こんにちは世界","input":[]}"#.as_bytes();
+        assert_ne!(
+            count_meta_input_tokens(short).unwrap(),
+            count_codex_input_tokens("muse-spark-1.3", short).unwrap()
+        );
+        assert_eq!(count_meta_input_tokens(b"{}").unwrap(), 0);
+        assert_eq!(
+            count_meta_input_tokens(b"invalid"),
+            Err(CodexTokenCountError::InvalidJson)
+        );
     }
 
     #[test]
