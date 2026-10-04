@@ -258,6 +258,8 @@ const NATIVE_PROJECTION_COLLECTIONS: &[&str] = &[
     "workjet_sessions",
     "workjet_session_transfers",
     "workjet_working_copies",
+    // Ephemeral files are native-only; no peer may forge frame metadata.
+    "guest_frames",
 ];
 
 /// A collection whose documents are server-authored (native core writes them,
@@ -378,6 +380,11 @@ fn actor_may_replicate_document_with_reader(
     collection_read_allowed: bool,
     visibility: &mut super::project_chats::VisibilityReadContext,
 ) -> bool {
+    if collection == "guest_frames" {
+        // These fields are supplied only by the held native guest owner.
+        // Administrator collection access does not transfer another controller.
+        return collection_read_allowed && value_string(document, "owner_user_id") == user_id;
+    }
     if let Some(allowed) = visibility.visible(collection, document, user_id) {
         return allowed && collection_read_allowed;
     }
@@ -4913,6 +4920,52 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn guest_frames_require_exact_owner_and_deny_all_peer_writes() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let document = json!({"owner_user_id":"owner", "frame_id":"native-frame"});
+        for role in ["user", "chef", "admin"] {
+            assert!(actor_may_replicate_document(
+                temp.path(),
+                "guest_frames",
+                &document,
+                "owner",
+                role,
+                true
+            ));
+            assert!(!actor_may_replicate_document(
+                temp.path(),
+                "guest_frames",
+                &document,
+                "foreign",
+                role,
+                true
+            ));
+            assert!(!actor_may_replicate_document(
+                temp.path(),
+                "guest_frames",
+                &document,
+                "owner",
+                role,
+                false
+            ));
+            assert!(!actor_may_replicate_document(
+                temp.path(),
+                "guest_frames",
+                &json!({}),
+                "owner",
+                role,
+                true
+            ));
+        }
+        assert!(!may_accept_peer_write(
+            temp.path(),
+            "any-peer-token",
+            "guest_frames"
+        ));
+        Ok(())
+    }
 
     fn seed_threads_user(
         root: &Path,

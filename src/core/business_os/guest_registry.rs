@@ -5,6 +5,8 @@
 //! registers a guest. Provider, policy and controller guards remain held through
 //! synchronous publication; a receipt or cached readiness is never authority.
 
+#[path = "guest_registry_frames.rs"]
+mod frames;
 #[cfg(test)]
 #[path = "guest_registry_tests.rs"]
 mod tests;
@@ -144,24 +146,7 @@ impl NativeGuestAdmissionOwner for NativeGuestAdmissionResolver {
             };
             super::guest_commands::apply_scope_claims(&scope, command)?;
             verify()?;
-            // No bytes or input can bypass the absent real delivery owner.
-            // In particular, MCP JSON/image content is not a substitute for
-            // the revocation-fenced native P2P frame path.
-            #[cfg(not(target_os = "linux"))]
-            anyhow::bail!("native guest command effects require retained Linux QEMU");
-            #[cfg(target_os = "linux")]
-            {
-                ensure!(
-                    entry.imported.is_some() && entry.registered_process.is_some(),
-                    "native guest has no registered import/child"
-                );
-                entry
-                    .desktop
-                    .as_ref()
-                    .context("native guest has no retained child")?
-                    .driver()?;
-                anyhow::bail!("native guest frame delivery owner is not installed")
-            }
+            execution.execute_frame_action(entry, verify, actual_turn, request.action, command)
         })
     }
 
@@ -288,6 +273,7 @@ struct Registration {
     publication: PublicationState,
     process_effect: Option<String>,
     registered_process: Option<GuestProcessEffect>,
+    frame: Option<frames::Observation>,
     #[cfg(target_os = "linux")]
     stopped_status: Option<std::process::ExitStatus>,
     #[cfg(target_os = "linux")]
@@ -314,6 +300,15 @@ pub(crate) struct NativeGuestRegistry {
     instance_path: PathBuf,
     instance_file_identity: FileIdentity,
     guests: Mutex<HashMap<String, Arc<Mutex<Registration>>>>,
+    frame_budget: Arc<frames::FrameBudget>,
+    frame_guests: Mutex<HashMap<String, String>>,
+    frame_transport: Mutex<
+        Option<
+            std::sync::Weak<
+                rxdb::plugins::replication_webrtc::file_fetch_handler::FileFetchRegistry,
+            >,
+        >,
+    >,
 }
 
 pub(crate) struct NativeGuestExecution {
@@ -373,6 +368,9 @@ impl NativeGuestRegistry {
             instance_path,
             instance_file_identity,
             guests: Mutex::new(HashMap::new()),
+            frame_budget: frames::FrameBudget::new(),
+            frame_guests: Mutex::new(HashMap::new()),
+            frame_transport: Mutex::new(None),
         }))
     }
 
@@ -519,6 +517,7 @@ impl NativeGuestRegistry {
                     publication: PublicationState::Virgin,
                     process_effect: None,
                     registered_process: None,
+                    frame: None,
                     #[cfg(target_os = "linux")]
                     stopped_status: None,
                     #[cfg(target_os = "linux")]
@@ -740,6 +739,7 @@ impl NativeGuestRegistry {
                     .context("controller generation exhausted")?;
                 entry.revoked = true;
             }
+            self.retire_frame(&mut entry)?;
             let desktop = entry
                 .desktop
                 .as_mut()
@@ -780,6 +780,7 @@ impl NativeGuestRegistry {
                     .context("controller generation exhausted")?;
                 entry.revoked = true;
             }
+            self.retire_frame(&mut entry)?;
             Ok(())
         })
     }

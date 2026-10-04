@@ -184,6 +184,39 @@ impl RetainedQemuDesktop {
         result
     }
 
+    /// Recheck the retained child and pinned guest service without allocating a
+    /// second capture. Failure or cancellation retires cached readiness.
+    pub(in crate::business_os) async fn validate_live_endpoint(
+        &mut self,
+        expected: &GuestLiveEndpoint,
+    ) -> Result<()> {
+        ensure!(self.phase == DesktopPhase::Ready, "guest is not ready");
+        ensure!(
+            expected.process_instance_id == self.process_instance_id
+                && self.endpoint_id.as_deref() == Some(expected.endpoint_id.as_str()),
+            "native frame endpoint belongs to another child"
+        );
+        self.phase = DesktopPhase::EndpointUnavailable;
+        let result = async {
+            self.process.ensure_alive()?;
+            let driver = self
+                .driver
+                .as_ref()
+                .context("guest endpoint is unavailable")?;
+            ensure!(
+                driver.probe_endpoint().await?.session_id == expected.guest_session_id,
+                "native frame guest service changed"
+            );
+            self.process.ensure_alive()?;
+            Ok(())
+        }
+        .await;
+        if result.is_ok() {
+            self.phase = DesktopPhase::Ready;
+        }
+        result
+    }
+
     pub(in crate::business_os) fn driver(&self) -> Result<&RemoteGuestDriver<UnixStream>> {
         ensure!(self.phase == DesktopPhase::Ready, "guest is not ready");
         self.driver
