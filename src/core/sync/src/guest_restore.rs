@@ -72,6 +72,8 @@ pub struct StagedGuestRestore {
     digest: String,
     manifest: CheckpointManifest,
     staging: tempfile::TempDir,
+    // Retain the actual native directory, not just a reusable pathname.
+    import_parent: fs::File,
 }
 impl StagedGuestRestore {
     /// Inspection only: these checkpoint bytes remain immutable.
@@ -132,6 +134,20 @@ fn validate_destination(destination: &GuestRestoreDestination, guest_id: &str) -
                 "guest import parent must be private and owned by this user",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_import_parent(
+    destination: &GuestRestoreDestination,
+    pinned: &fs::File,
+) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    validate_destination(destination, &destination.guest_id)?;
+    let actual = fs::symlink_metadata(&destination.import_parent)?;
+    let retained = pinned.metadata()?;
+    if !retained.is_dir() || actual.dev() != retained.dev() || actual.ino() != retained.ino() {
+        return Err(denied("native guest import directory was replaced"));
     }
     Ok(())
 }
@@ -199,6 +215,12 @@ pub async fn stage_guest_restore(
     validate_job(&job, authority, job_id, &ownership, digest)?;
     let destination = owner.resolve_destination(guest_id, &job.spec, &ownership)?;
     validate_destination(&destination, guest_id)?;
+    use std::os::unix::fs::OpenOptionsExt;
+    let import_parent = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&destination.import_parent)?;
+    validate_import_parent(&destination, &import_parent)?;
     // The CAS store revalidates every artifact before restoration.
     let manifest = store.load(digest)?;
     if !matches_manifest(&job, &manifest) {
@@ -220,6 +242,7 @@ pub async fn stage_guest_restore(
     {
         return Err(denied("guest destination changed while staging"));
     }
+    validate_import_parent(&destination, &import_parent)?;
     Ok(StagedGuestRestore {
         destination,
         spec: job.spec,
@@ -227,6 +250,7 @@ pub async fn stage_guest_restore(
         digest: digest.into(),
         manifest,
         staging,
+        import_parent,
     })
 }
 
@@ -259,6 +283,7 @@ pub async fn commit_guest_restore(
     {
         return Err(denied("guest restore binding changed before admission"));
     }
+    validate_import_parent(&staged.destination, &staged.import_parent)?;
     let effect_bytes = format!(
         "{}\0{}\0{}\0{}\0{}\0{}\0{}",
         staged.spec.job_id,
@@ -311,7 +336,7 @@ pub async fn commit_guest_restore(
                 return Err(denied("guest import publication invoked twice"));
             }
             invoked = true;
-            validate_destination(&staged.destination, &staged.destination.guest_id)?;
+            validate_import_parent(&staged.destination, &staged.import_parent)?;
             verify_staged_tree(&staged)?;
             sync_tree(&staged.staged_directory())?;
             // Reserve a new name without replacing any existing user content.
@@ -323,7 +348,7 @@ pub async fn commit_guest_restore(
             }
             // Once rename occurred, preserve the target even on durability failure.
             // A recovery owner must reconcile it against the pending effect.
-            fs::File::open(&staged.destination.import_parent)?.sync_all()?;
+            staged.import_parent.sync_all()?;
             published = true;
             Ok(())
         },

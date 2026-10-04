@@ -211,6 +211,7 @@ struct NativeFixture {
     hold_begin: Mutex<bool>,
     fail_complete: Mutex<bool>,
     changed_checkpoint_reply: Mutex<bool>,
+    replace_parent_on_begin: Mutex<bool>,
 }
 #[async_trait]
 impl ExecutionAuthority for NativeFixture {
@@ -257,6 +258,9 @@ impl ExecutionAuthority for NativeFixture {
         }
         if is_begin && *self.revoke_on_begin.lock().unwrap() {
             self.owner.binding.lock().unwrap().controller_generation += 1;
+        }
+        if is_begin && *self.replace_parent_on_begin.lock().unwrap() {
+            replace_import_parent(&self.owner.binding.lock().unwrap().import_parent);
         }
         let hold = is_begin && *self.hold_begin.lock().unwrap();
         if hold {
@@ -440,6 +444,7 @@ fn fixture() -> Fixture {
             hold_begin: Mutex::new(false),
             fail_complete: Mutex::new(false),
             changed_checkpoint_reply: Mutex::new(false),
+            replace_parent_on_begin: Mutex::new(false),
         },
     }
 }
@@ -469,6 +474,50 @@ fn imports(f: &Fixture) -> Vec<PathBuf> {
                 .starts_with("import-")
         })
         .collect()
+}
+
+fn replace_import_parent(parent: &Path) {
+    let retired = parent.with_file_name("retired-guests");
+    fs::rename(parent, &retired).unwrap();
+    fs::create_dir(parent).unwrap();
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+    // Preserve the exact checkpoint bytes and staging pathname, so content and
+    // pathname checks alone would wrongly accept the new native directory.
+    for entry in fs::read_dir(retired).unwrap() {
+        let entry = entry.unwrap();
+        fs::rename(entry.path(), parent.join(entry.file_name())).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn replaced_native_directory_before_admission_has_no_effect_or_publication() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    replace_import_parent(&staged.destination.import_parent);
+    let error = commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+    assert!(f.authority.state.lock().unwrap().jobs["job"]
+        .pending_effects
+        .is_empty());
+}
+
+#[tokio::test]
+async fn replaced_native_directory_during_admission_preserves_unknown_effect() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    *f.authority.replace_parent_on_begin.lock().unwrap() = true;
+    let error = commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(imports(&f).is_empty());
+    let state = f.authority.state.lock().unwrap();
+    assert_eq!(state.jobs["job"].pending_effects.len(), 1);
+    assert!(state.jobs["job"].completed_effects.is_empty());
 }
 
 #[tokio::test]
