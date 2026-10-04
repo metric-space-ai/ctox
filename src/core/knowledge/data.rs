@@ -23,6 +23,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
+use std::io::Seek;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
@@ -1248,26 +1249,39 @@ fn file_digest_stamp(metadata: &fs::Metadata) -> FileDigestStamp {
 /// re-hashing whole Parquet and snapshot files on every request would let a
 /// peer turn a small RPC into full-file reads.
 fn memoized_file_sha256(path: &Path) -> Option<(u64, String)> {
-    let metadata = fs::metadata(path).ok()?;
-    let stamp = file_digest_stamp(&metadata);
-    if let Ok(memo) = file_digest_memo().lock() {
-        if let Some((cached_stamp, digest)) = memo.get(path) {
-            if *cached_stamp == stamp {
-                return Some((stamp.len, digest.clone()));
+    let mut file = File::open(path).ok()?;
+    memoized_open_file_sha256(path, &mut file).ok()
+}
+
+/// Bind both the cache identity and bytes to the caller's open file. A path
+/// stat followed by a separate open can cache replacement bytes under an old inode.
+fn memoized_open_file_sha256(path: &Path, file: &mut File) -> Result<(u64, String)> {
+    let stamp = file_digest_stamp(&file.metadata()?);
+    // The portable stamp has no file identity on non-Unix hosts; do not reuse a
+    // digest there solely because an atomic replacement kept size and mtime.
+    if stamp.inode != 0 {
+        if let Ok(memo) = file_digest_memo().lock() {
+            if let Some((cached_stamp, digest)) = memo.get(path) {
+                if *cached_stamp == stamp {
+                    return Ok((stamp.len, digest.clone()));
+                }
             }
         }
     }
-    let mut file = File::open(path).ok()?;
+    file.rewind()?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 128 * 1024];
     let mut len = 0u64;
     loop {
-        let read = file.read(&mut buffer).ok()?;
+        let read = file.read(&mut buffer)?;
         if read == 0 {
             break;
         }
         len += read as u64;
         hasher.update(&buffer[..read]);
+    }
+    if len != stamp.len || file_digest_stamp(&file.metadata()?) != stamp {
+        bail!("open knowledge file changed while hashing");
     }
     let digest = format!("{:x}", hasher.finalize());
     let observed = FileDigestStamp { len, ..stamp };
@@ -1277,7 +1291,7 @@ fn memoized_file_sha256(path: &Path) -> Option<(u64, String)> {
         }
         memo.insert(path.to_path_buf(), (observed, digest.clone()));
     }
-    Some((len, digest))
+    Ok((len, digest))
 }
 
 /// Maximum rows returned by one on-demand Parquet window.
@@ -1535,35 +1549,87 @@ pub fn knowledge_table_row_window(
     offset: usize,
     limit: usize,
 ) -> Result<KnowledgeTableRowWindow> {
-    let limit = limit.min(KNOWLEDGE_TABLE_ROW_WINDOW_MAX);
-    let conn = open_runtime_db(root)?;
-    let (domain, table_key, catalog_schema_hash, catalog_row_count) =
-        lookup_active_knowledge_table(&conn, table_id)?;
-    let resolved_path = compute_parquet_path(root, &domain, &table_key);
-    let content_hash = knowledge_file_content_hash(&resolved_path);
-    let (rows, row_count, schema_hash) = if resolved_path.is_file() {
-        let schema_hash = super::parquet_io::scan_table(&resolved_path)
-            .and_then(|mut lf| lf.collect_schema())
-            .map(|schema| super::parquet_io::schema_hash(&schema))
-            .unwrap_or_else(|_| catalog_schema_hash.clone());
-        let (rows, row_count) = super::parquet_io::read_rows_window(&resolved_path, offset, limit)?;
-        (rows, row_count, schema_hash)
-    } else {
-        (Vec::new(), catalog_row_count, catalog_schema_hash)
-    };
-    let rows = normalize_evidence_rows_with_server_receipts(root, &table_key, rows)?;
-    let (rows, _quality_notes) = enrich_knowledge_table_rows_from(&table_key, rows, offset);
-    Ok(KnowledgeTableRowWindow {
-        table_id: table_id.to_string(),
-        domain,
-        table_key,
-        offset,
-        limit,
-        row_count,
-        rows,
-        content_hash,
-        schema_hash,
-    })
+    KnowledgeTableSnapshot::open(root, table_id)?.window(root, table_id, offset, limit)
+}
+
+/// A retained file handle pins an atomic Parquet revision across hash, schema
+/// and row reads. No lock spanning receipt normalization or network delivery.
+struct KnowledgeTableSnapshot {
+    domain: String,
+    table_key: String,
+    catalog_schema_hash: String,
+    catalog_row_count: i64,
+    file: Option<(File, FileDigestStamp)>,
+    content_hash: String,
+}
+
+impl KnowledgeTableSnapshot {
+    fn open(root: &Path, table_id: &str) -> Result<Self> {
+        let conn = open_runtime_db(root)?;
+        let (domain, table_key, catalog_schema_hash, catalog_row_count) =
+            lookup_active_knowledge_table(&conn, table_id)?;
+        let path = compute_parquet_path(root, &domain, &table_key);
+        let (file, content_hash) = match File::open(&path) {
+            Ok(mut file) => {
+                let stamp = file_digest_stamp(&file.metadata()?);
+                let (_, digest) = memoized_open_file_sha256(&path, &mut file)?;
+                if file_digest_stamp(&file.metadata()?) != stamp {
+                    bail!("open knowledge table changed while hashing");
+                }
+                (Some((file, stamp)), format!("sha256:{digest}"))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, String::new()),
+            Err(error) => return Err(error).context("open knowledge table snapshot"),
+        };
+        Ok(Self {
+            domain,
+            table_key,
+            catalog_schema_hash,
+            catalog_row_count,
+            file,
+            content_hash,
+        })
+    }
+
+    fn window(
+        &self,
+        root: &Path,
+        table_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<KnowledgeTableRowWindow> {
+        let limit = limit.min(KNOWLEDGE_TABLE_ROW_WINDOW_MAX);
+        let (rows, row_count, schema_hash) = if let Some((file, stamp)) = &self.file {
+            if file_digest_stamp(&file.metadata()?) != *stamp {
+                bail!("open knowledge table changed before reading rows");
+            }
+            let page =
+                super::parquet_io::read_rows_window_from_file(file.try_clone()?, offset, limit)?;
+            if file_digest_stamp(&file.metadata()?) != *stamp {
+                bail!("open knowledge table changed while reading rows");
+            }
+            page
+        } else {
+            (
+                Vec::new(),
+                self.catalog_row_count,
+                self.catalog_schema_hash.clone(),
+            )
+        };
+        let rows = normalize_evidence_rows_with_server_receipts(root, &self.table_key, rows)?;
+        let (rows, _) = enrich_knowledge_table_rows_from(&self.table_key, rows, offset);
+        Ok(KnowledgeTableRowWindow {
+            table_id: table_id.to_string(),
+            domain: self.domain.clone(),
+            table_key: self.table_key.clone(),
+            offset,
+            limit,
+            row_count,
+            rows,
+            content_hash: self.content_hash.clone(),
+            schema_hash,
+        })
+    }
 }
 
 fn lookup_active_knowledge_table(
@@ -2085,22 +2151,44 @@ const USAGE_DELETE: &str = "ctox knowledge data delete --domain X --key Y --conf
 const USAGE_TAG: &str = "ctox knowledge data tag --domain X --key Y --tag k=v";
 const USAGE_UNTAG: &str = "ctox knowledge data untag --domain X --key Y --tag k";
 
-/// Every row of one active table, paged through [`knowledge_table_row_window`].
+/// Every row of one active table, paged from one retained Parquet revision.
 ///
 /// `row_count` is the full parquet length. `rows` is the concatenation of the
-/// windows, in offset order. Hashes come from the first page.
+/// windows, in offset order. Hashes and rows refer to the same open file.
 pub fn knowledge_table_all_rows(root: &Path, table_id: &str) -> Result<KnowledgeTableRowWindow> {
-    let first = knowledge_table_row_window(root, table_id, 0, KNOWLEDGE_TABLE_ROW_WINDOW_MAX)?;
+    let snapshot = KnowledgeTableSnapshot::open(root, table_id)?;
+    collect_knowledge_table_rows(|offset| {
+        snapshot.window(root, table_id, offset, KNOWLEDGE_TABLE_ROW_WINDOW_MAX)
+    })
+}
+
+fn collect_knowledge_table_rows(
+    mut read_page: impl FnMut(usize) -> Result<KnowledgeTableRowWindow>,
+) -> Result<KnowledgeTableRowWindow> {
+    let first = read_page(0)?;
+    let expected = usize::try_from(first.row_count).context("invalid knowledge table row count")?;
     let mut rows = first.rows;
     let mut offset = rows.len();
-    while i64::try_from(offset).unwrap_or(i64::MAX) < first.row_count {
-        let page =
-            knowledge_table_row_window(root, table_id, offset, KNOWLEDGE_TABLE_ROW_WINDOW_MAX)?;
-        if page.rows.is_empty() {
-            break;
+    while offset < expected {
+        let page = read_page(offset)?;
+        if page.table_id != first.table_id
+            || page.domain != first.domain
+            || page.table_key != first.table_key
+            || page.offset != offset
+            || page.row_count != first.row_count
+            || page.content_hash != first.content_hash
+            || page.schema_hash != first.schema_hash
+        {
+            bail!("knowledge table revision changed between row windows");
         }
-        offset += page.rows.len();
+        if page.rows.is_empty() {
+            bail!("knowledge table ended before its advertised row count");
+        }
         rows.extend(page.rows);
+        offset = rows.len();
+    }
+    if rows.len() != expected {
+        bail!("knowledge table rows do not match its advertised row count");
     }
     let limit = rows.len();
     Ok(KnowledgeTableRowWindow {
@@ -2691,6 +2779,13 @@ mod tests {
         assert_eq!(missing.row_count, 42);
         assert!(missing.content_hash.is_empty());
         assert_eq!(missing.schema_hash, "catalog-schema");
+        let incomplete = knowledge_table_all_rows(root, "kdt-missing-parquet").unwrap_err();
+        assert!(
+            incomplete
+                .to_string()
+                .contains("before its advertised row count"),
+            "{incomplete:#}"
+        );
 
         let unknown = knowledge_table_row_window(root, "kdt-does-not-exist", 0, 10).unwrap_err();
         let unknown_message = format!("{unknown:#}");
@@ -2716,6 +2811,68 @@ mod tests {
     }
 
     #[test]
+    fn knowledge_table_snapshot_survives_replacement_between_pages() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let table_id = "kdt-atomic-pages";
+        let original_rows = (0..KNOWLEDGE_TABLE_ROW_WINDOW_MAX + 7)
+            .map(|index| json!({"reading": index as i64, "revision": "original"}))
+            .collect::<Vec<_>>();
+        let path = seed_knowledge_table_for_test(
+            root,
+            table_id,
+            "sensors",
+            "readings",
+            &original_rows,
+            None,
+        )?;
+        let snapshot = KnowledgeTableSnapshot::open(root, table_id)?;
+        let old_hash = snapshot.content_hash.clone();
+        let replacement_rows = vec![json!({"replacement": "shorter revision"})];
+        let mut pages = 0;
+        let all = collect_knowledge_table_rows(|offset| {
+            let page = snapshot.window(root, table_id, offset, KNOWLEDGE_TABLE_ROW_WINDOW_MAX)?;
+            pages += 1;
+            if offset == 0 {
+                let df = super::super::parquet_io::rows_to_df(&replacement_rows)?;
+                super::super::parquet_io::commit_parquet(&path, df)?;
+            }
+            Ok(page)
+        })?;
+        assert_eq!(pages, 2);
+        assert_eq!(
+            all.rows
+                .iter()
+                .map(|row| row["reading"].as_i64())
+                .collect::<Vec<_>>(),
+            (0..original_rows.len())
+                .map(|index| Some(index as i64))
+                .collect::<Vec<_>>()
+        );
+        assert!(all.rows.iter().all(|row| row["revision"] == "original"));
+        assert_eq!(all.row_count, original_rows.len() as i64);
+        assert_eq!(all.content_hash, old_hash);
+
+        // Hash, schema and rows remain pinned even for a page opened after rename.
+        let old_page = snapshot.window(root, table_id, 0, 1)?;
+        assert_eq!(old_page.rows[0]["reading"], 0);
+        assert_eq!(old_page.rows[0]["revision"], "original");
+        assert_eq!(old_page.content_hash, all.content_hash);
+        assert_eq!(old_page.schema_hash, all.schema_hash);
+        let fresh = knowledge_table_all_rows(root, table_id)?;
+        assert_eq!(fresh.rows.len(), 1);
+        assert_eq!(fresh.rows[0]["replacement"], "shorter revision");
+        assert_eq!(fresh.row_count, 1);
+        assert_ne!(fresh.content_hash, all.content_hash);
+        assert_ne!(fresh.schema_hash, all.schema_hash);
+        let empty = knowledge_table_row_window(root, table_id, 0, 0)?;
+        assert!(empty.rows.is_empty());
+        assert_eq!(empty.schema_hash, fresh.schema_hash);
+        assert_eq!(empty.content_hash, fresh.content_hash);
+        Ok(())
+    }
+
+    #[test]
     fn memoized_file_sha256_reuses_digest_until_the_file_changes() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let path = temp.path().join("snapshot.bin");
@@ -2727,6 +2884,7 @@ mod tests {
 
         // A rewrite with a different length (and a new rename-based file) must
         // never be answered from the memo.
+        let mut original_file = File::open(&path)?;
         let replacement = temp.path().join("snapshot.next");
         fs::write(&replacement, b"second, longer body")?;
         fs::rename(&replacement, &path)?;
@@ -2740,6 +2898,10 @@ mod tests {
             knowledge_file_content_hash(&path),
             format!("sha256:{}", second.1)
         );
+        // The path now names another inode; an already-open reader still hashes
+        // its original bytes and must not cache them under the replacement identity.
+        assert_eq!(memoized_open_file_sha256(&path, &mut original_file)?, first);
+        assert_eq!(memoized_file_sha256(&path), Some(second));
         assert!(memoized_file_sha256(&temp.path().join("missing")).is_none());
         Ok(())
     }
