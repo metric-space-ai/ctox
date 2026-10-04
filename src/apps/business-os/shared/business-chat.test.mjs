@@ -1815,9 +1815,16 @@ test('disposed crew presence releases observers and ignores queued callbacks and
   try {
     const dispose = __businessChatTestInternals.wireCrewAppPresence({
       state: { crewMembers: [] },
-      db: { raw: { ctox_queue_tasks: collection, ctox_crew_members: collection } },
-      syncFacade: { subscribeCollectionReadiness: (_name, callback) => subscribe(readiness, callback) },
+      db: { raw: { ctox_queue_tasks: collection, ctox_crew_members: collection,
+        ctox_harness_status: { find: () => ({ exec: async () => [{ service_running: true,
+          boot_id: 'own-boot', active_task_ids: ['task-1'], current_queue_workers: [{ task_id: 'task-1',
+            boot_id: 'own-boot', lease_worker_id: 'own-boot:worker-1', attempt: 1,
+            leased_at: new Date(Date.now() - 1000).toISOString(), lease_expires_at: new Date(Date.now() + 60000).toISOString() }] }] }) },
+      } },
+      syncFacade: { collectionFreshness: () => ({ ready: true, state: 'live' }),
+        subscribeCollectionReadiness: (_name, callback) => subscribe(readiness, callback) },
     });
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(observers.size, 2);
     assert.equal(readiness.size, 2);
     assert.equal(reads, 1);
@@ -1844,7 +1851,8 @@ test('crew presence retains its snapshot across cancelled reads and recovers on 
   const previousWarn = console.warn;
   const warnings = [];
   const reloads = [];
-  const task = { id: 'task-1', status: 'running', module: 'tickets', crew_member_id: 'member-1' };
+  const task = { id: 'task-1', status: 'running', module: 'tickets', crew_member_id: 'member-1',
+    attempt: 1, lease_worker_id: 'own-boot:worker-1' };
   let rows = [task];
   let failure = null;
   const state = { crewMembers: [{ id: 'member-1', name: 'Lumi' }] };
@@ -1858,8 +1866,12 @@ test('crew presence retains its snapshot across cancelled reads and recovers on 
       db: { raw: { ctox_queue_tasks: { find: () => ({ exec: async () => {
         if (failure) throw failure;
         return rows;
-      } }) } } },
-      syncFacade: { subscribeCollectionReadiness: (_name, callback) => { reloads.push(callback); } },
+      } }) }, ctox_harness_status: { find: () => ({ exec: async () => [{ service_running: true,
+        boot_id: 'own-boot', active_task_ids: ['task-1'], current_queue_workers: [{ task_id: 'task-1',
+          boot_id: 'own-boot', lease_worker_id: 'own-boot:worker-1', attempt: 1,
+          leased_at: new Date(Date.now() - 1000).toISOString(), lease_expires_at: new Date(Date.now() + 60000).toISOString() }] }] }) } } },
+      syncFacade: { collectionFreshness: () => ({ ready: true, state: 'live' }),
+        subscribeCollectionReadiness: (_name, callback) => { reloads.push(callback); } },
     });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(state.crewWorkload.get('member-1'), 1);

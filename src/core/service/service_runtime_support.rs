@@ -455,7 +455,7 @@ where
     anyhow::bail!("systemctl --user failed: {message}");
 }
 
-fn systemctl_user_capture<I, S>(args: I) -> Result<Output>
+pub(super) fn systemctl_user_capture<I, S>(args: I) -> Result<Output>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
