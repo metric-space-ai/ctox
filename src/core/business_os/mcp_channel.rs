@@ -8930,7 +8930,9 @@ mod tests {
                 "id": id,
                 "title": title,
                 "description": "Test module",
-                "install_scope": "core",
+                // Synthetic fixture IDs are not canonical system apps. Use the
+                // supported source-app scope instead of claiming core membership.
+                "install_scope": "internal",
                 "entry": format!("modules/{id}/index.html"),
                 "collections": collections,
                 "lifecycle": {

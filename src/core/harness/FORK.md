@@ -41,6 +41,26 @@ These are source-added regressions; compiler/test execution and transport
 acceptance must be recorded separately before promotion.
 This change does not implement queue-claim cancellation or publication fencing.
 
+## 2026-10 Native MCP emission boundary
+
+The MCP handler consults a live in-process native dispatcher immediately before
+ordinary transport, after the existing argument/configuration, approval and
+safety checks. Both allowed paths use the same helper. Declined, cancelled or
+safety-blocked calls do not dispatch. Public registration is a Rust capability;
+its invocation has private fields and is built only from the actual Session,
+TurnContext and MCP call. JSON labels and asynchronous events cannot construct it.
+
+Registrations are scoped to the real thread and removed on drop. The registry
+lock is released before the native callback. Native callbacks separately enforce
+their retained worker/turn lifetime and current policy/controller; these strings
+are not permits. Unhandled calls preserve ordinary MCP transport. CTOX installs
+this seam only on explicitly native-admitted guest sessions; the default guest
+consumer refuses effects until a real VM owner is registered.
+
+The core regressions exercise actual MCP handler dispatch and argument rejection,
+plus registry scoping/teardown. Native queue regressions test emitter lifetime and
+default-consumer denial. Execution and installed VM acceptance are separate.
+
 ## 2026-10 Rollout writer acknowledgement and publication
 
 Recorder `persist` and `flush` replies carry the writer's actual I/O result.
