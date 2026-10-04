@@ -603,7 +603,7 @@ mod tests {
             _: usize,
             _: bool,
             _: &str,
-            _: &mut dyn FnMut(&Value, &[u8]) -> RxResult<()>,
+            _: &mut dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
         ) -> RxResult<()> {
             panic!("slot fixture must not send files")
         }
