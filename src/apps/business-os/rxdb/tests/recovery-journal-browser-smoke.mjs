@@ -128,26 +128,56 @@ try {
     // the affected tenant's unknown batch mix or browser profile.
     const backlogName = `${databaseName}-backlog`;
     const backlogJournal = await openRecoveryJournal({ databaseName: backlogName });
-    const backlogTx = backlogJournal.db.transaction('batches', 'readwrite');
+    const backlogTx = backlogJournal.db.transaction(['batches', 'conflicts'], 'readwrite');
     const backlogStore = backlogTx.objectStore('batches');
     const backlogPayload = 'x'.repeat(90_000);
+    let backlogExpectedBytes = 4;
     for (let index = 0; index < 240; index += 1) {
       const id = `lead-${index % 60}`;
       const doc = { id, payload: backlogPayload, _meta: { ctoxHlc: `${(index + 1).toString(36)}:0:tab-a` } };
-      backlogStore.put({
+      const batch = {
         batchId: `backlog-${index}`, sequence: index + 1,
         collection: 'outbound_leads', state: 'pending',
         documentIds: [id], ackedIds: [], committedDocs: { [id]: doc },
         primaryCommittedAtMs: Date.now(), createdAtMs: Date.now(),
-      });
+      };
+      backlogStore.put(batch);
+      backlogExpectedBytes += new TextEncoder().encode(JSON.stringify(batch)).byteLength + (index ? 1 : 0);
     }
+    const pendingBacklogConflict = { conflictId: 'unicode', state: 'pending', local: { title: '恢复 résumé 🐈' } };
+    backlogTx.objectStore('conflicts').put(pendingBacklogConflict);
+    backlogTx.objectStore('conflicts').put({ conflictId: 'resolved', state: 'resolved', local: { title: 'old' } });
+    backlogExpectedBytes += new TextEncoder().encode(JSON.stringify(pendingBacklogConflict)).byteLength;
     await new Promise((resolveDone, rejectDone) => {
       backlogTx.oncomplete = resolveDone;
       backlogTx.onerror = () => rejectDone(backlogTx.error);
       backlogTx.onabort = () => rejectDone(backlogTx.error);
     });
+    // Trap full materialization only for this owned fixture journal. The real
+    // status/collection-startup paths must complete while these APIs reject.
+    const withBoundedJournalRead = async (operation, journalDatabaseName = backlogName) => {
+      const originalStoreGetAll = IDBObjectStore.prototype.getAll;
+      const originalIndexGetAll = IDBIndex.prototype.getAll;
+      IDBObjectStore.prototype.getAll = function (...args) {
+        if (this.transaction.db.name === `${journalDatabaseName}__recovery_v2`) {
+          throw new Error('startup materialized all journal payloads');
+        }
+        return originalStoreGetAll.apply(this, args);
+      };
+      IDBIndex.prototype.getAll = function (...args) {
+        if (this.objectStore.transaction.db.name === `${journalDatabaseName}__recovery_v2`) {
+          throw new Error('startup materialized all indexed journal payloads');
+        }
+        return originalIndexGetAll.apply(this, args);
+      };
+      try { return await operation(); }
+      finally {
+        IDBObjectStore.prototype.getAll = originalStoreGetAll;
+        IDBIndex.prototype.getAll = originalIndexGetAll;
+      }
+    };
     const statusStarted = performance.now();
-    const backlogBefore = await backlogJournal.getStatus();
+    const backlogBefore = await withBoundedJournalRead(() => backlogJournal.getStatus());
     const backlogStatusMs = performance.now() - statusStarted;
     const backlogPendingBefore = backlogBefore.pendingWrites;
     const backlogBytesBefore = backlogBefore.pendingBytes;
@@ -161,20 +191,72 @@ try {
       },
     });
     const recoveryStarted = performance.now();
-    await backlogCollection.initializeRecovery();
+    await withBoundedJournalRead(() => backlogCollection.initializeRecovery());
     const backlogRecoveryMs = performance.now() - recoveryStarted;
     const writeStarted = performance.now();
-    await backlogCollection.bulkUpsert([{ id: 'lead-new', payload: 'new' }]);
+    await withBoundedJournalRead(() => backlogCollection.bulkUpsert([{ id: 'lead-new', payload: 'new' }]));
     const backlogFirstWriteMs = performance.now() - writeStarted;
     const backlogPendingAfterFirstWrite = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
     const ackStarted = performance.now();
-    await backlogStorage.recoveryJournal.markMasterAcknowledged('outbound_leads', {
+    await withBoundedJournalRead(() => backlogStorage.recoveryJournal.markMasterAcknowledged('outbound_leads', {
       'lead-0': { id: 'lead-0', payload: backlogPayload, _meta: { ctoxHlc: '51:0:tab-a' } },
-    });
+    }));
     const backlogAckMs = performance.now() - ackStarted;
     const backlogPendingAfter = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
     backlogCollection.close();
     backlogStorage.close();
+
+    // Cross the read-group boundary with persisted native rows and one WAL
+    // batch spanning both groups. Partial ACK then complete ACK must survive.
+    const pagedName = `${databaseName}-paged-reconciliation`;
+    const pagedSchema = {
+      version: 0, type: 'object', primaryKey: 'id',
+      properties: { id: { type: 'string' }, title: { type: 'string' } }, required: ['id'],
+    };
+    const pagedDocuments = Array.from({ length: 205 }, (_, index) => ({
+      id: `paged-${index}`, title: 'persisted native',
+      _meta: { ctoxHlc: `${(index + 1).toString(36)}:0:native-fixture` },
+    }));
+    const pagedStorage = await openCtoxIndexedDbStorage({ databaseName: pagedName });
+    const pagedCollection = pagedStorage.collection('tickets', { schema: pagedSchema });
+    await pagedCollection._bulkUpsertOnce(pagedDocuments, {
+      replicationOrigin: { role: 'native', peerId: 'native-fixture' },
+    });
+    const pagedTx = pagedStorage.recoveryJournal.db.transaction('batches', 'readwrite');
+    pagedTx.objectStore('batches').put({
+      batchId: 'paged-pending', sequence: 1, collection: 'tickets', state: 'pending',
+      rows: pagedDocuments, documentIds: pagedDocuments.map((doc) => doc.id), ackedIds: [],
+      committedDocs: Object.fromEntries(pagedDocuments.map((doc) => [doc.id, doc])),
+      primaryCommittedAtMs: Date.now(), createdAtMs: Date.now(),
+    });
+    await new Promise((resolveDone, rejectDone) => {
+      pagedTx.oncomplete = resolveDone;
+      pagedTx.onerror = () => rejectDone(pagedTx.error);
+      pagedTx.onabort = () => rejectDone(pagedTx.error);
+    });
+    pagedCollection.close();
+    pagedStorage.close();
+    const pagedReopened = await openCtoxIndexedDbStorage({ databaseName: pagedName });
+    const pagedReopenedCollection = pagedReopened.collection('tickets', { schema: pagedSchema });
+    const originalGet = IDBObjectStore.prototype.get;
+    const primaryReadGroups = new Map();
+    let pagedPendingAfterRestart;
+    try {
+      IDBObjectStore.prototype.get = function (key) {
+        if (this.transaction.db.name === pagedName && this.name === 'documents'
+          && Array.isArray(key) && key[0] === 'tickets') {
+          primaryReadGroups.set(this.transaction, (primaryReadGroups.get(this.transaction) || 0) + 1);
+        }
+        return originalGet.call(this, key);
+      };
+      await withBoundedJournalRead(() => pagedReopenedCollection.initializeRecovery(), pagedName);
+      pagedPendingAfterRestart = (await pagedReopened.recoveryJournal.getStatus()).pendingWrites;
+    } finally {
+      IDBObjectStore.prototype.get = originalGet;
+      pagedReopenedCollection.close();
+      pagedReopened.close();
+    }
+    const pagedPrimaryReads = [...primaryReadGroups.values()];
 
     // Upgrade an existing v3 WAL in place: new indexes must not discard its
     // only copy of an unacknowledged browser write.
@@ -312,17 +394,95 @@ try {
     const pendingAfterRestartReconciliation = await reopenedStorage.recoveryJournal.getStatus();
     reopenedCommands.close();
     reopenedStorage.close();
+    // Keep an older journal handle open so the real browser reports blocked.
+    const lifecycleName = `${databaseName}-open-lifecycle`;
+    const lifecycleJournalName = `${lifecycleName}__recovery_v2`;
+    const openFixtureVersion = (name, version) => new Promise((resolveOpen, rejectOpen) => {
+      const request = indexedDB.open(name, version);
+      let retired = false;
+      const fail = (error) => {
+        retired = true;
+        clearTimeout(timer);
+        rejectOpen(error);
+      };
+      const timer = setTimeout(() => fail(new Error('lifecycle probe timed out')), 5000);
+      request.onsuccess = () => {
+        clearTimeout(timer);
+        if (retired) request.result.close();
+        else resolveOpen(request.result);
+      };
+      request.onerror = () => fail(request.error || new Error('lifecycle probe failed'));
+      request.onblocked = () => fail(new Error('failed startup retained an IndexedDB handle'));
+    });
+    // Observe real close calls before any version-change probe: the existing
+    // onversionchange handler could otherwise hide a leaked connection.
+    const originalClose = IDBDatabase.prototype.close;
+    let primaryCloses = 0;
+    let lateJournalClosed;
+    const lateCloseObserved = new Promise((resolveClosed) => { lateJournalClosed = resolveClosed; });
+    IDBDatabase.prototype.close = function () {
+      if (this.name === lifecycleName && this.version === 4) primaryCloses += 1;
+      if (this.name === lifecycleJournalName && this.version === 4) lateJournalClosed();
+      return originalClose.call(this);
+    };
+    let lifecycleJournalCode = '';
+    let lifecyclePrimaryReleased = false;
+    let lifecycleLateJournalReleased = false;
+    try {
+      const blocker = await openFixtureVersion(lifecycleJournalName, 3);
+      blocker.onversionchange = () => {};
+      try {
+        try {
+          await openCtoxIndexedDbStorage({ databaseName: lifecycleName });
+        } catch (error) {
+          lifecycleJournalCode = error.code || '';
+          if (!String(error.message).includes('blocked')) throw error;
+        }
+        if (lifecycleJournalCode !== 'indexeddb_journal_unavailable') {
+          throw new Error('blocked journal startup must reject with its original code');
+        }
+        if (primaryCloses === 0) throw new Error('failed startup did not close its primary handle');
+        const primaryProbe = await openFixtureVersion(lifecycleName, 5);
+        primaryProbe.close();
+        lifecyclePrimaryReleased = true;
+      } finally {
+        blocker.close();
+      }
+      let lateDeadline;
+      try {
+        await Promise.race([
+          lateCloseObserved,
+          new Promise((_, rejectLate) => {
+            lateDeadline = setTimeout(() => rejectLate(new Error('late journal handle was not closed')), 5000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(lateDeadline);
+      }
+      const journalProbe = await openFixtureVersion(lifecycleJournalName, 5);
+      journalProbe.close();
+      lifecycleLateJournalReleased = true;
+    } finally {
+      IDBDatabase.prototype.close = originalClose;
+      indexedDB.deleteDatabase(lifecycleName);
+      indexedDB.deleteDatabase(lifecycleJournalName);
+    }
     journal.close();
     indexedDB.deleteDatabase(`${databaseName}__recovery_v2`);
     indexedDB.deleteDatabase(`${databaseName}-other__recovery_v2`);
     indexedDB.deleteDatabase(backlogName);
     indexedDB.deleteDatabase(`${backlogName}__recovery_v2`);
+    indexedDB.deleteDatabase(pagedName);
+    indexedDB.deleteDatabase(`${pagedName}__recovery_v2`);
     indexedDB.deleteDatabase(`${legacyStorageName}__recovery_v2`);
     indexedDB.deleteDatabase(storageName);
     indexedDB.deleteDatabase(`${storageName}__recovery_v2`);
     indexedDB.deleteDatabase(restartStorageName);
     indexedDB.deleteDatabase(`${restartStorageName}__recovery_v2`);
     return {
+      lifecycleJournalCode,
+      lifecyclePrimaryReleased,
+      lifecycleLateJournalReleased,
       pendingBeforeReplay,
       pendingAfterAck,
       pendingAfterPartialAck,
@@ -333,12 +493,15 @@ try {
       migratedVersion,
       backlogPendingBefore,
       backlogBytesBefore,
+      backlogExpectedBytes,
       backlogStatusMs,
       backlogPendingAfterFirstWrite,
       backlogPendingAfter,
       backlogRecoveryMs,
       backlogFirstWriteMs,
       backlogAckMs,
+      pagedPendingAfterRestart,
+      pagedPrimaryReads,
       pendingAfterCommandAck,
       replay,
       replayed,
@@ -363,6 +526,9 @@ try {
     };
   });
 
+  assert(result.lifecycleJournalCode === 'indexeddb_journal_unavailable', 'blocked journal startup must retain its error code');
+  assert(result.lifecyclePrimaryReleased, 'failed journal startup must release its primary IndexedDB handle');
+  assert(result.lifecycleLateJournalReleased, 'a late journal open must not block the next schema version');
   assert(result.pendingBeforeReplay.pendingWrites === 1, 'journal commit must precede primary replay');
   assert(result.replay[0]?.status === 'replayed', 'pending batch must replay on startup');
   assert(result.replayed[0]?.[0]?.id === 'ticket-1', 'replay must preserve the complete local document');
@@ -383,6 +549,13 @@ try {
   'the new local write adds one pending version; the exact master HLC then drains one historical version');
   assert(result.backlogBytesBefore >= 20_000_000,
     'the sanitized backlog must exercise status and ACK costs at roughly the observed byte scale');
+  assert(result.backlogBytesBefore === result.backlogExpectedBytes,
+    'bounded cursor status must preserve exact UTF-8 JSON-array bytes and exclude resolved conflicts');
+  assert(result.pagedPendingAfterRestart === 0,
+    'startup must reconcile a single native-acknowledged batch spanning read groups');
+  assert(result.pagedPrimaryReads.length === 2 && result.pagedPrimaryReads[0] === 200
+    && result.pagedPrimaryReads[1] === 5,
+  '205 persisted native documents must be read in groups of200 and5, not one unbounded transaction');
   assert([result.backlogStatusMs, result.backlogRecoveryMs, result.backlogFirstWriteMs, result.backlogAckMs]
     .every((value) => Number.isFinite(value) && value >= 0),
   'sanitized backlog timings must be recorded for recovery, first write and ACK');
