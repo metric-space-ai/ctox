@@ -311,6 +311,47 @@ fn native_registry_replaced_policy_store_or_import_parent_never_invokes_callback
     assert!(!invoked);
 }
 #[test]
+fn native_registry_missing_or_replaced_instance_identity_never_recreates_authority() {
+    let (_directory, registry, _assignment) = fixture();
+    let identity_path = &registry.instance_path;
+    let retained = identity_path.with_extension("retained");
+    let original = std::fs::read(identity_path).unwrap();
+    std::fs::rename(identity_path, &retained).unwrap();
+    let mut invoked = false;
+    assert!(registry
+        .with_policy(|_| {
+            invoked = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!invoked);
+    assert!(
+        !identity_path.exists(),
+        "publication must not reinitialize native identity"
+    );
+    assert_eq!(std::fs::read(&retained).unwrap(), original);
+
+    std::fs::write(identity_path, &original).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(identity_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(registry
+        .with_policy(|_| {
+            invoked = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(
+        !invoked,
+        "identical identity bytes in a replacement file grant no authority"
+    );
+    assert_eq!(std::fs::read(&retained).unwrap(), original);
+
+    std::fs::remove_file(identity_path).unwrap();
+    std::fs::rename(&retained, identity_path).unwrap();
+    registry.with_policy(|_| Ok(())).unwrap();
+}
+
+#[test]
 fn native_registry_archived_project_removed_member_or_expired_worker_deny_callback() {
     for (collection, id, value) in [
         (
