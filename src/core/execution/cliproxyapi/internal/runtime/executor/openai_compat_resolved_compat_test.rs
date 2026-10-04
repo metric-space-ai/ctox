@@ -115,6 +115,12 @@ fn candidate_openai_executor_rewrites_portable_agent_input_before_normal_transla
             assert_eq!(input["input"][0]["role"], "user");
             assert_eq!(input["input"][0]["content"][0]["type"], "input_text");
             assert_eq!(input["input"][0]["content"][0]["text"], "agent-text");
+            assert!(input["input"][0]["content"][0]
+                .get("encrypted_content")
+                .is_none());
+            assert!(input["input"][0]
+                .get("internal_chat_message_metadata_passthrough")
+                .is_none());
             assert!(input["input"][0].get("author").is_none());
             assert!(input["input"][0].get("recipient").is_none());
             br#"{"messages":[]}"#.to_vec()
@@ -130,7 +136,7 @@ fn candidate_openai_executor_rewrites_portable_agent_input_before_normal_transla
     let request = ExecutorRequest {
         model: "shared".into(),
         source_format: "openai-response".into(),
-        payload: br#"{"input":[{"type":"agent_message","role":"assistant","author":"worker","recipient":"parent","content":[{"type":"encrypted_text","text":"agent-text"}]}]}"#.to_vec(),
+        payload: br#"{"input":[{"type":"agent_message","role":"assistant","author":"worker","recipient":"parent","internal_chat_message_metadata_passthrough":{"private":"fixture"},"content":[{"type":"encrypted_content","encrypted_content":"agent-text"}]}]}"#.to_vec(),
         resolved_model_info: Some(snapshot(true)),
         ..ExecutorRequest::default()
     };

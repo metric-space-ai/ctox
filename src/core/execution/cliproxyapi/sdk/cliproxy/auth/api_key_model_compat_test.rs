@@ -36,7 +36,11 @@ fn candidate_typed_codex_update_capability_defaults_false_and_is_account_bound()
         ..ProviderCompatConfig::default()
     });
     for (index, key, expected) in [(0, "first-test-key", true), (1, "second-test-key", false)] {
-        let mut account = auth("codex", key);
+        let mut account = auth(&format!("codex-{index}"), key);
+        account.provider = "codex".into();
+        account
+            .attributes
+            .insert("source".into(), format!("config:codex[{index}]"));
         account
             .attributes
             .insert("config_index".into(), index.to_string());
