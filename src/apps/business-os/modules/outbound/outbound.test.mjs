@@ -342,19 +342,15 @@ test('research auth assist opens the exact protected-source browser session with
   assert.match(outboundSource, /openDesktopApp\?\.\(['"]browser['"]/);
 });
 
-test('outbound import extracts company rows from uploaded Excel workbooks', async (t) => {
-  const workbookPath = process.env.OUTBOUND_XLSX_FIXTURE;
-  if (!workbookPath) {
-    t.skip('set OUTBOUND_XLSX_FIXTURE to a .xlsx workbook path to run this import test');
-    return;
-  }
-  const buffer = await fs.readFile(workbookPath);
+test('outbound import extracts company rows from uploaded Excel workbooks', async () => {
+  const buffer = await fs.readFile(new URL('../../../../../tests/fixtures/outbound/minimal-companies.xlsx', import.meta.url));
+
   const rows = await hooks.extractRowsFromPayload({
     source_type: 'excel',
     source: {
       files: [
         {
-          name: 'Personalvermittler.xlsx',
+          name: 'minimal-companies.xlsx',
           base64: buffer.toString('base64'),
         },
       ],
@@ -363,6 +359,7 @@ test('outbound import extracts company rows from uploaded Excel workbooks', asyn
 
   assert.ok(rows.length > 0, 'expected at least one company row from the uploaded workbook');
   assert.ok(rows.every((row) => row.name), 'every extracted row needs a company name');
+  assert.deepEqual(rows.map((row) => row.name), ['A GmbH', 'B GmbH']);
 });
 
 test('every campaign idea template is actionable and channel-explicit', () => {
