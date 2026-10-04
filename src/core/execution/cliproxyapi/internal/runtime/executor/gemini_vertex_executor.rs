@@ -83,6 +83,7 @@ pub struct GeminiVertexExecutor {
     token_provider: Option<Arc<dyn VertexAccessTokenProvider>>,
     cancellation: TranslationContext,
     response_sequence: AtomicU64,
+    request_processor: Option<Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>>,
 }
 
 impl GeminiVertexExecutor {
@@ -96,6 +97,7 @@ impl GeminiVertexExecutor {
             token_provider,
             cancellation: TranslationContext::default(),
             response_sequence: AtomicU64::new(1),
+            request_processor: None,
         }
     }
 
@@ -110,7 +112,18 @@ impl GeminiVertexExecutor {
             token_provider,
             cancellation,
             response_sequence: AtomicU64::new(1),
+            request_processor: None,
         }
+    }
+
+    /// Bind the host's existing client configuration and model catalog owner.
+    #[must_use]
+    pub fn with_request_processor(
+        mut self,
+        processor: Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>,
+    ) -> Self {
+        self.request_processor = Some(processor);
+        self
     }
 
     async fn authorization(
@@ -151,19 +164,7 @@ impl GeminiVertexExecutor {
         }
         let from = source_format(request);
         let to = Format::from("gemini");
-        let mut body = self.registry.translate_request(
-            &self.cancellation,
-            &from,
-            &to,
-            &model,
-            &request.payload,
-            stream,
-        );
-        body = super::helps::normalize_codex_tool_integer_types_for_executor(
-            &body,
-            &request.headers,
-            "vertex",
-        );
+        let mut body = self.translate_body(request, &from, &to, &model, stream);
         body = fix_gemini_image_aspect_ratio(&model, &body);
         let mut value: Value = serde_json::from_slice(&body)
             .map_err(|error| plugin_error(VertexExecutorError::InvalidJson(error.to_string())))?;
@@ -183,6 +184,43 @@ impl GeminiVertexExecutor {
         body = serde_json::to_vec(&value)
             .map_err(|error| plugin_error(VertexExecutorError::InvalidJson(error.to_string())))?;
         Ok((body, to))
+    }
+
+    // ref: gemini_vertex_executor.go:334-335,471-472,928,1022 @ d7914afd
+    fn translate_body(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        stream: bool,
+    ) -> Vec<u8> {
+        // Vertex uses ordinary Codex translation for both credential kinds.
+        let translate = |processor: &dyn super::helps::CodexMultiAgentV2Processor| {
+            super::helps::translate_request_with_codex_multi_agent_v2_for_executor(
+                processor,
+                &request.headers,
+                "vertex",
+                from,
+                to,
+                model,
+                &request.payload,
+                stream,
+            )
+        };
+        if let Some(processor) = &self.request_processor {
+            return translate(processor.as_ref());
+        }
+        let client =
+            crate::internal::client::codex::optimize_multi_agent_v2::MultiAgentV2Context::default();
+        let metadata = |_: &str| None;
+        translate(&super::helps::RegistryCodexMultiAgentV2Processor {
+            registry: &self.registry,
+            context: &self.cancellation,
+            client: &client,
+            model_metadata: &metadata,
+            orphan_delegation_compatibility: false,
+        })
     }
 
     async fn build_request(
@@ -694,6 +732,10 @@ fn set_header(headers: &mut Headers, name: &str, value: String) {
 fn plugin_error(error: VertexExecutorError) -> PluginExecutionError {
     Arc::new(error)
 }
+
+#[cfg(test)]
+#[path = "gemini_vertex_executor_candidate_test.rs"]
+mod candidate_google_requests;
 
 #[cfg(test)]
 mod tests {

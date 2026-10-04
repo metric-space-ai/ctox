@@ -56,7 +56,25 @@
   the accepted pin is unchanged.
 
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.13.
+- Gemini selected-model translation now uses the frozen v8 API-key compatibility
+  helper for GenerateContent, streaming, token count and converted Interactions
+  input. Explicit Home credential options, including false, take precedence over
+  a local catalog snapshot; public caller metadata cannot select compatibility.
+  Native Interactions input (including an empty source format) bypasses translation
+  and plugin hooks. Vertex uses its distinct ordinary Codex translation helper,
+  as upstream requires for both API-key and service-account credentials.
+  Both executors normalize Codex integer fields before conversion and accept the
+  host's existing owned processor rather than introducing process-global state.
+  Five source-level regressions are prepared for dispatch precedence, native
+  bypass, normalization order and injected owner use across preparation modes.
+  They have not executed. Canonical thinking, complete original/working payload
+  configuration, signature and content-shape parity, production owner binding,
+  HTTP workflows and full-provider acceptance remain open; this is not full
+  Gemini/Vertex parity. Primary references at the frozen d7914afd commit:
+  gemini_executor.go:153-154,279-280,684,888-920;
+  gemini_vertex_executor.go:334-335,471-472,928,1022.
 - Further native Meta request-time integration supplies an owned asynchronous
+
   preparation/401-refresh capability, sharing one per-account conductor lock and
   the guarded epoch/three-way manager publication. The injected DCA mint
   coordinator coalesces concurrent accounts and releases abandoned operations;
@@ -64,7 +82,7 @@
   treat DCA values as inference keys. Newly prepared regressions cover selected
   transport, failure/cancellation/deadline and content preservation, coalescing,
   actual unary/stream bootstrap replay, committed-stream non-replay and account
-  replacement/disabling/user-edit races. These guards are not executed yet.
+  replacement/disabling/user-edit races. Source-bound execution covers the subset recorded below; remaining guards are pending.
   The native Meta ProviderExecutor and service factory now consume the owned
   preparation contract, selected HTTP client, unary terminal translation,
   bounded streaming lines, apply_patch state, Claude token translation and
@@ -72,11 +90,18 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires180 actual native tests across22 groups, including39 new Meta
+  requires185 actual native tests across23 groups, including five Google request-preparation cases and39 new Meta
   tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
   three new shared cancellation-publication guards,15 existing background-worker
   guards and six retained
-  canonical thinking-route guards. The current corrected source has not run.
+  canonical thinking-route guards. The preceding06f5 revision compiled and
+  passed128 tests in15 completed groups; the transport group passed13 and failed
+  one missing-usage-detail guard, totaling141 passes/one failure. The38 later
+  targeted tests did not execute. The shared raw setter requires existing parent
+  objects; source6538 now creates absent detail objects like upstream sjson and
+  strengthens the existing usage guard for both roots/raw integers/idempotence.
+  That correction and the subsequent Google changes have not executed.
+
   Two recent native attempts failed compilation before executing tests:
   4cf3 found a non-Send stream borrow and an owned/static capability mismatch;
   774c found five private Auth-field initializers. The subsequent corrections

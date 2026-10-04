@@ -93,6 +93,7 @@ pub struct GeminiExecutor {
     registry: Arc<Registry>,
     cancellation: TranslationContext,
     usage_manager: Option<Arc<Manager>>,
+    request_processor: Option<Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>>,
 }
 
 impl GeminiExecutor {
@@ -114,6 +115,7 @@ impl GeminiExecutor {
             registry,
             cancellation,
             usage_manager: None,
+            request_processor: None,
         }
     }
 
@@ -126,12 +128,23 @@ impl GeminiExecutor {
             registry,
             cancellation: TranslationContext::default(),
             usage_manager: None,
+            request_processor: None,
         }
     }
 
     #[must_use]
     pub fn with_usage_manager(mut self, manager: Arc<Manager>) -> Self {
         self.usage_manager = Some(manager);
+        self
+    }
+
+    /// Bind the host's existing client configuration and model catalog owner.
+    #[must_use]
+    pub fn with_request_processor(
+        mut self,
+        processor: Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>,
+    ) -> Self {
+        self.request_processor = Some(processor);
         self
     }
 
@@ -151,7 +164,8 @@ impl GeminiExecutor {
                 .auth_provider
                 .trim()
                 .eq_ignore_ascii_case("gemini-interactions")
-            && native_interactions_source_format(&Format::from(request.source_format.clone()))
+            && (request.source_format.is_empty()
+                || native_interactions_source_format(&Format::from(request.source_format.clone())))
     }
 
     pub fn prepare_request(&self, request: &mut HttpRequest, execution: &ExecutorRequest) {
@@ -173,19 +187,7 @@ impl GeminiExecutor {
         let model = base_model(&request.model);
         let from = source_format(request);
         let to = self.request_to_format(request);
-        let mut body = self.registry.translate_request(
-            &self.cancellation,
-            &from,
-            &to,
-            &model,
-            &request.payload,
-            stream,
-        );
-        body = super::helps::normalize_codex_tool_integer_types_for_executor(
-            &body,
-            &request.headers,
-            "gemini",
-        );
+        let mut body = self.translate_body(request, &from, &to, &model, stream);
         let mut json = parse_object(&body)?;
         json.remove("session_id");
         if to.as_str() == "interactions" {
@@ -218,6 +220,58 @@ impl GeminiExecutor {
         body = serde_json::to_vec(&json)
             .map_err(|error| plugin_error(GeminiExecutorError::InvalidJson(error.to_string())))?;
         Ok((body, to))
+    }
+
+    // ref: gemini_executor.go:153-154,279-280,684,888-892 @ d7914afd
+    fn translate_body(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        stream: bool,
+    ) -> Vec<u8> {
+        // Native Interactions input bypasses translators and plugin hooks.
+        if to.as_str() == "interactions"
+            && (request.source_format.is_empty() || from.as_str() == "interactions")
+        {
+            return request.payload.clone();
+        }
+        let translate = |processor: &dyn super::helps::CodexMultiAgentV2Processor| {
+            super::helps::translate_request_with_api_key_model_compatibility_for_executor(
+                processor,
+                &request.headers,
+                "gemini",
+                from,
+                to,
+                model,
+                &request.payload,
+                stream,
+                request
+                    .resolved_home_model_options
+                    .as_ref()
+                    .map(|options| options.is_compat)
+                    .unwrap_or_else(|| {
+                        request
+                            .resolved_model_info
+                            .as_ref()
+                            .is_some_and(|info| info.is_compat)
+                    }),
+            )
+        };
+        if let Some(processor) = &self.request_processor {
+            return translate(processor.as_ref());
+        }
+        let client =
+            crate::internal::client::codex::optimize_multi_agent_v2::MultiAgentV2Context::default();
+        let metadata = |_: &str| None;
+        translate(&super::helps::RegistryCodexMultiAgentV2Processor {
+            registry: &self.registry,
+            context: &self.cancellation,
+            client: &client,
+            model_metadata: &metadata,
+            orphan_delegation_compatibility: false,
+        })
     }
 
     fn build_request(
@@ -533,6 +587,10 @@ impl ProviderExecutor for GeminiExecutor {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "gemini_executor_candidate_test.rs"]
+mod candidate_google_requests;
 
 #[must_use]
 pub fn native_interactions_source_format(format: &Format) -> bool {
