@@ -1812,32 +1812,53 @@ fn classify_auto_submitted_header(raw: Option<&str>) -> (bool, Option<String>) {
 }
 
 fn collect_mail_bodies(parsed: &ParsedMail<'_>) -> Result<(String, String, Vec<Value>)> {
-    if parsed.subparts.is_empty() {
-        let mimetype = parsed.ctype.mimetype.to_lowercase();
-        let disposition = parsed.get_content_disposition();
-        let has_attachment = matches!(disposition.disposition, DispositionType::Attachment);
-        let attachments = if has_attachment {
-            let fallback_name = format!("attachment.{}", extension_for_content_type(&mimetype));
-            let name = disposition
-                .params
-                .get("filename")
-                .or_else(|| parsed.ctype.params.get("name"))
-                .map(String::as_str)
-                .unwrap_or(&fallback_name)
-                .to_string();
-            let size_bytes = parsed.get_body_raw().map(|bytes| bytes.len()).unwrap_or(0);
+    let (mut body_text, body_html, attachments) = collect_mail_body_parts(parsed)?;
+    if body_text.is_empty() && !body_html.is_empty() {
+        body_text = strip_html(&body_html);
+    }
+    Ok((body_text, body_html, attachments))
+}
+
+// Delay HTML-to-text conversion until all MIME alternatives have been read;
+// an HTML part listed first must not displace the author's text/plain part.
+fn collect_mail_body_parts(parsed: &ParsedMail<'_>) -> Result<(String, String, Vec<Value>)> {
+    let mimetype = parsed.ctype.mimetype.to_lowercase();
+    let disposition = parsed.get_content_disposition();
+    // Attachment disposition applies to the entire MIME subtree. Descending
+    // into an attached multipart message would substitute its alternatives
+    // for the actual mail body and lose the enclosing attachment metadata.
+    if matches!(disposition.disposition, DispositionType::Attachment) {
+        let fallback_name = format!("attachment.{}", extension_for_content_type(&mimetype));
+        let name = disposition
+            .params
+            .get("filename")
+            .or_else(|| parsed.ctype.params.get("name"))
+            .map(String::as_str)
+            .unwrap_or(&fallback_name)
+            .to_string();
+        let size_bytes = if parsed.subparts.is_empty() {
+            parsed.get_body_raw().map(|bytes| bytes.len()).unwrap_or(0)
+        } else {
+            // mailparse stores multipart payloads in subparts, leaving its
+            // decoded body empty. Preserve the size of the whole MIME entity.
+            parsed.raw_bytes.len()
+        };
+        return Ok((
+            String::new(),
+            String::new(),
             vec![json!({
                 "name": name,
-                "contentType": mimetype.clone(),
+                "contentType": mimetype,
                 "sizeBytes": size_bytes,
                 "source": "mime",
-            })]
-        } else {
-            Vec::new()
-        };
+            })],
+        ));
+    }
+    if parsed.subparts.is_empty() {
+        let attachments = Vec::new();
         let body = parsed.get_body().unwrap_or_default();
         if mimetype == "text/html" {
-            return Ok((strip_html(&body), body, attachments));
+            return Ok((String::new(), body, attachments));
         }
         if mimetype.starts_with("text/") || mimetype.is_empty() {
             return Ok((body, String::new(), attachments));
@@ -1849,7 +1870,7 @@ fn collect_mail_bodies(parsed: &ParsedMail<'_>) -> Result<(String, String, Vec<V
     let mut body_html = String::new();
     let mut attachments = Vec::new();
     for part in &parsed.subparts {
-        let (part_text, part_html, mut part_attachments) = collect_mail_bodies(part)?;
+        let (part_text, part_html, mut part_attachments) = collect_mail_body_parts(part)?;
         if body_text.is_empty() && !part_text.trim().is_empty() {
             body_text = part_text;
         } else if looks_like_calendar_text(&part_text) {
@@ -1862,9 +1883,6 @@ fn collect_mail_bodies(parsed: &ParsedMail<'_>) -> Result<(String, String, Vec<V
             body_html = part_html;
         }
         attachments.append(&mut part_attachments);
-    }
-    if body_text.is_empty() && !body_html.is_empty() {
-        body_text = strip_html(&body_html);
     }
     Ok((body_text, body_html, attachments))
 }
@@ -1926,38 +1944,9 @@ fn is_ctox_mail_self_test(
 }
 
 fn strip_html(input: &str) -> String {
-    input
-        .replace("<br>", "\n")
-        .replace("<br/>", "\n")
-        .replace("<br />", "\n")
-        .replace("</p>", "\n")
-        .replace("</div>", "\n")
-        .replace("</li>", "\n")
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&#39;", "'")
-        .replace("&quot;", "\"")
-        .replace('\r', "")
-        .chars()
-        .scan(false, |inside_tag, ch| match ch {
-            '<' => {
-                *inside_tag = true;
-                Some(None)
-            }
-            '>' => {
-                *inside_tag = false;
-                Some(None)
-            }
-            _ if *inside_tag => Some(None),
-            _ => Some(Some(ch)),
-        })
-        .flatten()
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    // MIME and Graph imports need the same paragraph-aware, entity-safe text
+    // alternative as EWS. Do not decode entities before stripping markup.
+    ews_html_body_text(input)
 }
 
 fn account_key_from_email(address: &str) -> String {
@@ -3637,13 +3626,27 @@ fn ews_html_body_text(input: &str) -> String {
     let mut pending = vec![(document.tree.root(), false)];
     while let Some((node, closing_block)) = pending.pop() {
         if closing_block {
-            output.push(' ');
+            output.push_str("\n\n");
             continue;
         }
         match node.value() {
-            scraper::Node::Text(text) => output.push_str(text),
+            scraper::Node::Text(text) => {
+                // Source indentation is not a paragraph break. Only markup
+                // boundaries below create line breaks in the text alternative.
+                for ch in text.chars() {
+                    if !ch.is_whitespace() {
+                        output.push(ch);
+                    } else if !output.is_empty() && !output.ends_with(char::is_whitespace) {
+                        output.push(' ');
+                    }
+                }
+            }
             scraper::Node::Element(element) => {
                 if matches!(element.name(), "head" | "style" | "script" | "template") {
+                    continue;
+                }
+                if element.name() == "br" {
+                    output.push('\n');
                     continue;
                 }
                 if matches!(
@@ -3652,7 +3655,6 @@ fn ews_html_body_text(input: &str) -> String {
                         | "article"
                         | "aside"
                         | "blockquote"
-                        | "br"
                         | "div"
                         | "dl"
                         | "dt"
@@ -3678,7 +3680,7 @@ fn ews_html_body_text(input: &str) -> String {
                         | "tr"
                         | "ul"
                 ) {
-                    output.push(' ');
+                    output.push_str("\n\n");
                     pending.push((node, true));
                 }
                 pending.extend(node.children().rev().map(|child| (child, false)));
@@ -3686,7 +3688,21 @@ fn ews_html_body_text(input: &str) -> String {
             _ => pending.extend(node.children().rev().map(|child| (child, false))),
         }
     }
-    output.split_whitespace().collect::<Vec<_>>().join(" ")
+    // Keep one blank line between paragraphs while removing incidental spaces
+    // and repeated boundaries from nested block containers.
+    let mut lines = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if !line.is_empty() {
+            lines.push(line);
+        } else if !lines.is_empty() && lines.last() != Some(&"") {
+            lines.push("");
+        }
+    }
+    while lines.last() == Some(&"") {
+        lines.pop();
+    }
+    lines.join("\n")
 }
 
 fn descendant_text(node: roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
@@ -5654,6 +5670,62 @@ mod tests {
     }
 
     #[test]
+    fn mime_plain_alternative_wins_in_either_part_order() -> anyhow::Result<()> {
+        let plain = "Authored plain text\n\n> Quoted reply";
+        let html = "<p>Rich HTML alternative</p>";
+        for html_first in [false, true] {
+            let plain_part = format!("Content-Type: text/plain; charset=utf-8\r\n\r\n{plain}");
+            let html_part = format!("Content-Type: text/html; charset=utf-8\r\n\r\n{html}");
+            let parts = if html_first {
+                [html_part, plain_part]
+            } else {
+                [plain_part, html_part]
+            };
+            let raw = format!(
+                "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=parts\r\n\r\n--parts\r\n{}\r\n--parts\r\n{}\r\n--parts--\r\n",
+                parts[0], parts[1]
+            );
+            let parsed = mailparse::parse_mail(raw.as_bytes())?;
+            let (text, rich, attachments) = super::collect_mail_bodies(&parsed)?;
+            assert_eq!(text.trim(), plain);
+            assert_eq!(rich.trim(), html);
+            assert!(attachments.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mime_html_attachment_cannot_replace_the_message_body() -> anyhow::Result<()> {
+        let raw = b"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=parts\r\n\r\n--parts\r\nContent-Type: text/html\r\nContent-Disposition: attachment; filename=page.html\r\n\r\n<p>Attached content</p>\r\n--parts\r\nContent-Type: text/plain\r\n\r\nActual mail body\r\n--parts--\r\n";
+        let parsed = mailparse::parse_mail(raw)?;
+        let (text, rich, attachments) = super::collect_mail_bodies(&parsed)?;
+        assert_eq!(text.trim(), "Actual mail body");
+        assert!(rich.is_empty());
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0]["name"], "page.html");
+        assert_eq!(
+            super::strip_html("<p>Keep &lt;literal&gt; &amp; 🙂</p><div>Next<br>line</div><script>tracking()</script>"),
+            "Keep <literal> & 🙂\n\nNext\nline"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mime_multipart_attachment_cannot_replace_the_message_body() -> anyhow::Result<()> {
+        let raw = b"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=outer\r\n\r\n--outer\r\nContent-Type: multipart/alternative; boundary=attached\r\nContent-Disposition: attachment; filename=forwarded.mime\r\n\r\n--attached\r\nContent-Type: text/plain\r\n\r\nAttached plain text\r\n--attached\r\nContent-Type: text/html\r\n\r\n<p>Attached rich text</p>\r\n--attached--\r\n--outer\r\nContent-Type: text/plain\r\n\r\nActual mail body\r\n--outer--\r\n";
+        let parsed = mailparse::parse_mail(raw)?;
+        assert_eq!(parsed.subparts[0].subparts.len(), 2);
+        let (text, rich, attachments) = super::collect_mail_bodies(&parsed)?;
+        assert_eq!(text.trim(), "Actual mail body");
+        assert!(rich.is_empty());
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0]["name"], "forwarded.mime");
+        assert_eq!(attachments[0]["contentType"], "multipart/alternative");
+        assert!(attachments[0]["sizeBytes"].as_u64().unwrap_or(0) > 0);
+        Ok(())
+    }
+
+    #[test]
     fn ews_html_reply_and_sent_timestamp_are_hydrated() -> anyhow::Result<()> {
         let html =
             "<html><body><p>Yes &amp; thanks.</p><div>Next steps<br/>Tomorrow</div></body></html>";
@@ -5673,7 +5745,7 @@ mod tests {
             })?;
             let mail = &messages[0];
             assert_eq!(mail.body_html, html);
-            assert_eq!(mail.body_text, "Yes & thanks. Next steps Tomorrow");
+            assert_eq!(mail.body_text, "Yes & thanks.\n\nNext steps\nTomorrow");
             assert_eq!(mail.preview, "Yes & thanks. Next steps Tomorrow");
             assert_eq!(mail.folder_hint, "sent");
             assert_eq!(mail.remote_id, "sent-1");
@@ -5705,7 +5777,7 @@ mod tests {
         assert_eq!(messages[0].body_html, html);
         assert_eq!(
             messages[0].body_text,
-            "Please keep <literal> & 🙂 Agreed. Next line"
+            "Please keep <literal> & 🙂\n\nAgreed.\n\nNext\nline"
         );
         assert_eq!(
             messages[0].preview,
