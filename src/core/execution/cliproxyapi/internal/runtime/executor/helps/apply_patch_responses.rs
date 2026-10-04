@@ -4,9 +4,10 @@
 
 //! Request and response `apply_patch` state for a non-Codex executor.
 //!
-//! The request normalizer runs before Kimi reorders Responses input. The
-//! response state converts function-call events and folded namespace
-//! dispatchers. It is uncompiled, and Kimi, xAI, and Meta do not call it yet.
+//! The request normalizer preserves original tool declarations before translation.
+//! Devin owns this state for custom function-call conversion and terminal
+//! validation. Folded namespace provenance and Kimi/xAI/Meta integration remain
+//! partial.
 
 use std::collections::{HashMap, HashSet};
 
