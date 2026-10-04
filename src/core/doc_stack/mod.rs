@@ -121,20 +121,51 @@ enum LocalEmbeddingSocketRequest<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum LocalEmbeddingSocketResponse {
-    Embeddings {
-        model: String,
-        data: Vec<Vec<f32>>,
-        #[serde(rename = "prompt_tokens")]
-        _prompt_tokens: u32,
-        #[serde(rename = "total_tokens")]
-        _total_tokens: u32,
-    },
-    Error {
-        code: String,
-        message: String,
-    },
+struct LocalEmbeddingSocketResponse {
+    kind: String,
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn local_socket_embedding_contract_preserves_fractional_rows_and_errors() {
+    let replies = [
+        r#"{"kind":"embeddings","model":"Qwen/Qwen3-Embedding-0.6B","data":[[1.0,2.5],[3.0]],"prompt_tokens":4,"total_tokens":4}"#,
+        r#"{"kind":"embeddings","model":"Qwen/Qwen3-Embedding-0.6B","data":[[{"value":1.0}]],"prompt_tokens":4,"total_tokens":4}"#,
+        r#"{"kind":"error","code":"provider_unavailable","message":"not ready"}"#,
+    ];
+    for (index, reply) in replies.into_iter().enumerate() {
+        let root = tempfile::tempdir().unwrap();
+        let socket_path = root.path().join("e.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        let server = std::thread::spawn(move || -> anyhow::Result<String> {
+            let (stream, _) = listener.accept()?;
+            let mut reader = std::io::BufReader::new(stream);
+            let mut request = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut request)?;
+            std::io::Write::write_all(reader.get_mut(), format!("{reply}\n").as_bytes())?;
+            std::io::Write::flush(reader.get_mut())?;
+            Ok(request)
+        });
+        let result = embed_texts_via_local_socket(
+            &LocalTransport::UnixSocket { path: socket_path },
+            &["alpha".to_string(), "beta".to_string()],
+            "Qwen/Qwen3-Embedding-0.6B",
+        );
+        let request = server.join().unwrap().unwrap();
+        assert!(request.contains("\"kind\":\"embeddings_create\""));
+        assert!(request.contains("\"truncate_sequence\":false"));
+        match index {
+            0 => assert_eq!(result.unwrap(), vec![vec![1.0, 2.5], vec![3.0]]),
+            1 => assert!(
+                result.is_err(),
+                "object cells must never become numeric vectors"
+            ),
+            _ => assert_eq!(
+                result.unwrap_err().to_string(),
+                "provider_unavailable: not ready"
+            ),
+        }
+    }
 }
 
 fn embed_texts_via_local_socket(
@@ -171,24 +202,42 @@ fn embed_texts_via_local_socket(
     if line.trim().is_empty() {
         anyhow::bail!("embedding socket returned an empty response");
     }
-    match serde_json::from_str::<LocalEmbeddingSocketResponse>(line.trim())
-        .context("failed to parse embedding socket response")?
-    {
-        LocalEmbeddingSocketResponse::Embeddings {
-            model: response_model,
-            data,
-            _prompt_tokens: _,
-            _total_tokens: _,
-        } => {
-            let _ = response_model;
-            Ok(data
+    // Decode the tag before the typed payload: Serde's tagged-enum buffer
+    // cannot replay fractional numbers with serde_json/arbitrary_precision.
+    // https://github.com/serde-rs/json/issues/721
+    #[derive(serde::Deserialize)]
+    struct EmbeddingsReply {
+        #[serde(rename = "model")]
+        _model: String,
+        data: Vec<Vec<f32>>,
+        #[serde(rename = "prompt_tokens")]
+        _prompt_tokens: u32,
+        #[serde(rename = "total_tokens")]
+        _total_tokens: u32,
+    }
+    #[derive(serde::Deserialize)]
+    struct ErrorReply {
+        code: String,
+        message: String,
+    }
+    let response: LocalEmbeddingSocketResponse =
+        serde_json::from_str(line.trim()).context("failed to parse embedding socket response")?;
+    match response.kind.as_str() {
+        "embeddings" => {
+            let reply: EmbeddingsReply = serde_json::from_str(line.trim())
+                .context("failed to parse embedding vector payload")?;
+            Ok(reply
+                .data
                 .into_iter()
                 .map(|values| values.into_iter().map(|value| value as f64).collect())
                 .collect())
         }
-        LocalEmbeddingSocketResponse::Error { code, message } => {
-            anyhow::bail!("{code}: {message}");
+        "error" => {
+            let reply: ErrorReply = serde_json::from_str(line.trim())
+                .context("failed to parse embedding socket error")?;
+            anyhow::bail!("{}: {}", reply.code, reply.message);
         }
+        kind => anyhow::bail!("unknown embedding socket response kind: {kind}"),
     }
 }
 
