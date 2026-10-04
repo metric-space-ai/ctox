@@ -92,7 +92,7 @@ legacy provider witness cannot acquire guest admission.
 
 The constructor and its account checks do not replace canonical instance,
 project, principal, worker-profile or controller resolution. The concrete
-\x60NativeGuestAdmission\x60 consumer writes PendingCreate under the exact held worker
+`NativeGuestAdmission` consumer writes PendingCreate under the exact held worker
 transaction and native owner callback, submits Create on the existing running
 host's authority, validates the returned job with a fresh quorum read, and writes
 Admitted only after current native destination/policy/controller revalidation.
