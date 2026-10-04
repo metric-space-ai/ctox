@@ -313,7 +313,6 @@ try {
     reopenedCommands.close();
     reopenedStorage.close();
     // Keep an older journal handle open so the real browser reports blocked.
-    // Higher-version opens then prove that neither failed-startup handle leaks.
     const lifecycleName = `${databaseName}-open-lifecycle`;
     const lifecycleJournalName = `${lifecycleName}__recovery_v2`;
     const openFixtureVersion = (name, version) => new Promise((resolveOpen, rejectOpen) => {
@@ -333,31 +332,59 @@ try {
       request.onerror = () => fail(request.error || new Error('lifecycle probe failed'));
       request.onblocked = () => fail(new Error('failed startup retained an IndexedDB handle'));
     });
-    const blocker = await openFixtureVersion(lifecycleJournalName, 3);
-    blocker.onversionchange = () => {};
+    // Observe real close calls before any version-change probe: the existing
+    // onversionchange handler could otherwise hide a leaked connection.
+    const originalClose = IDBDatabase.prototype.close;
+    let primaryCloses = 0;
+    let lateJournalClosed;
+    const lateCloseObserved = new Promise((resolveClosed) => { lateJournalClosed = resolveClosed; });
+    IDBDatabase.prototype.close = function () {
+      if (this.name === lifecycleName && this.version === 4) primaryCloses += 1;
+      if (this.name === lifecycleJournalName && this.version === 4) lateJournalClosed();
+      return originalClose.call(this);
+    };
     let lifecycleJournalCode = '';
     let lifecyclePrimaryReleased = false;
+    let lifecycleLateJournalReleased = false;
     try {
+      const blocker = await openFixtureVersion(lifecycleJournalName, 3);
+      blocker.onversionchange = () => {};
       try {
-        await openCtoxIndexedDbStorage({ databaseName: lifecycleName });
-      } catch (error) {
-        lifecycleJournalCode = error.code || '';
-        if (!String(error.message).includes('blocked')) throw error;
+        try {
+          await openCtoxIndexedDbStorage({ databaseName: lifecycleName });
+        } catch (error) {
+          lifecycleJournalCode = error.code || '';
+          if (!String(error.message).includes('blocked')) throw error;
+        }
+        if (lifecycleJournalCode !== 'indexeddb_journal_unavailable') {
+          throw new Error('blocked journal startup must reject with its original code');
+        }
+        if (primaryCloses === 0) throw new Error('failed startup did not close its primary handle');
+        const primaryProbe = await openFixtureVersion(lifecycleName, 5);
+        primaryProbe.close();
+        lifecyclePrimaryReleased = true;
+      } finally {
+        blocker.close();
       }
-      if (lifecycleJournalCode !== 'indexeddb_journal_unavailable') {
-        throw new Error('blocked journal startup must reject with its original code');
+      let lateDeadline;
+      try {
+        await Promise.race([
+          lateCloseObserved,
+          new Promise((_, rejectLate) => {
+            lateDeadline = setTimeout(() => rejectLate(new Error('late journal handle was not closed')), 5000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(lateDeadline);
       }
-      const primaryProbe = await openFixtureVersion(lifecycleName, 5);
-      primaryProbe.close();
-      lifecyclePrimaryReleased = true;
+      const journalProbe = await openFixtureVersion(lifecycleJournalName, 5);
+      journalProbe.close();
+      lifecycleLateJournalReleased = true;
     } finally {
-      blocker.close();
+      IDBDatabase.prototype.close = originalClose;
+      indexedDB.deleteDatabase(lifecycleName);
+      indexedDB.deleteDatabase(lifecycleJournalName);
     }
-    const journalProbe = await openFixtureVersion(lifecycleJournalName, 5);
-    journalProbe.close();
-    const lifecycleLateJournalReleased = true;
-    indexedDB.deleteDatabase(lifecycleName);
-    indexedDB.deleteDatabase(lifecycleJournalName);
     journal.close();
     indexedDB.deleteDatabase(`${databaseName}__recovery_v2`);
     indexedDB.deleteDatabase(`${databaseName}-other__recovery_v2`);
