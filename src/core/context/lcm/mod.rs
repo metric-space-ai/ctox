@@ -3356,6 +3356,19 @@ impl LcmEngine {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    pub(crate) fn verification_run_by_id(
+        &self,
+        conversation_id: i64,
+        run_id: &str,
+    ) -> Result<Option<VerificationRunRecord>> {
+        self.conn.query_row(
+            "SELECT run_id, source_label, goal, preview, result_excerpt, blocker, review_required, review_verdict, review_summary, review_score, review_reasons, report_excerpt, raw_report, mission_state, failed_gates_json, semantic_findings_json, open_items_json, evidence_json, handoff_text, claim_count, open_claim_count, closure_blocking_claim_count, created_at
+             FROM verification_runs WHERE conversation_id = ?1 AND run_id = ?2",
+            params![conversation_id, run_id],
+            |row| map_verification_run_row(row, conversation_id),
+        ).optional().map_err(Into::into)
+    }
+
     pub fn latest_verification_run(
         &self,
         conversation_id: i64,

@@ -91,8 +91,7 @@ use super::store_projections::{
     is_placeholder_business_chat_owner, materialize_pending_business_chat, normalize_queue_status,
     persist_terminal_business_chat_command_projection, queue_projection_command_id,
     queue_projection_execution_phase, queue_projection_structured_status,
-    queue_projection_terminal_status, queue_task_payload, refresh_queue_task_projection,
-    write_queue_task_projection,
+    queue_projection_terminal_status, refresh_queue_task_projection, write_queue_task_projection,
 };
 use super::store_release_review::{
     data_access_review_from_release_snapshot, module_release_data_access_review_summary,
@@ -12175,6 +12174,297 @@ pub(crate) fn project_web_stack_auth_session_placeholder(
     Ok(())
 }
 
+/// Read witnesses and the current canonical row in one SQLite snapshot.
+/// A witness left by an older native mutation cannot authenticate a removed,
+/// changed or deleted status supplied by a caller.
+pub(super) fn load_current_native_field_status_witnesses(
+    root: &Path,
+    record_id: &str,
+) -> anyhow::Result<super::outbound_field_review::NativeFieldStatusWitnesses> {
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(Default::default());
+    }
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let tx = conn.unchecked_transaction()?;
+    let Some(table) = rxdb_collection_table_name(&path, &tx, "outbound_lead_generation_leads")
+    else {
+        return Ok(Default::default());
+    };
+    let columns = rxdb_table_columns_for_path(&tx, &path, &table)?;
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| columns.contains(*column))
+        .unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!("SELECT data, {deleted_expression} FROM {table} WHERE id=?1"),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((raw, deleted)) = raw else {
+        return Ok(Default::default());
+    };
+    let lead: Value = serde_json::from_str(&raw)?;
+    if deleted != 0 || is_rxdb_deleted_document(&lead) {
+        return Ok(Default::default());
+    }
+    let mut issued =
+        super::outbound_field_review::NativeFieldStatusWitnesses::load(&tx, record_id)?;
+    issued.retain_current(&lead);
+    tx.commit()?;
+    Ok(issued)
+}
+
+/// Native writeback issuance is committed with the actual persisted statuses.
+/// Only the validated writeback handler supplies the freshly stamped revision
+/// and exact delivered field locations. This is not an external record API.
+pub(super) fn upsert_native_research_writeback_record(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    expected_master: &Value,
+    revision: &Value,
+    keys: &BTreeSet<(String, String, String)>,
+) -> anyhow::Result<()> {
+    upsert_native_field_status_if_current(
+        root,
+        record_id,
+        updated_at_ms,
+        payload,
+        expected_master,
+        super::outbound_field_review::NativeFieldStatusIssuance::Writeback { revision, keys },
+    )
+}
+
+/// Native email results do not issue writeback/review provenance. They must
+/// nevertheless fence the full canonical snapshot read before deriving their
+/// patch, so an independently published review cannot be lost.
+pub(super) fn upsert_native_email_validation_record(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    expected_master: &Value,
+) -> anyhow::Result<()> {
+    upsert_native_field_status_if_current(
+        root,
+        record_id,
+        updated_at_ms,
+        payload,
+        expected_master,
+        super::outbound_field_review::NativeFieldStatusIssuance::Preserve,
+    )
+}
+
+fn upsert_native_field_status_if_current(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    expected_master: &Value,
+    issuance: super::outbound_field_review::NativeFieldStatusIssuance<'_>,
+) -> anyhow::Result<()> {
+    let writer = RxdbCollectionWriter::open(root, "outbound_lead_generation_leads")?
+        .context("native research persistence collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column))
+        .unwrap_or("0");
+    let current = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id=?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    anyhow::ensure!(
+        current.as_ref().is_some_and(|(_, deleted)| *deleted == 0),
+        "native research persistence cannot create or resurrect a missing/deleted lead"
+    );
+    let mut current: Value = serde_json::from_str(&current.unwrap().0)?;
+    if let Some(object) = current.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(record_id.to_string()));
+    }
+    anyhow::ensure!(
+        !is_rxdb_deleted_document(&current),
+        "native research lead is deleted"
+    );
+    anyhow::ensure!(
+        current == *expected_master,
+        "native lead changed before persistence; retry from the current record"
+    );
+    let issued = super::outbound_field_review::NativeFieldStatusWitnesses::load(&tx, record_id)?;
+    write_native_field_status_record(
+        &tx,
+        &writer,
+        record_id,
+        updated_at_ms,
+        payload,
+        &issued,
+        issuance,
+    )?;
+    tx.commit()?;
+    writer.notify_committed_change();
+    Ok(())
+}
+
+fn write_native_field_status_record(
+    tx: &rusqlite::Transaction<'_>,
+    writer: &RxdbCollectionWriter,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    issued: &super::outbound_field_review::NativeFieldStatusWitnesses,
+    issuance: super::outbound_field_review::NativeFieldStatusIssuance<'_>,
+) -> anyhow::Result<()> {
+    let expected = payload.clone();
+    upsert_rxdb_collection_record_with_writer(
+        tx,
+        &writer.table,
+        &writer.columns,
+        record_id,
+        updated_at_ms,
+        updated_at_ms,
+        payload,
+        writer.demand_file_storage,
+        false,
+        false,
+    )?;
+    let raw: String = tx.query_row(
+        &format!("SELECT data FROM {} WHERE id=?1", writer.table),
+        [record_id],
+        |row| row.get(0),
+    )?;
+    let staged: Value = serde_json::from_str(&raw)?;
+    anyhow::ensure!(
+        super::outbound_field_review::peer_preserves_native_field_status(
+            "outbound_lead_generation_leads",
+            &staged,
+            Some(&expected)
+        ),
+        "native field-status projection changed during normalization or budget clamping"
+    );
+    issued.persist(tx, record_id, &staged, issuance)?;
+    Ok(())
+}
+
+/// Audit publication requires exact prior issuance in this same snapshot.
+/// Its new witness and field verdict commit together; absence/deletion/clamp
+/// can never leave a publication witness behind.
+pub(super) fn update_native_field_review_record(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    review_id: &str,
+    update: impl FnOnce(
+        &mut Value,
+        &super::outbound_field_review::NativeFieldStatusWitnesses,
+    ) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    let writer = RxdbCollectionWriter::open(root, "outbound_lead_generation_leads")?
+        .context("native field review collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column))
+        .unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id=?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((raw, deleted)) = raw else {
+        tx.rollback()?;
+        return Ok(false);
+    };
+    let mut lead: Value = serde_json::from_str(&raw)?;
+    let issued = super::outbound_field_review::NativeFieldStatusWitnesses::load(&tx, record_id)?;
+    if deleted != 0 || is_rxdb_deleted_document(&lead) || !update(&mut lead, &issued)? {
+        tx.rollback()?;
+        return Ok(false);
+    }
+    write_native_field_status_record(
+        &tx,
+        &writer,
+        record_id,
+        updated_at_ms,
+        lead,
+        &issued,
+        super::outbound_field_review::NativeFieldStatusIssuance::Review(review_id),
+    )?;
+    tx.commit()?;
+    writer.notify_committed_change();
+    Ok(true)
+}
+
+/// Apply native field-review metadata to the current persisted document.
+/// The comparison and publication share an IMMEDIATE transaction, including
+/// browser/native writes. Absence and tombstones never become new records.
+#[cfg(test)]
+pub(super) fn update_rxdb_record_conditionally(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    update: impl FnOnce(&mut Value) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    let writer = RxdbCollectionWriter::open(root, collection)?
+        .context("native conditional update collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_column = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column));
+    let deleted_expression = deleted_column.unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id = ?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((raw, deleted)) = raw else {
+        tx.rollback()?;
+        return Ok(false);
+    };
+    let mut record: Value = serde_json::from_str(&raw)?;
+    if deleted != 0 || is_rxdb_deleted_document(&record) || !update(&mut record)? {
+        tx.rollback()?;
+        return Ok(false);
+    }
+    upsert_rxdb_collection_record_with_writer(
+        &tx,
+        &writer.table,
+        &writer.columns,
+        record_id,
+        updated_at_ms,
+        updated_at_ms,
+        record,
+        writer.demand_file_storage,
+        false,
+        false,
+    )?;
+    tx.commit()?;
+    writer.notify_committed_change();
+    Ok(true)
+}
+
 pub(super) fn upsert_rxdb_collection_record_cached(
     root: &Path,
     mut writers: Option<&mut RxdbProjectionWriterCache>,
@@ -12963,6 +13253,97 @@ pub fn upsert_projection_record(
     let conn = open_store(root)?;
     upsert_business_record(&conn, collection, record_id, updated_at_ms, payload.clone())?;
     upsert_rxdb_collection_record(root, collection, record_id, updated_at_ms, payload)
+}
+
+/// External app-record permission does not issue native research receipts.
+/// Guard the effective patch under the same IMMEDIATE transaction as its RxDB
+/// write. Native projections and typed writebacks keep their trusted path.
+pub(super) fn upsert_external_projection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+) -> anyhow::Result<()> {
+    if collection != "outbound_lead_generation_leads" {
+        return upsert_projection_record(root, collection, record_id, updated_at_ms, payload);
+    }
+    let writer = RxdbCollectionWriter::open(root, collection)?
+        .context("external record collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column))
+        .unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id = ?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let master = raw
+        .map(|(raw, deleted)| -> anyhow::Result<Value> {
+            let value: Value = serde_json::from_str(&raw)?;
+            anyhow::ensure!(
+                deleted == 0 && !is_rxdb_deleted_document(&value),
+                "external record write cannot resurrect a deleted lead"
+            );
+            Ok(value)
+        })
+        .transpose()?;
+    let mut effective = master.clone().unwrap_or_else(|| serde_json::json!({}));
+    merge_json_object_values(&mut effective, &payload);
+    anyhow::ensure!(
+        super::outbound_field_review::peer_preserves_native_field_status(
+            collection,
+            &effective,
+            master.as_ref(),
+        ),
+        "external record write cannot change native-owned field status"
+    );
+    upsert_rxdb_collection_record_with_writer(
+        &tx,
+        &writer.table,
+        &writer.columns,
+        record_id,
+        updated_at_ms,
+        updated_at_ms,
+        effective.clone(),
+        writer.demand_file_storage,
+        false,
+        false,
+    )?;
+    // Normalization and the existing wire-budget clamp run inside the writer.
+    // Validate the actual staged document as well, not only its input patch.
+    let staged: String = tx.query_row(
+        &format!("SELECT data FROM {} WHERE id = ?1", writer.table),
+        [record_id],
+        |row| row.get(0),
+    )?;
+    let staged: Value = serde_json::from_str(&staged)?;
+    anyhow::ensure!(
+        super::outbound_field_review::peer_preserves_native_field_status(
+            collection,
+            &staged,
+            master.as_ref(),
+        ),
+        "external record projection would change native-owned field status"
+    );
+    tx.commit()?;
+    writer.notify_committed_change();
+    // The existing core projection mirror follows the accepted RxDB write.
+    // Never write caller-supplied native metadata there before the guard.
+    upsert_business_record(
+        &open_store(root)?,
+        collection,
+        record_id,
+        updated_at_ms,
+        effective,
+    )
 }
 
 fn rxdb_table_has_column(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
@@ -14120,6 +14501,9 @@ pub(crate) fn detach_secret_from_replicated_document(collection: &str, document:
 pub(crate) fn install_replicated_secret_sanitizer() {
     rxdb::replication_protocol::index_mod::set_master_write_sanitizer(Arc::new(
         detach_secret_from_replicated_document,
+    ));
+    rxdb::replication_protocol::index_mod::set_master_write_validator(Arc::new(
+        super::outbound_field_review::peer_preserves_native_field_status,
     ));
 }
 
@@ -19719,17 +20103,10 @@ pub fn update_ctox_task(
     )?;
     let now = now_ms() as i64;
     let command_id = queue_projection_command_id(&conn, &task_id)?;
-    let structured_status =
-        queue_projection_structured_status(&conn, command_id.as_deref(), &task_id)?;
-    write_queue_task_projection(&conn, command_id.as_deref(), &updated, now)?;
+    let task_payload = write_queue_task_projection(&conn, command_id.as_deref(), &updated, now)?;
     Ok(serde_json::json!({
         "ok": true,
-        "task": queue_task_payload(
-            command_id.as_deref(),
-            &updated,
-            structured_status.as_deref(),
-            now,
-        )
+        "task": task_payload
     }))
 }
 
