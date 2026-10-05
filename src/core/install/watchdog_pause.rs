@@ -172,7 +172,23 @@ pub(super) fn bounded_output(
         }
         let _ = child.kill();
     }
-    let _ = child.wait();
+    // Never turn an uncertain cleanup into a successful cutover receipt.
+    let cleanup_deadline = Instant::now() + Duration::from_millis(200);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < cleanup_deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(None) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("watchdog control group {group} cleanup is unconfirmed"),
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+    }
     result
 }
 
