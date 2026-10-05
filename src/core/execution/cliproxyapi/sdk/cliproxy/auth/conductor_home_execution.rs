@@ -325,8 +325,9 @@ fn should_preserve_last_error(error: &HomeDispatchError) -> bool {
 }
 
 fn usage_context(request: &ExecutorRequest) -> crate::sdk::cliproxy::usage::UsageContext {
-    let mut context = crate::sdk::cliproxy::usage::UsageContext::default()
-        .with_requested_model_alias(&request.model);
+    let mut context =
+        crate::sdk::cliproxy::usage::UsageContext::from_request(request.request_context.clone())
+            .with_requested_model_alias(&request.model);
     if let Some(effort) = request
         .metadata
         .get("reasoning_effort")

@@ -492,7 +492,7 @@ impl GeminiExecutor {
                 .unwrap_or(&request.model);
             Arc::new(UsageReporter::new(
                 Arc::clone(manager),
-                UsageContext::default()
+                UsageContext::from_request(request.request_context.clone())
                     .with_requested_model_alias(alias)
                     .with_generate(request_action(&request) != "countTokens"),
                 "gemini",

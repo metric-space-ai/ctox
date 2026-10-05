@@ -460,14 +460,18 @@ fn header<'a>(headers: &'a BTreeMap<String, Vec<String>>, name: &str) -> Option<
 }
 
 #[derive(Default)]
-struct GeminiUsageCollector(Mutex<Vec<crate::sdk::cliproxy::usage::Record>>);
+struct GeminiUsageCollector(
+    Mutex<Vec<crate::sdk::cliproxy::usage::Record>>,
+    Mutex<Vec<crate::sdk::cliproxy::usage::UsageContext>>,
+);
 
 impl crate::sdk::cliproxy::usage::Plugin for GeminiUsageCollector {
     fn handle_usage(
         &self,
-        _: &crate::sdk::cliproxy::usage::UsageContext,
+        context: &crate::sdk::cliproxy::usage::UsageContext,
         record: &crate::sdk::cliproxy::usage::Record,
     ) {
+        self.1.lock().unwrap().push(context.clone());
         self.0.lock().unwrap().push(record.clone());
     }
 }
@@ -610,4 +614,60 @@ async fn candidate_google_usage_dedicated_counting_is_not_inference() {
     executor.count_tokens(request(client)).await.unwrap();
     manager.stop();
     assert!(collector.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn candidate_google_usage_keeps_owned_context_and_isolates_requests() {
+    use crate::internal::logging::requestmeta::{
+        get_endpoint, get_response_status, set_response_status, with_endpoint,
+        with_response_status_holder,
+    };
+
+    let (executor, manager, collector) = usage_executor();
+    let first_context = with_response_status_holder(Some(&with_endpoint(None, "/first-inference")));
+    let second_context =
+        with_response_status_holder(Some(&with_endpoint(None, "/second-inference")));
+    set_response_status(Some(&first_context), 201);
+    set_response_status(Some(&second_context), 202);
+    for context in [&first_context, &second_context] {
+        let mut input = request(MockClient::with_body(b"{}"));
+        input.request_context = context.clone();
+        executor.execute(input).await.unwrap();
+    }
+    manager.stop();
+    assert_eq!(collector.0.lock().unwrap().len(), 2);
+    let contexts = collector.1.lock().unwrap();
+    assert_eq!(contexts.len(), 2);
+    let first = contexts
+        .iter()
+        .find(|context| get_endpoint(Some(&context.request)) == "/first-inference")
+        .unwrap();
+    let second = contexts
+        .iter()
+        .find(|context| get_endpoint(Some(&context.request)) == "/second-inference")
+        .unwrap();
+    set_response_status(Some(&first_context), 218);
+    assert_eq!(get_response_status(Some(&first.request)), 218);
+    assert_eq!(get_response_status(Some(&second.request)), 202);
+}
+
+#[test]
+fn candidate_google_usage_request_context_cannot_enter_client_json() {
+    use crate::internal::logging::requestmeta::{get_endpoint, with_endpoint};
+
+    let mut input = request(MockClient::with_body(b"{}"));
+    input.request_context = with_endpoint(None, "/native-owned-context");
+    assert_eq!(
+        get_endpoint(Some(&input.clone().request_context)),
+        "/native-owned-context"
+    );
+    assert!(!format!("{input:?}").contains("native-owned-context"));
+    let mut wire = serde_json::to_value(&input).unwrap();
+    assert!(wire.get("RequestContext").is_none());
+    wire["RequestContext"] = json!({
+        "endpoint": "/client-injected-context",
+        "response_status": 401
+    });
+    let decoded: ExecutorRequest = serde_json::from_value(wire).unwrap();
+    assert_eq!(get_endpoint(Some(&decoded.request_context)), "");
 }
