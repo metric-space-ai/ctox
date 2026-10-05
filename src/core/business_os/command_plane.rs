@@ -708,16 +708,17 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
     } else {
         None
     };
+    // Domain receipts remain bound to the original admission hash on replay.
+    let control_claim = control_intent
+        .map(|claim| channels::claim_business_control_command(root, claim))
+        .transpose()?;
     let domain_effect_hash = domain_effect::supports_command(&command.command_type)
         .then(|| {
-            control_intent
+            control_claim
                 .as_ref()
                 .map(|claim| claim.payload_hash.clone())
         })
         .flatten();
-    let control_claim = control_intent
-        .map(|claim| channels::claim_business_control_command(root, claim))
-        .transpose()?;
     let _external_sql_execution_guard =
         if super::external_sql_sync::is_external_sql_command(&command.command_type) {
             match ActiveExternalSqlControlCommand::try_acquire(&command_id) {

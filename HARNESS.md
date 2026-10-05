@@ -247,7 +247,11 @@ Lifecycle-v2 command work is gated by three accepted decisions:
    owns lifecycle, result, errors, attempts, and projection version afterward.
    Whole-document LWW alone is insufficient: the collection must enforce that
    ownership boundary or split intent and native state. Reusing a command id
-   with a different immutable payload hash is an idempotency conflict.
+   with different immutable intent is an idempotency conflict. A key-order-only
+   replay is equivalent only when both encodings verify their own SHA-256 hashes
+   and the complete JSON values match, including authorization and array order.
+   Original intent bytes and admission hash stay canonical for task links,
+   effects and domain receipts; replay never rewrites them.
 3. Lifecycle-v2 fields first travel as shadow fields under the existing
    `additionalProperties: true` Business OS schemas. No required field, index,
    or schema-version change is allowed during the mixed-version window. Peers
