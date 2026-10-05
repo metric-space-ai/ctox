@@ -31686,7 +31686,30 @@ pub(super) mod tests {
             stored.get("chat_id").and_then(Value::as_str),
             Some("chat_persisted")
         );
+        let mut forged_shadow = stored.clone();
+        forged_shadow["chat_id"] = Value::String("forged_cached_chat".to_owned());
+        assert_eq!(
+            conn.execute(
+                "UPDATE business_records SET payload_json=?1 WHERE collection=?2 AND record_id=?3",
+                params![
+                    serde_json::to_string(&forged_shadow)?,
+                    "business_commands",
+                    "cmd_persisted_chat"
+                ],
+            )?,
+            1
+        );
         drop(conn);
+        channels::lease_queue_task(root, task_id, "ctox-service")?;
+        channels::transition_business_command_for_task(
+            root,
+            task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "chat navigation regression",
+        )?;
         let delivery = deliver_business_command_outbox(root, 32)?;
         assert_eq!(delivery["failed"], 0);
         let reopened = open_store(root)?;
