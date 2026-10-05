@@ -19,6 +19,7 @@ pub mod claude_executor_fast_error;
 pub mod claude_executor_request;
 pub mod claude_executor_stream;
 pub mod claude_executor_tokens;
+mod claude_executor_tool_state;
 pub mod claude_signing;
 pub mod codex_executor;
 pub mod codex_executor_auth;

@@ -109,6 +109,14 @@
   Exact current-release Go parents cover the common/native converters and the
   full existing Chat wire suite. Source preparation is not native, Go, host or
   live-provider acceptance. The accepted production pin is unchanged.
+  OAuth tool aliases now persist in a bounded1024-key FIFO owned by each
+  account executor. Continuations without declarations restore even an empty
+  known mapping; local missing or evicted state returns a request-scoped404
+  before inference transport, without cooldown or credential/account rotation.
+  Unary success,401 replay and completed native streams publish previous/new
+  message keys; partial streams do not publish. Stream owners retain keys only,
+  not the complete request body. Six native regressions and three primary Go
+  parent oracles are required; source preparation does not prove execution.
   Claude generation and count-token preparation now keep forwarded caller
   blocks top-level when consecutive user turns terminate the message array,
   matching5d890405b59c4b84a2f00ca39c4ee1494ce51a72. Generation retains its
