@@ -667,35 +667,53 @@ pub fn ensure_claude_cache_control(payload: &[u8]) -> Vec<u8> {
     encode_or_original(&root, payload)
 }
 
+// ref: internal/runtime/executor/claude_executor_cloaking.go::countCacheControls @ 16d98881d4bb37adaa827599e4be8f5154e81646
 pub fn count_claude_cache_controls(payload: &[u8]) -> usize {
-    serde_json::from_slice::<Value>(payload)
-        .ok()
-        .as_ref()
-        .map(count_cache_controls_value)
-        .unwrap_or_default()
+    if !crate::internal::util::valid_json_bytes(payload) {
+        return 0;
+    }
+    let Ok(document) = std::str::from_utf8(payload) else {
+        return 0;
+    };
+    let (tools, system, messages) = claude_cache_control_paths(document);
+    tools.len() + system.len() + messages.len()
 }
 
-fn count_cache_controls_value(root: &Value) -> usize {
-    section_objects(root.get("tools"))
-        .chain(section_objects(root.get("system")))
-        .chain(message_content_objects(root))
-        .filter(|item| item.get("cache_control").is_some())
-        .count()
+/// Raw paths retain sibling bytes, duplicate fields and numeric lexemes when
+/// the existing raw mutation helper removes a cache marker.
+fn claude_cache_control_paths(document: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut tools = Vec::new();
+    let mut system = Vec::new();
+    let mut messages = Vec::new();
+    for (section, paths) in [("tools", &mut tools), ("system", &mut system)] {
+        let array = gjson::get(document, section);
+        if array.kind() != gjson::Kind::Array {
+            continue;
+        }
+        for (index, item) in array.array().iter().enumerate() {
+            if gjson::get(item.json(), "cache_control").exists() {
+                paths.push(format!("{section}.{index}.cache_control"));
+            }
+        }
+    }
+    let rows = gjson::get(document, "messages");
+    if rows.kind() == gjson::Kind::Array {
+        for (message_index, message) in rows.array().iter().enumerate() {
+            let content = gjson::get(message.json(), "content");
+            if content.kind() != gjson::Kind::Array {
+                continue;
+            }
+            for (content_index, item) in content.array().iter().enumerate() {
+                if gjson::get(item.json(), "cache_control").exists() {
+                    messages.push(format!(
+                        "messages.{message_index}.content.{content_index}.cache_control"
+                    ));
+                }
+            }
+        }
+    }
+    (tools, system, messages)
 }
-
-fn section_objects(value: Option<&Value>) -> impl Iterator<Item = &Value> {
-    value.and_then(Value::as_array).into_iter().flatten()
-}
-
-fn message_content_objects(root: &Value) -> impl Iterator<Item = &Value> {
-    root.get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|message| message.get("content").and_then(Value::as_array))
-        .flatten()
-}
-
 fn inject_tools_cache_control(root: &mut Value) {
     let Some(tools) = root.get_mut("tools").and_then(Value::as_array_mut) else {
         return;
@@ -826,85 +844,49 @@ fn normalize_cache_item(item: &mut Value, seen_five_minutes: &mut bool, changed:
     }
 }
 
+// ref: internal/runtime/executor/claude_executor_cloaking.go::enforceCacheControlLimit @ 16d98881d4bb37adaa827599e4be8f5154e81646
 pub fn enforce_claude_cache_control_limit(payload: &[u8], maximum: usize) -> Vec<u8> {
-    let Ok(mut root) = serde_json::from_slice::<Value>(payload) else {
+    if !crate::internal::util::valid_json_bytes(payload) {
+        return payload.to_vec();
+    }
+    let Ok(document) = std::str::from_utf8(payload) else {
         return payload.to_vec();
     };
-    let total = count_cache_controls_value(&root);
+    let thread = gjson::get(document, "thread");
+    let maximum = if maximum > 0 && thread.exists() && thread.kind() != gjson::Kind::Null {
+        // Anthropic reserves one cache breakpoint for thread continuation.
+        maximum - 1
+    } else {
+        maximum
+    };
+    let (tools, system, messages) = claude_cache_control_paths(document);
+    let total = tools.len() + system.len() + messages.len();
     if total <= maximum {
         return payload.to_vec();
     }
     let mut excess = total - maximum;
-    strip_non_last_section(&mut root, "system", &mut excess);
-    strip_non_last_section(&mut root, "tools", &mut excess);
-    strip_message_controls(&mut root, &mut excess);
-    strip_all_section(&mut root, "system", &mut excess);
-    strip_all_section(&mut root, "tools", &mut excess);
-    encode_or_original(&root, payload)
-}
-
-fn strip_non_last_section(root: &mut Value, section: &str, excess: &mut usize) {
-    if *excess == 0 {
-        return;
-    }
-    let Some(items) = root.get_mut(section).and_then(Value::as_array_mut) else {
-        return;
-    };
-    let last = items
+    let mut output = payload.to_vec();
+    // Match upstream's five phases, preserving the last tool/system markers
+    // until earlier system/tool markers and then messages have been removed.
+    for path in system
         .iter()
-        .rposition(|item| item.get("cache_control").is_some());
-    for (index, item) in items.iter_mut().enumerate() {
-        if *excess == 0 {
+        .take(system.len().saturating_sub(1))
+        .chain(tools.iter().take(tools.len().saturating_sub(1)))
+        .chain(messages.iter())
+        .chain(system.last())
+        .chain(tools.last())
+    {
+        if excess == 0 {
             break;
         }
-        if Some(index) != last && item.get("cache_control").is_some() {
-            if let Some(object) = item.as_object_mut() {
-                object.remove("cache_control");
-                *excess -= 1;
-            }
+        let updated = crate::internal::translator::common::delete_raw_path(&output, path);
+        if updated != output {
+            output = updated;
+            excess -= 1;
         }
     }
+    output
 }
-
-fn strip_message_controls(root: &mut Value, excess: &mut usize) {
-    let Some(messages) = root.get_mut("messages").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for message in messages {
-        let Some(items) = message.get_mut("content").and_then(Value::as_array_mut) else {
-            continue;
-        };
-        for item in items {
-            if *excess == 0 {
-                return;
-            }
-            if item.get("cache_control").is_some() {
-                if let Some(object) = item.as_object_mut() {
-                    object.remove("cache_control");
-                    *excess -= 1;
-                }
-            }
-        }
-    }
-}
-
-fn strip_all_section(root: &mut Value, section: &str, excess: &mut usize) {
-    let Some(items) = root.get_mut(section).and_then(Value::as_array_mut) else {
-        return;
-    };
-    for item in items {
-        if *excess == 0 {
-            return;
-        }
-        if item.get("cache_control").is_some() {
-            if let Some(object) = item.as_object_mut() {
-                object.remove("cache_control");
-                *excess -= 1;
-            }
-        }
-    }
-}
-
 fn encode_or_original(value: &Value, original: &[u8]) -> Vec<u8> {
     serde_json::to_vec(value).unwrap_or_else(|_| original.to_vec())
 }
@@ -1096,6 +1078,81 @@ mod tests {
         let changed = normalize_claude_cache_control_ttl(br#"{"tools":[{"cache_control":{"type":"ephemeral"}}],"system":[{"cache_control":{"type":"ephemeral","ttl":"1h"}}]}"#);
         let value: Value = serde_json::from_slice(&changed).unwrap();
         assert!(value["system"][0]["cache_control"].get("ttl").is_none());
+    }
+
+    fn thread_cache_fixture(prefix: &str) -> String {
+        format!(
+            r#"{{{prefix}"tools":[{{"name":"t1","cache_control":{{"type":"ephemeral"}}}}],"system":[{{"type":"text","text":"s1","cache_control":{{"type":"ephemeral"}}}},{{"type":"text","text":"s2","cache_control":{{"type":"ephemeral"}}}}],"messages":[{{"role":"user","content":[{{"type":"text","text":"u1","cache_control":{{"type":"ephemeral"}}}},{{"type":"text","text":"u2","cache_control":{{"type":"ephemeral"}}}}]}}]}}"#
+        )
+    }
+
+    #[test]
+    fn candidate_claude_cache_thread_reserves_marker_and_preserves_removal_priority() {
+        let payload = thread_cache_fixture(r#""thread":{"type":"create"},"#);
+        let output = enforce_claude_cache_control_limit(payload.as_bytes(), 4);
+        let value: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(count_claude_cache_controls(&output), 3);
+        assert!(value["tools"][0].get("cache_control").is_some());
+        assert!(value["system"][0].get("cache_control").is_none());
+        assert!(value["system"][1].get("cache_control").is_some());
+        assert!(value["messages"][0]["content"][0]
+            .get("cache_control")
+            .is_none());
+        assert!(value["messages"][0]["content"][1]
+            .get("cache_control")
+            .is_some());
+        assert_eq!(value["thread"]["type"], "create");
+    }
+
+    #[test]
+    fn candidate_claude_cache_thread_matches_nonnull_and_first_duplicate_semantics() {
+        for (prefix, expected) in [
+            ("", 4),
+            (r#""thread":null,"#, 4),
+            (r#""thread":false,"#, 3),
+            (r#""thread":0,"#, 3),
+            (r#""thread":"continue","#, 3),
+            (r#""thread":null,"thread":{"type":"create"},"#, 4),
+            (r#""thread":{"type":"create"},"thread":null,"#, 3),
+        ] {
+            let payload = thread_cache_fixture(prefix);
+            let output = enforce_claude_cache_control_limit(payload.as_bytes(), 4);
+            assert_eq!(count_claude_cache_controls(&output), expected, "{prefix}");
+            assert!(std::str::from_utf8(&output)
+                .unwrap()
+                .starts_with(&format!("{{{prefix}")));
+        }
+    }
+
+    #[test]
+    fn candidate_claude_cache_thread_zero_budget_and_noop_are_safe() {
+        let payload =
+            thread_cache_fixture(r#""thread":{"type":"continue","previous_message_id":"m1"},"#);
+        for maximum in [0, 1] {
+            let output = enforce_claude_cache_control_limit(payload.as_bytes(), maximum);
+            assert_eq!(count_claude_cache_controls(&output), 0);
+            let value: Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(value["thread"]["previous_message_id"], "m1");
+        }
+        let valid = br#"{ "thread":{"type":"create"},"keep":1.000e+30,"duplicate":1,"duplicate":2,"tools":[{"name":"t","cache_control":null}] }"#;
+        assert_eq!(count_claude_cache_controls(valid), 1);
+        assert_eq!(enforce_claude_cache_control_limit(valid, 4), valid);
+        let invalid = br#"{"thread":{"type":"create"},"tools":[{"cache_control":{}}]} trailing"#;
+        assert_eq!(count_claude_cache_controls(invalid), 0);
+        assert_eq!(enforce_claude_cache_control_limit(invalid, 4), invalid);
+    }
+
+    #[test]
+    fn candidate_claude_cache_thread_retains_raw_large_numbers_and_duplicate_siblings() {
+        let prefix = r#""thread":{"type":"create"},"n":1e1000,"keep":1.000e+30,"duplicate":1,"duplicate":2,"#;
+        let payload = thread_cache_fixture(prefix);
+        assert_eq!(count_claude_cache_controls(payload.as_bytes()), 5);
+        let output = enforce_claude_cache_control_limit(payload.as_bytes(), 4);
+        assert_eq!(count_claude_cache_controls(&output), 3);
+        let text = std::str::from_utf8(&output).unwrap();
+        assert!(text.starts_with(&format!("{{{prefix}")));
+        assert!(text.contains(r#""name":"t1","cache_control":{"type":"ephemeral"}"#));
+        assert!(crate::internal::util::valid_json_bytes(&output));
     }
 
     #[test]

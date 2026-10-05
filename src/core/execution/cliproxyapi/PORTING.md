@@ -78,8 +78,16 @@
   views when joining local registry fallbacks, preserving owner metadata and
   borrowed level storage, and retains formatted gjson paths for their values.
   Existing guard expectations remain unchanged. Native/default-transport/Go
-  validation and actual HTTP/provider acceptance remain open. The current-main
-  thread cache-breakpoint reservation is a confirmed separate remaining delta.
+  validation and actual HTTP/provider acceptance remain open. The cache limiter
+  now reserves one breakpoint for a present non-null thread, matching immutable
+  current-main26e5efbb. Raw counting and deletion preserve surviving numeric
+  lexemes, duplicate sibling fields and key order. The existing five-phase
+  removal priority retains the final system/tool markers as long as possible.
+  Four prepared regressions cover reservation, first-key/null semantics, zero
+  budgets, unchanged inputs and raw large numbers. The full native cloaking
+  module requires16 tests; three additional current-main Go parent oracles cover
+  reservation, key order and tool-only limits. Neither suite has executed on
+  this revision; the accepted production pin is unchanged.
 - Gemini selected-model translation now uses the frozen v8 API-key compatibility
   helper for GenerateContent, streaming, token count and converted Interactions
   input. Explicit Home credential options, including false, take precedence over
