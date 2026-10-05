@@ -37923,17 +37923,11 @@ pub(super) mod tests {
             "ctox_business_os__business_module_releases__v{}",
             rxdb_schema_version("business_module_releases")
         );
+        // Admission registers the canonical collection. Reproduce the missing
+        // release projection while preserving its real registered schema.
         rxdb_conn.execute(
-            &format!(
-                "CREATE TABLE {release_table} (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    revision TEXT,
-                    deleted INTEGER NOT NULL DEFAULT 0,
-                    lastWriteTime REAL NOT NULL DEFAULT 0,
-                    data TEXT NOT NULL
-                )"
-            ),
-            [],
+            &format!("DELETE FROM {release_table} WHERE id = ?1"),
+            params![release_id.as_str()],
         )?;
         drop(rxdb_conn);
 
