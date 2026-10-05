@@ -19666,8 +19666,8 @@ fn write_business_os_command_outbox_mirror(
     let record_id = projection
         .get("record_id")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
     let status = projection
         .get("status")
         .and_then(Value::as_str)
@@ -40616,6 +40616,11 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(after, private_context);
+        assert_eq!(
+            load_business_command(&conn, command_id)?.record_id,
+            None,
+            "the public outbox must preserve an absent native record id"
+        );
         let public = load_business_record_payload(&conn, "business_commands", command_id)?
             .context("public command mirror")?;
         assert!(public
