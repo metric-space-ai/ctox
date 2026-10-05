@@ -159,6 +159,7 @@ enum CodexCall {
     Spawn(Headers, Vec<u8>),
     Input(Headers, Vec<u8>),
     Translate(Headers, String, String, String, Vec<u8>, bool),
+    Normalize(String, String, String, Vec<u8>, bool),
     Optimize(Headers, Vec<u8>),
     Restore(Vec<u8>, bool),
 }
@@ -201,6 +202,24 @@ impl CodexMultiAgentV2Processor for CapturingCodexProcessor {
             stream,
         ));
         payload.to_vec()
+    }
+
+    fn normalize_compatible_request(
+        &self,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        payload: Vec<u8>,
+        stream: bool,
+    ) -> Vec<u8> {
+        self.calls.borrow_mut().push(CodexCall::Normalize(
+            from.as_str().to_owned(),
+            to.as_str().to_owned(),
+            model.to_owned(),
+            payload.clone(),
+            stream,
+        ));
+        payload
     }
 
     fn optimize_request(&self, headers: &Headers, payload: &[u8]) -> (Vec<u8>, bool) {
@@ -313,7 +332,19 @@ fn api_key_compatibility_normalizes_reserved_integers_before_the_processor() {
         );
     assert!(!updates_changed);
     let calls = processor.calls.borrow();
+    // The compatibility facade calls the plugin normalizer, rather than the
+    // byte translator. Observe it explicitly; the default trait hook is a no-op.
     assert_eq!(calls.len(), 5);
+    assert_eq!(
+        calls[2],
+        CodexCall::Normalize(
+            "openai-response".to_owned(),
+            "claude".to_owned(),
+            "gpt-5.5".to_owned(),
+            original,
+            false,
+        )
+    );
 }
 
 #[test]
