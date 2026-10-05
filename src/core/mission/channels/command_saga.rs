@@ -21,6 +21,34 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+// JSON object insertion order is not immutable intent. Retain the first
+// admission hash, accepting a reordered replay only when both byte encodings
+// verify their hashes and the full intent (including authority) is unchanged.
+fn same_business_command_intent(
+    key: &str,
+    hash: &str,
+    intent_json: &str,
+    claim: &BusinessCommandClaimRequest,
+) -> bool {
+    if key != claim.idempotency_key {
+        return false;
+    }
+    if hash == claim.payload_hash {
+        return true;
+    }
+    use sha2::{Digest, Sha256};
+    if format!("sha256:{:x}", Sha256::digest(intent_json.as_bytes())) != hash {
+        return false;
+    }
+    let Ok(bytes) = serde_json::to_vec(&claim.intent) else {
+        return false;
+    };
+    if format!("sha256:{:x}", Sha256::digest(&bytes)) != claim.payload_hash {
+        return false;
+    }
+    serde_json::from_str::<Value>(intent_json).is_ok_and(|intent| intent == claim.intent)
+}
+
 pub(crate) fn claim_business_command_with_queue(
     root: &Path,
     claim: BusinessCommandClaimRequest,
@@ -36,7 +64,7 @@ pub(crate) fn claim_business_command_with_queue(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
-            "SELECT idempotency_key, payload_hash, execution_phase, projection_version
+            "SELECT idempotency_key, payload_hash, execution_phase, projection_version, intent_json
              FROM business_command_aggregates
              WHERE command_id = ?1",
             params![claim.command_id],
@@ -46,14 +74,15 @@ pub(crate) fn claim_business_command_with_queue(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
         .optional()?;
     let (aggregate_exists, from_phase, accepted_version) =
-        if let Some((idempotency_key, payload_hash, phase, version)) = existing {
+        if let Some((idempotency_key, payload_hash, phase, version, intent_json)) = existing {
             anyhow::ensure!(
-                idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
+                same_business_command_intent(&idempotency_key, &payload_hash, &intent_json, &claim),
                 "idempotency_conflict: command id was already claimed with different intent"
             );
             let task_id = tx
@@ -698,14 +727,14 @@ pub(crate) fn claim_business_command_waiting_dependencies(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
-            "SELECT idempotency_key, payload_hash FROM business_command_aggregates WHERE command_id = ?1",
+            "SELECT idempotency_key, payload_hash, intent_json FROM business_command_aggregates WHERE command_id = ?1",
             params![claim.command_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
         )
         .optional()?;
-    if let Some((idempotency_key, payload_hash)) = existing {
+    if let Some((idempotency_key, payload_hash, intent_json)) = existing {
         anyhow::ensure!(
-            idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
+            same_business_command_intent(&idempotency_key, &payload_hash, &intent_json, &claim),
             "idempotency_conflict: command id was already claimed with different intent"
         );
         tx.commit()?;
@@ -764,7 +793,7 @@ pub(crate) fn claim_business_control_command(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
-            "SELECT idempotency_key, payload_hash, terminal_status, result_json, execution_phase
+            "SELECT idempotency_key, payload_hash, terminal_status, result_json, execution_phase, intent_json
              FROM business_command_aggregates
              WHERE command_id = ?1",
             params![claim.command_id],
@@ -775,13 +804,16 @@ pub(crate) fn claim_business_control_command(
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
         .optional()?;
-    if let Some((idempotency_key, payload_hash, terminal_status, result_json, phase)) = existing {
+    if let Some((idempotency_key, payload_hash, terminal_status, result_json, phase, intent_json)) =
+        existing
+    {
         anyhow::ensure!(
-            idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
+            same_business_command_intent(&idempotency_key, &payload_hash, &intent_json, &claim),
             "idempotency_conflict: command id was already claimed with different intent"
         );
         let result = result_json
@@ -790,6 +822,7 @@ pub(crate) fn claim_business_control_command(
             .transpose()?;
         tx.commit()?;
         return Ok(BusinessCommandControlClaim {
+            payload_hash,
             disposition: if phase == "terminal" {
                 "terminal"
             } else {
@@ -851,6 +884,7 @@ pub(crate) fn claim_business_control_command(
     )?;
     tx.commit()?;
     Ok(BusinessCommandControlClaim {
+        payload_hash: claim.payload_hash,
         disposition: "new",
         result: None,
         terminal_status: None,
@@ -2394,7 +2428,7 @@ fn record_business_command_intake_failure_inner(
     let canonical = tx
         .query_row(
             "SELECT idempotency_key, payload_hash, execution_phase, terminal_status,
-                    projection_version
+                    projection_version, intent_json
              FROM business_command_aggregates WHERE command_id = ?1",
             params![claim.command_id],
             |row| {
@@ -2404,6 +2438,7 @@ fn record_business_command_intake_failure_inner(
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
@@ -2412,13 +2447,13 @@ fn record_business_command_intake_failure_inner(
     let idempotency_conflict =
         canonical
             .as_ref()
-            .is_some_and(|(idempotency_key, payload_hash, _, _, _)| {
-                idempotency_key != &claim.idempotency_key || payload_hash != &claim.payload_hash
+            .is_some_and(|(idempotency_key, payload_hash, _, _, _, intent_json)| {
+                !same_business_command_intent(idempotency_key, payload_hash, intent_json, &claim)
             });
     let canonical_already_terminal =
         canonical
             .as_ref()
-            .is_some_and(|(_, _, phase, terminal_status, _)| {
+            .is_some_and(|(_, _, phase, terminal_status, _, _)| {
                 phase == "terminal" || terminal_status != "none"
             });
     let mut canonical_failure_created = false;
@@ -2448,7 +2483,7 @@ fn record_business_command_intake_failure_inner(
             "first_intake_error": first_error_message,
             "last_intake_error": error_message,
         });
-        if let Some((_, _, phase, _, projection_version)) = canonical.as_ref() {
+        if let Some((_, _, phase, _, projection_version, _)) = canonical.as_ref() {
             prior_phase = phase.clone();
             next_projection_version = projection_version.saturating_add(1);
             tx.execute(

@@ -6135,6 +6135,216 @@ fn business_command_claim(command_id: &str, payload_hash: &str) -> BusinessComma
     }
 }
 
+fn command_intent_order_claim(reversed: bool) -> Result<BusinessCommandClaimRequest> {
+    // Parse both encodings: the repository enables serde_json preserve_order.
+    let intent: Value = serde_json::from_str(if reversed {
+        r#"{"native_authorization":{"scope":["read","write"],"actor":{"id":"owner-1","role":"admin"}},"client_context":{"action":"run","source":"browser"},"payload":{"ids":[1,2],"value":1},"record_id":"record-1","command_type":"tests.command","module":"tests","command_id":"command-json-order"}"#
+    } else {
+        r#"{"command_id":"command-json-order","module":"tests","command_type":"tests.command","record_id":"record-1","payload":{"value":1,"ids":[1,2]},"client_context":{"source":"browser","action":"run"},"native_authorization":{"actor":{"role":"admin","id":"owner-1"},"scope":["read","write"]}}"#
+    })?;
+    let mut claim = business_command_claim("command-json-order", "");
+    claim.intent = intent;
+    command_intent_order_rehash(&mut claim)?;
+    Ok(claim)
+}
+
+fn command_intent_order_rehash(claim: &mut BusinessCommandClaimRequest) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    claim.payload_hash = format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&claim.intent)?)
+    );
+    Ok(())
+}
+
+fn command_intent_order_admission(root: &Path) -> Result<(String, String, i64)> {
+    let conn = open_channel_db(&resolve_db_path(root, None))?;
+    Ok(conn.query_row(
+        "SELECT payload_hash, intent_json, projection_version FROM business_command_aggregates WHERE command_id='command-json-order'",
+        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?)
+}
+
+#[test]
+fn command_intent_order_control_replay_retains_original_receipt_and_effect() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let first = command_intent_order_claim(false)?;
+    let reordered = command_intent_order_claim(true)?;
+    assert_eq!(first.intent, reordered.intent);
+    assert_ne!(
+        first.payload_hash, reordered.payload_hash,
+        "fixture must change encoding"
+    );
+    let admitted = claim_business_control_command(root.path(), first.clone())?;
+    assert_eq!(admitted.disposition, "new");
+    assert_eq!(admitted.payload_hash, first.payload_hash);
+    let before = command_intent_order_admission(root.path())?;
+    let replay = claim_business_control_command(root.path(), reordered.clone())?;
+    assert_eq!(replay.disposition, "uncertain");
+    assert_eq!(replay.payload_hash, first.payload_hash);
+    assert_eq!(command_intent_order_admission(root.path())?, before);
+    let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+    let counts: (i64, i64) = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM business_command_effects WHERE command_id='command-json-order'), (SELECT COUNT(*) FROM business_command_transitions WHERE command_id='command-json-order')",
+        [], |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert_eq!(counts, (1, 1), "replay cannot claim another effect");
+    drop(conn);
+    let result = json!({"ok":true,"receipt":"original-effect"});
+    complete_business_control_command(root.path(), &first.command_id, "succeeded", &result, None)?;
+    let terminal_before = command_intent_order_admission(root.path())?;
+    let terminal = claim_business_control_command(root.path(), reordered)?;
+    assert_eq!(terminal.disposition, "terminal");
+    assert_eq!(terminal.result, Some(result));
+    assert_eq!(terminal.payload_hash, first.payload_hash);
+    assert_eq!(
+        command_intent_order_admission(root.path())?,
+        terminal_before
+    );
+    assert_eq!(terminal_before.0, before.0);
+    assert_eq!(terminal_before.1, before.1);
+    Ok(())
+}
+
+#[test]
+fn command_intent_order_queue_replay_preserves_dependencies_link_and_cancellation() -> Result<()> {
+    for waiting in [false, true] {
+        let root = tempfile::tempdir()?;
+        let first = command_intent_order_claim(false)?;
+        let reordered = command_intent_order_claim(true)?;
+        let request = || QueueTaskCreateRequest {
+            title: "Ordered intent".into(),
+            prompt: "Perform one bounded action".into(),
+            thread_key: "business-os/tests/intent-order".into(),
+            workspace_root: None,
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        };
+        if waiting {
+            claim_business_command_waiting_dependencies(
+                root.path(),
+                first.clone(),
+                &json!(["dependency"]),
+            )?;
+            let before = command_intent_order_admission(root.path())?;
+            claim_business_command_waiting_dependencies(
+                root.path(),
+                reordered.clone(),
+                &json!(["dependency"]),
+            )?;
+            assert_eq!(command_intent_order_admission(root.path())?, before);
+        }
+        let original = claim_business_command_with_queue(
+            root.path(),
+            if waiting {
+                reordered.clone()
+            } else {
+                first.clone()
+            },
+            request(),
+        )?;
+        update_queue_task(
+            root.path(),
+            QueueTaskUpdateRequest {
+                message_key: original.task.message_key.clone(),
+                route_status: Some("cancelled".into()),
+                status_note: Some("operator cancellation".into()),
+                ..Default::default()
+            },
+        )?;
+        let before = command_intent_order_admission(root.path())?;
+        let replay = claim_business_command_with_queue(
+            root.path(),
+            if waiting { first.clone() } else { reordered },
+            request(),
+        )?;
+        assert!(replay.already_claimed);
+        assert_eq!(replay.task.message_key, original.task.message_key);
+        assert_eq!(replay.task.route_status, "cancelled");
+        assert_eq!(command_intent_order_admission(root.path())?, before);
+        assert_eq!(before.0, first.payload_hash);
+        assert_eq!(before.1, serde_json::to_string(&first.intent)?);
+        let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM business_command_task_links WHERE command_id='command-json-order'", [], |r|r.get(0))?;
+        assert_eq!(count, 1);
+    }
+    Ok(())
+}
+
+#[test]
+fn command_intent_order_intake_failure_keeps_real_failure_not_false_conflict() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let first = command_intent_order_claim(false)?;
+    claim_business_control_command(root.path(), first.clone())?;
+    let failure = record_business_command_intake_failure(
+        root.path(),
+        command_intent_order_claim(true)?,
+        "handler unavailable",
+        1,
+    )?;
+    assert_eq!(failure["idempotency_conflict"], false);
+    assert_eq!(failure["canonical_failure_created"], true);
+    assert_eq!(
+        failure["failure_document"]["error_code"],
+        "native_unavailable"
+    );
+    let saved = command_intent_order_admission(root.path())?;
+    assert_eq!(saved.0, first.payload_hash);
+    assert_eq!(saved.1, serde_json::to_string(&first.intent)?);
+    Ok(())
+}
+
+#[test]
+fn command_intent_order_rejects_changed_authority_payload_key_and_bad_hashes() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let first = command_intent_order_claim(false)?;
+    claim_business_control_command(root.path(), first.clone())?;
+    let before = command_intent_order_admission(root.path())?;
+    for variant in 0..10 {
+        let mut changed = command_intent_order_claim(true)?;
+        match variant {
+            0 => changed.intent["payload"]["value"] = json!(2),
+            1 => changed.intent["native_authorization"]["actor"]["id"] = json!("other-owner"),
+            2 => changed.intent["native_authorization"]["scope"] = json!(["read"]),
+            3 => changed.intent["payload"]["ids"] = json!([2, 1]),
+            4 => changed.intent["record_id"] = json!("record-2"),
+            5 => changed.intent["module"] = json!("other-module"),
+            6 => changed.intent["command_type"] = json!("other-command"),
+            7 => changed.intent["client_context"]["source"] = json!("other-surface"),
+            8 => changed.idempotency_key = "other-key".into(),
+            9 => {}
+            _ => unreachable!(),
+        }
+        command_intent_order_rehash(&mut changed)?;
+        if variant == 9 {
+            changed.payload_hash = "sha256:unbound".into();
+        }
+        let error = claim_business_control_command(root.path(), changed.clone()).unwrap_err();
+        assert!(
+            error.to_string().contains("idempotency_conflict"),
+            "{variant}: {error}"
+        );
+        let failure = record_business_command_intake_failure(
+            root.path(),
+            changed,
+            "rejected changed intent",
+            1,
+        )?;
+        assert_eq!(failure["idempotency_conflict"], true, "variant {variant}");
+        assert_eq!(failure["canonical_failure_created"], false);
+        assert_eq!(command_intent_order_admission(root.path())?, before);
+    }
+    // The fallback must also reject a stored intent whose byte hash is unbound.
+    let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+    conn.execute("UPDATE business_command_aggregates SET payload_hash='sha256:corrupt' WHERE command_id='command-json-order'", [])?;
+    assert!(
+        claim_business_control_command(root.path(), command_intent_order_claim(true)?).is_err()
+    );
+    Ok(())
+}
+
 #[test]
 fn recovery_feedback_requires_the_exact_live_worker_lease() -> Result<()> {
     let root = tempfile::tempdir()?;
