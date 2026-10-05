@@ -19,6 +19,12 @@
   Antigravity disconnect/production usage binding, outer-host Meta/Devin and
   thinking/logger registration, installation and real provider/App acceptance
   remain required.
+- The outer CTOX instance router now forwards client headers to the selected
+  Responses handler. Codex-specific stream failures therefore keep their proper
+  terminal envelope instead of using the ordinary-client envelope. A prepared
+  root-binary regression exercises the real instance router and account pool
+  with both client identities and explicit/default provider selection. The
+  regression has not yet executed; it is separate from the 346 SDK cases.
 
 - Accepted pin: **617/617 production + 442/442 tests strict**, complete
 - Upstream candidate `a88197f`: **111/111 reviews**, **10/10 gates**,
