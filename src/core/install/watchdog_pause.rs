@@ -70,6 +70,46 @@ fn control_exited_unreaped(pid: libc::pid_t) -> io::Result<bool> {
     Ok(unsafe { info.si_pid() } == pid)
 }
 
+#[cfg(target_os = "macos")]
+fn control_group_contains_only_leader(group: libc::pid_t) -> bool {
+    // Two slots distinguish the one pinned zombie from any other member.
+    // proc_listpgrppids returns a PID count, not the byte count of proc_listpids.
+    // Failure, truncation or any additional member cannot establish cleanup.
+    let mut pids = [0 as libc::pid_t; 2];
+    let count = unsafe {
+        libc::proc_listpgrppids(
+            group,
+            pids.as_mut_ptr().cast(),
+            std::mem::size_of_val(&pids) as libc::c_int,
+        )
+    };
+    count == 1 && pids[0] == group
+}
+
+#[cfg(unix)]
+fn stop_control_group(group: libc::pid_t) -> io::Result<()> {
+    // Never signal after another waiter has released the leader identity.
+    control_exited_unreaped(group)?;
+    if unsafe { libc::kill(-group, libc::SIGKILL) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    // Darwin excludes zombies from killpg's signalable members and reports
+    // EPERM for a group containing only its unreaped leader (XNU killpg1).
+    // Confirm that exact state; other permission failures remain fatal.
+    #[cfg(target_os = "macos")]
+    if error.raw_os_error() == Some(libc::EPERM)
+        && control_exited_unreaped(group)?
+        && control_group_contains_only_leader(group)
+    {
+        return Ok(());
+    }
+    Err(error)
+}
+
 #[cfg(unix)]
 pub(super) fn bounded_output(
     command: &mut Command,
@@ -162,12 +202,7 @@ pub(super) fn bounded_output(
             if parent_exited && !group_stopped {
                 // A finished parent may leave a descendant holding a pipe.
                 // Stop only this new session's control group before draining.
-                if unsafe { libc::kill(-group, libc::SIGKILL) } == -1 {
-                    let error = io::Error::last_os_error();
-                    if error.raw_os_error() != Some(libc::ESRCH) {
-                        return Err(error);
-                    }
-                }
+                stop_control_group(group)?;
                 group_stopped = true;
             }
             if parent_exited && stdout_done && stderr_done {
@@ -183,13 +218,7 @@ pub(super) fn bounded_output(
         // Revalidate ownership even on an I/O error. ECHILD means another
         // waiter released the identity: fail closed without signaling an ID
         // that may now belong to an unrelated process or group.
-        control_exited_unreaped(group)?;
-        if unsafe { libc::kill(-group, libc::SIGKILL) } == -1 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(error);
-            }
-        }
+        stop_control_group(group)?;
     }
     // All signaling is complete before try_wait can release the pinned leader.
     // Never turn an uncertain cleanup into a successful cutover receipt.
@@ -242,6 +271,37 @@ mod tests {
         assert_eq!(
             control_exited_unreaped(pid).unwrap_err().raw_os_error(),
             Some(libc::ECHILD)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn watchdog_control_mac_group_proof_rejects_live_descendant() {
+        use std::os::unix::process::CommandExt;
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 2 & exit 7"]);
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let group = child.id() as libc::pid_t;
+        let until = Instant::now() + Duration::from_millis(500);
+        while !control_exited_unreaped(group).unwrap() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let alone = control_group_contains_only_leader(group);
+        // Cleanup while the leader is still pinned, before asserting the proof.
+        stop_control_group(group).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(7));
+        assert!(
+            !alone,
+            "a live descendant must prevent the Darwin EPERM exception"
         );
     }
 
