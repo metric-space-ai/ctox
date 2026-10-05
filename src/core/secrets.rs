@@ -1887,12 +1887,25 @@ mod tests {
             );
         }
         // The previous absent legacy value must not become a cached decision.
+        let protected_key_before = fs::read(master_key_path(root.path()))?;
         let conflicting = BASE64_STANDARD.encode([0u8; 32]);
         persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, Some(&conflicting))?;
         let error = get_secret_value(root.path(), "reader-fixture", "token").unwrap_err();
-        assert!(error
+        assert_eq!(
+            error.downcast_ref::<SecretReadError>(),
+            Some(&SecretReadError::Unavailable)
+        );
+        assert_eq!(error.to_string(), "secret store or key unavailable");
+        // The public reader sanitizes diagnostics, while the key loader must
+        // still detect the actual conflict and never replace the protected key.
+        let key_error = load_existing_secret_master_key(root.path()).unwrap_err();
+        assert!(key_error
             .to_string()
             .contains("conflicts with the legacy runtime key"));
+        assert_eq!(
+            fs::read(master_key_path(root.path()))?,
+            protected_key_before
+        );
         persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, None)?;
         assert_eq!(
             get_secret_value(root.path(), "reader-fixture", "token")?,
