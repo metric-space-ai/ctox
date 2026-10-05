@@ -33879,13 +33879,68 @@ pub(super) mod tests {
             }
         }
         let canonical_ids = system_module_ids().iter().cloned().collect::<BTreeSet<_>>();
-        assert_eq!(canonical_ids.len(), 10);
+        let expected_core_ids = [
+            "desktop",
+            "app-store",
+            "creator",
+            "explorer",
+            "file-viewer",
+            "appsec-pentest",
+            "browser",
+            "coding-agents",
+            "importer",
+            "credentials",
+            "ctox",
+            "documents",
+            "iot",
+            "knowledge",
+            "notes",
+            "reports",
+            "research",
+            "spreadsheets",
+            "threads",
+            "tickets",
+            "kundenpipeline",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+        assert_eq!(canonical_ids, expected_core_ids);
         assert_eq!(manifest_ids, canonical_ids);
         let marketplace = load_marketplace_module_manifests(
             repository_root,
             modules_root.parent().context("Business OS source root")?,
         )?;
-        assert_eq!(marketplace.len(), 24);
+        let expected_marketplace_ids = [
+            "buchhaltung",
+            "calendar",
+            "consent",
+            "conversations",
+            "customers",
+            "cv-print-builder",
+            "esign",
+            "intake",
+            "interviews",
+            "invoices",
+            "mail",
+            "matching",
+            "nachweise",
+            "outbound",
+            "placements",
+            "shiftflow",
+            "submissions",
+            "support",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+        let marketplace_ids = marketplace
+            .iter()
+            .filter_map(|module| module.get("id").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(marketplace.len(), expected_marketplace_ids.len());
+        assert_eq!(marketplace_ids, expected_marketplace_ids);
         let invalid_marketplace = marketplace
             .iter()
             .filter(|module| {
@@ -43184,7 +43239,17 @@ pub(super) mod tests {
 
         let module_root = app_root.join("modules").join("test-module");
         fs::create_dir_all(&module_root)?;
-        fs::write(module_root.join("module.json"), "{}")?;
+        fs::write(
+            module_root.join("module.json"),
+            serde_json::to_vec_pretty(&json!({
+                "id": "test-module",
+                "title": "Snapshot fixture",
+                "entry": "app.js",
+                "version": "1.0.0",
+                "install_scope": "store",
+                "editable": true
+            }))?,
+        )?;
 
         // 2. Save initial version
         let mutation1 = ModuleSourceSaveMutation {
