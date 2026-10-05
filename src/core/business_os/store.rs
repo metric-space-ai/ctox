@@ -32580,6 +32580,7 @@ pub(super) mod tests {
     fn app_create_rxdb_command_accepts_type_alias_from_cli_dispatch() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_test_business_os_app_root(root)?;
         let accepted = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -32653,6 +32654,7 @@ pub(super) mod tests {
     fn app_create_ignores_legacy_shared_creator_thread_key() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_test_business_os_app_root(root)?;
         let accepted = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -32693,6 +32695,7 @@ pub(super) mod tests {
     fn app_modify_ignores_legacy_shared_creator_thread_key() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_test_business_os_app_root(root)?;
         let accepted = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -33265,6 +33268,7 @@ pub(super) mod tests {
     fn app_build_commands_enforce_policy_before_queueing() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_test_business_os_app_root(root)?;
         seed_business_user(root, "viewer", "user")?;
         seed_business_user(root, "app_owner", "founder")?;
         seed_business_user(root, "ops_admin", "admin")?;
