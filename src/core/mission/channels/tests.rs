@@ -6191,7 +6191,7 @@ fn command_intent_order_control_replay_retains_original_receipt_and_effect() -> 
     assert_eq!(counts, (1, 1), "replay cannot claim another effect");
     drop(conn);
     let result = json!({"ok":true,"receipt":"original-effect"});
-    complete_business_control_command(root.path(), &first.command_id, "succeeded", &result, None)?;
+    complete_business_control_command(root.path(), &first.command_id, "completed", &result, None)?;
     let terminal_before = command_intent_order_admission(root.path())?;
     let terminal = claim_business_control_command(root.path(), reordered)?;
     assert_eq!(terminal.disposition, "terminal");

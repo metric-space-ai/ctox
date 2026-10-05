@@ -125,7 +125,7 @@ fn domain_receipt_reordered_intent_reuses_original_admission_hash() -> anyhow::R
     assert_eq!(before.0, original_claim.payload_hash);
     let store = open_store(root.path())?;
     let revision: String = store.query_row(
-        "SELECT rev FROM business_records WHERE collection='workjet_projects' AND id='domain-project'",
+        "SELECT rev FROM business_records WHERE collection='workjet_projects' AND record_id='domain-project'",
         [], |row| row.get(0),
     )?;
 
@@ -145,7 +145,7 @@ fn domain_receipt_reordered_intent_reuses_original_admission_hash() -> anyhow::R
     assert_eq!(admission()?, before);
     assert_eq!(
         store.query_row(
-            "SELECT rev FROM business_records WHERE collection='workjet_projects' AND id='domain-project'",
+            "SELECT rev FROM business_records WHERE collection='workjet_projects' AND record_id='domain-project'",
             [], |row| row.get::<_, String>(0),
         )?,
         revision
