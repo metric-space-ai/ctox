@@ -451,7 +451,7 @@ fn native_registry_archived_project_removed_member_or_expired_worker_deny_callba
         let conn = Connection::open(&registry.policy_path).unwrap();
         put(&conn, collection, &id, value);
         let resolver = NativeGuestAdmissionResolver {
-            registry,
+            registry: registry.clone(),
             guest_id: assignment.destination.guest_id,
         };
         let mut worker = worker_store();
@@ -467,7 +467,7 @@ fn native_registry_archived_project_removed_member_or_expired_worker_deny_callba
     }
     let (_directory, registry, assignment) = fixture();
     let resolver = NativeGuestAdmissionResolver {
-        registry,
+        registry: registry.clone(),
         guest_id: assignment.destination.guest_id,
     };
     let mut worker = worker_store();

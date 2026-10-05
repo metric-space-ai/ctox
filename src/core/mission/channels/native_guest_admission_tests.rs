@@ -2,7 +2,9 @@
 mod tests {
     // These exercise the production admission with the real native worker SQL
     // fence. Quorum/controller are bounded fixtures, not two-host acceptance.
-    use super::super::super::{NativeProviderCheckpointBinding, NativeProviderTurnOwner};
+    use super::super::super::{
+        resolve_db_path, NativeProviderCheckpointBinding, NativeProviderTurnOwner,
+    };
     use super::super::*;
     use ctox_sync::authority::{Ownership, WorkerMembership};
     use std::{
@@ -36,7 +38,7 @@ mod tests {
             assert_eq!(facts.provider_session_id, "actual-thread");
             assert_eq!(
                 std::path::Path::new(tx.path().expect("held native store")),
-                crate::resolve_db_path(runtime_root, None)
+                resolve_db_path(runtime_root, None)
             );
             let competing = rusqlite::Connection::open(tx.path().unwrap())?;
             competing.busy_timeout(std::time::Duration::from_millis(10))?;
@@ -211,7 +213,7 @@ mod tests {
             job: Mutex::new(None),
         });
         let admission = NativeGuestAdmission::new(quorum.clone(), owner.clone())?;
-        let conn = rusqlite::Connection::open(crate::resolve_db_path(root.path(), None))?;
+        let conn = rusqlite::Connection::open(resolve_db_path(root.path(), None))?;
         conn.execute(
             "CREATE TABLE test_guest_consumer_effects (id TEXT PRIMARY KEY)",
             [],

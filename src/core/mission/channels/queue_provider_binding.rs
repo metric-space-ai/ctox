@@ -1166,7 +1166,7 @@ pub(super) mod tests {
         auth.reload();
         assert!(owner
             .binding()
-            .with_live_provider(|_, _| panic!("removed account published"))
+            .with_live_provider(|_, _| -> Result<()> { panic!("removed account published") })
             .is_err());
         assert!(owner.bind_turn("actual-thread", "actual-turn").is_err());
         Ok(())
