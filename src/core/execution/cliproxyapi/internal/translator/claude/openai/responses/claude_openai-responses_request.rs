@@ -154,7 +154,24 @@ fn convert_openai_responses_request_to_claude_impl(
     }
     flush_reasoning(&mut messages, &mut pending_reasoning);
     flush_tools(&mut messages, &mut pending_tools);
-    if messages.is_empty() && !system_blocks.is_empty() {
+    // ref: internal/translator/claude/openai/responses/claude_openai-responses_request.go:532-550 @ 16d98881d4bb37adaa827599e4be8f5154e81646
+    let had_messages = !messages.is_empty();
+    if !preserve_empty_thinking_blocks {
+        strip_trailing_claude_thinking_blocks(&mut messages);
+    }
+    // Interrupted tools must be answered before checking for assistant prefill.
+    messages = repair_claude_tool_pairing(messages);
+    if !preserve_empty_thinking_blocks
+        && claude_model_rejects_assistant_prefill(model_name)
+        && messages
+            .last()
+            .and_then(|message| message.get("role"))
+            .and_then(Value::as_str)
+            .is_some_and(|role| role.trim().eq_ignore_ascii_case("assistant"))
+    {
+        messages.pop();
+    }
+    if messages.is_empty() && (!system_blocks.is_empty() || had_messages) {
         messages.push(json!({"role":"user", "content":[{"type":"text", "text":""}]}));
     }
 
@@ -192,6 +209,245 @@ fn convert_openai_responses_request_to_claude_impl(
     }
 
     serde_json::to_vec(&Value::Object(output)).unwrap_or_else(|_| input.to_vec())
+}
+
+// ref: internal/translator/claude/openai/responses/claude_openai-responses_request.go:678-771 @ 16d98881d4bb37adaa827599e4be8f5154e81646
+fn strip_trailing_claude_thinking_blocks(messages: &mut Vec<Value>) {
+    let Some(last) = messages.last_mut() else {
+        return;
+    };
+    if !last
+        .get("role")
+        .and_then(Value::as_str)
+        .is_some_and(|role| role.trim().eq_ignore_ascii_case("assistant"))
+    {
+        return;
+    }
+    let Some(parts) = last.get_mut("content").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let original_len = parts.len();
+    while parts.last().is_some_and(|part| {
+        matches!(
+            part.get("type").and_then(Value::as_str).map(str::trim),
+            Some("thinking" | "redacted_thinking")
+        )
+    }) {
+        parts.pop();
+    }
+    if parts.len() == original_len {
+        return;
+    }
+    if parts.is_empty() {
+        messages.pop();
+        return;
+    }
+    let replacement = (parts.len() == 1
+        && parts[0].get("type").and_then(Value::as_str) == Some("text")
+        && parts[0].get("cache_control").is_none()
+        && parts[0].get("citations").is_none())
+    .then(|| {
+        Value::String(
+            parts[0]
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+        )
+    });
+    if let Some(replacement) = replacement {
+        last["content"] = replacement;
+    }
+}
+
+fn claude_model_rejects_assistant_prefill(model_name: &str) -> bool {
+    let normalized = model_name.trim().to_lowercase();
+    let normalized = normalized.rsplit('/').next().unwrap_or("");
+    let normalized = normalized
+        .strip_prefix("claude-")
+        .unwrap_or(normalized)
+        .replace('.', "-");
+    let tokens: Vec<_> = normalized.split('-').collect();
+    if tokens[0] == "fable" {
+        return true;
+    }
+    if tokens.len() < 2 || !matches!(tokens[0], "opus" | "sonnet") {
+        return false;
+    }
+    let parse_version = |token: &str| {
+        // Eight-digit snapshot dates must never be treated as versions.
+        if token.is_empty()
+            || token.len() >= 8
+            || !token.bytes().all(|digit| digit.is_ascii_digit())
+        {
+            -1
+        } else {
+            token.parse::<i32>().unwrap_or(-1)
+        }
+    };
+    let major = parse_version(tokens[1]);
+    major >= 5
+        || (tokens[0] == "sonnet"
+            && major == 4
+            && tokens.len() > 2
+            && parse_version(tokens[2]) >= 6)
+}
+
+// ref: internal/translator/claude/openai/responses/claude_openai-responses_request.go:998-1175 @ 16d98881d4bb37adaa827599e4be8f5154e81646
+fn repair_claude_tool_pairing(mut messages: Vec<Value>) -> Vec<Value> {
+    use std::collections::HashSet;
+    let mut previous_tool_use_ids = HashSet::new();
+    let mut output = Vec::with_capacity(messages.len() + 1);
+    for i in 0..messages.len() {
+        let mut message = messages[i].clone();
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        if role == "user" {
+            normalize_claude_tool_result_message(&mut message, &previous_tool_use_ids);
+        }
+        output.push(message);
+        previous_tool_use_ids.clear();
+        if role != "assistant" {
+            continue;
+        }
+        let tool_use_ids: Vec<String> = output
+            .last()
+            .unwrap()
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|part| part.get("type").and_then(Value::as_str) == Some("tool_use"))
+            .filter_map(|part| part.get("id").and_then(Value::as_str))
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .collect();
+        previous_tool_use_ids.extend(tool_use_ids.iter().cloned());
+        if tool_use_ids.is_empty() {
+            continue;
+        }
+        let has_next_user = messages
+            .get(i + 1)
+            .and_then(|message| message.get("role"))
+            .and_then(Value::as_str)
+            == Some("user");
+        let answered: HashSet<&str> = messages
+            .get(i + 1)
+            .filter(|_| has_next_user)
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|part| part.get("type").and_then(Value::as_str) == Some("tool_result"))
+            .filter_map(|part| part.get("tool_use_id").and_then(Value::as_str))
+            .collect();
+        let mut synthesized: Vec<Value> = tool_use_ids
+            .iter()
+            .filter(|id| !answered.contains(id.as_str()))
+            .map(|id| {
+                json!({"type":"tool_result", "tool_use_id":id, "is_error":true,
+                "content":"Tool call was interrupted before any output was recorded."})
+            })
+            .collect();
+        if synthesized.is_empty() {
+            continue;
+        }
+        if has_next_user {
+            match messages[i + 1].get("content") {
+                Some(Value::Array(parts)) => synthesized.extend(parts.iter().cloned()),
+                Some(Value::String(text)) => synthesized.push(json!({"type":"text", "text":text})),
+                _ => {}
+            }
+            messages[i + 1] = json!({"role":"user", "content":synthesized});
+        } else {
+            output.push(json!({"role":"user", "content":synthesized}));
+        }
+    }
+    output
+}
+
+fn normalize_claude_tool_result_message(
+    message: &mut Value,
+    answered_ids: &std::collections::HashSet<String>,
+) {
+    let Some(parts) = message.get("content").and_then(Value::as_array) else {
+        return;
+    };
+    let mut results = Vec::new();
+    let mut others = Vec::new();
+    let mut seen_other = false;
+    let mut changed = false;
+    for part in parts {
+        if part.get("type").and_then(Value::as_str) == Some("tool_result") {
+            if !answered_ids.contains(
+                part.get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+            ) {
+                changed = true;
+                seen_other = true;
+                let text_parts = claude_tool_result_text_parts(part);
+                if text_parts.is_empty() {
+                    others.push(json!({"type":"text", "text":"Tool result was empty."}));
+                } else {
+                    others.extend(text_parts);
+                }
+            } else {
+                results.push(part.clone());
+                changed |= seen_other;
+            }
+        } else {
+            seen_other = true;
+            others.push(part.clone());
+        }
+    }
+    if changed {
+        results.extend(others);
+        *message = json!({"role":"user", "content":results});
+    }
+}
+
+fn claude_tool_result_text_parts(block: &Value) -> Vec<Value> {
+    let Some(content) = block.get("content") else {
+        return Vec::new();
+    };
+    if let Value::Array(parts) = content {
+        return parts
+            .iter()
+            .cloned()
+            .filter_map(|mut part| {
+                if part
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .is_empty()
+                {
+                    if let Some(object) = part.as_object_mut() {
+                        object.insert("type".to_owned(), Value::String("text".to_owned()));
+                    }
+                }
+                let visible = part.get("type").and_then(Value::as_str) != Some("text")
+                    || part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty());
+                visible.then_some(part)
+            })
+            .collect();
+    }
+    let text = match content {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    if text.trim().is_empty() {
+        Vec::new()
+    } else {
+        vec![json!({"type":"text", "text":text})]
+    }
 }
 
 fn is_system_level_role(role: Option<&str>) -> bool {
@@ -646,5 +902,235 @@ mod tests {
         let value: Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(value["messages"][0]["role"], "user");
         assert_eq!(value["messages"][0]["content"], "continue");
+    }
+
+    // ref: internal/translator/claude/openai/responses/claude_openai-responses_request_test.go @ 16d98881d4bb37adaa827599e4be8f5154e81646
+    fn history_convert(model: &str, input: &Value, stream: bool, compat: bool) -> Value {
+        serde_json::from_slice(&convert_openai_responses_request_to_claude_impl(
+            model,
+            &serde_json::to_vec(input).unwrap(),
+            stream,
+            compat,
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn candidate_claude_responses_history_rejects_current_model_prefill() {
+        let input = json!({"input":[
+            {"type":"message","role":"user","content":"prompt"},
+            {"type":"message","role":"assistant","content":"prefill"}
+        ]});
+        for model in [
+            "claude-fable-5",
+            "claude-opus-5",
+            "claude-sonnet-4-6",
+            "fable",
+            "opus-5",
+            "sonnet-4.6",
+            "anthropic/claude-opus-5-thinking",
+            "claude-sonnet-4.6",
+            "claude-sonnet-4-7",
+            "claude-sonnet-4-10",
+            "claude-sonnet-5",
+            "claude-opus-6",
+            "claude-opus-5.1",
+            "claude-sonnet-4-6-20260217",
+            " ANTHROPIC/CLAUDE-OPUS-5-THINKING ",
+        ] {
+            for stream in [false, true] {
+                let output = history_convert(model, &input, stream, false);
+                assert_eq!(
+                    output["messages"],
+                    json!([{"role":"user","content":"prompt"}]),
+                    "{model}"
+                );
+                assert_eq!(output["model"], model);
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_claude_responses_history_preserves_supported_prefill() {
+        let input = json!({"input":[{"role":"user","content":"prompt"},
+            {"role":"assistant","content":"prefill"}]});
+        for model in [
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+            "claude-3-opus-20240229",
+            "claude-opus-20240229",
+            "claude-sonnet-4-20260217",
+            "claude-sonnet-4.5",
+            "not-a-fable-model",
+            "my-custom-opus-5-wrapper",
+            "my-sonnet-4-6-wrapper",
+            "claude-fabled-5",
+            "claude-opus-5foo",
+            "claude-sonnet-4-6foo",
+            "fable/gpt-4o",
+            "opus",
+            "sonnet",
+            "",
+        ] {
+            for stream in [false, true] {
+                let output = history_convert(model, &input, stream, false);
+                assert_eq!(output["messages"].as_array().unwrap().len(), 2, "{model}");
+                assert_eq!(output["messages"][1]["content"], "prefill");
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_claude_responses_history_compat_keeps_prefill_and_thinking() {
+        for stream in [false, true] {
+            let prefill = history_convert(
+                "claude-opus-5",
+                &json!({"input":[
+                    {"role":"user","content":"prompt"}, {"role":"assistant","content":"prefill"}
+                ]}),
+                stream,
+                true,
+            );
+            assert_eq!(prefill["messages"][1]["content"], "prefill");
+            let thinking = history_convert(
+                "claude-opus-5",
+                &json!({"input":[
+                    {"role":"user","content":"prompt"},
+                    {"type":"reasoning","encrypted_content":"opaque-signature","summary":[]}
+                ]}),
+                stream,
+                true,
+            );
+            assert_eq!(thinking["messages"][1]["content"][0]["type"], "thinking");
+        }
+    }
+
+    #[test]
+    fn candidate_claude_responses_history_strips_only_terminal_thinking() {
+        let output = history_convert(
+            "claude-sonnet-4-5",
+            &json!({"input":[
+                {"type":"reasoning","encrypted_content":claude_signature(),"summary":[{"text":"earlier"}]},
+                {"role":"assistant","content":"answer"}, {"role":"user","content":"continue"},
+                {"type":"reasoning","encrypted_content":claude_signature(),"summary":[{"text":"unfinished"}]}
+            ]}),
+            false,
+            false,
+        );
+        assert_eq!(output["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(output["messages"][0]["content"][0]["thinking"], "earlier");
+        assert_eq!(output["messages"][0]["content"][1]["text"], "answer");
+        assert_eq!(output["messages"][1]["content"], "continue");
+    }
+
+    #[test]
+    fn candidate_claude_responses_history_thinking_strip_preserves_metadata() {
+        for protected in [
+            json!({"cache_control":{"type":"ephemeral"}}),
+            json!({"citations":[]}),
+        ] {
+            let mut text = json!({"type":"text","text":"visible"});
+            text.as_object_mut()
+                .unwrap()
+                .extend(protected.as_object().unwrap().clone());
+            let mut messages = vec![json!({"role":"assistant","content":[text.clone(),
+                {"type":"thinking","thinking":"unfinished"}]})];
+            strip_trailing_claude_thinking_blocks(&mut messages);
+            assert_eq!(messages[0]["content"], json!([text]));
+        }
+        let mut messages = vec![json!({"role":"assistant","content":[
+            {"type":"text","text":"visible"}, {"type":"redacted_thinking","data":"unfinished"}]})];
+        strip_trailing_claude_thinking_blocks(&mut messages);
+        assert_eq!(messages[0]["content"], "visible");
+    }
+
+    #[test]
+    fn candidate_claude_responses_history_answers_interrupted_tools_before_prefill() {
+        let input = json!({"input":[{"role":"user","content":"prompt"},
+            {"type":"function_call","call_id":"call_1","name":"Read","arguments":"{\"path\":\"file\"}"}]});
+        for model in ["claude-opus-5", "claude-sonnet-4-5"] {
+            for stream in [false, true] {
+                for compat in [false, true] {
+                    let output = history_convert(model, &input, stream, compat);
+                    assert_eq!(output["messages"].as_array().unwrap().len(), 3);
+                    assert_eq!(output["messages"][1]["content"][0]["id"], "call_1");
+                    assert_eq!(output["messages"][1]["content"][0]["input"]["path"], "file");
+                    let result = &output["messages"][2]["content"][0];
+                    assert_eq!(result["tool_use_id"], "call_1");
+                    assert_eq!(result["is_error"], true);
+                    assert_eq!(
+                        result["content"],
+                        "Tool call was interrupted before any output was recorded."
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_claude_responses_history_orders_results_before_user_content() {
+        let messages = vec![
+            json!({"role":"assistant","content":[
+            {"type":"tool_use","id":"one"}, {"type":"tool_use","id":"two"}]}),
+            json!({"role":"user","content":[{"type":"text","text":"continue"},
+                {"type":"tool_result","tool_use_id":"two","content":"actual"},
+                {"type":"image","source":{"type":"url","url":"https://example.invalid/image"}}]}),
+        ];
+        let output = repair_claude_tool_pairing(messages);
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[1]["content"][0]["tool_use_id"], "one");
+        assert_eq!(output[1]["content"][0]["is_error"], true);
+        assert_eq!(output[1]["content"][1]["tool_use_id"], "two");
+        assert_eq!(output[1]["content"][1]["content"], "actual");
+        assert_eq!(output[1]["content"][2]["text"], "continue");
+        assert_eq!(output[1]["content"][3]["type"], "image");
+    }
+
+    #[test]
+    fn candidate_claude_responses_history_folds_orphans_and_marks_empty_results() {
+        for (text, expected) in [
+            ("late result", "late result"),
+            ("", "Tool result was empty."),
+        ] {
+            let output = history_convert(
+                "claude-opus-5",
+                &json!({"input":[
+                    {"type":"function_call_output","call_id":"missing","output":text}
+                ]}),
+                false,
+                false,
+            );
+            assert_eq!(
+                output["messages"],
+                json!([{"role":"user","content":[{"type":"text","text":expected}]}])
+            );
+        }
+        let output = repair_claude_tool_pairing(vec![json!({"role":"user","content":[
+            {"type":"tool_result","tool_use_id":"missing","content":[
+                {"text":" "}, {"text":"visible"},
+                {"type":"image","source":{"type":"url","url":"https://example.invalid/image"}}]}]})]);
+        assert_eq!(output[0]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            output[0]["content"][0],
+            json!({"type":"text","text":"visible"})
+        );
+        assert_eq!(output[0]["content"][1]["type"], "image");
+    }
+
+    #[test]
+    fn candidate_claude_responses_history_retains_minimal_turn_after_removal() {
+        let output = history_convert(
+            "claude-opus-5",
+            &json!({"input":[
+            {"role":"assistant","content":"prefill"}]}),
+            false,
+            false,
+        );
+        assert_eq!(
+            output["messages"],
+            json!([{"role":"user","content":[{"type":"text","text":""}]}])
+        );
+        let empty = history_convert("claude-opus-5", &json!({}), false, false);
+        assert_eq!(empty["messages"], json!([]));
     }
 }

@@ -80,6 +80,17 @@
   guard now require14 records with the restored200k/64k limits and live-registry
   lookup. The earlier Claude5.5 and other-channel assertions remain intact.
   Source-byte equality and preparation pass; these native guards are unexecuted.
+  Native Responses-to-Claude history now applies the current model-version
+  parser, excluding provider namespaces and snapshot dates from family checks.
+  Native requests remove terminal thinking before repairing interrupted tool
+  results, then remove unsupported assistant prefill. Compatibility requests keep
+  prefill/thinking while sharing the tool-pairing repair. Missing outputs become
+  explicit interrupted-tool errors; orphan outputs retain visible text/media,
+  and real results precede ordinary user content. A minimal user turn survives
+  history removal. Nine native regressions and six exact current-release Go
+  parent oracles are prepared; compilation and execution remain unverified.
+  This matches33ec5502c38ac6841a0754577ebff2483fa10cef and the actual current
+  history normalization barriers; remaining translator/wire parity stays open.
   Claude generation and count-token preparation now keep forwarded caller
   blocks top-level when consecutive user turns terminate the message array,
   matching5d890405b59c4b84a2f00ca39c4ee1494ce51a72. Generation retains its
