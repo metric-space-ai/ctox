@@ -22,6 +22,9 @@ use crate::internal::api::server_routes::{
 use crate::sdk::api::handlers::claude::code_handlers::{
     ClaudeMessagesHttpResponse, ClaudeMessagesRouteHandler, ClaudeMessagesRouteResponse,
 };
+use crate::sdk::api::handlers::openai::openai_chat_handlers::{
+    handle_openai_chat_route, OpenAiChatRouteResponse,
+};
 use crate::sdk::api::handlers::openai::openai_responses_handlers::{
     OpenAiResponsesHttpResponse, OpenAiResponsesRouteHandler, OpenAiResponsesRouteResponse,
 };
@@ -187,6 +190,33 @@ where
         });
         prepare_messages_response_writer(response_writer.as_mut(), &response);
         write_messages_route_response(stream, &mut response, response_writer.as_mut()).await
+    } else if matches!(
+        route,
+        ServerRoute::ChatCompletions | ServerRoute::Completions
+    ) {
+        let mut response = if request.method != "POST" {
+            OpenAiChatRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                405,
+                "method not allowed",
+            ))
+        } else {
+            handle_openai_chat_route(
+                responses_handler,
+                request.provider.as_deref(),
+                &request.headers,
+                &request.body,
+                route == ServerRoute::Completions,
+            )
+            .await
+        };
+        if let Some(writer) = response_writer.as_mut() {
+            let (status, content_type) = response.status_and_content_type();
+            writer.write_header(
+                status,
+                BTreeMap::from([("Content-Type".to_owned(), vec![content_type.to_owned()])]),
+            );
+        }
+        write_chat_route_response(stream, &mut response, response_writer.as_mut()).await
     } else if route == ServerRoute::Messages {
         let mut response = match messages_handler {
             Some(handler) => dispatch_messages_request(request, handler).await,
@@ -647,6 +677,36 @@ where
     stream.shutdown().await
 }
 
+async fn write_chat_route_response<S>(
+    stream: &mut S,
+    response: &mut OpenAiChatRouteResponse,
+    mut capture: Option<&mut ResponseWriterWrapper>,
+) -> io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    match response {
+        OpenAiChatRouteResponse::Buffered(response) => {
+            write_response_with_capture(stream, response, capture).await
+        }
+        OpenAiChatRouteResponse::Stream(response) => {
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+            ).await?;
+            while let Some(chunk) = response.next_chunk().await {
+                let result = stream.write_all(&chunk).await;
+                if let Some(capture) = capture.as_deref_mut() {
+                    capture.write(&chunk);
+                }
+                // Returning drops the same provider-owned stream on disconnect;
+                // no producer task survives the HTTP request owner.
+                result?;
+            }
+            stream.shutdown().await
+        }
+    }
+}
+
 async fn write_route_response<S>(
     stream: &mut S,
     response: &mut OpenAiResponsesRouteResponse,
@@ -836,6 +896,8 @@ fn reason_phrase(status: u16) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    include!("server_openai_chat_candidate_test.rs");
+
     use std::collections::HashMap;
     use std::fs;
     use std::future::Future;

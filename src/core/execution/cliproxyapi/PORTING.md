@@ -5,6 +5,20 @@
 - Upstream: `a88197f845c979132c8978ea223c6af05cc81536`
 - Track A, accepted v7.2.116 standalone Rust-port release: **COMPLETE**
 - Current v8.0.15 update and promotion: **INCOMPLETE**
+- Current v8.0.15 Chat/Completions candidate now dispatches through the actual
+  provider HTTP listener to the existing Responses-shaped account owner.
+  Request-local translation preserves provider/header selection, session/cache
+  identity, structured tools, explicit sampling/token limits and usage. The
+  same live writer handles Claude, Codex and Antigravity streams; legacy
+  Completions convert each chunk instead of buffering the complete response.
+  After partial output, EOF without a nonempty, non-null finish reason emits a
+  terminal 502 error and suppresses [DONE]. First-chunk completion, later usage,
+  undelimited final data, every choice and multiline SSE are covered by 18
+  prepared real HTTP/pool guards. Formatting and declaration preparation are
+  not native execution or promotion. Full composed native/Go checks, exact
+  Antigravity disconnect/production usage binding, outer-host Meta/Devin and
+  thinking/logger registration, installation and real provider/App acceptance
+  remain required.
 
 - Accepted pin: **617/617 production + 442/442 tests strict**, complete
 - Upstream candidate `a88197f`: **111/111 reviews**, **10/10 gates**,
