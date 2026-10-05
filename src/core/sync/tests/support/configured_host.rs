@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn restarted_hosts_recover_confirmed_worker_and_job_from_persisted_configuration() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let signal = SignalingFixture::with_roles([

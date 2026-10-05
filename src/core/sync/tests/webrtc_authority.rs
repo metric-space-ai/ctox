@@ -34,19 +34,19 @@ use std::{
 mod signaling_fixture;
 use signaling_fixture::{route_ready, SignalingFixture};
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn additional_worker_connects_to_three_voters_and_owns_a_supervised_ipc() {
     exercise_worker_session(None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn worker_reconnect_preserves_identity_and_rebuilds_channels() {
     exercise_worker_session(Some(4)).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn voter_reconnect_uses_pinned_key_to_restore_quorum_and_worker_routes() {
     exercise_worker_session(Some(3)).await;
@@ -550,7 +550,7 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
     .expect("four-peer native worker lifecycle timed out");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
     use authority_ipc_fixture::call as ipc_call;
     use ctox_sync::contracts::{SyncIpcOperation, SyncIpcResult};
@@ -937,31 +937,31 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
     .expect("real WebRTC authority fixture exceeded 60 seconds");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn native_sessions_own_authority_without_granting_business_data_access() {
     exercise_native_session_group(NativeGroupScenario::Shutdown).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn workjet_ipc_uses_the_owned_native_execution_group() {
     exercise_native_session_group(NativeGroupScenario::WorkjetIpc).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn dropping_native_session_stops_retained_authority_and_ipc_handles() {
     exercise_native_session_group(NativeGroupScenario::Drop).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn configured_workjet_signaling_peers_reach_native_authority() {
     exercise_native_session_group(NativeGroupScenario::WorkjetRoles).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn configured_workjet_signaling_peers_connect_to_ctox_coordinator() {
     exercise_native_session_group(NativeGroupScenario::MixedRoles).await;
