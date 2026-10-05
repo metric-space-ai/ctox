@@ -32713,9 +32713,14 @@ pub(super) mod tests {
         let canonical = channels::business_command_projection(root, "cmd_app_type_alias")?;
         assert_eq!(
             canonical.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            canonical.get("task_status").and_then(Value::as_str),
             Some("queued"),
             "valid starter scaffolding must not complete an unleased app command"
         );
+        assert_eq!(canonical["terminal_status"], "none");
         let task_id = accepted
             .get("task_id")
             .and_then(Value::as_str)
