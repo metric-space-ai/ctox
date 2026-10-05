@@ -10,8 +10,13 @@ guest identifier, execution ownership, protected checkpoint digest and original
 manifest/artifact transfer identifiers. The destination is independently resolved
 by the lifecycle owner; no caller-selected guest path is accepted.
 
-Before ingestion, the adapter requires current local execution ownership and its
-protected digest. Every job must retain the manifest's source identity and
+Before ingestion, the adapter requires current local execution ownership, its
+protected digest and a checkpoint that does not require refresh. Completing an
+external effect does not make an older checkpoint fresh. The canonical staging
+and import checks still revalidate current authority after the adapter preflight;
+only the native CommitEffectCheckpoint transition can publish the newer durable
+copy and complete its pending effect atomically.
+Every job must retain the manifest's source identity and
 original enrolled account. Each file retains its own original grant. The real
 PeerRangeSource authorizes each saved immutable request before and after reading,
 again before checkpoint publication and after staging. Completed cache entries do

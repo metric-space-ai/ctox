@@ -189,6 +189,7 @@ pub(crate) async fn stage_transferred_guest_checkpoint(
             && job.ownership == request.ownership
             && job.ownership.node_id == authority.node_id()
             && !job.stopped
+            && !job.checkpoint_requires_refresh
             && job.pending_effects.is_empty()
             && job
                 .checkpoint

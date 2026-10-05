@@ -347,3 +347,218 @@ async fn protected_digest_must_match_the_original_manifest_job() {
     );
     assert_eq!(f.peer.checks.load(Ordering::SeqCst), 0);
 }
+
+// Deterministic native boundary, not quorum, a VM, or readiness evidence.
+struct StageBoundary {
+    job: ctox_sync::authority::Job,
+    destination: ctox_sync::guest_restore::GuestRestoreDestination,
+    ownership_checks: AtomicUsize,
+    refresh_at: usize,
+    resolutions: AtomicUsize,
+}
+impl StageBoundary {
+    fn new(f: &Fixture, refresh_at: usize) -> Self {
+        use ctox_sync::authority::{ExecutionSpec, Job, ProtectedCheckpoint};
+        use ctox_sync::guest_restore::GuestRestoreDestination;
+        use std::os::unix::fs::PermissionsExt;
+        let parent = f.root.path().join("guest-imports");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        Self {
+            job: Job {
+                spec: ExecutionSpec {
+                    job_id: "job".into(),
+                    session_id: "11111111-2222-4333-8444-555555555555".into(),
+                    scope_id: "scope".into(),
+                    harness: "codex".into(),
+                    harness_version: "1".into(),
+                    model_route_id: "route".into(),
+                    gateway_account_id: "account".into(),
+                    model_id: "model".into(),
+                    required_capabilities: BTreeSet::new(),
+                },
+                ownership: f.request().ownership,
+                checkpoint: Some(ProtectedCheckpoint {
+                    digest: f.digest.clone(),
+                    sequence: 4,
+                    replicas: BTreeSet::from([1, 2]),
+                    receipts: vec![],
+                }),
+                checkpoint_requires_refresh: false,
+                pending_effects: BTreeSet::new(),
+                completed_effects: BTreeSet::from(["previous-effect".into()]),
+                stopped: false,
+            },
+            destination: GuestRestoreDestination {
+                instance_id: "instance".into(),
+                guest_id: "guest".into(),
+                human_owner_id: "human".into(),
+                project_id: "project".into(),
+                thread_id: "thread".into(),
+                worker_profile_id: "profile".into(),
+                controller_id: "controller".into(),
+                controller_generation: 1,
+                import_parent: std::fs::canonicalize(parent).unwrap(),
+            },
+            ownership_checks: AtomicUsize::new(0),
+            refresh_at,
+            resolutions: AtomicUsize::new(0),
+        }
+    }
+}
+#[async_trait::async_trait]
+impl ExecutionAuthority for StageBoundary {
+    fn node_id(&self) -> u64 {
+        1
+    }
+    fn scope_id(&self) -> &str {
+        "scope"
+    }
+    async fn worker_membership(
+        &self,
+        _: u64,
+    ) -> std::io::Result<Option<ctox_sync::authority::WorkerMembership>> {
+        panic!("staging must not enroll a worker")
+    }
+    async fn submit(
+        &self,
+        _: ctox_sync::authority::Request,
+    ) -> std::io::Result<ctox_sync::authority::Receipt> {
+        panic!("staging must not acquire execution or publish an import")
+    }
+    async fn validate_ownership(
+        &self,
+        id: &str,
+        ownership: &Ownership,
+    ) -> std::io::Result<ctox_sync::authority::Job> {
+        assert_eq!(id, self.job.spec.job_id);
+        assert_eq!(ownership, &self.job.ownership);
+        let check = self.ownership_checks.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut job = self.job.clone();
+        job.checkpoint_requires_refresh = check >= self.refresh_at;
+        Ok(job)
+    }
+    async fn shutdown(&self) -> std::io::Result<()> {
+        panic!("staging must not stop shared authority")
+    }
+}
+impl GuestRestoreOwner for StageBoundary {
+    fn resolve_destination(
+        &self,
+        guest: &str,
+        spec: &ctox_sync::authority::ExecutionSpec,
+        ownership: &Ownership,
+    ) -> std::io::Result<ctox_sync::guest_restore::GuestRestoreDestination> {
+        assert_eq!(guest, self.destination.guest_id);
+        assert_eq!(spec, &self.job.spec);
+        assert_eq!(ownership, &self.job.ownership);
+        self.resolutions.fetch_add(1, Ordering::SeqCst);
+        Ok(self.destination.clone())
+    }
+    fn with_current_fence(
+        &self,
+        _: &ctox_sync::guest_restore::GuestRestoreDestination,
+        _: &ctox_sync::authority::ExecutionSpec,
+        _: &Ownership,
+        _: &mut dyn FnMut() -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        panic!("staging must not publish an import")
+    }
+}
+
+#[tokio::test]
+async fn stale_checkpoint_denied_before_reading_completed_transfers() {
+    let f = fixture(false).await;
+    let native = StageBoundary::new(&f, 1);
+    assert!(stage_transferred_guest_checkpoint(
+        &f.transfers,
+        &f.checkpoints,
+        &*f.peer,
+        &native,
+        &native,
+        f.request(),
+    )
+    .await
+    .is_err());
+    assert_eq!(f.peer.checks.load(Ordering::SeqCst), 0);
+    assert_eq!(native.resolutions.load(Ordering::SeqCst), 0);
+    assert!(f.checkpoints.load(&f.digest).is_err());
+}
+
+#[tokio::test]
+async fn checkpoint_dirtied_after_preflight_cannot_stage() {
+    let f = fixture(false).await;
+    let native = StageBoundary::new(&f, 2);
+    assert!(stage_transferred_guest_checkpoint(
+        &f.transfers,
+        &f.checkpoints,
+        &*f.peer,
+        &native,
+        &native,
+        f.request(),
+    )
+    .await
+    .is_err());
+    assert_eq!(native.ownership_checks.load(Ordering::SeqCst), 2);
+    assert_eq!(native.resolutions.load(Ordering::SeqCst), 0);
+    // Authorized cached bytes are retained, but cannot confer execution.
+    assert!(f.checkpoints.load(&f.digest).is_ok());
+    assert_eq!(
+        std::fs::read_dir(&native.destination.import_parent)
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn fresh_checkpoint_stages_without_execution_and_drop_cleans_stage() {
+    let f = fixture(false).await;
+    let native = StageBoundary::new(&f, usize::MAX);
+    let staged = stage_transferred_guest_checkpoint(
+        &f.transfers,
+        &f.checkpoints,
+        &*f.peer,
+        &native,
+        &native,
+        f.request(),
+    )
+    .await
+    .unwrap();
+    let path = staged.staged_directory().to_path_buf();
+    assert_eq!(
+        std::fs::read(path.join("workspace/notes/new.txt")).unwrap(),
+        b"untracked"
+    );
+    drop(staged);
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn grant_revoked_after_staging_removes_unpublished_stage() {
+    let f = fixture(false).await;
+    let native = StageBoundary::new(&f, usize::MAX);
+    // Manifest before/after, each artifact before/after, then all originals.
+    let ingestion_checks = 2 + 2 * f.ids.len() + (1 + f.ids.len());
+    f.peer
+        .revoke_at
+        .store(ingestion_checks + 1, Ordering::SeqCst);
+    assert!(stage_transferred_guest_checkpoint(
+        &f.transfers,
+        &f.checkpoints,
+        &*f.peer,
+        &native,
+        &native,
+        f.request(),
+    )
+    .await
+    .is_err());
+    assert!(native.resolutions.load(Ordering::SeqCst) > 0);
+    assert!(f.checkpoints.load(&f.digest).is_ok());
+    assert_eq!(
+        std::fs::read_dir(&native.destination.import_parent)
+            .unwrap()
+            .count(),
+        0
+    );
+}
