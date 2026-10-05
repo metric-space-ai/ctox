@@ -36954,15 +36954,17 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn runtime_settings_uses_ctox_proxy_for_minimax_when_configured() {
+    fn runtime_settings_preserve_provider_identity_with_proxy_credentials() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
             crate::inference::runtime_state::CTOX_LLM_PROXY_API_KEY_ENV.to_owned(),
             "configured".to_owned(),
         );
+        // Match the runtime's explicit provider/credential authority: an
+        // unrelated proxy key must never reroute a selected MiniMax account.
         assert_eq!(
             runtime_settings_api_upstream_base_url("minimax", &env_map),
-            "https://llm.ctox.dev"
+            "https://api.minimax.io"
         );
         assert_eq!(
             runtime_settings_api_upstream_base_url("ctox_proxy", &env_map),
@@ -36975,7 +36977,19 @@ pub(super) mod tests {
         );
         assert_eq!(
             runtime_settings_api_upstream_base_url("minimax", &env_map),
+            "https://api.minimax.io"
+        );
+        assert_eq!(
+            runtime_settings_api_upstream_base_url("ctox_proxy", &env_map),
             "https://example.ctox.dev/api/fallback-llm"
+        );
+        env_map.insert(
+            "CTOX_UPSTREAM_BASE_URL".to_owned(),
+            "https://api.minimax.io/v1".to_owned(),
+        );
+        assert_eq!(
+            runtime_settings_api_upstream_base_url("minimax", &env_map),
+            "https://api.minimax.io/v1"
         );
     }
 
