@@ -130,10 +130,14 @@ native command receipt or the existing owner/status projection checks.
 ### Sync connection cache and credential rotation
 
 The connection cache stamps the Secret Store's resolved SQLite file and its
-WAL/SHM sidecars. A credential update still in WAL invalidates the old room and
-browser signaling credential without waiting for a checkpoint or the five-minute
-cache TTL. The native-only credential retains its own identity. A configuration
-build that spans a source change is returned without caching; it cannot publish
+WAL/SHM sidecars and reads a private digest of the protected room-password row
+through a read-only connection. File size and timestamps alone may miss a
+committed update. An unreadable or absent protected row cannot authorize reuse
+or publication of a cached configuration. A credential update still in WAL
+invalidates the old room and browser signaling credential without waiting for
+a checkpoint or the five-minute cache TTL. The native-only credential retains
+its own identity. A configuration build that spans a source change is returned
+without caching; it cannot publish
 an old value tagged with the newer store stamp. Initial store setup follows the
 same rule. This cache coherence rule does not replace native policy or the peer
 lifecycle fence, and installed acceptance remains separate.
@@ -364,6 +368,13 @@ Backoff means eligibility on the next requested call, not a scheduled probe.
 Early operator probes require signed native `data.write` authorization;
 worker command sessions cannot grant that exception. A successful probe only
 clears the generation it owns, so a late result cannot erase a newer refusal.
+
+### Runtime app starter preparation
+
+Native app admission may prepare and validate starter files, but that proves
+only that scaffolding can load. The command remains queued until its owned
+worker runs and the existing app-validation/completion path accepts the result.
+Starter preparation never moves an unleased command into review or success.
 
 ### Command projection identity
 

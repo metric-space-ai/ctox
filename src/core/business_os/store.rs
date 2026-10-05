@@ -412,6 +412,7 @@ type SyncConnectionConfigCacheStamp = (
     BusinessOsFileChangeStamp,
     BusinessOsFileChangeStamp,
     BusinessOsSqliteStoreStamp,
+    Option<String>,
 );
 
 #[derive(Debug, Clone)]
@@ -2548,6 +2549,13 @@ fn sync_connection_config_cache_stamp(root: &Path) -> SyncConnectionConfigCacheS
         business_os_file_change_stamp(&runtime.join("business-os-instance-id")),
         business_os_file_change_stamp(&runtime.join(BUSINESS_OS_SIGNALING_URLS_FILE)),
         business_os_sqlite_store_stamp(&crate::secrets::secret_store_path(root)),
+        crate::secrets::secret_record_content_version(
+            root,
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME,
+        )
+        .ok()
+        .flatten(),
     )
 }
 
@@ -6155,7 +6163,10 @@ pub(super) fn ensure_delegated_app_modify_target_supported(
     let app_root = resolve_business_os_app_root(root)?;
     let (module_root, _) = resolve_module_source_root_for_root(root, &app_root, module_id)?;
     anyhow::ensure!(
-        module_root.parent().and_then(Path::file_name).and_then(|name| name.to_str())
+        module_root
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
             != Some("local-modules"),
         "local_app_authoring_unsupported: module `{module_id}` is operator-owned under local-modules; delegated modify_app has no local sandbox/validation lifecycle contract and must not create an installed-module shadow"
     );
@@ -6814,14 +6825,7 @@ fn record_command_inner(
         root,
         queue_task.as_ref().map(|task| task.message_key.as_str()),
     );
-    if let Some(completed) = maybe_materialize_and_complete_runtime_app_starter(
-        root,
-        &command_id,
-        &command,
-        queue_task.as_ref(),
-    )? {
-        return Ok(completed);
-    }
+    maybe_materialize_runtime_app_starter(root, &command, queue_task.as_ref())?;
     project_outbound_lead_queued(
         root,
         &command,
@@ -7159,73 +7163,42 @@ const RUNTIME_APP_STARTER_V2_LOCALE_DE: &str =
 const RUNTIME_APP_STARTER_V2_LOCALE_EN: &str =
     include_str!("../../apps/business-os/app-starter/v2/locales/en.json");
 
-fn maybe_materialize_and_complete_runtime_app_starter(
+fn maybe_materialize_runtime_app_starter(
     root: &Path,
-    command_id: &str,
     command: &BusinessCommand,
     queue_task: Option<&channels::QueueTaskView>,
-) -> anyhow::Result<Option<CommandAccepted>> {
+) -> anyhow::Result<()> {
     if command.client_context.get("source").and_then(Value::as_str) == Some("business-os-mcp") {
-        return Ok(None);
+        return Ok(());
     }
-    let is_import = command
-        .payload
-        .get("import_source")
-        .is_some_and(Value::is_object);
-    let Some(queue_task) = queue_task else {
-        return Ok(None);
-    };
+    if queue_task.is_none() {
+        return Ok(());
+    }
     let Some((module_id, install_target, _artifact_directory)) =
         business_os_app_command_target_metadata(command)
     else {
-        return Ok(None);
+        return Ok(());
     };
     if install_target != "runtime-installed-module" {
-        return Ok(None);
+        return Ok(());
     }
     let action = match command.command_type.as_str() {
         "ctox.business_os.app.create" => RuntimeAppStarterAction::Create,
         "ctox.business_os.app.modify" => RuntimeAppStarterAction::Modify,
-        _ => return Ok(None),
+        _ => return Ok(()),
     };
     let materialized =
         materialize_runtime_app_starter_artifacts(root, command, &module_id, action)?;
-    if !materialized.should_validate {
-        return Ok(None);
-    }
-    match validate_runtime_app_starter_artifacts(root, &module_id) {
-        Ok(()) => {}
-        Err(err) => {
+    if materialized.should_validate {
+        if let Err(err) = validate_runtime_app_starter_artifacts(root, &module_id) {
             eprintln!(
                 "[business-os] runtime app starter for `{module_id}` stayed in queue because validation failed: {err:#}"
             );
-            return Ok(None);
         }
     }
-    if is_import {
-        return Ok(None);
-    }
-    let Some(result) = complete_business_command_from_app_validation_success(
-        root,
-        &queue_task.message_key,
-        Some(&module_id),
-        "Business OS runtime app starter materialized and validated synchronously",
-    )?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(CommandAccepted {
-        ok: result.get("status").and_then(Value::as_str) == Some("completed"),
-        command_id: command_id.to_string(),
-        status: "completed",
-        task_id: Some(queue_task.message_key.clone()),
-        task_status: result
-            .get("task_status")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| Some("completed".to_string())),
-        ..CommandAccepted::default()
-    }))
+    // Starter validation proves only that scaffolding can load. It cannot
+    // finish a queued command before its owned worker and completion review.
+    Ok(())
 }
 
 fn materialize_runtime_app_starter_artifacts(
@@ -17870,7 +17843,9 @@ pub(super) fn stored_rxdb_business_command_outcome(
         );
         obj.insert("already_accepted".to_string(), Value::Bool(true));
     }
-    Ok(Some(payload))
+    Ok(Some(command_projection_with_native_identity(
+        conn, &payload,
+    )?))
 }
 
 const CAPABILITY_SECRET_SCOPE: &str = "credentials";
@@ -19410,13 +19385,20 @@ fn command_projection_with_native_identity(
     // Chat navigation is derived from the immutable command intent and its
     // private accepted context, never from a cached public mirror. Core's
     // reduced lifecycle projection does not carry this presentation field.
-    let presentation_context = native_command
-        .as_ref()
-        .filter(|(_, module, command_type, _, _)| {
-            document["module"].as_str() == Some(module.as_str())
-                && document["command_type"].as_str() == Some(command_type.as_str())
-        })
+    let matching_native_command =
+        native_command
+            .as_ref()
+            .filter(|(_, module, command_type, _, _)| {
+                document["module"].as_str() == Some(module.as_str())
+                    && document["command_type"].as_str() == Some(command_type.as_str())
+            });
+    let presentation_context = matching_native_command
         .map(|_| native_context.clone())
+        .unwrap_or(Value::Null);
+    let presentation_payload = matching_native_command
+        .map(|(_, _, _, _, payload)| serde_json::from_str(payload))
+        .transpose()
+        .context("invalid native command presentation payload")?
         .unwrap_or(Value::Null);
     // This value is only input to read-only display helpers, never admission
     // or execution; it carries no trusted-local origin or authorization.
@@ -19429,7 +19411,7 @@ fn command_projection_with_native_identity(
             .unwrap_or_default()
             .to_owned(),
         record_id: document["record_id"].as_str().map(str::to_owned),
-        payload: document["payload"].clone(),
+        payload: presentation_payload,
         client_context: presentation_context,
     };
     if document["execution_mode"] == "queue" && is_business_chat_command(&presentation_command) {
@@ -25119,12 +25101,30 @@ fn business_os_app_import_prompt_block(manifest: &Value) -> anyhow::Result<Strin
         .context("app import manifest has no resolved revision")?;
     Ok(format!(
         "\nImported application source (immutable evidence):\n- source_directory: {source_directory}\n- source_kind: {}\n- source_profile: {}\n- entry_path: {}\n- resolved_revision: {revision}\n- manifest_sha256: {}\n- file_count: {}\n- total_bytes: {}\n\nPorting contract:\n- Treat source_directory as read-only evidence. Write only the requested runtime-installed module target.\n- CTOX pre-materializes the canonical App Starter V2 in app_directory. Keep its valid Shell-V2 wiring, but treat its visible UI and sample records as disposable scaffolding rather than product design.\n- Remove every placeholder record, generic CRUD label, demo panel, and unused starter control before release.\n- Reimplement the complete user workflows as a functional Shell-V2 app; do not translate framework syntax mechanically.\n- For standalone HTML sources, first render entry_path and record a visual/interaction inventory. Preserve its recognizable composition, content density, typography, controls, animation, audio, game logic, keyboard/pointer behavior, and saved state unless Shell V2 requires a documented adaptation.\n- For every source type, keep a behavior inventory that maps each workflow, input, saved state, recovery, and permission boundary to a concrete verification.\n- Package browser dependencies using static local relative browser-ESM imports. Remote scripts, stylesheets, import maps, and CDN runtime dependencies are forbidden; package the required assets locally.\n- Require real Shell-V2 visual/interaction proof using the tenant actor and actual pointer and keyboard workflows. Compare source and mounted app at matching desktop and narrow viewports. A merely mountable app, static imitation, or generic dashboard is a failed port.\n- The delivered app must have no QML, Quickshell, mpv, Python, shell, or original native runtime dependency.\n- Use shell-provided database handles for app-owned RxDB collections; do not import upstream rxdb or create an HTTP data bridge.\n- Browser media playback must use HTMLAudioElement with HTTPS streams. Filter or clearly mark HTTP-only streams; do not add an SSRF/media proxy.\n- Add deterministic fixtures for external APIs and audio. The go/no-go gate requires exact data.read/data.write grants for every app-owned collection, static validation, and a real tenant-actor browser smoke.\n- The final report must enumerate every source workflow and its passing test or explicitly mark the job failed; partial parity must never be published as live.\n- Do not claim completion or catalog visibility yourself. CTOX publishes the imported module only after core-recorded passed smoke evidence.\n\nBounded implementation contract:\n- After the required plan update, inspect the skill entrypoint, the pre-materialized starter, and the immutable source evidence.\n- Run the first validation before substantial edits, then inspect the source entrypoints and one closest reference app; one bounded reference-catalog query is enough.\n- Continue from existing target artifacts on later slices. Do not restart source or reference discovery, and never leave app_directory invalid at the end of a slice.\n",
-        manifest.get("kind").and_then(Value::as_str).unwrap_or("unknown"),
-        manifest.get("profile").and_then(Value::as_str).unwrap_or("default"),
-        manifest.get("entry_path").and_then(Value::as_str).unwrap_or(""),
-        manifest.get("manifest_sha256").and_then(Value::as_str).unwrap_or(""),
-        manifest.get("file_count").and_then(Value::as_u64).unwrap_or(0),
-        manifest.get("total_bytes").and_then(Value::as_u64).unwrap_or(0),
+        manifest
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        manifest
+            .get("profile")
+            .and_then(Value::as_str)
+            .unwrap_or("default"),
+        manifest
+            .get("entry_path")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        manifest
+            .get("manifest_sha256")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        manifest
+            .get("file_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        manifest
+            .get("total_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
     ))
 }
 
@@ -25747,8 +25747,10 @@ pub(super) fn clamp_projected_document_to_wire_budget(
             payload.get("content").is_some_and(Value::is_string),
             "invalid module source content for {record_id}; restore its canonical projection"
         );
-        anyhow::ensure!(total <= rxdb::collection_policy::DEFAULT_MASTER_RESPONSE_CEILING_BYTES,
-            "module source {record_id} exceeds the lossless inline projection limit; content was not truncated");
+        anyhow::ensure!(
+            total <= rxdb::collection_policy::DEFAULT_MASTER_RESPONSE_CEILING_BYTES,
+            "module source {record_id} exceeds the lossless inline projection limit; content was not truncated"
+        );
         return Ok(());
     }
     let Some(object) = payload.as_object_mut() else {
@@ -29284,6 +29286,10 @@ pub(super) mod tests {
             repo_root.join("src/apps/business-os/scripts/validate-app-module.mjs"),
             &validator,
         )?;
+        fs::copy(
+            repo_root.join("src/apps/business-os/scripts/app-audit-scenarios.mjs"),
+            validator.with_file_name("app-audit-scenarios.mjs"),
+        )?;
         let checker = root.join(
             "src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs",
         );
@@ -31917,6 +31923,7 @@ pub(super) mod tests {
         );
         let mut forged_shadow = stored.clone();
         forged_shadow["chat_id"] = Value::String("forged_cached_chat".to_owned());
+        forged_shadow["payload"]["chat_id"] = Value::String("forged_payload_chat".to_owned());
         assert_eq!(
             conn.execute(
                 "UPDATE business_records SET payload_json=?1 WHERE collection=?2 AND record_id=?3",
@@ -31928,6 +31935,9 @@ pub(super) mod tests {
             )?,
             1
         );
+        let forged_outcome = stored_rxdb_business_command_outcome(&conn, "cmd_persisted_chat")?
+            .context("stored outcome after public mirror tampering")?;
+        assert_eq!(forged_outcome["chat_id"], "chat_persisted");
         drop(conn);
         channels::lease_queue_task(root, task_id, "ctox-service")?;
         channels::transition_business_command_for_task(
@@ -32671,6 +32681,12 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(command_type, "ctox.business_os.app.create");
+        let canonical = channels::business_command_projection(root, "cmd_app_type_alias")?;
+        assert_eq!(
+            canonical.get("status").and_then(Value::as_str),
+            Some("queued"),
+            "valid starter scaffolding must not complete an unleased app command"
+        );
         let task_id = accepted
             .get("task_id")
             .and_then(Value::as_str)
@@ -32753,6 +32769,7 @@ pub(super) mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
+        write_minimal_runtime_app_artifacts(root, "inventory")?;
         let accepted = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -33326,6 +33343,8 @@ pub(super) mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
+        write_minimal_runtime_app_artifacts(root, "inventory")?;
+        write_minimal_runtime_app_artifacts(root, "sales")?;
         seed_business_user(root, "viewer", "user")?;
         seed_business_user(root, "app_owner", "founder")?;
         seed_business_user(root, "ops_admin", "admin")?;
@@ -36724,7 +36743,9 @@ pub(super) mod tests {
         let detached_integrity =
             business_os_inspect_backup_manifest_integrity(root, &detached_manifest)?;
         assert_eq!(
-            detached_integrity.get("signature_valid").and_then(Value::as_bool),
+            detached_integrity
+                .get("signature_valid")
+                .and_then(Value::as_bool),
             Some(true),
             "manifest verification must work with the external signing key and no backup artifact access"
         );
@@ -39065,6 +39086,16 @@ pub(super) mod tests {
         let secret_path = crate::secrets::secret_store_path(root);
         let held_connection = Connection::open(&secret_path)?;
         held_connection.pragma_update(None, "journal_mode", "WAL")?;
+        assert_eq!(
+            held_connection
+                .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))?,
+            "wal"
+        );
+        held_connection.execute_batch("BEGIN")?;
+        let _: i64 =
+            held_connection.query_row("SELECT COUNT(*) FROM ctox_secret_records", [], |row| {
+                row.get(0)
+            })?;
         let old_connection_config = sync_connection_config(root)?;
         let source_stamp = sync_connection_config_cache_stamp(root);
         let before_main = business_os_file_change_stamp(&secret_path);
@@ -39082,7 +39113,12 @@ pub(super) mod tests {
             business_os_file_change_stamp(&secret_path),
             "the held WAL connection must retain the credential change outside the main file"
         );
-        assert_ne!(source_stamp, sync_connection_config_cache_stamp(root));
+        let changed_stamp = sync_connection_config_cache_stamp(root);
+        assert_ne!(
+            source_stamp.3, changed_stamp.3,
+            "the authoritative protected credential changed"
+        );
+        assert_ne!(source_stamp, changed_stamp);
         let reloaded = sync_config(root)?;
         assert_eq!(reloaded.signaling_room_password, password);
         assert_ne!(initial.sync_room, reloaded.sync_room);
@@ -42509,11 +42545,15 @@ pub(super) mod tests {
         )?;
         fs::write(
             dashboard_dir.join("semantic_graph_nodes.csv"),
-            format!("research_run_id,research_command_id,node_id,label\n{lineage},node-1,Bearing load\n"),
+            format!(
+                "research_run_id,research_command_id,node_id,label\n{lineage},node-1,Bearing load\n"
+            ),
         )?;
         fs::write(
             dashboard_dir.join("semantic_graph_edges.csv"),
-            format!("research_run_id,research_command_id,edge_id,relation\n{lineage},edge-1,measured_by\n"),
+            format!(
+                "research_run_id,research_command_id,edge_id,relation\n{lineage},edge-1,measured_by\n"
+            ),
         )?;
         fs::write(
             dashboard_dir.join("source_catalog.csv"),

@@ -307,6 +307,33 @@ pub fn write_secret_record(
     put_secret(root, scope, name, value, description, metadata)
 }
 
+/// Read a protected record's content version without decrypting it or repairing
+/// the store. File length and modification time alone can miss a committed
+/// credential change. This private digest is not an authorization receipt.
+pub(crate) fn secret_record_content_version(
+    root: &Path,
+    scope: &str,
+    name: &str,
+) -> Result<Option<String>> {
+    let path = secret_store_path(root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(persistence::sqlite_busy_timeout_duration())?;
+    let protected_record: Option<(String, String)> =
+        rusqlite::OptionalExtension::optional(conn.query_row(
+            "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records
+             WHERE scope = ?1 AND secret_name = ?2",
+            params![scope, name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ))?;
+    Ok(protected_record.map(|(nonce, ciphertext)| stable_digest(&format!("{nonce}:{ciphertext}"))))
+}
+
 pub fn delete_secret_record(root: &Path, scope: &str, name: &str) -> Result<()> {
     delete_secret(root, scope, name)
 }
