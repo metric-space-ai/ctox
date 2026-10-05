@@ -136,6 +136,26 @@ async fn readiness_retains_registered_process_effect_and_denies_takeover() {
             expected: imported.ownership.clone(),
             checkpoint_digest: imported.checkpoint_digest.clone(),
             owner: 2,
+            // Deliberately untrusted: this component fixture must be refused
+            // by the process fence before any policy evidence is consumed.
+            resume: crate::contracts::SessionHandoffPermit {
+                version: crate::contracts::CTOX_SYNC_SESSION_HANDOFF_PERMIT_VERSION,
+                binding_digest: "b".repeat(64),
+                phase: crate::contracts::SessionHandoffPhase::Resume,
+                audience: imported.spec.scope_id.clone(),
+                nonce: id.into(),
+                job_id: imported.spec.job_id.clone(),
+                session_id: imported.spec.session_id.clone(),
+                scope_id: imported.spec.scope_id.clone(),
+                checkpoint_digest: imported.checkpoint_digest.clone(),
+                checkpoint_sequence: 4,
+                ownership_generation: imported.ownership.generation,
+                principal_epoch: 0,
+                binding_revision: 1,
+                issued_at_ms: 0,
+                expires_at_ms: 1,
+                signature: String::new(),
+            },
         },
     };
     let blocked = f
@@ -678,6 +698,7 @@ fn fixture() -> Fixture {
             sequence: 4,
             replicas: BTreeSet::from([1, 2]),
             receipts: vec![],
+            disclosure: None,
         }),
         checkpoint_requires_refresh: false,
         pending_effects: BTreeSet::new(),

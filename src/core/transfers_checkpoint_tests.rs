@@ -383,6 +383,8 @@ impl StageBoundary {
                     sequence: 4,
                     replicas: BTreeSet::from([1, 2]),
                     receipts: vec![],
+                    // Legacy component state cannot authorize native takeover.
+                    disclosure: None,
                 }),
                 checkpoint_requires_refresh: false,
                 pending_effects: BTreeSet::new(),

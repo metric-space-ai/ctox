@@ -314,6 +314,27 @@ jobs:
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox --jobs 2 -- mission::channels::tests::business_command mission::channels::tests::business_control incomplete_plan command_writeback_tests direct_plan_v2 --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
+          for regression in \
+            admitted_command_projects_rxdb_identity_without_regressing_advanced_status \
+            command_only_outbox_delivers_newer_result_after_queue_stamped_admission \
+            push_collection_records_rebuilds_authoritative_queue_fields_from_snapshot \
+            push_collection_records_does_not_restore_cleared_authoritative_fields \
+            refresh_queue_projection_keeps_canonical_and_compatibility_in_one_transaction \
+            cancelled_record_command_overwrites_running_and_blocked_compatibility \
+            stale_accepted_record_command_does_not_overwrite_running_or_cancelled_compatibility \
+            delayed_accepted_outbox_does_not_regress_terminal_compatibility_status
+          do
+            regression_log="$RUNNER_TEMP/ctox-host-proof/$regression.log"
+            cargo test --locked --bin ctox --jobs 2 -- \
+              "business_os::store::tests::$regression" --exact --test-threads=2 \
+              | tee "$regression_log"
+            python3 - "$regression_log" <<'PY'
+          import pathlib
+          import sys
+          result = pathlib.Path(sys.argv[1]).read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in result, result
+          PY
+          done
       - name: Knowledge Parquet snapshot regressions
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
@@ -350,7 +371,6 @@ jobs:
             first_party_catalog_apps_get_admin_grants_for_declared_collections_only; do
             grep -F "test business_os::store::tests::$regression ... ok" "$RUNNER_TEMP/ctox-host-proof/capability-grant-tests.log"
           done
-
       - name: Preserve native schema migration history and deletion markers
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
@@ -365,6 +385,23 @@ jobs:
             business_os::rxdb_peer::tests::runtime_empty_legacy_table \
             business_os::rxdb_peer::tests::rxdb_schema_drift_repair \
             --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/schema-migration-tests.log"
+          # build-pi-sidecar is the existing compile prerequisite for the
+          # include_bytes! sidecar bundle. Do not invent a stub dist/ctox-pi-sidecar.mjs.
+          cargo test --locked --bin ctox -- business_os::populated_store_recovery --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-recovery-tests.log"
+      - name: Prove populated historical store migration and recovery
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test src/core/rxdb/tools/populated_store_recovery_acceptance.test.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-admission-oracle.log"
+          POPULATED_STORE_EVIDENCE_DIR="$RUNNER_TEMP/ctox-host-proof" \
+            POPULATED_STORE_ROOT="$RUNNER_TEMP/ctox-host-fixtures/populated-store" \
+            CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            node src/core/rxdb/tools/populated_store_recovery_acceptance.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-recovery.jsonl"
       - name: Verify fresh secret reads and bounded Core reader reuse
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
@@ -373,6 +410,24 @@ jobs:
           cargo test --locked --bin ctox -- persistence::tests secrets::tests business_os::domain_effect::tests business_os::rxdb_peer_domain_recovery::tests business_os::rxdb_peer_intake::tests business_os::store::peer_revocations::tests business_os::store::tests::peer_revocation_registry_round_trips business_os::rxdb_peer::peer_admission_tests business_os::rxdb_peer_business_data::tests \
             --nocapture --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/secret-reader-tests.log"
+      - name: Verify native handoff grants and atomic migration
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(
+            business_os::store_policy::handoff_grant_scope_tests::handoff_grants_require_named_actor_and_exact_binding_scope
+            business_os::store::grant_scope_migration_tests::grant_scope_migration_rolls_back_and_retries_inside_transaction
+            business_os::session_handoff_gate::tests::authorized_disclose_mints_a_verifiable_current_permit
+            business_os::session_handoff_gate::tests::unknown_or_revoked_binding_denies
+            business_os::session_handoff_gate::tests::wrong_instance_or_missing_grant_denies
+            business_os::session_handoff_gate::tests::tampered_request_fields_deny_as_binding_mismatch
+          )
+          for test in "${tests[@]}"; do
+            log="$RUNNER_TEMP/ctox-host-proof/${test##*::}.log"
+            cargo test --locked --jobs 2 --bin ctox "$test" -- --exact --test-threads=2 | tee "$log"
+            python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(); assert re.search(r"test result: ok\. 1 passed; 0 failed; 0 ignored;", text), "required exact test did not run"' "$log"
+          done
       - name: Context prompt first paint and authorized native command
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10

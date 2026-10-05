@@ -222,6 +222,55 @@ disagree, the code wins — and this document should be fixed.
 
 [Domain application receipts and command recovery](domain-effect-recovery.md) define the native boundary for a committed domain mutation whose RxDB/result delivery failed. Core remains the lifecycle owner; domain receipts are atomic application evidence, not another outbox.
 
+### Session handoff policy candidate — not production acceptance
+
+The [production integration boundary](ctox-sync-handoff-integration.md)
+traces the existing Workjet context handoff and native library seams, identifies
+their missing callers, and defines the required native lifecycle and evidence.
+
+The source work for [native handoff authorization (#183)](https://github.com/metric-space-ai/ctox/issues/183)
+introduces separate disclose, receive and execute permissions. Roles alone do
+not grant them. The explicit-grant evaluator requires a named actor and an exact,
+nonempty `session_handoff` scope. This is a grant lookup precondition, not proof
+that the actor was authenticated or that a binding is current.
+
+`src/core/sync/src/authority/handoff.rs` verifies each gate result against the
+independently enrolled issuer, signature, audience, fresh nonce, validity window,
+phase, binding digest, job/session/scope, checkpoint and ownership generation.
+Revalidation clears prior evidence before fallible work and awaits. Its permit
+accessor exposes audit evidence only; every protected chunk requires a new
+decision. The gate interface does not itself move or fence checkpoint bytes.
+
+The quorum state retains the source disclosure permit with a protected
+checkpoint and requires the target resume permit to name the same binding
+digest. This preserves digest continuity through state serialization. It does
+not prove that an issuer consulted current policy, resolve configured workspace
+or provider-account entitlements, or independently establish the initial binding.
+
+Existing grant-table migration rewrites the scope CHECK constraint and restores
+capability-epoch triggers in one savepoint. Copying grants does not fire those
+triggers; migration failure rolls back the rewrite, including dropped triggers.
+An enclosing caller transaction remains owned by the caller.
+
+Legacy quorum snapshots lacking disclosure evidence deserialize but deny
+takeover. The current owner can explicitly reauthorize the identical checkpoint
+with a fresh disclosure permit and identical sequence, digest, replicas and copy
+receipts. This one-time upgrade neither advances ownership nor changes checkpoint
+contents. Afterward equal-sequence replacement remains forbidden. Previously
+denied request IDs stay denied; a new takeover needs a new request and permit.
+This path requires the original owner; unavailable-owner recovery is unresolved.
+No automatic backfill or inferred permission is authorized.
+
+Cutover remains blocked on the native policy adapter, authenticated transport
+wiring, authoritative binding/account/workspace resolution, post-await revocation
+fencing, and actual checkpoint transfer/resume integration. Added grant,
+migration, permit, cancellation and restored-state regressions are source-only
+and have not been compiled or executed. State serialization tests are not Raft
+disk-snapshot restart tests. Acceptance still requires the real native policy
+store and authenticated transport, pre-byte and mid-transfer revocation tests,
+restoration of populated stores, independent-host durability, and real provider
+continuation. No production-readiness or rollout claim follows from these edits.
+
 ### Auth-assist command recovery
 
 `web_stack.auth_assist.request` represents an outstanding human login request.
@@ -1799,7 +1848,7 @@ that fails on the pre-fix code.
 | **The desktop-file idle scan must not re-check every chunk of a verified generation.** Newly written or once-verified eager file docs carry `chunk_count` and `generation_verified_at_ms`; unchanged rescans use that marker instead of rebuilding the expected chunk-id list every 15 s. | Materialised large files stayed sticky `available`, but the idle scan still checked every expected chunk id on every pass. Large files therefore created periodic CPU spikes even when no file changed. | `rxdb_peer.rs::desktop_file_generation_verified_by_metadata` / `mark_desktop_file_chunk_generation_verified` | `materialized_large_file_survives_lazy_rescan`; targeted `rxdb_peer.rs` tests |
 | **Active-collection gating must never lose events permanently.** Three sub-rules: (a) a peer that has never reported an active set is fail-open (all relays delivered) until its first report; (b) applying a new active set pushes one resync master-change per re-activated collection (closes the send→apply transit window); (c) the browser runs one checkpoint pull per newly-activated collection on every registry change. | Relays for "inactive" collections are dropped and browser pulls are purely event-driven — each hole left a collection permanently stale (viewer-restart soak mode: the browser file doc stayed `lazy` forever while the native doc was `available`). | `connection_handler_rs.rs::is_collection_active_for_peer` / `apply_active_collections` (+ the resync push in its message loop); relay drop point in `index_mod.rs`; `replication-webrtc.mjs` registry subscription | gating tests in `connection_handler_rs.rs`; `active-collections-catchup-smoke` (browser); viewer-restart soak mode |
 | **The multiplex room handshake carries per-collection checkpoints** (`collectionCheckpoints`, mirroring `collectionSchemas`; key absent for single-collection rooms). | Collections deriving their protocol from the room handshake advertised the REPRESENTATIVE collection's checkpoint epoch — wrong-collection checkpoint evidence after every native restart. | `index_mod.rs::collection_checkpoints_payload`; consumed by `replication-webrtc.mjs::remoteProtocolForCollection` | `handshake_payload_omits_collection_schemas_when_none` |
-| **Schema cleanup must itself preserve source rows.** Startup and the forced CLI repair use the same copy/verify implementation. Cleanup reserves a SQLite write transaction before discovering old tables, resolves every declared migration step, copies and verifies all populated sources, and only then drops their triggers/tables in that transaction. Active schema metadata and `--force` are not preservation receipts. Equal clocks require equal revision, deletion marker and migrated document; missing steps, reverse migrations and divergent equal-clock rows retain the source and roll back the cleanup. Startup rejects cleanup failure. The earlier copy pass remains idempotent; cleanup rechecks rows written after it. Transactions cover one collection's cleanup, not all collections or stores, and do not provide an immutable backup or recovery rehearsal. | Metadata-only cleanup could delete a unique old command; the former forced-repair regression even seeded such a row without asserting its preservation. A successful earlier copy also did not protect a subsequent source write. | `rxdb_peer.rs::copy_and_verify_native_rxdb_version_table`, `repair_rxdb_collection_schema_version_drift_at_version_with_connection` | `native_schema_migration_cleanup_conflict_rolls_back_copy_and_preserves_source`, `native_schema_migration_cleanup_rechecks_rows_written_after_copy`, `rxdb_schema_drift_repair_preserves_source_rows_before_dropping_stale_tables`, plus existing additive/identity/missing-strategy regressions. Native execution of the new cleanup cases remains pending. |
+| **Schema cleanup must itself preserve source rows.** Startup and the forced CLI repair use the same copy/verify implementation. Cleanup reserves a SQLite write transaction before discovering old tables, resolves every declared migration step, copies and verifies all populated sources, and only then drops their triggers/tables in that transaction. Active schema metadata and `--force` are not preservation receipts. Equal clocks require equal revision, deletion marker and migrated document; missing steps, reverse migrations and divergent equal-clock rows retain the source and roll back the cleanup. Startup rejects cleanup failure. The earlier copy pass remains idempotent; cleanup rechecks rows written after it. Transactions cover one collection's cleanup, not all collections or stores. Whole-store recovery is a separate write-once rehearsal: a synthetic supported-historical fixture, an immutable `VACUUM INTO` backup with pinned provenance, a cutover receipt recorded after verified migrate+repair, and fail-closed restore after accepted post-cutover writes or missing/mismatched provenance. Cleanup transactions themselves are not that backup. | Metadata-only cleanup could delete a unique old command; the former forced-repair regression even seeded such a row without asserting its preservation. A successful earlier copy also did not protect a subsequent source write. | `rxdb_peer.rs::copy_and_verify_native_rxdb_version_table`, `repair_rxdb_collection_schema_version_drift_at_version_with_connection`, `populated_store_recovery.rs` | `native_schema_migration_cleanup_conflict_rolls_back_copy_and_preserves_source`, `native_schema_migration_cleanup_rechecks_rows_written_after_copy`, `rxdb_schema_drift_repair_preserves_source_rows_before_dropping_stale_tables`, `business_os::populated_store_recovery`, plus existing additive/identity/missing-strategy regressions. |
 | **Runtime app migrations are declared in JSON and enforced natively.** The browser side mirrors declarations (guarded for parity by `assert-declarative-migrations.mjs`) but execution is native-only. Every runtime collection with `version > 0` must provide every intermediate `migration_strategies.<collection>.<targetVersion>` entry. The native peer supports the same `set_from_first_truthy` and `set_boolean` operations as the browser plus identity migrations (`operations: []`). Missing strategies with persisted source rows abort before cleanup. | Browser-only `schema.js` functions left the native v0 store stranded or tempted operators into destructive same-version cleanup; schema changes made in place could also produce DB6 forever. | `shared/declarative-migrations.js`, `module_static_check.mjs`, `rxdb_peer.rs::migrate_additive_native_rxdb_collection_versions` | `runtime_installed_declarative_migration_is_discovered_and_copied`, `native_declarative_migration_matches_browser_operations`, `runtime_migration_without_strategy_retains_old_table_and_fails_closed` |
 | **A terminal `completed` command ack without `task_id` is success.** Control commands (`ctox.file.materialize`, `ctox.module.*`, …) are executed directly and intentionally never get a queue-task projection. | The command bus waited 45 s for a task that never comes — every control command dispatched through it failed. | `command-bus.js::waitForAuthoritativeQueueProjection` | `command-bus-projection-smoke` |
 | **The 410 data-plane gate has an explicit control-plane allowlist** (subscription auth, CTOX release check/apply, `sync/native-peer/restart`). Control routes carry no Business OS records; CTOX release actions are admin-gated and only read release metadata or launch the existing installer, and the peer-restart route additionally answers 403 unless `CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS` is set. This is NOT a precedent for HTTP data routes. | The blanket 410 also killed the peer-lifecycle hook the rollover soak mode uses. | `server.rs::is_business_os_control_plane_path` | rollover soak mode |
