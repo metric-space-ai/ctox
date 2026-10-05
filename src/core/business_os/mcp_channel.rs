@@ -4901,13 +4901,15 @@ pub fn propose_action(
     let title = optional_string_arg(arguments, "title").unwrap_or_else(|| action.title.clone());
     let objective =
         optional_string_arg(arguments, "objective").unwrap_or_else(|| action.description.clone());
-    let mut payload = normalize_native_mcp_action_payload(
-        action_id,
-        arguments
-            .get("payload")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
-    );
+    let raw_payload = arguments
+        .get("payload")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if action.action_id == "web_stack.person_research" {
+        // Validate the caller's types before transport compatibility coercion.
+        validate_person_research_action_arguments(arguments, &raw_payload)?;
+    }
+    let mut payload = normalize_native_mcp_action_payload(action_id, raw_payload);
     if matches!(action_id, "ctox.coding.models" | "ctox.coding.turn") {
         anyhow::ensure!(
             record_id.is_none(),
@@ -7061,6 +7063,13 @@ fn context_from_arguments_with_trusted_gateway_context(
             // allowed action as the originating user's approval; the scope
             // guard below still rejects every other module or operation.
             McpConfirmationState::Approved
+        } else if arguments
+            .pointer("/_context/confirmation_state")
+            .and_then(Value::as_str)
+            == Some("rejected")
+        {
+            // Caller input may restrict approval, never mint trusted approval.
+            McpConfirmationState::Rejected
         } else {
             match string_field(context, "confirmation_state")
                 .unwrap_or_else(|| "not_required".to_string())
@@ -8582,6 +8591,18 @@ mod tests {
         assert_eq!(
             proposal_context.confirmation_state,
             McpConfirmationState::Rejected
+        );
+
+        let mut caller_approved = arguments.clone();
+        caller_approved["_context"]["confirmation_state"] = serde_json::json!("approved");
+        let proposal_context = context_from_arguments_with_trusted_gateway_context(
+            "business_os.propose_action",
+            &caller_approved,
+            Some(&trusted),
+        )?;
+        assert_eq!(
+            proposal_context.confirmation_state,
+            McpConfirmationState::NotRequired
         );
 
         let wrong_operation = serde_json::json!({
@@ -11580,7 +11601,7 @@ mod tests {
         let first = call_tool(root, "business_os.modify_app", arguments.clone())?;
         let command_id = first["command_id"].as_str().context("command id")?;
         let task_id = first["task_id"].as_str().context("task id")?;
-        let stopped = call_tool(
+        let rejected = call_tool(
             root,
             "business_os.cancel_project_task",
             serde_json::json!({
@@ -11589,8 +11610,42 @@ mod tests {
                 "reason": "Owner cancelled this app modification.",
                 "_context": { "actor": "chatgpt:test-user", "workspace": "test-workspace" }
             }),
+        )
+        .expect_err("the project-only MCP tool must reject an app modification");
+        assert!(rejected
+            .to_string()
+            .contains("native project target command is required"));
+
+        // App cancellation enters through the native command owner/policy gate.
+        let context = test_context("business_os.modify_app");
+        let actor = resolved_mcp_actor_context(root, &context)?;
+        let cancellation_id = "native-stop-cancelled-app-request";
+        let accepted = store::accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": cancellation_id,
+                "command_id": cancellation_id,
+                "module": "ctox",
+                "command_type": "ctox.command.cancel",
+                "payload": {
+                    "target_command_id": command_id,
+                    "reason": "Owner cancelled this app modification."
+                },
+                "client_context": {
+                    "actor": actor,
+                    "channel": context.channel,
+                    "surface": context.surface,
+                    "workspace": context.workspace,
+                    "request_id": cancellation_id
+                }
+            }),
         )?;
-        assert_eq!(stopped["target_status"], "cancelled");
+        assert_ne!(accepted.get("ok").and_then(Value::as_bool), Some(false));
+        let cancellation =
+            crate::mission::channels::business_command_projection(root, cancellation_id)?;
+        assert_eq!(cancellation["status"], "completed");
+        assert_eq!(cancellation["result"]["target_command_id"], command_id);
+        assert_eq!(cancellation["result"]["execution_task_id"], task_id);
         let before = crate::mission::channels::business_command_projection(root, command_id)?;
         assert_eq!(before["status"], "cancelled");
         arguments["_context"]["request_id"] = serde_json::json!("http-retry");
@@ -12636,10 +12691,13 @@ mod tests {
                         &id,
                     )?;
                 }
+                // Native policy exposes harness status to users; grants still
+                // cannot open protected event/run streams or any writes.
+                let readable = role != "user" || collection == "ctox_harness_status";
                 assert_eq!(
                     business_os_mcp_collection_read_decision(root.path(), &context, collection)?
                         .allowed,
-                    role != "user"
+                    readable
                 );
                 assert_eq!(
                     business_os_mcp_record_read_decision(
@@ -12649,7 +12707,7 @@ mod tests {
                         "fixture"
                     )?
                     .allowed,
-                    role != "user"
+                    readable
                 );
                 assert!(
                     !business_os_mcp_collection_write_decision(root.path(), &context, collection)?
@@ -12982,6 +13040,32 @@ mod tests {
             &["team_records"],
             None,
         )?;
+        write_installed_module(
+            root,
+            "unreleased-one",
+            "Unreleased One",
+            "1.0.0",
+            &["unreleased_records"],
+            None,
+        )?;
+        seed_default_mcp_admin(root)?;
+        let conn = store::open_store(root)?;
+        conn.execute(
+            "INSERT INTO business_module_releases
+                (version_id, module_id, version, status, manifest_json, snapshot_json,
+                 created_by, created_at_ms, notes)
+             VALUES (?1, ?2, 1, 'released', ?3, ?4, ?5, ?6, '')",
+            params![
+                "release-team-one",
+                "team-one",
+                serde_json::json!({"id": "team-one", "version": "1.0.0"}).to_string(),
+                serde_json::json!({"target_version": "1.0.0", "release_channel": "team"})
+                    .to_string(),
+                "chatgpt:test-user",
+                now_ms() as i64
+            ],
+        )?;
+        drop(conn);
         seed_business_user(root, "chatgpt:reader", "team")?;
         seed_business_permission_grant(
             root,
@@ -13027,7 +13111,11 @@ mod tests {
         );
         assert!(
             ids.contains(&"team-one".to_string()),
-            "1.0.0 app should be team-visible by default"
+            "a native released app should be team-visible"
+        );
+        assert!(
+            !ids.contains(&"unreleased-one".to_string()),
+            "a version string must not publish an app without a native release"
         );
         assert!(
             !ids.contains(&"private-zero".to_string()),
@@ -14080,6 +14168,33 @@ mod tests {
             .context("typed payload validation error")?;
         assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
         assert_eq!(typed.field.as_deref(), Some("payload.fields"));
+
+        for (field, invalid_value) in [
+            ("include_private", serde_json::json!({"item": ["email"]})),
+            ("auto_browser_capture", serde_json::json!("true")),
+        ] {
+            let mut invalid_payload = payload.clone();
+            invalid_payload[field] = invalid_value;
+            let error = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({
+                    "record_id": "lead_1",
+                    "payload": invalid_payload
+                }),
+            )
+            .expect_err("each transport-coerced field must be rejected before enqueue");
+            let typed = error
+                .downcast_ref::<BusinessOsMcpError>()
+                .context("typed payload validation error")?;
+            assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
+            assert_eq!(
+                typed.field.as_deref(),
+                Some(format!("payload.{field}").as_str())
+            );
+        }
 
         let execute_tool = tool_descriptors()
             .into_iter()

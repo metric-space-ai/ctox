@@ -377,6 +377,25 @@ idempotent reconciliation, current actors across reused connections,
 newly installed catalog grants and server-owned
 write exclusions before measuring the unchanged command latency budget.
 
+## Native MCP policy and command boundaries
+
+The MCP channel validates person-research payload types before compatibility
+normalization. Nested array wrappers and string booleans do not satisfy the typed
+contract. Trusted gateway identity and approval remain server-owned; a caller
+may reject a proposal but cannot supply its trusted approval. A signed internal
+execution session retains the approval for its exact persisted action scope.
+
+Installed-app visibility follows the native release projection. A valid
+`1.0.0` manifest without a stored released version remains private; a native
+team release makes the app team-visible. An AppsView preview grant may expose
+a preview app, while DataRead alone cannot publish a private app.
+
+The native cockpit policy exposes harness status and Crew members to users,
+while keeping run/event streams and learnings protected. Module, collection
+and record grants cannot bypass that boundary or authorize cockpit writes.
+The MCP project cancellation tool accepts only its owned native project targets;
+app cancellation uses the native command intake and its owner/policy checks.
+
 ## Shell artifact boundary
 
 The native instance selects and verifies its signed Business OS release.
