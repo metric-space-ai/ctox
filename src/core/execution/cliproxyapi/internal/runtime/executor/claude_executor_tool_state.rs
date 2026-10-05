@@ -32,7 +32,7 @@ impl ClaudeOAuthToolAliasStore {
             return Ok(None);
         }
         let tools = gjson::get(document, "tools");
-        if tools.exists() && tools.is_array() && !tools.array().is_empty() {
+        if tools.exists() && tools.kind() == gjson::Kind::Array && !tools.array().is_empty() {
             return Ok(None);
         }
         let state = self

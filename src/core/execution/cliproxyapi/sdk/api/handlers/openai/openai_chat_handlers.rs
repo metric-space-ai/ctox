@@ -11,7 +11,7 @@ use crate::internal::translator::codex::openai::chat_completions::{
     convert_openai_chat_request_to_codex, CodexToChatStreamState,
 };
 use crate::internal::translator::common::{SseDecoder, SseEvent};
-use crate::internal::translator::openai::openai::responses::convert_openai_responses_request_to_openai_chat_completions;
+use crate::internal::translator::openai::passthrough::responses::convert_openai_responses_request_to_openai_chat_completions;
 
 use super::openai_handlers::{
     convert_chat_completions_response_to_completions,

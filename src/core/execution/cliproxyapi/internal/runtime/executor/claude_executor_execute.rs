@@ -2351,7 +2351,7 @@ mod tests {
             unary.outcome().response().body()
         ));
         let stream = pool
-            .execute_stream(target(), "sonnet", alias_continuation_body())
+            .execute_stream_configured("sonnet", alias_continuation_body())
             .await
             .unwrap();
         assert_eq!(stream.selected_auth_id(), "account-a");

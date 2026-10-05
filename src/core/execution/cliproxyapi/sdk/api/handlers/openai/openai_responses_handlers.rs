@@ -406,6 +406,76 @@ impl OpenAiResponsesRouteHandler for OpenAiResponsesClaudeHandler {
     }
 }
 
+impl OpenAiResponsesRouteHandler for OpenAiResponsesAntigravityHandler {
+    fn handle_provider_route<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("antigravity")) {
+                return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route(body).await
+        })
+    }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("antigravity")) {
+                return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route_with_headers(body, headers).await
+        })
+    }
+}
+
+impl OpenAiResponsesRouteHandler for OpenAiResponsesCodexHandler {
+    fn handle_provider_route<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("codex")) {
+                return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route(body).await
+        })
+    }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("codex")) {
+                return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route_with_headers(body, headers).await
+        })
+    }
+}
+
 impl<T> OpenAiResponsesRouteHandler for Arc<T>
 where
     T: OpenAiResponsesRouteHandler + ?Sized,
