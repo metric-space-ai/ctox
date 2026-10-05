@@ -8,18 +8,18 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::claude_executor::{
-    parse_claude_stream_usage_line, ClaudeCredentialMode, ClaudeDeviceProfile,
-    ClaudeMessagesRequest, ClaudeMessagesResponse, ClaudeMessagesStreamResponse,
-    ClaudeMessagesStreamingTransport, ClaudeMessagesTransport, ClaudeMessagesTransportFailure,
-    ClaudeTargetError, ClaudeUpstreamTarget, ClaudeUsageSink,
+    ClaudeCredentialMode, ClaudeDeviceProfile, ClaudeMessagesRequest, ClaudeMessagesResponse,
+    ClaudeMessagesStreamResponse, ClaudeMessagesStreamingTransport, ClaudeMessagesTransport,
+    ClaudeMessagesTransportFailure, ClaudeTargetError, ClaudeUpstreamTarget, ClaudeUsageSink,
 };
 use super::claude_executor_auth::{
     ClaudePrepareAuthError, ClaudeRequestAuthPreparer, ClaudeSubscriptionAuth,
     ClaudeSubscriptionAuthError,
 };
 use super::claude_executor_buffered::{
-    claude_buffered_response_message_id, parse_claude_buffered_response_usage,
-    prepare_claude_buffered_response,
+    claude_buffered_response_message_id, claude_usage_from_stream_buffer,
+    parse_claude_buffered_response_usage, prepare_claude_buffered_response,
+    restore_claude_stream_tool_names,
 };
 use super::claude_executor_cloaking::{
     try_apply_claude_cloaking, ClaudeCallerSystemBlockError, ClaudeCloakPolicy,
@@ -31,7 +31,7 @@ use super::claude_executor_diagnostics::{
 };
 use super::claude_executor_request::{
     claude_request_uses_fast_mode, claude_requested_betas, extract_and_remove_claude_betas,
-    prepare_claude_upstream_body_with_identity, restore_claude_oauth_tool_names_from_stream_line,
+    prepare_claude_upstream_body_with_identity,
 };
 use super::claude_executor_tokens::prepare_claude_first_party_token_count_body;
 use super::claude_executor_tool_state::{
@@ -40,9 +40,10 @@ use super::claude_executor_tool_state::{
 use super::helps::{
     apply_claude_credential_metadata, claude_agent_session_uuid_for_request,
     detect_claude_code_request, normalize_codex_tool_integer_types_for_executor,
-    ClaudeCodeRequestDetection, ClaudeCredentialIdentityError,
+    observe_plugin_executor_stream, ClaudeCodeRequestDetection, ClaudeCredentialIdentityError,
     ClaudeDeviceProfileCache as ClaudeHelperDeviceProfileCache, ClaudeHeaderDefaults,
     ClaudeIdentityKvStore, ClaudeIdentityStoreError, SessionIdCache, SessionIdCacheError,
+    StreamUsageBuffer,
 };
 use crate::internal::registry::lookup_model_info;
 use crate::sdk::cliproxy::auth::{
@@ -1181,6 +1182,9 @@ impl ClaudeStreamExecutionOutcome {
             usage_sink: self.usage_sink,
             stream_line_buffer: Vec::new(),
             stream_eof: false,
+            pending_transport_failure: None,
+            usage_buffer: StreamUsageBuffer::default(),
+            usage_published: false,
             diagnostics_message_id: String::new(),
             diagnostics_completed: false,
             diagnostics_committed: false,
@@ -1231,6 +1235,9 @@ pub struct ClaudeTrackedMessagesStreamResponse {
     tool_name_reverse_map: HashMap<String, String>,
     stream_line_buffer: Vec<u8>,
     stream_eof: bool,
+    pending_transport_failure: Option<ClaudeMessagesTransportFailure>,
+    usage_buffer: StreamUsageBuffer,
+    usage_published: bool,
     usage_sink: Option<Arc<dyn ClaudeUsageSink>>,
     diagnostics_state: ClaudeDiagnosticsRequestState,
     diagnostics_message_id: String,
@@ -1247,47 +1254,61 @@ impl ClaudeTrackedMessagesStreamResponse {
 
     pub async fn next_chunk(&mut self) -> Option<Result<Vec<u8>, ClaudeMessagesTransportFailure>> {
         loop {
+            if self.diagnostics_completed {
+                self.stream_line_buffer.clear();
+                self.pending_transport_failure = None;
+                self.stream_eof = true;
+                self.finish_stream_usage();
+                return None;
+            }
             if let Some(boundary) = complete_sse_frame_len(&self.stream_line_buffer) {
                 let frame: Vec<u8> = self.stream_line_buffer.drain(..boundary).collect();
-                self.publish_stream_usage(&frame);
+                observe_plugin_executor_stream("claude", &frame, &mut self.usage_buffer);
                 self.observe_diagnostics(&frame);
-                return Some(Ok(restore_claude_oauth_tool_names_from_stream_line(
+                return Some(Ok(restore_claude_stream_tool_names(
                     &frame,
-                    "",
-                    false,
                     &self.tool_name_reverse_map,
                 )));
             }
             if self.stream_eof {
                 if self.stream_line_buffer.is_empty() {
+                    self.finish_stream_usage();
+                    if let Some(error) = self.pending_transport_failure.take() {
+                        if error != ClaudeMessagesTransportFailure::Cancelled {
+                            self.record_terminal_failure().await;
+                        }
+                        return Some(Err(error));
+                    }
                     return None;
                 }
                 let line = std::mem::take(&mut self.stream_line_buffer);
-                self.publish_stream_usage(&line);
+                observe_plugin_executor_stream("claude", &line, &mut self.usage_buffer);
                 self.observe_diagnostics(&line);
-                return Some(Ok(restore_claude_oauth_tool_names_from_stream_line(
+                return Some(Ok(restore_claude_stream_tool_names(
                     &line,
-                    "",
-                    false,
                     &self.tool_name_reverse_map,
                 )));
             }
             match self.response.next_chunk().await {
                 Some(Ok(chunk)) => self.stream_line_buffer.extend_from_slice(&chunk),
                 Some(Err(error)) => {
-                    if error != ClaudeMessagesTransportFailure::Cancelled {
-                        self.record_terminal_failure().await;
-                    }
-                    return Some(Err(error));
+                    self.stream_eof = true;
+                    self.pending_transport_failure = Some(error);
                 }
                 None => self.stream_eof = true,
             }
         }
     }
 
-    fn publish_stream_usage(&self, line: &[u8]) {
-        if let (Some(sink), Some(usage)) = (&self.usage_sink, parse_claude_stream_usage_line(line))
-        {
+    fn finish_stream_usage(&mut self) {
+        if self.usage_published {
+            return;
+        }
+        self.usage_published = true;
+        if let (Some(sink), Some(usage)) = (
+            &self.usage_sink,
+            claude_usage_from_stream_buffer(&self.usage_buffer),
+        ) {
             sink.publish(self.model.as_deref(), usage);
         }
     }
@@ -1309,10 +1330,13 @@ impl ClaudeTrackedMessagesStreamResponse {
             );
             self.diagnostics_committed = true;
         }
+        if self.diagnostics_completed {
+            self.finish_stream_usage();
+        }
     }
 
     pub async fn record_terminal_failure(&mut self) {
-        if self.failure_recorded {
+        if self.failure_recorded || self.diagnostics_completed {
             return;
         }
         self.failure_recorded = true;
@@ -1329,6 +1353,19 @@ impl ClaudeTrackedMessagesStreamResponse {
             observed_at_ms: binding.clock.now_ms(),
         };
         let _ = tokio::task::spawn_blocking(move || conductor.record(result)).await;
+    }
+}
+
+impl Drop for ClaudeTrackedMessagesStreamResponse {
+    fn drop(&mut self) {
+        if !self.usage_published {
+            observe_plugin_executor_stream(
+                "claude",
+                &self.stream_line_buffer,
+                &mut self.usage_buffer,
+            );
+        }
+        self.finish_stream_usage();
     }
 }
 
@@ -2558,6 +2595,165 @@ mod tests {
         }
     }
 
+    struct AliasUsageStreamTransport {
+        stopped: bool,
+        terminal_delimited: bool,
+        failure: Option<ClaudeMessagesTransportFailure>,
+    }
+
+    impl ClaudeMessagesStreamingTransport for AliasUsageStreamTransport {
+        fn execute_stream<'a>(
+            &'a self,
+            _: &'a ClaudeMessagesRequest,
+            _: Duration,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            ClaudeMessagesStreamResponse,
+                            ClaudeMessagesTransportFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let (sender, receiver) = mpsc::channel(2);
+                let mut body = alias_buffered_sse_body(self.stopped);
+                if self.stopped && !self.terminal_delimited {
+                    let suffix = b"\n\ndata: [DONE]\n\n";
+                    assert!(body.ends_with(suffix));
+                    body.truncate(body.len() - suffix.len());
+                }
+                sender.try_send(Ok(body)).unwrap();
+                if let Some(error) = self.failure {
+                    sender.try_send(Err(error)).unwrap();
+                }
+                drop(sender);
+                Ok(ClaudeMessagesStreamResponse::new(200, None, receiver))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_stream_terminal_usage_and_cache_lane() {
+        for (failure, terminal_delimited) in [
+            (ClaudeMessagesTransportFailure::Timeout, true),
+            (ClaudeMessagesTransportFailure::Cancelled, true),
+            (ClaudeMessagesTransportFailure::Protocol, false),
+        ] {
+            let transport = thread_fixture_transport(vec![200], &alias_response_body());
+            let usage = Arc::new(BufferedAliasUsageSink::default());
+            let cooldowns = Arc::new(MemoryCooldownStore::default());
+            let account = executor(transport.clone())
+                .with_usage_sink(usage.clone())
+                .with_account_state_clock(
+                    "account-a",
+                    Arc::new(CooldownConductor::new(cooldowns.clone())),
+                    Arc::new(FixedAccountClock),
+                )
+                .unwrap()
+                .with_stream_transport(Arc::new(AliasUsageStreamTransport {
+                    stopped: true,
+                    terminal_delimited,
+                    failure: Some(failure),
+                }));
+            let outcome = account
+                .execute_stream_for_model(target(), Some("sonnet"), alias_create_body())
+                .await
+                .unwrap();
+            let previous_cooldowns = cooldowns.0.lock().unwrap().clone();
+            let mut stream = outcome.into_response();
+            let mut restored_name = false;
+            while let Some(frame) = stream.next_chunk().await {
+                let frame = std::str::from_utf8(frame.as_ref().unwrap()).unwrap();
+                restored_name |= frame.contains("\"name\":\"Read\"");
+            }
+            assert!(
+                restored_name,
+                "event-prefixed tool frames restore client names"
+            );
+            stream.record_terminal_failure().await;
+            assert!(
+                *cooldowns.0.lock().unwrap() == previous_cooldowns,
+                "transport failure after message_stop cannot cool a completed account"
+            );
+            drop(stream);
+            let measurements = usage.0.lock().unwrap();
+            assert_eq!(measurements.len(), 1);
+            assert_eq!(measurements[0].input_tokens, 7);
+            assert_eq!(measurements[0].output_tokens, 5);
+            assert_eq!(measurements[0].cache_read_tokens, 11);
+            assert_eq!(measurements[0].cache_creation_tokens, 13);
+            assert_eq!(measurements[0].total_tokens, 36);
+            drop(measurements);
+            let next = account
+                .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), false)
+                .await
+                .unwrap();
+            assert_eq!(next.response().status(), 200);
+            assert_eq!(transport.authorizations.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_partial_stream_usage_is_measured_once() {
+        for mode in 0..3 {
+            let usage = Arc::new(BufferedAliasUsageSink::default());
+            let account = executor(thread_fixture_transport(vec![200], &alias_response_body()))
+                .with_usage_sink(usage.clone())
+                .with_stream_transport(Arc::new(AliasUsageStreamTransport {
+                    stopped: false,
+                    terminal_delimited: true,
+                    failure: (mode == 1).then_some(ClaudeMessagesTransportFailure::Cancelled),
+                }));
+            let outcome = account
+                .execute_stream_for_model(target(), Some("sonnet"), alias_create_body())
+                .await
+                .unwrap();
+            let mut stream = outcome.into_response();
+            while let Some(frame) = stream.next_chunk().await {
+                match frame {
+                    Ok(frame) => {
+                        if mode == 2
+                            && std::str::from_utf8(&frame)
+                                .unwrap()
+                                .contains("message_delta")
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        assert_eq!(mode, 1);
+                        assert_eq!(error, ClaudeMessagesTransportFailure::Cancelled);
+                    }
+                }
+            }
+            drop(stream);
+            let measurements = usage.0.lock().unwrap();
+            assert_eq!(
+                measurements.len(),
+                1,
+                "EOF, cancellation and drop publish once"
+            );
+            assert_eq!(measurements[0].input_tokens, 7);
+            assert_eq!(measurements[0].output_tokens, 5);
+            assert_eq!(measurements[0].cache_read_tokens, 11);
+            assert_eq!(measurements[0].cache_creation_tokens, 13);
+            assert_eq!(measurements[0].total_tokens, 36);
+            drop(measurements);
+            let next = account
+                .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), false)
+                .await
+                .unwrap();
+            assert_eq!(
+                next.response().status(),
+                404,
+                "partial usage does not publish continuity"
+            );
+        }
+    }
+
     const THREAD_MISSING_BODY: &[u8] = br#"{"type":"error","error":{"type":"not_found_error","message":"No thread state was found for the requested previous_message_id."}}"#;
 
     struct ThreadBootstrapTransport {
@@ -2889,6 +3085,9 @@ mod tests {
             stream_line_buffer: Vec::new(),
             stream_eof: false,
             usage_sink: None,
+            pending_transport_failure: None,
+            usage_buffer: StreamUsageBuffer::default(),
+            usage_published: false,
             diagnostics_state: ClaudeDiagnosticsRequestState::default(),
             diagnostics_message_id: String::new(),
             diagnostics_completed: false,

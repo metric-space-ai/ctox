@@ -2,6 +2,8 @@
 // Port-Status: candidate
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+use std::collections::HashMap;
+
 use super::claude_executor::{ClaudeMessagesRequest, ClaudeMessagesResponse, ClaudeUsage};
 use super::claude_executor_diagnostics::{
     claude_message_id_from_response, claude_message_id_from_sse,
@@ -47,21 +49,24 @@ pub(super) fn prepare_claude_buffered_response(
             .with_headers(headers)
             .with_retry_after(response.retry_after());
     }
-    response.map_body(|body| {
-        let mut restored = Vec::with_capacity(body.len());
-        for (index, line) in body.split(|byte| *byte == b'\n').enumerate() {
-            if index > 0 {
-                restored.push(b'\n');
-            }
-            restored.extend_from_slice(&restore_claude_oauth_tool_names_from_stream_line(
-                line,
-                "",
-                false,
-                request.tool_name_reverse_map(),
-            ));
+    response
+        .map_body(|body| restore_claude_stream_tool_names(body, request.tool_name_reverse_map()))
+}
+
+pub(super) fn restore_claude_stream_tool_names(
+    data: &[u8],
+    reverse: &HashMap<String, String>,
+) -> Vec<u8> {
+    let mut restored = Vec::with_capacity(data.len());
+    for (index, line) in data.split(|byte| *byte == b'\n').enumerate() {
+        if index > 0 {
+            restored.push(b'\n');
         }
-        restored
-    })
+        restored.extend_from_slice(&restore_claude_oauth_tool_names_from_stream_line(
+            line, "", false, reverse,
+        ));
+    }
+    restored
 }
 
 pub(super) fn claude_buffered_response_message_id(data: &[u8], stream: bool) -> String {
@@ -81,6 +86,10 @@ pub(super) fn parse_claude_buffered_response_usage(
     }
     let mut buffer = StreamUsageBuffer::default();
     observe_plugin_executor_stream("claude", data, &mut buffer);
+    claude_usage_from_stream_buffer(&buffer)
+}
+
+pub(super) fn claude_usage_from_stream_buffer(buffer: &StreamUsageBuffer) -> Option<ClaudeUsage> {
     buffer.detail().map(|detail| ClaudeUsage {
         input_tokens: detail.input_tokens,
         output_tokens: detail.output_tokens,

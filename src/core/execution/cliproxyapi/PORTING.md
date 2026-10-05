@@ -126,6 +126,14 @@
   unchanged event lines and delimiters retain their bytes. Three additional
   actual executor guards cover continuation,401/partial state and error cases;
   current native execution and full parity remain unverified.
+  True streaming now also merges nested message-start and later delta usage,
+  publishing measured fields once on terminal delivery,EOF,cancellation or drop.
+  Event-prefixed frames restore tool names per line rather than as whole JSON.
+  After message_stop the tracked owner stops reading and ignores later transport
+  failures; a final buffered terminal line is processed before a pending failure.
+  Partial measurements never publish continuation aliases. Two actual owner
+  guards and the two current upstream disconnect parent oracles are required;
+  execution and remaining error/publication parity are still open.
   Claude generation and count-token preparation now keep forwarded caller
   blocks top-level when consecutive user turns terminate the message array,
   matching5d890405b59c4b84a2f00ca39c4ee1494ce51a72. Generation retains its
