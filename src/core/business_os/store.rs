@@ -411,7 +411,7 @@ struct RuntimeSettingsCacheStamp {
 type SyncConnectionConfigCacheStamp = (
     BusinessOsFileChangeStamp,
     BusinessOsFileChangeStamp,
-    BusinessOsFileChangeStamp,
+    BusinessOsSqliteStoreStamp,
 );
 
 #[derive(Debug, Clone)]
@@ -2547,7 +2547,7 @@ fn sync_connection_config_cache_stamp(root: &Path) -> SyncConnectionConfigCacheS
     (
         business_os_file_change_stamp(&runtime.join("business-os-instance-id")),
         business_os_file_change_stamp(&runtime.join(BUSINESS_OS_SIGNALING_URLS_FILE)),
-        business_os_file_change_stamp(&runtime.join("ctox-secrets.sqlite3")),
+        business_os_sqlite_store_stamp(&crate::secrets::secret_store_path(root)),
     )
 }
 
@@ -39040,6 +39040,57 @@ pub(super) mod tests {
                 .and_then(Value::as_i64)
                 .unwrap()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn sync_connection_cache_observes_secret_wal_and_rejects_stale_builds() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let initial = sync_config(root)?;
+        let secret_path = crate::secrets::secret_store_path(root);
+        let held_connection = Connection::open(&secret_path)?;
+        held_connection.pragma_update(None, "journal_mode", "WAL")?;
+        let old_connection_config = sync_connection_config(root)?;
+        let source_stamp = sync_connection_config_cache_stamp(root);
+        let before_main = business_os_file_change_stamp(&secret_path);
+        let password = format!("ctox-room-{}", Uuid::new_v4().simple());
+        crate::secrets::write_secret_record(
+            root,
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME,
+            &password,
+            Some("WAL cache regression".to_owned()),
+            serde_json::json!({"source": "native_test"}),
+        )?;
+        assert_eq!(
+            before_main,
+            business_os_file_change_stamp(&secret_path),
+            "the held WAL connection must retain the credential change outside the main file"
+        );
+        assert_ne!(source_stamp, sync_connection_config_cache_stamp(root));
+        let reloaded = sync_config(root)?;
+        assert_eq!(reloaded.signaling_room_password, password);
+        assert_ne!(initial.sync_room, reloaded.sync_room);
+        assert_ne!(
+            initial.signaling_browser_token_hash,
+            reloaded.signaling_browser_token_hash
+        );
+        assert_eq!(
+            initial.signaling_native_token_hash,
+            reloaded.signaling_native_token_hash
+        );
+        assert!(
+            !cache_sync_connection_config_if_unchanged(
+                root,
+                &business_os_root_cache_key(root),
+                source_stamp,
+                &old_connection_config,
+            ),
+            "a pre-write builder must not overwrite the fresh cached configuration"
+        );
+        assert_eq!(sync_config(root)?.signaling_room_password, password);
+        drop(held_connection);
         Ok(())
     }
 

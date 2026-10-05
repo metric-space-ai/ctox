@@ -127,6 +127,17 @@ bridge wrapper itself has no `awaitInSync` method; treating that optional call
 as readiness skipped the replication wait. This repair does not replace the
 native command receipt or the existing owner/status projection checks.
 
+### Sync connection cache and credential rotation
+
+The connection cache stamps the Secret Store's resolved SQLite file and its
+WAL/SHM sidecars. A credential update still in WAL invalidates the old room and
+browser signaling credential without waiting for a checkpoint or the five-minute
+cache TTL. The native-only credential retains its own identity. A configuration
+build that spans a source change is returned without caching; it cannot publish
+an old value tagged with the newer store stamp. Initial store setup follows the
+same rule. This cache coherence rule does not replace native policy or the peer
+lifecycle fence, and installed acceptance remains separate.
+
 ### Native query cache shutdown
 
 Closing a native collection drains its query cache and marks those queries
