@@ -19385,6 +19385,26 @@ fn command_projection_with_native_identity(
         {
             projected["payload"] = serde_json::from_str(payload)
                 .context("invalid native control presentation payload")?;
+            // Use the handler's normalized values for context fields already
+            // present in the public projection. A sanitized native command can
+            // remove private selections as well as secrets from its payload.
+            // Private-only context fields do not become public here.
+            if let Some(context) = projected
+                .get_mut("client_context")
+                .and_then(Value::as_object_mut)
+            {
+                context.retain(|key, value| {
+                    if let Some(safe_value) = native_context
+                        .as_object()
+                        .and_then(|safe_context| safe_context.get(key))
+                    {
+                        *value = safe_value.clone();
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
         }
     }
     // Chat navigation is derived from the immutable command intent and its
