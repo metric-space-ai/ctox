@@ -52,6 +52,25 @@ impl<F: FnMut(&[&str]) -> io::Result<String>> Drop for WatchdogPause<F> {
 }
 
 #[cfg(unix)]
+fn control_exited_unreaped(pid: libc::pid_t) -> io::Result<bool> {
+    // WNOWAIT keeps the leader's PID/session identity pinned until all group
+    // signals are finished. Child::try_wait would release that identity.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    } == -1
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { info.si_pid() } == pid)
+}
+
+#[cfg(unix)]
 pub(super) fn bounded_output(
     command: &mut Command,
     timeout: Duration,
@@ -82,7 +101,7 @@ pub(super) fn bounded_output(
     let mut err = Vec::new();
     let mut stdout_done = false;
     let mut stderr_done = false;
-    let mut status = None;
+    let mut parent_exited = false;
     let mut group_stopped = false;
     const OUTPUT_LIMIT: usize = 256 * 1024;
 
@@ -137,10 +156,10 @@ pub(super) fn bounded_output(
                     }
                 }
             }
-            if status.is_none() {
-                status = child.try_wait()?;
+            if !parent_exited {
+                parent_exited = control_exited_unreaped(group)?;
             }
-            if status.is_some() && !group_stopped {
+            if parent_exited && !group_stopped {
                 // A finished parent may leave a descendant holding a pipe.
                 // Stop only this new session's control group before draining.
                 if unsafe { libc::kill(-group, libc::SIGKILL) } == -1 {
@@ -151,14 +170,8 @@ pub(super) fn bounded_output(
                 }
                 group_stopped = true;
             }
-            if let Some(status) = status {
-                if stdout_done && stderr_done {
-                    return Ok(std::process::Output {
-                        status,
-                        stdout: out,
-                        stderr: err,
-                    });
-                }
+            if parent_exited && stdout_done && stderr_done {
+                return Ok(());
             }
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -167,16 +180,23 @@ pub(super) fn bounded_output(
     drop(stdout);
     drop(stderr);
     if !group_stopped {
-        unsafe {
-            libc::kill(-group, libc::SIGKILL);
+        // Revalidate ownership even on an I/O error. ECHILD means another
+        // waiter released the identity: fail closed without signaling an ID
+        // that may now belong to an unrelated process or group.
+        control_exited_unreaped(group)?;
+        if unsafe { libc::kill(-group, libc::SIGKILL) } == -1 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error);
+            }
         }
-        let _ = child.kill();
     }
+    // All signaling is complete before try_wait can release the pinned leader.
     // Never turn an uncertain cleanup into a successful cutover receipt.
     let cleanup_deadline = Instant::now() + Duration::from_millis(200);
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < cleanup_deadline => {
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -188,14 +208,42 @@ pub(super) fn bounded_output(
             }
             Err(error) => return Err(error),
         }
-    }
-    result
+    };
+    result?;
+    Ok(std::process::Output {
+        status,
+        stdout: out,
+        stderr: err,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[cfg(unix)]
+    #[test]
+    fn watchdog_control_exit_observation_keeps_leader_waitable() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 7"])
+            .spawn()
+            .unwrap();
+        let pid = child.id() as libc::pid_t;
+        let until = Instant::now() + Duration::from_secs(1);
+        while !control_exited_unreaped(pid).unwrap() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // A second observation still finds our waitable child; the first
+        // observation must not have released its identity via waitpid.
+        assert!(control_exited_unreaped(pid).unwrap());
+        assert_eq!(child.wait().unwrap().code(), Some(7));
+        assert_eq!(
+            control_exited_unreaped(pid).unwrap_err().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
 
     #[cfg(unix)]
     #[test]
@@ -238,25 +286,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn watchdog_control_parent_exit_does_not_wait_for_descendant_output() {
-        struct Cleanup {
-            pid_path: std::path::PathBuf,
-        }
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                if let Ok(text) = std::fs::read_to_string(&self.pid_path) {
-                    if let Ok(pid) = text.trim().parse::<libc::pid_t>() {
-                        unsafe {
-                            libc::kill(pid, libc::SIGKILL);
-                        }
-                    }
-                }
-            }
-        }
+        // The descendant has its own finite lifetime even on test failure.
+        // Do not use a PID-only Drop signal after the helper has reaped it.
         let directory = tempfile::tempdir().unwrap();
         let pid_path = directory.path().join("descendant.pid");
-        let _cleanup = Cleanup {
-            pid_path: pid_path.clone(),
-        };
         let started = Instant::now();
         let output = bounded_output(
             Command::new("/bin/sh")
