@@ -480,7 +480,7 @@ impl GeminiExecutor {
         request: ExecutorRequest,
     ) -> Result<ExecutorResponse, PluginExecutionError> {
         reject_compact(&request)?;
-        // ref: gemini_executor.go:144-145,185 @ a4acc9f7
+        // ref: gemini_executor.go:141-142,185 @ a4acc9f7
         // Bind timing before preparation/transport and settle every failed attempt.
         let reporter = self.usage_manager.as_ref().map(|manager| {
             let alias = request
