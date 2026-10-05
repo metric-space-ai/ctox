@@ -19387,6 +19387,34 @@ fn command_projection_with_native_identity(
                 .context("invalid native control presentation payload")?;
         }
     }
+    // Chat navigation is derived from the immutable command intent and its
+    // private accepted context, never from a cached public mirror. Core's
+    // reduced lifecycle projection does not carry this presentation field.
+    let presentation_context = native_command
+        .as_ref()
+        .filter(|(_, module, command_type, _, _)| {
+            document["module"].as_str() == Some(module.as_str())
+                && document["command_type"].as_str() == Some(command_type.as_str())
+        })
+        .map(|_| native_context.clone())
+        .unwrap_or(Value::Null);
+    // This value is only input to read-only display helpers, never admission
+    // or execution; it carries no trusted-local origin or authorization.
+    let presentation_command = BusinessCommand {
+        origin: CommandOrigin::ReplicatedPeer,
+        id: Some(command_id.to_owned()),
+        module: document["module"].as_str().unwrap_or_default().to_owned(),
+        command_type: document["command_type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        record_id: document["record_id"].as_str().map(str::to_owned),
+        payload: document["payload"].clone(),
+        client_context: presentation_context,
+    };
+    if document["execution_mode"] == "queue" && is_business_chat_command(&presentation_command) {
+        projected["chat_id"] = Value::String(business_chat_id(&presentation_command, command_id));
+    }
     let context = projected
         .as_object_mut()
         .context("business command projection must be an object")?
@@ -31600,6 +31628,7 @@ pub(super) mod tests {
     fn accepted_business_chat_is_persisted_with_prompt_and_queue_tracking() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        create_repair_rxdb_tables(root)?;
         let accepted = record_command(
             root,
             BusinessCommand {
@@ -31657,6 +31686,19 @@ pub(super) mod tests {
             stored.get("chat_id").and_then(Value::as_str),
             Some("chat_persisted")
         );
+        drop(conn);
+        let delivery = deliver_business_command_outbox(root, 32)?;
+        assert_eq!(delivery["failed"], 0);
+        let reopened = open_store(root)?;
+        let delivered = stored_rxdb_business_command_outcome(&reopened, "cmd_persisted_chat")?
+            .context("delivered command outcome")?;
+        let replicated =
+            load_rxdb_collection_record(root, "business_commands", "cmd_persisted_chat")?
+                .context("replicated chat command")?;
+        for mirror in [delivered, replicated] {
+            assert_eq!(mirror["chat_id"], "chat_persisted");
+            assert_eq!(mirror["task_id"].as_str(), Some(task_id));
+        }
         Ok(())
     }
 

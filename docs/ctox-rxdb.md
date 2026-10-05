@@ -322,6 +322,9 @@ uses the matching native command’s normalized presentation payload. Module,
 command type and terminal status must match Core; no replica row supplies this
 payload. This preserves typed defaults and discarded sensitive fields without
 rewriting Core’s immutable admission intent or weakening authorization.
+Queue command chat navigation is derived from the immutable intent and a
+matching private command context. A cached public chat ID cannot replace that
+binding. This is presentation metadata and creates no execution authority.
 
 A projection that lacks matching native admission identity does not manufacture
 an actor from incoming metadata. The regression covers terminal state, outbox
