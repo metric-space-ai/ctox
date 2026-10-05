@@ -277,9 +277,14 @@ fn candidate_google_request_gemini_selected_compatibility_covers_all_preparation
             ] {
                 let calls = Arc::new(AtomicUsize::new(0));
                 let registry = Arc::new(Registry::new());
-                // ref: gemini_executor.go:134,834-835 @ d7914afd
-                // Claude input on either account kind uses GenerateContent.
-                let target = "gemini";
+                // ref: gemini_executor.go:680-688,843-852 @ a4acc9f7
+                // Claude generation uses Interactions on Interactions accounts;
+                // dedicated token counting keeps the GenerateContent format.
+                let target = if interactions && action != "countTokens" {
+                    "interactions"
+                } else {
+                    "gemini"
+                };
                 let observed = calls.clone();
                 registry.register(
                     Format::from("claude"),
