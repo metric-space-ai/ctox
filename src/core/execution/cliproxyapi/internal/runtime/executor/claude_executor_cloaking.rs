@@ -332,6 +332,12 @@ pub fn try_inject_claude_system_instructions(
     if !policy.strict_mode && !original_parts.is_empty() {
         if claude_uses_legacy_system_reminder(&root) {
             prepend_claude_system_reminders_to_first_user_message(&mut root, &original_parts);
+        } else if claude_mid_conversation_system_messages_at_end(&root) {
+            if let Some(blocks) = root.get_mut("system").and_then(Value::as_array_mut) {
+                blocks.extend(original_parts.iter().map(
+                    |text| json!({"type":"text","text":text,"cache_control":{"type":"ephemeral"}}),
+                ));
+            }
         } else {
             insert_claude_mid_conversation_system_messages(&mut root, &original_parts);
         }
@@ -390,8 +396,9 @@ pub fn validate_claude_caller_system_blocks(
 ///
 /// Unlike the Messages path, token counting must not install the synthetic
 /// Claude Code top-level system blocks. Caller system text still contributes
-/// to the measurement, so non-strict policy relocates each block into the
-/// message sequence using the same legacy/mid-system split as generation.
+/// to the measurement. Non-strict policy uses the same legacy/mid-system split
+/// as generation, keeping caller blocks top-level when consecutive user turns
+/// terminate the message sequence.
 pub fn relocate_claude_system_prompt_for_count_tokens(
     payload: &[u8],
     strict_mode: bool,
@@ -413,6 +420,15 @@ pub fn relocate_claude_system_prompt_for_count_tokens(
     if !forwarded.is_empty() {
         if claude_uses_legacy_system_reminder(&root) {
             prepend_claude_system_reminders_to_first_user_message(&mut root, &forwarded);
+        } else if claude_mid_conversation_system_messages_at_end(&root) {
+            root["system"] = Value::Array(
+                forwarded
+                    .iter()
+                    .map(|text| {
+                        json!({"type":"text","text":text,"cache_control":{"type":"ephemeral"}})
+                    })
+                    .collect(),
+            );
         } else {
             insert_claude_mid_conversation_system_messages(&mut root, &forwarded);
         }
@@ -525,6 +541,24 @@ fn prepend_claude_system_reminders_to_first_user_message(root: &mut Value, texts
         }
         _ => {}
     }
+}
+
+// ref: internal/runtime/executor/claude_executor_cloaking.go::claudeMidConversationSystemMessagesAtEnd @ 5d890405b59c4b84a2f00ca39c4ee1494ce51a72
+fn claude_mid_conversation_system_messages_at_end(root: &Value) -> bool {
+    let Some(first_user) = first_claude_user_message_index(root) else {
+        return false;
+    };
+    let Some(messages) = root.get("messages").and_then(Value::as_array) else {
+        return false;
+    };
+    let mut insert_at = first_user + 1;
+    while messages
+        .get(insert_at)
+        .is_some_and(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+    {
+        insert_at += 1;
+    }
+    insert_at > first_user + 1 && insert_at == messages.len()
 }
 
 fn insert_claude_mid_conversation_system_messages(root: &mut Value, texts: &[String]) {
@@ -1078,6 +1112,116 @@ mod tests {
         let changed = normalize_claude_cache_control_ttl(br#"{"tools":[{"cache_control":{"type":"ephemeral"}}],"system":[{"cache_control":{"type":"ephemeral","ttl":"1h"}}]}"#);
         let value: Value = serde_json::from_slice(&changed).unwrap();
         assert!(value["system"][0]["cache_control"].get("ttl").is_none());
+    }
+
+    #[test]
+    fn candidate_claude_system_terminal_generation_keeps_caller_blocks_top_level() {
+        let payload = br#"{"model":"claude-opus-5","system":[{"type":"text","text":"first guidance"},{"type":"text","text":"second guidance"}],"messages":[{"role":"user","content":"first"},{"role":"user","content":"second"}]}"#;
+        let mut policy = ClaudeCloakPolicy::oauth_default();
+        policy.current_date = Some("2026-10-05".to_owned());
+        let output = try_inject_claude_system_instructions(payload, &policy).unwrap();
+        let value: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(value["system"].as_array().unwrap().len(), 4);
+        assert_eq!(value["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(value["messages"][0]["role"], "user");
+        assert_eq!(value["messages"][0]["content"][1]["text"], "first");
+        assert_eq!(
+            value["messages"][1],
+            json!({"role":"user","content":"second"})
+        );
+        for (index, expected) in ["first guidance", "second guidance"].iter().enumerate() {
+            assert_eq!(value["system"][index + 2]["text"], *expected);
+            assert_eq!(
+                value["system"][index + 2]["cache_control"]["type"],
+                "ephemeral"
+            );
+        }
+    }
+
+    #[test]
+    fn candidate_claude_system_terminal_count_keeps_only_caller_blocks_top_level() {
+        let payload = br#"{"model":"claude-opus-5","system":[{"type":"text","text":"first guidance"},{"type":"text","text":"second guidance"}],"messages":[{"role":"user","content":"first"},{"role":"user","content":"second"}]}"#;
+        let output = relocate_claude_system_prompt_for_count_tokens(payload, false);
+        let value: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(value["system"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            value["messages"],
+            json!([{"role":"user","content":"first"},{"role":"user","content":"second"}])
+        );
+        for (index, expected) in ["first guidance", "second guidance"].iter().enumerate() {
+            assert_eq!(value["system"][index]["text"], *expected);
+            assert_eq!(value["system"][index]["cache_control"]["type"], "ephemeral");
+        }
+    }
+
+    #[test]
+    fn candidate_claude_system_terminal_preserves_legacy_strict_and_mid_system_routes() {
+        for (model, strict, messages, expected_roles) in [
+            (
+                "claude-opus-4-6",
+                false,
+                json!([{"role":"user","content":"first"},{"role":"user","content":"second"}]),
+                vec!["user", "user"],
+            ),
+            (
+                "claude-opus-5",
+                true,
+                json!([{"role":"user","content":"first"},{"role":"user","content":"second"}]),
+                vec!["user", "user"],
+            ),
+            (
+                "claude-opus-5",
+                false,
+                json!([{"role":"user","content":"first"}]),
+                vec!["user", "system", "system"],
+            ),
+            (
+                "claude-opus-5",
+                false,
+                json!([{"role":"user","content":"first"},{"role":"user","content":"second"},{"role":"assistant","content":"answer"}]),
+                vec!["user", "user", "system", "system", "assistant"],
+            ),
+        ] {
+            let payload = serde_json::to_vec(&json!({
+                "model":model,
+                "system":[{"type":"text","text":"first guidance"},{"type":"text","text":"second guidance"}],
+                "messages":messages
+            })).unwrap();
+            let mut policy = ClaudeCloakPolicy::oauth_default();
+            policy.current_date = Some("2026-10-05".to_owned());
+            policy.strict_mode = strict;
+            let generation: Value = serde_json::from_slice(
+                &try_inject_claude_system_instructions(&payload, &policy).unwrap(),
+            )
+            .unwrap();
+            let count: Value = serde_json::from_slice(
+                &relocate_claude_system_prompt_for_count_tokens(&payload, strict),
+            )
+            .unwrap();
+            assert_eq!(generation["system"].as_array().unwrap().len(), 2);
+            assert!(count.get("system").is_none());
+            for value in [&generation, &count] {
+                let roles = value["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|message| message["role"].as_str().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(roles, expected_roles, "{model} strict={strict}");
+                if strict {
+                    assert_eq!(count["messages"], messages);
+                    assert_eq!(generation["messages"][0]["content"][1]["text"], "first");
+                } else if model == "claude-opus-4-6" {
+                    assert!(value["messages"][0]["content"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|block| block["text"]
+                            .as_str()
+                            .is_some_and(|text| text.contains("first guidance"))));
+                }
+            }
+        }
     }
 
     fn thread_cache_fixture(prefix: &str) -> String {

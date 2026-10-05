@@ -4,7 +4,7 @@
 
 - Upstream: `a88197f845c979132c8978ea223c6af05cc81536`
 - Track A, accepted v7.2.116 standalone Rust-port release: **COMPLETE**
-- Current v8.0.13 update and promotion: **INCOMPLETE**
+- Current v8.0.14 update and promotion: **INCOMPLETE**
 - Accepted pin: **617/617 production + 442/442 tests strict**, complete
 - Upstream candidate `a88197f`: **111/111 reviews**, **10/10 gates**,
   promotion **YES**, post-promotion full gate **YES**
@@ -18,7 +18,8 @@
 - Historical accepted-pin capability ledger: **1,000 / 1,000 points**; this is
   explicitly not a project-completion percentage
 - Current gate: frozen candidate `d7914afdedca7af95ee974a42453dc49fc1388ce`
-  (tag `v8.0.13`, latest-release page rechecked 2026-10-04). The accepted
+  (tag `v8.0.13`, historical release floor). Current release target v8.0.14
+  is `16d98881d4bb37adaa827599e4be8f5154e81646`. The accepted
   production pin remains `a88197f845c979132c8978ea223c6af05cc81536`.
   The earlier v8.0.11 and v8.0.12 reviews remain historical prerequisites;
   none of these candidates is promoted.
@@ -33,7 +34,7 @@
   Preserve the v8.0.11 review; do not claim the full update is current after
   only that candidate passes.
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.12.
-- Latest observed upstream release: v8.0.13, published 2026-10-03 09:02:46 UTC,
+- Reviewed upstream release floor: v8.0.13, published 2026-10-03 09:02:46 UTC,
   commit d7914afdedca7af95ee974a42453dc49fc1388ce. Live GitHub API and the exact
   release page agree. Its additional v8.0.12 delta is21 files (+1,891 / -60),
   across11 commits: tool integer-field mappings, catalog IDs/token limits,
@@ -66,6 +67,20 @@
   the accepted pin is unchanged.
 
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.13.
+- Latest observed upstream release: v8.0.14, published 2026-10-04 21:51:52 UTC,
+  commit16d98881d4bb37adaa827599e4be8f5154e81646. Exact GitHub tag resolution
+  and the release page agree on 2026-10-05. This is the same immutable
+  current-main comparison already retained:24 commits/169 changed paths above
+  the v8.0.13 floor. It is a required current release target, not a promotion.
+  Claude generation and count-token preparation now keep forwarded caller
+  blocks top-level when consecutive user turns terminate the message array,
+  matching5d890405b59c4b84a2f00ca39c4ee1494ce51a72. Generation retains its
+  identity blocks; counting retains caller blocks only. Legacy reminders,
+  strict-mode omission and ordinary mid-conversation placement remain.
+  Three prepared native regressions and two additional primary Go parents
+  cover this behavior. Rust/default-transport/Go/provider acceptance, the
+  remaining release semantics and promotion remain open.
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.14.
 - Current-main Claude missing-thread404 detection now reaches unary execution,
   refresh replay, stream bootstrap and native account selection without
   credential rotation or cooldown. The manager adapter and Claude envelope
@@ -85,7 +100,7 @@
   removal priority retains the final system/tool markers as long as possible.
   Four prepared regressions cover reservation, first-key/null semantics, zero
   budgets, unchanged inputs and raw large numbers. The full native cloaking
-  module requires16 tests; three additional current-main Go parent oracles cover
+  module requires19 tests; three additional current-main Go parent oracles cover
   reservation, key order and tool-only limits. Neither suite has executed on
   this revision; the accepted production pin is unchanged.
 - Gemini selected-model translation now uses the frozen v8 API-key compatibility
