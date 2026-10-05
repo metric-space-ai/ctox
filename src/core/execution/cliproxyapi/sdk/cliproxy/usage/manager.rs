@@ -233,7 +233,7 @@ impl Manager {
     pub fn publish(&self, context: UsageContext, record: Record) -> bool {
         self.start();
         let mut state = lock_unpoisoned(&self.shared.queue);
-        if state.closed {
+        if state.closed || self.stopped.load(Ordering::Acquire) {
             return false;
         }
         state.queue.push_back(QueueItem { context, record });
@@ -327,6 +327,20 @@ mod candidate_lifecycle_tests {
         manager.stop();
         manager.start_worker();
         assert!(!manager.publish(UsageContext::default(), Record::default()));
+        assert!(lock_unpoisoned(&manager.worker).is_none());
+    }
+
+    #[test]
+    fn candidate_usage_dispatcher_stop_before_queue_close_rejects_publication() {
+        let manager = Manager::new(1);
+        // stop() signals closure before it acquires the queue lock. A first
+        // lazy publish in that interval must not accept work without a worker.
+        manager.stopped.store(true, Ordering::Release);
+        assert!(!manager.publish(UsageContext::default(), Record::default()));
+        let state = lock_unpoisoned(&manager.shared.queue);
+        assert!(!state.closed);
+        assert!(state.queue.is_empty());
+        drop(state);
         assert!(lock_unpoisoned(&manager.worker).is_none());
     }
 }
