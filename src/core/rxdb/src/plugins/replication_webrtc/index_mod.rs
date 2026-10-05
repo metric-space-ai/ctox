@@ -1543,8 +1543,10 @@ where
                             let mut protocol = ctox_protocol_response_with_flag(
                                 target.as_ref(),
                                 peer_session_id.as_deref(),
-                                flag,
-                                rows_fetch_registered,
+                                CtoxProtocolReadCapabilities {
+                                    query_demand_loading_enabled: flag,
+                                    rows_fetch_registered,
+                                },
                                 room_payload.collection_schemas,
                                 room_payload.collection_checkpoints,
                                 Some(&storage_token),
@@ -1794,8 +1796,10 @@ where
                     let mut local_protocol = ctox_protocol_response_with_flag(
                         representative.as_ref(),
                         peer_session_id.as_deref(),
-                        local_flag,
-                        rows_fetch_registered,
+                        CtoxProtocolReadCapabilities {
+                            query_demand_loading_enabled: local_flag,
+                            rows_fetch_registered,
+                        },
                         local_room_payload.collection_schemas,
                         local_room_payload.collection_checkpoints,
                         Some(&storage_token),
@@ -2256,11 +2260,17 @@ async fn collection_checkpoints_payload(collections: &[Arc<RxCollection>]) -> Va
     Value::Object(map)
 }
 
+/// Independently advertised read capabilities captured at handshake build.
+#[derive(Clone, Copy)]
+struct CtoxProtocolReadCapabilities {
+    query_demand_loading_enabled: bool,
+    rows_fetch_registered: bool,
+}
+
 async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     collection: Option<&Arc<RxCollection>>,
     peer_session_id: Option<&str>,
-    query_demand_loading_enabled: bool,
-    rows_fetch_registered: bool,
+    read_capabilities: CtoxProtocolReadCapabilities,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
@@ -2287,8 +2297,7 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     let mut payload = ctox_protocol_response_payload_with_flag(
         collection_payload,
         peer_session_id,
-        query_demand_loading_enabled,
-        rows_fetch_registered,
+        read_capabilities,
         collection_schemas,
         collection_checkpoints,
         storage_generation,
@@ -2303,12 +2312,54 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
 }
 
 #[cfg(test)]
+#[test]
+fn protocol_read_capabilities_remain_independent() {
+    for (query_demand_loading_enabled, rows_fetch_registered) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let payload = ctox_protocol_response_payload_with_flag(
+            Value::Null,
+            Some("read-capability-matrix"),
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled,
+                rows_fetch_registered,
+            },
+            None,
+            None,
+            Some("storage-generation"),
+            NativePeerRole::CtoxInstance,
+        );
+        let capabilities = payload["capabilities"].as_array().expect("capability list");
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|value| value.as_str() == Some(CTOX_QUERY_FETCH_CAPABILITY)),
+            query_demand_loading_enabled,
+        );
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|value| value.as_str() == Some(CTOX_ROWS_FETCH_CAPABILITY)),
+            rows_fetch_registered,
+        );
+        assert_eq!(
+            payload
+                .pointer("/v1_5/queryDemandLoadingEnabled")
+                .and_then(Value::as_bool),
+            Some(query_demand_loading_enabled),
+        );
+    }
+}
+
+#[cfg(test)]
 fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
     ctox_protocol_response_payload_with_flag(
         collection,
         peer_session_id,
-        true,
-        false,
+        CtoxProtocolReadCapabilities {
+            query_demand_loading_enabled: true,
+            rows_fetch_registered: false,
+        },
         None,
         None,
         None,
@@ -2319,13 +2370,16 @@ fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&st
 fn ctox_protocol_response_payload_with_flag(
     collection: Value,
     peer_session_id: Option<&str>,
-    query_demand_loading_enabled: bool,
-    rows_fetch_registered: bool,
+    read_capabilities: CtoxProtocolReadCapabilities,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
     peer_role: NativePeerRole,
 ) -> Value {
+    let CtoxProtocolReadCapabilities {
+        query_demand_loading_enabled,
+        rows_fetch_registered,
+    } = read_capabilities;
     let peer_session_id = peer_session_id
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
@@ -3556,8 +3610,10 @@ mod tests {
         let multiplexed = ctox_protocol_response_payload_with_flag(
             collection_payload,
             Some("rxdb-rs-run-a"),
-            true,
-            false,
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled: true,
+                rows_fetch_registered: false,
+            },
             None,
             Some(checkpoints_map.clone()),
             Some(storage_generation),
@@ -3829,8 +3885,10 @@ mod tests {
             let payload = ctox_protocol_response_payload_with_flag(
                 Value::Null,
                 Some("session"),
-                true,
-                false,
+                CtoxProtocolReadCapabilities {
+                    query_demand_loading_enabled: true,
+                    rows_fetch_registered: false,
+                },
                 None,
                 None,
                 None,
@@ -3858,8 +3916,10 @@ mod tests {
         let single = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
-            true,
-            false,
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled: true,
+                rows_fetch_registered: false,
+            },
             None,
             None,
             Some("storage-generation-1"),
@@ -3872,8 +3932,10 @@ mod tests {
         let multi = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
-            true,
-            false,
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled: true,
+                rows_fetch_registered: false,
+            },
             Some(local_schemas_two()),
             Some(serde_json::json!({
                 "documents": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "documents" },
@@ -4366,8 +4428,10 @@ mod tests {
         let protocol = ctox_protocol_response_with_flag(
             None,
             Some("worker-session"),
-            false,
-            false,
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled: false,
+                rows_fetch_registered: false,
+            },
             payload.collection_schemas,
             payload.collection_checkpoints,
             Some("worker-storage"),
@@ -4428,8 +4492,10 @@ mod tests {
             let protocol = ctox_protocol_response_with_flag(
                 None,
                 Some("control-session"),
-                false,
-                false,
+                CtoxProtocolReadCapabilities {
+                    query_demand_loading_enabled: false,
+                    rows_fetch_registered: false,
+                },
                 Some(serde_json::json!({})),
                 Some(serde_json::json!({})),
                 Some(remote_token),
