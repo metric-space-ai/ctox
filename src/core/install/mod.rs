@@ -22,6 +22,9 @@ use crate::inference::runtime_env;
 use crate::secrets;
 use crate::service;
 
+#[cfg(any(test, target_os = "linux"))]
+mod watchdog_pause;
+
 const INSTALL_MANIFEST_FILE_NAME: &str = "install_manifest.json";
 const UPDATE_STATE_FILE_NAME: &str = "update_state.json";
 const WATCHDOG_RELEASE_SWITCH_LOCK_FILE_NAME: &str = "watchdog-release-switch.lock";
@@ -4550,10 +4553,11 @@ fn acquire_watchdog_release_switch_guard(install_root: &Path) -> Result<Option<f
             &["--user", "daemon-reload"][..],
             &["--user", "stop", "ctox-watchdog.service"][..],
         ] {
-            let output = Command::new("systemctl")
-                .args(args)
-                .output()
-                .context("failed to run systemctl before CTOX release switch")?;
+            let output = watchdog_pause::bounded_output(
+                Command::new("systemctl").args(args),
+                Duration::from_secs(10),
+            )
+            .context("failed to run systemctl before CTOX release switch")?;
             if !output.status.success() {
                 anyhow::bail!(
                     "systemctl {} failed before CTOX release switch: {}",
