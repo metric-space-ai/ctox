@@ -38,6 +38,10 @@ pub struct Job {
     pub spec: ExecutionSpec,
     pub ownership: Ownership,
     pub checkpoint: Option<ProtectedCheckpoint>,
+    /// Effects invalidate takeover from a checkpoint captured before they ran.
+    /// Legacy snapshots have no freshness proof and require a new checkpoint.
+    #[serde(default = "checkpoint_refresh_required")]
+    pub checkpoint_requires_refresh: bool,
     pub pending_effects: BTreeSet<String>,
     pub completed_effects: BTreeSet<String>,
     pub stopped: bool,
@@ -64,6 +68,15 @@ pub enum Command {
     ProtectCheckpoint {
         job_id: String,
         ownership: Ownership,
+        receipts: Vec<CheckpointCopyReceipt>,
+    },
+    /// Native lifecycle owner supplies verified fresh copies only after proving
+    /// the exact retained process stopped and capturing consistent guest state.
+    /// One committed entry replaces the checkpoint and closes its sole effect.
+    CommitEffectCheckpoint {
+        job_id: String,
+        ownership: Ownership,
+        effect_id: String,
         receipts: Vec<CheckpointCopyReceipt>,
     },
     TakeOver {
@@ -131,6 +144,10 @@ pub struct State {
     #[serde(default)]
     pub workers: BTreeMap<NodeId, WorkerMembership>,
     receipts: BTreeMap<String, (String, Receipt)>,
+}
+
+fn checkpoint_refresh_required() -> bool {
+    true
 }
 
 impl State {
@@ -248,6 +265,7 @@ impl State {
                     generation: 1,
                 },
                 checkpoint: None,
+                checkpoint_requires_refresh: true,
                 pending_effects: BTreeSet::new(),
                 completed_effects: BTreeSet::new(),
                 stopped: false,
@@ -257,6 +275,9 @@ impl State {
         }
         let (job_id, expected) = match &request.command {
             Command::ProtectCheckpoint {
+                job_id, ownership, ..
+            }
+            | Command::CommitEffectCheckpoint {
                 job_id, ownership, ..
             }
             | Command::BeginEffect {
@@ -285,8 +306,21 @@ impl State {
             return Err(StaleOwner);
         }
         match &request.command {
-            Command::ProtectCheckpoint { receipts, .. } => {
-                if !job.pending_effects.is_empty() {
+            Command::ProtectCheckpoint { receipts, .. }
+            | Command::CommitEffectCheckpoint { receipts, .. } => {
+                let completing =
+                    if let Command::CommitEffectCheckpoint { effect_id, .. } = &request.command {
+                        if !job.pending_effects.contains(effect_id) {
+                            return Err(EffectNotStarted);
+                        }
+                        if job.pending_effects.len() != 1 {
+                            return Err(ReconciliationRequired);
+                        }
+                        Some(effect_id)
+                    } else {
+                        None
+                    };
+                if completing.is_none() && !job.pending_effects.is_empty() {
                     return Err(ReconciliationRequired);
                 }
                 if receipts.len() < 2 || receipts.len() > peers.len() {
@@ -332,6 +366,11 @@ impl State {
                     }
                 }
                 job.checkpoint = Some(checkpoint);
+                job.checkpoint_requires_refresh = false;
+                if let Some(effect_id) = completing {
+                    job.pending_effects.remove(effect_id);
+                    job.completed_effects.insert(effect_id.clone());
+                }
             }
             Command::TakeOver {
                 owner,
@@ -345,6 +384,9 @@ impl State {
                     return Err(ReconciliationRequired);
                 }
                 let checkpoint = job.checkpoint.as_ref().ok_or(CheckpointUnavailable)?;
+                if job.checkpoint_requires_refresh {
+                    return Err(ReconciliationRequired);
+                }
                 if &checkpoint.digest != checkpoint_digest || !checkpoint.replicas.contains(owner) {
                     return Err(CheckpointUnavailable);
                 }
@@ -365,6 +407,7 @@ impl State {
                 if !job.pending_effects.insert(effect_id.clone()) {
                     return Err(ReconciliationRequired);
                 }
+                job.checkpoint_requires_refresh = true;
             }
             Command::CompleteEffect { effect_id, .. } => {
                 if !job.pending_effects.remove(effect_id) {

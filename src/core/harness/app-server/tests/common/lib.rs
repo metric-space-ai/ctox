@@ -13,6 +13,16 @@ use wiremock::matchers::path_regex;
 
 pub async fn create_mock_responses_server_repeating_assistant(text: &str) -> MockServer {
     let server = responses::start_mock_server().await;
+    mount_mock_responses_assistant(&server, text, std::time::Duration::ZERO).await;
+    server
+}
+
+/// Delay only the model response; app-server and core dispatch remain real.
+pub async fn mount_mock_responses_assistant(
+    server: &MockServer,
+    text: &str,
+    delay: std::time::Duration,
+) {
     let body = responses::sse(vec![
         responses::ev_assistant_message("msg_test", text),
         responses::ev_completed("resp_test"),
@@ -23,12 +33,11 @@ pub async fn create_mock_responses_server_repeating_assistant(text: &str) -> Moc
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_raw(body, "text/event-stream"),
+                .set_body_raw(body, "text/event-stream")
+                .set_delay(delay),
         )
-        .mount(&server)
+        .mount(server)
         .await;
-
-    server
 }
 
 pub fn write_mock_responses_config_toml(

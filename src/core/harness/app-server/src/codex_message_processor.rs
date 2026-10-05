@@ -158,6 +158,7 @@ use ctox_app_server_protocol::ThreadUnsubscribeResponse;
 use ctox_app_server_protocol::ThreadUnsubscribeStatus;
 use ctox_app_server_protocol::Turn;
 use ctox_app_server_protocol::TurnInterruptParams;
+use ctox_app_server_protocol::TurnInterruptResponse;
 use ctox_app_server_protocol::TurnStartParams;
 use ctox_app_server_protocol::TurnStartResponse;
 use ctox_app_server_protocol::TurnStatus;
@@ -2972,6 +2973,11 @@ impl CodexMessageProcessor {
         };
 
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
+        let rollout_materialization_pending = match loaded_thread.as_ref() {
+            Some(thread) => thread.rollout_materialization_pending().await,
+            None => false,
+        };
+
         let loaded_thread_state_db = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
             read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
@@ -3004,6 +3010,17 @@ impl CodexMessageProcessor {
         }
 
         if include_turns && rollout_path.is_none() && db_summary.is_some() {
+            // Only a recorder that has not yet completed its first atomic
+            // publication may classify an absent pathname as deferred state.
+            // A materialized loaded thread with a missing file is lost state.
+            if rollout_materialization_pending {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("thread {thread_uuid} is not materialized yet"),
+                )
+                .await;
+                return;
+            }
             self.send_internal_error(
                 request_id,
                 format!("failed to locate rollout for thread {thread_uuid}"),
@@ -3018,7 +3035,7 @@ impl CodexMessageProcessor {
             let fallback_provider = self.config.model_provider_id.as_str();
             match read_summary_from_rollout(path, fallback_provider).await {
                 Ok(summary) => summary_to_thread(summary),
-                Err(err) if loaded_thread.is_some() && rollout_file_is_zero_bytes(path) => {
+                Err(err) if rollout_materialization_pending && rollout_file_is_zero_bytes(path) => {
                     // A loaded thread can create its rollout before the first
                     // session-meta line is flushed. Prefer the in-memory snapshot
                     // instead of treating a zero-byte file as persisted history.
@@ -3086,16 +3103,25 @@ impl CodexMessageProcessor {
                 }
                 Err(err)
                     if err.kind() == std::io::ErrorKind::NotFound
-                        || (loaded_thread.is_some()
+                        || (rollout_materialization_pending
                             && rollout_file_is_zero_bytes(rollout_path)) =>
                 {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!(
-                            "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
-                        ),
-                    )
-                    .await;
+                    if rollout_materialization_pending {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("thread {thread_uuid} is not materialized yet"),
+                        )
+                        .await;
+                    } else {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "rollout for thread {thread_uuid} is missing at `{}`",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                    }
                     return;
                 }
                 Err(err) => {
@@ -6034,31 +6060,45 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: TurnInterruptParams,
     ) {
-        let TurnInterruptParams { thread_id, .. } = params;
-
-        let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
+        let TurnInterruptParams { thread_id, turn_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
-
-        let request = request_id.clone();
-
-        // Record the pending interrupt so we can reply when TurnAborted arrives.
-        {
-            let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-            let mut thread_state = thread_state.lock().await;
-            thread_state
-                .pending_interrupts
-                .push((request, ApiVersion::V2));
+        match thread.interrupt_turn(turn_id).await {
+            Ok(true) => {
+                self.outgoing
+                    .send_response(request_id, TurnInterruptResponse {})
+                    .await
+            }
+            Ok(false) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "requested turn is not active".to_string(),
+                            data: None,
+                        },
+                    )
+                    .await
+            }
+            Err(error) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("turn interrupt failed: {error}"),
+                            data: None,
+                        },
+                    )
+                    .await
+            }
         }
-
-        // Submit the interrupt; we'll respond upon TurnAborted.
-        let _ = self
-            .submit_core_op(&request_id, thread.as_ref(), Op::Interrupt)
-            .await;
     }
 
     async fn ensure_conversation_listener(
@@ -8033,6 +8073,37 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn read_summary_from_rollout_fails_closed_when_persisted_rollout_is_invalid() {
+        use std::fs;
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let empty_path = temp_dir.path().join("empty.jsonl");
+        fs::write(&empty_path, b"").expect("write empty rollout");
+        let empty_error = read_summary_from_rollout(&empty_path, "fallback")
+            .await
+            .expect_err("an empty persisted rollout must fail closed");
+        assert!(empty_error.to_string().contains("is empty"));
+
+        let corrupt_path = temp_dir.path().join("corrupt.jsonl");
+        fs::write(
+            &corrupt_path,
+            concat!(
+                "{\"timestamp\":\"2025-09-05T16:53:11.850Z\",\"type\":\"response_item\",",
+                "\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n"
+            ),
+        )
+        .expect("write corrupt rollout");
+        let corrupt_error = read_summary_from_rollout(&corrupt_path, "fallback")
+            .await
+            .expect_err("a non-metadata persisted rollout must fail closed");
+        assert!(
+            corrupt_error
+                .to_string()
+                .contains("does not start with session metadata"),
+            "unexpected corrupt-rollout error: {corrupt_error}"
+        );
+    }
     #[tokio::test]
     async fn read_summary_from_rollout_preserves_agent_nickname() -> Result<()> {
         use ctox_protocol::protocol::RolloutItem;

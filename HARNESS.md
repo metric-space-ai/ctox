@@ -32,6 +32,60 @@ Cancellation, a missing row, a replaced store or a replacement worker stops the
 old turn; unrelated workers and a new lease are not interrupted. An unverifiable
 lease fails closed.
 
+On Unix, admission also retains a native queue execution fence with the real
+worker-attempt ID, routing attempts and worker lifetime. A synchronous effect
+callback holds that lifetime lock and an IMMEDIATE native-store transaction,
+then validates the exact unexpired worker rows before entering the separately
+owned guest-controller guard. Supported cancellation/reclaim cannot interleave
+with that callback, and worker teardown revokes all retained clones under the
+same lock. This API is not a reusable permission: callbacks must be bounded,
+must not re-enter the channel database, and do not undo external effects.
+Out-of-band store replacement during a callback requires reconciliation.
+The guest owner's authenticated Raft job/provider-session mapping remains a
+separate registration requirement; queue IDs or matching strings cannot mint
+it. This change does not claim a registered production guest owner or readiness.
+
+The direct-session producer also retains an actual native provider preparation
+before `turn/start`: worker/attempt and routing attempts, the created/resumed
+provider thread, selected model/provider route, and a whitelist of verified MCP
+command provenance. It stores a witness in the native channel database; it does
+not persist a token or infer a gateway account, harness version, project,
+instance or Raft generation. Only the private live provider owner plus the exact
+execution fence can read that witness as a current observation. Owner teardown,
+lease replacement/cancellation/expiry, record tampering and replay deny retained
+consumers. The actual TurnStart response binds the turn separately. Native
+policy reads and frame/import publication can borrow the same held SQLite
+transaction through the provider guard; the simpler observation callback
+reuses these exact checks. Neither callback may reopen the channel store,
+await, escape its transaction reference or re-enter the lifecycle guards.
+
+A native guest producer can install its explicit admission hook on the session.
+The hook must resolve native destination/policy/account/version and persist real
+Raft admission before returning; the adapter checks the retained binding again
+after this await and before model start. An admitted isolated thread cannot
+rotate after rejection. Ordinary isolated sessions retain their existing
+fallback. A failed post-start provider binding interrupts the exact actual turn
+and poisons the session. This seam does not itself register or implement the
+production guest owner, and its witness is neither a guest permit nor an OS
+process-stop receipt. Effect publication still requires the held execution and
+guest-controller guards.
+
+On native-admitted sessions, an in-process MCP dispatcher receives the actual
+core Session/TurnContext after existing argument, configuration, approval and
+safety checks. Registration resolves the already loaded Core thread and binds
+the Session allocation, not its persistent thread label. Before invoking the
+bounded synchronous callback, Core holds its active-turn mutex and checks the
+actual task context and uncancelled token; finish, replacement and abort share
+that fence. It intercepts only native guest observe/input actions. Verified
+initiating actor/workspace remain attribution; native invocation IDs mint the
+new command ID, and a private one-shot command witness binds its full envelope
+to the live worker and bound turn. Event labels and session tokens cannot mint
+it. The default guest consumer denies effects. A registered VM consumer must
+check current account/policy/controller and perform its bounded effect through
+the witness's held worker transaction, without reopening that store or nesting
+another provider guard. See `docs/native-guest-command-emission.md`. This source
+integration does not establish production guest admission or installed acceptance.
+
 The direct-session adapter submits `TurnInterrupt` for its actual thread and
 turn while continuing to drain events, with a ten-second bound. Only a terminal
 event matching both identities is a stop witness. An acknowledgement alone is
@@ -281,6 +335,25 @@ only wake signal. The lightweight preflight gate and the full router gate each
 perform an uncached durable `pending` count at most every 30 seconds. This
 bounds dispatch latency when a WAL write does not change the cached filesystem
 stamp, without returning to continuous full-router scans.
+
+When a reviewed queue attempt fails its artifact witness, recovery feedback is
+persisted on the same durable queue item. Finalization retains the normal hold,
+retry budget and backoff. Artifact feedback writes require the exact unexpired
+native worker lease inside the same Immediate transaction. The router must
+acquire a fresh lease before executing
+that feedback; the service does not enqueue an in-memory artifact retry with
+the released attempt's message keys. Proactive outbound work without queue keys
+retains its existing bounded in-process recovery path.
+
+MCP app creation and modification accept an optional stable `idempotency_key`,
+scoped to the resolved native actor and workspace. Identical retries retain
+their canonical command/task and current outcome; changed intent is rejected
+by the native claim. A replay does not reset its compatibility projection or
+reassign its Crew member. Delegation retains its existing actor/module/action
+key mapping, including previously issued IDs. Person research retains its own
+retry contract; other `execute_action` actions reject a supplied retry key.
+All retries still pass current policy and authority checks. These contracts do
+not infer completion from the reply or grant an external agent queue authority.
 
 ## Worker Slice Flow
 

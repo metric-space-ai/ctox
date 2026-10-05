@@ -753,6 +753,264 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
     .expect("native/Workjet IPC flow timed out");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn effect_checkpoint_commit_fences_stale_takeover_and_survives_restart() {
+    let mut c = Cluster::new().await;
+    c.create().await;
+    let old = checkpoint(&c, 1);
+    assert!(matches!(
+        c.send(
+            1,
+            "initial-copy",
+            Command::ProtectCheckpoint {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                receipts: old.clone()
+            }
+        )
+        .await,
+        Receipt::Applied(_)
+    ));
+    assert!(matches!(
+        c.send(
+            1,
+            "exact-process",
+            Command::BeginEffect {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                effect_id: "retained-child".into()
+            }
+        )
+        .await,
+        Receipt::Applied(_)
+    ));
+    let fresh = checkpoint(&c, 2);
+    let commit = |effect: &str, receipts| Command::CommitEffectCheckpoint {
+        job_id: "job".into(),
+        ownership: ownership(1, 1),
+        effect_id: effect.into(),
+        receipts,
+    };
+    let mut forged = fresh.clone();
+    forged[1].signature = "0".repeat(128);
+    for (id, command, reason) in [
+        (
+            "old-copy",
+            commit("retained-child", old.clone()),
+            Rejection::CheckpointRegressed,
+        ),
+        (
+            "one-copy",
+            commit("retained-child", vec![fresh[0].clone()]),
+            Rejection::CheckpointUnavailable,
+        ),
+        (
+            "forged-copy",
+            commit("retained-child", forged),
+            Rejection::CheckpointUnavailable,
+        ),
+        (
+            "foreign-effect",
+            commit("another-child", fresh.clone()),
+            Rejection::EffectNotStarted,
+        ),
+    ] {
+        assert_eq!(c.send(1, id, command).await, Receipt::Rejected(reason));
+        let job = c.nodes[&1]
+            .validate_ownership("job", &ownership(1, 1))
+            .await
+            .unwrap();
+        assert_eq!(
+            job.pending_effects,
+            BTreeSet::from(["retained-child".into()])
+        );
+        assert_eq!(job.checkpoint.unwrap().receipts, old);
+        assert!(job.checkpoint_requires_refresh);
+    }
+    // Another unresolved effect cannot be cleared by the process checkpoint.
+    c.send(
+        1,
+        "other-start",
+        Command::BeginEffect {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            effect_id: "unrelated".into(),
+        },
+    )
+    .await;
+    assert_eq!(
+        c.send(1, "other-pending", commit("retained-child", fresh.clone()))
+            .await,
+        Receipt::Rejected(Rejection::ReconciliationRequired)
+    );
+    assert!(matches!(
+        c.send(
+            1,
+            "other-complete",
+            Command::CompleteEffect {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                effect_id: "unrelated".into()
+            }
+        )
+        .await,
+        Receipt::Applied(_)
+    ));
+    // Actual signed RPCs race at independent Raft stores. In either log order,
+    // there is no state with the old checkpoint and no process fence.
+    let transition = commit("retained-child", fresh.clone());
+    let (committed, stale) = tokio::join!(
+        c.send(1, "stop-checkpoint-atomic", transition.clone()),
+        c.send(
+            2,
+            "stale-takeover-race",
+            Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: old[0].checkpoint_digest.clone(),
+                owner: 2,
+            }
+        )
+    );
+    let Receipt::Applied(job) = committed else {
+        panic!("atomic transition failed: {committed:?}");
+    };
+    assert!(matches!(
+        stale,
+        Receipt::Rejected(Rejection::ReconciliationRequired | Rejection::CheckpointUnavailable)
+    ));
+    assert!(job.pending_effects.is_empty());
+    assert!(job.completed_effects.contains("retained-child"));
+    assert!(!job.checkpoint_requires_refresh);
+    assert_eq!(job.checkpoint.as_ref().unwrap().receipts, fresh);
+    for id in 1..=3 {
+        c.stop(id).await;
+    }
+    for id in 1..=3 {
+        c.start(id).await;
+    }
+    for node in c.nodes.values() {
+        node.wait_for_leader(Duration::from_secs(10)).await.unwrap();
+    }
+    assert_eq!(
+        c.send(1, "stop-checkpoint-atomic", transition).await,
+        Receipt::Replayed(job.clone())
+    );
+    let restored = c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .unwrap();
+    assert_eq!(restored, job);
+    assert_eq!(
+        c.send(
+            1,
+            "late-old-process",
+            Command::CompleteEffect {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                effect_id: "retained-child".into()
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::EffectNotStarted)
+    );
+    let moved = c
+        .send(
+            2,
+            "fresh-checkpoint-takeover",
+            Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: fresh[0].checkpoint_digest.clone(),
+                owner: 2,
+            },
+        )
+        .await;
+    assert!(matches!(moved, Receipt::Applied(ref job) if job.ownership == ownership(2, 2)));
+    assert!(c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .is_err());
+    c.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_effect_cannot_reenable_old_checkpoint_after_restart() {
+    let mut c = Cluster::new().await;
+    c.create().await;
+    let old = checkpoint(&c, 1);
+    c.send(
+        1,
+        "protect",
+        Command::ProtectCheckpoint {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            receipts: old.clone(),
+        },
+    )
+    .await;
+    c.send(
+        1,
+        "begin",
+        Command::BeginEffect {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            effect_id: "retained-child".into(),
+        },
+    )
+    .await;
+    c.send(
+        1,
+        "complete",
+        Command::CompleteEffect {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            effect_id: "retained-child".into(),
+        },
+    )
+    .await;
+    for id in 1..=3 {
+        c.stop(id).await;
+    }
+    for id in 1..=3 {
+        c.start(id).await;
+    }
+    for node in c.nodes.values() {
+        node.wait_for_leader(Duration::from_secs(10)).await.unwrap();
+    }
+    let job = c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .unwrap();
+    assert!(job.pending_effects.is_empty());
+    assert!(job.checkpoint_requires_refresh);
+    assert_eq!(
+        c.send(
+            2,
+            "stale-takeover",
+            Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: old[0].checkpoint_digest.clone(),
+                owner: 2,
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::ReconciliationRequired)
+    );
+    let mut legacy = serde_json::to_value(job).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("checkpointRequiresRefresh");
+    let legacy: ctox_sync::authority::Job = serde_json::from_value(legacy).unwrap();
+    assert!(
+        legacy.checkpoint_requires_refresh,
+        "legacy snapshots cannot invent a freshness proof"
+    );
+    c.close().await;
+}
+
 fn spec() -> ExecutionSpec {
     ExecutionSpec {
         job_id: "job".into(),

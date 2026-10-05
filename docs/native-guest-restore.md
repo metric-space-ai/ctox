@@ -17,6 +17,12 @@ required capabilities), rejects pending effects, and revalidates after private
 materialization. Artifacts are rehashed by CheckpointStore. Nested files and
 directory entries are flushed without following symlinks. Dropping a stage
 removes only its private unpublished tree; existing user files are untouched.
+The stage retains an open, non-symlink import-parent directory handle. Its
+device/inode must still match the native pathname after staging, before effect
+admission and inside the publication guard. Replacing a private directory at the
+same pathname, even with identical staged bytes, denies publication. Parent
+durability is flushed through the retained handle. The native owner must still
+serialize filesystem publication and directory mutation under its real guard.
 
 `commit_guest_restore` admits one BeginEffect through the existing committed
 authority. Replayed or rejected receipts never dispatch the publication again.
@@ -38,7 +44,15 @@ full native destination, execution contract/ownership, digest, sequence, target
 and effect. It establishes imported state, not guest startup or execution rights.
 
 `confirm_guest_ready` revalidates current quorum ownership, protected checkpoint
-and completed import effect. GuestReadinessOwner::with_live_guest must resolve
+and completed import effect. The native owner retains a distinct BeginEffect for
+the exact live guest child until confirmed stop. Readiness permits only this
+single registered process effect to remain pending; missing/completed/foreign
+process effects or any additional unknown effect deny readiness. The returned
+GuestProcessEffect binds job, ownership, controller/generation and exact process
+instance to the actual endpoint. Readiness never completes this lifetime effect,
+so normal takeover remains blocked while the old child may still run.
+GuestReadinessOwner::with_live_guest supplies GuestReadyObservation (endpoint plus
+that native registration) under the same real fences and must resolve
 the import against canonical registration and observe the actual retained guest
 process, guest session and endpoint while holding the same current native
 fences. It returns GuestReadyReceipt only after that observation. Image presence,
@@ -69,6 +83,35 @@ reconciliation and cannot synthesize a ready guest.
   desktop_files grants and workjet-transfer Git reconstruction grant no takeover.
 - Workjet Main owns the single composed installed client and whole workflow
   acceptance; this API does not enable the VM capability catalog.
+
+The native producer constructor is
+`PersistentSession::start_native_guest_with_business_os_mcp`. It requests a fresh
+persisted harness thread before any model turn, retains the actual compiled
+harness/version and configured model route, and pins the account resolved from
+the configured native credential store. Its current supported profile is the
+direct authenticated ChatGPT Responses route; API-key, local and proxy-selected
+accounts are rejected because their account binding is not implemented.
+The provider callback holds the local account guard and rechecks the credential
+store, detecting external logout or a foreign account without relying on a cached
+startup snapshot. This read does not atomically fence external credential or
+SQLite policy mutation. Verified command authority is checked before and after
+admission; an uncertain or rejected admission poisons the session. A generic
+legacy provider witness cannot acquire guest admission.
+
+The constructor and its account checks do not replace canonical instance,
+project, principal, worker-profile or controller resolution. The concrete
+`NativeGuestAdmission` consumer writes PendingCreate under the exact held worker
+transaction and native owner callback, submits Create on the existing running
+host's authority, validates the returned job with a fresh quorum read, and writes
+Admitted only after current native destination/policy/controller revalidation.
+One native attempt cannot create a second job. Transport uncertainty, replay,
+revocation or any failed post-await check leaves PendingCreate for reconciliation;
+none automatically retries or starts a model turn. The authority handle is lent
+by the existing host lifecycle, with no second node/store or new IPC contract.
+The VM owner must implement the actual registry/policy/controller callback and
+connect it at the production factory; registration remains unfinished. No
+capability is enabled by these changes. Account, durable-thread, provider and
+admission regressions are source coverage until executed on the composed revision.
 
 There is deliberately no default/permissive production lifecycle owner or
 readiness probe in this module. Production registration remains unavailable

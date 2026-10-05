@@ -69,6 +69,7 @@ fn replay() -> Reply {
             generation: 1,
         },
         checkpoint: None,
+        checkpoint_requires_refresh: true,
         pending_effects: ["publish".into()].into(),
         completed_effects: Default::default(),
         stopped: false,

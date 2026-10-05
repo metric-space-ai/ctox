@@ -2,12 +2,269 @@ impl GuestReadinessOwner for TestOwner {
     fn with_live_guest(
         &self,
         _: &GuestImportReceipt,
-        _: &mut dyn FnMut(GuestLiveEndpoint) -> io::Result<()>,
+        _: &mut dyn FnMut(GuestReadyObservation) -> io::Result<()>,
     ) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "no registered guest process",
         ))
+    }
+}
+
+/// Component lifecycle owner. It deliberately does not claim a real QEMU child.
+struct LiveTestOwner {
+    inner: Arc<TestOwner>,
+    effect: GuestProcessEffect,
+    endpoint: GuestLiveEndpoint,
+}
+impl GuestRestoreOwner for LiveTestOwner {
+    fn resolve_destination(
+        &self,
+        guest: &str,
+        spec: &ExecutionSpec,
+        ownership: &Ownership,
+    ) -> io::Result<GuestRestoreDestination> {
+        self.inner.resolve_destination(guest, spec, ownership)
+    }
+    fn with_current_fence(
+        &self,
+        expected: &GuestRestoreDestination,
+        spec: &ExecutionSpec,
+        ownership: &Ownership,
+        publish: &mut dyn FnMut() -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.inner
+            .with_current_fence(expected, spec, ownership, publish)
+    }
+}
+impl GuestReadinessOwner for LiveTestOwner {
+    fn with_live_guest(
+        &self,
+        imported: &GuestImportReceipt,
+        publish: &mut dyn FnMut(GuestReadyObservation) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.inner.with_current_fence(
+            &imported.destination,
+            &imported.spec,
+            &imported.ownership,
+            &mut || {
+                publish(GuestReadyObservation {
+                    endpoint: self.endpoint.clone(),
+                    process_effect: self.effect.clone(),
+                })
+            },
+        )
+    }
+}
+async fn registered_live_process(f: &Fixture) -> (GuestImportReceipt, LiveTestOwner) {
+    let receipt = commit_guest_restore(&f.authority, &*f.authority.owner, stage(f).await.unwrap())
+        .await
+        .unwrap();
+    let effect = GuestProcessEffect {
+        effect_id: component_process_effect_id(),
+        job_id: receipt.spec.job_id.clone(),
+        ownership: receipt.ownership.clone(),
+        controller_id: receipt.destination.controller_id.clone(),
+        controller_generation: receipt.destination.controller_generation,
+        process_instance_id: "registered-native-child".into(),
+    };
+    let result = f
+        .authority
+        .submit(Request {
+            request_id: "native-process-begin".into(),
+            actor: 1,
+            command: Command::BeginEffect {
+                job_id: effect.job_id.clone(),
+                ownership: effect.ownership.clone(),
+                effect_id: effect.effect_id.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result, Receipt::Applied(_)));
+    let owner = LiveTestOwner {
+        inner: f.authority.owner.clone(),
+        endpoint: GuestLiveEndpoint {
+            process_instance_id: effect.process_instance_id.clone(),
+            guest_session_id: "actual-component-guest-session".into(),
+            endpoint_id: "actual-component-endpoint".into(),
+        },
+        effect,
+    };
+    (receipt, owner)
+}
+fn component_process_effect_id() -> String {
+    // Distinct native-generated fixture effect; never the import effect.
+    format!(
+        "native-process-{:x}",
+        Sha256::digest(b"component child lifetime")
+    )
+}
+
+#[tokio::test]
+async fn readiness_retains_registered_process_effect_and_denies_takeover() {
+    let f = fixture();
+    let (imported, owner) = registered_live_process(&f).await;
+    // The alternative executor is eligible for this protected checkpoint.
+    // This remains a deterministic authority fixture, not signed-copy/quorum proof.
+    f.authority
+        .state
+        .lock()
+        .unwrap()
+        .jobs
+        .get_mut("job")
+        .unwrap()
+        .checkpoint
+        .as_mut()
+        .unwrap()
+        .replicas
+        .insert(2);
+    let ready = confirm_guest_ready(&f.authority, &owner, imported.clone())
+        .await
+        .unwrap();
+    assert_eq!(ready.process_effect, owner.effect);
+    let pending = f.authority.state.lock().unwrap().jobs["job"]
+        .pending_effects
+        .clone();
+    assert_eq!(pending, BTreeSet::from([owner.effect.effect_id.clone()]));
+    assert!(stage(&f).await.is_err());
+    let takeover = |id: &str| Request {
+        request_id: id.into(),
+        actor: 2,
+        command: Command::TakeOver {
+            job_id: imported.spec.job_id.clone(),
+            expected: imported.ownership.clone(),
+            checkpoint_digest: imported.checkpoint_digest.clone(),
+            owner: 2,
+        },
+    };
+    let blocked = f
+        .authority
+        .submit(takeover("takeover-with-live-child"))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            blocked,
+            Receipt::Rejected(crate::authority::Rejection::ReconciliationRequired)
+        ),
+        "eligible distinct executor must be denied by the pending effect: {blocked:?}"
+    );
+    assert_eq!(
+        f.authority.state.lock().unwrap().jobs["job"].pending_effects,
+        pending
+    );
+    // Simulate the lifecycle owner's already-proven exact stop. Production must
+    // obtain that proof from the actual retained child, never from QMP/readiness.
+    let completed = f
+        .authority
+        .submit(Request {
+            request_id: "confirmed-component-child-stop".into(),
+            actor: 1,
+            command: Command::CompleteEffect {
+                job_id: imported.spec.job_id.clone(),
+                ownership: imported.ownership.clone(),
+                effect_id: owner.effect.effect_id.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(completed, Receipt::Applied(_)));
+    let moved = f
+        .authority
+        .submit(takeover("takeover-after-confirmed-stop"))
+        .await
+        .unwrap();
+    assert_eq!(
+        moved,
+        Receipt::Rejected(crate::authority::Rejection::ReconciliationRequired),
+        "even confirmed stop cannot authorize takeover from the pre-boot checkpoint"
+    );
+    assert_eq!(
+        f.authority.state.lock().unwrap().jobs["job"].ownership,
+        imported.ownership
+    );
+    assert!(confirm_guest_ready(&f.authority, &owner, imported)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn readiness_rejects_missing_completed_foreign_and_extra_process_effects() {
+    for case in 0..4 {
+        let f = fixture();
+        let (imported, mut owner) = registered_live_process(&f).await;
+        match case {
+            0 => {
+                f.authority
+                    .state
+                    .lock()
+                    .unwrap()
+                    .jobs
+                    .get_mut("job")
+                    .unwrap()
+                    .pending_effects
+                    .clear();
+            }
+            1 => {
+                let reply = f
+                    .authority
+                    .submit(Request {
+                        request_id: "premature-process-complete".into(),
+                        actor: 1,
+                        command: Command::CompleteEffect {
+                            job_id: imported.spec.job_id.clone(),
+                            ownership: imported.ownership.clone(),
+                            effect_id: owner.effect.effect_id.clone(),
+                        },
+                    })
+                    .await
+                    .unwrap();
+                assert!(matches!(reply, Receipt::Applied(_)));
+            }
+            2 => {
+                owner.effect.effect_id = "foreign-pending-effect".into();
+            }
+            _ => {
+                f.authority
+                    .state
+                    .lock()
+                    .unwrap()
+                    .jobs
+                    .get_mut("job")
+                    .unwrap()
+                    .pending_effects
+                    .insert("unknown-old-effect".into());
+            }
+        }
+        assert!(
+            confirm_guest_ready(&f.authority, &owner, imported)
+                .await
+                .is_err(),
+            "case {case} must not produce readiness"
+        );
+    }
+}
+
+#[tokio::test]
+async fn readiness_rejects_foreign_process_controller_and_execution_registration() {
+    for case in 0..6 {
+        let f = fixture();
+        let (imported, mut owner) = registered_live_process(&f).await;
+        match case {
+            0 => owner.effect.job_id = "foreign-job".into(),
+            1 => owner.effect.ownership.generation += 1,
+            2 => owner.effect.controller_id = "foreign-controller".into(),
+            3 => owner.effect.controller_generation += 1,
+            4 => owner.effect.process_instance_id = "foreign-child".into(),
+            _ => owner.effect.effect_id = imported.effect_id.clone(),
+        }
+        assert!(
+            confirm_guest_ready(&f.authority, &owner, imported)
+                .await
+                .is_err(),
+            "case {case} must not produce readiness"
+        );
     }
 }
 
@@ -147,6 +404,50 @@ async fn staged_payload_mutations_deny_publication_and_retain_pending_effect() {
     }
 }
 
+#[tokio::test]
+async fn checkpoint_advanced_after_staging_denies_before_effect_admission() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    f.authority
+        .state
+        .lock()
+        .unwrap()
+        .jobs
+        .get_mut("job")
+        .unwrap()
+        .checkpoint
+        .as_mut()
+        .unwrap()
+        .sequence += 1;
+    assert!(
+        commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+            .await
+            .is_err()
+    );
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+    assert!(f.authority.state.lock().unwrap().jobs["job"]
+        .pending_effects
+        .is_empty());
+}
+
+#[tokio::test]
+async fn changed_checkpoint_in_admission_reply_denies_publication() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    *f.authority.changed_checkpoint_reply.lock().unwrap() = true;
+    assert!(
+        commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+            .await
+            .is_err()
+    );
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+    let state = f.authority.state.lock().unwrap();
+    assert_eq!(state.jobs["job"].pending_effects.len(), 1);
+    assert!(state.jobs["job"].completed_effects.is_empty());
+}
+
 use super::*;
 use crate::{
     authority::{Peer, ProtectedCheckpoint, State, WorkerMembership},
@@ -166,6 +467,8 @@ struct NativeFixture {
     revoke_on_begin: Mutex<bool>,
     hold_begin: Mutex<bool>,
     fail_complete: Mutex<bool>,
+    changed_checkpoint_reply: Mutex<bool>,
+    replace_parent_on_begin: Mutex<bool>,
 }
 #[async_trait]
 impl ExecutionAuthority for NativeFixture {
@@ -196,17 +499,35 @@ impl ExecutionAuthority for NativeFixture {
         {
             return Err(io::Error::other("unknown completion outcome"));
         }
-        let peers = BTreeMap::from([(
-            1,
-            Peer {
-                identity: "fixture".into(),
-                executor: true,
-                data_replica: true,
-            },
-        )]);
-        let receipt = self.state.lock().unwrap().apply(&request, &peers);
+        let peers = BTreeMap::from([
+            (
+                1,
+                Peer {
+                    identity: "fixture".into(),
+                    executor: true,
+                    data_replica: true,
+                },
+            ),
+            (
+                2,
+                Peer {
+                    identity: "fixture-target".into(),
+                    executor: true,
+                    data_replica: true,
+                },
+            ),
+        ]);
+        let mut receipt = self.state.lock().unwrap().apply(&request, &peers);
+        if is_begin && *self.changed_checkpoint_reply.lock().unwrap() {
+            if let Receipt::Applied(job) = &mut receipt {
+                job.checkpoint.as_mut().unwrap().sequence += 1;
+            }
+        }
         if is_begin && *self.revoke_on_begin.lock().unwrap() {
             self.owner.binding.lock().unwrap().controller_generation += 1;
+        }
+        if is_begin && *self.replace_parent_on_begin.lock().unwrap() {
+            replace_import_parent(&self.owner.binding.lock().unwrap().import_parent);
         }
         let hold = is_begin && *self.hold_begin.lock().unwrap();
         if hold {
@@ -358,6 +679,7 @@ fn fixture() -> Fixture {
             replicas: BTreeSet::from([1, 2]),
             receipts: vec![],
         }),
+        checkpoint_requires_refresh: false,
         pending_effects: BTreeSet::new(),
         completed_effects: BTreeSet::new(),
         stopped: false,
@@ -389,6 +711,8 @@ fn fixture() -> Fixture {
             revoke_on_begin: Mutex::new(false),
             hold_begin: Mutex::new(false),
             fail_complete: Mutex::new(false),
+            changed_checkpoint_reply: Mutex::new(false),
+            replace_parent_on_begin: Mutex::new(false),
         },
     }
 }
@@ -418,6 +742,50 @@ fn imports(f: &Fixture) -> Vec<PathBuf> {
                 .starts_with("import-")
         })
         .collect()
+}
+
+fn replace_import_parent(parent: &Path) {
+    let retired = parent.with_file_name("retired-guests");
+    fs::rename(parent, &retired).unwrap();
+    fs::create_dir(parent).unwrap();
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+    // Preserve the exact checkpoint bytes and staging pathname, so content and
+    // pathname checks alone would wrongly accept the new native directory.
+    for entry in fs::read_dir(retired).unwrap() {
+        let entry = entry.unwrap();
+        fs::rename(entry.path(), parent.join(entry.file_name())).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn replaced_native_directory_before_admission_has_no_effect_or_publication() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    replace_import_parent(&staged.destination.import_parent);
+    let error = commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+    assert!(f.authority.state.lock().unwrap().jobs["job"]
+        .pending_effects
+        .is_empty());
+}
+
+#[tokio::test]
+async fn replaced_native_directory_during_admission_preserves_unknown_effect() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    *f.authority.replace_parent_on_begin.lock().unwrap() = true;
+    let error = commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(imports(&f).is_empty());
+    let state = f.authority.state.lock().unwrap();
+    assert_eq!(state.jobs["job"].pending_effects.len(), 1);
+    assert!(state.jobs["job"].completed_effects.is_empty());
 }
 
 #[tokio::test]
@@ -593,14 +961,90 @@ async fn pending_external_effect_blocks_guest_staging() {
     assert!(imports(&f).is_empty());
 }
 
+async fn complete_component_effect(f: &Fixture) {
+    let ownership = f.authority.state.lock().unwrap().jobs["job"]
+        .ownership
+        .clone();
+    for (id, command) in [
+        (
+            "component-effect-start",
+            Command::BeginEffect {
+                job_id: "job".into(),
+                ownership: ownership.clone(),
+                effect_id: "completed-process".into(),
+            },
+        ),
+        (
+            "component-effect-complete",
+            Command::CompleteEffect {
+                job_id: "job".into(),
+                ownership,
+                effect_id: "completed-process".into(),
+            },
+        ),
+    ] {
+        assert!(matches!(
+            f.authority
+                .submit(Request {
+                    request_id: id.into(),
+                    actor: 1,
+                    command,
+                })
+                .await
+                .unwrap(),
+            Receipt::Applied(_)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn completed_effect_blocks_old_checkpoint_staging_without_publication() {
+    let f = fixture();
+    complete_component_effect(&f).await;
+    assert!(stage(&f).await.is_err());
+    let job = f.authority.state.lock().unwrap().jobs["job"].clone();
+    assert!(job.pending_effects.is_empty());
+    assert!(job.checkpoint_requires_refresh);
+    assert_eq!(
+        job.completed_effects,
+        BTreeSet::from(["completed-process".into()])
+    );
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn effect_completed_after_staging_denies_old_import_before_admission() {
+    let f = fixture();
+    let staged = stage(&f).await.unwrap();
+    let private = staged.staging.path().to_owned();
+    complete_component_effect(&f).await;
+    assert!(
+        commit_guest_restore(&f.authority, &*f.authority.owner, staged)
+            .await
+            .is_err()
+    );
+    assert!(!private.exists());
+    let job = f.authority.state.lock().unwrap().jobs["job"].clone();
+    assert!(job.pending_effects.is_empty());
+    assert!(job.checkpoint_requires_refresh);
+    assert_eq!(
+        job.completed_effects,
+        BTreeSet::from(["completed-process".into()])
+    );
+    assert!(imports(&f).is_empty());
+    assert_eq!(*f.authority.owner.calls.lock().unwrap(), 0);
+}
+
 #[tokio::test]
 async fn repeated_completed_import_cannot_replay_publication() {
     let f = fixture();
     let first = stage(&f).await.unwrap();
+    let second = stage(&f).await.unwrap();
     let receipt = commit_guest_restore(&f.authority, &*f.authority.owner, first)
         .await
         .unwrap();
-    let second = stage(&f).await.unwrap();
+    assert!(stage(&f).await.is_err());
     assert!(
         commit_guest_restore(&f.authority, &*f.authority.owner, second)
             .await
