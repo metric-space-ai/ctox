@@ -270,9 +270,11 @@ impl AuthRefresher for CancelledRefresher {
     }
 }
 
+#[derive(Default)]
 struct CancellationAwareRefresher {
     started: AtomicBool,
     observed: AtomicBool,
+    calls: AtomicUsize,
 }
 
 impl AuthRefresher for CancellationAwareRefresher {
@@ -285,6 +287,7 @@ impl AuthRefresher for CancellationAwareRefresher {
         _auth: &mut Auth,
         cancellation: &RefreshCancellation,
     ) -> Result<Option<Auth>, RefreshExecutorError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         self.started.store(true, Ordering::SeqCst);
         while !cancellation.is_cancelled() {
             std::thread::sleep(Duration::from_millis(2));
@@ -501,7 +504,7 @@ async fn worker_shutdown_requeues_every_popped_but_unfinished_auth() {
     let store = Arc::new(WorkerStore::default());
     let schedule = Arc::new(RefreshSchedule::default());
     let lifecycle = Arc::new(AuthLifecycle::new(
-        store,
+        store.clone(),
         schedule.clone(),
         Duration::from_secs(5),
     ));
@@ -514,7 +517,7 @@ async fn worker_shutdown_requeues_every_popped_but_unfinished_auth() {
             )
             .expect("register");
     }
-    let refresher = Arc::new(ConcurrencyRefresher::new());
+    let refresher = Arc::new(CancellationAwareRefresher::default());
     let resolver = Arc::new(WorkerResolver::default());
     resolver.insert("worker-18bm-stop-requeue", refresher.clone());
     let worker = AutoRefreshWorker::spawn(
@@ -529,11 +532,89 @@ async fn worker_shutdown_requeues_every_popped_but_unfinished_auth() {
             job_buffer: 1,
         },
     );
-    wait_for(|| refresher.active.load(Ordering::SeqCst) == 1).await;
+    wait_for(|| refresher.started.load(Ordering::SeqCst)).await;
+    worker.stop().await;
+    assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
+    assert!(refresher.observed.load(Ordering::SeqCst));
+    assert_eq!(schedule.pop_due(add(now, 60)), vec!["a", "b", "c", "d"]);
+    assert_eq!(schedule.peek(), None);
+    let stored = store.list().expect("stored accounts");
+    assert_eq!(stored.len(), 4);
+    for auth in stored {
+        assert_eq!(auth.metadata.get("access_token"), Some(&json!("old")));
+        assert_eq!(auth.last_refreshed_at, DateTime::<Utc>::default());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn worker_shutdown_preserves_completed_refresh_and_unstarted_auth() {
+    let now = at("2026-08-03T12:00:00Z");
+    register_refresh_lead_provider("worker-18bm-stop-completed", || {
+        Some(Duration::from_secs(600))
+    });
+    let store = Arc::new(WorkerStore::default());
+    let schedule = Arc::new(RefreshSchedule::default());
+    let lifecycle = Arc::new(AuthLifecycle::new(
+        store.clone(),
+        schedule.clone(),
+        Duration::from_secs(5),
+    ));
+    lifecycle
+        .register(
+            worker_auth("a", "worker-18bm-stop-completed"),
+            AuthMutationOptions::default(),
+            now,
+        )
+        .expect("register");
+    let refresher = Arc::new(ConcurrencyRefresher::new());
+    let resolver = Arc::new(WorkerResolver::default());
+    resolver.insert("worker-18bm-stop-completed", refresher.clone());
+    let worker = AutoRefreshWorker::spawn(
+        lifecycle.clone(),
+        schedule.clone(),
+        resolver,
+        Arc::new(WorkerResumeSink),
+        Arc::new(FixedWorkerClock(now)),
+        AutoRefreshConfig {
+            interval: Duration::from_secs(5),
+            concurrency: 1,
+            job_buffer: 1,
+        },
+    );
+    wait_for(|| {
+        store.list().expect("stored accounts").iter().any(|auth| {
+            auth.id == "a"
+                && auth.last_refreshed_at == now
+                && auth.metadata.get("access_token") == Some(&json!("rotated"))
+        }) && schedule.peek() == Some(add(now, 600))
+    })
+    .await;
+    // No async yield between registering the remaining work and stop's
+    // cancellation signal: only the already committed refresh may survive.
+    for id in ["b", "c", "d"] {
+        lifecycle
+            .register(
+                worker_auth(id, "worker-18bm-stop-completed"),
+                AuthMutationOptions::default(),
+                now,
+            )
+            .expect("register");
+    }
     worker.stop().await;
     assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
     assert_eq!(schedule.pop_due(add(now, 60)), vec!["b", "c", "d"]);
     assert_eq!(schedule.peek(), Some(add(now, 600)));
+    let stored = store.list().expect("stored accounts");
+    assert_eq!(stored.len(), 4);
+    for auth in stored {
+        if auth.id == "a" {
+            assert_eq!(auth.metadata.get("access_token"), Some(&json!("rotated")));
+            assert_eq!(auth.last_refreshed_at, now);
+        } else {
+            assert_eq!(auth.metadata.get("access_token"), Some(&json!("old")));
+            assert_eq!(auth.last_refreshed_at, DateTime::<Utc>::default());
+        }
+    }
 }
 
 #[tokio::test]
@@ -556,10 +637,7 @@ async fn worker_shutdown_propagates_cancellation_into_inflight_refresher() {
             now,
         )
         .expect("register");
-    let refresher = Arc::new(CancellationAwareRefresher {
-        started: AtomicBool::new(false),
-        observed: AtomicBool::new(false),
-    });
+    let refresher = Arc::new(CancellationAwareRefresher::default());
     let resolver = Arc::new(WorkerResolver::default());
     resolver.insert("worker-18bm-cancel-signal", refresher.clone());
     let worker = AutoRefreshWorker::spawn(
