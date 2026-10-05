@@ -163,11 +163,14 @@ impl ClaudeResponsesStreamDecoder {
     }
 }
 
+// ref: internal/translator/claude/openai/responses/claude_openai-responses_response.go:1260-1432 @ 16d98881d4bb37adaa827599e4be8f5154e81646
 pub fn convert_claude_response_to_openai_responses_non_stream(
     original_request: &[u8],
     request: &[u8],
     raw_sse: &[u8],
 ) -> Vec<u8> {
+    let (raw_sse, native_model) =
+        crate::internal::translator::common::claude_messages_json_to_sse(raw_sse);
     #[derive(Debug)]
     enum OutputKind {
         Message,
@@ -192,7 +195,7 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
     let mut items = Vec::<OutputItem>::new();
     let mut block_to_item = BTreeMap::<usize, usize>::new();
     let mut message_count = 0_usize;
-    let mut active_message = None;
+    let mut active_message: Option<usize> = None;
     let mut pending_annotations = Vec::<Value>::new();
     for line in raw_sse.split(|byte| *byte == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
@@ -221,12 +224,25 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
             "content_block_start" => {
                 let block_index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                 let block = &event["content_block"];
-                let kind = match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                let block_type = block.get("type").and_then(Value::as_str).unwrap_or("");
+                if block_type != "text" {
+                    active_message = None;
+                }
+                let kind = match block_type {
                     "text" => OutputKind::Message,
                     "tool_use" => OutputKind::FunctionCall,
                     "thinking" | "redacted_thinking" => OutputKind::Reasoning,
                     _ => continue,
                 };
+                if matches!(kind, OutputKind::Message) {
+                    if let Some(item_index) = active_message {
+                        items[item_index]
+                            .annotations
+                            .append(&mut pending_annotations);
+                        block_to_item.insert(block_index, item_index);
+                        continue;
+                    }
+                }
                 let mut item = OutputItem {
                     kind,
                     id: String::new(),
@@ -343,6 +359,7 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
                     stop_reason = reason.to_owned();
                 }
             }
+            "message_stop" => break,
             _ => {}
         }
     }
@@ -398,6 +415,9 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
     state.reasoning_chars = reasoning_chars;
     let (_, status, details) = claude_responses_terminal_state(&state.stop_reason);
     let mut response = response_shell(&state, "", status, request);
+    if !native_model.is_empty() {
+        response["model"] = Value::String(native_model);
+    }
     response["incomplete_details"] = details;
     response["output"] = Value::Array(output);
     let reasoning_tokens = reasoning_chars / 4;

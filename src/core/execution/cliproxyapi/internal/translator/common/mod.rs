@@ -5,6 +5,7 @@ mod apply_patch_input;
 mod apply_patch_responses;
 mod bytes;
 mod cache_control;
+mod claude_native_response;
 mod claude_system;
 mod file_data;
 mod interactions_usage;
@@ -23,6 +24,7 @@ pub use bytes::{
 pub use cache_control::{
     attach_cache_control, attach_message_cache_control, attach_tool_message_cache_control,
 };
+pub use claude_native_response::claude_messages_json_to_sse;
 pub use claude_system::claude_message_system_reminder_text;
 pub use file_data::normalize_openai_file_data;
 pub use interactions_usage::interactions_usage;

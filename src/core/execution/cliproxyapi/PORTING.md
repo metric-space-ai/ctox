@@ -91,6 +91,20 @@
   parent oracles are prepared; compilation and execution remain unverified.
   This matches33ec5502c38ac6841a0754577ebff2483fa10cef and the actual current
   history normalization barriers; remaining translator/wire parity stays open.
+  Complete native Claude Messages JSON now feeds both public non-stream Chat
+  and Responses aggregators through the current common adapter. Text, tool input
+  (including raw duplicate/numeric spelling), thinking signatures, redacted
+  carriers, citations, terminal reasons and usage survive conversion. Native
+  model identity overrides the request alias; ordinary SSE request echo stays.
+  Adjacent text blocks merge until any non-text block, and Responses ignores
+  frames after message_stop. Chat now uses reasoning_content, includes the
+  cache-write usage alias, emits one measured trailing usage chunk and numbers
+  streamed tool calls from zero independently of Claude block indexes.
+  Thirteen native regressions plus the two existing Chat response guards are
+  required; the older reasoning guard is strengthened against the legacy field.
+  Exact current-release Go parents cover the common/native converters and the
+  full existing Chat wire suite. Source preparation is not native, Go, host or
+  live-provider acceptance. The accepted production pin is unchanged.
   Claude generation and count-token preparation now keep forwarded caller
   blocks top-level when consecutive user turns terminate the message array,
   matching5d890405b59c4b84a2f00ca39c4ee1494ce51a72. Generation retains its
