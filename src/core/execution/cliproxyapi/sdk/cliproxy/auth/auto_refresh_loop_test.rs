@@ -517,6 +517,7 @@ async fn worker_shutdown_requeues_every_popped_but_unfinished_auth() {
             )
             .expect("register");
     }
+    let initial_auth = store.list().expect("initial accounts");
     let refresher = Arc::new(CancellationAwareRefresher::default());
     let resolver = Arc::new(WorkerResolver::default());
     resolver.insert("worker-18bm-stop-requeue", refresher.clone());
@@ -542,7 +543,11 @@ async fn worker_shutdown_requeues_every_popped_but_unfinished_auth() {
     assert_eq!(stored.len(), 4);
     for auth in stored {
         assert_eq!(auth.metadata.get("access_token"), Some(&json!("old")));
-        assert_eq!(auth.last_refreshed_at, DateTime::<Utc>::default());
+        let initial = initial_auth
+            .iter()
+            .find(|initial| initial.id == auth.id)
+            .expect("registered account");
+        assert_eq!(auth.last_refreshed_at, initial.last_refreshed_at);
     }
 }
 
@@ -600,6 +605,7 @@ async fn worker_shutdown_preserves_completed_refresh_and_unstarted_auth() {
             )
             .expect("register");
     }
+    let initial_auth = store.list().expect("initial accounts");
     worker.stop().await;
     assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
     assert_eq!(schedule.pop_due(add(now, 60)), vec!["b", "c", "d"]);
@@ -612,7 +618,11 @@ async fn worker_shutdown_preserves_completed_refresh_and_unstarted_auth() {
             assert_eq!(auth.last_refreshed_at, now);
         } else {
             assert_eq!(auth.metadata.get("access_token"), Some(&json!("old")));
-            assert_eq!(auth.last_refreshed_at, DateTime::<Utc>::default());
+            let initial = initial_auth
+                .iter()
+                .find(|initial| initial.id == auth.id)
+                .expect("registered account");
+            assert_eq!(auth.last_refreshed_at, initial.last_refreshed_at);
         }
     }
 }
