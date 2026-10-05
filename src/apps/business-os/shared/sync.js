@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20261004-shell-v2-transfer-composed-v450';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261004-shell-v2-transfer-composed-v450';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261004-shell-v2-transfer-composed-v450';
+} from './sync-contract.js?v=20261005-shell-v2-transfer-composed-v452';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261005-shell-v2-transfer-composed-v452';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261005-shell-v2-transfer-composed-v452';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20261004-shell-v2-transfer-composed-v450';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261005-shell-v2-transfer-composed-v452';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -3630,6 +3630,11 @@ function isDemandOnlyPullCollection(collection) {
     // delay a new command behind thousands of old records.
     || collection === 'business_commands'
     || collection === 'ctox_queue_tasks'
+    // The cockpit reads only the selected task (32 runs / 200 events).
+    // Pulling every task's ledger can block initial readiness and foreground
+    // queries on a mature tenant; retain the live native query bridge.
+    || collection === 'ctox_runs'
+    || collection === 'ctox_harness_events'
     // Browser history must never gate the interactive browser surface. A
     // user needs only a bounded, owner-scoped session window plus the tabs of
     // the selected session; replaying every historical session/tab delayed a

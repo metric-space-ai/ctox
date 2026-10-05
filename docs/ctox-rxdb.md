@@ -1,5 +1,21 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Recovery journal startup payload bounds
+
+Recovery status scans one IndexedDB record at a time and preserves the exact
+UTF-8 byte count of pending batches and conflicts, including JSON delimiters.
+Startup replay retains only batch IDs and sequence numbers, then re-reads each
+candidate before applying it; primary-committed or newly acknowledged batches
+are skipped. Schema and application failures retain their recoverable conflicts.
+Startup reconciliation collects outstanding document IDs through the compound
+state/collection index and reads primary documents in groups of at most200.
+Acknowledgement-triggered retention scans also retain only eligible IDs and
+timestamps; pending writes/conflicts and the24-hour retention window survive.
+These paths no longer hold the complete pending WAL payload in memory. Batch
+atomicity and the v4 schema are unchanged; individual batch payloads and the
+ID/order summaries still consume memory. This source repair does not establish
+the THESEN renderer-crash cause or actual Windows8GiB startup acceptance.
+
 ### Browser live-query single-flight
 
 Each `RxQuery.$` subscription keeps at most one executing snapshot and one
@@ -51,6 +67,14 @@ phase records bound retention; the existing Shell diagnostics expose them.
 Legacy/superseded replica inventory runs after initial module/restore handling,
 outside the critical startup wait. It still preserves all old primaries and
 recovery journals; slow metadata enumeration is not a deletion authorization.
+
+Recovery-journal opening has its own four-second deadline, matching the primary
+IndexedDB open bound. A blocked, failed or timed-out journal attempt closes a
+late successful journal handle; failure also closes the primary handle already
+opened for that attempt. Cleanup retains the original journal error and changes
+no persisted data, schema version or recovery payload. These lifecycle guards
+prove failed-startup handle retirement, not the cause of an observed browser
+renderer crash or installed startup/memory acceptance.
 
 Window placement hydrates from the scoped localStorage cache synchronously after
 core schema registration. Its optional IndexedDB refresh runs in the background,
@@ -2133,6 +2157,18 @@ private cockpit projections (`ctox_runs`, `ctox_crew_learnings`,
 `ctox_harness_events`); Founder does not request admin-only collections.
 Module starts skip those collections without recording a transport failure.
 The native actor, grant and scope decision remains authoritative.
+
+Cockpit run and harness-event histories use demand-only pull bridges instead of
+replicating every task's ledger during startup. The selected-task view requests
+at most 32 runs and 200 events through the native WebRTC query bridge. Both
+collections remain module-startable; initial readiness still requires the
+authenticated native session and an open data channel. Maintenance continues
+to wait for that readiness rather than skipping the collections. The cockpit
+holds scoped history leases and listens to native master-change hints for the
+selected task, coalescing them through its existing refresh path. Each hint
+requires an authoritative bounded re-read, including the sort fallback; bridge
+replacement and module close retire the old subscriptions and leases. A
+selection change while a read is pending cannot paint the previous task.
 
 ### Crew identity contracts (PR-2)
 
