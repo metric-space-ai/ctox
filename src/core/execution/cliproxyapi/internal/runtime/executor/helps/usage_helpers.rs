@@ -415,6 +415,22 @@ impl StreamUsageBuffer {
     pub fn detail(&self) -> Option<&Detail> {
         self.observed.then_some(&self.detail)
     }
+
+    /// Failed streams still spent the measured tokens; retain those counters.
+    pub fn publish_failure(&self, reporter: &UsageReporter, status: i32, message: &str) -> bool {
+        if !self.observed {
+            return false;
+        }
+        let _ = reporter.publish_with_outcome(
+            self.detail.clone(),
+            true,
+            Failure {
+                status_code: status,
+                body: message.to_owned(),
+            },
+        );
+        true
+    }
 }
 
 /// Plugin executor usage. Codex and OpenAI Responses keep a service tier when

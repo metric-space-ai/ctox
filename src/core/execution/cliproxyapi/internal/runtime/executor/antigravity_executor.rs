@@ -12,6 +12,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
+use super::helps::{parse_antigravity_stream_usage, StreamUsageBuffer, UsageReporter};
 use crate::internal::auth::antigravity::SecretString;
 use crate::internal::cache::SignatureKvStore;
 use crate::internal::runtime::executor::antigravity_reasoning_replay::{
@@ -213,6 +214,7 @@ pub enum AntigravityGenerateTransportFailure {
     Timeout,
     Connect,
     Protocol,
+    Cancelled,
 }
 
 pub trait AntigravityGenerateTransport: Send + Sync {
@@ -298,9 +300,15 @@ pub struct AntigravityResponsesStream {
     adapter: AntigravityDownstreamStreamAdapter,
     original_request: Vec<u8>,
     translated_request: Vec<u8>,
-    pending: VecDeque<Vec<u8>>,
+    pending: VecDeque<(Vec<u8>, bool)>,
     replay: Option<AntigravityReasoningReplayAccumulator>,
     finished: bool,
+    pending_failure: Option<AntigravityGenerateTransportFailure>,
+    terminal_delivered: bool,
+    failed: bool,
+    usage: StreamUsageBuffer,
+    reporter: Option<Arc<UsageReporter>>,
+    usage_settled: bool,
 }
 
 enum AntigravityDownstreamStreamAdapter {
@@ -329,6 +337,12 @@ impl AntigravityResponsesStream {
             pending: VecDeque::new(),
             replay: None,
             finished: false,
+            pending_failure: None,
+            terminal_delivered: false,
+            failed: false,
+            usage: StreamUsageBuffer::default(),
+            reporter: None,
+            usage_settled: false,
         }
     }
 
@@ -352,6 +366,12 @@ impl AntigravityResponsesStream {
             pending: VecDeque::new(),
             replay: None,
             finished: false,
+            pending_failure: None,
+            terminal_delivered: false,
+            failed: false,
+            usage: StreamUsageBuffer::default(),
+            reporter: None,
+            usage_settled: false,
         }
     }
 
@@ -366,6 +386,40 @@ impl AntigravityResponsesStream {
     pub fn status(&self) -> u16 {
         self.upstream.status()
     }
+    /// The caller supplies a fresh reporter for this request. Usage observed
+    /// during bootstrap is retained, so attachment never loses the first frame.
+    pub fn with_usage_reporter(mut self, reporter: Arc<UsageReporter>) -> Self {
+        self.reporter = Some(reporter);
+        self
+    }
+
+    pub fn completed_delivery(&self) -> bool {
+        self.terminal_delivered
+            && !self.failed
+            && self
+                .pending_failure
+                .is_none_or(|error| error == AntigravityGenerateTransportFailure::Cancelled)
+    }
+
+    /// A client cancellation settles this owner without an unowned task.
+    /// The upstream receiver is closed; partial output remains a failure.
+    pub fn cancel(&mut self) {
+        self.settle_replay();
+        let failure = if self.completed_delivery() {
+            None
+        } else {
+            Some(
+                self.pending_failure
+                    .unwrap_or(AntigravityGenerateTransportFailure::Cancelled),
+            )
+        };
+        self.failed |= failure.is_some();
+        self.settle_usage(failure);
+        self.upstream.chunks.close();
+        self.pending.clear();
+        self.pending_failure = None;
+        self.finished = true;
+    }
     pub fn retry_after(&self) -> Option<&str> {
         self.upstream.retry_after()
     }
@@ -375,9 +429,16 @@ impl AntigravityResponsesStream {
             return Ok(());
         }
         while self.pending.is_empty() {
-            self.fill().await?;
+            self.fill().await;
+
             if self.finished && self.pending.is_empty() {
-                return Err(AntigravityGenerateTransportFailure::Protocol);
+                let error = self
+                    .pending_failure
+                    .take()
+                    .unwrap_or(AntigravityGenerateTransportFailure::Protocol);
+                self.failed = true;
+                self.settle_usage(Some(error));
+                return Err(error);
             }
         }
         Ok(())
@@ -387,48 +448,79 @@ impl AntigravityResponsesStream {
         &mut self,
     ) -> Option<Result<Vec<u8>, AntigravityGenerateTransportFailure>> {
         loop {
-            if let Some(event) = self.pending.pop_front() {
+            if let Some((event, terminal)) = self.pending.pop_front() {
+                if terminal {
+                    self.terminal_delivered = true;
+                    // ref: antigravity_executor_stream.go:348-359 @ a4acc9f7
+                    // Responses replay is committed before completion reaches
+                    // the consumer. Other adapters settle on close/drop.
+                    if matches!(
+                        &self.adapter,
+                        AntigravityDownstreamStreamAdapter::Responses(_)
+                    ) {
+                        self.settle_replay();
+                    }
+                }
                 return Some(Ok(event));
             }
+            if let Some(error) = self.pending_failure.take() {
+                // ref: antigravity_executor_stream.go:235-249,377-382 @ a4acc9f7
+                // Only cancellation after delivery is successful. A real
+                // protocol/transport failure retains its failure accounting.
+                if self.terminal_delivered
+                    && error == AntigravityGenerateTransportFailure::Cancelled
+                {
+                    self.settle_replay();
+                    self.settle_usage(None);
+                    return None;
+                }
+                self.failed = true;
+                self.settle_usage(Some(error));
+                return Some(Err(error));
+            }
             if self.finished {
+                self.settle_usage(None);
                 return None;
             }
-            if let Err(error) = self.fill().await {
-                return Some(Err(error));
+            self.fill().await;
+        }
+    }
+
+    async fn fill(&mut self) {
+        match self.upstream.next_chunk().await {
+            Some(Ok(chunk)) => {
+                for event in self.decoder.push(&chunk) {
+                    self.observe_event(&event.data);
+                }
+            }
+            Some(Err(error)) => {
+                // The final data line may lack a record delimiter. Deliver
+                // its decoded events before deciding whether cancellation
+                // happened before or after the terminal event.
+                for event in self.decoder.finish() {
+                    self.observe_event(&event.data);
+                }
+                self.finished = true;
+                self.pending_failure = Some(error);
+            }
+            None => {
+                for event in self.decoder.finish() {
+                    self.observe_event(&event.data);
+                }
+                self.translate_event(b"[DONE]");
+                self.finished = true;
             }
         }
     }
 
-    async fn fill(&mut self) -> Result<(), AntigravityGenerateTransportFailure> {
-        match self.upstream.next_chunk().await {
-            Some(Ok(chunk)) => {
-                for event in self.decoder.push(&chunk) {
-                    if let Some(replay) = self.replay.as_mut() {
-                        replay.observe_response_payload(&event.data);
-                    }
-                    self.translate_event(&event.data);
-                }
-                Ok(())
-            }
-            Some(Err(error)) => {
-                self.finished = true;
-                Err(error)
-            }
-            None => {
-                for event in self.decoder.finish() {
-                    if let Some(replay) = self.replay.as_mut() {
-                        replay.observe_response_payload(&event.data);
-                    }
-                    self.translate_event(&event.data);
-                }
-                self.translate_event(b"[DONE]");
-                if let Some(replay) = self.replay.take() {
-                    let _ = replay.commit(replay_now_ms());
-                }
-                self.finished = true;
-                Ok(())
-            }
+    fn observe_event(&mut self, data: &[u8]) {
+        if let Some(detail) = parse_antigravity_stream_usage(data) {
+            self.usage.observe(detail, true);
         }
+        if let Some(replay) = self.replay.as_mut() {
+            replay.observe_response_payload(data);
+        }
+        self.translate_event(data);
     }
 
     fn translate_event(&mut self, data: &[u8]) {
@@ -454,8 +546,109 @@ impl AntigravityResponsesStream {
                 signature_store.as_deref(),
             ),
         };
-        self.pending.extend(events);
+        // ref: antigravity_executor_stream.go:311-345,361-371 @ a4acc9f7
+        // A terminal source frame is delivered only after all translated
+        // events from that frame have reached the downstream consumer.
+        let terminal = antigravity_terminal_source(data)
+            || events
+                .iter()
+                .any(|event| antigravity_terminal_output(event));
+        let last = events.len().checked_sub(1);
+        self.pending.extend(
+            events
+                .into_iter()
+                .enumerate()
+                .map(|(index, event)| (event, terminal && last == Some(index))),
+        );
     }
+
+    fn settle_replay(&mut self) {
+        if self.terminal_delivered {
+            if let Some(replay) = self.replay.take() {
+                let _ = replay.commit(replay_now_ms());
+            }
+        }
+    }
+
+    fn settle_usage(&mut self, error: Option<AntigravityGenerateTransportFailure>) {
+        let Some(reporter) = self.reporter.as_deref() else {
+            return;
+        };
+        if self.usage_settled {
+            return;
+        }
+        self.usage_settled = true;
+        if let Some(error) = error {
+            let (status, message) = match error {
+                AntigravityGenerateTransportFailure::Timeout => {
+                    (408, "Antigravity upstream stream timed out")
+                }
+                AntigravityGenerateTransportFailure::Cancelled => {
+                    (0, "Antigravity stream canceled")
+                }
+                AntigravityGenerateTransportFailure::Connect
+                | AntigravityGenerateTransportFailure::Protocol => {
+                    (502, "Antigravity upstream stream failed")
+                }
+            };
+            if !self.usage.publish_failure(reporter, status, message) {
+                reporter.publish_failure(Some(status), &message);
+            }
+        } else {
+            self.usage.publish(reporter);
+            reporter.ensure_published();
+        }
+    }
+}
+
+impl Drop for AntigravityResponsesStream {
+    fn drop(&mut self) {
+        // ref: antigravity_executor_stream.go:222-250 @ a4acc9f7
+        // A consumer that stops after completion must not wait for upstream
+        // EOF to preserve replay and the measured usage. Unconsumed/partial
+        // streams are cancellations, not synthetic successful completions.
+        self.settle_replay();
+        if !self.usage_settled {
+            let failure = if self.completed_delivery() {
+                None
+            } else {
+                Some(
+                    self.pending_failure
+                        .unwrap_or(AntigravityGenerateTransportFailure::Cancelled),
+                )
+            };
+            self.settle_usage(failure);
+        }
+    }
+}
+
+fn antigravity_terminal_source(data: &[u8]) -> bool {
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(data) else {
+        return false;
+    };
+    let response = root.get("response").unwrap_or(&root);
+    response
+        .pointer("/candidates/0/finishReason")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|reason| !reason.trim().is_empty())
+}
+
+fn antigravity_terminal_output(event: &[u8]) -> bool {
+    event.split(|byte| *byte == b'\n').any(|line| {
+        let line = line.trim_ascii();
+        let payload = line.strip_prefix(b"data:").unwrap_or(line).trim_ascii();
+        if payload == b"[DONE]" {
+            return true;
+        }
+        serde_json::from_slice::<serde_json::Value>(payload)
+            .ok()
+            .and_then(|root| {
+                root.get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .is_some_and(|kind| kind == "response.completed" || kind == "message_stop")
+    })
 }
 
 #[cfg(test)]

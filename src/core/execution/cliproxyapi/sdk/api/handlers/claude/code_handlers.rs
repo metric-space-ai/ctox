@@ -247,7 +247,8 @@ fn forward_claude_stream_event(
             let (status, message) = match error {
                 AntigravityGenerateTransportFailure::Timeout => (408, "Request Timeout"),
                 AntigravityGenerateTransportFailure::Connect
-                | AntigravityGenerateTransportFailure::Protocol => {
+                | AntigravityGenerateTransportFailure::Protocol
+                | AntigravityGenerateTransportFailure::Cancelled => {
                     (502, "Antigravity upstream stream failed")
                 }
             };

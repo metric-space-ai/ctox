@@ -1284,6 +1284,17 @@ pub struct AntigravityTrackedResponsesStream {
 }
 
 impl AntigravityTrackedResponsesStream {
+    pub fn with_usage_reporter(mut self, reporter: Arc<super::helps::UsageReporter>) -> Self {
+        self.stream = self.stream.with_usage_reporter(reporter);
+        self
+    }
+
+    /// Cancellation by the consumer settles measured usage and replay without
+    /// blaming the selected account or spawning asynchronous cleanup.
+    pub fn cancel(&mut self) {
+        self.stream.cancel();
+    }
+
     pub async fn next_event(
         &mut self,
     ) -> Option<Result<Vec<u8>, AntigravityGenerateTransportFailure>> {
@@ -1295,7 +1306,7 @@ impl AntigravityTrackedResponsesStream {
     }
 
     pub async fn record_terminal_failure(&mut self) {
-        if self.failure_recorded {
+        if self.failure_recorded || self.stream.completed_delivery() {
             return;
         }
         self.failure_recorded = true;
@@ -1875,6 +1886,8 @@ mod tests {
         )
         .unwrap()
     }
+
+    include!("antigravity_executor_terminal_disconnect_candidate_test.rs");
 
     #[tokio::test]
     async fn unauthorized_refreshes_rebuilds_bearer_request_exactly_once() {

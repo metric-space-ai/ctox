@@ -4,7 +4,8 @@
 
 - Upstream: `a88197f845c979132c8978ea223c6af05cc81536`
 - Track A, accepted v7.2.116 standalone Rust-port release: **COMPLETE**
-- Current v8.0.14 update and promotion: **INCOMPLETE**
+- Current v8.0.15 update and promotion: **INCOMPLETE**
+
 - Accepted pin: **617/617 production + 442/442 tests strict**, complete
 - Upstream candidate `a88197f`: **111/111 reviews**, **10/10 gates**,
   promotion **YES**, post-promotion full gate **YES**
@@ -18,8 +19,9 @@
 - Historical accepted-pin capability ledger: **1,000 / 1,000 points**; this is
   explicitly not a project-completion percentage
 - Current gate: frozen candidate `d7914afdedca7af95ee974a42453dc49fc1388ce`
-  (tag `v8.0.13`, historical release floor). Current release target v8.0.14
-  is `16d98881d4bb37adaa827599e4be8f5154e81646`. The accepted
+  (tag `v8.0.13`, historical release floor). Current release target v8.0.15
+  is `a4acc9f752bd46571f737a10c04bf413656ab06b`. The accepted
+
   production pin remains `a88197f845c979132c8978ea223c6af05cc81536`.
   The earlier v8.0.11 and v8.0.12 reviews remain historical prerequisites;
   none of these candidates is promoted.
@@ -67,7 +69,28 @@
   the accepted pin is unchanged.
 
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.13.
-- Latest observed upstream release: v8.0.14, published 2026-10-04 21:51:52 UTC,
+- Latest observed upstream release: v8.0.15, published 2026-10-04 22:29:27 UTC,
+  commit a4acc9f752bd46571f737a10c04bf413656ab06b. The exact primary
+  release/commit comparison adds two commits and four paths above v8.0.14.
+  The Antigravity stream owner now records terminal delivery independently
+  of upstream EOF. Responses replay settles before delivered completion;
+  Claude replay and observed usage survive client cancellation/drop after
+  terminal delivery. Typed cancellation after terminal output does not
+  cool down the selected account. Partial cancellation and actual protocol
+  failures retain measured failure usage; unconsumed completion is not
+  successful delivery. A buffered final data line is drained before a
+  pending cancellation. Settlement is synchronous and request-owned,
+  without a cleanup task. Callers can attach a fresh per-request usage
+  reporter to the actual tracked stream; production reporter binding remains
+  open. Seven native owner/replay/usage/cooldown guards are prepared.
+  The bounded Go controller now requires the immutable v8.0.15 source,
+  including its three Antigravity disconnect and nine OpenAI truncation
+  parent tests. Native and Go execution, live Chat/Completions forwarding,
+  the Antigravity Chat adapter, remaining full semantic parity and promotion
+  remain open. The accepted production pin is unchanged.
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.15.
+- Previous observed upstream release: v8.0.14, published 2026-10-04 21:51:52 UTC,
+
   commit16d98881d4bb37adaa827599e4be8f5154e81646. Exact GitHub tag resolution
   and the release page agree on 2026-10-05. This is the same immutable
   current-main comparison already retained:24 commits/169 changed paths above
