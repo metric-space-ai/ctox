@@ -35592,8 +35592,7 @@ pub(super) mod tests {
         // discarded prompt back into either the native presentation payload or
         // the replicated command, including after reopening the store.
         let intent =
-            channels::business_command_projection(root, "cmd_audit_retention_policy_allowed")?
-                .context("canonical admission intent")?;
+            channels::business_command_projection(root, "cmd_audit_retention_policy_allowed")?;
         assert_eq!(intent["payload"]["prompt"], "SECRET_AUDIT_POLICY_PROMPT");
         for _ in 0..2 {
             let delivery = deliver_business_command_outbox(root, 32)?;
