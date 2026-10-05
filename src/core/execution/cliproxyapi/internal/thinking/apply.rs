@@ -375,6 +375,7 @@ impl ThinkingEngine {
         request: ResolvedCapabilityThinkingRequest<'_>,
         summary: &SummaryConfig,
     ) -> Result<Vec<u8>, ThinkingError> {
+        let selected_model_view = request.model_info.as_ref().map(|info| info.reborrow());
         self.apply(ApplyRequest {
             body: request.body,
             source_body: request.source_body,
@@ -382,7 +383,7 @@ impl ThinkingEngine {
             from_format: request.from_format,
             to_format: request.to_format,
             provider_key: request.provider_key,
-            resolved_model_info: request.model_info,
+            resolved_model_info: selected_model_view.as_ref(),
             model_info_resolved: request.model_info_resolved,
             normalized_updates_changed: request.normalized_updates_changed,
             summary,
@@ -421,8 +422,12 @@ impl ThinkingEngine {
             .as_ref()
             .map(ModelInfoView::from)
             .or_else(|| looked_up.as_ref().map(ModelInfoView::from));
+        let selected_model_view = request
+            .resolved_model_info
+            .as_ref()
+            .map(|info| info.reborrow());
         let model_info = if request.model_info_resolved {
-            request.resolved_model_info
+            selected_model_view.as_ref()
         } else {
             looked_up_view.as_ref()
         };

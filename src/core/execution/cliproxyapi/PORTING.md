@@ -66,6 +66,20 @@
   the accepted pin is unchanged.
 
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.13.
+- Current-main Claude missing-thread404 detection now reaches unary execution,
+  refresh replay, stream bootstrap and native account selection without
+  credential rotation or cooldown. The manager adapter and Claude envelope
+  carry error.details.error_code=thread_not_found for client history replay.
+  Generic model404 and upstream500 failures retain failover. Raw classification
+  preserves first duplicate keys and large numeric fields. Nine new native
+  guards and four primary Go parent tests at immutable16d98881 are required.
+  The d22cc7b verification stopped during compilation with13 lifetime errors;
+  zero tests executed. The repair explicitly reborrows selected capability
+  views when joining local registry fallbacks, preserving owner metadata and
+  borrowed level storage, and retains formatted gjson paths for their values.
+  Existing guard expectations remain unchanged. Native/default-transport/Go
+  validation and actual HTTP/provider acceptance remain open. The current-main
+  thread cache-breakpoint reservation is a confirmed separate remaining delta.
 - Gemini selected-model translation now uses the frozen v8 API-key compatibility
   helper for GenerateContent, streaming, token count and converted Interactions
   input. Explicit Home credential options, including false, take precedence over

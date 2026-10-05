@@ -46,7 +46,8 @@ fn candidate_google_content_leading_turn_contract() {
             && input.contains("\"role\":\"model\"")
         {
             let text = std::str::from_utf8(&out).unwrap();
-            let empty = gjson::get(text, &format!("{path}.0.parts.0.text"));
+            let empty_path = format!("{path}.0.parts.0.text");
+            let empty = gjson::get(text, &empty_path);
             assert!(empty.exists());
             assert_eq!(empty.str(), "");
         }
@@ -82,10 +83,8 @@ fn candidate_google_content_trailing_turn_and_function_response_contract() {
         assert_eq!(roles(&out, "contents"), expected, "{input}");
         if expected.last() == Some(&"user") && expected.len() > 1 {
             let text = std::str::from_utf8(&out).unwrap();
-            let empty = gjson::get(
-                text,
-                &format!("contents.{}.parts.0.text", expected.len() - 1),
-            );
+            let empty_path = format!("contents.{}.parts.0.text", expected.len() - 1);
+            let empty = gjson::get(text, &empty_path);
             assert!(empty.exists());
             assert_eq!(empty.str(), "");
         }

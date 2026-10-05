@@ -30,7 +30,8 @@ fn ensure_user_content<'a>(
         return Cow::Borrowed(payload);
     };
     // Valid leading-user payloads, including large media, need no item copies.
-    let first_role = gjson::get(document, &format!("{path}.0.role"));
+    let first_role_path = format!("{path}.0.role");
+    let first_role = gjson::get(document, &first_role_path);
     if leading && !trailing && first_role.str() != "model" {
         return Cow::Borrowed(payload);
     }

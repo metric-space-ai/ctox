@@ -542,7 +542,9 @@ fn enable_claude_thinking_for_summary(
         None
     };
     let owned_model_view = owned_model_info.as_ref().map(ModelInfoView::from);
-    if let Some(support) = resolved_model_info
+    let selected_model_view = resolved_model_info.as_ref().map(|info| info.reborrow());
+    if let Some(support) = selected_model_view
+        .as_ref()
         .or(owned_model_view.as_ref())
         .and_then(|info| info.thinking.as_ref())
     {

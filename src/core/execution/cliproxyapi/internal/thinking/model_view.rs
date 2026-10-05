@@ -41,6 +41,32 @@ impl<'a> ModelInfoView<'a> {
     pub fn static_info(&self) -> Option<&'a registry::ModelInfo> {
         self.static_info
     }
+
+    /// Shorten this view to the caller's borrow without copying level storage.
+    /// Cow's owned level type makes the inner lifetime invariant, so selected
+    /// capabilities need this explicit reborrow before joining local fallbacks.
+    pub fn reborrow(&self) -> ModelInfoView<'_> {
+        ModelInfoView {
+            id: self.id,
+            provider_type: self.provider_type,
+            user_defined: self.user_defined,
+            is_compat: self.is_compat,
+            input_token_limit: self.input_token_limit,
+            output_token_limit: self.output_token_limit,
+            context_length: self.context_length,
+            max_completion_tokens: self.max_completion_tokens,
+            thinking: self.thinking.as_ref().map(|support| ThinkingSupportView {
+                min: support.min,
+                max: support.max,
+                zero_allowed: support.zero_allowed,
+                dynamic_allowed: support.dynamic_allowed,
+                levels: Cow::Borrowed(support.levels.as_ref()),
+            }),
+            native_capabilities: self.native_capabilities,
+            support_configuration_update: self.support_configuration_update,
+            static_info: self.static_info,
+        }
+    }
 }
 
 impl<'a> From<&'a registry::ModelInfo> for ModelInfoView<'a> {
