@@ -5,6 +5,7 @@ import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/pe
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
 import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
+import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261005-shell-v2-task-history-demand-v451';
 
 const FLOW_WIDTH = 1760;
 const FLOW_HEIGHT = 1050;
@@ -966,8 +967,11 @@ async function hydrateFromLocal(state) {
   reconcileSelection(state);
   const selected = getSelectedTask(state);
   const key = taskLiveKey(selected);
-  const live = key ? await loadSelectedTaskLive(state.ctx, selected) : { key: '', events: [], runs: [], flow: null };
+  const revision = state.taskHistoryRevision?.key === key ? state.taskHistoryRevision : null;
+  const live = key ? await loadSelectedTaskLive(state.ctx, selected, revision?.revision) : { key: '', events: [], runs: [], flow: null };
   if (state.disposed) return;
+  if (taskLiveKey(getSelectedTask(state)) !== key) { state.rerenderAfterRefresh = true; return; }
+  if (state.taskHistoryRevision === revision) state.taskHistoryRevision = null;
   state.selectedLive = live;
   applyLiveFlow(state);
   state.harnessHealth = deriveHarnessHealth(state);
@@ -1022,8 +1026,24 @@ function wireLocalRealtime(state) {
       }, {emitPendingChanges: collectionName === "ctox_harness_status"}) || null;
     })
     .filter(Boolean);
+  const nativeHistoryCleanup = subscribeTaskHistoryChanges({
+    sync: state.ctx.sync,
+    getSelection: () => {
+      const task = getSelectedTask(state);
+      return { key: taskLiveKey(task), taskId: task ? nativeTaskId(task) : '', commandId: task?.commandId || '' };
+    },
+    onChange: ({ key, revision }) => {
+      if (state.disposed) return;
+      state.taskHistoryRevision = { key, revision };
+      scheduleRender();
+    },
+    onError: (error) => {
+      if (!state.disposed) console.warn('[ctox] task history native observer failed', error);
+    },
+  });
   state.realtimeCollectionCount = subscriptions.length;
   return () => {
+    nativeHistoryCleanup();
     if (renderTimer) window.clearTimeout(renderTimer);
     renderTimer = null;
     for (const sub of subscriptions) {
@@ -5197,43 +5217,44 @@ function taskLiveKey(task) {
   return nativeTaskId(task) || String(task.commandId || task.id || '');
 }
 
-async function findLocalDocs(collection, selector, limit, sortField = 'updated_at_ms', direction = 'desc') {
+async function findLocalDocs(collection, selector, limit, sortField = 'updated_at_ms', direction = 'desc', requireRevision = '') {
+  const freshness = requireRevision ? { requireRevision } : {};
   try {
-    const docs = await collection.find({ selector, sort: [{ [sortField]: direction }], limit }).exec();
+    const docs = await collection.find({ selector, sort: [{ [sortField]: direction }], limit, ...freshness }).exec();
     return docs.map((doc) => doc.toJSON());
   } catch {
-    const docs = await collection.find({ selector, limit }).exec();
+    const docs = await collection.find({ selector, limit, ...freshness }).exec();
     const rows = docs.map((doc) => doc.toJSON());
     rows.sort((a, b) => (Number(b?.[sortField]) || 0) - (Number(a?.[sortField]) || 0));
     return direction === 'desc' ? rows : rows.reverse();
   }
 }
 
-async function loadLocalHarnessEvents(ctx, task) {
+async function loadLocalHarnessEvents(ctx, task, requireRevision = '') {
   const collection = ctoxCollection(ctx, 'ctox_harness_events');
   const taskId = nativeTaskId(task);
   if (!collection || !taskId) return [];
-  let rows = await findLocalDocs(collection, { task_id: taskId }, HARNESS_EVENT_LIMIT);
+  let rows = await findLocalDocs(collection, { task_id: taskId }, HARNESS_EVENT_LIMIT, 'updated_at_ms', 'desc', requireRevision);
   if (!rows.length && task?.commandId) {
-    rows = await findLocalDocs(collection, { command_id: task.commandId }, HARNESS_EVENT_LIMIT);
+    rows = await findLocalDocs(collection, { command_id: task.commandId }, HARNESS_EVENT_LIMIT, 'updated_at_ms', 'desc', requireRevision);
   }
   // Newest 200 from the store, handed on oldest first.
   return rows.reverse();
 }
 
-async function loadLocalRunsForTask(ctx, task) {
+async function loadLocalRunsForTask(ctx, task, requireRevision = '') {
   const collection = ctoxCollection(ctx, 'ctox_runs');
   const taskId = nativeTaskId(task);
   if (!collection || !taskId) return [];
-  return findLocalDocs(collection, { task_id: taskId }, 32);
+  return findLocalDocs(collection, { task_id: taskId }, 32, 'updated_at_ms', 'desc', requireRevision);
 }
 
-async function loadSelectedTaskLive(ctx, task) {
+async function loadSelectedTaskLive(ctx, task, requireRevision = '') {
   const key = taskLiveKey(task);
   if (!key) return { key: '', events: [], runs: [], flow: null };
   const [events, runs] = await Promise.all([
-    loadLocalHarnessEvents(ctx, task).catch(() => []),
-    loadLocalRunsForTask(ctx, task).catch(() => []),
+    loadLocalHarnessEvents(ctx, task, requireRevision).catch(() => []),
+    loadLocalRunsForTask(ctx, task, requireRevision).catch(() => []),
   ]);
   return { key, events, runs, flow: harnessFlowFromEvents(task, events) };
 }

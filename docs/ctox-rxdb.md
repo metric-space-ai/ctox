@@ -2147,7 +2147,12 @@ replicating every task's ledger during startup. The selected-task view requests
 at most 32 runs and 200 events through the native WebRTC query bridge. Both
 collections remain module-startable; initial readiness still requires the
 authenticated native session and an open data channel. Maintenance continues
-to wait for that readiness rather than skipping the collections.
+to wait for that readiness rather than skipping the collections. The cockpit
+holds scoped history leases and listens to native master-change hints for the
+selected task, coalescing them through its existing refresh path. Each hint
+requires an authoritative bounded re-read, including the sort fallback; bridge
+replacement and module close retire the old subscriptions and leases. A
+selection change while a read is pending cannot paint the previous task.
 
 ### Crew identity contracts (PR-2)
 
