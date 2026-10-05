@@ -2,19 +2,20 @@ use std::io;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 const TIMER: &str = "ctox-watchdog.timer";
+#[cfg(test)]
 const SERVICE: &str = "ctox-watchdog.service";
-type Runner = fn(&[&str]) -> io::Result<String>;
-pub(super) type SystemWatchdogPause = WatchdogPause<Runner>;
 
-/// Pause both sources of watchdog restarts: stopping just the timer leaves
-/// an already dispatched oneshot free to start the daemon during cutover.
-/// Unit refresh must not start the timer until this guard has been dropped.
-pub(super) struct WatchdogPause<F: FnMut(&[&str]) -> io::Result<String>> {
+/// Retain the former pause protocol's regression model. Production now holds
+/// the release-switch flock; its systemctl calls use the bounded helper below.
+#[cfg(test)]
+struct WatchdogPause<F: FnMut(&[&str]) -> io::Result<String>> {
     run: F,
     resume_timer: bool,
 }
 
+#[cfg(test)]
 impl<F: FnMut(&[&str]) -> io::Result<String>> WatchdogPause<F> {
     fn acquire(mut run: F, installed: bool) -> io::Result<Self> {
         let mut resume_timer = false;
@@ -35,6 +36,7 @@ impl<F: FnMut(&[&str]) -> io::Result<String>> WatchdogPause<F> {
     }
 }
 
+#[cfg(test)]
 impl<F: FnMut(&[&str]) -> io::Result<String>> Drop for WatchdogPause<F> {
     fn drop(&mut self) {
         // Restore only the previously active timer, also on errors/unwind.
@@ -47,33 +49,24 @@ impl<F: FnMut(&[&str]) -> io::Result<String>> Drop for WatchdogPause<F> {
     }
 }
 
-pub(super) fn pause(installed: bool) -> io::Result<WatchdogPause<Runner>> {
-    WatchdogPause::acquire(systemctl as Runner, installed)
-}
-
-fn systemctl(args: &[&str]) -> io::Result<String> {
-    let mut command = Command::new("systemctl");
-    command.arg("--user").args(args);
-    let output = bounded_output(&mut command, Duration::from_secs(10))?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "systemctl --user {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn bounded_output(command: &mut Command, timeout: Duration) -> io::Result<std::process::Output> {
+pub(super) fn bounded_output(
+    command: &mut Command,
+    timeout: Duration,
+) -> io::Result<std::process::Output> {
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
     let deadline = Instant::now() + timeout;
     loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output(),
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -91,6 +84,44 @@ fn bounded_output(command: &mut Command, timeout: Duration) -> io::Result<std::p
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[cfg(unix)]
+    #[test]
+    fn watchdog_control_output_preserves_exit_code_and_both_streams() {
+        let output = bounded_output(
+            Command::new("/bin/sh").args(["-c", "printf out; printf err >&2; exit 7"]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, b"out");
+        assert_eq!(output.stderr, b"err");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watchdog_control_timeout_reaps_its_owned_control_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_path = directory.path().join("control.pid");
+        let error = bounded_output(
+            Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "printf '%s' \"$$\" > \"$1\"; exec sleep 10",
+                    "control",
+                ])
+                .arg(&pid_path),
+            Duration::from_millis(500),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let pid = std::fs::read_to_string(pid_path)
+            .unwrap()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+    }
 
     #[test]
     #[cfg(unix)]
