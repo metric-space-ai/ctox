@@ -202,6 +202,20 @@ pub(super) fn active_permission_grant_allows(
     scope: &BusinessOsScope,
 ) -> anyhow::Result<bool> {
     let actor_id = actor.id.as_deref().unwrap_or("").trim();
+    if matches!(
+        permission,
+        BusinessOsPermission::SessionHandoffDisclose
+            | BusinessOsPermission::SessionHandoffReceive
+            | BusinessOsPermission::SessionHandoffExecute
+    ) && (actor_id.is_empty()
+        || scope.scope_type != BusinessOsScopeType::SessionHandoff
+        || scope
+            .scope_id
+            .as_deref()
+            .is_none_or(|id| id.trim().is_empty()))
+    {
+        return Ok(false);
+    }
     let count: i64 = conn.query_row(
         "SELECT COUNT(*)
          FROM business_permission_grants
@@ -223,6 +237,59 @@ pub(super) fn active_permission_grant_allows(
         |row| row.get(0),
     )?;
     Ok(count > 0)
+}
+
+#[cfg(test)]
+mod handoff_grant_scope_tests {
+    use super::*;
+
+    #[test]
+    fn handoff_grants_require_named_actor_and_exact_binding_scope() -> anyhow::Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE business_permission_grants (
+            active INTEGER, permission TEXT, scope_type TEXT, scope_id TEXT,
+            subject_type TEXT, subject_id TEXT
+        )",
+        )?;
+        let actor = BusinessOsActor::new(Some("alice".into()), "admin");
+        for permission in [
+            BusinessOsPermission::SessionHandoffDisclose,
+            BusinessOsPermission::SessionHandoffReceive,
+            BusinessOsPermission::SessionHandoffExecute,
+        ] {
+            for (scope_type, scope_id) in [
+                ("workspace", ""),
+                ("session_handoff", ""),
+                ("session_handoff", "binding-a"),
+            ] {
+                conn.execute("INSERT INTO business_permission_grants VALUES (1, ?1, ?2, ?3, 'role', 'admin')",
+                    params![permission.as_str(), scope_type, scope_id])?;
+            }
+            let mut scope = BusinessOsScope::workspace();
+            assert!(
+                !evaluate_policy_with_explicit_grants(&conn, &actor, permission, &scope)?.allowed
+            );
+            scope.scope_type = BusinessOsScopeType::SessionHandoff;
+            assert!(
+                !evaluate_policy_with_explicit_grants(&conn, &actor, permission, &scope)?.allowed
+            );
+            scope.scope_id = Some("binding-a".into());
+            assert!(
+                evaluate_policy_with_explicit_grants(&conn, &actor, permission, &scope)?.allowed
+            );
+            let anonymous = BusinessOsActor::new(None, "admin");
+            assert!(
+                !evaluate_policy_with_explicit_grants(&conn, &anonymous, permission, &scope)?
+                    .allowed
+            );
+            scope.scope_id = Some("binding-b".into());
+            assert!(
+                !evaluate_policy_with_explicit_grants(&conn, &actor, permission, &scope)?.allowed
+            );
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn queue_command_policy_decision(
