@@ -143,6 +143,12 @@
   cover this behavior. Rust/default-transport/Go/provider acceptance, the
   remaining release semantics and promotion remain open.
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.14.
+- Codex/OpenAI Chat URL citations now survive unary and streaming conversion,
+  with Unicode rune offsets over all output-text parts, upstream URL/id
+  deduplication, annotation-added/text-done/part-done/item-done event support,
+  and invalid-range filtering. Three actual converter guards plus its two
+  existing contract guards and the current upstream citation parent are
+  required; native/Go execution and full converter parity remain open.
 - Current-main Claude missing-thread404 detection now reaches unary execution,
   refresh replay, stream bootstrap and native account selection without
   credential rotation or cooldown. The manager adapter and Claude envelope
