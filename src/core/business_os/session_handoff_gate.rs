@@ -123,7 +123,9 @@ impl NativeSessionHandoffGate {
             return Err(deny("binding_mismatch"));
         }
         // Only the responsible enrolled instance may mint for its side.
-        if self.identity.public_identity() != expected_identity {
+        if self.identity.public_identity() != expected_identity
+            || request.issuer_identity != expected_identity
+        {
             return Err(deny("wrong_instance"));
         }
         // The principal must be a current active native user; its capability
@@ -276,6 +278,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE business_session_handoff_bindings (
                 binding_id TEXT PRIMARY KEY,
+                binding_digest TEXT NOT NULL,
                 revision INTEGER NOT NULL,
                 state TEXT NOT NULL,
                 side TEXT NOT NULL,
@@ -330,7 +333,7 @@ mod tests {
         let binding_digest = digest("ab");
         conn.execute(
             "INSERT INTO business_session_handoff_bindings VALUES (
-                'binding-1', 3, 'active', 'source', 'job-1', 'session-1', 'scope-1',
+                'binding-1', ?1, 3, 'active', 'source', 'job-1', 'session-1', 'scope-1',
                 ?1, 7, 2, ?2, 'alice', 'ed25519:target', 'bob',
                 'harness-a', '1.0', 'route-1', 'account-1', 'model-1'
             )",
@@ -362,6 +365,7 @@ mod tests {
 
     fn request(fixture: &Fixture, phase: SessionHandoffPhase) -> SessionHandoffGateRequest {
         SessionHandoffGateRequest {
+            issuer_identity: fixture.identity.public_identity(),
             phase,
             binding_digest: fixture.binding_digest.clone(),
             audience: "scope-1".into(),
@@ -375,6 +379,7 @@ mod tests {
                 model_route_id: "route-1".into(),
                 gateway_account_id: "account-1".into(),
                 model_id: "model-1".into(),
+                required_capabilities: Default::default(),
             },
             checkpoint_digest: fixture.binding_digest.clone(),
             checkpoint_sequence: 7,
@@ -448,6 +453,16 @@ mod tests {
     #[test]
     fn wrong_instance_or_missing_grant_denies() {
         let fixture = fixture();
+        let mut wrong_issuer = request(&fixture, SessionHandoffPhase::Disclose);
+        wrong_issuer.issuer_identity = identity().public_identity();
+        assert_eq!(
+            fixture
+                .gate
+                .authorize_with_conn(&fixture.conn, &wrong_issuer)
+                .unwrap_err()
+                .reason_code,
+            "wrong_instance"
+        );
         let foreign =
             NativeSessionHandoffGate::with_identity(PathBuf::from("test-root"), identity());
         assert_eq!(
@@ -480,22 +495,22 @@ mod tests {
     #[test]
     fn tampered_request_fields_deny_as_binding_mismatch() {
         let fixture = fixture();
-        let mut request = request(&fixture, SessionHandoffPhase::Disclose);
-        request.checkpoint_sequence = 8;
+        let mut wrong_sequence = request(&fixture, SessionHandoffPhase::Disclose);
+        wrong_sequence.checkpoint_sequence = 8;
         assert_eq!(
             fixture
                 .gate
-                .authorize_with_conn(&fixture.conn, &request)
+                .authorize_with_conn(&fixture.conn, &wrong_sequence)
                 .unwrap_err()
                 .reason_code,
             "binding_mismatch"
         );
-        let mut request = request(&fixture, SessionHandoffPhase::Disclose);
-        request.spec.gateway_account_id = "account-2".into();
+        let mut wrong_account = request(&fixture, SessionHandoffPhase::Disclose);
+        wrong_account.spec.gateway_account_id = "account-2".into();
         assert_eq!(
             fixture
                 .gate
-                .authorize_with_conn(&fixture.conn, &request)
+                .authorize_with_conn(&fixture.conn, &wrong_account)
                 .unwrap_err()
                 .reason_code,
             "binding_mismatch"
