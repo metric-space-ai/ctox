@@ -46,7 +46,7 @@
   history/notes fixture is vendored unchanged; six new scoped regressions are
   prepared. The Claude handler now maps both408 and504 to timeout_error,
   retains explicit upstream error classifications and supplies the request-timeout
-  fallback message. The complete embedded models.json now matches the exact
+  fallback message. The prior embedded models.json snapshot matched the exact
   v8.0.13 file (raw SHA256 f46d38b1ace1da689468daf4c36dbbd2e6af2c0496a3cb3ad4f3b5edac95ea7d).
   The full-catalog guard retains an exact normalized hash and provider/tier counts.
   This includes the Antigravity Claude5.5 records, current Codex tier catalogs,
@@ -72,6 +72,14 @@
   and the release page agree on 2026-10-05. This is the same immutable
   current-main comparison already retained:24 commits/169 changed paths above
   the v8.0.13 floor. It is a required current release target, not a promotion.
+  The current embedded catalog now matches its exact118168-byte upstream file:
+  raw SHA2563a97eea65c1df3ea8ad4edac838b37f7714868d1e784b3723d0650b6e848aa9a,
+  Git blob228ef1c7319210501eea759572404daf7fe6a9ee. Only two restored Claude4.6
+  records differ from the prior snapshot; all other provider/tier records retain
+  their bytes and order. The full hash/channel guard and Antigravity metadata
+  guard now require14 records with the restored200k/64k limits and live-registry
+  lookup. The earlier Claude5.5 and other-channel assertions remain intact.
+  Source-byte equality and preparation pass; these native guards are unexecuted.
   Claude generation and count-token preparation now keep forwarded caller
   blocks top-level when consecutive user turns terminate the message array,
   matching5d890405b59c4b84a2f00ca39c4ee1494ce51a72. Generation retains its

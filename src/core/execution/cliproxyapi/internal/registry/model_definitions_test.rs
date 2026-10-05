@@ -101,9 +101,9 @@ fn antigravity_web_search_requires_requested_provider_capability() {
     );
 }
 
-// ref: internal/registry/models/models.json:3980-4030 @ d7914afd
+// ref: internal/registry/models/models.json @ 16d98881d4bb37adaa827599e4be8f5154e81646
 #[test]
-fn candidate_v13_antigravity_claude_catalog_keeps_provider_and_thinking_limits() {
+fn candidate_v14_antigravity_claude_catalog_keeps_provider_and_thinking_limits() {
     let catalog = embedded_models_catalog().unwrap();
     let models = models_for_channel(&catalog, "antigravity").unwrap();
     for (id, display) in [
@@ -127,9 +127,32 @@ fn candidate_v13_antigravity_claude_catalog_keeps_provider_and_thinking_limits()
         assert_eq!((thinking.min, thinking.max), (1024, 64_000));
         assert!(thinking.zero_allowed && thinking.dynamic_allowed);
     }
-    assert!(!models.iter().any(
-        |model| ["claude-opus-4-6-thinking", "claude-sonnet-4-6"].contains(&model.id.as_str())
-    ));
+    for (id, display) in [
+        ("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)"),
+        ("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)"),
+    ] {
+        let model = models.iter().find(|model| model.id == id).unwrap();
+        assert_eq!(model.provider_type, "antigravity");
+        assert_eq!(model.owned_by, "antigravity");
+        assert_eq!(model.display_name, display);
+        assert_eq!(model.name, id);
+        assert_eq!(model.description, display);
+        assert_eq!(model.context_length, 200_000);
+        assert_eq!(model.max_completion_tokens, 64_000);
+        assert_eq!(
+            model.supported_input_modalities,
+            vec!["text".to_owned(), "image".to_owned()]
+        );
+        assert_eq!(model.supported_output_modalities, vec!["text".to_owned()]);
+        let thinking = model.thinking.as_ref().unwrap();
+        assert_eq!((thinking.min, thinking.max), (1024, 64_000));
+        assert!(thinking.zero_allowed && thinking.dynamic_allowed);
+        let registry = ModelRegistry::from_store(Arc::new(ModelCatalogStore::new(catalog.clone())));
+        let resolved = registry.lookup_model_info(id, "antigravity").unwrap();
+        assert_eq!(resolved.provider_type, "antigravity");
+        assert_eq!(resolved.context_length, 200_000);
+        assert_eq!(resolved.max_completion_tokens, 64_000);
+    }
     assert!(models_for_channel(&catalog, "claude")
         .unwrap()
         .iter()
@@ -143,7 +166,7 @@ fn complete_embedded_catalog_hash_channels_and_lookup_are_stable() {
             "{:x}",
             Sha256::digest(include_str!("models/models.json").trim_end().as_bytes())
         ),
-        "c8b7f9a3339801ca49f68c85f214ac5e1fa97ce63a94f5ba55a12d91d5c3b40a"
+        "8fad5ea79ca3a61dc4dfca72338ec4cd966218c3f9f62c6b074233d4af9579e6"
     );
     let expected = [
         ("claude", 18),
@@ -157,7 +180,7 @@ fn complete_embedded_catalog_hash_channels_and_lookup_are_stable() {
         ("codex-plus", 14),
         ("codex-pro", 14),
         ("kimi", 10),
-        ("antigravity", 12),
+        ("antigravity", 14),
         ("xai", 18),
         ("meta", 5),
     ];
