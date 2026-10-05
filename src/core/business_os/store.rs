@@ -19344,15 +19344,25 @@ fn command_projection_with_native_identity(
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
         .context("business command projection is missing command_id")?;
-    let native_context: Option<String> = conn
+    let native_command: Option<(String, String, String, String, String)> = conn
         .query_row(
-            "SELECT client_context_json FROM business_commands WHERE command_id = ?1",
+            "SELECT client_context_json, module, command_type, status, payload_json
+             FROM business_commands WHERE command_id = ?1",
             params![command_id],
-            |row| row.get(0),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()?;
-    let native_context: Value = native_context
-        .and_then(|raw| serde_json::from_str(&raw).ok())
+    let native_context: Value = native_command
+        .as_ref()
+        .and_then(|(raw, _, _, _, _)| serde_json::from_str(raw).ok())
         .unwrap_or(Value::Null);
     let owner_id = native_context
         .get("owner_user_id")
@@ -19362,6 +19372,21 @@ fn command_projection_with_native_identity(
         native_context.pointer("/actor/id").and_then(Value::as_str) == Some(*owner)
     });
     let mut projected = document.clone();
+    // Typed native control handlers normalize and redact their command payload
+    // before completing Core. Preserve that private-store presentation payload;
+    // Core's immutable admission intent is neither changed nor republished as
+    // an unsanitized replacement. Replica business_records are not consulted.
+    if let Some((_, module, command_type, status, payload)) = native_command.as_ref() {
+        if document["execution_mode"] == "control"
+            && document["module"].as_str() == Some(module.as_str())
+            && document["command_type"].as_str() == Some(command_type.as_str())
+            && document["status"].as_str() == Some(status.as_str())
+            && matches!(status.as_str(), "completed" | "failed" | "cancelled")
+        {
+            projected["payload"] = serde_json::from_str(payload)
+                .context("invalid native control presentation payload")?;
+        }
+    }
     let context = projected
         .as_object_mut()
         .context("business command projection must be an object")?
@@ -19692,8 +19717,8 @@ fn write_business_os_command_outbox_mirror(
     if !applied {
         return Ok(false);
     }
-    // Preserve the accepted private context. The mirror is a redacted public
-    // document and cannot replace the native command's authority record.
+    // Preserve the accepted private context and any typed native payload
+    // normalization. The public mirror cannot replace either private value.
     conn.execute(
         "INSERT INTO business_commands
             (command_id, module, command_type, record_id, status, payload_json,
@@ -19704,7 +19729,6 @@ fn write_business_os_command_outbox_mirror(
             command_type = excluded.command_type,
             record_id = excluded.record_id,
             status = excluded.status,
-            payload_json = excluded.payload_json,
             observed_at_ms = excluded.observed_at_ms",
         params![
             command_id,
@@ -35411,6 +35435,7 @@ pub(super) mod tests {
     fn audit_retention_policy_set_is_users_manage_gated_and_sanitized() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        create_repair_rxdb_tables(root)?;
         seed_business_user(root, "ops_admin", "admin")?;
         seed_business_user(root, "viewer", "user")?;
 
@@ -35496,6 +35521,39 @@ pub(super) mod tests {
         let stored_text = serde_json::to_string(&stored)?;
         assert!(!allowed_text.contains("SECRET_AUDIT_POLICY_PROMPT"));
         assert!(!stored_text.contains("SECRET_AUDIT_POLICY_PROMPT"));
+        drop(conn);
+
+        // Core retains the admission intent. Public delivery must not put its
+        // discarded prompt back into either the native presentation payload or
+        // the replicated command, including after reopening the store.
+        let intent =
+            channels::business_command_projection(root, "cmd_audit_retention_policy_allowed")?
+                .context("canonical admission intent")?;
+        assert_eq!(intent["payload"]["prompt"], "SECRET_AUDIT_POLICY_PROMPT");
+        for _ in 0..2 {
+            let delivery = deliver_business_command_outbox(root, 32)?;
+            assert_eq!(delivery["failed"], 0);
+            let reopened = open_store(root)?;
+            for command_id in [
+                "cmd_audit_retention_policy_denied",
+                "cmd_audit_retention_policy_allowed",
+            ] {
+                let native = load_business_command(&reopened, command_id)?;
+                assert_eq!(native.payload["retention_days"], 14);
+                assert!(native.payload.get("prompt").is_none());
+                let public =
+                    load_business_record_payload(&reopened, "business_commands", command_id)?
+                        .context("public retention policy command")?;
+                let replicated =
+                    load_rxdb_collection_record(root, "business_commands", command_id)?
+                        .context("replicated retention policy command")?;
+                for mirror in [public, replicated] {
+                    assert_eq!(mirror["payload"]["retention_days"], 14);
+                    assert!(mirror["payload"].get("prompt").is_none());
+                    assert!(!serde_json::to_string(&mirror)?.contains("SECRET_AUDIT_POLICY_PROMPT"));
+                }
+            }
+        }
         Ok(())
     }
 

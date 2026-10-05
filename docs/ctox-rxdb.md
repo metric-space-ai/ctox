@@ -315,6 +315,13 @@ canonical core intent, payload hash and authorization semantics are unchanged.
 The same enriched document is mirrored locally and to RxDB. Outbox delivery
 preserves an existing native client_context_json, including the credential
 needed for execution-time revalidation; public projections remain redacted.
+Absent native record IDs remain SQL NULL rather than becoming empty IDs during
+outbox delivery. The private native payload also survives public mirror updates.
+For a completed, failed or cancelled control command, the public projection
+uses the matching native command’s normalized presentation payload. Module,
+command type and terminal status must match Core; no replica row supplies this
+payload. This preserves typed defaults and discarded sensitive fields without
+rewriting Core’s immutable admission intent or weakening authorization.
 
 A projection that lacks matching native admission identity does not manufacture
 an actor from incoming metadata. The regression covers terminal state, outbox
