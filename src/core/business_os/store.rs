@@ -32589,6 +32589,26 @@ pub(super) mod tests {
             .context("expected queued task id")?
             .to_string();
         channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        // Leasing the route does not start command execution. Model the
+        // worker's durable phases before submitting its validation result.
+        for phase in ["leased", "running"] {
+            assert!(channels::transition_business_command_for_task(
+                root,
+                &task_id,
+                phase,
+                None,
+                None,
+                None,
+                "app validation fixture enters worker execution",
+            )?);
+        }
+        assert_eq!(
+            channels::inspect_business_command_for_task(root, &task_id)?
+                .context("expected canonical app command")?
+                .pointer("/command/execution_phase")
+                .and_then(Value::as_str),
+            Some("running")
+        );
         thread::sleep(Duration::from_millis(1100));
         write_minimal_runtime_app_artifacts(root, module_id)?;
 
@@ -32911,6 +32931,26 @@ pub(super) mod tests {
             .context("expected queued task id")?
             .to_string();
         channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        // Leasing the route does not start command execution. Model the
+        // worker's durable phases before submitting its validation result.
+        for phase in ["leased", "running"] {
+            assert!(channels::transition_business_command_for_task(
+                root,
+                &task_id,
+                phase,
+                None,
+                None,
+                None,
+                "app validation fixture enters worker execution",
+            )?);
+        }
+        assert_eq!(
+            channels::inspect_business_command_for_task(root, &task_id)?
+                .context("expected canonical app command")?
+                .pointer("/command/execution_phase")
+                .and_then(Value::as_str),
+            Some("running")
+        );
         thread::sleep(Duration::from_millis(1100));
         write_minimal_runtime_app_artifacts(root, module_id)?;
 
@@ -32981,6 +33021,26 @@ pub(super) mod tests {
             .context("expected queued task id")?
             .to_string();
         channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        // Leasing the route does not start command execution. Model the
+        // worker's durable phases before submitting its validation result.
+        for phase in ["leased", "running"] {
+            assert!(channels::transition_business_command_for_task(
+                root,
+                &task_id,
+                phase,
+                None,
+                None,
+                None,
+                "app validation fixture enters worker execution",
+            )?);
+        }
+        assert_eq!(
+            channels::inspect_business_command_for_task(root, &task_id)?
+                .context("expected canonical app command")?
+                .pointer("/command/execution_phase")
+                .and_then(Value::as_str),
+            Some("running")
+        );
         thread::sleep(Duration::from_millis(1100));
         write_minimal_runtime_app_artifacts(root, module_id)?;
         let module_dir = root
