@@ -376,6 +376,16 @@ only that scaffolding can load. The command remains queued until its owned
 worker runs and the existing app-validation/completion path accepts the result.
 Starter preparation never moves an unleased command into review or success.
 
+### Immediate document edits
+
+The deterministic Markdown append in a Documents chat uses a native control
+claim before changing the document, without creating a worker queue task. Its
+completion passes through the existing Core terminal barrier and mirrors that
+terminal result to the private command store and RxDB. An identical completed
+replay returns the saved result without making another version; a different
+intent with the same command ID is rejected. An unfinished claim requires
+recovery before another write and is never reported as successful.
+
 ### Command projection identity
 
 Terminal and outbox projections retain the actor ID from the accepted native

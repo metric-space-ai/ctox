@@ -6686,6 +6686,7 @@ fn record_command_inner(
         &command_id,
         &command,
         observed_at_ms,
+        native_authorization.as_ref(),
     )? {
         return Ok(completed);
     }
@@ -7081,6 +7082,7 @@ fn maybe_complete_documents_chat_markdown_edit_immediately(
     command_id: &str,
     command: &BusinessCommand,
     observed_at_ms: i64,
+    native_authorization: Option<&Value>,
 ) -> anyhow::Result<Option<CommandAccepted>> {
     if command.module != "documents" || command.command_type != "business_os.chat.task" {
         return Ok(None);
@@ -7101,6 +7103,23 @@ fn maybe_complete_documents_chat_markdown_edit_immediately(
         return Ok(None);
     }
 
+    // This deterministic edit has no worker queue. Claim its immutable intent
+    // before writing the document, then use the native control completion
+    // barrier before exposing terminal state to command readers.
+    let claim = channels::claim_business_control_command(
+        root,
+        business_command_core_claim_with_authorization(command_id, command, native_authorization)?,
+    )?;
+    if claim.disposition == "terminal" {
+        let mut replay = replayed_queue_command(root, conn, command_id, command)?;
+        replay.execution_mode = "control";
+        return Ok(Some(replay));
+    }
+    anyhow::ensure!(
+        claim.disposition == "new",
+        "document append has an uncertain native claim; recovery is required before another write"
+    );
+
     let payload_json = serde_json::to_string(&command.payload)?;
     let context_json = serde_json::to_string(&command.client_context)?;
     conn.execute(
@@ -7120,10 +7139,20 @@ fn maybe_complete_documents_chat_markdown_edit_immediately(
 
     let reply = "Die Markdown-Änderung wurde direkt als neue Dokumentversion persistiert.";
     let mut completed = process_business_chat_reply(root, conn, command_id, command, None, reply)?;
-    if completed.task_id.is_none() {
-        completed.task_id = Some(command_id.to_string());
-        completed.task_status = Some("completed".to_string());
-    }
+    conn.execute(
+        "UPDATE business_commands SET status='completed', observed_at_ms=?2 WHERE command_id=?1",
+        params![command_id, now_ms() as i64],
+    )?;
+    let mut writers = RxdbProjectionWriterCache::new(root);
+    super::command_plane::complete_and_project_business_control_command(
+        root,
+        command_id,
+        "completed",
+        completed.result.as_ref().unwrap_or(&Value::Null),
+        None,
+        &mut writers,
+    )?;
+    completed.execution_mode = "control";
     Ok(Some(completed))
 }
 
@@ -37232,7 +37261,9 @@ pub(super) mod tests {
         )?;
         assert_eq!(
             outcome.get("status").and_then(Value::as_str),
-            Some("completed")
+            Some("completed"),
+            "rollback-only command error: {:?}",
+            outcome.get("error_message")
         );
         assert_eq!(
             fs::read_to_string(app_root.join("modules/widget/index.js"))?,
@@ -42287,32 +42318,30 @@ pub(super) mod tests {
         drop(conn);
 
         let instruction = "Bitte ergänze ganz am Ende eine kurze Prüfnotiz: Diese Fassung wurde gegen die wiederhergestellte SKF Knowledge Base validiert (322 Quellen, 816 Messpunkte, 192 Knowledge Records); numerische Lastdaten sind metrisch mit Dezimalkomma zu interpretieren.";
-        let accepted = accept_rxdb_business_command(
-            root,
-            serde_json::json!({
-                "id": "cmd_documents_pruefnotiz",
-                "command_id": "cmd_documents_pruefnotiz",
+        let command_document = serde_json::json!({
+            "id": "cmd_documents_pruefnotiz",
+            "command_id": "cmd_documents_pruefnotiz",
+            "module": "documents",
+            "command_type": "business_os.chat.task",
+            "record_id": document_id,
+            "status": "pending_sync",
+            "payload": {
+                "title": "Documents bearbeiten · Test Markdown",
+                "instruction": instruction,
+                "prompt": instruction,
+                "user_message": instruction,
+                "message_id": "chatmsg_documents_pruefnotiz",
+                "mode": "data"
+            },
+            "client_context": {
+                "source": "business-os-chat",
                 "module": "documents",
-                "command_type": "business_os.chat.task",
-                "record_id": document_id,
-                "status": "pending_sync",
-                "payload": {
-                    "title": "Documents bearbeiten · Test Markdown",
-                    "instruction": instruction,
-                    "prompt": instruction,
-                    "user_message": instruction,
-                    "message_id": "chatmsg_documents_pruefnotiz",
-                    "mode": "data"
-                },
-                "client_context": {
-                    "source": "business-os-chat",
-                    "module": "documents",
-                    "mode": "data",
-                    "document_id": document_id,
-                    "owner_user_id": "tester"
-                }
-            }),
-        )?;
+                "mode": "data",
+                "document_id": document_id,
+                "owner_user_id": "tester"
+            }
+        });
+        let accepted = accept_rxdb_business_command(root, command_document.clone())?;
 
         assert_eq!(
             accepted.get("status").and_then(Value::as_str),
@@ -42361,6 +42390,69 @@ pub(super) mod tests {
         assert!(text.contains("Prüfnotiz"));
         assert!(text.contains("322 Quellen, 816 Messpunkte, 192 Knowledge Records"));
         assert!(text.contains("Dezimalkomma"));
+        let canonical = channels::business_command_projection(root, "cmd_documents_pruefnotiz")?;
+        assert_eq!(canonical["execution_mode"], "control");
+        assert_eq!(canonical["terminal_status"], "completed");
+        let private_status: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = 'cmd_documents_pruefnotiz'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(private_status, "completed");
+        let rxdb_command =
+            load_rxdb_collection_record(root, "business_commands", "cmd_documents_pruefnotiz")?
+                .context("completed immediate edit must be visible over RxDB")?;
+        assert_eq!(rxdb_command["terminal_status"], "completed");
+        let version_count = || -> anyhow::Result<i64> {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM business_records WHERE collection = 'document_versions' AND json_extract(payload_json, '$.document_id') = ?1",
+                [document_id],
+                |row| row.get(0),
+            )?)
+        };
+        let before_replay = version_count()?;
+        let replay = accept_rxdb_business_command(root, command_document.clone())?;
+        assert_eq!(replay["status"], "completed");
+        assert_eq!(replay["execution_mode"], "control");
+        assert_eq!(
+            replay["result"]["document_writeback"]["version_id"],
+            next_version
+        );
+        assert_eq!(version_count()?, before_replay);
+        let mut changed = command_document.clone();
+        changed["payload"]["user_message"] =
+            serde_json::json!("Bitte ergänze am Ende eine Prüfnotiz: anderer Inhalt.");
+        let conflict = accept_rxdb_business_command(root, changed)
+            .expect_err("reusing the command id must not append a different section");
+        assert!(conflict.to_string().contains("idempotency_conflict"));
+        assert_eq!(version_count()?, before_replay);
+
+        let mut uncertain_document = command_document;
+        let uncertain_id = "cmd_documents_uncertain_pruefnotiz";
+        uncertain_document["id"] = serde_json::json!(uncertain_id);
+        uncertain_document["command_id"] = serde_json::json!(uncertain_id);
+        let uncertain_command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some(uncertain_id.to_owned()),
+            module: "documents".to_owned(),
+            command_type: "business_os.chat.task".to_owned(),
+            record_id: Some(document_id.to_owned()),
+            payload: uncertain_document["payload"].clone(),
+            client_context: uncertain_document["client_context"].clone(),
+        };
+        let claim = channels::claim_business_control_command(
+            root,
+            business_command_core_claim(uncertain_id, &uncertain_command)?,
+        )?;
+        assert_eq!(claim.disposition, "new");
+        let recovery_error = accept_rxdb_business_command(root, uncertain_document)
+            .expect_err("a nonterminal claim must not repeat an unproven document write");
+        assert!(recovery_error.to_string().contains("recovery is required"));
+        assert_eq!(version_count()?, before_replay);
+        assert!(find_queue_task_for_command(root, uncertain_id).is_none());
+        let uncertain = channels::business_command_projection(root, uncertain_id)?;
+        assert_eq!(uncertain["execution_phase"], "accepted");
+        assert_eq!(uncertain["terminal_status"], "none");
         Ok(())
     }
 
@@ -43936,7 +44028,12 @@ pub(super) mod tests {
             }),
         )?;
 
-        assert_eq!(outcome["status"], "completed");
+        assert_eq!(
+            outcome["status"],
+            "completed",
+            "configured admin command error: {:?}",
+            outcome.get("error_message")
+        );
         let conn = open_store(root)?;
         let configured_role: String = conn.query_row(
             "SELECT role FROM business_users WHERE user_id = ?1",
@@ -44232,7 +44329,12 @@ pub(super) mod tests {
             document,
             CommandOrigin::ReplicatedPeer,
         )?;
-        assert_eq!(outcome["status"], "failed");
+        assert_eq!(
+            outcome["status"],
+            "failed",
+            "historical accepted control replay error: {:?}",
+            outcome.get("error_message")
+        );
         assert!(outcome["error_message"]
             .as_str()
             .is_some_and(|error| error.contains("native authorization receipt")));
