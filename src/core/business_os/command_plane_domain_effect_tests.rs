@@ -104,6 +104,62 @@ fn domain_receipt_replay_recovers_current_source_without_reapplying() -> anyhow:
 }
 
 #[test]
+fn domain_receipt_reordered_intent_reuses_original_admission_hash() -> anyhow::Result<()> {
+    let (root, command) = fixture(true)?;
+    let original_claim = business_command_core_claim(command.id.as_deref().unwrap(), &command)?;
+    let mut reordered = command.clone();
+    reordered.payload =
+        serde_json::from_str(r#"{"name":"Original","project_id":"domain-project"}"#)?;
+    let replay_claim = business_command_core_claim(reordered.id.as_deref().unwrap(), &reordered)?;
+    assert_eq!(original_claim.intent, replay_claim.intent);
+    assert_ne!(original_claim.payload_hash, replay_claim.payload_hash);
+
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    let admission = || -> anyhow::Result<(String, String)> {
+        Ok(core.query_row(
+            "SELECT payload_hash, intent_json FROM business_command_aggregates WHERE command_id='cmd-domain-recovery'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    };
+    let before = admission()?;
+    assert_eq!(before.0, original_claim.payload_hash);
+    let store = open_store(root.path())?;
+    let revision: String = store.query_row(
+        "SELECT rev FROM business_records WHERE collection='workjet_projects' AND id='domain-project'",
+        [], |row| row.get(0),
+    )?;
+
+    // Exercise actual native intake, not merely the claim helper. Using the
+    // freshly rebuilt hash here would reject the existing domain receipt.
+    let outcome = accept_rxdb_business_command(root.path(), document(&reordered))?;
+    assert_eq!(outcome["result"]["original_result"], "retained");
+    assert_eq!(admission()?, before);
+    assert_eq!(
+        channels::business_command_projection(root.path(), "cmd-domain-recovery")?
+            ["terminal_status"],
+        "completed"
+    );
+    // A terminal retry keeps the original result and cannot reapply the effect.
+    let terminal = accept_rxdb_business_command(root.path(), document(&reordered))?;
+    assert_eq!(terminal["result"]["original_result"], "retained");
+    assert_eq!(admission()?, before);
+    assert_eq!(
+        store.query_row(
+            "SELECT rev FROM business_records WHERE collection='workjet_projects' AND id='domain-project'",
+            [], |row| row.get::<_, String>(0),
+        )?,
+        revision
+    );
+    let effect_count: i64 = core.query_row(
+        "SELECT COUNT(*) FROM business_command_effects WHERE command_id='cmd-domain-recovery'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(effect_count, 1);
+    Ok(())
+}
+
+#[test]
 fn domain_receipt_terminal_replay_repairs_missing_result_storage() -> anyhow::Result<()> {
     let (root, command) = fixture(true)?;
     let rxdb = Connection::open(rxdb_store_path(root.path()))?;
