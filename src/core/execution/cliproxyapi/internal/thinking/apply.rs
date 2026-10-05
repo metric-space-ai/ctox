@@ -507,9 +507,10 @@ impl ThinkingEngine {
             parse_suffix_to_config(&suffix.raw_suffix)
         } else {
             let mut config = source_config;
+            // Current source intent also belongs to models resolved from the
+            // instance's live registry, not only explicitly selected capabilities.
             if !has_thinking_config(&config)
                 && !request.normalized_updates_changed
-                && request.model_info_resolved
                 && !request.source_body.is_empty()
             {
                 config = extract_source_thinking_config(request.source_body, &from_format);
