@@ -41,6 +41,7 @@ mod outbound_update_digest;
 mod person_research_command;
 mod person_research_gap_closure;
 pub mod policy;
+mod populated_store_recovery;
 mod project_chats;
 mod project_crew;
 pub(crate) use project_crew::project_crew_member_for_task;
@@ -103,6 +104,12 @@ pub fn audit_customer_apps(root: &std::path::Path) -> anyhow::Result<serde_json:
 }
 pub(crate) use browser_runtime::BrowserSessionAutomationRequest;
 pub use outbound_update_digest::tick as outbound_update_digest_tick;
+pub use populated_store_recovery::{
+    backup_native_rxdb_immutable_store, default_native_rxdb_immutable_backup_path,
+    materialize_supported_historical_rxdb_fixture, native_rxdb_cutover_receipt,
+    native_rxdb_store_inventory, restore_native_rxdb_immutable_backup,
+    run_production_native_rxdb_cutover, supported_historical_rxdb_versions,
+};
 pub use rxdb_peer::enqueue_business_command_document;
 pub use rxdb_peer::initialize_business_os_rxdb;
 pub use rxdb_peer::native_peer_status;

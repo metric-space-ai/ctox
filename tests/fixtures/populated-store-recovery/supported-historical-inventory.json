@@ -1,0 +1,224 @@
+{
+  "schema": "ctox.populated_store_recovery.fixture.v1",
+  "purpose": "Synthetic populated historical native RxDB store for migration/recovery acceptance. Versions are taken from declared migration_strategies and the current schema contract; this file does not invent compatibility.",
+  "supported_historical": {
+    "business_commands": {
+      "source_version": 0,
+      "current_version_from_contract": 2,
+      "strategy_source": "src/apps/business-os/modules/ctox/collections.schema.json",
+      "steps": [
+        "1:set_from_first_truthy inbound_channel from inbound_channel|module",
+        "2:identity"
+      ]
+    },
+    "ctox_queue_tasks": {
+      "source_version": 0,
+      "current_version_from_contract": 3,
+      "strategy_source": "src/apps/business-os/modules/ctox/collections.schema.json",
+      "steps": [
+        "1:identity",
+        "2:identity",
+        "3:identity"
+      ]
+    },
+    "ctox_runs": {
+      "source_version": 0,
+      "current_version_from_contract": 1,
+      "strategy_source": "src/apps/business-os/modules/ctox/collections.schema.json",
+      "steps": [
+        "1:identity"
+      ]
+    },
+    "desktop_files": {
+      "source_version": 0,
+      "current_version_from_contract": 0,
+      "strategy_source": "none; already current",
+      "steps": []
+    },
+    "desktop_file_chunks": {
+      "source_version": 0,
+      "current_version_from_contract": 0,
+      "strategy_source": "none; already current",
+      "steps": []
+    }
+  },
+  "unsupported_source_versions": [
+    {
+      "collection": "business_commands",
+      "version": 3,
+      "reason": "schema contract and packaged cockpit strategies stop at version 2"
+    },
+    {
+      "collection": "notes",
+      "version": 0,
+      "reason": "notes v0->v1 strategies exist on the packaged notes module, but native startup only migrates runtime-installed modules plus packaged cockpit collections"
+    }
+  ],
+  "unverified_environments": [
+    "live tenant stores",
+    "provider export/import/resume (issue 97)",
+    "Windows native host acceptance"
+  ],
+  "documents": [
+    {
+      "collection": "business_commands",
+      "source_version": 0,
+      "id": "cmd-history-001",
+      "revision": "1-populated-history",
+      "deleted": 0,
+      "lastWriteTime": 1700000001000,
+      "data": {
+        "id": "cmd-history-001",
+        "command_id": "cmd-history-001",
+        "contract_version": 2,
+        "idempotency_key": "cmd-history-001",
+        "payload_hash": "sha256:9c4a3a0e1f2b6d8a7c5e4f3b2a19080766554433221100ffeeddccbbaa998877",
+        "module": "ctox",
+        "command_type": "business_os.test",
+        "record_id": "file-attachment-001",
+        "status": "completed",
+        "replication_phase": "native_observed",
+        "task_id": "task-history-001",
+        "history": [
+          {
+            "phase": "accepted",
+            "at_ms": 1700000001000
+          },
+          {
+            "phase": "queued",
+            "at_ms": 1700000001100
+          },
+          {
+            "phase": "completed",
+            "at_ms": 1700000001500,
+            "run_id": "run-history-001"
+          }
+        ],
+        "payload": {
+          "title": "historical completed command",
+          "instruction": "synthetic fixture"
+        },
+        "updated_at_ms": 1700000001500
+      }
+    },
+    {
+      "collection": "business_commands",
+      "source_version": 0,
+      "id": "cmd-pending-001",
+      "revision": "1-populated-pending",
+      "deleted": 0,
+      "lastWriteTime": 1700000002000,
+      "data": {
+        "id": "cmd-pending-001",
+        "command_id": "cmd-pending-001",
+        "contract_version": 2,
+        "idempotency_key": "cmd-pending-001",
+        "payload_hash": "sha256:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "module": "ctox",
+        "command_type": "business_os.test",
+        "record_id": "",
+        "status": "pending_sync",
+        "replication_phase": "pushed",
+        "attempt": 0,
+        "payload": {
+          "title": "historical pending command",
+          "instruction": "do not duplicate"
+        },
+        "updated_at_ms": 1700000002000
+      }
+    },
+    {
+      "collection": "business_commands",
+      "source_version": 0,
+      "id": "cmd-deleted-001",
+      "revision": "2-populated-deleted",
+      "deleted": 1,
+      "lastWriteTime": 1700000003000,
+      "data": {
+        "id": "cmd-deleted-001",
+        "command_id": "cmd-deleted-001",
+        "module": "ctox",
+        "command_type": "business_os.test",
+        "status": "cancelled",
+        "_deleted": true,
+        "updated_at_ms": 1700000003000
+      }
+    },
+    {
+      "collection": "ctox_queue_tasks",
+      "source_version": 0,
+      "id": "task-history-001",
+      "revision": "1-populated-task-history",
+      "deleted": 0,
+      "lastWriteTime": 1700000001100,
+      "data": {
+        "id": "task-history-001",
+        "command_id": "cmd-history-001",
+        "command_type": "business_os.test",
+        "title": "historical completed task",
+        "status": "completed",
+        "module": "ctox",
+        "updated_at_ms": 1700000001500
+      }
+    },
+    {
+      "collection": "ctox_runs",
+      "source_version": 0,
+      "id": "run-history-001",
+      "revision": "1-populated-run",
+      "deleted": 0,
+      "lastWriteTime": 1700000001500,
+      "data": {
+        "id": "run-history-001",
+        "task_id": "task-history-001",
+        "command_id": "cmd-history-001",
+        "title": "historical execution",
+        "status": "completed",
+        "started_at_ms": 1700000001200,
+        "finished_at_ms": 1700000001500
+      }
+    },
+    {
+      "collection": "desktop_files",
+      "source_version": 0,
+      "id": "file-attachment-001",
+      "revision": "1-populated-file",
+      "deleted": 0,
+      "lastWriteTime": 1700000001600,
+      "data": {
+        "id": "file-attachment-001",
+        "name": "populated-store-recovery.txt",
+        "kind": "file",
+        "linked_collection": "business_commands",
+        "linked_record_id": "cmd-history-001",
+        "content_hash": "70b24f43af4f6268646054f87b87b2509adfd9c7e4f7198bd03bf6c281fb01b0",
+        "content_hash_scheme": "sha256",
+        "content_generation_id": "gen1",
+        "size_bytes": 39,
+        "created_at_ms": 1700000001600,
+        "updated_at_ms": 1700000001600
+      }
+    },
+    {
+      "collection": "desktop_file_chunks",
+      "source_version": 0,
+      "id": "file-attachment-001_gen1_0",
+      "revision": "1-populated-chunk",
+      "deleted": 0,
+      "lastWriteTime": 1700000001600,
+      "data": {
+        "id": "file-attachment-001_gen1_0",
+        "file_id": "file-attachment-001",
+        "generation_id": "gen1",
+        "idx": 0,
+        "total": 1,
+        "encoding": "base64",
+        "data": "cG9wdWxhdGVkLXN0b3JlLXJlY292ZXJ5LWF0dGFjaG1lbnQtdjEK",
+        "chunk_hash": "70b24f43af4f6268646054f87b87b2509adfd9c7e4f7198bd03bf6c281fb01b0",
+        "chunk_hash_scheme": "sha256",
+        "size_bytes": 39,
+        "created_at_ms": 1700000001600
+      }
+    }
+  ]
+}
