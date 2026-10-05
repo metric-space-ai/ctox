@@ -2270,9 +2270,8 @@ pub(crate) mod tests {
         channels::lease_queue_task(root, &task_id, "ctox-service")?;
 
         let conn = open_store(root)?;
-        // Model a historical row written before canonical mutation-time
-        // projection refresh. The current writer correctly refuses to seed this
-        // mismatch, so inject the persisted legacy fixture directly.
+        // Seed an already persisted historical mismatch, rather than asking the
+        // version-guarded production writer to downgrade a current leased row.
         let historical = serde_json::json!({
             "id": task_id,
             "command_id": "cmd_no_running_repair",
@@ -2282,15 +2281,27 @@ pub(crate) mod tests {
         });
         assert_eq!(
             conn.execute(
-                "UPDATE business_records SET payload_json=?1 WHERE collection=?2 AND record_id=?3",
-                params![
-                    serde_json::to_string(&historical)?,
-                    "ctox_queue_tasks",
-                    task_id.as_str()
-                ],
+                "UPDATE business_records SET payload_json = ?1
+                 WHERE collection = 'ctox_queue_tasks' AND record_id = ?2 AND deleted = 0",
+                params![serde_json::to_string(&historical)?, task_id.as_str()],
             )?,
             1,
-            "the historical fixture must replace the admitted projection"
+            "historical fixture must replace the existing queue projection"
+        );
+        let seeded: Value = serde_json::from_str(&conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1",
+            params![task_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(
+            seeded, historical,
+            "historical mismatch must exist before repair"
+        );
+        assert_eq!(
+            channels::load_queue_task(root, &task_id)?
+                .context("canonical task must remain present")?
+                .route_status,
+            "leased"
         );
         drop(conn);
 
