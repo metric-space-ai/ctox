@@ -101,11 +101,22 @@ fn stop_control_group(group: libc::pid_t) -> io::Result<()> {
     // EPERM for a group containing only its unreaped leader (XNU killpg1).
     // Confirm that exact state; other permission failures remain fatal.
     #[cfg(target_os = "macos")]
-    if error.raw_os_error() == Some(libc::EPERM)
-        && control_exited_unreaped(group)?
-        && control_group_contains_only_leader(group)
-    {
-        return Ok(());
+    if error.raw_os_error() == Some(libc::EPERM) {
+        // Closing a full output pipe can put Darwin's leader in the exit
+        // transition: killpg already excludes it, but WNOWAIT is not yet
+        // ready. Keep its child identity pinned and wait only a bounded time
+        // for the same exact leader-only proof. Never waive a live member,
+        // an enumeration failure or ECHILD from another waiter.
+        let until = Instant::now() + Duration::from_millis(200);
+        loop {
+            if control_exited_unreaped(group)? && control_group_contains_only_leader(group) {
+                return Ok(());
+            }
+            if Instant::now() >= until {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
     Err(error)
 }
