@@ -100,7 +100,11 @@
   frames after message_stop. Chat now uses reasoning_content, includes the
   cache-write usage alias, emits one measured trailing usage chunk and numbers
   streamed tool calls from zero independently of Claude block indexes.
-  Thirteen native regressions plus the two existing Chat response guards are
+  Raw JSON is compacted outside string literals before embedding it in SSE,
+  matching upstream RawMessage encoding without changing keys, numbers or
+  escaped string values. Pretty-printed provider bodies remain complete single-line
+  events and are checked through both public translators.
+  Fourteen native regressions plus the two existing Chat response guards are
   required; the older reasoning guard is strengthened against the legacy field.
   Exact current-release Go parents cover the common/native converters and the
   full existing Chat wire suite. Source preparation is not native, Go, host or

@@ -105,7 +105,28 @@ pub fn claude_messages_json_to_sse(raw: &[u8]) -> (Cow<'_, [u8]>, String) {
 fn emit_raw(output: &mut Vec<u8>, prefix: &[u8], raw: &[u8], suffix: &[u8]) {
     output.extend_from_slice(b"data: ");
     output.extend_from_slice(prefix);
-    output.extend_from_slice(raw);
+    // Upstream json.Marshal compacts embedded RawMessage values. Keep each
+    // payload on one SSE data line while retaining raw keys, numeric spellings
+    // and string escapes rather than normalizing through a Value map.
+    let mut quoted = false;
+    let mut escaped = false;
+    for &byte in raw {
+        if quoted {
+            output.push(byte);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else if byte == b'"' {
+            quoted = true;
+            output.push(byte);
+        } else if !matches!(byte, b' ' | b'\t' | b'\r' | b'\n') {
+            output.push(byte);
+        }
+    }
     output.extend_from_slice(suffix);
     output.extend_from_slice(b"\n\n");
 }
@@ -583,6 +604,55 @@ mod tests {
             serde_json::from_str::<Value>(calls[1]["function"]["arguments"].as_str().unwrap())
                 .unwrap(),
             json!({"city":"Tokyo"})
+        );
+    }
+
+    #[test]
+    fn candidate_claude_native_json_pretty_payloads_keep_single_line_events() {
+        let text = "a b\tline\n\"quoted\" \\ 雪";
+        let input = json!({"nested":{"text":text,"items":[true,null,2]}});
+        let compact = native(
+            json!([
+                {"type":"text","text":text},
+                {"type":"tool_use","id":"pretty_tool","name":"lookup","input":input.clone()}
+            ]),
+            "tool_use",
+        );
+        let document: Value = serde_json::from_slice(&compact).unwrap();
+        let pretty = serde_json::to_vec_pretty(&document).unwrap();
+        assert!(pretty.contains(&b'\n'));
+        let (adapted, _) = claude_messages_json_to_sse(&pretty);
+        for line in adapted
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+        {
+            let payload = line
+                .strip_prefix(b"data: ")
+                .expect("one data line per event");
+            let _: Value =
+                serde_json::from_slice(payload).expect("complete single-line event JSON");
+        }
+        let chat: Value = serde_json::from_slice(&chat(b"{}", b"{}", &pretty)).unwrap();
+        let response: Value = serde_json::from_slice(&responses(b"{}", b"{}", &pretty)).unwrap();
+        for output in [&chat, &response] {
+            assert_eq!(output["id"], "msg_native");
+            assert_eq!(output["model"], "claude-native");
+        }
+        assert_eq!(chat["choices"][0]["message"]["content"], text);
+        assert_eq!(response["output"][0]["content"][0]["text"], text);
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                chat["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+                    .as_str()
+                    .unwrap()
+            )
+            .unwrap(),
+            input
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(response["output"][1]["arguments"].as_str().unwrap())
+                .unwrap(),
+            input
         );
     }
 }
