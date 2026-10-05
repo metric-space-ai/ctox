@@ -30769,7 +30769,7 @@ pub(super) mod tests {
                 "payload": {},
                 "client_context": {
                     "capability_token": token,
-                    "actor": { "id": "chef1", "role": "chef" }
+                    "actor": { "id": "viewer", "role": "chef" }
                 }
             }),
             CommandOrigin::ReplicatedPeer,
