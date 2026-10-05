@@ -45563,6 +45563,53 @@ BRbBv2mhaOAuKib7tmks74He
         seed_test_business_os_app_root(root)?;
         write_private_runtime_module(root, "team-one", "1.0.0")?;
         seed_business_user(root, "team_member", "user")?;
+        seed_business_user(root, "release-owner", "chef")?;
+
+        let private = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_why_team_one_before_release",
+                "module": "ctox",
+                "type": "ctox.business_os.why",
+                "payload": { "module_id": "team-one" },
+                "client_context": { "actor": { "id": "team_member" } }
+            }),
+        )?;
+        assert_eq!(private["status"], "completed", "{private}");
+        assert_eq!(
+            private
+                .pointer("/result/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("private")
+        );
+        assert_eq!(
+            private
+                .pointer("/result/decisions/visibility/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let release = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_release_team_one",
+                "module": "ctox",
+                "type": "ctox.module.release",
+                "payload": {
+                    "module_id": "team-one",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "responsible_user_ids": ["release-owner"],
+                    "data_access_review": {
+                        "completed": true,
+                        "collections": [],
+                        "reviewed_by": "release-owner"
+                    }
+                },
+                "client_context": { "actor": { "id": "release-owner" } }
+            }),
+        )?;
+        assert_eq!(release["status"], "completed", "{release}");
 
         let outcome = accept_rxdb_business_command(
             root,
