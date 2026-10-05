@@ -117,6 +117,15 @@
   message keys; partial streams do not publish. Stream owners retain keys only,
   not the complete request body. Six native regressions and three primary Go
   parent oracles are required; source preparation does not prove execution.
+  Buffered upstream SSE now follows the separate validation, continuity and
+  tool-restoration branch through both the initial request and401 replay.
+  Invalid, empty, errored or incomplete start/delta envelopes return502 and
+  publish neither aliases nor successful usage. A completed message_stop
+  supplies the continuation ID; streams without it never publish new aliases.
+  Start/delta token and cache measurements merge into one usage record, while
+  unchanged event lines and delimiters retain their bytes. Three additional
+  actual executor guards cover continuation,401/partial state and error cases;
+  current native execution and full parity remain unverified.
   Claude generation and count-token preparation now keep forwarded caller
   blocks top-level when consecutive user turns terminate the message array,
   matching5d890405b59c4b84a2f00ca39c4ee1494ce51a72. Generation retains its

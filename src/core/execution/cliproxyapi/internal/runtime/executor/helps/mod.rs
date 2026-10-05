@@ -242,12 +242,12 @@ pub use token_helpers::{
 };
 pub use usage_helpers::{
     has_nonzero_token_usage, json_payload, normalize_usage_detail_total,
-    parse_antigravity_stream_usage, parse_antigravity_usage, parse_claude_stream_usage,
-    parse_claude_usage, parse_codex_image_tool_usage, parse_codex_usage, parse_gemini_stream_usage,
-    parse_gemini_usage, parse_interactions_stream_usage, parse_interactions_usage,
-    parse_openai_stream_usage, parse_openai_usage, strip_usage_metadata_from_json,
-    SseUsageMetadataFilter, StreamUsageBuffer, DEFAULT_STOP_TRACE_CAPACITY, DEFAULT_STOP_TRACE_TTL,
-    MAX_USAGE_STREAM_CHUNK_BYTES,
+    observe_plugin_executor_stream, parse_antigravity_stream_usage, parse_antigravity_usage,
+    parse_claude_stream_usage, parse_claude_usage, parse_codex_image_tool_usage, parse_codex_usage,
+    parse_gemini_stream_usage, parse_gemini_usage, parse_interactions_stream_usage,
+    parse_interactions_usage, parse_openai_stream_usage, parse_openai_usage,
+    strip_usage_metadata_from_json, SseUsageMetadataFilter, StreamUsageBuffer,
+    DEFAULT_STOP_TRACE_CAPACITY, DEFAULT_STOP_TRACE_TTL, MAX_USAGE_STREAM_CHUNK_BYTES,
 };
 pub use user_id_cache::{ClaudeIdentityKvStore, ClaudeIdentityStoreError, UserIdCache};
 pub use utls_client::{

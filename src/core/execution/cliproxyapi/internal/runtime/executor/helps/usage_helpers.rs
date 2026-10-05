@@ -457,7 +457,8 @@ fn parse_responses_plugin_executor_usage(payload: &[u8]) -> Detail {
 
 /// Streaming counterpart of `parse_plugin_executor_response_usage`.
 ///
-/// No production executor calls this yet. The Responses branch falls through
+/// Buffered Claude responses use this to merge start and delta usage once.
+/// The Responses branch falls through
 /// to top-level usage when a service tier arrives without `response.usage`.
 pub fn observe_plugin_executor_stream(
     protocol: &str,
