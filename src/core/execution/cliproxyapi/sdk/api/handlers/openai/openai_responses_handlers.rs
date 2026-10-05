@@ -934,7 +934,6 @@ pub struct OpenAiResponsesStreamBootstrap {
     terminal: bool,
     failed: bool,
     ended: bool,
-    codex_client: bool,
 }
 
 impl OpenAiResponsesStreamBootstrap {
@@ -957,7 +956,6 @@ impl OpenAiResponsesStreamBootstrap {
             terminal: false,
             failed: false,
             ended: false,
-            codex_client,
         };
         stream.fill_pending().await;
         (!stream.pending.is_empty()).then_some(stream).ok_or(())

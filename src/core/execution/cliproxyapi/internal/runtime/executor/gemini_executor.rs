@@ -980,30 +980,6 @@ fn payload_config_from_legacy(config: &GeminiExecutorConfig) -> super::helps::Pa
     output
 }
 
-fn apply_interactions_thinking_suffix(body: &mut Map<String, Value>, model: &str) {
-    let suffix = parse_suffix(model);
-    if !suffix.has_suffix {
-        return;
-    }
-    let generation = body
-        .entry("generation_config")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(generation) = generation.as_object_mut() else {
-        return;
-    };
-    let normalized = suffix.raw_suffix.to_ascii_lowercase();
-    if matches!(
-        normalized.as_str(),
-        "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
-    ) {
-        generation.insert("thinking_level".into(), Value::String(normalized));
-    } else if let Ok(budget) = suffix.raw_suffix.parse::<u64>() {
-        generation.insert("thinking_budget".into(), Value::from(budget));
-    } else if normalized == "none" {
-        generation.insert("thinking_budget".into(), Value::from(0));
-    }
-}
-
 fn normalize_interactions_input(body: &mut Map<String, Value>) {
     let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
         return;

@@ -841,13 +841,17 @@ data: {"status":408,"message":"stream disconnected before completion"}
     #[test]
     fn error_event_wins_over_payload_type() {
         let mut framer = ResponsesSseFramer::new(false);
-        framer.write_chunk(
-            b"event: error\ndata: {\"type\":\"provider.error\",\"message\":\"failed\"}\n\n",
-        );
+        assert!(!framer
+            .write_chunk(
+                b"event: error\ndata: {\"type\":\"provider.error\",\"message\":\"failed\"}\n\n",
+            )
+            .is_empty());
         assert_eq!(framer.terminal_event(), "error");
 
         let mut framer = ResponsesSseFramer::new(false);
-        framer.write_chunk(b"data: {\"response\":{\"error\":{\"message\":\"failed\"}}}\n\n");
+        assert!(!framer
+            .write_chunk(b"data: {\"response\":{\"error\":{\"message\":\"failed\"}}}\n\n")
+            .is_empty());
         assert_eq!(framer.terminal_event(), "error");
     }
 
@@ -881,15 +885,15 @@ data: {"status":408,"message":"stream disconnected before completion"}
     #[test]
     fn indexed_output_items_are_sorted_before_unindexed_items() {
         let mut framer = ResponsesSseFramer::new(false);
-        framer.write_chunk(
+        assert!(!framer.write_chunk(
             b"data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc-1\",\"name\":\"shell\"}}\n\n",
-        );
-        framer.write_chunk(
+         ).is_empty());
+        assert!(!framer.write_chunk(
             b"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg-0\"}}\n\n",
-        );
-        framer.write_chunk(
+         ).is_empty());
+        assert!(!framer.write_chunk(
             b"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg-unindexed\"}}\n\n",
-        );
+         ).is_empty());
         let completed = framer.write_chunk(
             b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[]}}\n\n",
         );
@@ -970,8 +974,8 @@ data: {"status":408,"message":"stream disconnected before completion"}
         assert_eq!(payload["sequence_number"], 0);
 
         let mut framer = ResponsesSseFramer::new(false);
-        framer.write_chunk(b"event: response.created\ndata: {\"type\":\"response.created\",\"sequence_number\":0}\n\n");
-        framer.write_chunk(b"event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"sequence_number\":1}\n\n");
+        assert!(!framer.write_chunk(b"event: response.created\ndata: {\"type\":\"response.created\",\"sequence_number\":0}\n\n" ).is_empty());
+        assert!(!framer.write_chunk(b"event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"sequence_number\":1}\n\n" ).is_empty());
         let out =
             framer.write_chunk(b"event: error\ndata: {\"error\":{\"code\":\"cyber_policy\"}}\n\n");
         let payload: Value = serde_json::from_slice(&data_payload(&out).unwrap()).unwrap();
