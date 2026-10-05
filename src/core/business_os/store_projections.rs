@@ -2270,19 +2270,28 @@ pub(crate) mod tests {
         channels::lease_queue_task(root, &task_id, "ctox-service")?;
 
         let conn = open_store(root)?;
-        upsert_business_record(
-            &conn,
-            "ctox_queue_tasks",
-            &task_id,
-            now_ms() as i64,
-            serde_json::json!({
-                "id": task_id,
-                "command_id": "cmd_no_running_repair",
-                "status": "completed",
-                "route_status": "handled",
-                "task_status": "completed"
-            }),
-        )?;
+        // Model a historical row written before canonical mutation-time
+        // projection refresh. The current writer correctly refuses to seed this
+        // mismatch, so inject the persisted legacy fixture directly.
+        let historical = serde_json::json!({
+            "id": task_id,
+            "command_id": "cmd_no_running_repair",
+            "status": "completed",
+            "route_status": "handled",
+            "task_status": "completed"
+        });
+        assert_eq!(
+            conn.execute(
+                "UPDATE business_records SET payload_json=?1 WHERE collection=?2 AND record_id=?3",
+                params![
+                    serde_json::to_string(&historical)?,
+                    "ctox_queue_tasks",
+                    task_id.as_str()
+                ],
+            )?,
+            1,
+            "the historical fixture must replace the admitted projection"
+        );
         drop(conn);
 
         let dry_run =
