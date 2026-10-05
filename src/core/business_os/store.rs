@@ -30436,17 +30436,15 @@ pub(super) mod tests {
             Ok(status)
         };
 
-        // Replicated peer, no token, claiming chef → inert "user", no DataWrite
-        // → policy-denied, never processed.
+        // Authentication rejects a tokenless peer before policy or recording.
         let denied = accept_rxdb_business_command_with_origin(
             root.path(),
             cmd("d1", serde_json::json!({ "actor": { "id": "chef1" } })),
             CommandOrigin::ReplicatedPeer,
-        )?;
-        assert!(
-            is_failed(&denied),
-            "no-token fall-through data command must be policy-denied: {denied:?}"
-        );
+        )
+        .expect_err("tokenless fall-through command must fail authentication");
+        assert!(denied.to_string().contains("valid capability token"));
+        assert_eq!(command_status(root.path(), "d1")?, None);
         assert_ne!(
             command_status(root.path(), "d1")?.as_deref(),
             Some("accepted"),
@@ -30700,16 +30698,10 @@ pub(super) mod tests {
     // only require_manage_all ones). A replicated peer claiming a chef id without
     // a token must NOT pass the SecretsManage policy gate.
     //
-    // INTENTIONALLY RED (SM16, 01.08.). The guarantee still holds — it now holds
-    // earlier. A tokenless peer is refused at the authentication boundary and
-    // never receives the synthetic user whose policy this test then inspects, so
-    // the assertion below waits for a rejection that can no longer happen at that
-    // stage. Turning it green would mean asserting the weaker of two guarantees.
-    //
-    // The repair is to split it: one test that the auth boundary refuses a
-    // tokenless peer, one that the SecretsManage gate refuses an authenticated
-    // non-chef. Left red rather than adjusted, because an assertion edited to
-    // match today's behaviour stops being evidence about it.
+    // The tokenless-peer regression proves rejection before command persistence.
+    // The separate authenticated-peer regression below exercises SecretsManage
+    // with a valid user token and a forged chef hint. The valid-chef control
+    // remains in this test.
     #[test]
     fn replicated_peer_without_token_cannot_manage_secrets() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
@@ -30726,18 +30718,22 @@ pub(super) mod tests {
             })
         };
 
-        // Replicated peer claiming chef, no token → SecretsManage denied (role is
-        // downgraded to user). The handler returns a non-completed (failed) outcome.
         let denied = accept_rxdb_business_command_with_origin(
             root.path(),
             secret_list("s1", serde_json::json!({ "actor": { "id": "chef1" } })),
             CommandOrigin::ReplicatedPeer,
+        )
+        .expect_err("tokenless secret.list must fail authentication");
+        assert!(denied.to_string().contains("valid capability token"));
+        let conn = open_store(root.path())?;
+        let stored_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_commands WHERE command_id = 's1'",
+            [],
+            |row| row.get(0),
         )?;
-        assert_ne!(
-            denied.get("status").and_then(Value::as_str),
-            Some("completed"),
-            "replicated no-token secret.list must not succeed: {denied:?}"
-        );
+        assert_eq!(stored_count, 0, "unauthenticated command must not persist");
+        drop(conn);
+        assert!(channels::list_queue_tasks(root.path(), &[], 32)?.is_empty());
 
         // Same command with a valid chef token → allowed.
         let now = now_ms() as i64;
@@ -30752,6 +30748,47 @@ pub(super) mod tests {
             Some("completed"),
             "valid chef token must pass SecretsManage: {allowed:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn authenticated_replicated_peer_without_secret_permission_cannot_manage_secrets(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "chef1", "chef")?;
+        seed_business_user(root.path(), "viewer", "user")?;
+        let (token, _) =
+            issue_business_os_capability_token(root.path(), "viewer", now_ms() as i64)?;
+        let denied = accept_rxdb_business_command_with_origin(
+            root.path(),
+            serde_json::json!({
+                "id": "secret_policy_denied",
+                "command_id": "secret_policy_denied",
+                "module": "credentials",
+                "type": "ctox.secret.list",
+                "payload": {},
+                "client_context": {
+                    "capability_token": token,
+                    "actor": { "id": "chef1", "role": "chef" }
+                }
+            }),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert_ne!(denied["status"], "completed");
+        assert_eq!(denied["status"], "failed");
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some(BusinessOsPermission::SecretsManage.as_str())
+        );
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(channels::list_queue_tasks(root.path(), &[], 32)?.is_empty());
         Ok(())
     }
 
@@ -44037,6 +44074,8 @@ pub(super) mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         let command_id = "cmd_external_sql_missing_authorization";
+        seed_business_user(root, "operator", "admin")?;
+        let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
         let document = serde_json::json!({
             "id": command_id,
             "command_id": command_id,
@@ -44050,6 +44089,7 @@ pub(super) mod tests {
                 "item_id": 42
             },
             "client_context": {
+                "capability_token": token,
                 "actor": { "id": "operator", "display_name": "Operator" }
             }
         });
@@ -44062,10 +44102,9 @@ pub(super) mod tests {
             payload: document["payload"].clone(),
             client_context: document["client_context"].clone(),
         };
-        let claim = channels::claim_business_control_command(
-            root,
-            business_command_core_claim(command_id, &command)?,
-        )?;
+        let claim_request = business_command_core_claim(command_id, &command)?;
+        assert!(claim_request.intent.get("native_authorization").is_none());
+        let claim = channels::claim_business_control_command(root, claim_request)?;
         assert_eq!(claim.disposition, "new");
         let conn = open_store(root)?;
         conn.execute(
