@@ -43579,7 +43579,7 @@ pub(super) mod tests {
         fs::create_dir_all(&module_root)?;
         fs::write(
             module_root.join("module.json"),
-            serde_json::to_vec_pretty(&json!({
+            serde_json::to_vec_pretty(&serde_json::json!({
                 "id": "test-module",
                 "title": "Snapshot fixture",
                 "entry": "app.js",
