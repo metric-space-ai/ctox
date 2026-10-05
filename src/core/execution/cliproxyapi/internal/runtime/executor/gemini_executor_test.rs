@@ -27,6 +27,7 @@ struct MockClient {
     requests: Mutex<Vec<HttpRequest>>,
     response: Mutex<HttpResponse>,
     stream_chunks: Mutex<Vec<Vec<u8>>>,
+    entered_at: Mutex<Option<std::time::SystemTime>>,
 }
 
 impl MockClient {
@@ -48,6 +49,7 @@ impl MockClient {
 impl HostHttpClient for MockClient {
     fn execute<'a>(&'a self, request: HttpRequest) -> PluginFuture<'a, HttpResponse> {
         Box::pin(async move {
+            *self.entered_at.lock().unwrap() = Some(std::time::SystemTime::now());
             self.requests.lock().unwrap().push(request);
             Ok(self.response.lock().unwrap().clone())
         })
@@ -455,4 +457,157 @@ fn header<'a>(headers: &'a BTreeMap<String, Vec<String>>, name: &str) -> Option<
         .find(|(key, _)| key.eq_ignore_ascii_case(name))
         .and_then(|(_, values)| values.first())
         .map(String::as_str)
+}
+
+#[derive(Default)]
+struct GeminiUsageCollector(Mutex<Vec<crate::sdk::cliproxy::usage::Record>>);
+
+impl crate::sdk::cliproxy::usage::Plugin for GeminiUsageCollector {
+    fn handle_usage(
+        &self,
+        _: &crate::sdk::cliproxy::usage::UsageContext,
+        record: &crate::sdk::cliproxy::usage::Record,
+    ) {
+        self.0.lock().unwrap().push(record.clone());
+    }
+}
+
+fn usage_executor() -> (
+    GeminiExecutor,
+    Arc<crate::sdk::cliproxy::usage::Manager>,
+    Arc<GeminiUsageCollector>,
+) {
+    let manager = Arc::new(crate::sdk::cliproxy::usage::Manager::new(8));
+    let collector = Arc::new(GeminiUsageCollector::default());
+    manager.register(collector.clone());
+    let executor = GeminiExecutor::new(
+        Arc::new(GeminiExecutorConfig::default()),
+        Arc::new(Registry::new()),
+    )
+    .with_usage_manager(manager.clone());
+    (executor, manager, collector)
+}
+
+#[tokio::test]
+async fn candidate_google_usage_starts_before_transport_and_keeps_cache_reasoning() {
+    let (executor, manager, collector) = usage_executor();
+    let client = MockClient::with_body(
+        br#"{"usageMetadata":{"promptTokenCount":11,"toolUsePromptTokenCount":2,"candidatesTokenCount":3,"thoughtsTokenCount":4,"cachedContentTokenCount":5,"totalTokenCount":20}}"#,
+    );
+    let mut input = request(client.clone());
+    input
+        .metadata
+        .insert("requested_model".into(), json!(" public-gemini "));
+    executor.execute(input).await.unwrap();
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert!(!record.failed);
+    assert_eq!(record.provider, "gemini");
+    assert_eq!(record.model, "gemini-3.1-pro-preview");
+    assert_eq!(record.alias, "public-gemini");
+    assert!(record.requested_at.unwrap() <= client.entered_at.lock().unwrap().unwrap());
+    assert_eq!(record.detail.input_tokens, 13);
+    assert_eq!(record.detail.output_tokens, 3);
+    assert_eq!(record.detail.reasoning_tokens, 4);
+    assert_eq!(record.detail.cache_read_tokens, 5);
+    assert_eq!(record.detail.total_tokens, 20);
+}
+
+#[tokio::test]
+async fn candidate_google_usage_preserves_upstream_failure_once() {
+    let (executor, manager, collector) = usage_executor();
+    let client = MockClient::with_body(b"upstream rejected the account");
+    client.response.lock().unwrap().status_code = 401;
+    assert!(executor.execute(request(client)).await.is_err());
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].failed);
+    assert_eq!(records[0].fail.status_code, 401);
+    assert_eq!(records[0].detail.total_tokens, 0);
+}
+
+#[tokio::test]
+async fn candidate_google_usage_captures_missing_client_bootstrap() {
+    let (executor, manager, collector) = usage_executor();
+    let mut input = request(MockClient::with_body(b"{}"));
+    input.http_client = None;
+    assert!(executor.execute(input).await.is_err());
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].failed);
+    assert!(records[0].fail.body.contains("HTTP client missing"));
+}
+
+struct PendingGeminiUsageClient(tokio::sync::Notify);
+
+impl HostHttpClient for PendingGeminiUsageClient {
+    fn execute<'a>(&'a self, _: HttpRequest) -> PluginFuture<'a, HttpResponse> {
+        Box::pin(async move {
+            self.0.notify_one();
+            std::future::pending().await
+        })
+    }
+
+    fn execute_stream<'a>(&'a self, _: HttpRequest) -> PluginFuture<'a, HttpStreamResponse> {
+        Box::pin(std::future::pending())
+    }
+}
+
+#[tokio::test]
+async fn candidate_google_usage_settles_cancelled_attempt_once() {
+    let (executor, manager, collector) = usage_executor();
+    let client = Arc::new(PendingGeminiUsageClient(tokio::sync::Notify::new()));
+    let mut input = request(MockClient::with_body(b"{}"));
+    input.http_client = Some(client.clone());
+    let task = tokio::spawn(async move { executor.execute(input).await });
+    let started =
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.0.notified()).await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(started.is_ok(), "the request must reach the held transport");
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].failed);
+    assert_eq!(records[0].fail.status_code, 499);
+}
+
+#[tokio::test]
+async fn candidate_google_usage_native_interactions_keeps_its_usage_schema() {
+    let (_, manager, collector) = usage_executor();
+    let executor = GeminiExecutor::interactions(
+        Arc::new(GeminiExecutorConfig::default()),
+        Arc::new(Registry::new()),
+    )
+    .with_usage_manager(manager.clone());
+    let client = MockClient::with_body(
+        br#"{"usage":{"total_input_tokens":11,"total_output_tokens":3,"total_thought_tokens":4,"cache_read_tokens":5,"total_tokens":18}}"#,
+    );
+    let mut input = request(client);
+    input.auth_provider = "gemini-interactions".into();
+    input.source_format = "interactions".into();
+    input.payload = br#"{"input":"hello"}"#.to_vec();
+    executor.execute(input).await.unwrap();
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].failed);
+    assert_eq!(records[0].detail.input_tokens, 11);
+    assert_eq!(records[0].detail.output_tokens, 3);
+    assert_eq!(records[0].detail.reasoning_tokens, 4);
+    assert_eq!(records[0].detail.cache_read_tokens, 5);
+    assert_eq!(records[0].detail.total_tokens, 18);
+}
+
+#[tokio::test]
+async fn candidate_google_usage_dedicated_counting_is_not_inference() {
+    let (executor, manager, collector) = usage_executor();
+    let client = MockClient::with_body(br#"{"totalTokens":3}"#);
+    executor.count_tokens(request(client)).await.unwrap();
+    manager.stop();
+    assert!(collector.0.lock().unwrap().is_empty());
 }

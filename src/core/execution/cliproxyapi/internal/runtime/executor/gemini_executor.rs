@@ -480,41 +480,75 @@ impl GeminiExecutor {
         request: ExecutorRequest,
     ) -> Result<ExecutorResponse, PluginExecutionError> {
         reject_compact(&request)?;
-        let client = require_client(&request)?;
-        let (body, to) = self.prepare_body(&request, false, false)?;
-        let upstream =
-            self.build_request(&request, body.clone(), &to, request_action(&request), false);
-        let response = client.execute(upstream).await?;
-        self.ensure_active()?;
-        ensure_success(response.status_code, &response.body)?;
-        if let Some(manager) = &self.usage_manager {
-            let reporter = UsageReporter::new(
+        // ref: gemini_executor.go:144-145,185 @ a4acc9f7
+        // Bind timing before preparation/transport and settle every failed attempt.
+        let reporter = self.usage_manager.as_ref().map(|manager| {
+            let alias = request
+                .metadata
+                .get("requested_model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|alias| !alias.is_empty())
+                .unwrap_or(&request.model);
+            Arc::new(UsageReporter::new(
                 Arc::clone(manager),
-                UsageContext::default(),
+                UsageContext::default()
+                    .with_requested_model_alias(alias)
+                    .with_generate(request_action(&request) != "countTokens"),
                 "gemini",
                 self.identifier.clone(),
                 base_model(&request.model),
                 None,
                 "",
+            ))
+        });
+        let _publication = GeminiUsagePublication(reporter.clone());
+        let result: Result<ExecutorResponse, PluginExecutionError> = async {
+            let client = require_client(&request)?;
+            let (body, to) = self.prepare_body(&request, false, false)?;
+            if let Some(reporter) = &reporter {
+                reporter.set_translated_reasoning_effort(&body, to.as_str());
+            }
+            let upstream =
+                self.build_request(&request, body.clone(), &to, request_action(&request), false);
+            let response = client.execute(upstream).await?;
+            self.ensure_active()?;
+            ensure_success(response.status_code, &response.body)?;
+            if let Some(reporter) = &reporter {
+                let detail = if to.as_str() == "interactions" {
+                    super::helps::parse_interactions_usage(&response.body)
+                } else {
+                    gemini_usage_detail(&response.body)
+                };
+                reporter.publish(detail);
+            }
+            let mut state: TranslationState = None;
+            let payload = self.registry.translate_non_stream(
+                &self.cancellation,
+                &to,
+                &response_format(&request),
+                &request.model,
+                original_request(&request),
+                &body,
+                &response.body,
+                &mut state,
             );
-            reporter.publish(gemini_usage_detail(&response.body));
+            Ok(ExecutorResponse {
+                payload,
+                headers: response.headers,
+                ..ExecutorResponse::default()
+            })
         }
-        let mut state: TranslationState = None;
-        let payload = self.registry.translate_non_stream(
-            &self.cancellation,
-            &to,
-            &response_format(&request),
-            &request.model,
-            original_request(&request),
-            &body,
-            &response.body,
-            &mut state,
-        );
-        Ok(ExecutorResponse {
-            payload,
-            headers: response.headers,
-            ..ExecutorResponse::default()
-        })
+        .await;
+        if let (Some(reporter), Err(error)) = (&reporter, &result) {
+            let status = match error.downcast_ref::<GeminiExecutorError>() {
+                Some(GeminiExecutorError::Upstream { status, .. }) => Some(i32::from(*status)),
+                Some(GeminiExecutorError::Cancelled) => Some(499),
+                _ => None,
+            };
+            reporter.publish_failure(status, error.as_ref());
+        }
+        result
     }
 
     async fn execute_stream_inner(
@@ -671,26 +705,20 @@ impl GeminiExecutor {
     }
 }
 
-fn gemini_usage_detail(body: &[u8]) -> Detail {
-    let usage = serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|body| body.get("usageMetadata").cloned())
-        .unwrap_or(Value::Null);
-    Detail {
-        input_tokens: usage
-            .get("promptTokenCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        output_tokens: usage
-            .get("candidatesTokenCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        total_tokens: usage
-            .get("totalTokenCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        ..Detail::default()
+struct GeminiUsagePublication(Option<Arc<UsageReporter>>);
+
+impl Drop for GeminiUsagePublication {
+    fn drop(&mut self) {
+        if let Some(reporter) = &self.0 {
+            // The reporter's terminal-once guard preserves an already settled
+            // success or explicit failure when this request future is dropped.
+            reporter.publish_failure(Some(499), &"Gemini request cancelled before completion");
+        }
     }
+}
+
+fn gemini_usage_detail(body: &[u8]) -> Detail {
+    super::helps::parse_gemini_usage(body)
 }
 
 impl ProviderExecutor for GeminiExecutor {
