@@ -412,7 +412,8 @@ fn normalize_raw_integer_field_types(parameters: &str, fields: &[&str]) -> Optio
                 document,
                 &format!("properties.{field}.type"),
                 replacement,
-            )?.into_bytes();
+            )?
+            .into_bytes();
             changed |= updated != output;
             output = updated;
         }
