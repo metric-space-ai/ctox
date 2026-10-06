@@ -41,12 +41,17 @@ try {
     const live = fixture();
     const value = await live.invoke();
     assert.equal(value.projects[0].workingCopies[0].id, 'native-copy');
+    assert.equal(value.count, 1);
+    assert.equal(value.truncated, false);
     assert.equal(live.reads.length, 2);
     assert.ok(live.reads.every(({ query }) => query.signal.aborted));
     results.push('current native projects and copies without historical pull');
     live.rows.workjet_projects.length = 0;
     live.rows.workjet_working_copies.length = 0;
-    assert.equal((await live.invoke()).projects.length, 0);
+    const empty = await live.invoke();
+    assert.equal(empty.projects.length, 0);
+    assert.equal(empty.count, 0);
+    assert.equal(empty.truncated, false);
     assert.ok(live.reads[0].query.requireRevision !== live.reads[2].query.requireRevision);
     results.push('fresh native empty result');
     const replaced = fixture({ exec: (name, query, peer) => {
@@ -57,6 +62,25 @@ try {
     assert.ok(rejected);
     assert.ok(replaced.reads.every(({ query }) => query.signal.aborted));
     results.push('replaced generation rejects and aborts');
+    const incomplete = fixture({ exec: () => [] });
+    let incompleteRejected = false;
+    try { await incomplete.invoke(); } catch (error) {
+      incompleteRejected = error.code === 'WORKJET_PROJECT_LIST_INCOMPLETE';
+    }
+    assert.ok(incompleteRejected);
+    assert.ok(incomplete.reads.every(({ query }) => query.signal.aborted));
+    results.push('native nonzero count rejects an empty projection');
+    const legacy = fixture({ dispatch: (receipt) => {
+      delete receipt.result.count;
+      return receipt;
+    } });
+    let legacyRejected = false;
+    try { await legacy.invoke(); } catch (error) {
+      legacyRejected = error.code === 'WORKJET_PROJECT_LIST_UNCONFIRMED';
+    }
+    assert.ok(legacyRejected);
+    assert.equal(legacy.reads.length, 0);
+    results.push('legacy unconfirmed native count rejects before query');
     const originalNow = Date.now;
     let now = 10_000;
     try {
@@ -76,7 +100,7 @@ try {
     } finally { Date.now = originalNow; }
     return results;
   }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd) });
-  assert.equal(results.length, 4);
+  assert.equal(results.length, 6);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };

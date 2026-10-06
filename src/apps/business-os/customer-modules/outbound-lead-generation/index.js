@@ -468,7 +468,7 @@ const NICHT_ZURUECKGEMELDET = 'Der Vorgang hat sich nicht zurueckgemeldet. Reche
 // Gemessen: vorher 50360 ms fuer 1 Firma / 3 Personen; mit Parallelisierung
 // und $in liegt die Frist grosszuegig ueber dem 3-s-Ziel, aber weit unter
 // der alten 50-s-Welt — ein haengender Vorgang blockiert die Kette nicht mehr.
-// Gemessen am 03.09.2026 auf Produktionsinstanz: eine Sperrvermerkspruefung braucht 7 bis
+// Gemessen am 03.09.2026 auf Kundeninstanz: eine Sperrvermerkspruefung braucht 7 bis
 // 75 Sekunden (CRM-Projektion mit 17.520 Firmen / 60.639 Personen, Bedarfs-
 // abfrage). Mit 30 Sekunden riss jede zweite Pruefung die Frist und der Nutzer
 // sah dauerhaft "hat nicht geantwortet", obwohl der Befehl serverseitig sauber
@@ -642,7 +642,7 @@ export async function mount(ctx) {
   globalThis.addEventListener('online', handleOnline);
   bindCollections();
   bindUi();
-  // Zuerst zeichnen, dann laden. Am 03.09.2026 auf Produktionsinstanz gemessen: vom
+  // Zuerst zeichnen, dann laden. Am 03.09.2026 auf Kundeninstanz gemessen: vom
   // Seitenaufruf bis zur nutzbaren Oberflaeche vergingen 167 Sekunden, davon
   // fast alles im `await reload()` - die fuenf Collections antworten erst,
   // wenn ihre Replikation steht, und die Shell faehrt 201 Collections hoch.
@@ -713,7 +713,7 @@ function istKanalAbriss(error) {
 
 // Der Auftrag hat CTOX nie erreicht: der Browser hatte keine Sync-Verbindung
 // ("business_commands has no authenticated WebRTC peer after 45000 ms").
-// Produktionsinstanz 23.09.2026: CARBAGAS, DuPont und CHT standen danach als
+// Kundeninstanz 23.09.2026: CARBAGAS, DuPont und CHT standen danach als
 // "fehlgeschlagen" da, obwohl am Server kein einziger Befehl ankam.
 function auftragNichtZugestellt(error) {
   return /no authenticated WebRTC peer|collection peer: not-connected|nicht mit CTOX verbunden/i.test(String(error?.message || error));
@@ -1482,7 +1482,7 @@ function quellenGlossar() {
 }
 
 // Owner 23.09.2026: "fuer jedes Feld genuegt EINE passende belegte Quelle".
-// Die Regel kam nur in den Standardtext; der auf Produktionsinstanz gespeicherte Ablauf
+// Die Regel kam nur in den Standardtext; der auf Kundeninstanz gespeicherte Ablauf
 // (v32, 23.09. 13:13) trug weiter die alte Zwei-Quellen-Regel, der Agent liess
 // Registerfelder, WZ-Code und Land deshalb offen (25.09.2026). Ersetzt werden
 // nur die beiden alten Zeilen, wortgleich; jede eigene Fassung bleibt stehen.
@@ -8588,7 +8588,7 @@ async function queueAdapterReconciliation(reason, policyRecord = state.researchP
 // RxCollection-OBJEKT als frame.collection; der CTOX-Server verwirft solche
 // Frames still, jede direkte Sellify-Abfrage lief deshalb in ihren Timeout und
 // jeder Abgleich ging den 12-s-Umweg ueber einen Befehl. Mit dem Collection-
-// NAMEN antwortet derselbe Weg in unter einer Sekunde (Produktionsinstanz 26.09.2026).
+// NAMEN antwortet derselbe Weg in unter einer Sekunde (Kundeninstanz 26.09.2026).
 // Bis der Shell-Fix ueberall geladen ist, fragt die App den Peer selbst.
 async function sellifyDirektAnfrage(payload, timeoutMs) {
   const sync = state.ctx?.sync;
@@ -8840,7 +8840,7 @@ async function sucheSellifyKampagnen() {
 // payload.sql.country_code ("CH") und mehrsprachig in country
 // (`GE:"Schweiz";US:"Switzerland";BA:"CH"`). Der Import las nur
 // firma.country_code und setzte deshalb bei allen 32 Firmen der Kampagne
-// "Unternehmen CH - Chemie" das Land DE (Produktionsinstanz 23.09.2026) - die Recherche
+// "Unternehmen CH - Chemie" das Land DE (Kundeninstanz 23.09.2026) - die Recherche
 // haette deutsche statt Schweizer Register befragt.
 function sellifyLaenderkennung(firma) {
   const sql = firma?.payload?.sql || firma?.sql || {};
@@ -9367,7 +9367,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
   // Vorhandene Leads kennt die App bereits aus ihrer Liste. Frueher fragte der
   // Import fuer JEDEN Lead einzeln die Datenbank (unter Last ein Netz-Umlauf je
   // Firma) und legte jeden einzeln an; eine haengende Einzelabfrage liess den
-  // Import bei 21 von 29 Firmen stehen (Produktionsinstanz 25.09.2026). Neue Leads werden
+  // Import bei 21 von 29 Firmen stehen (Kundeninstanz 25.09.2026). Neue Leads werden
   // gesammelt und blockweise angelegt, mit Fortschrittsmeldung.
   const bekannteIds = new Set(state.leads.map((lead) => lead.id));
   const neueLeads = [];
@@ -9376,7 +9376,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
   const melde = (text) => { try { fortschritt?.(text); } catch { /* nur Anzeige */ } };
   // Vorhandene Leads in wenigen Sammelabfragen laden statt je Firma einzeln:
   // 55 Firmen einer Sellify-Kampagne brauchten unter Serverlast ueber sieben
-  // Minuten, je Firma ein Netz-Umlauf (Produktionsinstanz 26.09.2026).
+  // Minuten, je Firma ein Netz-Umlauf (Kundeninstanz 26.09.2026).
   const zeilen = normalizedRows.map((raw, index) => {
     const row = normalisiereImportzeile(raw, index);
     return { raw, row, id: raw.id || `lead_${fingerprint(`${row.name}|${row.domain || row.website}|${row.country}`)}` };
@@ -10151,7 +10151,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
     // Nur Leads, deren Ausgang noch offen ist: laufende immer, sonst nur solange
     // noch kein Vorgangsergebnis angewendet wurde. Fertige Leads mit
     // angewendetem Ergebnis fragten sonst alle 5 s erneut beim Server nach
-    // (137 "Pruefung noetig"-Leads, Produktionsinstanz 26.09.2026).
+    // (137 "Pruefung noetig"-Leads, Kundeninstanz 26.09.2026).
     const pendingLeads = state.leads.filter((lead) => {
       const status = String(lead.research_status || '');
       if (status === 'queued' || status === 'running') return true;
@@ -10308,7 +10308,7 @@ async function loadResearchCommandsForLeads(leads = []) {
 // laengst abgeschlossene, alle gleichzeitig. Bei 207 Leads waren das je Tab
 // hunderte Abfragen alle 5 s; die Abfragewarteschlange des Servers lief voll
 // (75 offen, 74 s je Abfrage) und jede andere Aktion der App blieb haengen
-// (Produktionsinstanz 26.09.2026). Abgeschlossene Befehle aendern sich nicht mehr und
+// (Kundeninstanz 26.09.2026). Abgeschlossene Befehle aendern sich nicht mehr und
 // werden gemerkt; hoechstens vier Abfragen laufen gleichzeitig.
 const BEFEHL_ENDZUSTAENDE = new Set([
   'completed', 'failed', 'cancelled', 'canceled', 'blocked', 'rejected', 'succeeded', 'handled', 'timed_out', 'expired',
@@ -11469,7 +11469,7 @@ async function fetchAuthoritativeSourceVersion(kind, entityId, workflowId, promp
 // Version nach dem letzten Schreiben. Das lokale Browser-Replikat hinkt dagegen
 // hinterher: die zweite Uebergabe derselben Firma scheiterte am 25.09.2026 mit
 // "source version changed", weil die Dublettenpruefung die Firma im lokalen
-// Replikat mit dem Stand von vor dem letzten Update fand. Auf Produktionsinstanz ist
+// Replikat mit dem Stand von vor dem letzten Update fand. Auf Kundeninstanz ist
 // company_source_version nicht registriert, daher dieser zweite Weg.
 async function serverseitigeQuellversion(kind, entityId) {
   const id = Number(entityId) || 0;

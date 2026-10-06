@@ -12,6 +12,8 @@ use std::{
     sync::Arc,
 };
 
+type HostWaiting<'a> = std::pin::Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'a>>;
+
 #[derive(Debug, Clone)]
 pub struct HostStarted {
     /// Actual private endpoint from the live listener, never an invitation field.
@@ -94,7 +96,7 @@ where
         let (endpoint, authority, waiting): (
             PathBuf,
             Arc<dyn ExecutionAuthority>,
-            std::pin::Pin<Box<dyn Future<Output = io::Result<()>> + Send + '_>>,
+            HostWaiting<'_>,
         ) = if let Some(options) = voter {
             let host = session.attach_execution(options, key).await?;
             (host.ipc_endpoint().to_path_buf(), host.node().clone(), Box::pin(host.wait_stopped()))
