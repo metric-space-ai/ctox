@@ -23,6 +23,9 @@ import { getActiveCollectionRegistry } from './active-collections.mjs';
 import { getPresenceRegistry } from './presence.mjs';
 import { getMultiTabSyncCoordinator } from './multi-tab-sync-coordinator.mjs';
 import { DEFAULT_WINDOW_LIMIT, isControlPlaneStatusCollection } from './query-demand-loader.mjs';
+import { cloneQueryRow, normalizeQueryProjection, projectQueryDocument, projectedDocumentWriteError } from './query-projection.mjs';
+
+const readOnlyProjectedDocuments = new WeakSet();
 
 export function getCtoxIndexedDbStorage() {
   return { name: 'ctox-indexeddb-native' };
@@ -596,9 +599,9 @@ class CtoxRxQuery {
         // 200-row window when a loader/complete eager replica serves it.
         // Check dynamically: a loader may attach after subscription starts.
         const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
-        const canApplyPrimaryDelta = () => !controlPlaneRead && Boolean(primaryId)
+        const canApplyPrimaryDelta = () => !controlPlaneRead && !this.query.projection && Boolean(primaryId)
           && !this.collection.demandLoader && !this.query.requireRevision;
-        const canApplyQueryDelta = () => !controlPlaneRead && !this.single
+        const canApplyQueryDelta = () => !controlPlaneRead && !this.query.projection && !this.single
           && !this.collection.demandLoader && !this.query.requireRevision
           && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
@@ -808,9 +811,14 @@ class CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
+    if (this.query.requireRevision && !demandLoader) {
+      throw Object.assign(new Error('QUERY_GENERATION_REQUIRED: strict demand read has no loader'), {
+        code: 'QUERY_GENERATION_REQUIRED', retryable: false,
+      });
+    }
     // Replica coverage answers ordinary reads only. Explicit revision tokens
     // still require the loader's authority and connection-generation checks.
-    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
+    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision || this.query.projection)) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
         ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
         : {};
@@ -865,7 +873,7 @@ class CtoxRxQuery {
         docs = docs.slice(0, this.query.limit);
       }
     }
-    if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
+    if ((isControlPlaneStatusCollection(this.collection.name) || this.query.requireRevision || this.query.projection) && demandLoader !== this.collection.demandLoader) {
       // A response authorized under the previous bridge must not reach a
       // subscriber after that bridge has been detached or replaced.
       if (this.query.requireRevision) {
@@ -883,7 +891,11 @@ class CtoxRxQuery {
         retryable: false,
       });
     }
-    const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
+    const wrapped = docs.map((doc) => new CtoxRxDocument(
+      this.collection,
+      this.query.projection ? projectQueryDocument(doc, this.query.projection) : doc,
+      { projected: Boolean(this.query.projection) },
+    ));
     return this.single ? wrapped[0] || null : wrapped;
   }
 
@@ -895,6 +907,8 @@ class CtoxRxQuery {
       limit: patch.limit ?? this.query.limit,
       skip: patch.skip ?? this.query.skip,
       requireRevision: patch.requireRevision ?? this.query.requireRevision,
+      projection: this.query.projection,
+      signal: this.signal,
     }, this.single);
   }
 
@@ -909,14 +923,15 @@ class CtoxRxQuery {
 }
 
 class CtoxRxDocument {
-  constructor(collection, data) {
+  constructor(collection, data, { projected = false } = {}) {
     this.collection = collection;
-    this._data = { ...data };
+    this._data = projected ? cloneQueryRow(data) : { ...data };
     Object.assign(this, this._data);
+    if (projected) readOnlyProjectedDocuments.add(this);
   }
 
   toJSON() {
-    return { ...this._data };
+    return readOnlyProjectedDocuments.has(this) ? cloneQueryRow(this._data) : { ...this._data };
   }
 
   async patch(fields) {
@@ -935,6 +950,7 @@ class CtoxRxDocument {
   }
 
   async incrementalModify(modifier) {
+    if (readOnlyProjectedDocuments.has(this)) throw projectedDocumentWriteError();
     const current = this.toJSON();
     const next = await modifier({ ...current });
     return this.incrementalPatch(next || current);
@@ -945,6 +961,7 @@ class CtoxRxDocument {
   }
 
   async incrementalPatch(fields) {
+    if (readOnlyProjectedDocuments.has(this)) throw projectedDocumentWriteError();
     const updatedAtMs = Number(fields?.updated_at_ms || Date.now());
     const next = {
       ...this._data,
@@ -972,7 +989,7 @@ function normalizeQuery(query, primaryPath) {
   if (typeof query === 'string') {
     return { selector: { [primaryPath]: query } };
   }
-  if (query && typeof query === 'object' && !query.selector && Object.keys(query).length && !query.sort && !query.limit && !query.skip) {
+  if (query && typeof query === 'object' && !query.selector && Object.keys(query).length && !query.sort && !query.limit && !query.skip && !query.projection) {
     return { selector: query };
   }
   return {
@@ -984,6 +1001,7 @@ function normalizeQuery(query, primaryPath) {
     requireRevision: typeof query?.requireRevision === 'string' && query.requireRevision
       ? query.requireRevision
       : undefined,
+    projection: normalizeQueryProjection(query?.projection, primaryPath),
   };
 }
 
