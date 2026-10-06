@@ -26,6 +26,49 @@ feature into a privileged native transfer; introduce the native lifecycle with
 its own explicit authorization and retire superseded execution paths only after
 its acceptance evidence exists.
 
+## Native producer ownership at the current source revision
+
+Source inspection at CTOX `5f2d52c362c628b0eea673c7eda8fe60d6e9be70`
+(2026-10-06) identifies three separate lifetime boundaries:
+
+- `service::run_foreground` retains the configured `sync_host::ServiceHost`
+  for daemon lifetime. The host exposes its running `execution_authority`;
+  no production caller currently connects that authority to
+  `NativeGuestRegistry::new`.
+- The regular chat producer in `execution::agent::turn_loop` calls
+  `PersistentSession::start_with_business_os_mcp`. The separate
+  `start_native_guest_with_business_os_mcp` entry point has no production
+  caller. It requires an independently enrolled registry assignment and a
+  retained native peer; a signed command token alone cannot supply those.
+- `PersistentSession::run_turn_async` owns `NativeProviderTurnOwner` locally.
+  On every return, its destructor revokes the live binding and removes the
+  registry entry. The retained `NativeGuestExecution` observation handle
+  does not extend that authority. A later turn is also expressly rejected
+  until lifecycle reconciliation. Passing that handle to capture after the
+  turn would therefore fail current-authority checks.
+
+Checked shutdown now reaches the public persistent-session owner and its
+review callers. It establishes checked teardown only. It neither transfers
+the turn owner's authority to a capture owner nor independently resolves
+the journal, provider artifacts, target account or handoff enrollment.
+
+The production connection must retain the running host's authority through
+an explicitly authorized native session lifecycle. That lifecycle must
+enroll the actual project/chat/profile/controller and source/target account
+bindings before execution. For capture it must retire mutable turn/command
+rights, wait for checked termination and journal completion, and retain a
+distinct source authority that can still validate the admitted session,
+worker, account and policy while capturing and publishing. A cloned guest
+handle, a finished worker row or a caller-supplied manifest cannot replace
+that authority. Keep the current rejection of unreconciled subsequent
+turns until this lifecycle is implemented; do not lengthen turn authority
+merely to make capture pass.
+
+These are source observations, not compiler, runtime or cross-host
+acceptance results. The daemon's embedded pi sidecar remains the owner of
+Business OS app coding turns; native session handoff must not redirect
+`ctox.coding.turn` into the Codex guest producer.
+
 ## Required implementation sequence
 
 1. Bind the native session owner to the durable job and provider session. The
