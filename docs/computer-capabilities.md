@@ -24,10 +24,12 @@ unavailable to native routing. Managed backend hosts remain ineligible.
 Legacy assignment refreshes preserve typed settings. Operational names in the
 `capabilities` string array are derived from the typed descriptors; toolchain
 names such as `codex` and `claude` remain supported. A name alone never grants
-execution. Endpoint references are opaque registered TransferEngine endpoint
-identifiers, not hostnames, URLs, passwords, private keys or command strings.
-The endpoint registry resolves SSH/SMB/NFS connection details and native secret
-references. This contract contains no credentials.
+execution. Endpoint references are opaque identifiers in the native Instances-owned
+[computer endpoint registry](computer-endpoints.md), not hostnames, URLs,
+passwords, private keys or command strings. Its resolver checks current grants,
+SSH/SMB connection details and SecretStore references; Transfer owns IO and
+job lifecycle. NFS is explicitly unsupported in this endpoint increment.
+This capability contract contains no credentials.
 
 ## Typed descriptors
 
@@ -102,9 +104,12 @@ and `additionalProperties: false`. Native typed settings and the agentless flag
 are retained in the authoritative record but excluded from that projection;
 capability names continue to replicate over the existing WebRTC data plane.
 There is no schema version/hash change or HTTP data bridge in this increment.
-The expanded UI schema and editing workflow will be coordinated with Main after
-Workjet 0.0.35 is installed. Actual build dispatch, registered endpoint resolution
-and deployed UI acceptance remain subsequent integration work.
+The expanded UI schema and editing workflow are coordinated with Main after
+Workjet 0.0.35 is installed. Native registered endpoint resolution now uses the
+owner-bound registry and a frozen per-job authority fingerprint. Native
+capability_epoch is excluded from the v1 projection along with typed settings.
+Actual build dispatch, protocol IO and deployed UI acceptance remain integration
+work.
 
 Acceptance for the complete capability outcome remains: gpu3 and gpu4 registered
 for build, ASUSTOR `flashstore24-nas` (10.0.0.28) registered as agentless storage,

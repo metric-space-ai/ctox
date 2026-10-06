@@ -10,7 +10,7 @@ const source=fileURLToPath(new URL('../../customer-modules/outbound-lead-generat
 mkdirSync(join(fixture,'modules','olg'),{recursive:true});
 mkdirSync(join(fixture,'shared'),{recursive:true});
 writeFileSync(join(fixture,'package.json'),'{"type":"module"}');
-for(const name of ['index.js','collection-reloader.mjs','lead-revision-loader.mjs','import-preview-groups.js'])
+for(const name of ['index.js','collection-reloader.mjs','lead-revision-loader.mjs','import-preview-groups.js','current-state-export.mjs', 'required-field-selection.mjs'])
   copyFileSync(join(source,name),join(fixture,'modules','olg',name));
 writeFileSync(join(fixture,'shared','universal-importer.js'), `
 export async function extractCompanyRowsFromWorkbookFile(file,options) {
@@ -31,7 +31,7 @@ try {
   const state=hooks.testState(); state.leads=[];
   let writes=0;
   state.collections={imports:{insert:async()=>{writes++;throw new Error('unexpected write');}},leads:{insert:async()=>{writes++;throw new Error('unexpected write');}}};
-  const sheet=[['Kategorie1','Code','Listenname THESEN'],['','20','Chemie'],['','64','Finanzdienstleistungen']];
+  const sheet=[['Kategorie1','Code','Listenname MUSTER'],['','20','Chemie'],['','64','Finanzdienstleistungen']];
   const row=(name,wz,i)=>({name,website:'',domain:'',country:'DE',city:'',row_index:i,raw:{'branche(wz)':wz}});
   const file=(rows)=>({source_type:'file',title:'UITEST-Import',source:{files:[{name:'Chemie.xlsx',fixture:{rows,meta:{skippedOutsideTable:16876,sheets:{'WZ-Code':sheet}}}}]}});
   const rows=[...Array.from({length:506},(_,i)=>row('Chemie '+i,'20 Chemie',i)),...Array.from({length:5001},(_,i)=>row('Finance '+i,'64 Finance',i+506))];

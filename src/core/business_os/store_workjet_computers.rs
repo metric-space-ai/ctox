@@ -74,6 +74,9 @@ pub(super) fn handle_workjet_computer_store_command(
         );
     }
     migrate_signed_owner_alias(root, authorized_owner_user_id, authorized_owner_email)?;
+    if super::computer_endpoints::is_endpoint_command(&command.command_type) {
+        return super::computer_endpoints::handle_command(root, command, authorized_owner_user_id);
+    }
     match command.command_type.as_str() {
         "ctox.workjet.computer.list" => {
             handle_workjet_computer_list_command(root, command, authorized_owner_user_id)
@@ -89,9 +92,10 @@ pub(super) fn handle_workjet_computer_store_command(
 }
 
 pub(super) fn requires_capability_management(command: &BusinessCommand) -> bool {
-    command.command_type == "ctox.workjet.computer.assign"
-        && (command.payload.get("capability_config").is_some()
-            || command.payload.get("agentless").is_some())
+    super::computer_endpoints::is_endpoint_command(&command.command_type)
+        || (command.command_type == "ctox.workjet.computer.assign"
+            && (command.payload.get("capability_config").is_some()
+                || command.payload.get("agentless").is_some()))
 }
 
 fn migrate_signed_owner_alias(
@@ -276,6 +280,24 @@ fn handle_workjet_computer_assign_command(
         !agentless || capabilities.iter().all(|kind| kind == "storage"),
         "an agentless computer cannot advertise agent toolchains"
     );
+    let capability_value = serde_json::to_value(&capability_config)?;
+    let capability_epoch = existing
+        .as_ref()
+        .and_then(|record| record["capability_epoch"].as_u64())
+        .unwrap_or(0);
+    let same_grant = existing.as_ref().is_some_and(|record| {
+        record["status"] == "assigned"
+            && record["is_deleted"] != true
+            && record.get("capability_config") == Some(&capability_value)
+            && record["agentless"].as_bool().unwrap_or(false) == agentless
+    });
+    let capability_epoch = if !configured || same_grant {
+        capability_epoch
+    } else {
+        capability_epoch
+            .checked_add(1)
+            .context("computer capability epoch exhausted")?
+    };
     let now = super::store::now_ms() as i64;
     let created_at_ms = existing
         .as_ref()
@@ -319,7 +341,8 @@ fn handle_workjet_computer_assign_command(
         "is_deleted": false,
     });
     if configured {
-        computer["capability_config"] = serde_json::to_value(&capability_config)?;
+        computer["capability_config"] = capability_value;
+        computer["capability_epoch"] = Value::from(capability_epoch);
     }
     if payload.agentless.is_some()
         || existing
@@ -366,6 +389,14 @@ fn handle_workjet_computer_unassign_command(
     let now = super::store::now_ms() as i64;
     let mut computer = existing;
     computer["status"] = Value::String("unassigned".to_owned());
+    if computer.get("capability_config").is_some() {
+        let epoch = computer["capability_epoch"]
+            .as_u64()
+            .unwrap_or(0)
+            .checked_add(1)
+            .context("computer capability epoch exhausted")?;
+        computer["capability_epoch"] = Value::from(epoch);
+    }
     computer["updated_at_ms"] = Value::from(now);
     computer["unassigned_at_ms"] = Value::from(now);
     let computer = persist_and_project_idempotently(
@@ -446,6 +477,7 @@ fn persist_and_project_idempotently(
     let mut projection = record.clone();
     if let Some(object) = projection.as_object_mut() {
         object.remove("capability_config");
+        object.remove("capability_epoch");
         object.remove("agentless");
     }
     upsert_rxdb_collection_record(root, collection, record_id, updated_at_ms, projection)?;

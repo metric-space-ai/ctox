@@ -46,6 +46,7 @@ mod project_chats;
 mod project_crew;
 pub(crate) use project_crew::project_crew_member_for_task;
 pub mod computer_capabilities;
+pub mod computer_endpoints;
 mod rxdb_peer;
 mod rxdb_peer_browser;
 mod rxdb_peer_business_data;
