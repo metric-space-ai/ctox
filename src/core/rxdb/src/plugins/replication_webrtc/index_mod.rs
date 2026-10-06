@@ -2299,6 +2299,43 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
 }
 
 #[cfg(test)]
+#[test]
+fn protocol_read_capabilities_remain_independent() {
+    for (query_demand_loading_enabled, rows_fetch_registered) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let payload = ctox_protocol_response_payload_with_flag(
+            Value::Null,
+            Some("read-capability-matrix"),
+            query_demand_loading_enabled,
+            rows_fetch_registered,
+            ProtocolRoomPayload::default(),
+            Some("storage-generation"),
+            NativePeerRole::CtoxInstance,
+        );
+        let capabilities = payload["capabilities"].as_array().expect("capability list");
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|value| value.as_str() == Some(CTOX_QUERY_FETCH_CAPABILITY)),
+            query_demand_loading_enabled,
+        );
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|value| value.as_str() == Some(CTOX_ROWS_FETCH_CAPABILITY)),
+            rows_fetch_registered,
+        );
+        assert_eq!(
+            payload
+                .pointer("/v1_5/queryDemandLoadingEnabled")
+                .and_then(Value::as_bool),
+            Some(query_demand_loading_enabled),
+        );
+    }
+}
+
+#[cfg(test)]
 fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
     ctox_protocol_response_payload_with_flag(
         collection,
