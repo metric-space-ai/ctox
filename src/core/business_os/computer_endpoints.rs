@@ -191,8 +191,10 @@ pub fn resolve_computer_endpoint(
 /// Enter before worker/Core/controller locks. Perform at most one bounded,
 /// synchronous protocol operation; never await, retain credentials, or reenter
 /// APIs. Both native endpoint/grant mutations and secret rotation are fenced
-/// until this callback returns. Adapters enforce a deadline (currently 10s) and
-/// at most 1 MiB per data operation. Call again before every operation and resume.
+/// until this callback returns. Adapters bound logical call counts/paths and
+/// data to 1 MiB; library connection/IO calls currently time out after 10s.
+/// A compound operation has no promised 10s total deadline. Reenter for the next
+/// operation and on resume.
 pub fn with_current_computer_endpoint<T>(
     root: &Path,
     request: &ComputerEndpointRequest,

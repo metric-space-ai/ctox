@@ -188,6 +188,16 @@ bridge wrapper itself has no `awaitInSync` method; treating that optional call
 as readiness skipped the replication wait. This repair does not replace the
 native command receipt or the existing owner/status projection checks.
 
+### SQLite external-writer wakeup
+
+Each file-backed database shares one external-write poller. After three idle
+reads, an available filesystem watcher wakes it for database/WAL changes while
+the rescue timeout backs off to 30 minutes. If watcher setup fails, the poller
+retains its one-second database-wide cadence; it must not delay another
+connection's committed write until the standby timeout. Local update hooks and
+changed-table generations still suppress duplicate notifications. The fallback
+adds no per-collection poller and changes no replication authority or transport.
+
 ### Sync connection cache and credential rotation
 
 The connection cache stamps the Secret Store's resolved SQLite file and its

@@ -85,8 +85,11 @@ An agentless NAS is assigned with `hosting_mode: "self_hosted"`,
 ```
 
 Storage protocols are `ssh`, `smb` and `nfs`. The root is an absolute normalized
-remote path, without `.`/`..` components. Quota is positive GiB or null (no
-configured quota); it is not a measured free-space claim. At least one purpose
+remote path, without `.`/`..` components. Quota is a declared positive-GiB budget
+or null. This increment uses it for per-artifact admission; it does not establish
+an aggregate limit across files/clients or claim measured free space. A hard total
+limit requires an actual server-enforced quota. NAS acceptance uses null until
+such a quota is enrolled. At least one purpose
 is required; purposes are deduplicated. The endpoint's protocol must match this
 configuration when TransferEngine resolves it. TransferEngine owns protocol
 support, cancellation, resume and the actual transfer. Declaring a protocol here
