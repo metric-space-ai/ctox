@@ -7,15 +7,15 @@ use smb::{
 };
 use std::{str::FromStr, time::Duration};
 
-pub struct SmbStorageOptions {
+pub struct SmbStorageOptions<'a> {
     pub host: String,
     pub port: u16,
     pub share: String,
     pub root: String,
     pub username: String,
-    pub password: String,
+    pub password: &'a str,
 }
-pub fn connect(options: SmbStorageOptions) -> Result<Box<dyn StorageConnection>> {
+pub fn connect(options: SmbStorageOptions<'_>) -> Result<Box<dyn StorageConnection>> {
     ensure!(
         !options.host.is_empty()
             && !options.host.contains(['/', '\\'])
@@ -44,7 +44,7 @@ pub fn connect(options: SmbStorageOptions) -> Result<Box<dyn StorageConnection>>
     config.connection.compression_enabled = false;
     let client = Client::new(config);
     let share = UncPath::from_str(&format!("\\\\{}\\{}", options.host, options.share))?;
-    if let Err(error) = client.share_connect(&share, &options.username, options.password) {
+    if let Err(error) = client.share_connect(&share, &options.username, options.password.to_owned()) {
         let _ = client.close();
         return Err(error.into());
     }

@@ -11,17 +11,17 @@ use std::{
     time::Duration,
 };
 
-pub struct SshStorageOptions {
+pub struct SshStorageOptions<'a> {
     pub host: String,
     pub port: u16,
     pub username: String,
     pub root: String,
     pub host_key_sha256: String,
-    pub private_key: String,
-    pub passphrase: Option<String>,
+    pub private_key: &'a str,
+    pub passphrase: Option<&'a str>,
 }
 
-pub fn connect(options: SshStorageOptions) -> Result<Box<dyn StorageConnection>> {
+pub fn connect(options: SshStorageOptions<'_>) -> Result<Box<dyn StorageConnection>> {
     ensure!(
         options.port != 0 && !options.host.is_empty() && !options.username.is_empty(),
         "invalid SSH endpoint"
@@ -135,7 +135,7 @@ fn absent(error: &ssh2::Error) -> bool {
 impl StorageConnection for SshStorage {
     fn length(&mut self, path: &str) -> Result<Option<u64>> {
         let path = self.path(path)?;
-        match self.sftp.lstat(path) {
+        match self.sftp.lstat(&path) {
             Ok(stat) => Ok(Some(stat.size.context("remote length missing")?)),
             Err(error) if absent(&error) => Ok(None),
             Err(error) => Err(error.into()),
@@ -181,8 +181,8 @@ impl StorageConnection for SshStorage {
     }
     fn publish(&mut self, staging: &str, destination: &str) -> Result<()> {
         self.sftp.rename(
-            self.path(staging)?,
-            self.path(destination)?,
+            &self.path(staging)?,
+            &self.path(destination)?,
             Some(ssh2::RenameFlags::empty()),
         )?;
         Ok(())

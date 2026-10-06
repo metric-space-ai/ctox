@@ -131,7 +131,7 @@ impl Worker {
             .as_ref()
             .context("storage resolver unavailable")?
             .authorize(request)?;
-        Ok(true)
+        Ok(!stop.load(Ordering::Acquire) && self.store.desired(&request.id)? == "run")
     }
 
     pub(super) fn transfer_storage(
