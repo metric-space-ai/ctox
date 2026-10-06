@@ -233,6 +233,18 @@ fn query_fingerprint(query: &Query) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
+/// One accepted peer and authenticated request envelope throughout watch setup.
+struct WatchRequest<'a> {
+    peer: &'a WebRTCRsConnection,
+    identity: &'a RemoteIdentity,
+    capability_token: &'a str,
+    request_id: &'a str,
+    session: &'a SessionRef,
+    query: &'a Query,
+    mode: WatchMode,
+    command_id: Option<&'a str>,
+}
+
 enum SnapshotItem {
     Batch(Vec<Value>, bool),
     Failed,
@@ -358,7 +370,7 @@ struct SubscriptionPublication {
     terminal_control: bool,
 }
 
-impl SubscriptionPublication {
+impl WebRTCPublicationGuard for SubscriptionPublication {
     fn with_current(
         &self,
         publish: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
@@ -441,7 +453,10 @@ impl BusinessDataSource {
     }
 
     /// Register the typed private WebRTC request handler.
-    pub fn register(self: &Arc<Self>, pool: &NativePool) -> Result<(), rxdb::rx_error::RxError> {
+    pub fn register(
+        self: &Arc<Self>,
+        pool: &NativePool,
+    ) -> Result<(), Box<rxdb::rx_error::RxError>> {
         let source = self.clone();
         pool.register_guarded_auxiliary_request_handler(
             BUSINESS_DATA_RPC_METHOD,
@@ -462,6 +477,7 @@ impl BusinessDataSource {
                 })
             }),
         )
+        .map_err(Box::new)
     }
 
     pub async fn shutdown(&self) -> io::Result<()> {
@@ -699,15 +715,17 @@ impl BusinessDataSource {
                 resume_cursor,
             } => {
                 self.watch(
-                    peer,
-                    identity,
-                    capability_token,
-                    request.request_id.as_str(),
-                    session,
-                    query,
+                    WatchRequest {
+                        peer,
+                        identity,
+                        capability_token,
+                        request_id: request.request_id.as_str(),
+                        session,
+                        query,
+                        mode: WatchMode::Query,
+                        command_id: None,
+                    },
                     resume_cursor.as_deref(),
-                    WatchMode::Query,
-                    None,
                 )
                 .await
             }
@@ -803,15 +821,17 @@ impl BusinessDataSource {
                 let query = command_watch_query(command_id);
                 let response = self
                     .watch(
-                        peer,
-                        identity,
-                        capability_token,
-                        request.request_id.as_str(),
-                        session,
-                        &query,
+                        WatchRequest {
+                            peer,
+                            identity,
+                            capability_token,
+                            request_id: request.request_id.as_str(),
+                            session,
+                            query: &query,
+                            mode: WatchMode::Command,
+                            command_id: Some(command_id),
+                        },
                         None,
-                        WatchMode::Command,
-                        Some(command_id),
                     )
                     .await?;
                 let WireResult::Subscribed { session, .. } = response.result else {
@@ -880,7 +900,7 @@ impl BusinessDataSource {
         })?;
         let mut mango: MangoQuery = serde_json::from_value(query.query.clone())
             .map_err(|error| RemoteError::invalid(format!("invalid Mango query: {error}")))?;
-        if mango.sort.as_ref().map_or(true, |sort| sort.is_empty()) {
+        if mango.sort.as_ref().is_none_or(|sort| sort.is_empty()) {
             return Err(RemoteError::invalid(
                 "query must provide supported ordering",
             ));
@@ -1247,16 +1267,19 @@ impl BusinessDataSource {
 
     async fn watch(
         self: &Arc<Self>,
-        peer: &WebRTCRsConnection,
-        identity: &RemoteIdentity,
-        capability_token: &str,
-        request_id: &str,
-        session: &SessionRef,
-        query: &Query,
+        request: WatchRequest<'_>,
         resume_cursor: Option<&str>,
-        mode: WatchMode,
-        command_id: Option<&str>,
     ) -> Result<Response, RemoteError> {
+        let WatchRequest {
+            peer,
+            identity,
+            capability_token,
+            request_id,
+            session,
+            query,
+            mode,
+            command_id,
+        } = request;
         let (collection, prepared, fingerprint) = self
             .prepare(identity, capability_token, query, Access::Read)
             .await?;
@@ -1324,35 +1347,37 @@ impl BusinessDataSource {
             ));
         }
         self.fresh_watch(
-            peer,
-            identity,
-            capability_token,
-            collection,
-            prepared,
-            fingerprint,
-            request_id,
-            query,
-            session,
-            mode,
-            command_id,
+            WatchRequest {
+                peer,
+                identity,
+                capability_token,
+                request_id,
+                session,
+                query,
+                mode,
+                command_id,
+            },
+            (collection, prepared, fingerprint),
         )
         .await
     }
 
     async fn fresh_watch(
         self: &Arc<Self>,
-        peer: &WebRTCRsConnection,
-        identity: &RemoteIdentity,
-        capability_token: &str,
-        collection: Arc<RxCollection>,
-        prepared: Value,
-        fingerprint: String,
-        request_id: &str,
-        query: &Query,
-        session: &SessionRef,
-        mode: WatchMode,
-        command_id: Option<&str>,
+        request: WatchRequest<'_>,
+        prepared: (Arc<RxCollection>, Value, String),
     ) -> Result<Response, RemoteError> {
+        let WatchRequest {
+            peer,
+            identity,
+            capability_token,
+            request_id,
+            session,
+            query,
+            mode,
+            command_id,
+        } = request;
+        let (collection, prepared, fingerprint) = prepared;
         let identity_key = identity.key();
         {
             let subscriptions = self
@@ -1991,7 +2016,7 @@ impl Subscription {
         let _lifecycle_guard = self.lifecycle.lock().await;
         let documents = collection
             .storage_instance
-            .find_documents_by_id(&[document_id.clone()], true)
+            .find_documents_by_id(std::slice::from_ref(&document_id), true)
             .await
             .map_err(|error| error.to_string())?;
         if self.mode == WatchMode::Command {
@@ -2346,7 +2371,7 @@ impl Subscription {
         {
             return Err("BusinessData subscription session changed".into());
         }
-        if !self.sender.handler.is_peer_current(&peer) {
+        if !self.sender.handler.is_peer_current(peer) {
             *bound_peer = None;
             return Err("BusinessData subscription peer retired".into());
         }
