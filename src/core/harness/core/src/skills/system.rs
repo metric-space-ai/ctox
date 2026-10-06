@@ -28,6 +28,8 @@ use std::hash::Hasher;
 
 const SKILL_BUNDLES_TABLE: &str = "ctox_skill_bundles";
 const SKILL_FILES_TABLE: &str = "ctox_skill_files";
+const SKILL_STORE_META_TABLE: &str = "ctox_skill_store_meta";
+const SYSTEM_SKILLS_FINGERPRINT_KEY: &str = "system_skills_fingerprint";
 const SYSTEM_SKILL_VIRTUAL_ROOT: &str = "/__ctox_system_skills__";
 const SYSTEM_SOURCE_PREFIX: &str = "embedded:skills/system/";
 const DEFAULT_SQLITE_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
@@ -144,19 +146,31 @@ fn skill_id_from_virtual_path(path: &Path) -> Option<String> {
 fn bootstrap_system_skill_store(cwd: &Path) -> Result<()> {
     let mut conn = open_system_skill_db(cwd)?;
     ensure_schema_on_conn(&conn)?;
+
+    let mut embedded = Vec::new();
+    collect_embedded_skill_dirs(&SYSTEM_SKILLS_DIR, "", &mut embedded);
+    let records = embedded
+        .into_iter()
+        .filter_map(|(skill_dir, path_in_system)| {
+            embedded_skill_record(skill_dir, &path_in_system).map(|record| (path_in_system, record))
+        })
+        .collect::<Vec<_>>();
+    let fingerprint = system_skills_fingerprint(&records);
+    // Every thread start runs this bootstrap. Rewriting ~100 bundles and
+    // ~1,100 file blobs each time fires the process-mining triggers on both
+    // tables and holds the write lock long enough to push thread/start past
+    // its timeout on slower hosts. Skip the write when the store already
+    // holds exactly this embedded set.
+    if system_skill_store_current(&conn, &fingerprint, &records)? {
+        return Ok(());
+    }
+
     let tx = conn
         .transaction()
         .context("failed to open system skill transaction")?;
 
     let mut active_skill_ids = BTreeSet::new();
-    let mut embedded = Vec::new();
-    collect_embedded_skill_dirs(&SYSTEM_SKILLS_DIR, "", &mut embedded);
-    for (skill_dir, path_in_system) in embedded {
-        let Some((skill_id, skill_name, description, cluster, files)) =
-            embedded_skill_record(skill_dir, &path_in_system)
-        else {
-            continue;
-        };
+    for (path_in_system, (skill_id, skill_name, description, cluster, files)) in records {
         active_skill_ids.insert(skill_id.clone());
         let source_path = format!("{SYSTEM_SOURCE_PREFIX}{path_in_system}");
         let now = now_epoch_string();
@@ -214,15 +228,73 @@ fn bootstrap_system_skill_store(cwd: &Path) -> Result<()> {
         }
     }
 
+    tx.execute(
+        &format!(
+            "INSERT INTO {SKILL_STORE_META_TABLE} (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        ),
+        params![SYSTEM_SKILLS_FINGERPRINT_KEY, fingerprint],
+    )?;
+
     tx.commit()
         .context("failed to commit system skill transaction")?;
     Ok(())
 }
 
-fn embedded_skill_record(
-    skill_dir: &Dir<'_>,
-    path_in_system: &str,
-) -> Option<(String, String, String, String, BTreeMap<String, Vec<u8>>)> {
+type EmbeddedSkillRecord = (String, String, String, String, BTreeMap<String, Vec<u8>>);
+
+fn system_skills_fingerprint(records: &[(String, EmbeddedSkillRecord)]) -> String {
+    let mut hasher = Sha256::new();
+    for (path_in_system, (skill_id, skill_name, description, cluster, files)) in records {
+        for field in [path_in_system, skill_id, skill_name, description, cluster] {
+            hasher.update(field.as_bytes());
+            hasher.update([0]);
+        }
+        for (relative_path, content) in files {
+            hasher.update(relative_path.as_bytes());
+            hasher.update([0]);
+            hasher.update((content.len() as u64).to_le_bytes());
+            hasher.update(content);
+        }
+        hasher.update([1]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn system_skill_store_current(
+    conn: &Connection,
+    fingerprint: &str,
+    records: &[(String, EmbeddedSkillRecord)],
+) -> Result<bool> {
+    let stored: Option<String> = conn
+        .query_row(
+            &format!("SELECT value FROM {SKILL_STORE_META_TABLE} WHERE key = ?1"),
+            params![SYSTEM_SKILLS_FINGERPRINT_KEY],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if stored.as_deref() != Some(fingerprint) {
+        return Ok(false);
+    }
+    // The fingerprint alone cannot see rows removed behind its back (manual
+    // cleanup, partial restore), so also confirm the row counts still match.
+    let (bundle_count, file_count): (i64, i64) = conn.query_row(
+        &format!(
+            "SELECT
+               (SELECT COUNT(*) FROM {SKILL_BUNDLES_TABLE}
+                WHERE class = 'ctox_core' AND source_path LIKE ?1),
+               (SELECT COUNT(*) FROM {SKILL_FILES_TABLE} f
+                JOIN {SKILL_BUNDLES_TABLE} b ON b.skill_id = f.skill_id
+                WHERE b.class = 'ctox_core' AND b.source_path LIKE ?1)"
+        ),
+        params![format!("{SYSTEM_SOURCE_PREFIX}%")],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let expected_files: usize = records.iter().map(|(_, record)| record.4.len()).sum();
+    Ok(bundle_count == records.len() as i64 && file_count == expected_files as i64)
+}
+
+fn embedded_skill_record(skill_dir: &Dir<'_>, path_in_system: &str) -> Option<EmbeddedSkillRecord> {
     let mut files = BTreeMap::new();
     let root_len = skill_dir.path().to_string_lossy().len();
     collect_embedded_files(skill_dir, root_len, &mut files);
@@ -373,6 +445,10 @@ fn ensure_schema_on_conn(conn: &Connection) -> Result<()> {
              content_blob BLOB NOT NULL,
              PRIMARY KEY (skill_id, relative_path),
              FOREIGN KEY (skill_id) REFERENCES {SKILL_BUNDLES_TABLE}(skill_id) ON DELETE CASCADE
+         );
+         CREATE TABLE IF NOT EXISTS {SKILL_STORE_META_TABLE} (
+             key TEXT PRIMARY KEY,
+             value TEXT NOT NULL
          );"
     ))
     .context("failed to initialize system skill store schema")?;
@@ -461,8 +537,10 @@ fn collect_fingerprint_items(dir: &Dir<'_>, items: &mut Vec<(String, Option<u64>
 #[cfg(test)]
 mod tests {
     use super::SYSTEM_SKILLS_DIR;
+    use super::bootstrap_system_skill_store;
     use super::collect_fingerprint_items;
     use super::ensure_schema_on_conn;
+    use super::system_skill_db_path;
     use rusqlite::Connection;
 
     #[test]
@@ -518,5 +596,51 @@ mod tests {
 
         assert!(columns.iter().any(|column| column == "source_path"));
         assert!(columns.iter().any(|column| column == "cluster"));
+    }
+
+    #[test]
+    fn bootstrap_skips_rewrite_when_store_is_current() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let cwd = workspace.path();
+        bootstrap_system_skill_store(cwd).expect("first bootstrap");
+
+        let conn = Connection::open(system_skill_db_path(cwd)).expect("open store");
+        conn.execute_batch(
+            "CREATE TABLE write_log (n INTEGER);
+             CREATE TRIGGER bundles_ai AFTER INSERT ON ctox_skill_bundles BEGIN INSERT INTO write_log VALUES (1); END;
+             CREATE TRIGGER bundles_au AFTER UPDATE ON ctox_skill_bundles BEGIN INSERT INTO write_log VALUES (1); END;
+             CREATE TRIGGER files_ai AFTER INSERT ON ctox_skill_files BEGIN INSERT INTO write_log VALUES (1); END;
+             CREATE TRIGGER files_ad AFTER DELETE ON ctox_skill_files BEGIN INSERT INTO write_log VALUES (1); END;",
+        )
+        .expect("install write log");
+        let writes = |conn: &Connection| -> i64 {
+            conn.query_row("SELECT COUNT(*) FROM write_log", [], |row| row.get(0))
+                .expect("count writes")
+        };
+
+        bootstrap_system_skill_store(cwd).expect("second bootstrap");
+        assert_eq!(writes(&conn), 0, "unchanged store must not be rewritten");
+
+        let files_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ctox_skill_files", [], |row| {
+                row.get(0)
+            })
+            .expect("count files");
+        conn.execute(
+            "DELETE FROM ctox_skill_files WHERE rowid = (SELECT MIN(rowid) FROM ctox_skill_files)",
+            [],
+        )
+        .expect("drop one file row");
+        conn.execute("DELETE FROM write_log", [])
+            .expect("reset write log");
+
+        bootstrap_system_skill_store(cwd).expect("repair bootstrap");
+        let files_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ctox_skill_files", [], |row| {
+                row.get(0)
+            })
+            .expect("count files");
+        assert!(writes(&conn) > 0, "missing rows must trigger a rewrite");
+        assert_eq!(files_after, files_before);
     }
 }
