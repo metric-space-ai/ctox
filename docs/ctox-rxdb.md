@@ -41,7 +41,7 @@ timestamps; pending writes/conflicts and the24-hour retention window survive.
 These paths no longer hold the complete pending WAL payload in memory. Batch
 atomicity and the v4 schema are unchanged; individual batch payloads and the
 ID/order summaries still consume memory. This source repair does not establish
-the THESEN renderer-crash cause or actual Windows8GiB startup acceptance.
+the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acceptance.
 
 ### Browser live-query single-flight
 
@@ -747,6 +747,19 @@ must distinguish it from a complete snapshot. The built-in Crew subscribes this
 way only for harness status and triggers its existing authoritative row read;
 it does not render the changed-document payload as a fully loaded collection.
 The shell's scoped collection facade preserves this subscription option.
+
+A consumer that only needs to know *that* something changed — because it
+re-runs its own bounded query — subscribes with
+`subscribe(listener, { invalidateOnly: true })`. It never reads the collection:
+the listener receives `{ collectionName, invalidated: true }` once right after
+subscribing and then, debounced, whenever the local store or the demand loader
+reports a change. A plain `$` subscription materializes the 200-document demand
+window first and, for the control-plane ledgers (`business_commands`,
+`ctox_queue_tasks`), refetches it after each change; crew presence, chat
+tracking and the desktop command stream used it purely as a change trigger and
+downloaded ~1.5 MB of ledger documents per shell start that way (on-prem deployment,
+06.10.2026). They now use `invalidateOnly`. Chat tracking additionally looks up
+only messages that still need a sync (`trackedMessageNeedsSync`).
 
 Crew app presence retains the last valid queue snapshot when a read fails.
 An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;
@@ -1665,6 +1678,29 @@ state so a resume after completion gets a final ack. Flow control: browser
 no buffered-amount getter). Sends are prioritised high/normal/low; control
 frames are intrinsically high, oversized `masterWrite`s stay low, frames for
 active collections are high.
+
+**Pipelining (2026-10).** The native sender keeps up to
+`FRAME_PIPELINE_WINDOWS = 24` ack windows (96 chunks, ~1 MB, just under the
+native 1 MiB buffered-amount high-water mark) in flight
+instead of stop-and-wait per window; browser acks are cumulative, so an ack
+for sequence *n* settles every outstanding window at or below *n*
+(`take_pending_frame_acks`). Browsers reaching the peer through a TURN relay
+over a slow UDP path measured 400–900 ms RTT, so throughput is bounded by
+bytes-in-flight per round trip, not by bandwidth.
+
+**Compression (`ctox-rxdb-frame-deflate-v1`).** When the browser advertises
+this capability in its `ctoxProtocol` handshake (only where
+`DecompressionStream` exists), the native peer deflates (raw deflate, fast
+level) every framed payload of at least 32 KiB and base64-encodes it; it is
+only used when the result is below 90% of the plain text. The `start` frame
+then carries `"encoding": "deflate-raw-base64"` (also on restarts), and
+`totalBytes`/chunking apply to the transmitted base64 text. The browser
+reassembles, checks `totalBytes`, inflates through
+`DecompressionStream('deflate-raw')` with a 16× `MAX_TRANSFER_BYTES` inflate
+ceiling, and only then parses JSON. Replication documents compress 5–10×, so
+this is the main lever on slow uplinks. Peers without the capability keep
+receiving plain frames; an unknown `encoding` is a decode error, never a
+silent pass-through.
 
 ### 6.4 Demand-loading RPCs (V1.5)
 

@@ -1,17 +1,17 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261006-shell-v2-query-projection-v454';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261006-shell-v2-query-projection-v454';
-import { CtoxResizer } from './shared/resizer.js?v=20261006-shell-v2-query-projection-v454';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261006-shell-v2-query-projection-v454';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261006-shell-v2-query-projection-v454';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261006-shell-v2-query-projection-v454';
-import { createAppActions } from './shared/app-actions.js?v=20261006-shell-v2-query-projection-v454';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { CtoxResizer } from './shared/resizer.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { createAppActions } from './shared/app-actions.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261006-shell-v2-query-projection-v454';
+} from './shared/app-lifecycle.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -20,20 +20,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261006-shell-v2-query-projection-v454';
+} from './shared/permissions.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261006-shell-v2-query-projection-v454';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261006-shell-v2-query-projection-v454';
+} from './shared/branding.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261006-shell-v2-query-projection-v454';
+} from './shared/presentation.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -44,9 +44,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261006-shell-v2-query-projection-v454';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261006-shell-v2-query-projection-v454';
-import { createDocumentsFacade } from './shared/documents.js?v=20261006-shell-v2-query-projection-v454';
+} from './shared/shell-permissions-ui.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { createDocumentsFacade } from './shared/documents.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -54,16 +54,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261006-shell-v2-query-projection-v454';
+} from './shared/maintenance-state.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261006-shell-v2-query-projection-v454';
+} from './shared/workspace-session.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261006-shell-v2-query-projection-v454';
+} from './shared/taskbar-pins.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -71,10 +71,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261006-shell-v2-query-projection-v454';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261006-shell-v2-sync-invalidate-v455';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261006-shell-v2-query-projection-v454';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261006-shell-v2-query-projection-v454';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261006-shell-v2-sync-invalidate-v455';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -82,8 +82,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261006-shell-v2-query-projection-v454';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261006-shell-v2-query-projection-v454';
+} from './shared/startup-deadlines.js?v=20261006-shell-v2-sync-invalidate-v455';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261006-shell-v2-sync-invalidate-v455';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -101,7 +101,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261006-shell-v2-query-projection-v454';
+const APP_BUILD = '20261006-shell-v2-sync-invalidate-v455';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);

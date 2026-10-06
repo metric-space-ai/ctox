@@ -22,7 +22,11 @@ const MAX_PENDING_WRITES: usize = MAX_IN_FLIGHT;
 /// authority valid at queueing wins, and the frame then finishes uninterrupted
 /// so the private stream never mixes a partial frame with another frame.
 pub struct WatchLifetime {
-    state: std::sync::Mutex<WatchLifetimeState>,
+    // All watches and responses in one generation serialize first-byte IO
+    // with Close/revoke through this same fence.
+    state: Arc<std::sync::Mutex<WatchLifetimeState>>,
+    local_alive: std::sync::atomic::AtomicBool,
+    generation_owner: bool,
 }
 
 struct WatchLifetimeState {
@@ -33,21 +37,39 @@ struct WatchLifetimeState {
 impl WatchLifetime {
     pub(crate) fn new() -> Self {
         Self {
-            state: std::sync::Mutex::new(WatchLifetimeState {
+            state: Arc::new(std::sync::Mutex::new(WatchLifetimeState {
                 alive: true,
                 pending_writer: None,
-            }),
+            })),
+            local_alive: std::sync::atomic::AtomicBool::new(true),
+            generation_owner: true,
+        }
+    }
+
+    /// Retiring an individual pump must not revoke its whole session. This
+    /// watch still shares the generation's physical-publication mutex.
+    pub(crate) fn for_watch(generation: &Arc<Self>) -> Self {
+        Self {
+            state: generation.state.clone(),
+            local_alive: std::sync::atomic::AtomicBool::new(true),
+            generation_owner: false,
         }
     }
 
     pub(crate) fn is_alive(&self) -> bool {
-        self.state.lock().is_ok_and(|state| state.alive)
+        self.state.lock().is_ok_and(|state| {
+            state.alive && self.local_alive.load(std::sync::atomic::Ordering::SeqCst)
+        })
     }
 
     pub(crate) fn invalidate(&self) {
         let wake = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            state.alive = false;
+            self.local_alive
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            if self.generation_owner {
+                state.alive = false;
+            }
             state.pending_writer.take()
         };
         if let Some(wake) = wake {
@@ -95,7 +117,12 @@ impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for WatchFrameWrite
                 )));
             }
         };
-        if !state.alive {
+        if !state.alive
+            || !this
+                .lifetime
+                .local_alive
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
             this.cancelled = true;
             return std::task::Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,

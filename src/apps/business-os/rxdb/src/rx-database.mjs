@@ -411,9 +411,47 @@ class CtoxRxCollection {
     return this.storageCollection.observe(listener);
   }
 
+  // Change notification without a snapshot: the listener receives
+  // `{collectionName, invalidated: true}` once right after subscribing and
+  // then (debounced) whenever the local store or the demand loader reports a
+  // change. A plain `$` subscription materializes the collection's whole
+  // 200-document demand window first and, for control-plane collections,
+  // refetches it after every change; callers that only re-run their own
+  // bounded query on change (crew presence, chat tracking) downloaded ~1.5 MB
+  // of commands and tasks per start that way (on-prem deployment, 06.10.2026).
+  subscribeInvalidations(listener) {
+    let active = true;
+    let pendingTimer = null;
+    const registry = getActiveCollectionRegistry();
+    registry.subscriptionStarted(this.name);
+    const schedule = () => {
+      if (!active || pendingTimer != null) return;
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        if (active) listener({ collectionName: this.name, invalidated: true });
+      }, OBSERVABLE_DEBOUNCE_MS);
+    };
+    const unsubscribe = this.observe(schedule);
+    const unsubscribeLoader = this.subscribeDemandLoaderChange(schedule);
+    schedule();
+    return {
+      unsubscribe: () => {
+        active = false;
+        if (pendingTimer != null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        unsubscribe();
+        unsubscribeLoader();
+        registry.subscriptionEnded(this.name);
+      },
+    };
+  }
+
   get $() {
     return {
-      subscribe: (listener, { emitPendingChanges = false } = {}) => {
+      subscribe: (listener, { emitPendingChanges = false, invalidateOnly = false } = {}) => {
+        if (invalidateOnly) return this.subscribeInvalidations(listener);
         let active = true;
         // Phase 2: a live collection subscription marks this collection as
         // foreground in the RxDB layer so replication prioritizes it on the

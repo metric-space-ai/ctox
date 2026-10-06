@@ -855,19 +855,21 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             })
             .collect();
         assert!(matches!(
-            ipc_call(
-                nodes[&1].clone(),
-                "reconcile-effect",
-                SyncIpcOperation::CommitEffectCheckpoint {
-                    job_id: "job".into(),
-                    ownership: job.ownership.clone(),
-                    effect_id: "external".into(),
-                    disclosure: disclosure_for("reconcile-effect", &fresh_receipts),
-                    receipts: fresh_receipts.clone(),
-                }
-            )
-            .await,
-            SyncIpcResult::Applied { .. }
+            nodes[&1]
+                .submit(Request {
+                    request_id: "reconcile-effect".into(),
+                    actor: 1,
+                    command: Command::CommitEffectCheckpoint {
+                        job_id: "job".into(),
+                        ownership: job.ownership.clone(),
+                        effect_id: "external".into(),
+                        disclosure: disclosure_for("reconcile-effect", &fresh_receipts),
+                        receipts: fresh_receipts.clone(),
+                    },
+                })
+                .await
+                .unwrap(),
+            Receipt::Applied(_)
         ));
         let fresh_digest = &fresh_receipts[0].checkpoint_digest;
         let takeover = SyncIpcOperation::TakeOver {

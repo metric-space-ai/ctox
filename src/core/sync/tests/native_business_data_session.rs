@@ -56,6 +56,7 @@ struct ResponsePublicationGate {
     armed: AtomicBool,
     blocked: AtomicBool,
     completed_query_page: AtomicBool,
+    completed_watch_response: AtomicBool,
     blocked_at_header: AtomicBool,
     entered: tokio::sync::Notify,
     writer_waker: futures_util::task::AtomicWaker,
@@ -77,6 +78,12 @@ impl BusinessDataDispatcher for WitnessDispatcher {
             if response.request_id == "blocked-query" {
                 gate.completed_query_page.store(
                     matches!(response.result, NativeBusinessDataResult::Page { .. }),
+                    Ordering::SeqCst,
+                );
+            }
+            if response.request_id == "resume-watch-a" {
+                gate.completed_watch_response.store(
+                    matches!(response.result, NativeBusinessDataResult::Subscribed { .. }),
                     Ordering::SeqCst,
                 );
             }
@@ -806,12 +813,13 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         .await
         .unwrap();
 
+        let resume_gate = Arc::new(ResponsePublicationGate::default());
         let (a_root, a_db, mut client_a, session_a, service_a, serve_a) = open_ipc_client(
             &signaling.url,
             &source_pin,
             device.clone(),
             credential_requests.clone(),
-            None,
+            Some(resume_gate.clone()),
         )
         .await;
         let (b_root, b_db, mut client_b, session_b, service_b, serve_b) = open_ipc_client(
@@ -1011,9 +1019,11 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
             },
         )
         .await;
+        // A still owns this deterministic ID. B must be fenced by its
+        // different session reference, without removing A's subscription.
         assert_rejected(
             read_frame(&mut client_b).await,
-            NativeBusinessDataErrorCode::UnknownSession,
+            NativeBusinessDataErrorCode::StaleGeneration,
         );
 
         send_request(
@@ -1106,40 +1116,94 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         );
         assert_eq!(state.result, Some(json!({"generation": "retired"})));
 
-        // A replayed CaughtUp may arrive before the response frame. Consume it
-        // explicitly, then require the positive Subscribed acknowledgement for
-        // A before publishing the next generation.
-        let mut resume_acknowledged = false;
-        while !resume_acknowledged {
-            match read_frame(&mut client_a).await {
-                Frame::Response { response }
-                    if response.request_id == "resume-in-flight-command" =>
-                {
-                    let NativeBusinessDataResult::Subscribed {
-                        session,
-                        subscription_id,
-                    } = response.result
-                    else {
-                        panic!("expected resumed subscription: {response:?}");
-                    };
-                    assert_eq!(session, session_a);
-                    assert_eq!(subscription_id, "command:overlap-command");
-                    resume_acknowledged = true;
-                }
-                Frame::Event { event } => {
-                    assert_eq!(event.session, session_a);
-                    assert_eq!(event.subscription_id, "command:overlap-command");
-                    assert!(
-                        matches!(
-                            event.payload,
-                            NativeBusinessDataEventPayload::CaughtUp { .. }
-                        ),
-                        "resume must not deliver a stale command event: {event:?}"
-                    );
-                }
-                other => panic!("expected in-flight resume response: {}", frame_kind(&other)),
+        // A document Watch cannot reinterpret an ObserveCommand cursor. The
+        // in-flight command stays with B; A must reset and establish an actual
+        // command observation after explicit retirement.
+        assert_rejected(
+            read_frame(&mut client_a).await,
+            NativeBusinessDataErrorCode::ResetRequired,
+        );
+        assert_no_frame(&mut client_a, "command cursor mode mismatch").await;
+        send_request(
+            &mut client_b,
+            "retire-b-command",
+            NativeBusinessDataOperation::Unwatch {
+                session: session_b.clone(),
+                subscription_id: "command:overlap-command".into(),
+            },
+        )
+        .await;
+        match read_frame(&mut client_b).await {
+            Frame::Response { response } if response.request_id == "retire-b-command" => {
+                let NativeBusinessDataResult::Unwatched {
+                    session,
+                    subscription_id,
+                } = response.result
+                else {
+                    panic!("expected B retirement: {response:?}");
+                };
+                assert_eq!(session, session_b);
+                assert_eq!(subscription_id, "command:overlap-command");
             }
+            other => panic!("expected B retirement response: {}", frame_kind(&other)),
         }
+        send_request(
+            &mut client_a,
+            "observe-a-current",
+            NativeBusinessDataOperation::ObserveCommand {
+                session: session_a.clone(),
+                command_id: "overlap-command".into(),
+            },
+        )
+        .await;
+        match read_frame(&mut client_a).await {
+            Frame::Response { response } if response.request_id == "observe-a-current" => {
+                let NativeBusinessDataResult::Command { session, state } = response.result else {
+                    panic!("expected fresh A command observation: {response:?}");
+                };
+                assert_eq!(session, session_a);
+                assert_eq!(state.command_id, "overlap-command");
+                // This synthetic policy's id-only admission returns Pending.
+                // The actual stored state must arrive in the snapshot below.
+                assert_eq!(
+                    state.status,
+                    ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Pending
+                );
+                assert_eq!(state.result, None);
+                assert_eq!(state.error, None);
+            }
+            other => panic!("expected fresh A command response: {}", frame_kind(&other)),
+        }
+        drain_snapshot(
+            &mut client_a,
+            &session_a,
+            "command:overlap-command",
+            "fresh A command snapshot",
+            Some(ctox_sync::business_data_contract::NativeBusinessDataCommandState {
+                command_id: "overlap-command".into(),
+                status: ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Completed,
+                result: Some(json!({"generation": "retired"})),
+                error: None,
+            }),
+        )
+        .await;
+
+        // Failed setup must retire only its pending pump. The accepted A
+        // observation must still deliver its next authorized state below.
+        send_request(
+            &mut client_a,
+            "observe-unowned-command",
+            NativeBusinessDataOperation::ObserveCommand {
+                session: session_a.clone(),
+                command_id: "unowned-command".into(),
+            },
+        )
+        .await;
+        assert_rejected(
+            read_frame(&mut client_a).await,
+            NativeBusinessDataErrorCode::Unauthorized,
+        );
+        assert_no_frame(&mut client_a, "rejected command setup").await;
 
         server_db
             .collection("business_commands")
@@ -1168,6 +1232,22 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         );
         assert_eq!(state.result, Some(json!({"generation": "current"})));
         assert_no_frame(&mut client_b, "replacement command on B").await;
+
+        // A second notification of the same durable public state is not a
+        // command transition, even when SQLite updates its internal revision.
+        server_db
+            .collection("business_commands")
+            .unwrap()
+            .upsert(json!({
+                "id": "overlap-command",
+                "owner_user_id": "fixture-user",
+                "status": "completed",
+                "result": {"generation": "current"}
+            }))
+            .await
+            .unwrap();
+        assert_no_frame(&mut client_a, "duplicate command state on A").await;
+        assert_no_frame(&mut client_b, "duplicate command state on B").await;
 
         // A post-replacement event for another command is stale for this watch.
         // It must not be relabeled or cross peer boundaries.
@@ -1226,6 +1306,49 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                 if record.document_id == "query-a"
         ));
         assert_no_frame(&mut client_b, "A-targeted query on B").await;
+
+        // Hold the actual resumed Watch ACK at zero accepted bytes. Existing
+        // pumps must not publish recovery ahead of its complete private frame.
+        let NativeBusinessDataEventPayload::Upsert { cursor, .. } = &a_live.payload else {
+            panic!("expected A query cursor");
+        };
+        let NativeBusinessDataOperation::Watch { query, .. } =
+            records_watch_request(&session_a, "query-a")
+        else {
+            panic!("expected A query operation");
+        };
+        resume_gate.armed.store(true, Ordering::SeqCst);
+        send_request(
+            &mut client_a,
+            "resume-watch-a",
+            NativeBusinessDataOperation::Watch {
+                session: session_a.clone(),
+                query,
+                resume_cursor: Some(cursor.clone()),
+            },
+        )
+        .await;
+        timeout(Duration::from_secs(5), resume_gate.entered.notified())
+            .await
+            .expect("resumed Watch ACK must reach the zero-byte sink");
+        assert!(resume_gate.completed_watch_response.load(Ordering::SeqCst));
+        assert!(resume_gate.blocked_at_header.load(Ordering::SeqCst));
+        assert_no_frame(&mut client_a, "resume ACK held before byte zero").await;
+        resume_gate.blocked.store(false, Ordering::SeqCst);
+        resume_gate.writer_waker.wake();
+        assert_eq!(
+            read_subscribed(&mut client_a, &session_a, "resume-watch-a").await,
+            query_a
+        );
+        let recovered = read_event(&mut client_a, "A resume after complete ACK").await;
+        assert_eq!(recovered.session, session_a);
+        assert_eq!(recovered.subscription_id, query_a);
+        assert!(recovered.sequence > a_live.sequence);
+        assert!(matches!(
+            recovered.payload,
+            NativeBusinessDataEventPayload::CaughtUp { ref cursor } if !cursor.is_empty()
+        ));
+        assert_no_frame(&mut client_b, "A resume on B").await;
 
         server_db
             .collection("records")
@@ -1412,7 +1535,20 @@ async fn wait_for_caught_up(
     subscription_id: &str,
     context: &str,
 ) -> String {
+    drain_snapshot(stream, session, subscription_id, context, None).await
+}
+
+async fn drain_snapshot(
+    stream: &mut (impl tokio::io::AsyncRead + Unpin + Send),
+    session: &NativeBusinessDataSessionRef,
+    subscription_id: &str,
+    context: &str,
+    expected_command: Option<ctox_sync::business_data_contract::NativeBusinessDataCommandState>,
+) -> String {
     let mut last_sequence = 0;
+    let mut saw_start = false;
+    let mut saw_end = false;
+    let mut saw_expected_command = false;
     loop {
         let event = read_event(stream, context).await;
         assert_eq!(event.session, *session);
@@ -1421,7 +1557,9 @@ async fn wait_for_caught_up(
         last_sequence = event.sequence;
         match event.payload {
             NativeBusinessDataEventPayload::SnapshotStart { snapshot_id } => {
+                assert!(!saw_start && !saw_end);
                 assert_eq!(snapshot_id, subscription_id);
+                saw_start = true;
             }
             NativeBusinessDataEventPayload::SnapshotPage {
                 snapshot_id,
@@ -1434,10 +1572,32 @@ async fn wait_for_caught_up(
                     "{context} unexpectedly received records"
                 );
             }
-            NativeBusinessDataEventPayload::SnapshotEnd { snapshot_id, .. } => {
-                assert_eq!(snapshot_id, subscription_id);
+            NativeBusinessDataEventPayload::Command { state } => {
+                assert!(saw_start && !saw_end);
+                assert_eq!(
+                    subscription_id.strip_prefix("command:"),
+                    Some(state.command_id.as_str())
+                );
+                if let Some(expected) = &expected_command {
+                    assert!(!saw_expected_command);
+                    assert_eq!(state.command_id, expected.command_id);
+                    assert_eq!(state.status, expected.status);
+                    assert_eq!(state.result, expected.result);
+                    assert_eq!(state.error, expected.error);
+                    saw_expected_command = true;
+                }
             }
-            NativeBusinessDataEventPayload::CaughtUp { cursor } => return cursor,
+            NativeBusinessDataEventPayload::SnapshotEnd { snapshot_id, .. } => {
+                assert!(saw_start && !saw_end);
+                assert_eq!(snapshot_id, subscription_id);
+                saw_end = true;
+            }
+            NativeBusinessDataEventPayload::CaughtUp { cursor } => {
+                assert!(saw_start && saw_end);
+                assert!(expected_command.is_none() || saw_expected_command);
+                assert!(!cursor.is_empty());
+                return cursor;
+            }
             other => panic!("{context} received unexpected event: {other:?}"),
         }
     }
@@ -2223,7 +2383,7 @@ async fn exercise_session(
                     assert_eq!(session, ready.clone().unwrap());
                     assert_eq!(resumed, subscription_id);
                 }
-                _ => panic!("expected resume response"),
+                other => panic!("expected resume response, received {}", frame_kind(&other)),
             }
             let caught_up = read_event(&mut client, "resume caught-up").await;
             assert_eq!(caught_up.session, ready.clone().unwrap());
@@ -2519,6 +2679,7 @@ async fn send_request(
     request_id: &str,
     operation: NativeBusinessDataOperation,
 ) {
+    eprintln!("fixture sending request: {request_id}");
     write_frame(
         stream,
         &Frame::Request {
@@ -2593,6 +2754,7 @@ async fn read_event(
 ) -> ctox_sync::business_data_contract::NativeBusinessDataEvent {
     // The test-level deadline owns cancellation. Reading through the
     // persistent stream retains any partial frame for the next poll.
+    eprintln!("fixture waiting for event: {context}");
     let frame = read_frame(stream).await;
     match frame {
         Frame::Event { event } => event,
@@ -2615,7 +2777,13 @@ fn frame_kind(frame: &Frame) -> &'static str {
     match frame {
         Frame::Request { .. } => "request",
         Frame::Response { .. } => "response",
-        Frame::Event { .. } => "event",
+        Frame::Event { event } => match event.payload {
+            NativeBusinessDataEventPayload::Upsert { .. } => "event:upsert",
+            NativeBusinessDataEventPayload::Remove { .. } => "event:remove",
+            NativeBusinessDataEventPayload::Command { .. } => "event:command",
+            NativeBusinessDataEventPayload::CaughtUp { .. } => "event:caughtUp",
+            _ => "event:other",
+        },
         Frame::CredentialChallenge { .. } => "credentialChallenge",
         Frame::CredentialReply { .. } => "credentialReply",
     }
