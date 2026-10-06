@@ -36,6 +36,23 @@ MCP response payloads into durable central storage.
 
 ## Admin Policy
 
+The App Store exposes the typed `ctox.app_store.install` action through
+`business_os.propose_action` / `business_os.execute_action` with
+`module_id: "app-store"`. Its payload contains only `module_id` (the target),
+`source_kind: "github"`, `repo`, a full 40-character commit `git_ref`, and the
+relative module `subpath`. An `idempotency_key` is required. Retrying the same
+actor/key uses the same native control command; changing that command's source
+intent is rejected by the command plane.
+
+Both proposal and execution require native **AppsInstall on the target
+module**, and the target must be inside the channel's module allowlist.
+App Store visibility alone grants no installation rights. Execution dispatches
+to the running daemon's existing installer, including archive, source and
+module validation; it does not delegate to an agent or accept local paths,
+download URLs, caller authority or moving Git refs. Proposals have no install
+effect. Inspect the returned command ID for the durable installation result;
+failed installation/replay is not reported as successful.
+
 Admins can inspect policy:
 
 ```bash
