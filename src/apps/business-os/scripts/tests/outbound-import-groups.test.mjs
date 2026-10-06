@@ -6,7 +6,7 @@ const { normalizeWzDivision, buildWzMapping, selectImportGroups } = api;
 let passed = 0;
 function test(name, run) { run(); console.log('PASS ' + name); passed++; }
 const sheet = Object.freeze([
-  Object.freeze(['Kategorie1', '\uFEFF Code ', ' LISTENNAME THESEN ']),
+  Object.freeze(['Kategorie1', '\uFEFF Code ', ' LISTENNAME MUSTER ']),
   Object.freeze(['', '20', 'Herstellung von chemischen Erzeugnissen']),
   Object.freeze(['', '21', 'Herstellung von chemischen Erzeugnissen']),
   Object.freeze(['', '64', 'Erbringung von Finanzdienstleistungen']),
@@ -20,11 +20,19 @@ test('WZ division normalization distinguishes absent codes and strips leading ze
   for (const [input, wanted] of [['64.21 Beteiligungsgesellschaften','64'], ['01 Landwirtschaft','1'], [20,'20'], [' 03.1 ','3'], [null,''], ['', ''], ['Chemie20',''], [3,'']]) assert.equal(normalizeWzDivision(input), wanted);
 });
 test('Mapping recognizes reordered/BOM/case headers, numeric codes and invalid rows', () => {
-  const data = [[' listenname thesen ', '\uFEFF CODE'], [' A ',3], ['B','20'], ['invalid','x20'], ['invalid',2.5], ['','04'], []];
+  const data = [[' listenname muster ', '\uFEFF CODE'], [' A ',3], ['B','20'], ['invalid','x20'], ['invalid',2.5], ['','04'], []];
   const before = JSON.stringify(data);
   assert.deepEqual([...buildWzMapping(data)], [['3','A'],['20','B']]);
   assert.equal(JSON.stringify(data),before);
   for (const invalid of [null,[],[[]],[['Other','Code'],['A','20']]]) assert.equal(buildWzMapping(invalid).size,0);
+});
+test('Generic and historical customer-suffixed list headers map without a tenant dependency', () => {
+  for (const header of ['Listenname', 'Listenname MUSTER', ' listenname Beispiel GmbH ', '\uFEFF LISTENNAME ']) {
+    assert.equal(buildWzMapping([['Code', header], ['20', 'Chemie']]).get('20'), 'Chemie');
+  }
+  for (const header of ['ListennameSuffix', 'Andere Listenname']) {
+    assert.equal(buildWzMapping([['Code', header], ['20', 'Chemie']]).size, 0);
+  }
 });
 const fixtures = [];
 for (const [n,wz] of [[17000,''],[6860,'64.21 Beteiligungsgesellschaften'],[3704,'46 Großhandel'],[1374,'28 Maschinenbau'],[506,'20 Chemie'],[3482,'99 Sonstige']]) {
@@ -64,10 +72,10 @@ test('Absent mapping and maliciously similar labels remain distinct stable group
   const rows=[company(1,'20 Chemie'),company(2,'')];
   const fallback=selectImportGroups(rows,null);
   assert.ok(fallback.groups.some(g=>g.label==='WZ-Abteilung 20'));
-  const mapped=selectImportGroups(rows,[['Code','Listenname THESEN'],['20','(ohne WZ-Code)']]);
+  const mapped=selectImportGroups(rows,[['Code','Listenname MUSTER'],['20','(ohne WZ-Code)']]);
   assert.equal(mapped.groups.length,2); assert.equal(new Set(mapped.groups.map(g=>g.id)).size,2);
   const one=mapped.groups.find(g=>g.id.startsWith('list:')).id;
-  assert.deepEqual(selectImportGroups(rows,[['Code','Listenname THESEN'],['20','(ohne WZ-Code)']],[one]).selectedRows,[rows[0]]);
+  assert.deepEqual(selectImportGroups(rows,[['Code','Listenname MUSTER'],['20','(ohne WZ-Code)']],[one]).selectedRows,[rows[0]]);
   assert.deepEqual(selectImportGroups([...rows].reverse(),sheet).groups.map(g=>g.id).sort(),selectImportGroups(rows,sheet).groups.map(g=>g.id).sort());
 });
 async function testAsync(name, run) { await run(); console.log('PASS ' + name); passed++; }
@@ -107,7 +115,7 @@ await testAsync('Malformed files and read failures cannot become successful empt
 });
 await testAsync('Multiple workbook sheets merge consistent mappings and reject conflicting labels', async () => {
   const payload={source_type:'file',source:{files:[{name:'a.xlsx'},{name:'b.xlsx'}]}};
-  const response=label=>({rows:[],meta:{skippedOutsideTable:3,sheets:{'WZ-Code':[['Code','Listenname THESEN'],['20',label]]}}});
+  const response=label=>({rows:[],meta:{skippedOutsideTable:3,sheets:{'WZ-Code':[['Code','Listenname MUSTER'],['20',label]]}}});
   const merged=await api.extractImportRows(payload,{extractCompanyRowsFromWorkbookFile:async()=>response('Chemie')});
   assert.equal(merged.meta.skippedOutsideTable,6); assert.equal(buildWzMapping(merged.meta.sheets['WZ-Code']).get('20'),'Chemie');
   await assert.rejects(api.extractImportRows(payload,{extractCompanyRowsFromWorkbookFile:async file=>response(file.name==='a.xlsx'?'Chemie':'Andere Liste')}),/Konflikt/);
