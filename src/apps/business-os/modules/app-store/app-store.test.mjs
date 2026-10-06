@@ -474,7 +474,7 @@ test('app store lifecycle keeps 0.x apps private and 1.0.0 apps team-visible', (
       version: hooks.appLifecycleBadge(privateApp, {}).version,
       state: hooks.appLifecycleBadge(privateApp, {}).state,
     },
-    { text: 'Privat', version: 'v0.1.0', state: 'private' }
+    { text: 'App privat', version: 'v0.1.0', state: 'private' }
   );
   assert.deepEqual(
     {
