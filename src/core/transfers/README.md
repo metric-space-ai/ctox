@@ -138,7 +138,7 @@ admission. Run Linux checks through the shared gpu3 build lane, retaining one
 stable task name for the PR so source and compiler caches are reused:
 
 ```
-~/.codex/bin/gpu-build-run.sh --owner THREAD_ID --task ctox-pr227 --src WORKTREE -- \
+~/.codex/bin/gpu-build-run.sh --host gpu3 --owner THREAD_ID --task ctox-pr227 --src WORKTREE -- \
   cargo test --locked --manifest-path src/core/transfers/Cargo.toml -j 6 -- --test-threads=2
 ```
 
