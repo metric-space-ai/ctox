@@ -152,6 +152,11 @@ fn document_visible_with_readers(
     if !has_restricted_reference(collection, document) {
         return None;
     }
+    if let (Some(core), Some(store)) = (core.as_ref(), store.as_ref()) {
+        return super::document_visible_from_connections(
+            core, store, collection, document, user_id,
+        );
+    }
     // Resolve the existing Core command/queue authority before opening the
     // Business OS relationship store. Ordinary executions have no Workjet
     // constraints and retain their existing policy without that extra open.
@@ -181,26 +186,69 @@ fn collect_constraints(
     constraints: &mut Vec<(String, Value)>,
     core: &mut Option<Connection>,
 ) -> anyhow::Result<()> {
+    let mut resolve = |related_collection: &str, id: &str| {
+        if core.is_none() {
+            *core = Some(crate::mission::channels::open_channel_db(
+                &crate::paths::core_db(root),
+            )?);
+        }
+        canonical_association(
+            root,
+            core.as_ref().expect("reader opened above"),
+            related_collection,
+            id,
+        )
+    };
+    collect_constraints_with_reader(collection, document, constraints, &mut resolve)
+}
+
+fn collect_constraints_with_reader(
+    collection: &str,
+    document: &Value,
+    constraints: &mut Vec<(String, Value)>,
+    resolve: &mut impl FnMut(&str, &str) -> anyhow::Result<(&'static str, Value)>,
+) -> anyhow::Result<()> {
     let mut ids = BTreeSet::new();
     references(document, &mut ids);
     if is_owned_collection(collection) || project_command(document) || !ids.is_empty() {
         constraints.push((collection.to_owned(), document.clone()));
     }
     for (related_collection, id) in associations(collection, document) {
-        if core.is_none() {
-            *core = Some(crate::mission::channels::open_channel_db(
-                &crate::paths::core_db(root),
-            )?);
-        }
-        let (related_collection, related) = canonical_association(
-            root,
-            core.as_ref().expect("reader opened above"),
-            related_collection,
-            id,
-        )?;
-        collect_constraints(root, related_collection, &related, constraints, core)?;
+        let (related_collection, related) = resolve(related_collection, id)?;
+        collect_constraints_with_reader(related_collection, &related, constraints, resolve)?;
     }
     Ok(())
+}
+
+/// Borrow the caller's held Core and relationship authority. This path never
+/// opens a store, initializes a schema or substitutes a replicated association.
+pub(in crate::business_os) fn document_visible_from_connections(
+    core: &Connection,
+    store: &Connection,
+    collection: &str,
+    document: &Value,
+    user_id: &str,
+) -> Option<bool> {
+    if !has_restricted_reference(collection, document) {
+        return None;
+    }
+    let mut constraints = Vec::new();
+    let mut resolve = |related_collection: &str, id: &str| {
+        canonical_association_with_legacy(core, related_collection, id, &mut |id| {
+            legacy_command_from_connection(store, id)
+        })
+    };
+    if collect_constraints_with_reader(collection, document, &mut constraints, &mut resolve)
+        .is_err()
+    {
+        return Some(false);
+    }
+    if constraints.is_empty() {
+        return None;
+    }
+    Some(constraints.iter().all(|(collection, document)| {
+        visible_in_store(store, collection, document, user_id) == Some(true)
+    }))
 }
 
 fn canonical_association(
@@ -208,6 +256,27 @@ fn canonical_association(
     conn: &Connection,
     collection: &str,
     id: &str,
+) -> anyhow::Result<(&'static str, Value)> {
+    canonical_association_with_legacy(conn, collection, id, &mut |id| {
+        let store = open_store(root)?;
+        legacy_command_from_connection(&store, id)
+    })
+}
+
+fn legacy_command_from_connection(conn: &Connection, id: &str) -> anyhow::Result<Value> {
+    let command = crate::business_os::store::load_business_command(conn, id)?;
+    ensure!(
+        command.payload.is_object(),
+        "legacy command payload is unavailable"
+    );
+    serde_json::to_value(command).map_err(Into::into)
+}
+
+fn canonical_association_with_legacy(
+    conn: &Connection,
+    collection: &str,
+    id: &str,
+    legacy: &mut impl FnMut(&str) -> anyhow::Result<Value>,
 ) -> anyhow::Result<(&'static str, Value)> {
     use crate::mission::channels;
     match collection {
@@ -220,13 +289,7 @@ fn canonical_association(
                         Some(rusqlite::Error::QueryReturnedNoRows)
                     ) =>
                 {
-                    let conn = open_store(root)?;
-                    let command = crate::business_os::store::load_business_command(&conn, id)?;
-                    ensure!(
-                        command.payload.is_object(),
-                        "legacy command payload is unavailable"
-                    );
-                    serde_json::to_value(command)?
+                    legacy(id)?
                 }
                 Err(error) => return Err(error),
             };
@@ -240,7 +303,12 @@ fn canonical_association(
                     .as_str()
                     .filter(|id| !id.is_empty())
                     .ok_or_else(|| anyhow::anyhow!("native task command reference is invalid"))?;
-                let resolved = canonical_association(root, conn, "business_commands", command_id)?;
+                let resolved = canonical_association_with_legacy(
+                    conn,
+                    "business_commands",
+                    command_id,
+                    legacy,
+                )?;
                 // A task's metadata cannot point at some other public command
                 // to conceal the private aggregate actually linked to it.
                 ensure!(

@@ -17939,6 +17939,27 @@ fn capability_signing_secret(root: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(value.into_bytes())
 }
 
+/// Hold the native issuer BEFORE worker/policy/controller authority. The
+/// callback may only perform one synchronous publication poll; no secret API
+/// reentry or await is allowed. Missing/rotated/deleted issuer fails closed.
+pub(super) fn with_current_webrtc_capability_signer<T>(
+    root: &Path,
+    apply: impl FnOnce(&[u8]) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    crate::secrets::with_current_secret_value(
+        root,
+        CAPABILITY_SECRET_SCOPE,
+        CAPABILITY_SECRET_NAME,
+        |secret| {
+            anyhow::ensure!(
+                !std::str::from_utf8(secret)?.trim().is_empty(),
+                "current capability signing secret is empty"
+            );
+            apply(secret)
+        },
+    )
+}
+
 /// Verify a Business OS capability token and return its actor role, or `None`
 /// if the token is missing, malformed or expired. Binds a sync-mesh browser
 /// peer to its server-authenticated role for the per-collection authz gate.
@@ -18037,6 +18058,88 @@ pub(super) fn verified_webrtc_capability_claims(
     validate_capability_claims_against_store(root, claims)
 }
 
+/// Revalidate through the caller's already-held policy transaction, without
+/// reopening stores, initializing schemas or looking up a signing key.
+/// The native caller must hold current issuer authority for signing_secret;
+/// cached bytes alone cannot prove a key has not rotated. at_ms is native time.
+pub(super) fn verified_webrtc_capability_claims_from_connection(
+    conn: &Connection,
+    token: &str,
+    signing_secret: &[u8],
+    at_ms: i64,
+) -> Option<super::capability::CapabilityClaims> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    if let Some(claims) = super::capability::verify_capability_token(signing_secret, token, at_ms) {
+        if let Some(claims) = validate_capability_claims_from_connection(conn, claims) {
+            return Some(claims);
+        }
+    }
+    if let Some(claims) =
+        super::mobile_invites::claims_for_webrtc_invite_secret_from_connection(conn, token, at_ms)
+    {
+        return validate_capability_claims_from_connection(conn, claims);
+    }
+    let claims = super::capability::verify_capability_token_allow_expired(signing_secret, token)?;
+    if !super::mobile_invites::is_active_paired_device_user_from_connection(conn, &claims.user_id) {
+        return None;
+    }
+    validate_capability_claims_from_connection(conn, claims)
+}
+
+fn validate_capability_claims_from_connection(
+    conn: &Connection,
+    claims: super::capability::CapabilityClaims,
+) -> Option<super::capability::CapabilityClaims> {
+    let (role, epoch): (String, i64) = conn
+        .query_row(
+            "SELECT role, capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
+            params![claims.user_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .ok()??;
+    if normalize_business_role(&role) != normalize_business_role(&claims.role)
+        || epoch != claims.actor_epoch
+    {
+        return None;
+    }
+    if let Some(binding) = &claims.device_binding {
+        if !super::mobile_invites::is_active_device_binding_from_connection(
+            conn,
+            &claims.user_id,
+            binding,
+        ) {
+            return None;
+        }
+    }
+    Some(claims)
+}
+
+/// Collection permission remains independent of document/controller ownership.
+/// Uses the same current signed/device and native-grant checks on held authority.
+pub(super) fn webrtc_capability_allows_collection_permission_from_connection(
+    conn: &Connection,
+    token: &str,
+    signing_secret: &[u8],
+    collection: &str,
+    permission: BusinessOsPermission,
+    at_ms: i64,
+) -> bool {
+    let Some(claims) =
+        verified_webrtc_capability_claims_from_connection(conn, token, signing_secret, at_ms)
+    else {
+        return false;
+    };
+    let actor = BusinessOsActor::new(Some(claims.user_id), claims.role);
+    let scope = BusinessOsScope::collection(collection.trim());
+    evaluate_policy_with_explicit_grants(conn, &actor, permission, &scope)
+        .map(|decision| decision.allowed)
+        .unwrap_or(false)
+}
+
 pub(super) fn verify_webrtc_capability_actor(root: &Path, token: &str) -> Option<(String, String)> {
     verified_webrtc_capability_claims(root, token).map(|claims| (claims.user_id, claims.role))
 }
@@ -18065,15 +18168,25 @@ pub(super) fn webrtc_capability_allows_collection_permission(
     collection: &str,
     permission: BusinessOsPermission,
 ) -> bool {
-    let Some(claims) = verified_webrtc_capability_claims(root, token) else {
+    // Ordinary callers may need schema setup; do it before issuer authority.
+    // Publication callers use the borrowed APIs on their already-held policy.
+    if with_store_connection(root, |_| Ok(())).is_err() {
         return false;
-    };
-    let actor = BusinessOsActor::new(Some(claims.user_id), claims.role);
-    let scope = BusinessOsScope::collection(collection.trim());
-    with_store_connection(root, |conn| {
-        evaluate_policy_with_explicit_grants(conn, &actor, permission, &scope)
+    }
+    with_current_webrtc_capability_signer(root, |secret| {
+        with_store_connection(root, |conn| {
+            Ok(
+                webrtc_capability_allows_collection_permission_from_connection(
+                    conn,
+                    token,
+                    secret,
+                    collection,
+                    permission,
+                    now_ms() as i64,
+                ),
+            )
+        })
     })
-    .map(|decision| decision.allowed)
     .unwrap_or(false)
 }
 
@@ -29689,6 +29802,246 @@ pub(super) mod tests {
         assert_eq!(display_name, "Michael Example");
         assert_eq!(role, "chef");
         assert_eq!(active, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn held_policy_connection_revalidates_signed_actor_without_store_reentry() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "held-actor", "chef")?;
+        let at_ms = now_ms() as i64;
+        let (token, _) = issue_business_os_capability_token(root.path(), "held-actor", at_ms)?;
+        let secret = capability_signing_secret(root.path())?;
+        let expected = webrtc_capability_allows_collection_permission(
+            root.path(),
+            &token,
+            "guest_frames",
+            BusinessOsPermission::DataRead,
+        );
+        assert!(expected, "native chef permission must remain usable");
+        with_store_connection(root.path(), |conn| {
+            let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+            let schema: i64 = tx.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
+            let changes = tx.total_changes();
+            let claims =
+                verified_webrtc_capability_claims_from_connection(&tx, &token, &secret, at_ms)
+                    .expect("current native actor on held policy");
+            assert_eq!(claims.user_id, "held-actor");
+            assert_eq!(
+                webrtc_capability_allows_collection_permission_from_connection(
+                    &tx,
+                    &token,
+                    &secret,
+                    "guest_frames",
+                    BusinessOsPermission::DataRead,
+                    at_ms,
+                ),
+                expected
+            );
+            assert!(verified_webrtc_capability_claims_from_connection(
+                &tx,
+                &token,
+                b"wrong-fixture-key",
+                at_ms,
+            )
+            .is_none());
+            assert!(verified_webrtc_capability_claims_from_connection(
+                &tx,
+                &token,
+                &secret,
+                at_ms + CAPABILITY_TOKEN_TTL_MS + 1,
+            )
+            .is_none());
+            assert_eq!(tx.total_changes(), changes);
+            assert_eq!(
+                tx.query_row::<i64, _, _>("PRAGMA schema_version", [], |row| row.get(0))?,
+                schema
+            );
+            tx.execute(
+                "UPDATE business_users SET role='user' WHERE user_id='held-actor'",
+                [],
+            )?;
+            assert!(
+                verified_webrtc_capability_claims_from_connection(&tx, &token, &secret, at_ms,)
+                    .is_none(),
+                "same transaction must see native role/epoch revocation"
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_issuer_rotation_invalidates_borrowed_policy_without_cached_key() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "held-issuer", "chef")?;
+        let at_ms = now_ms() as i64;
+        let (token, _) = issue_business_os_capability_token(root.path(), "held-issuer", at_ms)?;
+        let check = || {
+            with_current_webrtc_capability_signer(root.path(), |secret| {
+                with_store_connection(root.path(), |conn| {
+                    let tx =
+                        rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+                    Ok(verified_webrtc_capability_claims_from_connection(
+                        &tx, &token, secret, at_ms,
+                    ))
+                })
+            })
+        };
+        assert!(check()?.is_some());
+        crate::secrets::write_secret_record(
+            root.path(),
+            CAPABILITY_SECRET_SCOPE,
+            CAPABILITY_SECRET_NAME,
+            "rotated-native-issuer-fixture-only",
+            None,
+            json!({}),
+        )?;
+        assert!(
+            check()?.is_none(),
+            "next physical poll must use the rotated native issuer"
+        );
+        crate::secrets::delete_secret_record(
+            root.path(),
+            CAPABILITY_SECRET_SCOPE,
+            CAPABILITY_SECRET_NAME,
+        )?;
+        assert!(
+            check().is_err(),
+            "publication cannot generate a replacement issuer"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn borrowed_capability_verifier_never_initializes_missing_policy_tables() -> anyhow::Result<()>
+    {
+        let conn = Connection::open_in_memory()?;
+        let secret = b"borrowed-fixture-only";
+        let token = super::super::capability::issue_capability_token_with_epoch(
+            secret,
+            "unregistered",
+            "chef",
+            0,
+            1,
+            10_000,
+        );
+        assert!(
+            verified_webrtc_capability_claims_from_connection(&conn, &token, secret, 2).is_none()
+        );
+        assert!(
+            !webrtc_capability_allows_collection_permission_from_connection(
+                &conn,
+                &token,
+                secret,
+                "guest_frames",
+                BusinessOsPermission::DataRead,
+                2,
+            )
+        );
+        assert_eq!(conn.total_changes(), 0);
+        assert_eq!(
+            conn.query_row::<i64, _, _>("SELECT COUNT(*) FROM sqlite_master", [], |row| row
+                .get(0),)?,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn held_policy_verifier_preserves_compact_pairing_expiry_and_exact_binding(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let at_ms = now_ms() as i64;
+        let unbound = super::super::mobile_invites::create(root.path(), 300, None, None)?;
+        let unbound_token = unbound["invite"]["session"]["capability_token"]
+            .as_str()
+            .unwrap();
+        let unbound_user = unbound["invite"]["session"]["user"]["id"].as_str().unwrap();
+        let binding = super::super::mobile_invites::device_binding(
+            Some("held-pairing"),
+            Some("held-device"),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        )?
+        .unwrap();
+        let paired = super::super::mobile_invites::create(root.path(), 300, None, Some(&binding))?;
+        let paired_token = paired["invite"]["session"]["capability_token"]
+            .as_str()
+            .unwrap();
+        let secret = capability_signing_secret(root.path())?;
+        let conn = open_store(root.path())?;
+        let tx = rusqlite::Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)?;
+        assert!(verified_webrtc_capability_claims_from_connection(
+            &tx,
+            unbound_token,
+            &secret,
+            at_ms,
+        )
+        .is_some());
+        tx.execute(
+            "UPDATE business_mobile_invites SET expires_at_ms=0 WHERE user_id=?1",
+            params![unbound_user],
+        )?;
+        assert!(verified_webrtc_capability_claims_from_connection(
+            &tx,
+            unbound_token,
+            &secret,
+            at_ms,
+        )
+        .is_none());
+        tx.execute("UPDATE business_mobile_invites SET expires_at_ms=0 WHERE device_pairing_id='held-pairing'", [])?;
+        let claims =
+            verified_webrtc_capability_claims_from_connection(&tx, paired_token, &secret, at_ms)
+                .expect("durable paired edge survives compact invitation expiry");
+        assert_eq!(claims.device_binding.as_ref(), Some(&binding));
+        let signed = super::super::capability::issue_capability_token_with_epoch_and_binding(
+            &secret,
+            &claims.user_id,
+            &claims.role,
+            claims.actor_epoch,
+            0,
+            1,
+            Some(&binding),
+        );
+        assert!(
+            verified_webrtc_capability_claims_from_connection(&tx, &signed, &secret, at_ms)
+                .is_some()
+        );
+        let foreign = super::super::capability::CapabilityDeviceBinding {
+            device_id: "foreign-device".into(),
+            ..binding.clone()
+        };
+        let forged_binding =
+            super::super::capability::issue_capability_token_with_epoch_and_binding(
+                &secret,
+                &claims.user_id,
+                &claims.role,
+                claims.actor_epoch,
+                0,
+                1,
+                Some(&foreign),
+            );
+        assert!(verified_webrtc_capability_claims_from_connection(
+            &tx,
+            &forged_binding,
+            &secret,
+            at_ms
+        )
+        .is_none());
+        tx.execute("UPDATE business_mobile_invites SET revoked_at_ms=?1 WHERE device_pairing_id='held-pairing'", params![at_ms])?;
+        assert!(verified_webrtc_capability_claims_from_connection(
+            &tx,
+            paired_token,
+            &secret,
+            at_ms
+        )
+        .is_none());
+        assert!(
+            verified_webrtc_capability_claims_from_connection(&tx, &signed, &secret, at_ms)
+                .is_none()
+        );
         Ok(())
     }
 
