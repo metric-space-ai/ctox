@@ -573,7 +573,7 @@ impl Cluster {
             )
             .await
         {
-            Receipt::Applied(job) => job,
+            Receipt::Applied(job) | Receipt::Replayed(job) => job,
             other => panic!("{other:?}"),
         }
     }
