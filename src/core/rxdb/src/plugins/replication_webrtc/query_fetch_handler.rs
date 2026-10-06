@@ -2595,6 +2595,7 @@ mod tests {
         registry.register(collection);
         let handler = Arc::new(MockHandler::new());
         let mut message = make_request("projection", "business_records", 0);
+        message.params[0]["window"] = json!({"offset":0,"limit":200});
         message.params[0]["projection"] = json!(["id", "_rev", "_deleted", "id"]);
         run_query_fetch(
             registry,
@@ -2774,6 +2775,7 @@ mod tests {
             let handler = Arc::new(MockHandler::new());
             *handler.document_fields.lock() = Some(vec!["id".into()]);
             let mut message = make_request("crew-fields", "business_records", 0);
+            message.params[0]["window"] = json!({"offset":0,"limit":200});
             message.params[0]["query"] = json!({"selector":{},"sort":[{"id":"asc"}]});
             message.params[0]["projection"] = json!(["private_profile"]);
             if private_selector {
