@@ -1372,6 +1372,7 @@ pub(super) struct NativePeer {
     shutdown_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     _process_lock: File,
     _pools: Vec<ctox_sync::native::NativeSyncSession>,
+    business_data_sources: Vec<Arc<ctox_sync::business_data_remote::BusinessDataSource>>,
     _command_consumer: tokio::task::JoinHandle<()>,
     _command_outbox: tokio::task::JoinHandle<()>,
     _notes_sync: tokio::task::JoinHandle<()>,
@@ -1537,6 +1538,7 @@ impl NativePeer {
             for pool in &self._pools {
                 pool.shutdown().await;
             }
+            shutdown_business_data_sources(&self.business_data_sources).await;
             // Tear down any live browser processes so stop leaves no zombies.
             for session_id in browser_runtime_manager().active_session_ids() {
                 browser_runtime_manager().stop(&session_id).await;
@@ -1554,6 +1556,19 @@ impl NativePeer {
                  releasing the run for supervised reconfiguration",
                 NATIVE_PEER_SHUTDOWN_TIMEOUT_SECS
             );
+        }
+    }
+}
+
+// Sources own snapshot/watch tasks independently of the replication pool.
+// Drain them from the NativePeer owner after transport/request shutdown; a
+// cancellation observer tracked by that pool would itself be aborted.
+async fn shutdown_business_data_sources(
+    sources: &[Arc<ctox_sync::business_data_remote::BusinessDataSource>],
+) {
+    for source in sources {
+        if let Err(error) = source.shutdown().await {
+            eprintln!("[business-os] BusinessData source cleanup failed: {error}");
         }
     }
 }
@@ -2853,6 +2868,7 @@ async fn run_native_peer(
         .collect();
     let collection_count = collection_list.len();
     let mut pools = Vec::with_capacity(1);
+    let mut business_data_sources = Vec::with_capacity(1);
     if collection_count == 0 {
         eprintln!(
             "[business-os] no Business OS RxDB collections to replicate; skipping WebRTC bring-up"
@@ -3030,17 +3046,10 @@ async fn run_native_peer(
                     ),
                     pool.connection_handler.clone(),
                 );
+                // Retain before registration so partial setup failure also
+                // drains any source tasks before the database is released.
+                business_data_sources.push(Arc::clone(&business_data_source));
                 business_data_source.register(pool)?;
-                {
-                    let source = business_data_source.clone();
-                    let cancelled = pool.cancelled();
-                    pool.spawn_auxiliary_tracked(async move {
-                        cancelled.await;
-                        if let Err(error) = source.shutdown().await {
-                            eprintln!("[business-os] BusinessData source cleanup failed: {error}");
-                        }
-                    });
-                }
                 let identity_transport = pool.connection_handler.clone();
                 pool.register_identity_request_handler(
                     ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
@@ -3099,6 +3108,7 @@ async fn run_native_peer(
                 pools.push(session);
             }
             Err(err) => {
+                shutdown_business_data_sources(&business_data_sources).await;
                 return Err(release_database_after_failed_bring_up(
                     &database,
                     native_peer_bring_up_failure(format!(
@@ -3224,6 +3234,7 @@ async fn run_native_peer(
         shutdown_tx: Mutex::new(Some(shutdown_tx)),
         _process_lock: process_lock,
         _pools: pools,
+        business_data_sources,
         _command_consumer: command_consumer,
         _command_outbox: command_outbox,
         _notes_sync: notes_sync,

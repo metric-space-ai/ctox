@@ -2,7 +2,7 @@
 #[cfg(test)]
 use super::resolve_db_path;
 use super::QueueExecutionFence;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 #[cfg(test)]
 use rusqlite::Connection;
 use serde::Serialize;

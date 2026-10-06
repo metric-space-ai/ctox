@@ -2,7 +2,7 @@
 //! Every request is revalidated against the current signed WebRTC capability.
 //! Scope is narrowed server-side, and commands reuse ReplicatedPeer intake.
 
-use super::store;
+use super::{policy::BusinessOsPermission, store};
 use ctox_sync::business_data_contract::{
     NativeBusinessDataCommand as Command, NativeBusinessDataCommandState as CommandState,
     NativeBusinessDataCommandStatus, NativeBusinessDataEvent as Event,
@@ -243,9 +243,9 @@ impl NativeBusinessDataPolicy {
                     signer,
                     collection,
                     if access == Access::Read {
-                        store::BusinessOsPermission::DataRead
+                        BusinessOsPermission::DataRead
                     } else {
-                        store::BusinessOsPermission::DataWrite
+                        BusinessOsPermission::DataWrite
                     },
                     at_ms,
                 ),
@@ -582,7 +582,7 @@ mod owner_receipt_tests {
                 format!("read-{user}-{collection}"),
                 user,
                 collection,
-                store::BusinessOsPermission::DataRead.as_str()
+                BusinessOsPermission::DataRead.as_str()
             ],
         )?;
         Ok(())
@@ -1443,9 +1443,9 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
                 ));
             }
             let permission = if read {
-                store::BusinessOsPermission::DataRead
+                BusinessOsPermission::DataRead
             } else {
-                store::BusinessOsPermission::DataWrite
+                BusinessOsPermission::DataWrite
             };
             if store::webrtc_capability_allows_collection_permission(
                 &root,
