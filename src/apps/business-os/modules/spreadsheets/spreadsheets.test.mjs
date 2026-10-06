@@ -644,12 +644,31 @@ test('snapshot reports reject missing or mismatched descriptors before persisten
     { ...input.report_snapshot, source_module: '' },
     { ...input.report_snapshot, source_collection: '' },
     { ...input.report_snapshot, captured_at_ms: -1 },
+    { ...input.report_snapshot, captured_at_ms: Number.MAX_SAFE_INTEGER },
+    { ...input.report_snapshot, source_record_ids: [null] },
   ]) {
     const fixture = snapshotReportState();
     await assert.rejects(hooks.openSpreadsheetFile(fixture.state, { ...input, report_snapshot }));
     assert.deepEqual(fixture.writes, []);
     assert.deepEqual(fixture.acknowledged, []);
   }
+});
+
+test('snapshot digest is checked before reusing a matching saved report', async () => {
+  const input = await snapshotReportInput();
+  const fixture = snapshotReportState([{
+    id: 'existing-report', source_sha256: input.report_snapshot.file_sha256,
+    source_kind: 'research_generated', ingestion_kind: 'research_generated',
+    knowledge_lineage: {
+      open_purpose: 'snapshot_report', evidence_eligible: false,
+      report_snapshot: input.report_snapshot,
+    },
+  }]);
+  await assert.rejects(hooks.openSpreadsheetFile(fixture.state, {
+    ...input, report_snapshot: { ...input.report_snapshot, file_sha256: '0'.repeat(64) },
+  }), (error) => error.code === 'SPREADSHEET_LINEAGE_REQUIRED');
+  assert.deepEqual(fixture.writes, []);
+  assert.deepEqual(fixture.acknowledged, []);
 });
 
 test('snapshot purpose cannot turn an unresolved source file into an import', async () => {

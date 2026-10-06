@@ -1,7 +1,7 @@
 # Spreadsheet snapshot report opening contract
 
-Status: proposed contract and regression coverage; implementation and installed
-acceptance are pending. This does not claim WELSCH or THESEN is repaired.
+Status: receiver implemented with regression coverage. Installed acceptance of
+this revision remains pending; this does not claim WELSCH or THESEN is repaired.
 
 ## Caller
 
