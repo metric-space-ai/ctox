@@ -45,6 +45,7 @@ mod populated_store_recovery;
 mod project_chats;
 mod project_crew;
 pub(crate) use project_crew::project_crew_member_for_task;
+pub mod build_delivery;
 pub mod build_source;
 pub mod computer_capabilities;
 pub mod computer_endpoints;
