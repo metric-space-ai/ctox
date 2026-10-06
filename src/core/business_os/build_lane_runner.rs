@@ -74,7 +74,7 @@ root={root}
 run={run}
 source={source}
 target={target}
-mkdir -p -- "$root/leases" "$root/runs/{task_id}" "$target"
+mkdir -p -- "$root/runs/{task_id}" "$target"
 # An existing run is never relaunched or overwritten.
 mkdir -- "$run" || exit 73
 cat > "$run/job.sh" <<'{delimiter}'
@@ -97,8 +97,8 @@ finish() {{
 trap finish EXIT
 date -u +%FT%TZ > "$run/started"
 leased=0
-for ((slot=0; slot<{slots}; slot++)); do
-    exec 9>"$root/leases/slot-$slot.lock"
+for ((slot=1; slot<={slots}; slot++)); do
+    exec 9>"$root/slot-$slot.lock"
     if flock -n 9; then leased=1; break; fi
     exec 9>&-
 done
@@ -248,5 +248,35 @@ mod tests {
         launch(&job);
         assert_eq!(wait_file(&format!("{}/exit", job.run_dir)).trim(), "74");
         assert!(plan(&grant, "../task", "run", "source", &["true".into()], 1).is_err());
+    }
+
+    #[test]
+    fn prototype_slot_namespace_is_shared_with_external_flock() {
+        let (_dir, grant) = fixture();
+        fs::create_dir_all(&grant.lane_root).unwrap();
+        let marker = format!("{}/external-holder-ready", grant.lane_root);
+        let mut holder = Command::new("bash")
+            .arg("-c")
+            .arg("exec 9>\"$1/slot-1.lock\"; flock 9; printf ready > \"$2\"; read -r release")
+            .arg("fixture")
+            .arg(&grant.lane_root)
+            .arg(&marker)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        wait_file(&marker);
+        let job = plan(&grant, "task", "external", "source", &["true".into()], 10).unwrap();
+        fs::create_dir_all(&job.source_dir).unwrap();
+        launch(&job);
+        let status = wait_file(&format!("{}/exit", job.run_dir));
+        use std::io::Write;
+        holder
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"release\n")
+            .unwrap();
+        assert!(holder.wait().unwrap().success());
+        assert_eq!(status.trim(), "75");
     }
 }

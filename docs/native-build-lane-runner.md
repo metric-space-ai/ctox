@@ -12,7 +12,8 @@ The service account must exclusively own the lane tree: hostile symlinks or
 concurrent writes by another account are outside this trust boundary. Run ids
 must be unique; a repeated launch exits 73 without overwriting prior evidence.
 
-The detached session owns a nonblocking flock lease until the bounded command
+The detached session shares the prototype lock namespace (`lane_root/slot-1.lock`
+through `slot-SLOTS.lock`) and owns a nonblocking flock lease until the bounded command
 and its inherited lock descriptors exit. Admission rejection exits 75, disk
 floor rejection exits 74 and GNU timeout returns 124. Inspect the run directory
 for `pid`, `started`, `slot`, `log`, atomic `exit` and `finished` files. The parent
