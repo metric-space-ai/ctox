@@ -17,7 +17,7 @@
     "signer_fingerprint": "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81",
     "fingerprint_reference": "https://documentation.ubuntu.com/_/downloads/public-images/en/latest/pdf/",
     "metadata_signature_checked": true,
-    "image_downloaded_or_image_hash_checked": false
+    "image_downloaded_or_image_hash_checked": true
   },
   "native_artifact": {
     "repository": "https://github.com/metric-space-ai/ctox",
@@ -63,5 +63,5 @@
     "durability": "Approved final raw image and receipt require durable approved storage and an independent verified copy before cleanup. /Volumes/tmp is only disposable staging, never sole golden image custody. Do not delete shared Docker images or unrelated task data."
   },
   "required_acceptance": ["Actual Linux native artifact compilation and relevant guest regressions", "Boot the actual assigned KVM child, Xorg/XFCE and native endpoint; fresh same-session capture proof", "Authorized capture through actual native guarded P2P queue and rendering, typed input observed in a real application", "Revoke/controller change/expiry/child or endpoint death prevents later send and input; no automatic replay", "Consistent portable checkpoint and real two-host continuation with old-owner fencing and independent durable copies"],
-  "approval_scope": "Select and permit acquisition/build of this fixed Ubuntu input and source-bound recipe after host/storage clearance. Does not authorize shared-image deletion, credentials/admin bypass, runtime activation, claim native acceptance or substitute force-stop for a consistent checkpoint."
+  "approval_scope": "Claude authorized acquisition/build of this fixed Ubuntu input and source-bound recipe plus bounded real guest/two-host verification on2026-10-06. This record supplies no controller/effect authority and is not acceptance evidence. Shared-image deletion, credentials/admin bypass and substituting force-stop for a consistent checkpoint remain outside scope."
 }
