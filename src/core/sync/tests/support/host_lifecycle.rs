@@ -65,7 +65,7 @@ fn config() -> (HostConfiguration, Arc<SigningIdentity>) {
         keys[0].clone(),
     )
 }
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shared_host_loop_withdraws_its_listener_after_stop() {
     let signal = SignalingFixture::start().await;
     let (config, key) = config();
@@ -77,27 +77,29 @@ async fn shared_host_loop_withdraws_its_listener_after_stop() {
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let (started, ready) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        host_runtime::run(
+        host_runtime::run_with_authority(
             &config,
             &path,
             &ipc,
             key,
             options,
             async { stopped.await.map_err(io::Error::other) },
-            move |ready| {
+            move |ready, authority| {
                 started
-                    .send(ready)
+                    .send((ready, authority))
                     .map_err(|_| io::Error::other("startup receiver closed"))
             },
         )
         .await
     });
-    let ready = tokio::time::timeout(Duration::from_secs(10), ready)
+    let (ready, authority) = tokio::time::timeout(Duration::from_secs(10), ready)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(ready.node_id, 1);
     assert_eq!(ready.scope_id, "lifecycle");
+    assert_eq!(authority.node_id(), ready.node_id);
+    assert_eq!(authority.scope_id(), ready.scope_id);
     assert!(ready.ipc_endpoint.exists());
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), task)
@@ -106,9 +108,13 @@ async fn shared_host_loop_withdraws_its_listener_after_stop() {
         .unwrap()
         .unwrap();
     assert!(!ready.ipc_endpoint.exists());
+    assert!(
+        authority.worker_membership(4).await.is_err(),
+        "retained native authority must reject after host shutdown"
+    );
     database.close().await.unwrap();
 }
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_host_publication_closes_the_native_session_and_listener() {
     let signal = SignalingFixture::start().await;
     let (config, key) = config();

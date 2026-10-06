@@ -19,8 +19,8 @@ use std::{
 
 #[path = "runtime.rs"]
 mod runtime;
-const SECRET_SCOPE: &str = "ctox-sync-host";
-const IDENTITY_SECRET: &str = "identity-pkcs8";
+const SECRET_SCOPE: &str = super::SIGNING_IDENTITY_SECRET_KEY.0;
+const IDENTITY_SECRET: &str = super::SIGNING_IDENTITY_SECRET_KEY.1;
 const INPUT_LIMIT: u64 = 1024 * 1024;
 
 fn directory(root: &Path) -> PathBuf {
@@ -39,24 +39,39 @@ fn load_config(root: &Path) -> Result<Option<HostConfiguration>> {
 fn configuration(root: &Path) -> Result<HostConfiguration> {
     load_config(root)?.context("native Sync host is not configured")
 }
-pub(super) fn key(root: &Path) -> Result<Arc<SigningIdentity>> {
-    let encoded = crate::secrets::read_secret_value(root, SECRET_SCOPE, IDENTITY_SECRET)
-        .map_err(|_| anyhow::anyhow!("native Sync identity is unavailable in the secret store"))?;
+pub(super) fn decode_key(encoded: &[u8]) -> Result<SigningIdentity> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct StoredKey {
         identity: String,
         pkcs8: String,
     }
-    let record: StoredKey = serde_json::from_str(&encoded)
+    let record: StoredKey = serde_json::from_slice(encoded)
         .map_err(|_| anyhow::anyhow!("invalid native Sync key record"))?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(record.pkcs8)
         .context("invalid native Sync key encoding")?;
-    Ok(Arc::new(
-        SigningIdentity::from_existing_pkcs8(&bytes, &record.identity)
-            .context("invalid native Sync signing key")?,
-    ))
+    SigningIdentity::from_existing_pkcs8(&bytes, &record.identity)
+        .context("invalid native Sync signing key")
+}
+
+pub(super) fn key(root: &Path) -> Result<Arc<SigningIdentity>> {
+    let encoded = crate::secrets::read_secret_value(root, SECRET_SCOPE, IDENTITY_SECRET)
+        .map_err(|_| anyhow::anyhow!("native Sync identity is unavailable in the secret store"))?;
+    Ok(Arc::new(decode_key(encoded.as_bytes())?))
+}
+
+/// Borrow the freshly verified provisioned key under the existing encrypted
+/// secret mutation fence. Enter before policy/worker locks; never await or
+/// reenter secret APIs in the callback. This path cannot provision a key/store.
+pub(super) fn with_current_key<T>(
+    root: &Path,
+    apply: impl FnOnce(&SigningIdentity) -> Result<T>,
+) -> Result<T> {
+    crate::secrets::with_current_secret_value(root, SECRET_SCOPE, IDENTITY_SECRET, |encoded| {
+        let identity = decode_key(encoded)?;
+        apply(&identity)
+    })
 }
 fn transport_name(config: &HostConfiguration) -> String {
     format!("transport:{}", config.scope_id)
@@ -162,14 +177,24 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         ["run"] => runtime::run(&root, async {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
-        }, |started| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
+        }, |started, _authority| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
         _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | status | run"),
     }
 }
 
 pub struct ServiceHost {
+    authority: Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<thread::JoinHandle<()>>,
+}
+impl ServiceHost {
+    /// The host remains the lifecycle owner; cloning this handle cannot keep
+    /// a stopped listener/discovery or revoked quorum owner authorized.
+    pub(crate) fn execution_authority(
+        &self,
+    ) -> Arc<dyn ctox_sync::authority::client::ExecutionAuthority> {
+        self.authority.clone()
+    }
 }
 impl Drop for ServiceHost {
     fn drop(&mut self) {
@@ -198,9 +223,9 @@ pub fn start_if_configured(root: &Path) -> Result<Option<ServiceHost>> {
                     let _ = stopped.await;
                     Ok(())
                 },
-                move |_| {
+                move |_, authority| {
                     ready
-                        .send(Ok(()))
+                        .send(Ok(authority))
                         .map_err(|_| anyhow::anyhow!("native Sync service startup receiver closed"))
                 },
             );
@@ -210,18 +235,20 @@ pub fn start_if_configured(root: &Path) -> Result<Option<ServiceHost>> {
                 eprintln!("ctox service: native Sync host stopped; local listener is unavailable");
             }
         })?;
-    let host = ServiceHost {
-        stop: Some(stop),
-        task: Some(task),
-    };
-    match started
-        .recv()
-        .context("native Sync host startup thread ended")?
-    {
-        Ok(()) => Ok(Some(host)),
-        Err(error) => {
-            drop(host);
-            anyhow::bail!(error)
+    match started.recv() {
+        Ok(Ok(authority)) => Ok(Some(ServiceHost {
+            authority,
+            stop: Some(stop),
+            task: Some(task),
+        })),
+        failed => {
+            let _ = stop.send(());
+            let _ = task.join();
+            match failed {
+                Ok(Err(error)) => anyhow::bail!(error),
+                Err(error) => Err(error).context("native Sync host startup thread ended"),
+                Ok(Ok(_)) => unreachable!(),
+            }
         }
     }
 }

@@ -34,19 +34,19 @@ use std::{
 mod signaling_fixture;
 use signaling_fixture::{route_ready, SignalingFixture};
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn additional_worker_connects_to_three_voters_and_owns_a_supervised_ipc() {
     exercise_worker_session(None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn worker_reconnect_preserves_identity_and_rebuilds_channels() {
     exercise_worker_session(Some(4)).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn voter_reconnect_uses_pinned_key_to_restore_quorum_and_worker_routes() {
     exercise_worker_session(Some(3)).await;
@@ -311,7 +311,7 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
         if reconnect.is_none() {
             let mut handoff_spec = spec.clone();
             handoff_spec.job_id = "additional-worker-handoff".into();
-            handoff_spec.session_id = "additional-worker-checkpoint".into();
+            handoff_spec.session_id = "22222222-2222-4222-8222-222222222222".into();
             let initial = call(&handoff_endpoints[&1], "create-for-worker-handoff",
                 SyncIpcOperation::Create { spec: handoff_spec.clone() }).await;
             let SyncIpcResult::Applied { ownership: initial_owner, .. } = initial else {
@@ -320,20 +320,31 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
             let copies = |ids: [u64; 2]| ids.into_iter().map(|id|
                 checkpoint_fixture::copy_receipt(root.path(), id, &keys[&id],
                     &handoff_spec, &initial_owner, 1)).collect::<Vec<_>>();
+            let vote_copies = copies([1, 3]);
             assert!(matches!(call(&handoff_endpoints[&1], "coordination-vote-is-not-data",
                 SyncIpcOperation::ProtectCheckpoint {
                     job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(),
-                    receipts: copies([1, 3]),
+                    receipts: vote_copies.clone(),
+                    disclosure: checkpoint_fixture::handoff_permit(&keys[&1],
+                        ctox_sync::authority::SessionHandoffPhase::Disclose, &handoff_spec,
+                        &vote_copies[0].checkpoint_digest, vote_copies[0].sequence,
+                        &initial_owner, "coordination-vote-is-not-data"),
                 }).await, SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable"));
             let receipts = copies([1, 4]);
             let digest = receipts[0].checkpoint_digest.clone();
             assert!(matches!(call(&handoff_endpoints[&1], "protect-on-additional-worker",
                 SyncIpcOperation::ProtectCheckpoint {
-                    job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(), receipts,
+                    job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(), receipts: receipts.clone(),
+                    disclosure: checkpoint_fixture::handoff_permit(&keys[&1],
+                        ctox_sync::authority::SessionHandoffPhase::Disclose, &handoff_spec,
+                        &digest, receipts[0].sequence, &initial_owner, "protect-on-additional-worker"),
                 }).await, SyncIpcResult::Applied { .. }));
             let operation = SyncIpcOperation::TakeOver {
-                job_id: handoff_spec.job_id.clone(), expected: initial_owner,
-                checkpoint_digest: digest,
+                job_id: handoff_spec.job_id.clone(), expected: initial_owner.clone(),
+                checkpoint_digest: digest.clone(),
+                resume: checkpoint_fixture::handoff_permit(&keys[&4],
+                    ctox_sync::authority::SessionHandoffPhase::Resume, &handoff_spec,
+                    &digest, receipts[0].sequence, &initial_owner, "additional-worker-takeover"),
             };
             let transferred = call(worker.ipc_endpoint(), "additional-worker-takeover", operation.clone()).await;
             let SyncIpcResult::Applied { ownership: transferred_owner, .. } = transferred else {
@@ -539,7 +550,7 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
     .expect("four-peer native worker lifecycle timed out");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
     use authority_ipc_fixture::call as ipc_call;
     use ctox_sync::contracts::{SyncIpcOperation, SyncIpcResult};
@@ -700,7 +711,7 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
         }
         let spec = ExecutionSpec {
             job_id: "job".into(),
-            session_id: "session".into(),
+            session_id: "11111111-1111-4111-8111-111111111111".into(),
             scope_id: "scope".into(),
             harness: "codex".into(),
             harness_version: "fixture".into(),
@@ -739,17 +750,30 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             })
             .collect();
         let checkpoint_digest = receipts[0].checkpoint_digest.clone();
+        let disclosure_for =
+            |request_id: &str, copies: &[ctox_sync::authority::CheckpointCopyReceipt]| {
+                checkpoint_fixture::handoff_permit(
+                    &keys[&1],
+                    ctox_sync::authority::SessionHandoffPhase::Disclose,
+                    &job.spec,
+                    &copies[0].checkpoint_digest,
+                    copies[0].sequence,
+                    &job.ownership,
+                    request_id,
+                )
+            };
         let protect = SyncIpcOperation::ProtectCheckpoint {
             job_id: "job".into(),
             ownership: job.ownership.clone(),
             receipts: receipts.clone(),
+            disclosure: disclosure_for("protect", &receipts),
         };
         // The local IPC cannot impersonate the checkpoint's current owner.
         assert!(matches!(
             ipc_call(nodes[&2].clone(), "foreign-protect", protect.clone()).await,
             SyncIpcResult::Rejected { .. }
         ));
-        let mut tampered = receipts;
+        let mut tampered = receipts.clone();
         tampered[1].signature.push('0');
         assert!(matches!(
             ipc_call(
@@ -758,6 +782,7 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
                 SyncIpcOperation::ProtectCheckpoint {
                     job_id: "job".into(),
                     ownership: job.ownership.clone(),
+                    disclosure: disclosure_for("tampered-copy", &tampered),
                     receipts: tampered,
                 }
             )
@@ -777,18 +802,29 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             ipc_call(nodes[&1].clone(), "protect", protect).await,
             SyncIpcResult::Replayed { .. }
         ));
-        let takeover = SyncIpcOperation::TakeOver {
-            job_id: "job".into(),
-            expected: job.ownership.clone(),
-            checkpoint_digest: checkpoint_digest.clone(),
-        };
+        let takeover_for =
+            |request_id: &str, digest: &str, signer: u64| SyncIpcOperation::TakeOver {
+                job_id: "job".into(),
+                expected: job.ownership.clone(),
+                checkpoint_digest: digest.to_owned(),
+                resume: checkpoint_fixture::handoff_permit(
+                    &keys[&signer],
+                    ctox_sync::authority::SessionHandoffPhase::Resume,
+                    &job.spec,
+                    digest,
+                    receipts[0].sequence,
+                    &job.ownership,
+                    request_id,
+                ),
+            };
+        let takeover = takeover_for("takeover", &checkpoint_digest, 2);
         assert!(
-            matches!(ipc_call(nodes[&3].clone(), "coordination-peer-cannot-takeover", takeover.clone()).await,
+            matches!(ipc_call(nodes[&3].clone(), "coordination-peer-cannot-takeover",
+                takeover_for("coordination-peer-cannot-takeover", &checkpoint_digest, 3)).await,
             SyncIpcResult::Rejected { ref reason } if reason == "UnknownPeer")
         );
         assert!(matches!(ipc_call(nodes[&2].clone(), "wrong-digest",
-            SyncIpcOperation::TakeOver { job_id: "job".into(),
-                expected: job.ownership.clone(), checkpoint_digest: "0".repeat(64) }).await,
+            takeover_for("wrong-digest", &"0".repeat(64), 2)).await,
             SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable"));
         assert!(matches!(
             ipc_call(
@@ -803,10 +839,9 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             .await,
             SyncIpcResult::Applied { .. }
         ));
-        assert!(
-            matches!(ipc_call(nodes[&2].clone(), "blocked-takeover", takeover.clone()).await,
-            SyncIpcResult::Rejected { ref reason } if reason == "ReconciliationRequired")
-        );
+        assert!(matches!(ipc_call(nodes[&2].clone(), "blocked-takeover",
+                takeover_for("blocked-takeover", &checkpoint_digest, 2)).await,
+            SyncIpcResult::Rejected { ref reason } if reason == "ReconciliationRequired"));
         assert!(matches!(
             ipc_call(
                 nodes[&1].clone(),
@@ -902,31 +937,31 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
     .expect("real WebRTC authority fixture exceeded 60 seconds");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn native_sessions_own_authority_without_granting_business_data_access() {
     exercise_native_session_group(NativeGroupScenario::Shutdown).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn workjet_ipc_uses_the_owned_native_execution_group() {
     exercise_native_session_group(NativeGroupScenario::WorkjetIpc).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn dropping_native_session_stops_retained_authority_and_ipc_handles() {
     exercise_native_session_group(NativeGroupScenario::Drop).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn configured_workjet_signaling_peers_reach_native_authority() {
     exercise_native_session_group(NativeGroupScenario::WorkjetRoles).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
 async fn configured_workjet_signaling_peers_connect_to_ctox_coordinator() {
     exercise_native_session_group(NativeGroupScenario::MixedRoles).await;
@@ -1066,7 +1101,7 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
         }
         let spec = ExecutionSpec {
             job_id: "job".into(),
-            session_id: "session".into(),
+            session_id: "11111111-1111-4111-8111-111111111111".into(),
             scope_id: "scope".into(),
             harness: "codex".into(),
             harness_version: "fixture".into(),
@@ -1179,7 +1214,7 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
             client_spec.session_id = "workjet-session".into();
             let mut handoff_spec = client_spec.clone();
             handoff_spec.job_id = "workjet-handoff-job".into();
-            handoff_spec.session_id = "workjet-handoff-session".into();
+            handoff_spec.session_id = "33333333-3333-4333-8333-333333333333".into();
             let receipts: Vec<_> = [1, 2]
                 .into_iter()
                 .map(|id| {

@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { chromium } from '../../node_modules/playwright/index.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const playwrightModule = process.env.PLAYWRIGHT_MODULE_PATH
+  ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE_PATH, 'index.mjs')).href
+  : '../../node_modules/playwright/index.mjs';
+const { chromium } = await import(playwrightModule);
+
 const bundle = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../dist/ctox-rxdb-js.mjs'));
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': req.url === '/bundle.mjs' ? 'text/javascript' : 'text/html' });

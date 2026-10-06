@@ -96,6 +96,9 @@ use std::time::Duration as StdDuration;
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
 
+#[path = "codex_interrupt_tests.rs"]
+mod interrupt_tests;
+
 use ctox_protocol::models::function_call_output_content_items_to_text;
 
 fn expect_text_tool_output(output: &FunctionToolOutput) -> String {
@@ -2561,6 +2564,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        interrupt_receipts: std::sync::Mutex::new(HashMap::new()),
+        shutdown_journal_result: std::sync::OnceLock::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -2996,19 +3001,22 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
 #[tokio::test]
 async fn shutdown_and_wait_allows_multiple_waiters() {
     let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
     let (tx_sub, rx_sub) = async_channel::bounded(4);
     let (_tx_event, rx_event) = async_channel::unbounded();
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let shutdown_session = Arc::clone(&session);
     let session_loop_handle = tokio::spawn(async move {
         let shutdown: Submission = rx_sub.recv().await.expect("shutdown submission");
         assert_eq!(shutdown.op, Op::Shutdown);
         tokio::time::sleep(StdDuration::from_millis(50)).await;
+        assert!(handlers::shutdown(&shutdown_session, shutdown.id).await);
     });
     let codex = Arc::new(Codex {
         tx_sub,
         rx_event,
         agent_status,
-        session: Arc::new(session),
+        session: Arc::clone(&session),
         session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
     });
 
@@ -3034,19 +3042,22 @@ async fn shutdown_and_wait_allows_multiple_waiters() {
 #[tokio::test]
 async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
     let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
     let (tx_sub, rx_sub) = async_channel::bounded(4);
     drop(rx_sub);
     let (_tx_event, rx_event) = async_channel::unbounded();
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
     let (shutdown_complete_tx, shutdown_complete_rx) = tokio::sync::oneshot::channel();
+    let shutdown_session = Arc::clone(&session);
     let session_loop_handle = tokio::spawn(async move {
         let _ = shutdown_complete_rx.await;
+        assert!(handlers::shutdown(&shutdown_session, "already-shutting-down".to_string()).await);
     });
     let codex = Arc::new(Codex {
         tx_sub,
         rx_event,
         agent_status,
-        session: Arc::new(session),
+        session: Arc::clone(&session),
         session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
     });
 
@@ -3066,6 +3077,181 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
         .await
         .expect("shutdown waiter join")
         .expect("shutdown waiter");
+}
+
+#[tokio::test]
+async fn shutdown_and_wait_rejects_termination_without_journal_receipt() {
+    for panic_after_request in [false, true] {
+        let (session, _turn_context) = make_session_and_context().await;
+        let (tx_sub, rx_sub) = async_channel::bounded(1);
+        let (_tx_event, rx_event) = async_channel::unbounded();
+        let (_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+        let session_loop_handle = tokio::spawn(async move {
+            let shutdown: Submission = rx_sub.recv().await.expect("shutdown request");
+            assert_eq!(shutdown.op, Op::Shutdown);
+            assert!(
+                !panic_after_request,
+                "unexpected-session-loop-panic-fixture"
+            );
+        });
+        let codex = Codex {
+            tx_sub,
+            rx_event,
+            agent_status,
+            session: Arc::new(session),
+            session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+        };
+        let error = codex
+            .shutdown_and_wait()
+            .await
+            .expect_err("loop exit alone cannot certify journal shutdown");
+        assert!(matches!(error, CodexErr::InternalAgentDied));
+    }
+}
+
+#[tokio::test]
+async fn shutdown_and_wait_rejects_failed_loop_after_real_journal_receipt() {
+    for cancel_after_receipt in [false, true] {
+        let (session, _turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let (tx_sub, rx_sub) = async_channel::bounded(1);
+        let (_tx_event, rx_event) = async_channel::unbounded();
+        let (_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+        let (receipt_tx, receipt_rx) = tokio::sync::oneshot::channel();
+        let shutdown_session = Arc::clone(&session);
+        let session_loop_handle = tokio::spawn(async move {
+            let shutdown: Submission = rx_sub.recv().await.expect("shutdown request");
+            assert_eq!(shutdown.op, Op::Shutdown);
+            assert!(handlers::shutdown(&shutdown_session, shutdown.id).await);
+            receipt_tx.send(()).expect("real handler finished");
+            if cancel_after_receipt {
+                std::future::pending::<()>().await;
+            } else {
+                panic!("private-session-loop-panic-after-receipt");
+            }
+        });
+        let abort = session_loop_handle.abort_handle();
+        let codex = Arc::new(Codex {
+            tx_sub,
+            rx_event,
+            agent_status,
+            session,
+            session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+        });
+        let caller = Arc::clone(&codex);
+        let waiter = tokio::spawn(async move { caller.shutdown_and_wait().await });
+        tokio::time::timeout(StdDuration::from_secs(5), receipt_rx)
+            .await
+            .expect("real handler must finish")
+            .expect("real receipt signal");
+        assert!(matches!(
+            codex.session.shutdown_journal_result.get(),
+            Some(Ok(()))
+        ));
+        if cancel_after_receipt {
+            abort.abort();
+        }
+
+        let error = tokio::time::timeout(StdDuration::from_secs(5), waiter)
+            .await
+            .expect("failed loop must release initial shutdown waiter")
+            .expect("shutdown waiter join")
+            .expect_err("successful journal receipt cannot mask task failure");
+        assert!(matches!(error, CodexErr::InternalAgentDied));
+        assert!(!error.to_string().contains("private-session-loop-panic"));
+        let repeated = codex
+            .shutdown_and_wait()
+            .await
+            .expect_err("every waiter must retain the same failed termination");
+        assert!(matches!(repeated, CodexErr::InternalAgentDied));
+    }
+}
+
+#[tokio::test]
+async fn shutdown_and_wait_propagates_failed_recorder_through_real_session_loop() {
+    let home = tempfile::TempDir::new().expect("recorder fixture home");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await
+        .expect("recorder config");
+    let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            session.conversation_id,
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        None,
+        None,
+    )
+    .await
+    .expect("fresh deferred recorder");
+    let foreign_stage = recorder
+        .materialization_staging_path()
+        .expect("private staging path")
+        .to_path_buf();
+    tokio::fs::create_dir_all(foreign_stage.parent().expect("staging parent"))
+        .await
+        .expect("staging directory");
+    tokio::fs::write(&foreign_stage, b"foreign-owned-staging")
+        .await
+        .expect("existing foreign path");
+    assert!(
+        recorder.persist().await.is_err(),
+        "real create-new failure must close the recorder writer"
+    );
+    *session.services.rollout.lock().await = Some(recorder);
+
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    let (_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let session_for_loop = Arc::clone(&session);
+    let session_config = Arc::clone(&turn_context.config);
+    let session_loop_handle = tokio::spawn(async move {
+        submission_loop(session_for_loop, session_config, rx_sub).await;
+    });
+    let codex = Codex {
+        tx_sub,
+        rx_event: rx_event.clone(),
+        agent_status,
+        session,
+        session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+    };
+    let error = tokio::time::timeout(StdDuration::from_secs(5), codex.shutdown_and_wait())
+        .await
+        .expect("failed recorder must not hang shutdown")
+        .expect_err("real shutdown must retain recorder failure");
+    assert!(matches!(error, CodexErr::Io(_)));
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx_event.try_recv() {
+        events.push(event.msg);
+    }
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, EventMsg::Error(_)))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, EventMsg::ShutdownComplete)),
+        "lifecycle completion notification is preserved but cannot certify success"
+    );
+    assert!(matches!(
+        codex.shutdown_and_wait().await,
+        Err(CodexErr::Io(_))
+    ));
+    assert_eq!(
+        tokio::fs::read(foreign_stage)
+            .await
+            .expect("foreign staging retained"),
+        b"foreign-owned-staging"
+    );
 }
 
 #[tokio::test]
@@ -3355,6 +3541,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        interrupt_receipts: std::sync::Mutex::new(HashMap::new()),
+        shutdown_journal_result: std::sync::OnceLock::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,

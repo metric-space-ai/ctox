@@ -252,6 +252,25 @@ pub(super) fn rxdb_collection_table_name(
     rxdb_collection_table_name_from_tables(&tables, &expected, collection)
 }
 
+/// Resolve against the caller's held SQLite catalog, without path caches,
+/// opening a connection or creating any schema.
+pub(super) fn rxdb_collection_table_name_from_connection(
+    conn: &Connection,
+    collection: &str,
+) -> anyhow::Result<Option<String>> {
+    let mut statement = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?;
+    let tables = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let expected = format!(
+        "ctox_business_os__{collection}__v{}",
+        rxdb_schema_version(collection)
+    );
+    Ok(rxdb_collection_table_name_from_tables(
+        &tables, &expected, collection,
+    ))
+}
+
 fn rxdb_collection_table_name_from_tables(
     tables: &BTreeSet<String>,
     expected: &str,
@@ -444,35 +463,59 @@ pub(crate) fn sync_connection_config(
     root: &Path,
 ) -> anyhow::Result<BusinessOsSyncConnectionConfig> {
     let key = business_os_root_cache_key(root);
-    let stamp = sync_connection_config_cache_stamp(root);
     let cache = SYNC_CONNECTION_CONFIG_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
-    {
+    let stamp = {
         let cache = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Waiting for another publisher must not preserve a pre-lock stamp.
+        let stamp = sync_connection_config_cache_stamp(root);
         if let Some(entry) = cache.get(&key).filter(|entry| {
-            entry.stamp == stamp
+            stamp.3.is_some()
+                && entry.stamp == stamp
                 && entry.generated_at.elapsed()
                     < Duration::from_secs(SYNC_CONNECTION_CONFIG_CACHE_TTL_SECS)
         }) {
             return Ok(entry.config.clone());
         }
-    }
+        stamp
+    };
 
     let config = build_sync_connection_config(root)?;
-    let stamp = sync_connection_config_cache_stamp(root);
+    cache_sync_connection_config_if_unchanged(root, &key, stamp, &config);
+    Ok(config)
+}
+
+fn cache_sync_connection_config_if_unchanged(
+    root: &Path,
+    key: &Path,
+    source_stamp: SyncConnectionConfigCacheStamp,
+    config: &BusinessOsSyncConnectionConfig,
+) -> bool {
+    // A build spanning a credential write must never label its old result with
+    // the new store stamp. Initial setup may also change the source; that first
+    // result remains usable but is not cached.
+    if source_stamp.3.is_none() {
+        return false;
+    }
+    let cache = SYNC_CONNECTION_CONFIG_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Recheck after acquiring the publication lock: an old builder may have
+    // waited here while a credential rotation and a fresh builder completed.
+    if sync_connection_config_cache_stamp(root) != source_stamp {
+        return false;
+    }
     cache.insert(
-        key,
+        key.to_path_buf(),
         SyncConnectionConfigCacheEntry {
             generated_at: Instant::now(),
-            stamp,
+            stamp: source_stamp,
             config: config.clone(),
         },
     );
-    Ok(config)
+    true
 }
 
 fn build_sync_connection_config(root: &Path) -> anyhow::Result<BusinessOsSyncConnectionConfig> {
@@ -559,6 +602,65 @@ pub(crate) fn mobile_invite_sync_config(
     })
 }
 pub(crate) const BUSINESS_OS_SIGNALING_AUTH_VERSION: &str = "ctox-role-bound-v1";
+
+pub(super) fn native_transfer_routing_secret_keys() -> [(&'static str, &'static str); 2] {
+    [
+        (
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME,
+        ),
+        (
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_SIGNALING_NATIVE_TOKEN_SECRET_NAME,
+        ),
+    ]
+}
+
+/// Validate the prepared role credentials using this same held secret tuple.
+/// No cache, environment fallback, key creation or secret API reentry at IO.
+pub(super) fn validate_native_transfer_routing_publication(
+    routing: &crate::native_transfer_routing::NativeTransferRouting,
+    instance_id: &str,
+    values: &[&[u8]],
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        values.len() == 2,
+        "current signaling credentials unavailable"
+    );
+    let room = std::str::from_utf8(values[0])?.trim();
+    let native = std::str::from_utf8(values[1])?.trim();
+    anyhow::ensure!(
+        !room.is_empty() && !native.is_empty(),
+        "current signaling credentials empty"
+    );
+    let browser = signaling_token_from_room_password(room)
+        .ok_or_else(|| anyhow::anyhow!("current browser signaling credential unavailable"))?;
+    anyhow::ensure!(
+        routing.auth_version == BUSINESS_OS_SIGNALING_AUTH_VERSION
+            && routing.room == format!("ctox-business-os:{instance_id}:{}", room_secret_id(room))
+            && routing.browser_token == browser
+            && routing.browser_token_hash == signaling_token_hash(&browser)
+            && routing.native_token_hash == signaling_token_hash(native),
+        "prepared routing issuer changed"
+    );
+    Ok(())
+}
+
+/// Safe inside an auxiliary handler: avoids the recursive peer liveness
+/// snapshot in sync_config while preserving the source's configured ICE/TURN.
+pub(super) fn native_transfer_ice_config(
+    root: &Path,
+    device_id: &str,
+) -> (Vec<Value>, Option<i64>) {
+    let mut servers = ice_servers_config(root);
+    if let Some(server) = ephemeral_turn_server(root, device_id) {
+        servers.push(server);
+    }
+    let expiry = ice_diagnostics(&servers)
+        .get("credentialExpiresAtMs")
+        .and_then(Value::as_i64);
+    (servers, expiry)
+}
 
 pub(crate) fn signaling_auth_config(
     root: &Path,

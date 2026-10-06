@@ -14,6 +14,107 @@ Fork policy:
 - Local modifications inside this subtree belong to the CTOX fork state unless explicitly documented otherwise.
 - CTOX must not auto-clone, auto-fetch, or auto-update this subtree from upstream.
 
+
+## 2026-09 Exact-turn interrupt receipts
+
+The V2 `turn/interrupt` handler preserves the supplied turn ID and submits
+`Op::InterruptTurn` through the existing serial core submission loop. Core
+compares and takes the named active task under the same lock; stale, unknown,
+completed, or already-cancelled identities return a rejected receipt without
+interrupting another turn or cancelling session startup. Successful stops keep
+the existing task cleanup, durable abort marker, `TurnAborted` event, and inline
+interrupt compaction before the next queued operation.
+
+Each request has its own internal one-shot receipt, resolved only by its core
+submission after that task's abort handling. The app-server no longer resolves
+interrupt RPCs from the thread-wide broadcast abort stream. Dropped callers,
+failed enqueueing, and session-loop termination remove pending receipts.
+Legacy unscoped `Op::Interrupt` remains available to existing internal callers.
+
+`core/src/codex_interrupt_tests.rs` exercises the public core request method and
+its production dispatch handler with controlled task replacement and abort
+cleanup. `app-server/src/in_process_interrupt_tests.rs` additionally drives the
+real in-process RPC boundary with serialized `TurnInterruptParams`, positive
+matching interrupts, stale/unknown rejections, and exact-turn steering probes
+that verify the successor stays active. Only the model response is mocked.
+These are source-added regressions; compiler/test execution and transport
+acceptance must be recorded separately before promotion.
+This change does not implement queue-claim cancellation or publication fencing.
+
+## 2026-10 Native MCP emission boundary
+
+The MCP handler consults a live in-process native dispatcher immediately before
+ordinary transport, after the existing argument/configuration, approval and
+safety checks. Both allowed paths use the same helper. Declined, cancelled or
+safety-blocked calls do not dispatch. Public registration is a Rust capability;
+its invocation has private fields and is built only from the actual Session,
+TurnContext and MCP call. JSON labels and asynchronous events cannot construct it.
+
+Registrations are scoped to the actual Session allocation, obtained from the
+already loaded Core thread, and removed on drop. A weak Session reference prevents
+allocation reuse while registered. The registry lock is released before taking
+the active-turn mutex. Core checks the exact task context and uncancelled token
+and holds that mutex across the bounded synchronous callback, serializing it
+with turn finish, replacement and abort. Native callbacks separately enforce
+their retained worker/turn lifetime and current policy/controller; these strings
+are not permits. Unhandled calls preserve ordinary MCP transport. CTOX installs
+this seam only on explicitly native-admitted guest sessions; the default guest
+consumer refuses effects until a real VM owner is registered.
+
+The core regressions exercise actual MCP handler dispatch and argument rejection,
+plus registry scoping/teardown. Native queue regressions test emitter lifetime and
+default-consumer denial. Execution and installed VM acceptance are separate.
+
+## 2026-10 Checked embedding shutdown
+
+In-process shutdown carries checked background/thread-drain and task-join
+results to the embedding client. Forced timeouts, lost acknowledgements and
+panics return safe errors instead of success; an error response still awaits
+bounded owned cleanup. Runtime processor/router tasks and client shutdown
+futures retain abort ownership on cancellation, including before the facade
+future's first poll. The awaited public call shape remains
+`client.shutdown().await`.
+
+The outer `AppServerClient` enum constructs the embedded shutdown future at
+the public call boundary too. Its unpolled-future regression uses the actual
+enum wrapper and a raw owned fixture worker, not a preconstructed cleanup guard.
+
+Tracked sessions retain a one-time result from the real shutdown handler's
+recorder I/O. The shared session-loop future also retains the checked task-join
+result. Shutdown waiters reject a failed recorder, a missing receipt or a failed
+task join, even if the real handler already acknowledged journal I/O. Panic
+and cancellation remain sanitized failures for repeated waiters. Recorder shutdown flushes
+preceding writes, propagates the real file error and closes its writer despite
+retained clones. Existing multiple-waiter fixtures now invoke the actual shutdown
+handler rather than treating a sleeping loop's exit as successful shutdown.
+The unchanged lifecycle completion event is not a success receipt.
+
+Real in-process event-pressure, persistent-resume, guardian and retained-manager
+checks remain required. A file-I/O receipt adds no fsync/power-loss guarantee;
+empty deferred threads are not materialized. It also does not prove reconciled
+effects, independently enrolled capture authority or a transferable provider
+checkpoint. Production capture/transfer and cross-host continuation remain
+unfinished work.
+
+## 2026-10 Rollout writer acknowledgement and publication
+
+Recorder `persist` and `flush` replies carry the writer's actual I/O result.
+A fresh writer prepares its metadata and buffered history in a unique private
+file, flushes it, and publishes the complete pathname by a same-directory,
+create-new hard link. State projections follow publication; caller cancellation
+does not transfer publication ownership. Failure cleanup removes only that
+writer's owned staging file and never another writer's final or staging file.
+This is atomic pathname publication, not a new fsync/power-loss guarantee.
+Session-level flush logging remains separate from a recorder I/O receipt.
+
+The app-server treats an absent file as deferred only while its loaded recorder
+is genuinely awaiting first publication. Missing or invalid materialized
+rollouts fail closed. Recorder regressions cover writer failure, cancellation,
+concurrent readers, state visibility and file ownership. The actual in-process
+persistent-resume regression is in `ctox-app-server-client`; root `cargo test`
+does not execute that nested package. Failure-only diagnostics use read-only
+SQLite handles with bounded lock waits and omit raw message contents.
+
 ## 2026-08 Required Plan and Stable Activity Events
 
 CTOX service-owned queue turns use the upstream-compatible

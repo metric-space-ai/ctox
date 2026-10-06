@@ -178,6 +178,25 @@ bridge wrapper itself has no `awaitInSync` method; treating that optional call
 as readiness skipped the replication wait. This repair does not replace the
 native command receipt or the existing owner/status projection checks.
 
+### Sync connection cache and credential rotation
+
+The connection cache stamps the Secret Store's resolved SQLite file and its
+WAL/SHM sidecars and reads a private digest of the protected room-password row
+through a read-only connection. File size and timestamps alone may miss a
+committed update. An unreadable or absent protected row cannot authorize reuse
+or publication of a cached configuration. A credential update still in WAL
+invalidates the old room and browser signaling credential without waiting for
+a checkpoint or the five-minute cache TTL. The native-only credential retains
+its own identity. A configuration build that spans a source change is returned
+without caching; it cannot publish an old value tagged with the newer store
+stamp. Cache readers capture their source stamp after acquiring the cache lock,
+and builders recheck it under that same lock before publication. Waiting for
+another builder therefore cannot preserve a stale pre-lock decision. Initial
+store setup follows the same rule. The optional read-only version probe has a
+100ms busy timeout; failure bypasses caching and leaves the authoritative Secret
+Store read unchanged. This cache coherence rule does not replace native policy
+or the peer lifecycle fence, and installed acceptance remains separate.
+
 ### Native query cache shutdown
 
 Closing a native collection drains its query cache and marks those queries
@@ -248,6 +267,82 @@ verified against the cited source file. When this document and the code
 disagree, the code wins — and this document should be fixed.
 
 [Domain application receipts and command recovery](domain-effect-recovery.md) define the native boundary for a committed domain mutation whose RxDB/result delivery failed. Core remains the lifecycle owner; domain receipts are atomic application evidence, not another outbox.
+
+### Session handoff policy candidate — not production acceptance
+
+The [production integration boundary](ctox-sync-handoff-integration.md)
+traces the existing Workjet context handoff and native library seams, identifies
+their missing callers, and defines the required native lifecycle and evidence.
+
+The source work for [native handoff authorization (#183)](https://github.com/metric-space-ai/ctox/issues/183)
+introduces separate disclose, receive and execute permissions. Roles alone do
+not grant them. The explicit-grant evaluator requires a named actor and an exact,
+nonempty `session_handoff` scope. This is a grant lookup precondition, not proof
+that the actor was authenticated or that a binding is current.
+
+`src/core/sync/src/authority/handoff.rs` verifies each gate result against the
+independently enrolled issuer, signature, audience, fresh nonce, validity window,
+phase, binding digest, job/session/scope, checkpoint and ownership generation.
+Revalidation clears prior evidence before fallible work and awaits. Its permit
+accessor exposes audit evidence only; every protected chunk requires a new
+decision. The gate interface does not itself move or fence checkpoint bytes.
+
+The quorum state retains the source disclosure permit with a protected
+checkpoint and requires the target resume permit to name the same binding
+digest. This preserves digest continuity through state serialization. It does
+not prove that an issuer consulted current policy, resolve configured workspace
+or provider-account entitlements, or independently establish the initial binding.
+
+Existing grant-table migration rewrites the scope CHECK constraint and restores
+capability-epoch triggers in one savepoint. Copying grants does not fire those
+triggers; migration failure rolls back the rewrite, including dropped triggers.
+An enclosing caller transaction remains owned by the caller.
+
+Legacy quorum snapshots lacking disclosure evidence deserialize but deny
+takeover. The current owner can explicitly reauthorize the identical checkpoint
+with a fresh disclosure permit and identical sequence, digest, replicas and copy
+receipts. This one-time upgrade neither advances ownership nor changes checkpoint
+contents. Afterward equal-sequence replacement remains forbidden. Previously
+denied request IDs stay denied; a new takeover needs a new request and permit.
+This path requires the original owner; unavailable-owner recovery is unresolved.
+No automatic backfill or inferred permission is authorized.
+
+Cutover remains blocked on the native policy adapter, authenticated transport
+wiring, authoritative binding/account/workspace resolution, post-await revocation
+fencing, and actual checkpoint transfer/resume integration. Added grant,
+migration, permit, cancellation and restored-state regressions are source-only
+and have not been compiled or executed. State serialization tests are not Raft
+disk-snapshot restart tests. Acceptance still requires the real native policy
+store and authenticated transport, pre-byte and mid-transfer revocation tests,
+restoration of populated stores, independent-host durability, and real provider
+continuation. No production-readiness or rollout claim follows from these edits.
+
+### Native transfer response publication
+
+The native grant and account-provisioning services register guarded auxiliary
+handlers. Their responses retain the exact accepted connection and its captured
+capability; a signaling-ID lookup cannot substitute a reconnected peer. Each
+physical send poll revalidates the original enrolled principal and current
+capability issuer under a single encrypted-secret transaction, then holds native
+policy through the callback. No store initialization, cached issuer or recursive
+secret-store acquisition is allowed inside that callback.
+
+Grant replies additionally retain the exact persisted grant, expiry and source
+identity. Active grants hold the current desktop-file projection through the
+poll and require the same generation, size and hash. Account replies revalidate
+the renewed signed capability, its expiry and principal, plus the persisted
+room/native signaling credential tuple and routing validity. This does not
+certify live TURN reachability or configuration changes outside that tuple.
+All fences release on Pending and are reacquired before another physical poll.
+
+The service regressions use real device verification, policy and encrypted
+stores through the actual auxiliary dispatcher, with a controlled byte sink
+held Pending at zero bytes. They cover current delivery, device/user/epoch and
+grant revocation, credential rotation, changed file generation and replacement
+connections with the same signaling ID. Native queue polling has separate
+transport regressions. These source tests are not two-host acceptance; final
+composed execution, dirty/untracked Git fidelity and reconnect/resume remain
+required before describing the worktree transfer as usable.
 
 ### Auth-assist command recovery
 
@@ -373,6 +468,23 @@ Early operator probes require signed native `data.write` authorization;
 worker command sessions cannot grant that exception. A successful probe only
 clears the generation it owns, so a late result cannot erase a newer refusal.
 
+### Runtime app starter preparation
+
+Native app admission may prepare and validate starter files, but that proves
+only that scaffolding can load. The command remains queued until its owned
+worker runs and the existing app-validation/completion path accepts the result.
+Starter preparation never moves an unleased command into review or success.
+
+### Immediate document edits
+
+The deterministic Markdown append in a Documents chat uses a native control
+claim before changing the document, without creating a worker queue task. Its
+completion passes through the existing Core terminal barrier and mirrors that
+terminal result to the private command store and RxDB. An identical completed
+replay returns the saved result without making another version; a different
+intent with the same command ID is rejected. An unfinished claim requires
+recovery before another write and is never reported as successful.
+
 ### Command projection identity
 
 Terminal and outbox projections retain the actor ID from the accepted native
@@ -383,6 +495,16 @@ canonical core intent, payload hash and authorization semantics are unchanged.
 The same enriched document is mirrored locally and to RxDB. Outbox delivery
 preserves an existing native client_context_json, including the credential
 needed for execution-time revalidation; public projections remain redacted.
+Absent native record IDs remain SQL NULL rather than becoming empty IDs during
+outbox delivery. The private native payload also survives public mirror updates.
+For a completed, failed or cancelled control command, the public projection
+uses the matching native command’s normalized presentation payload. Module,
+command type and terminal status must match Core; no replica row supplies this
+payload. This preserves typed defaults and discarded sensitive fields without
+rewriting Core’s immutable admission intent or weakening authorization.
+Queue command chat navigation is derived from the immutable intent and a
+matching private command context. A cached public chat ID cannot replace that
+binding. This is presentation metadata and creates no execution authority.
 
 A projection that lacks matching native admission identity does not manufacture
 an actor from incoming metadata. The regression covers terminal state, outbox
@@ -444,6 +566,25 @@ and WebRTC admission checks. The Full Host gate exercises revocation,
 idempotent reconciliation, current actors across reused connections,
 newly installed catalog grants and server-owned
 write exclusions before measuring the unchanged command latency budget.
+
+## Native MCP policy and command boundaries
+
+The MCP channel validates person-research payload types before compatibility
+normalization. Nested array wrappers and string booleans do not satisfy the typed
+contract. Trusted gateway identity and approval remain server-owned; a caller
+may reject a proposal but cannot supply its trusted approval. A signed internal
+execution session retains the approval for its exact persisted action scope.
+
+Installed-app visibility follows the native release projection. A valid
+`1.0.0` manifest without a stored released version remains private; a native
+team release makes the app team-visible. An AppsView preview grant may expose
+a preview app, while DataRead alone cannot publish a private app.
+
+The native cockpit policy exposes harness status and Crew members to users,
+while keeping run/event streams and learnings protected. Module, collection
+and record grants cannot bypass that boundary or authorize cockpit writes.
+The MCP project cancellation tool accepts only its owned native project targets;
+app cancellation uses the native command intake and its owner/policy checks.
 
 ## Shell artifact boundary
 
@@ -1243,8 +1384,8 @@ The three declarations must agree: `module.json` `collections`,
 ### 4.1 Crate layout (`src/core/rxdb/`)
 
 Standalone Cargo package `ctox-rxdb` (lib name `rxdb`), with its own
-`Cargo.toml` and `Cargo.lock`. The root `Cargo.toml` has **no `[workspace]`
-section**; the crate is consumed as a path dependency
+`Cargo.toml` and `Cargo.lock`. The root workspace excludes this crate;
+it is consumed as a path dependency
 (`rxdb = { package = "ctox-rxdb", path = "src/core/rxdb" }`), so its tests run
 only via `--manifest-path` (see §10).
 
@@ -1601,6 +1742,22 @@ silent pass-through.
 
 ### 6.4 Demand-loading RPCs (V1.5)
 
+The native `NativeSyncSession::file_range` consumer uses the existing
+`rxdb.file.fetch` exchange on an already admitted connection. Each request
+requires an explicit range of at most 2 MiB and a fresh generated request ID.
+It shares the existing eight-reader budget with native query pages. Each
+Base64 frame is decoded independently and checked against its chunk SHA-256;
+sequence gaps, malformed bytes, wrong hashes, cancellation, disconnect,
+timeout, and a terminal frame before the requested byte count discard the
+entire range. Acceptance and an ordered empty terminal frame are both required.
+Dropping a read sends cancellation through the pool-owned task lifecycle for
+the same connection generation. This is a bounded transport consumer, not a
+durable checkpoint: the caller must verify the complete content identity and
+flush the destination before advancing durable transfer state or issuing a
+receipt. Native policy, destination admission and execution fencing remain
+with their existing owners. The new consumer regressions and full native/browser
+gates must execute before this interface is treated as verified.
+
 From `protocol_contract_generated.rs` (and the JS twin): `rxdb.query.fetch` /
 `rxdb.query.chunk` / `rxdb.query.error` / `rxdb.query.cancel`, and
 `rxdb.file.fetch` / `rxdb.file.chunk` / `rxdb.file.error` /
@@ -1852,7 +2009,7 @@ that fails on the pre-fix code.
 | **The desktop-file idle scan must not re-check every chunk of a verified generation.** Newly written or once-verified eager file docs carry `chunk_count` and `generation_verified_at_ms`; unchanged rescans use that marker instead of rebuilding the expected chunk-id list every 15 s. | Materialised large files stayed sticky `available`, but the idle scan still checked every expected chunk id on every pass. Large files therefore created periodic CPU spikes even when no file changed. | `rxdb_peer.rs::desktop_file_generation_verified_by_metadata` / `mark_desktop_file_chunk_generation_verified` | `materialized_large_file_survives_lazy_rescan`; targeted `rxdb_peer.rs` tests |
 | **Active-collection gating must never lose events permanently.** Three sub-rules: (a) a peer that has never reported an active set is fail-open (all relays delivered) until its first report; (b) applying a new active set pushes one resync master-change per re-activated collection (closes the send→apply transit window); (c) the browser runs one checkpoint pull per newly-activated collection on every registry change. | Relays for "inactive" collections are dropped and browser pulls are purely event-driven — each hole left a collection permanently stale (viewer-restart soak mode: the browser file doc stayed `lazy` forever while the native doc was `available`). | `connection_handler_rs.rs::is_collection_active_for_peer` / `apply_active_collections` (+ the resync push in its message loop); relay drop point in `index_mod.rs`; `replication-webrtc.mjs` registry subscription | gating tests in `connection_handler_rs.rs`; `active-collections-catchup-smoke` (browser); viewer-restart soak mode |
 | **The multiplex room handshake carries per-collection checkpoints** (`collectionCheckpoints`, mirroring `collectionSchemas`; key absent for single-collection rooms). | Collections deriving their protocol from the room handshake advertised the REPRESENTATIVE collection's checkpoint epoch — wrong-collection checkpoint evidence after every native restart. | `index_mod.rs::collection_checkpoints_payload`; consumed by `replication-webrtc.mjs::remoteProtocolForCollection` | `handshake_payload_omits_collection_schemas_when_none` |
-| **Schema cleanup must itself preserve source rows.** Startup and the forced CLI repair use the same copy/verify implementation. Cleanup reserves a SQLite write transaction before discovering old tables, resolves every declared migration step, copies and verifies all populated sources, and only then drops their triggers/tables in that transaction. Active schema metadata and `--force` are not preservation receipts. Equal clocks require equal revision, deletion marker and migrated document; missing steps, reverse migrations and divergent equal-clock rows retain the source and roll back the cleanup. Startup rejects cleanup failure. The earlier copy pass remains idempotent; cleanup rechecks rows written after it. Transactions cover one collection's cleanup, not all collections or stores, and do not provide an immutable backup or recovery rehearsal. | Metadata-only cleanup could delete a unique old command; the former forced-repair regression even seeded such a row without asserting its preservation. A successful earlier copy also did not protect a subsequent source write. | `rxdb_peer.rs::copy_and_verify_native_rxdb_version_table`, `repair_rxdb_collection_schema_version_drift_at_version_with_connection` | `native_schema_migration_cleanup_conflict_rolls_back_copy_and_preserves_source`, `native_schema_migration_cleanup_rechecks_rows_written_after_copy`, `rxdb_schema_drift_repair_preserves_source_rows_before_dropping_stale_tables`, plus existing additive/identity/missing-strategy regressions. Native execution of the new cleanup cases remains pending. |
+| **Schema cleanup must itself preserve source rows.** Startup and the forced CLI repair use the same copy/verify implementation. Cleanup reserves a SQLite write transaction before discovering old tables, resolves every declared migration step, copies and verifies all populated sources, and only then drops their triggers/tables in that transaction. Active schema metadata and `--force` are not preservation receipts. Equal clocks require equal revision, deletion marker and migrated document; missing steps, reverse migrations and divergent equal-clock rows retain the source and roll back the cleanup. Startup rejects cleanup failure. The earlier copy pass remains idempotent; cleanup rechecks rows written after it. Transactions cover one collection's cleanup, not all collections or stores. Whole-store recovery is a separate write-once rehearsal: a synthetic supported-historical fixture, an immutable `VACUUM INTO` backup with pinned provenance, a cutover receipt recorded after verified migrate+repair, and fail-closed restore after accepted post-cutover writes or missing/mismatched provenance. Cleanup transactions themselves are not that backup. | Metadata-only cleanup could delete a unique old command; the former forced-repair regression even seeded such a row without asserting its preservation. A successful earlier copy also did not protect a subsequent source write. | `rxdb_peer.rs::copy_and_verify_native_rxdb_version_table`, `repair_rxdb_collection_schema_version_drift_at_version_with_connection`, `populated_store_recovery.rs` | `native_schema_migration_cleanup_conflict_rolls_back_copy_and_preserves_source`, `native_schema_migration_cleanup_rechecks_rows_written_after_copy`, `rxdb_schema_drift_repair_preserves_source_rows_before_dropping_stale_tables`, `business_os::populated_store_recovery`, plus existing additive/identity/missing-strategy regressions. |
 | **Runtime app migrations are declared in JSON and enforced natively.** The browser side mirrors declarations (guarded for parity by `assert-declarative-migrations.mjs`) but execution is native-only. Every runtime collection with `version > 0` must provide every intermediate `migration_strategies.<collection>.<targetVersion>` entry. The native peer supports the same `set_from_first_truthy` and `set_boolean` operations as the browser plus identity migrations (`operations: []`). Missing strategies with persisted source rows abort before cleanup. | Browser-only `schema.js` functions left the native v0 store stranded or tempted operators into destructive same-version cleanup; schema changes made in place could also produce DB6 forever. | `shared/declarative-migrations.js`, `module_static_check.mjs`, `rxdb_peer.rs::migrate_additive_native_rxdb_collection_versions` | `runtime_installed_declarative_migration_is_discovered_and_copied`, `native_declarative_migration_matches_browser_operations`, `runtime_migration_without_strategy_retains_old_table_and_fails_closed` |
 | **A terminal `completed` command ack without `task_id` is success.** Control commands (`ctox.file.materialize`, `ctox.module.*`, …) are executed directly and intentionally never get a queue-task projection. | The command bus waited 45 s for a task that never comes — every control command dispatched through it failed. | `command-bus.js::waitForAuthoritativeQueueProjection` | `command-bus-projection-smoke` |
 | **The 410 data-plane gate has an explicit control-plane allowlist** (subscription auth, CTOX release check/apply, `sync/native-peer/restart`). Control routes carry no Business OS records; CTOX release actions are admin-gated and only read release metadata or launch the existing installer, and the peer-restart route additionally answers 403 unless `CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS` is set. This is NOT a precedent for HTTP data routes. | The blanket 410 also killed the peer-lifecycle hook the rollover soak mode uses. | `server.rs::is_business_os_control_plane_path` | rollover soak mode |
@@ -2462,6 +2619,39 @@ not password-login/logout acceptance. The earlier a6fd70c06 warm-command fixture
 across reload/restart; this does not establish critical-boot p95 below 5 s.
 
 ## 11. Test map
+
+### Hidden-tab frame progress
+
+The send queue wakes its high-priority inline drain directly when an ACK or
+control frame is enqueued during a bulk transfer. It arms that wake before
+draining to avoid losing an enqueue during an asynchronous buffer wait. The
+old 50 ms polling loop could leave both directions waiting for each other's
+ACKs when page timers were throttled. ACK receipt and `bufferedamountlow`
+remain event-driven; timeout/retry bounds, frame sizes, ACK windows, queue
+budgets and the wire protocol are unchanged. No MessageChannel polling loop
+or production environment toggle is needed.
+
+`hidden-transfer-smoke.mjs` holds all page timers, transfers a 20-document
+1.84 MB pull concurrently with a 19 KB push, and exercises `masterWrite`
+response correlation. The same test fails on main `365927a3c` in the concurrent
+case; the one-way pull succeeds there. This is a deterministic reproduction
+of a timer dependency, not a claim that the complete thesen incident has been
+reproduced on the tenant.
+
+`hidden-transfer-browser-smoke.mjs` additionally uses real local RTCDataChannels
+in a fresh Chrome context with page timers clamped to 1000 ms. A 19 KB command
+behind simultaneous 1.84 MB document transfers times out on `365927a3c`; with
+the direct wake it completes without retries. This checks actual SCTP delivery
+and RPC correlation, but deliberately simulates the timer clamp rather than
+relying on a particular Chrome version's visibility exemptions.
+
+Frame-transport diagnostics include `pageHidden`, `lastPageTimerDelayMs`,
+`lastPageTimerSampleAtMs` and `throttled`. The existing status-emission timer
+supplies the sample: `throttled` means the page is hidden and a timer was at
+least 750 ms late within the last 30 seconds. It is evidence of delayed
+scheduling, which can also result from host load, not proof of browser policy.
+No extra diagnostic polling is introduced. Readiness and acceptance decisions
+do not depend on this diagnostic flag.
 
 ### 10.1 Browser suite (`src/apps/business-os/rxdb/tests/`)
 

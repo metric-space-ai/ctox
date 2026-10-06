@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod auth;
 pub mod client;
 pub mod diagnostics;
+pub mod handoff;
 pub mod network;
 pub mod node;
 mod routing;
@@ -19,7 +20,8 @@ pub type NodeId = u64;
 pub use crate::contracts::ExecutionPeer as Peer;
 
 pub use crate::contracts::{
-    CheckpointCopyReceipt, ExecutionOwnership as Ownership, ExecutionSpec, WorkerMembership,
+    CheckpointCopyReceipt, ExecutionOwnership as Ownership, ExecutionSpec, SessionHandoffPermit,
+    SessionHandoffPhase, WorkerMembership,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +32,10 @@ pub struct ProtectedCheckpoint {
     pub replicas: BTreeSet<NodeId>,
     /// Retain the authenticated evidence across Raft log compaction and snapshots.
     pub receipts: Vec<CheckpointCopyReceipt>,
+    /// Legacy snapshots remain readable but cannot authorize takeover without
+    /// freshly protected disclosure evidence.
+    #[serde(default)]
+    pub disclosure: Option<SessionHandoffPermit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +44,10 @@ pub struct Job {
     pub spec: ExecutionSpec,
     pub ownership: Ownership,
     pub checkpoint: Option<ProtectedCheckpoint>,
+    /// Effects invalidate takeover from a checkpoint captured before they ran.
+    /// Legacy snapshots have no freshness proof and require a new checkpoint.
+    #[serde(default = "checkpoint_refresh_required")]
+    pub checkpoint_requires_refresh: bool,
     pub pending_effects: BTreeSet<String>,
     pub completed_effects: BTreeSet<String>,
     pub stopped: bool,
@@ -65,12 +75,28 @@ pub enum Command {
         job_id: String,
         ownership: Ownership,
         receipts: Vec<CheckpointCopyReceipt>,
+        /// Current signed source-disclosure decision, verified deterministically
+        /// against the enrolled owner key, this scope and the request id.
+        disclosure: SessionHandoffPermit,
+    },
+    /// Native lifecycle owner supplies verified fresh copies only after proving
+    /// the exact retained process stopped and capturing consistent guest state.
+    /// One committed entry replaces the checkpoint and closes its sole effect.
+    CommitEffectCheckpoint {
+        job_id: String,
+        ownership: Ownership,
+        effect_id: String,
+        receipts: Vec<CheckpointCopyReceipt>,
+        /// Fresh source-disclosure authority is required for the replacement.
+        disclosure: SessionHandoffPermit,
     },
     TakeOver {
         job_id: String,
         expected: Ownership,
         checkpoint_digest: String,
         owner: NodeId,
+        /// Current signed target-resume decision from the new owner instance.
+        resume: SessionHandoffPermit,
     },
     BeginEffect {
         job_id: String,
@@ -117,6 +143,8 @@ pub enum Rejection {
     StaleOwner,
     CheckpointUnavailable,
     CheckpointRegressed,
+    /// The embedded session-handoff permit is missing, forged, mismatched or stale.
+    PolicyDenied,
     ReconciliationRequired,
     EffectAlreadyCompleted,
     EffectNotStarted,
@@ -131,6 +159,10 @@ pub struct State {
     #[serde(default)]
     pub workers: BTreeMap<NodeId, WorkerMembership>,
     receipts: BTreeMap<String, (String, Receipt)>,
+}
+
+fn checkpoint_refresh_required() -> bool {
+    true
 }
 
 impl State {
@@ -248,6 +280,7 @@ impl State {
                     generation: 1,
                 },
                 checkpoint: None,
+                checkpoint_requires_refresh: true,
                 pending_effects: BTreeSet::new(),
                 completed_effects: BTreeSet::new(),
                 stopped: false,
@@ -257,6 +290,9 @@ impl State {
         }
         let (job_id, expected) = match &request.command {
             Command::ProtectCheckpoint {
+                job_id, ownership, ..
+            }
+            | Command::CommitEffectCheckpoint {
                 job_id, ownership, ..
             }
             | Command::BeginEffect {
@@ -285,14 +321,50 @@ impl State {
             return Err(StaleOwner);
         }
         match &request.command {
-            Command::ProtectCheckpoint { receipts, .. } => {
-                if !job.pending_effects.is_empty() {
+            Command::ProtectCheckpoint {
+                receipts,
+                disclosure,
+                ..
+            }
+            | Command::CommitEffectCheckpoint {
+                receipts,
+                disclosure,
+                ..
+            } => {
+                let completing =
+                    if let Command::CommitEffectCheckpoint { effect_id, .. } = &request.command {
+                        if !job.pending_effects.contains(effect_id) {
+                            return Err(EffectNotStarted);
+                        }
+                        if job.pending_effects.len() != 1 {
+                            return Err(ReconciliationRequired);
+                        }
+                        Some(effect_id)
+                    } else {
+                        None
+                    };
+                if completing.is_none() && !job.pending_effects.is_empty() {
                     return Err(ReconciliationRequired);
                 }
                 if receipts.len() < 2 || receipts.len() > peers.len() {
                     return Err(CheckpointUnavailable);
                 }
                 let first = &receipts[0];
+                // Disclosure evidence is part of the deterministic transition:
+                // signed by the enrolled owner key, bound to this exact job,
+                // checkpoint, ownership generation, scope and request id.
+                let owner_peer = peers.get(&expected.node_id).ok_or(PolicyDenied)?;
+                auth::session_handoff::verify_permit_evidence(
+                    disclosure,
+                    &owner_peer.identity,
+                    SessionHandoffPhase::Disclose,
+                    &job.spec,
+                    &first.checkpoint_digest,
+                    first.sequence,
+                    expected.generation,
+                    &request.request_id,
+                )
+                .map_err(|_| PolicyDenied)?;
                 let mut replicas = BTreeSet::new();
                 for receipt in receipts {
                     let peer = peers.get(&receipt.node_id).ok_or(CheckpointUnavailable)?;
@@ -311,6 +383,7 @@ impl State {
                     sequence: first.sequence,
                     replicas,
                     receipts: receipts.clone(),
+                    disclosure: Some(disclosure.clone()),
                 };
                 if checkpoint.digest.len() != 64
                     || !checkpoint
@@ -327,15 +400,31 @@ impl State {
                     return Err(CheckpointUnavailable);
                 }
                 if let Some(previous) = &job.checkpoint {
-                    if checkpoint.sequence <= previous.sequence {
+                    // Upgrade an unchanged legacy checkpoint only after the
+                    // current owner supplied newly verified disclosure evidence.
+                    // No checkpoint bytes, copy evidence or ownership can change.
+                    let authorizes_legacy = completing.is_none()
+                        && !job.checkpoint_requires_refresh
+                        && previous.disclosure.is_none()
+                        && checkpoint.sequence == previous.sequence
+                        && checkpoint.digest == previous.digest
+                        && checkpoint.replicas == previous.replicas
+                        && checkpoint.receipts == previous.receipts;
+                    if checkpoint.sequence <= previous.sequence && !authorizes_legacy {
                         return Err(CheckpointRegressed);
                     }
                 }
                 job.checkpoint = Some(checkpoint);
+                job.checkpoint_requires_refresh = false;
+                if let Some(effect_id) = completing {
+                    job.pending_effects.remove(effect_id);
+                    job.completed_effects.insert(effect_id.clone());
+                }
             }
             Command::TakeOver {
                 owner,
                 checkpoint_digest,
+                resume,
                 ..
             } => {
                 if *owner != request.actor || *owner == expected.node_id {
@@ -345,9 +434,30 @@ impl State {
                     return Err(ReconciliationRequired);
                 }
                 let checkpoint = job.checkpoint.as_ref().ok_or(CheckpointUnavailable)?;
+                if job.checkpoint_requires_refresh {
+                    return Err(ReconciliationRequired);
+                }
                 if &checkpoint.digest != checkpoint_digest || !checkpoint.replicas.contains(owner) {
                     return Err(CheckpointUnavailable);
                 }
+                // The new owner must carry its own current, signed resume
+                // decision: target execution starts only with target policy.
+                let disclosure = checkpoint.disclosure.as_ref().ok_or(PolicyDenied)?;
+                if resume.binding_digest != disclosure.binding_digest {
+                    return Err(PolicyDenied);
+                }
+                let new_owner_peer = peers.get(owner).ok_or(PolicyDenied)?;
+                auth::session_handoff::verify_permit_evidence(
+                    resume,
+                    &new_owner_peer.identity,
+                    SessionHandoffPhase::Resume,
+                    &job.spec,
+                    &checkpoint.digest,
+                    checkpoint.sequence,
+                    expected.generation,
+                    &request.request_id,
+                )
+                .map_err(|_| PolicyDenied)?;
                 let generation = expected.generation.checked_add(1).ok_or(InvalidRequest)?;
                 job.ownership = Ownership {
                     node_id: *owner,
@@ -365,6 +475,7 @@ impl State {
                 if !job.pending_effects.insert(effect_id.clone()) {
                     return Err(ReconciliationRequired);
                 }
+                job.checkpoint_requires_refresh = true;
             }
             Command::CompleteEffect { effect_id, .. } => {
                 if !job.pending_effects.remove(effect_id) {

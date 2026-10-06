@@ -9,6 +9,10 @@ archive/
 /bin/ctox-real
 .venv/
 node_modules/
+
+# Generated sidecar outputs may be symlinks to the disposable build volume.
+/src/core/coding_agents/pi-sidecar/node_modules
+/src/core/coding_agents/pi-sidecar/dist
 .codex-paramiko-venv/
 .DS_Store
 __pycache__/

@@ -158,6 +158,7 @@ use ctox_app_server_protocol::ThreadUnsubscribeResponse;
 use ctox_app_server_protocol::ThreadUnsubscribeStatus;
 use ctox_app_server_protocol::Turn;
 use ctox_app_server_protocol::TurnInterruptParams;
+use ctox_app_server_protocol::TurnInterruptResponse;
 use ctox_app_server_protocol::TurnStartParams;
 use ctox_app_server_protocol::TurnStartResponse;
 use ctox_app_server_protocol::TurnStatus;
@@ -1728,13 +1729,21 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) async fn drain_background_tasks(&self) {
-        self.background_tasks.close();
-        if tokio::time::timeout(Duration::from_secs(10), self.background_tasks.wait())
-            .await
-            .is_err()
-        {
+        if self.drain_background_tasks_checked().await.is_err() {
             warn!("timed out waiting for background tasks to shut down; proceeding");
         }
+    }
+
+    pub(crate) async fn drain_background_tasks_checked(&self) -> std::io::Result<()> {
+        self.background_tasks.close();
+        tokio::time::timeout(Duration::from_secs(10), self.background_tasks.wait())
+            .await
+            .map_err(|_| {
+                IoError::new(
+                    std::io::ErrorKind::TimedOut,
+                    "app-server background tasks did not finish shutdown",
+                )
+            })
     }
 
     pub(crate) async fn clear_all_thread_listeners(&self) {
@@ -1742,16 +1751,32 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) async fn shutdown_threads(&self) {
+        let _ = self.shutdown_threads_checked().await;
+    }
+
+    pub(crate) async fn shutdown_threads_checked(&self) -> std::io::Result<()> {
         let report = self
             .thread_manager
             .shutdown_all_threads_bounded(Duration::from_secs(10))
             .await;
-        for thread_id in report.submit_failed {
+        for thread_id in &report.submit_failed {
             warn!("failed to submit Shutdown to thread {thread_id}");
         }
-        for thread_id in report.timed_out {
+        for thread_id in &report.timed_out {
             warn!("timed out waiting for thread {thread_id} to shut down");
         }
+        if !report.timed_out.is_empty() {
+            return Err(IoError::new(
+                std::io::ErrorKind::TimedOut,
+                "app-server threads did not finish shutdown",
+            ));
+        }
+        if !report.submit_failed.is_empty() {
+            return Err(IoError::other(
+                "app-server thread shutdown submission failed",
+            ));
+        }
+        Ok(())
     }
 
     async fn request_trace_context(
@@ -2972,6 +2997,11 @@ impl CodexMessageProcessor {
         };
 
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
+        let rollout_materialization_pending = match loaded_thread.as_ref() {
+            Some(thread) => thread.rollout_materialization_pending().await,
+            None => false,
+        };
+
         let loaded_thread_state_db = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
             read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
@@ -3004,6 +3034,17 @@ impl CodexMessageProcessor {
         }
 
         if include_turns && rollout_path.is_none() && db_summary.is_some() {
+            // Only a recorder that has not yet completed its first atomic
+            // publication may classify an absent pathname as deferred state.
+            // A materialized loaded thread with a missing file is lost state.
+            if rollout_materialization_pending {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("thread {thread_uuid} is not materialized yet"),
+                )
+                .await;
+                return;
+            }
             self.send_internal_error(
                 request_id,
                 format!("failed to locate rollout for thread {thread_uuid}"),
@@ -3014,16 +3055,39 @@ impl CodexMessageProcessor {
 
         let mut thread = if let Some(summary) = db_summary {
             summary_to_thread(summary)
-        } else if let Some(rollout_path) = rollout_path.as_ref() {
+        } else if let Some(path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
-            match read_summary_from_rollout(rollout_path, fallback_provider).await {
+            match read_summary_from_rollout(path, fallback_provider).await {
                 Ok(summary) => summary_to_thread(summary),
+                Err(err) if rollout_materialization_pending && rollout_file_is_zero_bytes(path) => {
+                    // A loaded thread can create its rollout before the first
+                    // session-meta line is flushed. Prefer the in-memory snapshot
+                    // instead of treating a zero-byte file as persisted history.
+                    let Some(thread) = loaded_thread.as_ref() else {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for thread {thread_uuid}: {err}",
+                                path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    };
+                    let config_snapshot = thread.config_snapshot().await;
+                    let loaded_rollout_path = thread.rollout_path();
+                    build_thread_from_snapshot(
+                        thread_uuid,
+                        &config_snapshot,
+                        loaded_rollout_path.or_else(|| Some(path.clone())),
+                    )
+                }
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
                         format!(
                             "failed to load rollout `{}` for thread {thread_uuid}: {err}",
-                            rollout_path.display()
+                            path.display()
                         ),
                     )
                     .await;
@@ -3061,14 +3125,27 @@ impl CodexMessageProcessor {
                 Ok(items) => {
                     thread.turns = build_turns_from_rollout_items(&items);
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!(
-                            "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
-                        ),
-                    )
-                    .await;
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::NotFound
+                        || (rollout_materialization_pending
+                            && rollout_file_is_zero_bytes(rollout_path)) =>
+                {
+                    if rollout_materialization_pending {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("thread {thread_uuid} is not materialized yet"),
+                        )
+                        .await;
+                    } else {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "rollout for thread {thread_uuid} is missing at `{}`",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                    }
                     return;
                 }
                 Err(err) => {
@@ -6007,31 +6084,45 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: TurnInterruptParams,
     ) {
-        let TurnInterruptParams { thread_id, .. } = params;
-
-        let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
+        let TurnInterruptParams { thread_id, turn_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
-
-        let request = request_id.clone();
-
-        // Record the pending interrupt so we can reply when TurnAborted arrives.
-        {
-            let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-            let mut thread_state = thread_state.lock().await;
-            thread_state
-                .pending_interrupts
-                .push((request, ApiVersion::V2));
+        match thread.interrupt_turn(turn_id).await {
+            Ok(true) => {
+                self.outgoing
+                    .send_response(request_id, TurnInterruptResponse {})
+                    .await
+            }
+            Ok(false) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "requested turn is not active".to_string(),
+                            data: None,
+                        },
+                    )
+                    .await
+            }
+            Err(error) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("turn interrupt failed: {error}"),
+                            data: None,
+                        },
+                    )
+                    .await
+            }
         }
-
-        // Submit the interrupt; we'll respond upon TurnAborted.
-        let _ = self
-            .submit_core_op(&request_id, thread.as_ref(), Op::Interrupt)
-            .await;
     }
 
     async fn ensure_conversation_listener(
@@ -7496,6 +7587,16 @@ pub(crate) async fn read_rollout_items_from_rollout(
     Ok(items)
 }
 
+/// Newly created rollout files can exist at zero bytes before the first
+/// session-meta line is flushed. Those files are not persisted history.
+/// Non-empty unreadable content, including corrupt JSON whose parser error
+/// mentions "empty", stays fail-closed.
+fn rollout_file_is_zero_bytes(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|meta| meta.len() == 0)
+        .unwrap_or(false)
+}
+
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
@@ -7727,6 +7828,32 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn zero_byte_rollout_is_in_progress_empty_but_nonempty_corrupt_history_is_not() {
+        let dir = TempDir::new().expect("tempdir");
+        let empty = dir.path().join("empty.jsonl");
+        std::fs::write(&empty, b"").expect("write empty rollout");
+        assert!(rollout_file_is_zero_bytes(&empty));
+
+        let corrupt = dir.path().join("rollout at empty session file.jsonl");
+        std::fs::write(
+            &corrupt,
+            b"{not session metadata}\nempty session file\nrollout at this file is empty\n",
+        )
+        .expect("write corrupt rollout");
+        assert!(
+            corrupt.metadata().expect("corrupt metadata").len() > 0,
+            "negative case must be a non-empty file"
+        );
+        assert!(
+            !rollout_file_is_zero_bytes(&corrupt),
+            "non-empty corrupt history must stay fail-closed even if path/contents mention empty"
+        );
+        assert!(!rollout_file_is_zero_bytes(
+            &dir.path().join("missing-rollout.jsonl")
+        ));
+    }
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
@@ -7970,6 +8097,37 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn read_summary_from_rollout_fails_closed_when_persisted_rollout_is_invalid() {
+        use std::fs;
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let empty_path = temp_dir.path().join("empty.jsonl");
+        fs::write(&empty_path, b"").expect("write empty rollout");
+        let empty_error = read_summary_from_rollout(&empty_path, "fallback")
+            .await
+            .expect_err("an empty persisted rollout must fail closed");
+        assert!(empty_error.to_string().contains("is empty"));
+
+        let corrupt_path = temp_dir.path().join("corrupt.jsonl");
+        fs::write(
+            &corrupt_path,
+            concat!(
+                "{\"timestamp\":\"2025-09-05T16:53:11.850Z\",\"type\":\"response_item\",",
+                "\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n"
+            ),
+        )
+        .expect("write corrupt rollout");
+        let corrupt_error = read_summary_from_rollout(&corrupt_path, "fallback")
+            .await
+            .expect_err("a non-metadata persisted rollout must fail closed");
+        assert!(
+            corrupt_error
+                .to_string()
+                .contains("does not start with session metadata"),
+            "unexpected corrupt-rollout error: {corrupt_error}"
+        );
+    }
     #[tokio::test]
     async fn read_summary_from_rollout_preserves_agent_nickname() -> Result<()> {
         use ctox_protocol::protocol::RolloutItem;

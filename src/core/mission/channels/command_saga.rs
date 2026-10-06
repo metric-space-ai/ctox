@@ -10,7 +10,7 @@ use super::{
     refresh_queue_projection_tasks, resolve_db_path, sanitize_path_component, set_routing_status,
     sha256_hex, BusinessCommandClaimRequest, BusinessCommandControlClaim,
     BusinessCommandOutboxEvent, BusinessCommandQueueClaim, QueueRouteStatus,
-    QueueTaskCreateRequest, TerminalPolicyGrant,
+    QueueTaskCreateRequest, QueueTaskView, TerminalPolicyGrant,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -20,6 +20,34 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+// JSON object insertion order is not immutable intent. Retain the first
+// admission hash, accepting a reordered replay only when both byte encodings
+// verify their hashes and the full intent (including authority) is unchanged.
+fn same_business_command_intent(
+    key: &str,
+    hash: &str,
+    intent_json: &str,
+    claim: &BusinessCommandClaimRequest,
+) -> bool {
+    if key != claim.idempotency_key {
+        return false;
+    }
+    if hash == claim.payload_hash {
+        return true;
+    }
+    use sha2::{Digest, Sha256};
+    if format!("sha256:{:x}", Sha256::digest(intent_json.as_bytes())) != hash {
+        return false;
+    }
+    let Ok(bytes) = serde_json::to_vec(&claim.intent) else {
+        return false;
+    };
+    if format!("sha256:{:x}", Sha256::digest(&bytes)) != claim.payload_hash {
+        return false;
+    }
+    serde_json::from_str::<Value>(intent_json).is_ok_and(|intent| intent == claim.intent)
+}
 
 pub(crate) fn claim_business_command_with_queue(
     root: &Path,
@@ -36,7 +64,7 @@ pub(crate) fn claim_business_command_with_queue(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
-            "SELECT idempotency_key, payload_hash, execution_phase, projection_version
+            "SELECT idempotency_key, payload_hash, execution_phase, projection_version, intent_json
              FROM business_command_aggregates
              WHERE command_id = ?1",
             params![claim.command_id],
@@ -46,14 +74,15 @@ pub(crate) fn claim_business_command_with_queue(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
         .optional()?;
     let (aggregate_exists, from_phase, accepted_version) =
-        if let Some((idempotency_key, payload_hash, phase, version)) = existing {
+        if let Some((idempotency_key, payload_hash, phase, version, intent_json)) = existing {
             anyhow::ensure!(
-                idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
+                same_business_command_intent(&idempotency_key, &payload_hash, &intent_json, &claim),
                 "idempotency_conflict: command id was already claimed with different intent"
             );
             let task_id = tx
@@ -698,14 +727,14 @@ pub(crate) fn claim_business_command_waiting_dependencies(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
-            "SELECT idempotency_key, payload_hash FROM business_command_aggregates WHERE command_id = ?1",
+            "SELECT idempotency_key, payload_hash, intent_json FROM business_command_aggregates WHERE command_id = ?1",
             params![claim.command_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
         )
         .optional()?;
-    if let Some((idempotency_key, payload_hash)) = existing {
+    if let Some((idempotency_key, payload_hash, intent_json)) = existing {
         anyhow::ensure!(
-            idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
+            same_business_command_intent(&idempotency_key, &payload_hash, &intent_json, &claim),
             "idempotency_conflict: command id was already claimed with different intent"
         );
         tx.commit()?;
@@ -764,7 +793,7 @@ pub(crate) fn claim_business_control_command(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
-            "SELECT idempotency_key, payload_hash, terminal_status, result_json, execution_phase
+            "SELECT idempotency_key, payload_hash, terminal_status, result_json, execution_phase, intent_json
              FROM business_command_aggregates
              WHERE command_id = ?1",
             params![claim.command_id],
@@ -775,13 +804,16 @@ pub(crate) fn claim_business_control_command(
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
         .optional()?;
-    if let Some((idempotency_key, payload_hash, terminal_status, result_json, phase)) = existing {
+    if let Some((idempotency_key, payload_hash, terminal_status, result_json, phase, intent_json)) =
+        existing
+    {
         anyhow::ensure!(
-            idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
+            same_business_command_intent(&idempotency_key, &payload_hash, &intent_json, &claim),
             "idempotency_conflict: command id was already claimed with different intent"
         );
         let result = result_json
@@ -790,6 +822,7 @@ pub(crate) fn claim_business_control_command(
             .transpose()?;
         tx.commit()?;
         return Ok(BusinessCommandControlClaim {
+            payload_hash,
             disposition: if phase == "terminal" {
                 "terminal"
             } else {
@@ -851,10 +884,138 @@ pub(crate) fn claim_business_control_command(
     )?;
     tx.commit()?;
     Ok(BusinessCommandControlClaim {
+        payload_hash: claim.payload_hash,
         disposition: "new",
         result: None,
         terminal_status: None,
     })
+}
+
+/// Reject only the historical, unowned external-SQL admission. This is a
+/// native invariant repair, never an authorization receipt or effect replay.
+/// Its identity and phase fences share the transaction that records failure.
+pub(crate) fn reject_legacy_unowned_external_sql_command(
+    root: &Path,
+    original: &BusinessCommandClaimRequest,
+    replay: &BusinessCommandClaimRequest,
+) -> Result<Option<Value>> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let stored = tx
+        .query_row(
+            "SELECT idempotency_key, payload_hash, intent_json
+             FROM business_command_aggregates WHERE command_id = ?1",
+            params![original.command_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((key, hash, intent_json)) = stored else {
+        return Ok(None);
+    };
+    let intent: Value = serde_json::from_str(&intent_json)?;
+    let object = intent
+        .as_object()
+        .context("canonical command intent must be an object")?;
+    // Presence, including malformed/null values, cannot be downgraded to an
+    // ownerless legacy admission by this repair.
+    if object.contains_key("native_owner") || object.contains_key("native_authorization") {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        matches!(
+            original.command_type.as_str(),
+            "external_sql.write" | "external_sql.sync.refresh"
+        ) && original.command_id == replay.command_id
+            && intent == original.intent
+            && original.intent == replay.intent
+            && same_business_command_intent(&key, &hash, &intent_json, original)
+            && same_business_command_intent(&key, &hash, &intent_json, replay)
+            && format!("sha256:{}", sha256_hex(intent_json.as_bytes())) == hash,
+        "idempotency_conflict: legacy control rejection requires the unchanged original intent"
+    );
+    let projection = business_command_projection_from_conn(&tx, &original.command_id)?;
+    anyhow::ensure!(
+        projection["execution_mode"] == "control"
+            && projection["module"] == original.module
+            && projection["command_type"] == original.command_type
+            && projection["record_id"] == original.record_id,
+        "legacy control rejection requires the original control identity"
+    );
+    const ERROR: &str = "accepted recoverable command has no native authorization receipt";
+    const OPERATION: &str = "legacy_unowned_external_sql_rejection";
+    if projection["execution_phase"] == "terminal" {
+        // A failed delivery may repeat this exact native rejection, but cannot
+        // replace a different terminal outcome or create another transition.
+        if projection["terminal_status"] == "failed"
+            && projection
+                .pointer("/result/operation")
+                .and_then(Value::as_str)
+                == Some(OPERATION)
+            && projection["error_message"] == ERROR
+            && projection["error_code"] == "original_native_authorization_missing"
+            && projection
+                .pointer("/result/error_code")
+                .and_then(Value::as_str)
+                == Some("original_native_authorization_missing")
+        {
+            tx.commit()?;
+            return Ok(Some(projection));
+        }
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        projection["execution_phase"] == "accepted"
+            && projection["terminal_status"] == "none"
+            && projection["attempt"] == 0
+            && projection.get("result").is_none(),
+        "legacy control rejection cannot replace an advanced command"
+    );
+    let claimed: bool = tx.query_row(
+        "SELECT COUNT(*) = 1 AND
+                COALESCE(SUM(effect_key = ?2 AND status = 'claimed'
+                             AND result_json IS NULL AND error_message IS NULL), 0) = 1
+         FROM business_command_effects WHERE command_id = ?1",
+        params![
+            original.command_id,
+            format!("control:{}", original.command_type)
+        ],
+        |row| row.get(0),
+    )?;
+    let linked: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_command_task_links WHERE command_id = ?1)
+             OR EXISTS(SELECT 1 FROM business_command_sagas WHERE command_id = ?1)",
+        params![original.command_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        claimed && !linked,
+        "legacy control rejection cannot replace active effect ownership"
+    );
+    let result = json!({
+        "ok": false,
+        "operation": OPERATION,
+        "error_code": "original_native_authorization_missing",
+        "error": ERROR,
+        "check": "failed"
+    });
+    complete_business_control_command_tx(
+        root,
+        &tx,
+        &original.command_id,
+        "failed",
+        &result,
+        Some(ERROR),
+    )?;
+    let projection = business_command_projection_from_conn(&tx, &original.command_id)?;
+    tx.commit()?;
+    Ok(Some(projection))
 }
 
 pub(crate) fn complete_business_control_command(
@@ -871,6 +1032,26 @@ pub(crate) fn complete_business_control_command(
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    complete_business_control_command_tx(
+        root,
+        &tx,
+        command_id,
+        terminal_status,
+        result,
+        error_message,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn complete_business_control_command_tx(
+    root: &Path,
+    tx: &Transaction<'_>,
+    command_id: &str,
+    terminal_status: &str,
+    result: &Value,
+    error_message: Option<&str>,
+) -> Result<()> {
     let (phase, version, command_type) = tx.query_row(
         "SELECT execution_phase, projection_version, command_type
          FROM business_command_aggregates WHERE command_id = ?1",
@@ -884,7 +1065,6 @@ pub(crate) fn complete_business_control_command(
         },
     )?;
     if phase == "terminal" {
-        tx.commit()?;
         return Ok(());
     }
     let saga_phase: Option<String> = tx
@@ -1024,7 +1204,6 @@ pub(crate) fn complete_business_control_command(
             refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;
         }
     }
-    tx.commit()?;
     Ok(())
 }
 
@@ -1823,12 +2002,108 @@ pub(crate) fn pending_business_command_outbox(
         .map_err(Into::into)
 }
 
+pub(crate) struct BusinessOsQueueMirrorSnapshot {
+    pub task: QueueTaskView,
+    pub command_projection: Option<Value>,
+    pub terminal_status: Option<String>,
+    pub queue_clock_version: i64,
+}
+
+pub(crate) fn load_business_os_queue_mirror_snapshot(
+    root: &Path,
+    command_id: &str,
+    task_id: &str,
+) -> Result<Option<BusinessOsQueueMirrorSnapshot>> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let snapshot = load_business_os_queue_mirror_snapshot_from_conn(&tx, command_id, task_id)?;
+    tx.commit()?;
+    Ok(snapshot)
+}
+
+pub(crate) fn load_business_os_queue_mirror_snapshot_from_conn(
+    conn: &Connection,
+    command_id: &str,
+    task_id: &str,
+) -> Result<Option<BusinessOsQueueMirrorSnapshot>> {
+    let Some(task) = load_queue_task_from_conn(conn, task_id)? else {
+        return Ok(None);
+    };
+    let command_projection = load_business_command_projection_if_present(conn, command_id)?;
+    let inspect = inspect_business_command_for_task_from_conn(conn, task_id)?;
+    let terminal_status = inspect.as_ref().and_then(|context| {
+        context
+            .pointer("/command/terminal_status")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+    Ok(Some(BusinessOsQueueMirrorSnapshot {
+        task,
+        command_projection,
+        terminal_status,
+        queue_clock_version: communication_projection_clock_version(conn)?,
+    }))
+}
+
+pub(crate) fn load_business_command_projection_if_present(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Option<Value>> {
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM business_command_aggregates WHERE command_id = ?1",
+            params![command_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Ok(None);
+    }
+    Ok(Some(business_command_projection_from_conn(
+        conn, command_id,
+    )?))
+}
+
+pub(crate) fn communication_projection_clock_version(conn: &Connection) -> Result<i64> {
+    Ok(conn
+        .query_row(
+            "SELECT version FROM communication_projection_clock WHERE id = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
 pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Result<Value> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     let mut command = business_command_projection_from_conn(&conn, command_id)?;
     enrich_command_execution_progress(&db_path, &mut command)?;
     Ok(command)
+}
+
+/// Canonical command mirror for Business OS / RxDB outbox delivery.
+/// Command fields and `queue_projection_version` are read from one Core
+/// transaction so a later command-only transition cannot omit the queue clock
+/// that destination CAS now requires.
+pub(crate) fn canonical_command_mirror_projection(root: &Path, command_id: &str) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let mut projection = business_command_projection_from_conn(&tx, command_id)?;
+    let queue_clock_version = communication_projection_clock_version(&tx)?;
+    if let Some(object) = projection.as_object_mut() {
+        object.insert(
+            "queue_projection_version".to_string(),
+            Value::from(queue_clock_version),
+        );
+    }
+    tx.commit()?;
+    enrich_command_execution_progress(&db_path, &mut projection)?;
+    Ok(projection)
 }
 
 /// Canonical stored command snapshot. The path-based wrapper additionally
@@ -2432,7 +2707,7 @@ fn record_business_command_intake_failure_inner(
     let canonical = tx
         .query_row(
             "SELECT idempotency_key, payload_hash, execution_phase, terminal_status,
-                    projection_version
+                    projection_version, intent_json
              FROM business_command_aggregates WHERE command_id = ?1",
             params![claim.command_id],
             |row| {
@@ -2442,6 +2717,7 @@ fn record_business_command_intake_failure_inner(
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
@@ -2450,13 +2726,13 @@ fn record_business_command_intake_failure_inner(
     let idempotency_conflict =
         canonical
             .as_ref()
-            .is_some_and(|(idempotency_key, payload_hash, _, _, _)| {
-                idempotency_key != &claim.idempotency_key || payload_hash != &claim.payload_hash
+            .is_some_and(|(idempotency_key, payload_hash, _, _, _, intent_json)| {
+                !same_business_command_intent(idempotency_key, payload_hash, intent_json, &claim)
             });
     let canonical_already_terminal =
         canonical
             .as_ref()
-            .is_some_and(|(_, _, phase, terminal_status, _)| {
+            .is_some_and(|(_, _, phase, terminal_status, _, _)| {
                 phase == "terminal" || terminal_status != "none"
             });
     let mut canonical_failure_created = false;
@@ -2486,7 +2762,7 @@ fn record_business_command_intake_failure_inner(
             "first_intake_error": first_error_message,
             "last_intake_error": error_message,
         });
-        if let Some((_, _, phase, _, projection_version)) = canonical.as_ref() {
+        if let Some((_, _, phase, _, projection_version, _)) = canonical.as_ref() {
             prior_phase = phase.clone();
             next_projection_version = projection_version.saturating_add(1);
             tx.execute(

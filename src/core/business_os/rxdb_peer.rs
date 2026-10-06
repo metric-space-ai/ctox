@@ -712,7 +712,7 @@ const DEVICE_PROOF_VERSION: &str = "ctox-device-proof-v1";
 #[path = "rxdb_peer_admission_tests.rs"]
 mod peer_admission_tests;
 
-fn validate_device_bound_peer_session(
+pub(super) fn validate_device_bound_peer_session(
     root: &Path,
     protocol: &Value,
     expected_nonce: Option<&str>,
@@ -835,7 +835,7 @@ fn validate_and_bind_mobile_device_proof(
     Accept
 }
 
-fn p256_public_key_and_thumbprint(jwk: &Value) -> Option<(Vec<u8>, String)> {
+pub(super) fn p256_public_key_and_thumbprint(jwk: &Value) -> Option<(Vec<u8>, String)> {
     if jwk.get("kty").and_then(Value::as_str) != Some("EC")
         || jwk.get("crv").and_then(Value::as_str) != Some("P-256")
     {
@@ -1372,6 +1372,7 @@ pub(super) struct NativePeer {
     shutdown_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     _process_lock: File,
     _pools: Vec<ctox_sync::native::NativeSyncSession>,
+    business_data_sources: Vec<Arc<ctox_sync::business_data_remote::BusinessDataSource>>,
     _command_consumer: tokio::task::JoinHandle<()>,
     _command_outbox: tokio::task::JoinHandle<()>,
     _notes_sync: tokio::task::JoinHandle<()>,
@@ -1537,6 +1538,7 @@ impl NativePeer {
             for pool in &self._pools {
                 pool.shutdown().await;
             }
+            shutdown_business_data_sources(&self.business_data_sources).await;
             // Tear down any live browser processes so stop leaves no zombies.
             for session_id in browser_runtime_manager().active_session_ids() {
                 browser_runtime_manager().stop(&session_id).await;
@@ -1554,6 +1556,19 @@ impl NativePeer {
                  releasing the run for supervised reconfiguration",
                 NATIVE_PEER_SHUTDOWN_TIMEOUT_SECS
             );
+        }
+    }
+}
+
+// Sources own snapshot/watch tasks independently of the replication pool.
+// Drain them from the NativePeer owner after transport/request shutdown; a
+// cancellation observer tracked by that pool would itself be aborted.
+async fn shutdown_business_data_sources(
+    sources: &[Arc<ctox_sync::business_data_remote::BusinessDataSource>],
+) {
+    for source in sources {
+        if let Err(error) = source.shutdown().await {
+            eprintln!("[business-os] BusinessData source cleanup failed: {error}");
         }
     }
 }
@@ -2301,13 +2316,18 @@ where
     }
     runtime.block_on(async move {
         let database = open_database(database_path).await?;
-        register_collections_tolerant(&database, collection_creators()).await?;
-        let output = operation(None, Arc::clone(&database)).await?;
+        let output = async {
+            register_collections_tolerant(&database, collection_creators()).await?;
+            operation(None, Arc::clone(&database)).await
+        }
+        .await;
+        // Registration or publication failure still owns this temporary handle.
+        // Drain it before returning the error and dropping the local runtime.
         database
             .close()
             .await
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
-        Ok(output)
+        output
     })
 }
 
@@ -2815,6 +2835,11 @@ async fn run_native_peer(
     // persisted source row has been migrated and verified may the legacy sweep
     // remove old version tables. Migration failures are fatal: continuing would
     // publish a live heartbeat for a peer whose runtime collections are empty.
+    if let Err(err) = super::populated_store_recovery::mark_cutover_in_progress(&root)
+        .context("mark native RxDB cutover in progress before migration")
+    {
+        return Err(release_database_after_failed_bring_up(&database, err).await);
+    }
     if let Err(err) = migrate_additive_native_rxdb_collection_versions(&root)
         .context("migrate native Business OS RxDB collection schema versions")
     {
@@ -2844,6 +2869,13 @@ async fn run_native_peer(
             )
             .await);
         }
+    }
+    // Write-once. Later restarts must not hash the store or reset the restore
+    // baseline; accepted writes after this receipt fail-close rollback.
+    if let Err(err) = super::populated_store_recovery::record_native_rxdb_cutover_receipt(&root)
+        .context("record native RxDB cutover receipt after verified migration")
+    {
+        return Err(release_database_after_failed_bring_up(&database, err).await);
     }
     match compact_desktop_file_index_store(&root).await {
         Ok(stats) if stats.changed() => {
@@ -2891,6 +2923,7 @@ async fn run_native_peer(
         .collect();
     let collection_count = collection_list.len();
     let mut pools = Vec::with_capacity(1);
+    let mut business_data_sources = Vec::with_capacity(1);
     if collection_count == 0 {
         eprintln!(
             "[business-os] no Business OS RxDB collections to replicate; skipping WebRTC bring-up"
@@ -3073,7 +3106,23 @@ async fn run_native_peer(
                     }),
                 )?;
                 let workjet_device_root = root.clone();
+                super::rxdb_peer_transfer_publication::register(pool, &root)?;
                 let business_data_root = root.clone();
+
+                let business_data_database = Arc::clone(&database);
+                let business_data_source = ctox_sync::business_data_remote::BusinessDataSource::new(
+                    business_data_database,
+                    Arc::new(
+                        super::rxdb_peer_business_data_source::NativeBusinessDataPolicy::new(
+                            root.clone(),
+                        ),
+                    ),
+                    pool.connection_handler.clone(),
+                );
+                // Retain before registration so partial setup failure also
+                // drains any source tasks before the database is released.
+                business_data_sources.push(Arc::clone(&business_data_source));
+                business_data_source.register(pool)?;
                 let identity_transport = pool.connection_handler.clone();
                 pool.register_identity_request_handler(
                     ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
@@ -3132,6 +3181,7 @@ async fn run_native_peer(
                 pools.push(session);
             }
             Err(err) => {
+                shutdown_business_data_sources(&business_data_sources).await;
                 return Err(release_database_after_failed_bring_up(
                     &database,
                     native_peer_bring_up_failure(format!(
@@ -3257,6 +3307,7 @@ async fn run_native_peer(
         shutdown_tx: Mutex::new(Some(shutdown_tx)),
         _process_lock: process_lock,
         _pools: pools,
+        business_data_sources,
         _command_consumer: command_consumer,
         _command_outbox: command_outbox,
         _notes_sync: notes_sync,
@@ -9064,7 +9115,9 @@ struct NativeMigrationRow {
 /// A non-empty source table requires every declarative step from its version to
 /// the registered target version. Empty legacy tables deliberately require no
 /// chain so currently deployed zero-row leftovers can be swept safely.
-fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Result<Value> {
+pub(super) fn migrate_additive_native_rxdb_collection_versions(
+    root: &Path,
+) -> anyhow::Result<Value> {
     let database_path = store::rxdb_store_path(root);
     if !database_path.is_file() {
         return Ok(json!({
@@ -9597,7 +9650,7 @@ pub fn repair_optional_rxdb_collection_schema_drift(
     repair_rxdb_collection_schema_version_drift(root, collection, dry_run, force)
 }
 
-fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<Value> {
+pub(super) fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<Value> {
     let database_path = store::rxdb_store_path(root);
     if !database_path.is_file() {
         return Ok(json!({
@@ -9892,7 +9945,7 @@ struct StaleRxdbCollectionTrigger {
     stale_versions: Vec<i64>,
 }
 
-fn expected_rxdb_collection_version(collection: &str) -> i64 {
+pub(super) fn expected_rxdb_collection_version(collection: &str) -> i64 {
     business_os_schema_contract()
         .get(collection)
         .and_then(|schema| schema.get("version"))

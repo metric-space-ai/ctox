@@ -233,6 +233,29 @@ impl Session {
         }
     }
 
+    /// Compare and take under one lock. Never reselect a turn after awaiting cleanup.
+    pub(crate) async fn abort_turn(self: &Arc<Self>, turn_id: &str) -> bool {
+        let mut active_turn = {
+            let mut active = self.active_turn.lock().await;
+            let Some(turn) = active.as_ref() else {
+                return false;
+            };
+            if turn.tasks.len() != 1
+                || !turn.tasks.contains_key(turn_id)
+                || turn.tasks[turn_id].cancellation_token.is_cancelled()
+            {
+                return false;
+            }
+            active.take().expect("matched active turn")
+        };
+        for task in active_turn.drain_tasks() {
+            self.handle_task_abort(task, TurnAbortReason::Interrupted)
+                .await;
+        }
+        active_turn.clear_pending().await;
+        true
+    }
+
     pub async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,

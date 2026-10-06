@@ -136,7 +136,7 @@ fn dispatch_authorized<O: GuestCommandOwner>(
     Ok(receipt(command, &scope, outcome))
 }
 
-fn parse_guest_command(command: &BusinessCommand) -> Result<GuestRequest> {
+pub(super) fn parse_guest_command(command: &BusinessCommand) -> Result<GuestRequest> {
     let payload_bytes =
         serde_json::to_vec(&command.payload).context("guest command payload is not JSON")?;
     ensure!(
@@ -183,7 +183,7 @@ fn parse_guest_command(command: &BusinessCommand) -> Result<GuestRequest> {
     }
 }
 
-fn apply_scope_claims(scope: &GuestScope, command: &BusinessCommand) -> Result<()> {
+pub(super) fn apply_scope_claims(scope: &GuestScope, command: &BusinessCommand) -> Result<()> {
     let claims: GuestScopeClaims = match command.command_type.as_str() {
         GUEST_OBSERVE_COMMAND_TYPE => {
             serde_json::from_value::<GuestObserveCommandPayload>(command.payload.clone())
@@ -264,7 +264,7 @@ fn receipt(command: &BusinessCommand, scope: &GuestScope, outcome: GuestOutcome)
 }
 
 #[allow(dead_code)]
-fn block_on_guest<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+pub(super) fn block_on_guest<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => match handle.runtime_flavor() {
             tokio::runtime::RuntimeFlavor::CurrentThread => {

@@ -636,9 +636,9 @@ mod tests {
     use crate::rxjs_compat::DEFAULT_SUBJECT_BUFFER;
     use crate::types::{
         BulkWriteRow, DocumentsWithCheckpoint, FirstSyncDone, ReplicationEvents, ReplicationStats,
-        RxConflictHandler, RxReplicationMasterChange, RxStorageInstance,
-        RxStorageInstanceCreationParams, RxStorageInstanceReplicationInput,
-        RxStorageInstanceReplicationState, RxStorageReplicationDirection, StreamQueue,
+        RxReplicationMasterChange, RxStorageInstance, RxStorageInstanceCreationParams,
+        RxStorageInstanceReplicationInput, RxStorageInstanceReplicationState,
+        RxStorageReplicationDirection, StreamQueue,
     };
 
     async fn guarded_master_test_instance(name: &str) -> Arc<dyn RxStorageInstance> {

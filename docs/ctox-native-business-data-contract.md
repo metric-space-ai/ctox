@@ -3,8 +3,10 @@
 Status: implementation boundary agreed with the Workjet consumer on 2026-09-09.
 This document specifies the remaining integration; it is not a declaration that
 an application client, production Workjet resolver or resumable subscription is
-available. A native Open/Status/Close lifecycle service and a reusable trusted
-host seam now exist; scoped query/watch/command execution remains outstanding.
+available. The current branch includes native lifecycle and scoped query/watch/
+command source implementations. The BusinessData rework has not passed compiler,
+adversarial service, or production consumer validation; it is not a release gate
+pass or permission to remove the existing consumer path.
 
 ## Generated host-consumer API
 
@@ -44,11 +46,11 @@ fabricated from shape validation alone.
 ## Trusted native lifecycle service
 
 `BusinessDataService` is a connection-scoped dispatcher for the private
-`BusinessDataIpc` factory. `BusinessDataServiceDispatcher::dispatch` implements
-`Open`, `Status` and `Close`; all query, watch, command and unwatch operations
-return explicit `Unsupported` or `UnknownSession` failures without exposing
-data. One dispatcher owns one random opaque handle table and credential
-requester, so concurrent private clients cannot share a handle or lease.
+`BusinessDataIpc` factory. `BusinessDataServiceDispatcher::dispatch` routes
+lifecycle, query/watch and command operations through that connection's native
+session and authenticated source. Invalid or stale handles fail closed. Each
+factory invocation must create a separate service/handle table; sharing a
+service across private clients is not an authorized host configuration.
 
 The host implements `BusinessDataSessionHost`. For a renderer-selected target
 ID it asynchronously supplies:
@@ -81,8 +83,86 @@ service awaits dispatcher shutdown. Concurrent opens each receive a fresh
 handle and own a separate native transport and credentials.
 
 This service does not add a saved-target store, policy store or Workjet
-bootstrap. It also does not authorize scoped selectors or provide subscription
-or command execution.
+bootstrap. Source-side document visibility, field projection and query-field
+authorization reuse Business OS replication policy. Their complete runtime
+coverage remains an acceptance requirement.
+
+Native publication now has borrowed policy and visibility entry points in
+Business OS. The signed/paired verifier and collection permission evaluator
+read the already-held policy connection; private execution visibility reads
+the caller's Core and relationship connections with the existing canonical
+command/task lineage rules. They never initialize or reopen those stores.
+The issuer wrapper enters first and rereads the encrypted signing record under
+an immediate secret-store transaction, retaining it through one bounded
+synchronous callback. Rotation/deletion cannot cross that callback; each next
+poll rereads the issuer and protected master key. Missing, busy, malformed or
+conflicting issuer authority denies publication without generating a key.
+Legacy Core key rows remain migration-conflict diagnostics and do not acquire
+a second Core writer lock; protected filesystem replacement belongs to native
+runtime ownership. Native issuer/SQL fences release at each Pending. These source helpers
+and their adversarial regressions still require composed compiler/runtime
+validation. The actual BusinessData source now registers the guarded auxiliary
+handler with the exact accepted connection and sends Watch/Observe events through
+send_guarded. Native response/event guards retain the prepared payload separately
+from wire JSON and reacquire current issuer, Core, policy and projection authority
+inside every physical IO poll. Query rows require current source visibility/scope,
+their prepared field projection and the original scoped Mango selector. Even an
+empty page rechecks query-field permission. Command responses/events require
+current canonical Core ownership and the exact prepared command state; Submit
+publication checks DataWrite, observation checks DataRead.
+
+The source's synchronous lifetime fence retires queued output before shutdown's
+first await and prevents installing later snapshot/watch tasks. Subscription
+publication shares its session/terminal/binding-epoch fence with resume and
+Unwatch. A reconnect retaining the same wire session still changes that local
+epoch. Data-free Watch acknowledgements can release already-buffered Error/Reset
+after a producer failure; resume, Unwatch, source shutdown and exact peer/token
+retirement still fence them. Fixed Error/Reset/Revoked controls and exact Unwatched
+acknowledgements carry no data authority. Arbitrary native error text is sanitized;
+unsupported policies/transports cannot fall back to an ordinary data send.
+
+The auxiliary request is the direct generated Request used by remote_request;
+the WebRTC response envelope carries its WireResult directly. Source decoding
+uses the existing bounded decoder. These source changes have not passed compiler,
+real queue/service adversarial execution or performance validation. Immediate
+SQLite fences fail closed on contention; availability under concurrent writers
+and arbitrary filesystem replacement remain unproved.
+
+Standalone Sync verification must enable `--features webrtc`: this crate has no
+default WebRTC feature, so featureless success does not compile or exercise the
+BusinessData source. The isolated native CLI acceptance example uses two runtime
+workers and a freshly built binary from the same composed source. Browser,
+installed Linux and two-host acceptance remain separate obligations.
+
+## Command ownership and existing records
+
+ObserveCommand must resolve the requested command in the canonical native
+command store before installing an observation. Peer-provided owner fields and
+client context are not ownership evidence. Native queue authorization receipts
+already bind a trusted actor. For replicated control commands without such a
+receipt, admission now adds `native_owner` with contract
+`ctox-business-command-owner-v1` and the authenticated session's user ID to the
+canonical intent before hashing it. This is an authentication binding, not a
+permission grant; current collection and command policies still apply.
+
+The binding participates in idempotency: an otherwise identical command with
+the same ID and a different owner must conflict. Existing permission receipts
+remain unchanged so background recovery can reproduce their hashes. Existing
+ownerless commands must not acquire an owner from the next requester. They
+remain unavailable to owner-scoped observation and conflict with a newly bound
+intent; no automatic ownership backfill is implemented.
+
+Recovery of an accepted background control first requires its original native
+authorization receipt, including its permission, module scope and trusted actor.
+A current capability cannot replace a missing receipt or adopt that actor's
+effect. When a live capability is supplied, its authenticated user must match
+the original actor before current module policy is checked. Token-redacted
+native recovery still derives its actor from the unchanged receipt. A rejected
+recovery does not rewrite the admission hash or install a new owner/receipt.
+
+Tests for canonical store replay/conflict and receipt validation are present as
+source but have not been executed for this rework. Full authenticated intake,
+observation, recovery and migration evidence is still required.
 
 
 ## Private host credential callback
@@ -124,6 +204,95 @@ startup is pending.
 Workjet binds the generated callback to a host-owned credential lease and
 validates target/connection/epoch before reading or signing; this is not yet a
 running native service.
+
+## Queued transport ownership
+
+A response or event send retains its own completion receiver. The native
+transport now skips a queued frame whose receiver has retired, and cancels that
+frame's pending capacity/send work when the receiver closes. Framed transfers
+check their owner for the start, each chunk and retry, while independently
+owned inline frames keep their own completion boundary. Cancellation of an
+inline frame must not abort an unrelated enclosing framed transfer.
+
+This closes the source-send cancellation gap caused by another sender draining
+the shared queue later. The new queue and pending-transport regressions are
+source-only and have not run. It does **not** establish a shared native policy
+revision or a held SQLite publication guard: external policy/capability changes
+still require that additional authority integration at the actual queued IO.
+A successful authorization before enqueue is not proof of current policy at IO.
+
+The native transport now has an explicit `send_guarded` entry point.
+`WebRTCPublicationGuard` is a host-owned object carried by the exact queued item,
+including independently draining high-priority inline frames and framed
+starts/chunks/retries. Its synchronous callback holds current native mutation
+authority while polling physical IO once, releases it on Pending, and reacquires
+it before the next poll. A bounded 16ms recheck detects revocation even if the
+transport never wakes; the existing send-capacity timeout bounds that wait.
+Missing or repeated callbacks fail, and an unsupported handler rejects guarded
+publication rather than dropping the guard into ordinary send. An inline
+authority rejection is delivered to its own caller without aborting a different
+framed owner; genuine transport errors retain the existing failure behavior.
+
+Guarded auxiliary registration now returns a native response value and a
+mandatory publication guard separately from wire JSON. The handler receives
+the exact accepted connection, not a later signaling-ID lookup. Guarded
+registration cannot opt into public identity admission or replace an existing
+method owner. Setup failures use a fixed public error, never arbitrary native
+error text. The pool retains its synchronous cancellation fence through each
+callback and invalidates it before its first asynchronous teardown step.
+Unsupported guarded transports reject without retrying ordinary send.
+
+For every native guarded queue item, admission captures the accepted connection
+generation and its capability token under peer lifecycle authority. Each IO
+poll enters native policy first, then holds that same lifecycle lock while
+checking the captured generation/token and polling the DataChannel. Token
+mutation, replacement and close use that lock. Capacity waits do not emit bytes:
+they probe authority on each bounded recheck, release the fences before polling
+the capacity method, and reacquire them for physical IO. Holding lifecycle while
+polling capacity would recursively acquire it and deadlock. Pending IO releases
+all fences; a token change retires it even without a transport wakeup.
+
+This transport implementation is a prerequisite, not native BusinessData
+policy wiring. Its actual Query/Watch/Observe source publishers still use plain
+auxiliary registration and ordinary send. Their adapter must supply the real
+retained policy authority through the new guarded auxiliary registration and
+Watch/Observe queues. It must use the existing signed
+actor/device claims, native collection/query/field policy, exact command owner
+and authoritative document visibility. Those decisions read both the Business
+OS relationship store and Core execution state: holding one independently
+opened transaction while helpers reopen stores or perform schema initialization
+does not establish a common publication boundary. Checks must borrow the held
+native authority, without awaiting or re-entering its store inside the IO
+callback.
+
+NativeBusinessDataPolicy.document_view now uses the complete shared replication
+decision on held Core, Business OS and RxDB readers. The ordinary replication
+filter retains its existing browser/channel hooks and decision order. Both
+readers share command parent/workflow inheritance, task-command and thread
+membership predicates; the held reader preserves the ordinary domain-first
+relationship lookup and RxDB projection fallback. It resolves schema tables
+from the held SQLite catalog rather than a path-stamped cache. This entry point
+uses the same explicit NativeBusinessData collection allowlist; it does not
+substitute for the separate browser or communication source readers.
+
+The synchronous read callback enters current issuer -> Core -> policy -> RxDB,
+using existing databases with zero busy timeout and immediate mutation fences.
+It verifies current signed/paired actor, epoch, collection grant and existing
+native instance, binds authority to that exact collection, and applies current
+crew field projection on the same claims. Missing or busy authority fails
+closed; it creates no schema, instance or secret. Fences release before the
+async document_view call returns. Instance-file checks remain native filesystem
+ownership, not a proof that arbitrary external file replacement is atomically
+fenced.
+
+This implements the actual document policy path but does not yet retain those
+fences through response/event IO. The new native guard factory must reacquire
+this callback and check the exact prepared payload, query fields, scope and
+owned command at every publication poll. Source/subscription terminal and
+resume changes also need the shared local publication fence. Production queue
+wiring, concurrency/availability/performance evidence and external SQLite
+mutation regressions remain required. The new real-policy and transport tests
+are source-only and unrun.
 
 ## Existing implementation and reuse boundary
 
@@ -340,6 +509,14 @@ snapshot. Buffer overflow and missed events also reset; they never silently
 skip ahead. Removed records must yield remove events, including records that
 leave an authorized query because their scope or policy changed. Revocation
 invalidates data visibility and ends the subscription.
+At the private IPC boundary, the shared publication fence linearizes at the
+first transport-accepted byte of a watch event or gated response. A zero-byte
+Pending frame is cancellable by Close, revoke, shutdown or account invalidation;
+once its first byte is accepted, that frame finishes intact to preserve framing
+under the authority captured when it was admitted. This is a host-session
+boundary, not proof that an external native SQLite policy mutation is fenced
+atomically at the remote source transport; that policy owner must share its own
+revision/guard with source response and event publication.
 
 Cancellation is owned by the existing native session lifecycle. A slow renderer
 gets bounded backpressure or a visible reset/error, not an unbounded queue or

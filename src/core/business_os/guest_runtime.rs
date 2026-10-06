@@ -16,13 +16,21 @@ use std::future::Future;
 
 mod channel;
 #[cfg(target_os = "linux")]
+mod desktop;
+#[cfg(target_os = "linux")]
 mod image;
 #[cfg(target_os = "linux")]
 mod qemu;
 mod qmp;
+mod startup;
 mod x11;
 #[cfg(target_os = "linux")]
 pub(super) use channel::run_guest_desktop_effects;
+#[cfg(target_os = "linux")]
+pub(super) use desktop::RetainedQemuDesktop;
+#[cfg(target_os = "linux")]
+pub(super) use qemu::PreparedQemuGuest;
+pub(crate) use startup::run_native_guest_desktop;
 pub(super) use x11::{X11GuestConfig, X11GuestDriver};
 
 #[derive(Clone, PartialEq, Eq)]

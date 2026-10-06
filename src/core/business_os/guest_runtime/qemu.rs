@@ -11,7 +11,8 @@ use super::identifier;
 use super::qmp::{QemuStatus, QmpClient};
 use anyhow::{anyhow, ensure, Context, Result};
 use serde_json::json;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
@@ -24,7 +25,7 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Resolved by the native image/lifecycle owner, never deserialized from a
 /// renderer or model request. Image provenance and host admission belong there.
-pub(super) struct PreparedQemuGuest {
+pub(in crate::business_os) struct PreparedQemuGuest {
     pub program: PathBuf,
     pub runtime_parent: PathBuf,
     /// A verified, immutable, standalone raw base image.
@@ -67,7 +68,12 @@ pub(super) fn regular_file(path: &Path) -> Result<std::fs::Metadata> {
     Ok(metadata)
 }
 
-fn prepare_command(config: &PreparedQemuGuest, monitor: &Path, guest: &Path) -> Result<Command> {
+fn prepare_command(
+    config: &PreparedQemuGuest,
+    monitor: &Path,
+    guest: &Path,
+    startup: &Path,
+) -> Result<Command> {
     use std::os::unix::fs::MetadataExt;
 
     ensure!(
@@ -92,6 +98,7 @@ fn prepare_command(config: &PreparedQemuGuest, monitor: &Path, guest: &Path) -> 
     );
     let monitor = chardev_socket_path(monitor, "monitor")?;
     let guest = chardev_socket_path(guest, "guest channel")?;
+    let startup = chardev_socket_path(startup, "guest startup")?;
     let base_path = config
         .base_raw
         .to_str()
@@ -114,6 +121,13 @@ fn prepare_command(config: &PreparedQemuGuest, monitor: &Path, guest: &Path) -> 
     ]);
     command.args(["-m", &config.memory_mib.to_string()]);
     command.args(["-smp", &config.vcpus.to_string()]);
+    // Native-owned assignment data only; no controller token, host path or
+    // credential enters the guest. The image copies this fixed fw_cfg blob
+    // into its own overlay before starting the native endpoint.
+    // ref: https://www.qemu.org/docs/master/specs/fw_cfg.html
+    command
+        .arg("-fw_cfg")
+        .arg(format!("name=opt/org.ctox/guest-startup,file={startup}"));
     command.args([
         "-nodefaults",
         "-no-user-config",
@@ -197,7 +211,8 @@ fn chardev_socket_path<'a>(path: &'a Path, what: &str) -> Result<&'a str> {
 impl QemuProcess {
     /// Creates the owner synchronously, before the first cancellable await.
     /// A successful return proves only process creation; call connect_monitor.
-    pub(super) fn spawn_paused(config: &PreparedQemuGuest) -> Result<Self> {
+    pub(super) fn spawn_paused(config: &PreparedQemuGuest, guest_id: &str) -> Result<Self> {
+        ensure!(identifier(guest_id), "guest identity is invalid");
         ensure!(
             config.runtime_parent.is_absolute(),
             "runtime parent must be absolute"
@@ -210,7 +225,25 @@ impl QemuProcess {
         // Restrict access at creation, before binding the monitor or spawning.
         let socket = runtime.path().join("qmp.sock");
         let guest_socket = runtime.path().join("guest.sock");
-        let mut command = prepare_command(config, &socket, &guest_socket)?;
+        let startup_path = runtime.path().join("guest-startup.json");
+        let mut startup = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&startup_path)?;
+        serde_json::to_writer(
+            &mut startup,
+            &json!({
+                "guest_id": guest_id,
+                "display": ":0",
+                "xauthority": "/run/ctox-desktop/Xauthority"
+            }),
+        )?;
+        startup.flush()?;
+        startup.sync_all()?;
+        drop(startup);
+        let mut command = prepare_command(config, &socket, &guest_socket, &startup_path)?;
         let listener = UnixListener::bind(&socket)
             .map_err(|_| anyhow!("private QEMU monitor could not be bound"))?;
         let guest_listener = UnixListener::bind(&guest_socket)
@@ -228,6 +261,14 @@ impl QemuProcess {
             guest_channel: None,
             runtime,
         })
+    }
+
+    pub(super) fn ensure_alive(&mut self) -> Result<()> {
+        ensure!(
+            self.child.try_wait()?.is_none(),
+            "owned QEMU process has exited"
+        );
+        Ok(())
     }
 
     pub(super) fn pid(&self) -> u32 {

@@ -22,7 +22,7 @@ impl HashFunction for Hash {
 pub(super) fn run<S, F>(root: &Path, stop: S, started: F) -> Result<()>
 where
     S: std::future::Future<Output = io::Result<()>>,
-    F: FnOnce(HostStarted) -> Result<()>,
+    F: FnOnce(HostStarted, Arc<dyn ctox_sync::authority::client::ExecutionAuthority>) -> Result<()>,
 {
     // This process lease precedes opening Raft/RxDB and outlives the Tokio
     // runtime, including blocking storage work during unwind or shutdown.
@@ -112,14 +112,21 @@ where
                 live_change: None,
             },
         };
-        let result =
-            ctox_sync::host_runtime::run(&config, root, ipc.path(), key, options, stop, |ready| {
+        let result = ctox_sync::host_runtime::run_with_authority(
+            &config,
+            root,
+            ipc.path(),
+            key,
+            options,
+            stop,
+            |ready, authority| {
                 descriptor =
                     Some(DescriptorGuard::publish(root, &ready).map_err(io::Error::other)?);
-                started(ready).map_err(io::Error::other)
-            })
-            .await
-            .map_err(|error| anyhow::anyhow!("native Sync host failed ({:?})", error.kind()));
+                started(ready, authority).map_err(io::Error::other)
+            },
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("native Sync host failed ({:?})", error.kind()));
         let closed = database
             .close()
             .await

@@ -66,8 +66,26 @@ impl CodexThread {
         }
     }
 
+    /// Register against this loaded Core Session, never a caller-supplied label.
+    pub fn register_native_mcp_dispatch(
+        &self,
+        dispatcher: std::sync::Arc<dyn crate::native_mcp_dispatch::NativeMcpDispatch>,
+    ) -> Result<crate::native_mcp_dispatch::NativeMcpRegistration, String> {
+        crate::native_mcp_dispatch::register_native_mcp_dispatch(&self.codex.session, dispatcher)
+    }
+
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
+    }
+
+    pub async fn interrupt_turn(&self, turn_id: String) -> CodexResult<bool> {
+        self.codex.interrupt_turn(turn_id).await
+    }
+
+    /// Obtain the journal from this actual Core Session, never from a path claim.
+    /// The returned reader remains sealed until successful recorder shutdown.
+    pub async fn retain_native_journal(&self) -> std::io::Result<crate::NativeJournalReader> {
+        self.codex.session.retain_native_journal().await
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
@@ -153,6 +171,10 @@ impl CodexThread {
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
         self.codex.state_db()
+    }
+
+    pub async fn rollout_materialization_pending(&self) -> bool {
+        self.codex.rollout_materialization_pending().await
     }
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
