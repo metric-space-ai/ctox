@@ -1800,10 +1800,17 @@ than mapping errors ad hoc at each `map_err`:
 | `FILE_NOT_FOUND` | no | The file genuinely does not exist. |
 | `FILE_SOURCE_ERROR` | **yes** | Transient source failure (I/O, DB, lock). Previously collapsed into `FILE_NOT_FOUND`, which made disk blips indistinguishable from a missing file and therefore never retried. |
 | `UNAUTHORIZED` | no | Peer is not authorized for the collection/file. |
+| `REMOTE_ERROR` | yes | For demand-query admission: the current native issuer/store authority remains unavailable after eight checks separated by 10 ms. No query rows are sent. |
 | `STREAM_LIMIT_EXCEEDED` | yes | Too many in-flight streams. |
 | `RATE_LIMITED` | yes | Server-side throttle. |
 | `REMOTE_TIMEOUT` | yes | Deadline hit. |
 | `QUERY_NOT_SUPPORTED`, `SCHEMA_MISMATCH`, `FEATURE_DISABLED` | no | Terminal until config/schema changes. |
+
+Demand-query admission distinguishes a verified collection-policy denial from
+an unavailable authority lookup. Only `COLLECTION_AUTHORITY_UNAVAILABLE` is
+retried inside that bounded admission window; invalid credentials and replaced
+peer/token generations remain immediate denials. The existing issuer fence is
+retained, and boolean replication paths still deny unavailable authority.
 
 Adding a code is safe on this path: `routeFileError`
 (`demand-loading-transport.mjs`) carries `code` and `retryable` through without
