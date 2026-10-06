@@ -7165,7 +7165,17 @@ fn maybe_materialize_and_complete_runtime_app_starter(
     command: &BusinessCommand,
     queue_task: Option<&channels::QueueTaskView>,
 ) -> anyhow::Result<Option<CommandAccepted>> {
-    if command.client_context.get("source").and_then(Value::as_str) == Some("business-os-mcp") {
+    // CLI and MCP app requests describe work for the bounded coding worker.
+    // Admission must not manufacture app files or claim a queued task completed.
+    if matches!(
+        command.client_context.get("source").and_then(Value::as_str),
+        Some(
+            "business-os-mcp"
+                | "ctox-cli.business-os-app-create"
+                | "ctox-cli.business-os-app-modify"
+                | "ctox-cli.business-os-app-bench"
+        )
+    ) {
         return Ok(None);
     }
     let is_import = command

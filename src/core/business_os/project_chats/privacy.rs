@@ -50,8 +50,21 @@ fn references(document: &Value, result: &mut BTreeSet<String>) {
     }
 }
 
-fn project_command(document: &Value) -> bool {
-    document
+fn project_command(collection: &str, document: &Value) -> bool {
+    // An execution projection carries command_id as an association, not a
+    // command envelope. Its project constraint comes from the canonical
+    // command; requiring its own payload would reject the owner too.
+    if collection != "business_commands" {
+        return false;
+    }
+    // App-free native tasks have no private chat reference. Their reserved
+    // command identity binds reads even if a malformed projection omits type
+    // or project_id; visible_in_store then requires the actual project owner.
+    ["id", "command_id"].iter().any(|field| {
+        document[*field]
+            .as_str()
+            .is_some_and(|id| id.starts_with("workjet_project_native_"))
+    }) || document
         .get("command_type")
         .and_then(Value::as_str)
         .is_some_and(|kind| is_command(kind) && kind.starts_with("ctox.workjet.project."))
@@ -62,6 +75,29 @@ fn project_command(document: &Value) -> bool {
 // the chat policy merely by omitting a direct thread_id.
 fn associations<'a>(collection: &str, document: &'a Value) -> Vec<(&'static str, &'a str)> {
     let mut result = Vec::new();
+    // A native stop receipt has no project/chat field of its own. Resolve its
+    // typed target through the same canonical Core reader before deciding
+    // visibility; a missing target fails that read rather than becoming public.
+    if collection == "business_commands"
+        && ["id", "command_id"].iter().any(|field| {
+            document[*field]
+                .as_str()
+                .is_some_and(|id| id.starts_with("workjet_project_cancel_"))
+        })
+    {
+        result.push((
+            "business_commands",
+            document["payload"]["target_command_id"]
+                .as_str()
+                .filter(|id| {
+                    id.starts_with("workjet_project_native_")
+                        || id.starts_with("workjet_crew_")
+                        || id.starts_with("ctox_delegate_")
+                })
+                .unwrap_or_default(),
+        ));
+    }
+
     if matches!(
         collection,
         "ctox_queue_tasks"
@@ -88,7 +124,7 @@ fn associations<'a>(collection: &str, document: &'a Value) -> Vec<(&'static str,
 }
 
 pub(in crate::business_os) fn has_restricted_reference(collection: &str, document: &Value) -> bool {
-    if is_owned_collection(collection) || project_command(document) {
+    if is_owned_collection(collection) || project_command(collection, document) {
         return true;
     }
     let mut ids = BTreeSet::new();
@@ -210,7 +246,7 @@ fn collect_constraints_with_reader(
 ) -> anyhow::Result<()> {
     let mut ids = BTreeSet::new();
     references(document, &mut ids);
-    if is_owned_collection(collection) || project_command(document) || !ids.is_empty() {
+    if is_owned_collection(collection) || project_command(collection, document) || !ids.is_empty() {
         constraints.push((collection.to_owned(), document.clone()));
     }
     for (related_collection, id) in associations(collection, document) {
@@ -366,7 +402,7 @@ pub(super) fn visible_in_store(
             }
         }
     }
-    if project_command(document) {
+    if project_command(collection, document) {
         let Some(project_id) = document["payload"]["project_id"].as_str() else {
             return Some(false);
         };
@@ -375,7 +411,7 @@ pub(super) fn visible_in_store(
         }
     }
     let restricted = is_owned_collection(collection)
-        || project_command(document)
+        || project_command(collection, document)
         || !references_to_check.is_empty();
     for id in &references_to_check {
         let related_collection = if chat_id(id) {

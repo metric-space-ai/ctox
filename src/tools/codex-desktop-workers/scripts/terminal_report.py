@@ -13,8 +13,9 @@ import statistics
 import subprocess
 import uuid
 
-REPOS = ("metric-space-ai/ctox", "metric-space-ai/workjet", "mkh-welsch/ctox-dev")
-PROJECTS = dict(zip(REPOS, ("CTOX", "Workjet", "ctox-dev")))
+REPOS = ("metric-space-ai/ctox", "metric-space-ai/workjet", "mkh-welsch/ctox-dev",
+         "metric-space-ai/greppy", "mkh-welsch/miltonticket-app")
+PROJECTS = dict(zip(REPOS, ("CTOX", "Workjet", "ctox-dev", "Greppy", "miltonticket-app")))
 
 STOP = {174, 177, 181, 188, 189}
 WEIGHTS = dict(correctness=.30, assignment_fulfillment=.25, evidence_quality=.20,
@@ -106,6 +107,9 @@ def collect(base, repositories=REPOS):
                       project="External registry", snapshot_at=now())
             gathered.append(pr)
     snapshot = dict(version=1, collected_at=now(), repositories=list(repositories), prs=gathered)
+    current_path = base / "terminal-evidence/current.json"
+    previous = load(current_path) if current_path.exists() else {}
+    snapshot["terminal_event_history"] = retain_terminal_history(previous, gathered)
     destination = base / "terminal-evidence/snapshots" / (sha(snapshot) + ".json")
     save(destination, snapshot)
     save(base / "terminal-evidence/current.json", snapshot)
@@ -188,15 +192,65 @@ def historical_merge_target(pr, records):
     return targets[0]
 
 
+def terminal_event(pr):
+    """A reopened/reclosed PR is a distinct delivery even at the same head."""
+    return {key: pr.get(key) for key in ("state", "headRefOid", "closedAt", "mergedAt")}
+
+def retain_terminal_history(previous, prs):
+    """Keep event changes and verified metadata through delta or full recollection."""
+    current = {pr["url"]: pr for pr in prs}
+    prior = {pr["url"]: pr for pr in previous.get("prs", [])}
+    history = {url: list(events) for url, events in
+               previous.get("terminal_event_history", {}).items()}
+    for url, pr in prior.items():
+        if url not in current or terminal_event(pr) != terminal_event(current[url]):
+            events = history.setdefault(url, [])
+            event = terminal_event(pr)
+            if event not in events:
+                events.append(event)
+    for pr in prs:
+        events = [event for event in history.get(pr["url"], [])
+                  if event != terminal_event(pr)]
+        if events:
+            pr["previous_terminal_events"] = events
+        if pr["url"] in prior and terminal_event(prior[pr["url"]]) == terminal_event(pr):
+            old = prior[pr["url"]]
+            for key in ("closing_review", "rework_iterations", "whole_pr_rework_iterations_lower_bound"):
+                if key in old:
+                    pr.setdefault(key, old[key])
+    return history
+
+def current_assessment(row, pr):
+    if row.get("terminal_event") is not None:
+        return row["terminal_event"] == terminal_event(pr)
+    # Old immutable records can only remain current for an unchanged event.
+    # A late retrospective recording date is not proof of a new closing action.
+    if pr.get("previous_terminal_events"):
+        return False
+    if row.get("pr_head") != pr.get("headRefOid") or row.get("disposition") != pr.get("state"):
+        return False
+    try:
+        recorded = dt.datetime.fromisoformat(row["recorded_at"].replace("Z", "+00:00"))
+        closed = dt.datetime.fromisoformat(pr["closedAt"].replace("Z", "+00:00"))
+        return recorded >= closed
+    except (KeyError, TypeError, ValueError):
+        return False
+
 def record(base, entry):
     inventory = load(base / "terminal-evidence/current.json")
     prs = {p["url"]: p for p in inventory["prs"]}
     pr = prs.get(entry.get("pr_url"))
     if not pr or not terminal(pr) or stop(pr):
         raise ValueError("Assessments require an inventoried terminal, non-STOP PR")
-    live = json.loads(command("gh", "pr", "view", entry["pr_url"], "--json", "state,headRefOid"))
-    if not terminal(live) or live["headRefOid"] != pr["headRefOid"]:
-        raise ValueError("PR is live or snapshot head changed; recollect terminal evidence")
+    live = json.loads(command("gh", "pr", "view", entry["pr_url"], "--json",
+                              "state,headRefOid,closedAt,mergedAt"))
+    if not terminal(live) or terminal_event(live) != terminal_event(pr):
+        raise ValueError("PR is live or terminal event changed; recollect terminal evidence")
+    event = terminal_event(pr)
+    if entry.get("terminal_event") is not None and entry["terminal_event"] != event:
+        raise ValueError("Assessment belongs to a different terminal event")
+    if pr.get("previous_terminal_events") and entry.get("terminal_event") is None:
+        raise ValueError("Reclosed PR requires explicit current terminal-event binding")
     if entry.get("role") not in ("parent", "worker"):
         raise ValueError("Same schema requires parent or worker")
     if not entry.get("actor_id") or not entry.get("scope") or not entry.get("reviewer"):
@@ -223,7 +277,8 @@ def record(base, entry):
         raise ValueError("Provenance model must match assessed author")
     key = sha([entry["pr_url"], entry["role"], entry["actor_id"], entry.get("package", "delivery")])
     entry.update(schema=RUBRIC, assessment_key=key, repository=pr["repository"],
-                 recorded_at=now(), pr_head=pr["headRefOid"], disposition=pr["state"])
+                 recorded_at=now(), pr_head=pr["headRefOid"], disposition=pr["state"],
+                 terminal_event=event)
     folder = base / "assessments/unified-v1"
     folder.mkdir(parents=True, exist_ok=True)
     with (folder / "write.lock").open("a") as lock:
@@ -455,11 +510,21 @@ def build(base):
         pr["project"] = PROJECTS.get(pr["repository"], "External registry")
     mapping = {p["url"]: p for p in prs}
     records, non_delivery_attempts = partition_deliveries(assessments(base))
+    historical_assessments = [row for row in records + non_delivery_attempts
+                              if row["pr_url"] in mapping and
+                              not current_assessment(row, mapping[row["pr_url"]])]
+    records = [row for row in records if row["pr_url"] in mapping and
+               current_assessment(row, mapping[row["pr_url"]])]
+    non_delivery_attempts = [row for row in non_delivery_attempts if row["pr_url"] in mapping and
+                            current_assessment(row, mapping[row["pr_url"]])]
     legacy = []
+    historical_legacy = []
     registry = jobs(base)
     for j in registry:
         if j.get("pr_url") in mapping:
-            legacy.extend(legacy_rows(j, mapping[j["pr_url"]]))
+            pr = mapping[j["pr_url"]]
+            target = historical_legacy if pr.get("previous_terminal_events") else legacy
+            target.extend(legacy_rows(j, pr))
     excluded = {(row["pr_url"], row["actor_id"]) for row in non_delivery_attempts}
     non_delivery_legacy = [row for row in legacy if (row["pr_url"], row["actor_id"]) in excluded]
     legacy = [row for row in legacy if (row["pr_url"], row["actor_id"]) not in excluded]
@@ -512,6 +577,7 @@ def build(base):
     data = dict(schema=RUBRIC, generated_at=now(), snapshot_at=snapshot["collected_at"],
                 summary=summary, weights=WEIGHTS, prs=prs, assessments=records, legacy=legacy,
                 non_delivery_attempts=non_delivery_attempts, non_delivery_legacy=non_delivery_legacy,
+                historical_assessments=historical_assessments, historical_legacy=historical_legacy,
                 leaderboards=leaderboard_data(records + legacy), parent_worker_pairs=parent_worker_pairs(records, mapping), scope_repositories=list(REPOS))
     save(base / "MODEL-EXPERIENCE.json", data)
     template = read(Path(__file__).with_name("terminal_report.html"))
@@ -528,12 +594,17 @@ def build(base):
 def bootstrap(base):
     """Build first populated report from terminal lists while rich evidence collects."""
     prs = []
-    for name, repo in zip(("ctox", "workjet", "ctox-dev"), REPOS):
+    for repo in REPOS:
+        name = repo.rsplit("/", 1)[1]
         for p in load(base / (name + "-terminal-prs.json")):
             if terminal(p):
                 p.update(repository=repo, project=PROJECTS[repo], snapshot_at=now())
                 prs.append(p)
-    save(base / "terminal-evidence/current.json", dict(version=1, collected_at=now(), repositories=list(REPOS), prs=prs))
+    current_path = base / "terminal-evidence/current.json"
+    previous = load(current_path) if current_path.exists() else {}
+    history = retain_terminal_history(previous, prs)
+    save(current_path, dict(version=1, collected_at=now(), repositories=list(REPOS),
+                            prs=prs, terminal_event_history=history))
     return build(base)
 
 def main():
