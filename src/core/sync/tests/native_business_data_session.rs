@@ -1012,7 +1012,7 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         )
         .await;
         // A still owns this deterministic ID. B must be fenced by its
-        // different session generation, without removing A's subscription.
+        // different session reference, without removing A's subscription.
         assert_rejected(
             read_frame(&mut client_b).await,
             NativeBusinessDataErrorCode::StaleGeneration,
