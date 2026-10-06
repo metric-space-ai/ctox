@@ -6,6 +6,208 @@ use std::fs;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
+#[cfg(unix)]
+#[test]
+fn queue_turn_fence_rejects_replaced_store_even_with_replayed_lease() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = resolve_db_path(root.path(), None);
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let create = |path: &Path| -> Result<()> {
+        let conn = Connection::open(path)?;
+        conn.execute_batch(
+            "CREATE TABLE communication_routing_state (
+                message_key TEXT, route_status TEXT, lease_worker_id TEXT
+             );
+             INSERT INTO communication_routing_state VALUES
+                ('queue:system::target', 'leased', 'worker-target');",
+        )?;
+        Ok(())
+    };
+    create(&path)?;
+    let fence = QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: vec!["queue:system::target".into()],
+        worker_id: "worker-target".into(),
+    };
+    let reader = fence.open_reader()?;
+    let retained_reader =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    assert!(fence.still_owned(&reader)?);
+    std::fs::rename(&path, path.with_extension("retired"))?;
+    create(&path)?;
+    // Both files contain the same lease. The retained SQLite connection
+    // still reads the retired file, so a row-only check would allow the turn.
+    let retired_still_leased: bool = retained_reader.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_routing_state
+         WHERE message_key='queue:system::target' AND route_status='leased'
+         AND lease_worker_id='worker-target')",
+        [],
+        |row| row.get(0),
+    )?;
+    assert!(retired_still_leased);
+    assert!(!fence.still_owned(&reader)?);
+    assert!(fence.still_owned(&fence.open_reader()?)?);
+    Ok(())
+}
+
+#[test]
+fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let create = |name: &str| {
+        create_queue_task(
+            root.path(),
+            QueueTaskCreateRequest {
+                title: name.into(),
+                prompt: name.into(),
+                thread_key: format!("queue/cancel/{name}"),
+                workspace_root: None,
+                priority: "normal".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+    };
+    let target = create("target")?;
+    let other = create("unrelated")?;
+    let sibling = create("same-worker-sibling")?;
+    let fence = |key: &str, worker: &str| QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: vec![key.to_owned()],
+        worker_id: worker.into(),
+    };
+    for (task, worker) in [
+        (&target, "worker-target"),
+        (&other, "worker-other"),
+        (&sibling, "worker-target"),
+    ] {
+        lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+        assert_eq!(
+            record_queue_lease_worker(
+                root.path(),
+                std::slice::from_ref(&task.message_key),
+                "ctox-service",
+                worker
+            )?,
+            1
+        );
+    }
+    let target_fence = fence(&target.message_key, "worker-target");
+    let other_fence = fence(&other.message_key, "worker-other");
+    let reader = target_fence.open_reader()?;
+    assert!(target_fence.still_owned(&reader)?);
+    assert!(other_fence.still_owned(&reader)?);
+    let batch_fence = QueueTurnLeaseFence {
+        message_keys: vec![target.message_key.clone(), other.message_key.clone()],
+        // A combined turn cannot adopt a task leased by a different worker.
+        ..target_fence.clone()
+    };
+    assert!(!batch_fence.still_owned(&reader)?);
+    let missing_member = QueueTurnLeaseFence {
+        message_keys: vec![target.message_key.clone(), "queue:system::missing".into()],
+        ..target_fence.clone()
+    };
+    assert!(!missing_member.still_owned(&reader)?);
+    let owned_batch = QueueTurnLeaseFence {
+        message_keys: vec![target.message_key.clone(), sibling.message_key.clone()],
+        ..target_fence.clone()
+    };
+    assert!(owned_batch.still_owned(&reader)?);
+    update_queue_task(
+        root.path(),
+        QueueTaskUpdateRequest {
+            message_key: target.message_key.clone(),
+            route_status: Some("cancelled".into()),
+            status_note: Some("operator cancellation".into()),
+            ..Default::default()
+        },
+    )?;
+    // The same open reader observes the committed cancellation, without a
+    // retained WAL snapshot, and cannot revive the cancelled row.
+    assert!(!target_fence.still_owned(&reader)?);
+    assert!(!owned_batch.still_owned(&reader)?);
+    assert!(fence(&sibling.message_key, "worker-target").still_owned(&reader)?);
+    assert!(other_fence.still_owned(&reader)?);
+    assert_eq!(
+        record_queue_lease_worker(
+            root.path(),
+            std::slice::from_ref(&target.message_key),
+            "ctox-service",
+            "worker-target"
+        )?,
+        0
+    );
+    assert!(!fence(&other.message_key, "stale-worker").still_owned(&reader)?);
+    assert!(!fence("queue:system::missing", "worker-target").still_owned(&reader)?);
+    assert!(fence(&other.message_key, "").open_reader().is_err());
+    assert!(reader
+        .connection
+        .execute("DELETE FROM communication_routing_state", [])
+        .is_err());
+    Ok(())
+}
+
+#[test]
+fn queue_turn_fence_cannot_interrupt_a_released_new_worker() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let task = create_queue_task(
+        root.path(),
+        QueueTaskCreateRequest {
+            title: "re-leased task".into(),
+            prompt: "re-leased task".into(),
+            thread_key: "queue/cancel/re-lease".into(),
+            workspace_root: None,
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        },
+    )?;
+    let keys = vec![task.message_key.clone()];
+    lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+    record_queue_lease_worker(root.path(), &keys, "ctox-service", "old-worker")?;
+    let old = QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: keys.clone(),
+        worker_id: "old-worker".into(),
+    };
+    let reader = old.open_reader()?;
+    assert!(old.still_owned(&reader)?);
+    let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+    conn.execute("UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+        [&task.message_key])?;
+    drop(conn);
+    let sweep = release_stale_queue_task_leases(root.path(), "ctox-service", &HashSet::new())?;
+    assert_eq!(sweep.released, keys);
+    lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+    record_queue_lease_worker(root.path(), &keys, "ctox-service", "new-worker")?;
+    assert!(!old.still_owned(&reader)?);
+    let new = QueueTurnLeaseFence {
+        worker_id: "new-worker".into(),
+        ..old
+    };
+    assert!(new.still_owned(&reader)?);
+    Ok(())
+}
+
+#[test]
+fn queue_turn_fence_fails_closed_without_creating_a_missing_store() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let fence = QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: vec!["queue:system::missing".into()],
+        worker_id: "worker-target".into(),
+    };
+    let db_path = resolve_db_path(root.path(), None);
+    assert!(!db_path.exists());
+    assert!(fence.open_reader().is_err());
+    assert!(
+        !db_path.exists(),
+        "lease probe must not initialize a new store"
+    );
+    Ok(())
+}
+
 fn unique_test_db_path(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{prefix}-{}.db",
@@ -5923,6 +6125,64 @@ fn business_command_claim(command_id: &str, payload_hash: &str) -> BusinessComma
         intent: json!({"command_id": command_id, "payload": {"value": 1}}),
         created_at_ms: 1_700_000_000_000,
     }
+}
+
+#[test]
+fn native_app_origin_survives_children_and_rejects_metadata_spoofing() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let request = |title: &str, parent: Option<String>| QueueTaskCreateRequest {
+        title: title.to_string(),
+        prompt: "Perform the bounded task.".to_string(),
+        thread_key: format!("origin/{title}"),
+        workspace_root: None,
+        priority: "normal".to_string(),
+        suggested_skill: None,
+        parent_message_key: parent,
+        extra_metadata: Some(
+            json!({"business_os_origin":{"command_id":"forged","module":"foreign-app"}}),
+        ),
+    };
+    let mut claim = business_command_claim("origin-command", "sha256:origin");
+    claim.module = "inventory".to_string();
+    let admitted = claim_business_command_with_queue(root.path(), claim, request("root", None))?;
+    let expected = json!({"command_id":"origin-command","module":"inventory"});
+    assert_eq!(admitted.task.metadata["business_os_origin"], expected);
+    let child = create_queue_task(
+        root.path(),
+        request("review", Some(admitted.task.message_key.clone())),
+    )?;
+    let continuation = create_queue_task(
+        root.path(),
+        request("continue", Some(child.message_key.clone())),
+    )?;
+    assert_eq!(child.metadata["business_os_origin"], expected);
+    assert_eq!(continuation.metadata["business_os_origin"], expected);
+    let mut child_claim = business_command_claim("review-command", "sha256:review");
+    child_claim.module = "ctox".to_string();
+    let child_command = claim_business_command_with_queue(
+        root.path(),
+        child_claim,
+        request("linked-review", Some(child.message_key)),
+    )?;
+    let after_review = create_queue_task(
+        root.path(),
+        request("after-review", Some(child_command.task.message_key)),
+    )?;
+    assert_eq!(
+        after_review.metadata["business_os_origin"], expected,
+        "a child command's execution module must not replace the originating app"
+    );
+    // Older roots have a canonical command link but no new metadata stamp.
+    let conn = open_channel_db(&crate::paths::core_db(root.path()))?;
+    conn.execute("UPDATE communication_messages SET metadata_json=json_remove(metadata_json,'$.business_os_origin') WHERE message_key=?1", [&admitted.task.message_key])?;
+    let legacy_child = create_queue_task(
+        root.path(),
+        request("legacy", Some(admitted.task.message_key)),
+    )?;
+    assert_eq!(legacy_child.metadata["business_os_origin"], expected);
+    let unlinked = create_queue_task(root.path(), request("unlinked", None))?;
+    assert!(unlinked.metadata.get("business_os_origin").is_none());
+    Ok(())
 }
 
 #[test]

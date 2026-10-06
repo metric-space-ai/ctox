@@ -1,17 +1,17 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261002-shell-v2-live-query-window-v438';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261002-shell-v2-live-query-window-v438';
-import { CtoxResizer } from './shared/resizer.js?v=20261002-shell-v2-live-query-window-v438';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261002-shell-v2-live-query-window-v438';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261002-shell-v2-live-query-window-v438';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261002-shell-v2-live-query-window-v438';
-import { createAppActions } from './shared/app-actions.js?v=20261002-shell-v2-live-query-window-v438';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261005-shell-v2-task-history-demand-v451';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261005-shell-v2-task-history-demand-v451';
+import { CtoxResizer } from './shared/resizer.js?v=20261005-shell-v2-task-history-demand-v451';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261005-shell-v2-task-history-demand-v451';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261005-shell-v2-task-history-demand-v451';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261005-shell-v2-task-history-demand-v451';
+import { createAppActions } from './shared/app-actions.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/app-lifecycle.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -20,20 +20,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/permissions.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261002-shell-v2-live-query-window-v438';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/branding.js?v=20261005-shell-v2-task-history-demand-v451';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/presentation.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -44,9 +44,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261002-shell-v2-live-query-window-v438';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261002-shell-v2-live-query-window-v438';
-import { createDocumentsFacade } from './shared/documents.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/shell-permissions-ui.js?v=20261005-shell-v2-task-history-demand-v451';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261005-shell-v2-task-history-demand-v451';
+import { createDocumentsFacade } from './shared/documents.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -54,16 +54,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/maintenance-state.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/workspace-session.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/taskbar-pins.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -71,10 +71,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261002-shell-v2-live-query-window-v438';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261005-shell-v2-task-history-demand-v451';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261002-shell-v2-live-query-window-v438';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261002-shell-v2-live-query-window-v438';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261005-shell-v2-task-history-demand-v451';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261005-shell-v2-task-history-demand-v451';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -82,8 +82,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261002-shell-v2-live-query-window-v438';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/startup-deadlines.js?v=20261005-shell-v2-task-history-demand-v451';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261005-shell-v2-task-history-demand-v451';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -101,7 +101,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261002-shell-v2-live-query-window-v438';
+const APP_BUILD = '20261005-shell-v2-task-history-demand-v451';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -1794,24 +1794,33 @@ async function registerCoreCollections() {
   setStartupProgress(61, shellText('bootSchemasDone'));
   const t1 = performance.now();
   console.log(`[business-os] registerCoreCollections took ${(t1 - t0).toFixed(2)}ms`);
-  // Window placement is optional cached UI state. An IndexedDB read blocked
-  // by another tab must not prevent WebRTC and the app catalog from starting.
-  // The read may finish later; do not close/reopen the registered database.
-  await withStartupTimeout(primeWindowGeometryCache(), 1500, null, 'window geometry cache');
+  // Scoped window placement is hydrated synchronously from localStorage.
+  // Its optional IndexedDB refresh must not delay the first usable app.
+  void primeWindowGeometryCache();
 }
 
 async function primeWindowGeometryCache() {
-  const coll = state.db?.collections?.desktop_windows;
+  const db = state.db;
+  const scope = currentWindowGeometryScope();
+  const coll = db?.collections?.desktop_windows;
   state.windowGeometryCache.clear();
   for (const [ownerId, payload] of readWindowGeometryLocalCache()) {
     state.windowGeometryCache.set(ownerId, payload);
   }
   if (!coll) return;
+  const refreshBaseline = new Map(state.windowGeometryCache);
   try {
     const docs = await coll.find().exec();
+    const currentScope = currentWindowGeometryScope();
+    if (state.db !== db
+      || currentScope.workspace_scope !== scope.workspace_scope
+      || currentScope.actor_scope !== scope.actor_scope) return;
     for (const doc of docs) {
       const payload = doc.toJSON();
       if (!payload?.owner_id) continue;
+      // A move/save after this read began wins even when timestamps are equal
+      // or another device's clock is ahead of this one.
+      if (state.windowGeometryCache.get(payload.owner_id) !== refreshBaseline.get(payload.owner_id)) continue;
       if (windowGeometryDocumentMatchesCurrentScope(payload)) {
         mergeWindowGeometryCache(payload.owner_id, payload);
       } else if (isLegacyWindowGeometryDocument(payload) && !state.windowGeometryCache.has(payload.owner_id)) {
@@ -4872,8 +4881,7 @@ async function openDesktopApp(appId, options = {}) {
     renderWindowAppRecovery(win.container, {
       title: options.title || entry.title,
       onRetry: async () => {
-        state.windowManager?.destroy?.(win.id);
-        await delay(220);
+        await closeWindowForRecovery(win.id);
         openDesktopApp(appId, options);
       },
     });
@@ -5019,8 +5027,7 @@ async function openWindowedModule(mod, options = {}) {
     renderWindowAppRecovery(content, {
       title: moduleDisplayTitle(mod),
       onRetry: async () => {
-        state.windowManager?.destroy?.(win.id);
-        await delay(220);
+        await closeWindowForRecovery(win.id);
         const refreshed = state.modules.find((item) => item.id === mod.id) || mod;
         openWindowedModule(refreshed, options);
       },
@@ -5033,6 +5040,29 @@ async function openWindowedModule(mod, options = {}) {
   }
   moduleSyncLeasePromise?.catch?.(() => {});
   return win.id;
+}
+
+async function closeWindowForRecovery(id) {
+  const manager = state.windowManager;
+  const bus = state.eventBus;
+  if (!manager || !bus) throw new Error('Window recovery is unavailable');
+  if (!manager.listWindows().some((win) => win.id === id)) return;
+  // Subscribe before destroy: reduced-motion closes may complete immediately.
+  let token;
+  const closed = new Promise((resolve) => {
+    token = bus.on('window:closed', (event) => {
+      if (event?.id === id) resolve();
+    });
+  });
+  try {
+    if (await manager.destroy(id) === false) {
+      throw new Error('Window close was cancelled');
+    }
+    // A close guard resolves before the morph removes the registry entry.
+    await closed;
+  } finally {
+    bus.off('window:closed', token);
+  }
 }
 
 function renderWindowAppRecovery(host, { title, onRetry }) {
@@ -7636,6 +7666,14 @@ function currentCollectionReadiness(collection) {
   );
 }
 
+function currentCollectionFreshness(collection) {
+  return collectionFreshnessFromDiagnostics(
+    collection,
+    state.syncDiagnostics?.collections?.[collection],
+    { syncMode: state.syncDiagnostics?.mode },
+  );
+}
+
 function createLiveSyncFacade({ host = null } = {}) {
   const assertActive = () => {
     if (!host || host.isConnected) return;
@@ -7662,6 +7700,30 @@ function createLiveSyncFacade({ host = null } = {}) {
       return state.sync.requestNative(...args);
     },
     collectionReadiness: (collection) => currentCollectionReadiness(collection),
+    collectionFreshness: (collection) => currentCollectionFreshness(collection),
+    subscribeCollectionFreshness: (collection, listener) => {
+      assertActive();
+      if (typeof listener !== 'function') throw new TypeError('Collection freshness listener must be a function.');
+      let active = true;
+      let lastState = null;
+      const unsubscribe = () => {
+        if (!active) return;
+        active = false;
+        window.removeEventListener('ctox-business-os-sync-diagnostics', handleDiagnostics);
+      };
+      const handleDiagnostics = () => {
+        if (!active) return;
+        if (host && !host.isConnected) { unsubscribe(); return; }
+        const snapshot = currentCollectionFreshness(collection);
+        if (snapshot.state === lastState) return;
+        lastState = snapshot.state;
+        listener(snapshot);
+        if (host && !host.isConnected) unsubscribe();
+      };
+      window.addEventListener('ctox-business-os-sync-diagnostics', handleDiagnostics);
+      try { handleDiagnostics(); } catch (error) { unsubscribe(); throw error; }
+      return unsubscribe;
+    },
     subscribeCollectionReadiness: (collection, listener) => {
       assertActive();
       if (typeof listener !== 'function') throw new TypeError('Collection readiness listener must be a function.');
@@ -10638,17 +10700,19 @@ function renderShellCtoxVersion(status = state.ctoxHealth) {
   }
   const platform = status?.runtime_settings?.platform || null;
   const version = platformDisplayVersion(platform?.version || platform?.release_tag || '');
+  const labelEl = container.querySelector('[data-ctox-version-label]');
+  const button = container.querySelector('[data-ctox-update-button]');
   if (!version) {
-    container.hidden = true;
-    container.removeAttribute('title');
+    if (labelEl) labelEl.textContent = 'CTOX —';
+    container.title = 'Backend-Version derzeit nicht verfügbar; Runtime-Status über Sync prüfen';
+    container.hidden = false;
+    if (button) button.hidden = true;
     return;
   }
   maybeRefreshCtoxUpdateCheck(platform);
   const check = currentCtoxUpdateCheck();
   const updateAvailable = check?.update_available === true;
   const latest = platformDisplayVersion(check?.latest_release || '');
-  const labelEl = container.querySelector('[data-ctox-version-label]');
-  const button = container.querySelector('[data-ctox-update-button]');
   const parts = [`CTOX ${version}`];
   // Die Versionsnummer stammt aus Cargo.toml und wird auf main nie
   // hochgezaehlt: sie zeigt seit Monaten 0.3.22, egal wie oft aktualisiert
@@ -11052,6 +11116,7 @@ async function loadModules(options = {}) {
     modules,
     governance,
     catalogFingerprint: moduleCatalogFingerprint({ ...catalog, modules }),
+    usedProjectedCatalog: startup.usedProjectedCatalog === true,
   };
 }
 
@@ -11063,10 +11128,15 @@ async function waitForRequestedHashModule(modules, timeoutMs = 45000) {
   if (hasRequestedModule(modules)) return modules;
   if (!state.db?.collection?.('business_module_catalog')) return modules;
 
-  console.log(`[business-os] Waiting for requested runtime module #${hashId} in RxDB module catalog.`);
+  console.log(`[business-os] Requested runtime module #${hashId} is missing; starting catalog convergence.`);
   state.sync?.startCollection?.('business_module_catalog').catch((error) => {
     console.warn('[business-os] requested module catalog sync start failed:', error);
   });
+  // A cached or injected native projection already defines this actor's usable
+  // catalog, including a valid empty selection. Paint it immediately. The
+  // existing catalog subscription opens a late requested route after refresh;
+  // no packaged app is added or permission inferred from its URL.
+  if (modules?.usedProjectedCatalog === true) return modules;
 
   const deadline = Date.now() + timeoutMs;
   let latest = modules;
@@ -13353,7 +13423,7 @@ async function waitForProjectedWorkjetComputer(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(computerId).exec();
       const rawComputer = doc?.toJSON?.() || doc;
       if (rawComputer?.owner_user_id === ownerUserId && rawComputer?.status === status) {
@@ -13749,7 +13819,7 @@ async function waitForProjectedWorkjetProject(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(projectId).exec();
       const rawProject = doc?.toJSON?.() || doc;
       if (rawProject?.owner_user_id === ownerUserId
@@ -13796,7 +13866,7 @@ async function waitForProjectedWorkjetWorkingCopy(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const docs = await collection.find({
         selector: {
           project_id: { $eq: projectId },
@@ -14141,7 +14211,7 @@ async function waitForProjectedWorkjetSession(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       let rawSession = null;
       if (sessionId) {
         const doc = await collection.findOne(sessionId).exec();

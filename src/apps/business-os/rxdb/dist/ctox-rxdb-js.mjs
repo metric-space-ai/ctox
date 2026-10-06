@@ -966,6 +966,7 @@ var recoveryCryptoTestInternals = Object.freeze({
 
 // src/apps/business-os/rxdb/src/recovery-journal.mjs
 var JOURNAL_VERSION = 4;
+var JOURNAL_OPEN_TIMEOUT_MS = 4e3;
 var BATCH_STORE = "batches";
 var BATCH_STATE_COLLECTION_INDEX = "stateCollection";
 var BATCH_STATE_INDEX = "state";
@@ -1099,10 +1100,24 @@ var CtoxRecoveryJournal = class {
     if (changed || pruned) await this.publishStatus();
   }
   async replayRegisteredCollections(collection = null) {
-    const batches = await this.listBatches("pending", collection);
+    const candidates = [];
+    await scanRecords(
+      this.db,
+      BATCH_STORE,
+      (batch) => {
+        if (batch.state !== "pending" || Number(batch.primaryCommittedAtMs || 0) > 0) return;
+        if (collection && batch.collection !== collection) return;
+        candidates.push({ batchId: batch.batchId, sequence: Number(batch.sequence || 0) });
+      },
+      collection ? BATCH_STATE_COLLECTION_INDEX : BATCH_STATE_INDEX,
+      collection ? ["pending", collection] : "pending"
+    );
+    candidates.sort((left, right) => left.sequence - right.sequence);
     const outcomes = [];
-    for (const batch of batches) {
-      if (Number(batch.primaryCommittedAtMs || 0) > 0) continue;
+    for (const candidate of candidates) {
+      const batch = await getRecord(this.db, BATCH_STORE, candidate.batchId);
+      if (!batch || batch.state !== "pending" || Number(batch.primaryCommittedAtMs || 0) > 0) continue;
+      if (collection && batch.collection !== collection) continue;
       const replayer = this.replayers.get(batch.collection);
       if (!replayer) continue;
       if (batch.schemaHash && replayer.schemaHash && batch.schemaHash !== replayer.schemaHash) {
@@ -1210,18 +1225,32 @@ var CtoxRecoveryJournal = class {
     return true;
   }
   async getStatus() {
-    const batches = await this.listBatches("pending");
-    const conflicts = await this.listConflicts();
-    const bytes = estimateBytes(batches) + estimateBytes(conflicts);
+    let pendingBatches = 0;
+    let pendingWrites = 0;
+    let unresolvedConflicts = 0;
+    let oldestPendingAtMs = Number.MAX_SAFE_INTEGER;
+    let pendingBytes = 4;
+    await scanRecords(this.db, BATCH_STORE, (batch) => {
+      if (batch.state !== "pending") return;
+      if (pendingBatches++) pendingBytes += 1;
+      pendingBytes += estimateBytes(batch);
+      pendingWrites += countOutstandingWrites([batch]);
+      oldestPendingAtMs = Math.min(oldestPendingAtMs, batch.createdAtMs || oldestPendingAtMs);
+    }, BATCH_STATE_INDEX, "pending");
+    await scanRecords(this.db, CONFLICT_STORE, (conflict) => {
+      if (conflict.state !== "pending") return;
+      if (unresolvedConflicts++) pendingBytes += 1;
+      pendingBytes += estimateBytes(conflict);
+    });
     return {
       schema: "ctox.browser-recovery.status.v2",
       databaseName: this.databaseName,
       instanceId: this.instanceId,
-      pendingBatches: batches.length,
-      pendingWrites: countOutstandingWrites(batches),
-      pendingBytes: bytes,
-      oldestPendingAtMs: batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER) === Number.MAX_SAFE_INTEGER ? 0 : batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER),
-      unresolvedConflicts: conflicts.length,
+      pendingBatches,
+      pendingWrites,
+      pendingBytes,
+      oldestPendingAtMs: oldestPendingAtMs === Number.MAX_SAFE_INTEGER ? 0 : oldestPendingAtMs,
+      unresolvedConflicts,
       lastExportAtMs: Number((await getRecord(this.db, META_STORE, "lastExport"))?.value || 0),
       updatedAtMs: Date.now()
     };
@@ -1300,18 +1329,30 @@ var CtoxRecoveryJournal = class {
     await this.publishStatus();
     return { imported: true, replay };
   }
+  async pendingDocumentIds(collection) {
+    const ids = /* @__PURE__ */ new Set();
+    await scanRecords(this.db, BATCH_STORE, (batch) => {
+      if (batch.state !== "pending" || batch.collection !== collection) return;
+      const acked = new Set(batch.ackedIds || []);
+      for (const id of batch.documentIds || []) if (!acked.has(id)) ids.add(id);
+    }, BATCH_STATE_COLLECTION_INDEX, ["pending", collection]);
+    return [...ids];
+  }
   async listBatches(state = null, collection = null) {
     const rows = (state && collection ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_COLLECTION_INDEX, [state, collection]) : state ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_INDEX, state) : await getAllRecords(this.db, BATCH_STORE)).sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
     return rows.filter((row) => (!state || row.state === state) && (!collection || row.collection === collection));
   }
   async gc(now = Date.now()) {
-    const rows = await this.listBatches("master_acked");
-    let pruned = 0;
-    for (const row of rows) {
-      if (now - Number(row.masterAckedAtMs || 0) >= ACKED_RETENTION_MS) {
-        await deleteRecord(this.db, BATCH_STORE, row.batchId);
-        pruned += 1;
+    const expiredIds = [];
+    await scanRecords(this.db, BATCH_STORE, (row) => {
+      if (row.state === "master_acked" && now - Number(row.masterAckedAtMs || 0) >= ACKED_RETENTION_MS) {
+        expiredIds.push(row.batchId);
       }
+    }, BATCH_STATE_INDEX, "master_acked");
+    let pruned = 0;
+    for (const batchId of expiredIds) {
+      await deleteRecord(this.db, BATCH_STORE, batchId);
+      pruned += 1;
     }
     pruned += await this.gcConflicts(now);
     this.lastGcAtMs = Date.now();
@@ -1327,20 +1368,25 @@ var CtoxRecoveryJournal = class {
   // here; neither are unsynced WRITE batches (handled by the master_acked
   // path above and protected by §9). Returns the number of records pruned.
   async gcConflicts(now = Date.now()) {
-    const rows = await getAllRecords(this.db, CONFLICT_STORE);
-    let pruned = 0;
-    for (const row of rows) {
-      if (row.state !== "resolved") continue;
+    const candidates = [];
+    await scanRecords(this.db, CONFLICT_STORE, (row) => {
+      if (row.state !== "resolved") return;
       const resolvedAt = Number(row.resolvedAtMs || 0);
+      if (!resolvedAt || now - resolvedAt >= ACKED_RETENTION_MS) {
+        candidates.push({ conflictId: row.conflictId, resolvedAt });
+      }
+    });
+    let pruned = 0;
+    for (const { conflictId, resolvedAt } of candidates) {
       if (!resolvedAt) {
-        await updateRecord(this.db, CONFLICT_STORE, row.conflictId, (current) => ({
+        await updateRecord(this.db, CONFLICT_STORE, conflictId, (current) => ({
           ...current,
           resolvedAtMs: now
         }));
         continue;
       }
       if (now - resolvedAt >= ACKED_RETENTION_MS) {
-        await deleteRecord(this.db, CONFLICT_STORE, row.conflictId);
+        await deleteRecord(this.db, CONFLICT_STORE, conflictId);
         pruned += 1;
       }
     }
@@ -1380,6 +1426,20 @@ var CtoxRecoveryJournal = class {
 function openJournalDatabase(name) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(name, JOURNAL_VERSION);
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+      return true;
+    };
+    const timer = setTimeout(() => {
+      finish(reject, recoveryError(
+        "indexeddb_journal_unavailable",
+        `IndexedDB open timed out after ${JOURNAL_OPEN_TIMEOUT_MS}ms for recovery journal ${name}`
+      ));
+    }, JOURNAL_OPEN_TIMEOUT_MS);
     request.onupgradeneeded = () => {
       const db = request.result;
       const batches = db.objectStoreNames.contains(BATCH_STORE) ? request.transaction.objectStore(BATCH_STORE) : db.createObjectStore(BATCH_STORE, { keyPath: "batchId" });
@@ -1398,10 +1458,15 @@ function openJournalDatabase(name) {
     request.onsuccess = () => {
       const db = request.result;
       db.onversionchange = () => db.close();
-      resolve(db);
+      if (!finish(resolve, db)) {
+        try {
+          db.close();
+        } catch {
+        }
+      }
     };
-    request.onerror = () => reject(request.error || new Error(`Failed to open recovery journal ${name}`));
-    request.onblocked = () => reject(recoveryError("indexeddb_journal_unavailable", `Recovery journal ${name} is blocked.`));
+    request.onerror = () => finish(reject, request.error || new Error(`Failed to open recovery journal ${name}`));
+    request.onblocked = () => finish(reject, recoveryError("indexeddb_journal_unavailable", `Recovery journal ${name} is blocked.`));
   });
 }
 function transact(db, storeName, mode, run) {
@@ -1467,6 +1532,26 @@ function putSequencedBatch(db, batch) {
 }
 function getRecord(db, storeName, key) {
   return transact(db, storeName, "readonly", (store) => requestResult(store.get(key)));
+}
+function scanRecords(db, storeName, visit, indexName = null, key = void 0) {
+  return transact(db, storeName, "readonly", (store) => new Promise((resolve, reject) => {
+    const source = indexName ? store.index(indexName) : store;
+    const request = source.openCursor(key);
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+      try {
+        visit(cursor.value);
+        cursor.continue();
+      } catch (error) {
+        reject(error);
+      }
+    };
+    request.onerror = () => reject(request.error || new Error("IndexedDB recovery scan failed"));
+  }));
 }
 function getAllRecords(db, storeName) {
   return transact(db, storeName, "readonly", (store) => requestResult(store.getAll()));
@@ -2305,12 +2390,20 @@ async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1
   const quotaCoordinator = {
     recover: (context = {}) => recoverQueryMetaQuota(databaseName, context)
   };
-  const recoveryJournal = await openRecoveryJournal({
-    databaseName,
-    instanceId: databaseName,
-    quotaCoordinator
-  });
-  return new CtoxIndexedDbStorage(db, { recoveryJournal, quotaCoordinator });
+  try {
+    const recoveryJournal = await openRecoveryJournal({
+      databaseName,
+      instanceId: databaseName,
+      quotaCoordinator
+    });
+    return new CtoxIndexedDbStorage(db, { recoveryJournal, quotaCoordinator });
+  } catch (error) {
+    try {
+      db.close();
+    } catch {
+    }
+    throw error;
+  }
 }
 var CtoxIndexedDbStorage = class {
   constructor(db, { recoveryJournal = null, quotaCoordinator = null } = {}) {
@@ -2476,25 +2569,24 @@ var CtoxIndexedDbCollection = class {
     return this.recoveryReady;
   }
   async acknowledgePersistedMasterRecovery() {
-    const batches = await this.recoveryJournal?.listBatches?.("pending", this.name) || [];
-    const ids = [...new Set(batches.filter((batch) => batch.collection === this.name).flatMap((batch) => {
-      const acked = new Set(batch.ackedIds || []);
-      return (batch.documentIds || []).filter((id) => !acked.has(id));
-    }))];
+    const ids = await this.recoveryJournal?.pendingDocumentIds?.(this.name) || [];
     if (!ids.length) return;
-    const documents = {};
-    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
-    const done = idbTransactionDone(tx);
-    const store = tx.objectStore(DOCUMENT_STORE);
-    const records = await Promise.all(ids.map((id) => idbRequest(store.get([this.name, id]))));
-    await done;
-    for (let index = 0; index < ids.length; index += 1) {
-      const id = ids[index];
-      const record = records[index];
-      if (record?.replicationOriginRole && record.doc) documents[id] = record.doc;
-    }
-    if (Object.keys(documents).length) {
-      await this.recoveryJournal.markMasterAcknowledged(this.name, documents);
+    const readBatchSize = 200;
+    for (let offset = 0; offset < ids.length; offset += readBatchSize) {
+      const readIds = ids.slice(offset, offset + readBatchSize);
+      const documents = {};
+      const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+      const done = idbTransactionDone(tx);
+      const store = tx.objectStore(DOCUMENT_STORE);
+      const records = await Promise.all(readIds.map((id) => idbRequest(store.get([this.name, id]))));
+      await done;
+      for (let index = 0; index < readIds.length; index += 1) {
+        const record = records[index];
+        if (record?.replicationOriginRole && record.doc) documents[readIds[index]] = record.doc;
+      }
+      if (Object.keys(documents).length) {
+        await this.recoveryJournal.markMasterAcknowledged(this.name, documents);
+      }
     }
   }
   observe(listener) {
@@ -4510,6 +4602,7 @@ var CtoxWebRtcNativePeer = class {
       sequence: queue.nextSequence++
     });
     queue.queuedBytes += itemBytes;
+    if (item.inline && item.priority === "high") queue.controlWake?.();
     this.recordTransportStatus({
       queuedFrames: this.transportStats.queuedFrames + 1,
       lastSendPriority: item.priority
@@ -4659,20 +4752,26 @@ var CtoxWebRtcNativePeer = class {
         return { ok: false, error };
       }
     );
-    while (!settled && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === "open") {
-      const result2 = await Promise.race([
-        wrapped,
-        delay(50).then(() => null)
-      ]);
-      if (result2) {
-        if (result2.ok) return result2.value;
-        throw result2.error;
+    const queue = connection.sendQueue;
+    if (!queue) return ackPromise;
+    try {
+      while (!settled && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === "open") {
+        const enqueued = new Promise((resolve) => {
+          queue.controlWake = resolve;
+        });
+        await this.drainHighPriorityInlineFrames(connection);
+        const result2 = await Promise.race([wrapped, enqueued.then(() => null)]);
+        if (result2) {
+          if (result2.ok) return result2.value;
+          throw result2.error;
+        }
       }
-      await this.drainHighPriorityInlineFrames(connection);
+      const result = await wrapped;
+      if (result.ok) return result.value;
+      throw result.error;
+    } finally {
+      queue.controlWake = null;
     }
-    const result = await wrapped;
-    if (result.ok) return result.value;
-    throw result.error;
   }
   async drainHighPriorityInlineFrames(connection) {
     const queue = connection.sendQueue;
@@ -6071,6 +6170,9 @@ var CtoxWebRtcNativePeer = class {
     globalThis.CTOX_RXDB_AUX_STATUS = auxiliary;
     const base = {
       ...this.transportStats,
+      pageHidden: globalThis.document?.hidden === true,
+      // Evidence of a delayed page timer, not proof that Chrome caused it.
+      throttled: globalThis.document?.hidden === true && Number(this.transportStats.lastPageTimerDelayMs || 0) >= 750 && Date.now() - Number(this.transportStats.lastPageTimerSampleAtMs || 0) < 3e4,
       collection: collectionNameFromTopic(this.options.room),
       topic: this.options.room,
       localSignalingPeerId: this.localSignalingPeerId || null,
@@ -6174,12 +6276,16 @@ var CtoxWebRtcNativePeer = class {
       return;
     }
     if (this.transportStatusEmitTimer) return;
+    const waitMs = Math.max(0, TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS - elapsed);
+    const expectedAtMs = now + waitMs;
     this.transportStatusEmitTimer = setTimeout(() => {
       this.transportStatusEmitTimer = null;
       if (this.closed) return;
       this.lastTransportStatusEmitAtMs = Date.now();
+      this.transportStats.lastPageTimerDelayMs = Math.max(0, this.lastTransportStatusEmitAtMs - expectedAtMs);
+      this.transportStats.lastPageTimerSampleAtMs = this.lastTransportStatusEmitAtMs;
       this.events.emit("transport-status", this.getTransportStatus());
-    }, Math.max(0, TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS - elapsed));
+    }, waitMs);
   }
   refreshSendQueueStatus(connection = null) {
     let high = 0;

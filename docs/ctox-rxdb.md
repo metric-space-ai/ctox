@@ -1,5 +1,21 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Recovery journal startup payload bounds
+
+Recovery status scans one IndexedDB record at a time and preserves the exact
+UTF-8 byte count of pending batches and conflicts, including JSON delimiters.
+Startup replay retains only batch IDs and sequence numbers, then re-reads each
+candidate before applying it; primary-committed or newly acknowledged batches
+are skipped. Schema and application failures retain their recoverable conflicts.
+Startup reconciliation collects outstanding document IDs through the compound
+state/collection index and reads primary documents in groups of at most200.
+Acknowledgement-triggered retention scans also retain only eligible IDs and
+timestamps; pending writes/conflicts and the24-hour retention window survive.
+These paths no longer hold the complete pending WAL payload in memory. Batch
+atomicity and the v4 schema are unchanged; individual batch payloads and the
+ID/order summaries still consume memory. This source repair does not establish
+the THESEN renderer-crash cause or actual Windows8GiB startup acceptance.
+
 ### Browser live-query single-flight
 
 Each `RxQuery.$` subscription keeps at most one executing snapshot and one
@@ -52,6 +68,50 @@ Legacy/superseded replica inventory runs after initial module/restore handling,
 outside the critical startup wait. It still preserves all old primaries and
 recovery journals; slow metadata enumeration is not a deletion authorization.
 
+Recovery-journal opening has its own four-second deadline, matching the primary
+IndexedDB open bound. A blocked, failed or timed-out journal attempt closes a
+late successful journal handle; failure also closes the primary handle already
+opened for that attempt. Cleanup retains the original journal error and changes
+no persisted data, schema version or recovery payload. These lifecycle guards
+prove failed-startup handle retirement, not the cause of an observed browser
+renderer crash or installed startup/memory acceptance.
+
+Window placement hydrates from the scoped localStorage cache synchronously after
+core schema registration. Its optional IndexedDB refresh runs in the background,
+so a blocked read does not add the previous 1500ms wait before the first app.
+Late results retain moves made since the read began, even with equal timestamps
+or a remote clock ahead, and are discarded if the database, workspace or actor
+changed. This removes one startup delay; retained-profile
+browser measurements still determine whether the complete shell meets its
+latency and memory targets.
+
+If a requested route is absent from a cached or injected native catalog, warm
+startup renders that actor's existing catalog immediately while catalog sync
+continues. A valid projected empty catalog also renders without the route wait.
+The existing catalog subscription opens the requested app only after it appears
+in the filtered projection. Cold shell-seed startup retains its existing bounded
+wait; a URL cannot add an app or grant access.
+
+App-icon task counts require a current-pull-confirmed native harness snapshot
+and its current-boot, unexpired worker lease projection. The queue row must match
+that worker's task ID, attempt and lease worker ID before its member or app can
+be attributed. Native source_module supplies the app origin; opening an app
+does not count as execution. Presence queries select the native task identities
+in batches of at most 200, so newer historical rows cannot hide current work.
+Retained rows contain bounded public title/status, navigation and lease join
+fields rather than task payloads. The native queue message key supplies task
+navigation; a payload alias cannot replace it. Queue reads stay single-flight
+and coalesce notifications. Disposal or a changed native lease join stops
+remaining batches; an unchanged heartbeat preserves the in-flight read.
+Native truth refreshes independently of a pending queue read;
+a stop, new attempt or loss of confirmed freshness immediately retires old
+counts. A cancelled queue read retains its rows only while current native
+lease truth still confirms them.
+The task chooser rechecks its selected identity against the latest snapshot
+before navigation and is removed when the chat/presence owner is disposed.
+This browser consumption does not replace Crew's native projection authority
+or prove installed persistence, permissions, startup latency or memory.
+
 ### Fresh native schema initialization
 
 Before dispatching native Business OS commands into a fresh root, run
@@ -83,6 +143,13 @@ Collection acquisition, command completion and both queries share a 29-second
 deadline inside Workjet's existing 30-second desktop call. Timeout does not
 extend that call or introduce an HTTP data bridge. Query streams are aborted
 when the list settles; shared replication bridges are not stopped.
+
+Workjet computer, project, working-copy and session projection waits use the
+replication state on `bridge.state`, through the existing bounded readiness
+helper. Each retry passes only the time left on its original deadline. The
+bridge wrapper itself has no `awaitInSync` method; treating that optional call
+as readiness skipped the replication wait. This repair does not replace the
+native command receipt or the existing owner/status projection checks.
 
 ### Native query cache shutdown
 
@@ -197,6 +264,14 @@ are listed in `payload.unbound_person_field_keys`, outside the researched-field
 list. Existing imported names and contact details remain unchanged. Initial
 legacy discovery from an empty contact list and explicit keyed updates remain
 supported; this does not certify the source quality of those values.
+Completion of a requested person field is judged for every keyed contact,
+including contacts for which the worker supplied no status. An absent or empty
+`person_field_status` map cannot let an unbound Lead-level answer close those
+people. Repeated rows for one key produce one open-person entry. Leads without
+keyed contacts retain the documented Lead-level negative-result path. The same
+rule applies when native email validation considers promoting a research result
+from `needs_review`; this does not create a new person-selection contract or
+validate a worker's evidence.
 Contact deduplication also preserves two distinct nonempty person keys even
 when imported contacts share a local row ID. Duplicate rows with the same
 person key still coalesce; unkeyed legacy row-ID matching remains supported.
@@ -524,11 +599,12 @@ way only for harness status and triggers its existing authoritative row read;
 it does not render the changed-document payload as a fully loaded collection.
 The shell's scoped collection facade preserves this subscription option.
 
-Crew app presence keeps its last valid queue snapshot when a read fails.
+Crew app presence retains the last valid queue snapshot when a read fails.
 An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;
-other read failures retain their diagnostic. The existing collection-readiness
-callback retries the read, and only a successful empty response clears the
-presence and workload. Cancellation is never evidence that the queue is empty.
+other read failures retain their diagnostic. Collection readiness retries the
+read. Native stop, attempt changes or unconfirmed harness freshness independently
+retire presence and workload; cancellation alone is never evidence that the
+queue is empty.
 
 The Rust side is a byte-correct port of RxDB 16.20.0 (upstream pin
 `c69c94bb…`, see `src/core/rxdb/PORTING.md` and `vendor/rxdb.version`),
@@ -1490,6 +1566,12 @@ empty window is one final chunk. Extra error codes: `ROWS_TABLE_NOT_FOUND`
   `ParquetReader::with_slice`, evidence receipts, `row_id` enrichment from the
   absolute offset). The capability is advertised only when a rows source is
   registered.
+  A row window binds its content hash, schema and rows to one open Parquet
+  file. Native all-row reads retain that file across every page, so atomic
+  replacement cannot mix revisions; an incomplete count fails instead of
+  yielding a partial completion manifest. Independent browser requests can
+  observe newer revisions and still carry their own hashes. File-handle
+  identity guards the digest cache; reads keep the existing bounded page size.
 - Browser: `rows-demand-loader.mjs`, reachable from modules as
   `bridge.state.knowledgeRowsLoader` after
   `ctx.sync.startCollection('knowledge_tables')` (`fetchRows`,
@@ -1932,7 +2014,16 @@ adds the device id and proof-key thumbprint to the invite row. Later reconnects
 require that exact active Device-to-Instance edge; revoke disables both the row
 and actor epoch. This keeps the QR compact without an online reference service.
 
+Background transfer ACKs wake the existing high-priority control drain directly,
+before its awaited drain can lose an enqueue. This lets simultaneous bulk pull
+and command push progress without a page polling timer. Frame/queue budgets,
+ACK windows, retries and the WebRTC-only data boundary remain unchanged.
+`hidden-transfer-smoke.mjs` verifies both directions with all page progress
+timers held. Transport diagnostics report page visibility and a bounded,
+expiring observed timer-delay sample; visibility alone does not prove throttling.
+
 ## 10. Build & release
+
 
 `dist/ctox-rxdb-js.mjs` is **built** from `src/index.mjs` with a pinned
 esbuild. The exact command (pinned in
@@ -2050,6 +2141,18 @@ private cockpit projections (`ctox_runs`, `ctox_crew_learnings`,
 `ctox_harness_events`); Founder does not request admin-only collections.
 Module starts skip those collections without recording a transport failure.
 The native actor, grant and scope decision remains authoritative.
+
+Cockpit run and harness-event histories use demand-only pull bridges instead of
+replicating every task's ledger during startup. The selected-task view requests
+at most 32 runs and 200 events through the native WebRTC query bridge. Both
+collections remain module-startable; initial readiness still requires the
+authenticated native session and an open data channel. Maintenance continues
+to wait for that readiness rather than skipping the collections. The cockpit
+holds scoped history leases and listens to native master-change hints for the
+selected task, coalescing them through its existing refresh path. Each hint
+requires an authoritative bounded re-read, including the sort fallback; bridge
+replacement and module close retire the old subscriptions and leases. A
+selection change while a read is pending cannot paint the previous task.
 
 ### Crew identity contracts (PR-2)
 
@@ -2537,6 +2640,33 @@ Each has shipped (or would ship) real production breakage.
 
 
 ### Cockpit projections (PR-1)
+
+#### App origin and current execution
+
+`ctox_queue_tasks.source_module` identifies the originating app; `module=ctox`
+identifies the queue surface and must not be used as that origin. Native command
+admission stamps private queue metadata with its accepted command ID and module.
+Child/review/continuation tasks with an explicit parent inherit that stamp in
+the same tenant's core transaction. Legacy parent roots resolve through their
+canonical command/task link. Caller-supplied origin metadata is discarded.
+Queue edits and retry/terminal transitions retain the origin; unrelated tasks
+without an admitted parent remain unattributed rather than adopting an open app.
+
+The command projection associates `command_id`, `module`,
+`task_id`/`execution_task_id` and `execution_phase`. Queue rows associate their
+task ID, numeric `attempt`, `crew_member_id`, `lease_worker_id` and expiring lease.
+`status=running` alone means leased. Native `ctox_harness_status.current_queue_workers`
+publishes `task_id`, `lease_worker_id`, `attempt`, `boot_id`, `leased_at` and
+`lease_expires_at` only for a current live worker in the current boot, joined
+to its exact unexpired CTOX service lease. `active_task_ids` alone and a finalized
+`ctox_runs.id` are not evidence of current execution. Replaying persisted status
+keeps diagnostics but clears activity until a live worker publication.
+Consumers must show unknown when the current task/attempt, lease, terminal state
+or confirmed connected native generation cannot be bound. App presence joins
+these worker fields to queue fields; this does not establish a live fence for
+other per-attempt progress projections. App visibility, queue length or process
+liveness cannot fill a missing authority join. No new collection, permission
+grant or HTTP bridge is introduced here.
 
 The cockpit uses only the existing native-store → CTOX DB → WebRTC path. There
 are no browser HTTP data endpoints. Source ledgers remain durable; retention

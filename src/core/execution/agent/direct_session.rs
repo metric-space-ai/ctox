@@ -77,8 +77,68 @@ const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 10;
 // turn/start loads the durable thread rollout before submitting input, so it
 // gets a more generous bound than ordinary control requests — but it must be
 // bounded: an unbounded await here hangs the whole prompt worker when the
-// session runtime is wedged (ctox#21).
-const DIRECT_SESSION_TURN_START_TIMEOUT_SECS: u64 = 30;
+// session runtime is wedged (ctox#21). 60 s rather than 30 s: thread/start
+// opens the core SQLite store (multi-MB process-mining schema) twice, which on
+// customer on-prem hosts with ~4x slower cores measured past 30 s (05.10.2026).
+const DIRECT_SESSION_TURN_START_TIMEOUT_SECS: u64 = 60;
+
+fn queue_turn_terminal_event(event: &InProcessServerEvent, thread_id: &str, turn_id: &str) -> bool {
+    match event {
+        InProcessServerEvent::ServerNotification(ServerNotification::TurnCompleted(done)) => {
+            done.thread_id == thread_id && done.turn.id == turn_id
+        }
+        InProcessServerEvent::LegacyNotification(notification)
+            if legacy_notification_thread_id(notification) == Some(thread_id) =>
+        {
+            match try_extract_event_msg(notification) {
+                Some(EventMsg::TurnComplete(done)) => done.turn_id == turn_id,
+                Some(EventMsg::TurnAborted(done)) => done.turn_id.as_deref() == Some(turn_id),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Keep draining while the exact scoped interrupt is in flight. Only a
+/// matching terminal event proves this turn stopped; an RPC ack does not.
+async fn interrupt_cancelled_queue_turn(
+    client: &mut InProcessAppServerClient,
+    seq: &mut RequestIdSeq,
+    thread_id: &str,
+    turn_id: &str,
+) -> bool {
+    let handle = client.request_handle();
+    let interrupt = handle.request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
+        request_id: seq.next(),
+        params: TurnInterruptParams {
+            thread_id: thread_id.to_owned(),
+            turn_id: turn_id.to_owned(),
+        },
+    });
+    tokio::pin!(interrupt);
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS);
+    let mut acknowledged = false;
+    loop {
+        tokio::select! {
+            biased;
+            _ = tokio::time::sleep_until(deadline) => return false,
+            result = &mut interrupt, if !acknowledged => {
+                if result.is_err() {
+                    return false;
+                }
+                acknowledged = true;
+            }
+            event = client.next_event() => {
+                let Some(event) = event else { return false };
+                if queue_turn_terminal_event(&event, thread_id, turn_id) {
+                    return true;
+                }
+            }
+        }
+    }
+}
 
 fn production_session_control_timeouts() -> SessionControlTimeouts {
     SessionControlTimeouts {
@@ -1215,6 +1275,27 @@ impl PersistentSession {
         progress: &mut dyn FnMut(&JsonValue),
         required_initial_tool: Option<&str>,
     ) -> Result<String> {
+        self.run_turn_inner_with_context_progress_and_lease(
+            prompt,
+            developer_instructions,
+            timeout,
+            exact_prompt_preflight,
+            progress,
+            required_initial_tool,
+            None,
+        )
+    }
+
+    pub(crate) fn run_turn_inner_with_context_progress_and_lease(
+        &mut self,
+        prompt: &str,
+        developer_instructions: Option<&str>,
+        timeout: Option<Duration>,
+        exact_prompt_preflight: Option<ExactPromptTokenCount>,
+        progress: &mut dyn FnMut(&JsonValue),
+        required_initial_tool: Option<&str>,
+        queue_turn_lease: Option<&crate::channels::QueueTurnLeaseFence>,
+    ) -> Result<String> {
         anyhow::ensure!(
             !self.poisoned,
             "session is poisoned by an earlier ambiguous turn outcome; rebuild the session"
@@ -1277,6 +1358,7 @@ impl PersistentSession {
                 exact_prompt_preflight,
                 progress,
                 required_initial_tool.as_deref(),
+                queue_turn_lease,
             )
             .await
         });
@@ -1630,7 +1712,17 @@ impl PersistentSession {
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
         progress: &mut dyn FnMut(&JsonValue),
         required_initial_tool: Option<&str>,
+        queue_turn_lease: Option<&crate::channels::QueueTurnLeaseFence>,
     ) -> Result<String> {
+        let lease_reader = queue_turn_lease
+            .map(|fence| fence.open_reader())
+            .transpose()?;
+        if let (Some(fence), Some(reader)) = (queue_turn_lease, lease_reader.as_ref()) {
+            anyhow::ensure!(
+                fence.still_owned(reader)?,
+                "queue turn cancelled before model invocation: native lease revoked"
+            );
+        }
         // Reuse the session's thread across turns. The previous fresh-thread-
         // per-turn workaround ("the thread may not accept new TurnStart
         // requests") has no backing mechanism in the current fork: turn_start
@@ -1764,6 +1856,14 @@ impl PersistentSession {
             persistent_thread_name: persistent_thread_name.as_deref(),
         };
         let timeouts = production_session_control_timeouts();
+        // Context compaction/tokenization may take time. A cancellation
+        // committed during that preparation must not start a model turn.
+        if let (Some(fence), Some(reader)) = (queue_turn_lease, lease_reader.as_ref()) {
+            anyhow::ensure!(
+                fence.still_owned(reader)?,
+                "queue turn cancelled before turn start: native lease revoked"
+            );
+        }
         let turn_resp: TurnStartResponse = start_bound_turn(
             client,
             seq,
@@ -1795,9 +1895,49 @@ impl PersistentSession {
         let mut saw_reasoning_section_break = false;
         let mut seen_plan_updates = None;
         let deadline = timeout.map(|d| tokio::time::Instant::now() + d);
+        let mut lease_tick = tokio::time::interval(Duration::from_millis(250));
+        lease_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
-            let event = match deadline {
+            let event = tokio::select! {
+                biased;
+                _ = lease_tick.tick(), if lease_reader.is_some() => {
+                    let fence = queue_turn_lease.expect("reader requires lease fence");
+                    let check = fence.still_owned(lease_reader.as_ref().unwrap());
+                    if !matches!(check, Ok(true)) {
+                        let reason = match check {
+                            Ok(false) => "native lease revoked".to_string(),
+                            Err(error) => format!("native lease cannot be verified: {error}"),
+                            Ok(true) => unreachable!(),
+                        };
+                        let terminal = interrupt_cancelled_queue_turn(
+                            client, seq, &thread_id, &turn_id,
+                        ).await;
+                        // Cancellation suppresses the reply, not the cost
+                        // of model work already observed before the stop.
+                        if !pending_api_cost_records.is_empty() {
+                            if let Err(err) = api_costs::record_api_model_usage_batch(
+                                root, &pending_api_cost_records,
+                            ) {
+                                eprintln!("[ctox direct-session] cost tracking failed: {err}");
+                            }
+                        }
+                        progress(&serde_json::json!({
+                            "event_kind": "worker.turn_cancelled",
+                            "title": "Queue turn interrupted",
+                            "body_text": reason,
+                            "metadata": {"thread_id": thread_id, "turn_id": turn_id,
+                                "terminal_observed": terminal},
+                        }));
+                        // Rebuild only this session. An interrupt acknowledgement
+                        // alone is not evidence that its tools have terminated.
+                        return Err(SessionPoisoned(format!(
+                            "queue turn cancelled: {reason}; terminal_observed={terminal}"
+                        )).into());
+                    }
+                    continue;
+                }
+                event = async { Ok::<_, anyhow::Error>(match deadline {
                 Some(d) => tokio::select! {
                     ev = client.next_event() => ev,
                     _ = tokio::time::sleep_until(d) => {
@@ -1859,6 +1999,7 @@ impl PersistentSession {
                     }
                 },
                 None => client.next_event().await,
+                })} => event?,
             };
             let Some(event) = event else { break };
             match event {
@@ -2201,6 +2342,12 @@ impl PersistentSession {
             }
         }
 
+        if let (Some(fence), Some(reader)) = (queue_turn_lease, lease_reader.as_ref()) {
+            anyhow::ensure!(
+                fence.still_owned(reader)?,
+                "queue turn cancelled before reply persistence: native lease revoked"
+            );
+        }
         let final_message =
             reply_capture.complete(completion_message.as_deref(), saw_our_turn_started);
 
@@ -2219,6 +2366,42 @@ impl PersistentSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queue_cancel_terminal_witness_requires_exact_thread_and_turn() {
+        let event = |thread: &str, turn: Option<&str>| {
+            InProcessServerEvent::LegacyNotification(JSONRPCNotification {
+                method: "codex/event/turn_aborted".to_owned(),
+                params: Some(serde_json::json!({
+                    "threadId": thread,
+                    "msg": EventMsg::TurnAborted(ctox_protocol::protocol::TurnAbortedEvent {
+                        turn_id: turn.map(str::to_owned),
+                        reason: ctox_protocol::protocol::TurnAbortReason::Interrupted,
+                    }),
+                })),
+            })
+        };
+        assert!(queue_turn_terminal_event(
+            &event("mine", Some("current")),
+            "mine",
+            "current"
+        ));
+        assert!(!queue_turn_terminal_event(
+            &event("other", Some("current")),
+            "mine",
+            "current"
+        ));
+        assert!(!queue_turn_terminal_event(
+            &event("mine", Some("previous")),
+            "mine",
+            "current"
+        ));
+        assert!(!queue_turn_terminal_event(
+            &event("mine", None),
+            "mine",
+            "current"
+        ));
+    }
 
     fn plan_v2_notification(
         thread_id: &str,

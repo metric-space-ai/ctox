@@ -225,7 +225,7 @@ test('there is a single responsive cascade and the host layer does not duplicate
   assert.doesNotMatch(cssRules, /@container/);
   assert.doesNotMatch(cssRules, /@media/);
   assert.doesNotMatch(cssRules, /ctox-desktop-guest/);
-  assert.match(baseCss, /@container business-app-window \(max-width: 760px\)/);
+  assert.match(baseCss, /@container business-app-window \(max-width: 768px\)/);
   assert.match(baseCss, /\.ctox-workspace > \[data-resizer\]/,
     'the single-column collapse must hide both resizer implementations');
   assert.match(appCss, /container-name: business-app-window/);

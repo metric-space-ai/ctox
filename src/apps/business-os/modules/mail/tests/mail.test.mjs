@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import * as esbuild from 'esbuild';
 import { collections as conversationCollections } from '../../conversations/schema.js';
 // Gleicher Query-String wie in ../schema.js — sonst erzeugt Node eine zweite
 // Modulinstanz und die Referenzgleichheits-Pruefung unten schlaegt fehl.
@@ -23,17 +23,39 @@ import {
 } from '../mail-group-model.mjs';
 
 const moduleRoot = new URL('../', import.meta.url);
-const bundledModule = await build({
+const [bootstrapPackage, bootstrapLock] = await Promise.all([
+  readFile(new URL('../../../package.json', import.meta.url), 'utf8').then(JSON.parse),
+  readFile(new URL('../../../package-lock.json', import.meta.url), 'utf8').then(JSON.parse),
+]);
+const declaredEsbuildVersion = bootstrapPackage.devDependencies.esbuild;
+assert.match(declaredEsbuildVersion, /^\d+\.\d+\.\d+$/, 'Business OS must declare an exact esbuild version');
+assert.equal(bootstrapLock.packages['node_modules/esbuild'].version, declaredEsbuildVersion, 'The locked esbuild version must match the Business OS declaration');
+assert.equal(esbuild.version, declaredEsbuildVersion, 'Mail regression requires the declared and locked real esbuild; a re-export shim does not verify browser bundling');
+
+const bundledModule = await esbuild.build({
   entryPoints: [fileURLToPath(new URL('../index.js', import.meta.url))],
   bundle: true,
   format: 'esm',
   platform: 'browser',
   write: false,
+  metafile: true,
 });
+assert.ok(
+  Object.keys(bundledModule.metafile?.inputs || {}).some(path => path.endsWith('/mail/lib/mail-body-renderer.mjs')),
+  'The Mail bundle must include its actual body renderer dependency',
+);
 const [{ text: bundledSource }] = bundledModule.outputFiles;
 const { __mailTestHooks: hooks } = await import(
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
 );
+
+test('mail counts stay unknown until complete reads and replication readiness', () => {
+  assert.equal(hooks.mailCountsKnown({ loading: true, mailReadComplete: false }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, readiness: { ready: false } }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: false, readiness: { ready: true } }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, readiness: { ready: true }, mailReadError: 'denied' }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, readiness: { ready: true } }), true);
+});
 
 test('mail reuses canonical communication and outbound schemas', () => {
   assert.deepEqual(Object.keys(mailCollections).sort(), [

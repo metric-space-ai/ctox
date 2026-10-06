@@ -427,6 +427,36 @@ fn embed_texts_via_local_socket_uses_internal_embedding_contract() {
 
 #[cfg(unix)]
 #[test]
+fn embed_texts_via_local_socket_rejects_non_numeric_vector_cells() {
+    for data in [r#"[[{"value":1.0}]]"#, r#"[["1.0"]]"#, r#"[[null]]"#] {
+        let root = tempfile::tempdir().unwrap();
+        let socket_path = root.path().join("e.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = std::thread::spawn(move || -> Result<()> {
+            let (stream, _) = listener.accept()?;
+            let mut reader = BufReader::new(stream);
+            let mut request = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut request)?;
+            assert!(request.contains("\"kind\":\"embeddings_create\""));
+            let reply = format!(
+                "{{\"kind\":\"embeddings\",\"model\":\"Qwen/Qwen3-Embedding-0.6B\",\"data\":{data},\"prompt_tokens\":4,\"total_tokens\":4}}\n"
+            );
+            std::io::Write::write_all(reader.get_mut(), reply.as_bytes())?;
+            std::io::Write::flush(reader.get_mut())?;
+            Ok(())
+        });
+        let result = embed_texts_via_local_socket(
+            &LocalTransport::UnixSocket { path: socket_path },
+            &["alpha".to_string()],
+            "Qwen/Qwen3-Embedding-0.6B",
+        );
+        server.join().unwrap().unwrap();
+        assert!(result.is_err(), "non-numeric matrix was accepted: {data}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn invoke_responses_text_via_local_socket_streams_internal_response_contract() {
     let root = std::env::temp_dir().join(format!("cr-{}", &stable_digest(&now_iso_string())[..8]));
     let _ = fs::remove_dir_all(&root);
@@ -2095,6 +2125,41 @@ fn classify_reachable_empty_output_as_portal_drift() {
 }
 
 #[test]
+fn classify_invalid_input_without_script_repair() {
+    let execution = CommandExecution {
+        exit_code: Some(1),
+        timed_out: false,
+        stdout_text: String::new(),
+        stderr_text: String::new(),
+    };
+    for detail in [
+        "missing source_id",
+        "neither profile URL nor person name supplied",
+    ] {
+        for status_code in [Some(200), Some(403), None] {
+            let probe = ProbeResult {
+                reachable: status_code.is_some(),
+                status_code,
+                final_url: "https://example.com/".to_string(),
+                human_verification: status_code == Some(403),
+                error: None,
+            };
+            let classification = classify_outcome(
+                &json!({"failure_mode": " invalid_input ", "detail": detail}),
+                &probe,
+                &execution,
+                0,
+                1,
+            );
+            assert_eq!(classification.status, ScrapeRunStatus::InvalidInput);
+            assert_eq!(classification.status.as_str(), "invalid_input");
+            assert!(!classification.should_queue_repair);
+            assert_eq!(classification.reason, "explicit_failure_mode_invalid_input");
+        }
+    }
+}
+
+#[test]
 fn classify_browser_challenge_for_web_unlock_repair() {
     let payload = json!({"failure_mode": "blocked"});
     let probe = ProbeResult {
@@ -2983,6 +3048,8 @@ calls=pathlib.Path(inp['calls']); calls.write_text(calls.read_text()+'x' if call
 mode=pathlib.Path(inp['mode_file']).read_text().strip()
 if mode == 'inactive':
     print(json.dumps({'records':[],'failure_mode':'temporary_unreachable','detail':'Bright Data antwortete mit HTTP 400: Customer is not active'}))
+elif mode == 'invalid_input':
+    print(json.dumps({'records':[],'failure_mode':'invalid_input','detail':'neither profile URL nor person name supplied'}))
 elif mode == 'input':
     print(json.dumps({'records':[],'failure_mode':'portal_drift','detail':'weder LinkedIn-Profil-URL noch Vor- und Nachname im Auftrag'}))
 else:
@@ -3424,6 +3491,55 @@ CTOX_ACCOUNT_FIXTURE
             ),
             None
         );
+    }
+
+    #[test]
+    fn invalid_input_is_persisted_without_repair_or_account_suppression() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-invalid-input");
+        fx.mode("invalid_input");
+        let outcome = fx.execute(&[]);
+        assert_eq!(outcome.status, ScrapeRunStatus::InvalidInput, "{outcome:?}");
+        assert!(!outcome.ok);
+        assert!(!outcome.should_queue_repair);
+        assert!(outcome.repair_queue_task.is_none());
+        assert!(outcome
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("neither profile URL nor person name supplied"));
+        let stored_status: String = open_db(&fx.root)
+            .unwrap()
+            .query_row(
+                "SELECT status FROM scrape_run WHERE run_id=?1",
+                params![outcome.run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_status, "invalid_input");
+        assert!(
+            crate::channels::list_queue_tasks(&fx.root, &["pending".to_string()], 10)
+                .unwrap()
+                .is_empty()
+        );
+        fx.execute(&[]);
+        assert_eq!(
+            fx.calls(),
+            2,
+            "input errors must not suppress later queries"
+        );
+        assert_eq!(
+            fx.runs(),
+            2,
+            "each rejected query keeps its own run evidence"
+        );
+        assert!(super::super::account_state::load(
+            &open_db(&fx.root).unwrap(),
+            &fx.target.target_id
+        )
+        .unwrap()
+        .is_none());
+        let _ = fs::remove_dir_all(&fx.root);
     }
 
     #[test]

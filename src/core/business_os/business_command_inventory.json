@@ -31,6 +31,8 @@
     "ctox.crew.memory.update",
     "ctox.file.export",
     "ctox.file.materialize",
+    "ctox.guest.input",
+    "ctox.guest.observe",
     "ctox.mailserver.delete_domain",
     "ctox.mailserver.delete_user",
     "ctox.mailserver.get_config",

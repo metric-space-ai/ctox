@@ -7,7 +7,12 @@ use std::path::PathBuf;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-env-changed=WHA_PROTO_ROOT");
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Cargo may reuse this executable between linked worktrees. Resolve the
+    // current invocation instead of embedding the checkout that compiled it.
+    let manifest_dir = PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR")
+            .ok_or("Cargo did not supply the current manifest directory")?,
+    );
     let workspace_root = manifest_dir
         .parent()
         .unwrap()

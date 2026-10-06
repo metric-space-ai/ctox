@@ -29,6 +29,8 @@ use libc::SIGPIPE;
 #[cfg(unix)]
 use libc::SIG_IGN;
 use runtime_support::*;
+#[path = "release_shutdown.rs"]
+mod release_shutdown;
 use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
@@ -202,7 +204,7 @@ const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
 const REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 const MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 const MAX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
-const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
+use super::SERVICE_LIFECYCLE_TIMEOUTS;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
 const CTO_DRIFT_KIND: &str = "cto-drift-correction";
@@ -976,6 +978,7 @@ struct SharedState {
     // Only a live PromptWorkerActivity owns these keys. Routing cache entries
     // alone do not prove that a worker still exists.
     active_worker_lease_keys: HashSet<String>,
+    active_worker_instance_ids: BTreeMap<String, String>,
     active_worker_threads: BTreeMap<String, usize>,
     parallel_queue_jobs: BTreeMap<String, QueuedPrompt>,
     current_goal_preview: Option<String>,
@@ -1001,6 +1004,7 @@ impl Default for SharedState {
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
             active_worker_lease_keys: HashSet::new(),
+            active_worker_instance_ids: BTreeMap::new(),
             active_worker_threads: BTreeMap::new(),
             parallel_queue_jobs: BTreeMap::new(),
             current_goal_preview: None,
@@ -2639,7 +2643,8 @@ pub fn start_background(root: &Path) -> Result<String> {
         let windows_status = crate::service::windows_service::status()?;
         if windows_status.installed {
             crate::service::windows_service::start()?;
-            for _ in 0..200 {
+            let deadline = Instant::now() + SERVICE_LIFECYCLE_TIMEOUTS.startup;
+            while Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(300));
                 if service_status_snapshot(root)?.running {
                     return Ok(format!(
@@ -2648,7 +2653,10 @@ pub fn start_background(root: &Path) -> Result<String> {
                     ));
                 }
             }
-            anyhow::bail!("CTOX Windows service did not become healthy within 60 seconds");
+            anyhow::bail!(
+                "CTOX Windows service did not become healthy within {:?}",
+                SERVICE_LIFECYCLE_TIMEOUTS.startup
+            );
         }
     }
     let _systemd_cache_guard = SystemdCacheInvalidator;
@@ -2668,11 +2676,11 @@ pub fn start_background(root: &Path) -> Result<String> {
         // SQLite migrations, model registry boot).  The previous 6 s
         // timeout silently returned `Ok` when the service had not actually
         // come up, leaving the caller (the upgrade pipeline) believing
-        // the daemon was running while production stayed down.  60 s with
-        // a hard error on miss closes that silent-failure window.
-        let attempts: usize = 200;
+        // the daemon was running while production stayed down. Share the
+        // cold bring-up budget with the release-switch stop path.
+        let deadline = Instant::now() + SERVICE_LIFECYCLE_TIMEOUTS.startup;
         let interval = Duration::from_millis(300);
-        for _ in 0..attempts {
+        while Instant::now() < deadline {
             thread::sleep(interval);
             let status = service_status_snapshot(root)?;
             if status.running {
@@ -2684,7 +2692,7 @@ pub fn start_background(root: &Path) -> Result<String> {
         }
         anyhow::bail!(
             "CTOX systemd service did not come up within {:?} of `systemctl --user start {}`. Inspect `journalctl --user -u {}` for the boot failure.",
-            interval * (attempts as u32),
+            SERVICE_LIFECYCLE_TIMEOUTS.startup,
             SYSTEMD_USER_UNIT_NAME,
             SYSTEMD_USER_UNIT_NAME,
         );
@@ -2699,9 +2707,9 @@ pub fn start_background(root: &Path) -> Result<String> {
         cleanup_stale_service_runtime(root)?;
         let _ = launchd_bootout();
         launchd_bootstrap_and_start(root)?;
-        let attempts: usize = 200;
+        let deadline = Instant::now() + SERVICE_LIFECYCLE_TIMEOUTS.startup;
         let interval = Duration::from_millis(300);
-        for _ in 0..attempts {
+        while Instant::now() < deadline {
             thread::sleep(interval);
             let status = service_status_snapshot(root)?;
             if status.running {
@@ -2713,7 +2721,7 @@ pub fn start_background(root: &Path) -> Result<String> {
         }
         anyhow::bail!(
             "CTOX launchd service did not come up within {:?} of `launchctl kickstart {}`. Inspect `launchctl print {}/{}` and {} for the boot failure.",
-            interval * (attempts as u32),
+            SERVICE_LIFECYCLE_TIMEOUTS.startup,
             launchd_target_label(),
             launchd_user_domain(),
             LAUNCHD_USER_LABEL,
@@ -2824,6 +2832,79 @@ pub fn stop_background_guarded(root: &Path, force: bool) -> Result<String> {
 }
 
 pub fn stop_background(root: &Path) -> Result<String> {
+    stop_background_with_timeout(root, SERVICE_LIFECYCLE_TIMEOUTS.shutdown)
+}
+
+/// Upgrade-only stop: request shutdown, wait, and refuse live residue without KILL.
+pub fn stop_background_for_release_switch_guarded(root: &Path) -> Result<String> {
+    ensure_background_stop_allowed(root)?;
+    #[cfg(not(unix))]
+    {
+        return stop_background_with_timeout(
+            root,
+            SERVICE_LIFECYCLE_TIMEOUTS.release_switch_shutdown(),
+        );
+    }
+    #[cfg(unix)]
+    {
+        let timeout = SERVICE_LIFECYCLE_TIMEOUTS.release_switch_shutdown();
+        let deadline = Instant::now() + timeout;
+        let _systemd_cache_guard = SystemdCacheInvalidator;
+        let systemd = systemd_unit_status(root)?;
+        let launchd = launchd_unit_status(root)?;
+        if let Some(unit) = systemd.as_ref() {
+            if unit.active || unit.enabled || unit.pid.is_some() {
+                let home = env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .context("systemd release stop needs an operator home")?;
+                let service_dir = env::var_os("XDG_CONFIG_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".config"))
+                    .join("systemd/user");
+                release_shutdown::configure_systemd_stop(&service_dir, timeout, |args| {
+                    let output = systemctl_user_capture(args.iter().copied())?;
+                    anyhow::ensure!(
+                        output.status.success(),
+                        "systemd release control failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+                })?;
+                systemctl_user(["--no-block", "stop", SYSTEMD_USER_UNIT_NAME])?;
+                systemctl_user(["disable", SYSTEMD_USER_UNIT_NAME])?;
+            }
+        }
+        if let Some(unit) = launchd.as_ref() {
+            if unit.active || unit.enabled || unit.pid.is_some() {
+                // Disable respawn; bootout only after the real process has exited.
+                launchd_disable()?;
+            }
+        }
+        let mut pids = matching_service_processes(root, None)?;
+        pids.extend(matching_business_os_surface_processes(root)?);
+        pids.extend(supervisor::persistent_backend_release_stop_pids(root)?);
+        pids.sort_unstable();
+        pids.dedup();
+        release_shutdown::stop_processes(&pids, deadline)?;
+        supervisor::finish_persistent_backend_release_stop(root)?;
+        anyhow::ensure!(
+            wait_for_service_shutdown(root, deadline.saturating_duration_since(Instant::now()))?,
+            "refusing release switch: shutdown residue: {}",
+            service_shutdown_residue(root)?.join("; ")
+        );
+
+        if launchd
+            .as_ref()
+            .is_some_and(|unit| unit.active || unit.pid.is_some())
+        {
+            launchd_bootout()?;
+        }
+        let _ = std::fs::remove_file(service_pid_path(root));
+        Ok("CTOX service stopped without forced release-switch termination.".to_owned())
+    }
+}
+
+fn stop_background_with_timeout(root: &Path, shutdown_timeout: Duration) -> Result<String> {
     #[cfg(windows)]
     {
         let windows_status = crate::service::windows_service::status()?;
@@ -2832,13 +2913,14 @@ pub fn stop_background(root: &Path) -> Result<String> {
                 return Ok("CTOX Windows service is already stopped.".to_string());
             }
             crate::service::windows_service::stop()?;
-            for _ in 0..100 {
+            let deadline = Instant::now() + shutdown_timeout;
+            while Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(150));
                 if !crate::service::windows_service::status()?.running {
                     return Ok("CTOX Windows service stopped.".to_string());
                 }
             }
-            anyhow::bail!("CTOX Windows service did not stop within 15 seconds");
+            anyhow::bail!("CTOX Windows service did not stop within {shutdown_timeout:?}");
         }
     }
     let _systemd_cache_guard = SystemdCacheInvalidator;
@@ -2853,7 +2935,9 @@ pub fn stop_background(root: &Path) -> Result<String> {
         let had_systemd_service = systemd.active || systemd.enabled || systemd.pid.is_some();
         let mut systemd_failures = Vec::new();
         if systemd.active || systemd.enabled {
-            if let Err(err) = systemctl_user(["stop", SYSTEMD_USER_UNIT_NAME]) {
+            // Queue the stop without the five-second systemctl client limit
+            // interrupting a cold daemon; the bounded residue poll owns waiting.
+            if let Err(err) = systemctl_user(["--no-block", "stop", SYSTEMD_USER_UNIT_NAME]) {
                 systemd_failures.push(format!("systemd stop: {err}"));
             }
             if let Err(err) = systemctl_user(["disable", SYSTEMD_USER_UNIT_NAME]) {
@@ -2866,7 +2950,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
         }
         let cleaned = cleanup_orphan_service_processes(root, None)?;
         let cleaned_surfaces = cleanup_orphan_business_os_surface_processes(root)?;
-        if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
+        if wait_for_service_shutdown(root, shutdown_timeout)? {
             if !supervisor::persistent_backends_idle(root)? {
                 anyhow::bail!(
                     "CTOX service stop did not complete cleanly: {}",
@@ -2920,7 +3004,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
         }
         let cleaned = cleanup_orphan_service_processes(root, None)?;
         let cleaned_surfaces = cleanup_orphan_business_os_surface_processes(root)?;
-        if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
+        if wait_for_service_shutdown(root, shutdown_timeout)? {
             if !supervisor::persistent_backends_idle(root)? {
                 anyhow::bail!(
                     "CTOX service stop did not complete cleanly: {}",
@@ -2970,7 +3054,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
                 .set("content-type", "application/json")
                 .send_string("{}");
         }
-        if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
+        if wait_for_service_shutdown(root, shutdown_timeout)? {
             return Ok("CTOX service stopped.".to_string());
         }
     }
@@ -2996,7 +3080,7 @@ pub fn stop_background(root: &Path) -> Result<String> {
     if let Some(err) = preflight_backend_shutdown_error.as_ref() {
         eprintln!("ctox preflight backend shutdown reported residue: {err}");
     }
-    if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
+    if wait_for_service_shutdown(root, shutdown_timeout)? {
         if !supervisor::persistent_backends_idle(root)? {
             anyhow::bail!(
                 "CTOX service stop did not complete cleanly: {}",
@@ -5636,6 +5720,7 @@ fn publish_cockpit_worker_state_with_task(root: &Path, shared: &SharedState, ext
             worker_active_count: shared.worker_active_count,
             worker_phase: shared.worker_phase.clone(),
             active_task_ids,
+            worker_instance_ids: shared.active_worker_instance_ids.clone(),
             last_error: shared.last_error.clone(),
             boot_id: SERVICE_PERFORMANCE_BOOT_ID
                 .get_or_init(|| uuid::Uuid::new_v4().to_string())
@@ -5727,7 +5812,14 @@ impl PromptWorkerActivity {
                     ),
                 );
             } else {
+                let mut shared = lock_shared_state(state);
+                for key in &job.leased_message_keys {
+                    shared
+                        .active_worker_instance_ids
+                        .insert(key.clone(), worker_id.clone());
+                }
                 lease_worker_id = Some(worker_id);
+                publish_cockpit_worker_state(root, &shared);
             }
         }
         Self {
@@ -5785,6 +5877,9 @@ impl Drop for PromptWorkerActivity {
                 .chain(&self.leased_ticket_event_keys)
             {
                 shared.active_worker_lease_keys.remove(key);
+                if shared.active_worker_instance_ids.get(key) == self.lease_worker_id.as_ref() {
+                    shared.active_worker_instance_ids.remove(key);
+                }
                 shared.parallel_queue_jobs.remove(key);
             }
             let (leaked_message_keys, leaked_ticket_event_keys) = if self.leases_released {
@@ -6746,6 +6841,13 @@ fn start_prompt_worker(
                 source_label: job.source_label.clone(),
                 progress_error: Arc::clone(&progress_error),
             });
+            if job.source_label == "queue" && !job.leased_message_keys.is_empty() {
+                session_options.queue_turn_lease = Some(channels::QueueTurnLeaseFence {
+                    root: root.clone(),
+                    message_keys: job.leased_message_keys.clone(),
+                    worker_id: worker_activity.lease_worker_id.clone().unwrap_or_default(),
+                });
+            }
             let invoked_result = if let Some(attempt) = recoverable_attempt.as_ref() {
                 push_event(
                     &event_state,
@@ -9834,14 +9936,14 @@ fn run_completion_review(
         source_label: review_request.source_label.clone(),
         owner_visible,
     };
-    let review_audit_key = match verification::record_slice_assurance(
+    let (review_audit_key, recorded_review) = match verification::record_slice_assurance(
         root,
         &verification_request,
         reply_text,
         None,
         Some(&outcome),
     ) {
-        Ok(recorded) => recorded.run.run_id.clone(),
+        Ok(recorded) => (recorded.run.run_id.clone(), recorded.run),
         Err(err) => {
             push_event(
                 state,
@@ -9858,6 +9960,18 @@ fn run_completion_review(
             };
         }
     };
+    if let Err(error) = crate::business_os::outbound_field_review::publish(
+        root,
+        &job.leased_message_keys,
+        &recorded_review,
+    ) {
+        return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "outbound-field-review-publication".to_string(),
+            },
+            summary: format!("Field review could not be bound and persisted: {error}"),
+        };
+    }
     push_event(
         state,
         format!(
@@ -11636,6 +11750,7 @@ fn chat_turn_session_options_for_queue_job(
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
+            queue_turn_lease: None,
             crew_persona: None,
             crew_memory_block: None,
         };
@@ -11660,6 +11775,7 @@ fn chat_turn_session_options_for_queue_job(
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
+            queue_turn_lease: None,
             crew_persona: None,
             crew_memory_block: None,
         };
@@ -11677,6 +11793,7 @@ fn chat_turn_session_options_for_queue_job(
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
+            queue_turn_lease: None,
             crew_persona: None,
             crew_memory_block: None,
         };

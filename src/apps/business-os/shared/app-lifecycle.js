@@ -362,6 +362,8 @@ export function appLifecycleBadge(moduleLike, options = {}) {
   const lifecycle = appLifecycleState(moduleLike, options);
   const version = lifecycle.versionLabel || '';
   const label = lifecycle.label || '';
+  // Publication of the app and access to its records are separate decisions.
+  const text = lifecycle.state === 'private' ? 'App privat' : label;
   const update = appUpdateState(moduleLike);
   return {
     ...lifecycle,
@@ -369,10 +371,11 @@ export function appLifecycleBadge(moduleLike, options = {}) {
     modificationState: update.modificationState,
     catalogVersion: update.catalogVersion,
     installedVersion: update.installedVersion,
-    title: [version, label, update.available ? 'Update verfügbar' : '', lifecycle.reason]
+    title: [version, `App-Sichtbarkeit: ${label}`, update.available ? 'Update verfügbar' : '', lifecycle.reason,
+      'Datenrechte werden separat geprüft.']
       .filter(Boolean)
       .join(' · '),
-    text: label,
+    text,
     version,
   };
 }
