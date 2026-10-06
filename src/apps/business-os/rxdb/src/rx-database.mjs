@@ -989,9 +989,10 @@ function normalizeQuery(query, primaryPath) {
   if (typeof query === 'string') {
     return { selector: { [primaryPath]: query } };
   }
-  if (query && typeof query === 'object' && !query.selector && Object.keys(query).length && !query.sort && !query.limit && !query.skip && !query.projection) {
+  if (query && typeof query === 'object' && !query.selector && Object.keys(query).length && !query.sort && !query.limit && !query.skip && !Object.hasOwn(query, 'projection')) {
     return { selector: query };
   }
+  const projection = normalizeQueryProjection(query?.projection, primaryPath);
   return {
     selector: query?.selector || {},
     sort: normalizeSort(query?.sort),
@@ -1001,7 +1002,7 @@ function normalizeQuery(query, primaryPath) {
     requireRevision: typeof query?.requireRevision === 'string' && query.requireRevision
       ? query.requireRevision
       : undefined,
-    projection: normalizeQueryProjection(query?.projection, primaryPath),
+    ...(projection ? { projection } : {}),
   };
 }
 
