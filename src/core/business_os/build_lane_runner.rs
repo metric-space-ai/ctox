@@ -57,7 +57,7 @@ pub fn plan(
     let root = grant.lane_root.as_str();
     let run_dir = format!("{root}/runs/{task_id}/{run_id}");
     let source_dir = format!("{root}/sources/{source_id}");
-    let target_dir = format!("{root}/targets/{source_id}");
+    let target_dir = format!("{root}/target/{source_id}");
     let command = args
         .iter()
         .map(|arg| quote(arg))
