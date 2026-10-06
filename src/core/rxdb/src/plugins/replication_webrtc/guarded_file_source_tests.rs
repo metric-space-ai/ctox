@@ -147,7 +147,7 @@ impl GuardedFileSource for Source {
         max: usize,
         terminal: bool,
         _capability_token: &str,
-        send: &mut dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
+        send: &mut super::GuardedChunkSend<'_>,
     ) -> RxResult<()> {
         let _guard = self.lock.lock();
         if !self.live.load(Ordering::SeqCst) {
