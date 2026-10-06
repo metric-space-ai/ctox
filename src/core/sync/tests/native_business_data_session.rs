@@ -1155,19 +1155,28 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                 };
                 assert_eq!(session, session_a);
                 assert_eq!(state.command_id, "overlap-command");
+                // This synthetic policy's id-only admission returns Pending.
+                // The actual stored state must arrive in the snapshot below.
                 assert_eq!(
                     state.status,
-                    ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Completed
+                    ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Pending
                 );
-                assert_eq!(state.result, Some(json!({"generation": "retired"})));
+                assert_eq!(state.result, None);
+                assert_eq!(state.error, None);
             }
             other => panic!("expected fresh A command response: {}", frame_kind(&other)),
         }
-        wait_for_caught_up(
+        drain_snapshot(
             &mut client_a,
             &session_a,
             "command:overlap-command",
             "fresh A command snapshot",
+            Some(ctox_sync::business_data_contract::NativeBusinessDataCommandState {
+                command_id: "overlap-command".into(),
+                status: ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Completed,
+                result: Some(json!({"generation": "retired"})),
+                error: None,
+            }),
         )
         .await;
 
@@ -1442,9 +1451,20 @@ async fn wait_for_caught_up(
     subscription_id: &str,
     context: &str,
 ) -> String {
+    drain_snapshot(stream, session, subscription_id, context, None).await
+}
+
+async fn drain_snapshot(
+    stream: &mut (impl tokio::io::AsyncRead + Unpin + Send),
+    session: &NativeBusinessDataSessionRef,
+    subscription_id: &str,
+    context: &str,
+    expected_command: Option<ctox_sync::business_data_contract::NativeBusinessDataCommandState>,
+) -> String {
     let mut last_sequence = 0;
     let mut saw_start = false;
     let mut saw_end = false;
+    let mut saw_expected_command = false;
     loop {
         let event = read_event(stream, context).await;
         assert_eq!(event.session, *session);
@@ -1474,6 +1494,14 @@ async fn wait_for_caught_up(
                     subscription_id.strip_prefix("command:"),
                     Some(state.command_id.as_str())
                 );
+                if let Some(expected) = &expected_command {
+                    assert!(!saw_expected_command);
+                    assert_eq!(state.command_id, expected.command_id);
+                    assert_eq!(state.status, expected.status);
+                    assert_eq!(state.result, expected.result);
+                    assert_eq!(state.error, expected.error);
+                    saw_expected_command = true;
+                }
             }
             NativeBusinessDataEventPayload::SnapshotEnd { snapshot_id, .. } => {
                 assert!(saw_start && !saw_end);
@@ -1482,6 +1510,7 @@ async fn wait_for_caught_up(
             }
             NativeBusinessDataEventPayload::CaughtUp { cursor } => {
                 assert!(saw_start && saw_end);
+                assert!(expected_command.is_none() || saw_expected_command);
                 assert!(!cursor.is_empty());
                 return cursor;
             }
