@@ -137,10 +137,14 @@ or publication of a cached configuration. A credential update still in WAL
 invalidates the old room and browser signaling credential without waiting for
 a checkpoint or the five-minute cache TTL. The native-only credential retains
 its own identity. A configuration build that spans a source change is returned
-without caching; it cannot publish
-an old value tagged with the newer store stamp. Initial store setup follows the
-same rule. This cache coherence rule does not replace native policy or the peer
-lifecycle fence, and installed acceptance remains separate.
+without caching; it cannot publish an old value tagged with the newer store
+stamp. Cache readers capture their source stamp after acquiring the cache lock,
+and builders recheck it under that same lock before publication. Waiting for
+another builder therefore cannot preserve a stale pre-lock decision. Initial
+store setup follows the same rule. The optional read-only version probe has a
+100ms busy timeout; failure bypasses caching and leaves the authoritative Secret
+Store read unchanged. This cache coherence rule does not replace native policy
+or the peer lifecycle fence, and installed acceptance remains separate.
 
 ### Native query cache shutdown
 

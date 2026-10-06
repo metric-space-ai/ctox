@@ -323,7 +323,10 @@ pub(crate) fn secret_record_content_version(
         &path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
-    conn.busy_timeout(persistence::sqlite_busy_timeout_duration())?;
+    // This optional cache-coherence probe also runs under the cache lock.
+    // A busy store must bypass caching without delaying unrelated roots for
+    // the ordinary authoritative Secret Store read's full busy timeout.
+    conn.busy_timeout(std::time::Duration::from_millis(100))?;
     let protected_record: Option<(String, String)> =
         rusqlite::OptionalExtension::optional(conn.query_row(
             "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records

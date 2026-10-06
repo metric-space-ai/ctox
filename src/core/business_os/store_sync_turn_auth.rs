@@ -444,12 +444,13 @@ pub(crate) fn sync_connection_config(
     root: &Path,
 ) -> anyhow::Result<BusinessOsSyncConnectionConfig> {
     let key = business_os_root_cache_key(root);
-    let stamp = sync_connection_config_cache_stamp(root);
     let cache = SYNC_CONNECTION_CONFIG_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
-    {
+    let stamp = {
         let cache = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Waiting for another publisher must not preserve a pre-lock stamp.
+        let stamp = sync_connection_config_cache_stamp(root);
         if let Some(entry) = cache.get(&key).filter(|entry| {
             stamp.3.is_some()
                 && entry.stamp == stamp
@@ -458,7 +459,8 @@ pub(crate) fn sync_connection_config(
         }) {
             return Ok(entry.config.clone());
         }
-    }
+        stamp
+    };
 
     let config = build_sync_connection_config(root)?;
     cache_sync_connection_config_if_unchanged(root, &key, stamp, &config);
@@ -474,13 +476,18 @@ fn cache_sync_connection_config_if_unchanged(
     // A build spanning a credential write must never label its old result with
     // the new store stamp. Initial setup may also change the source; that first
     // result remains usable but is not cached.
-    if source_stamp.3.is_none() || sync_connection_config_cache_stamp(root) != source_stamp {
+    if source_stamp.3.is_none() {
         return false;
     }
     let cache = SYNC_CONNECTION_CONFIG_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Recheck after acquiring the publication lock: an old builder may have
+    // waited here while a credential rotation and a fresh builder completed.
+    if sync_connection_config_cache_stamp(root) != source_stamp {
+        return false;
+    }
     cache.insert(
         key.to_path_buf(),
         SyncConnectionConfigCacheEntry {
