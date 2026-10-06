@@ -99,5 +99,8 @@ deadline. Reusing an authenticated transport is allowed; secret byte buffers mus
 be dropped/zeroized before callback return,
 and every next operation must revalidate the original fingerprint. Adapters must
 independently enforce paths against remote symlinks, destination permissions,
-quota/free space, host pin verification, stop/resume and atomic publication.
+per-artifact budget admission, available-space checks where supported, host pin
+verification, stop/resume and atomic publication. Declared quota_gib does not
+establish an aggregate server quota; a hard total guarantee requires a real
+server-enforced quota. Use null for the NAS until one is enrolled.
 A registry descriptor is authority metadata, not evidence of reachable storage.
