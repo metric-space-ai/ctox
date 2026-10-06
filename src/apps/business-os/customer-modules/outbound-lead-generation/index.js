@@ -597,6 +597,7 @@ const state = {
 export async function mount(ctx) {
   await ensureStyles();
   state.ctx = ctx;
+  state.uiMounted = true;
   globalThis.__olgDialogZiel = ctx.host;
   ctx.host.classList.add('outbound-lead-generation');
   const locale = ctx.locale === 'en' ? 'en' : 'de';
@@ -672,6 +673,7 @@ export async function mount(ctx) {
     }).catch(() => {});
   }, COMMAND_REFRESH_MS);
   return () => {
+    state.uiMounted = false;
     state.collectionReloader?.dispose();
     state.collectionReloader = null;
     state.collectionBindingGeneration = (state.collectionBindingGeneration || 0) + 1;
@@ -1731,6 +1733,9 @@ function restoreScrollPositions() {
 }
 
 function render() {
+  // An initial/action read can resolve after the Shell has closed this App.
+  // It must not recreate the removed layout in the former module host.
+  if (state.uiMounted === false) return;
   captureScrollPositions();
   ensureLayoutSkeleton();
   renderSyncLine();

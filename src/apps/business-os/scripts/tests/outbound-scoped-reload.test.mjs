@@ -173,6 +173,12 @@ try {
     blocked.resolve([{ toJSON: () => ({ id: 'old', label: 'Old' }) }]); await old;
     assert.deepEqual(state.sources, []);
   });
+  await test('a late render after unmount cannot query or recreate the old module host', () => {
+    const previous = state.ctx;
+    state.ctx = { host: new Proxy({}, { get: () => { throw new Error('closed host accessed'); } }) };
+    state.uiMounted = false;
+    try { hooks.__render.render(); } finally { state.ctx = previous; state.uiMounted = undefined; }
+  });
   await test('demand-only is wrapper metadata; persisted lead schema version stays zero', () => {
     const manifest = JSON.parse(readFileSync(join(source, 'collections.schema.json'), 'utf8'));
     const leads = manifest.collections.outbound_lead_generation_leads;
