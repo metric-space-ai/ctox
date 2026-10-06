@@ -14,6 +14,7 @@ mod antigravity_claude_response_test;
 #[cfg(test)]
 mod signature_validation_test;
 
+pub(crate) use antigravity_claude_request::convert_claude_request_for_direct_gemini;
 pub use antigravity_claude_request::convert_claude_request_to_antigravity;
 pub use antigravity_claude_request::{
     claude_request_uses_native_web_search, convert_claude_request_to_antigravity_with_capabilities,

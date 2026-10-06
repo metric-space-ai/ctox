@@ -117,26 +117,33 @@ fn web_search_query(root: &Value, item: &Value) -> Option<String> {
 }
 
 fn web_search_results(root: &Value, item: &Value) -> Vec<Value> {
-    item.get("results")
-        .or_else(|| root.get("results"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|result| {
-            let url = result
-                .get("url")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())?;
-            let title = result
-                .get("title")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(url);
-            Some(json!({"type":"web_search_result","title":title,"url":url,"page_age":Value::Null}))
-        })
-        .collect()
+    // ref: internal/translator/codex/claude/codex_claude_response_web_search.go:130:147 @ a2976eb8a303f11b4ea5177bce9f9ff752634dfc
+    [
+        item.get("results"),
+        root.get("results"),
+        item.pointer("/action/sources"),
+        root.pointer("/action/sources"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_array)
+    .into_iter()
+    .flatten()
+    .filter_map(|result| {
+        let url = result
+            .get("url")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let title = result
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(url);
+        Some(json!({"type":"web_search_result","title":title,"url":url,"page_age":Value::Null}))
+    })
+    .collect()
 }
 
 fn event(name: &str, payload: &Value) -> Vec<u8> {

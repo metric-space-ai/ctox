@@ -13,7 +13,9 @@ use crate::sdk::translator::Format;
 use super::codex_multi_agent_v2::{
     optimize_codex_multi_agent_v2_request, restore_codex_multi_agent_v2_response,
     rewrite_codex_multi_agent_v2_input, rewrite_codex_spawn_agent_description,
-    translate_request_with_codex_multi_agent_v2, CodexMultiAgentV2Processor,
+    translate_request_pair_with_api_key_model_compatibility_and_update_intent,
+    translate_request_with_codex_multi_agent_v2,
+    translate_request_with_codex_multi_agent_v2_for_executor, CodexMultiAgentV2Processor,
 };
 use super::model_capabilities::{
     apply_request_thinking, RequestThinkingEngine, RequestThinkingInput, RequestThinkingRoute,
@@ -103,6 +105,7 @@ fn request_thinking_forwards_exact_capability_and_original_source_precedence() {
             to_format: "claude",
             provider: "claude-api-key",
             resolved_model_info: Some(&model),
+            resolved_config_model_info: None,
         },
     )
     .unwrap();
@@ -140,6 +143,7 @@ fn request_thinking_falls_back_to_current_payload_without_fabricating_capability
             to_format: "xai",
             provider: "xai",
             resolved_model_info: None,
+            resolved_config_model_info: None,
         },
     )
     .unwrap();
@@ -155,6 +159,7 @@ enum CodexCall {
     Spawn(Headers, Vec<u8>),
     Input(Headers, Vec<u8>),
     Translate(Headers, String, String, String, Vec<u8>, bool),
+    Normalize(String, String, String, Vec<u8>, bool),
     Optimize(Headers, Vec<u8>),
     Restore(Vec<u8>, bool),
 }
@@ -197,6 +202,24 @@ impl CodexMultiAgentV2Processor for CapturingCodexProcessor {
             stream,
         ));
         payload.to_vec()
+    }
+
+    fn normalize_compatible_request(
+        &self,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        payload: Vec<u8>,
+        stream: bool,
+    ) -> Vec<u8> {
+        self.calls.borrow_mut().push(CodexCall::Normalize(
+            from.as_str().to_owned(),
+            to.as_str().to_owned(),
+            model.to_owned(),
+            payload.clone(),
+            stream,
+        ));
+        payload
     }
 
     fn optimize_request(&self, headers: &Headers, payload: &[u8]) -> (Vec<u8>, bool) {
@@ -270,6 +293,57 @@ fn codex_multi_agent_wrappers_are_byte_and_field_transparent() {
             CodexCall::Optimize(headers, payload.to_vec()),
             CodexCall::Restore(payload.to_vec(), true),
         ]
+    );
+}
+
+#[test]
+fn api_key_compatibility_normalizes_reserved_integers_before_the_processor() {
+    let processor = CapturingCodexProcessor::default();
+    let headers = Headers::from([(
+        "User-Agent".to_owned(),
+        vec!["Codex Desktop/1.0".to_owned()],
+    )]);
+    let payload = br#"{"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"yield_time_ms":{"type":"number"}}}}]}"#;
+    let from = Format::from("openai-response");
+    let to = Format::from("claude");
+    let translated = translate_request_with_codex_multi_agent_v2_for_executor(
+        &processor, &headers, "claude", &from, &to, "gpt-5.5", payload, false,
+    );
+    let seen: serde_json::Value = serde_json::from_slice(&translated).unwrap();
+    assert_eq!(
+        seen["tools"][0]["parameters"]["properties"]["yield_time_ms"]["type"],
+        "integer"
+    );
+    let codex_target = translate_request_with_codex_multi_agent_v2_for_executor(
+        &processor, &headers, "codex", &from, &to, "gpt-5.5", payload, false,
+    );
+    assert_eq!(codex_target, payload);
+    let (original, working, updates_changed) =
+        translate_request_pair_with_api_key_model_compatibility_and_update_intent(
+            &processor, &headers, "claude", &from, &to, "gpt-5.5", payload, payload, false, true,
+        );
+    assert!(!updates_changed);
+    assert_eq!(original, working);
+    assert!(!std::ptr::eq(original.as_ptr(), working.as_ptr()));
+    let other = br#"{"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"yield_time_ms":{"type":"number"},"cmd":{"type":"string"}}}}]}"#;
+    let (_original, _working, updates_changed) =
+        translate_request_pair_with_api_key_model_compatibility_and_update_intent(
+            &processor, &headers, "claude", &from, &to, "gpt-5.5", payload, other, false, false,
+        );
+    assert!(!updates_changed);
+    let calls = processor.calls.borrow();
+    // The compatibility facade calls the plugin normalizer, rather than the
+    // byte translator. Observe it explicitly; the default trait hook is a no-op.
+    assert_eq!(calls.len(), 5);
+    assert_eq!(
+        calls[2],
+        CodexCall::Normalize(
+            "openai-response".to_owned(),
+            "claude".to_owned(),
+            "gpt-5.5".to_owned(),
+            original,
+            false,
+        )
     );
 }
 

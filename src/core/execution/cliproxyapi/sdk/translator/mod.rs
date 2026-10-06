@@ -15,11 +15,15 @@ pub mod builtin;
 #[cfg(test)]
 mod registry_bytes_test;
 #[cfg(test)]
+mod registry_raw_model_test;
+#[cfg(test)]
 mod registry_summary_test;
+#[cfg(test)]
+mod registry_update_intent_test;
 
 pub use format::Format;
 pub use formats::*;
-pub use pipeline::{Pipeline, RequestEnvelope, ResponseEnvelope};
+pub use pipeline::{Pipeline, RequestEnvelope, RequestEnvelopeTransform, ResponseEnvelope};
 pub use plugin_hooks::PluginHooks;
 pub use registry::Registry;
 pub use types::{

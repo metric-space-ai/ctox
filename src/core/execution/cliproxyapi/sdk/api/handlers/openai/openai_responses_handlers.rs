@@ -2,7 +2,7 @@
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -10,15 +10,18 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::internal::runtime::executor::{
-    AntigravityAccountPoolError, AntigravitySubscriptionAccountPool,
-    AntigravityTrackedResponsesStream, ClaudeAccountPoolError, ClaudeSubscriptionAccountPool,
-    ClaudeTrackedMessagesStreamResponse, CodexAccountPoolError, CodexSubscriptionAccountPool,
-    CodexTrackedResponsesStreamResponse,
+    normalize_codex_tool_integer_types_for_executor, AntigravityAccountPoolError,
+    AntigravitySubscriptionAccountPool, AntigravityTrackedResponsesStream, ClaudeAccountPoolError,
+    ClaudeSubscriptionAccountPool, ClaudeTrackedMessagesStreamResponse, CodexAccountPoolError,
+    CodexSubscriptionAccountPool, CodexTrackedResponsesStreamResponse,
 };
 use crate::internal::translator::antigravity::openai::responses::convert_openai_responses_request_to_antigravity;
 use crate::internal::translator::claude::openai::responses::{
     convert_claude_response_to_openai_responses_non_stream,
     convert_openai_responses_request_to_claude, ClaudeResponsesStreamDecoder,
+};
+use crate::sdk::api::handlers::responses_sse_framer::{
+    is_codex_responses_client, responses_transport_failure_frame, ResponsesSseFramer,
 };
 use crate::sdk::translator::TranslationContext;
 
@@ -37,7 +40,11 @@ impl OpenAiResponsesClaudeHandler {
         Self { pool }
     }
 
-    async fn handle_non_stream(&self, body: &[u8]) -> OpenAiResponsesHttpResponse {
+    async fn handle_non_stream(
+        &self,
+        body: &[u8],
+        headers: &BTreeMap<String, Vec<String>>,
+    ) -> OpenAiResponsesHttpResponse {
         let request = match parse_request(body) {
             Ok(request) => request,
             Err(message) => return OpenAiResponsesHttpResponse::error(400, message),
@@ -49,7 +56,11 @@ impl OpenAiResponsesClaudeHandler {
             );
         }
 
-        let translated = convert_openai_responses_request_to_claude(&request.model, body, true);
+        let translated = normalize_codex_tool_integer_types_for_executor(
+            &convert_openai_responses_request_to_claude(&request.model, body, true),
+            headers,
+            "claude",
+        );
         let outcome = match self
             .pool
             .execute_configured(&request.model, translated.clone(), true)
@@ -84,6 +95,14 @@ impl OpenAiResponsesClaudeHandler {
     }
 
     pub async fn handle_route(&self, body: &[u8]) -> OpenAiResponsesRouteResponse {
+        self.handle_route_with_headers(body, &BTreeMap::new()).await
+    }
+
+    pub async fn handle_route_with_headers(
+        &self,
+        body: &[u8],
+        headers: &BTreeMap<String, Vec<String>>,
+    ) -> OpenAiResponsesRouteResponse {
         let request = match parse_request(body) {
             Ok(request) => request,
             Err(message) => {
@@ -93,10 +112,16 @@ impl OpenAiResponsesClaudeHandler {
             }
         };
         if !request.stream {
-            return OpenAiResponsesRouteResponse::Buffered(self.handle_non_stream(body).await);
+            return OpenAiResponsesRouteResponse::Buffered(
+                self.handle_non_stream(body, headers).await,
+            );
         }
 
-        let translated = convert_openai_responses_request_to_claude(&request.model, body, true);
+        let translated = normalize_codex_tool_integer_types_for_executor(
+            &convert_openai_responses_request_to_claude(&request.model, body, true),
+            headers,
+            "claude",
+        );
         let outcome = match self
             .pool
             .execute_stream_configured(&request.model, translated.clone())
@@ -120,6 +145,7 @@ impl OpenAiResponsesClaudeHandler {
             body.to_vec(),
             translated,
             upstream,
+            is_codex_responses_client(headers),
         )
         .await
         {
@@ -154,6 +180,14 @@ impl OpenAiResponsesAntigravityHandler {
     }
 
     pub async fn handle_route(&self, body: &[u8]) -> OpenAiResponsesRouteResponse {
+        self.handle_route_with_headers(body, &BTreeMap::new()).await
+    }
+
+    pub async fn handle_route_with_headers(
+        &self,
+        body: &[u8],
+        headers: &BTreeMap<String, Vec<String>>,
+    ) -> OpenAiResponsesRouteResponse {
         let request = match parse_request(body) {
             Ok(request) => request,
             Err(message) => {
@@ -162,12 +196,20 @@ impl OpenAiResponsesAntigravityHandler {
                 ));
             }
         };
-        let translated =
-            convert_openai_responses_request_to_antigravity(&request.model, body, request.stream);
+        let translated = normalize_codex_tool_integer_types_for_executor(
+            &convert_openai_responses_request_to_antigravity(&request.model, body, request.stream),
+            headers,
+            "antigravity",
+        );
         if request.stream {
             let outcome = match self
                 .pool
-                .execute_stream_configured(&request.model, body.to_vec(), translated)
+                .execute_stream_configured_with_client_headers(
+                    &request.model,
+                    body.to_vec(),
+                    translated,
+                    headers,
+                )
                 .await
             {
                 Ok(outcome) => outcome,
@@ -178,12 +220,18 @@ impl OpenAiResponsesAntigravityHandler {
                 }
             };
             return OpenAiResponsesRouteResponse::AntigravityStream(Box::new(
-                OpenAiResponsesAntigravityStream::new(outcome.into_response()),
+                OpenAiResponsesAntigravityStream::new(outcome.into_response())
+                    .with_codex_client(is_codex_responses_client(headers)),
             ));
         }
         let outcome = match self
             .pool
-            .execute_configured(&request.model, body.to_vec(), translated)
+            .execute_configured_with_client_headers(
+                &request.model,
+                body.to_vec(),
+                translated,
+                headers,
+            )
             .await
         {
             Ok(outcome) => outcome,
@@ -237,6 +285,14 @@ impl OpenAiResponsesCodexHandler {
     }
 
     pub async fn handle_route(&self, body: &[u8]) -> OpenAiResponsesRouteResponse {
+        self.handle_route_with_headers(body, &BTreeMap::new()).await
+    }
+
+    pub async fn handle_route_with_headers(
+        &self,
+        body: &[u8],
+        headers: &BTreeMap<String, Vec<String>>,
+    ) -> OpenAiResponsesRouteResponse {
         let request = match parse_request(body) {
             Ok(request) => request,
             Err(message) => {
@@ -257,7 +313,8 @@ impl OpenAiResponsesCodexHandler {
                 }
             };
             return OpenAiResponsesRouteResponse::CodexStream(Box::new(
-                OpenAiResponsesCodexStream::new(outcome.into_response()),
+                OpenAiResponsesCodexStream::new(outcome.into_response())
+                    .with_codex_client(is_codex_responses_client(headers)),
             ));
         }
         let outcome = match self
@@ -302,6 +359,16 @@ pub trait OpenAiResponsesRouteHandler: Send + Sync {
         provider: Option<&'a str>,
         body: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>>;
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        let _ = headers;
+        self.handle_provider_route(provider, body)
+    }
 }
 
 impl OpenAiResponsesRouteHandler for OpenAiResponsesClaudeHandler {
@@ -320,6 +387,93 @@ impl OpenAiResponsesRouteHandler for OpenAiResponsesClaudeHandler {
             self.handle_route(body).await
         })
     }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("claude")) {
+                return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route_with_headers(body, headers).await
+        })
+    }
+}
+
+impl OpenAiResponsesRouteHandler for OpenAiResponsesAntigravityHandler {
+    fn handle_provider_route<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("antigravity")) {
+                return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route(body).await
+        })
+    }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("antigravity")) {
+                return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route_with_headers(body, headers).await
+        })
+    }
+}
+
+impl OpenAiResponsesRouteHandler for OpenAiResponsesCodexHandler {
+    fn handle_provider_route<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("codex")) {
+                return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route(body).await
+        })
+    }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("codex")) {
+                return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route_with_headers(body, headers).await
+        })
+    }
 }
 
 impl<T> OpenAiResponsesRouteHandler for Arc<T>
@@ -332,6 +486,15 @@ where
         body: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
         (**self).handle_provider_route(provider, body)
+    }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        (**self).handle_provider_route_with_headers(provider, headers, body)
     }
 }
 
@@ -396,6 +559,34 @@ impl OpenAiResponsesRouteHandler for OpenAiResponsesProviderRouter {
             ))
         })
     }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            let provider = provider.unwrap_or(&self.default_provider).trim();
+            if provider.eq_ignore_ascii_case("claude") {
+                if let Some(handler) = self.claude.as_ref() {
+                    return handler.handle_route_with_headers(body, headers).await;
+                }
+            } else if provider.eq_ignore_ascii_case("codex") {
+                if let Some(handler) = self.codex.as_ref() {
+                    return handler.handle_route_with_headers(body, headers).await;
+                }
+            } else if provider.eq_ignore_ascii_case("antigravity") {
+                if let Some(handler) = self.antigravity.as_ref() {
+                    return handler.handle_route_with_headers(body, headers).await;
+                }
+            }
+            OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                400,
+                "requested provider is not configured",
+            ))
+        })
+    }
 }
 
 impl std::fmt::Debug for OpenAiResponsesProviderRouter {
@@ -443,42 +634,81 @@ pub enum OpenAiResponsesRouteResponse {
 
 pub struct OpenAiResponsesAntigravityStream {
     upstream: AntigravityTrackedResponsesStream,
+    framer: ResponsesSseFramer,
     terminal: bool,
     emitted_failure: bool,
+    codex_client: bool,
 }
 
 impl OpenAiResponsesAntigravityStream {
     fn new(upstream: AntigravityTrackedResponsesStream) -> Self {
         Self {
             upstream,
+            framer: ResponsesSseFramer::new(false),
             terminal: false,
             emitted_failure: false,
+            codex_client: false,
         }
+    }
+
+    fn with_codex_client(mut self, codex_client: bool) -> Self {
+        self.codex_client = codex_client;
+        self.framer = ResponsesSseFramer::new(codex_client);
+        self
     }
 
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
         if self.terminal {
             return None;
         }
-        match self.upstream.next_event().await {
-            Some(Ok(mut chunk)) => {
-                if chunk.starts_with(b"event: response.completed\n")
-                    || chunk.starts_with(b"event: response.incomplete\n")
-                {
-                    self.terminal = true;
-                } else if chunk.starts_with(b"event: response.failed\n") {
-                    self.terminal = true;
-                    redact_provider_stream_failure_message(
-                        &mut chunk,
-                        "Antigravity upstream stream failed",
-                    );
-                    self.upstream.record_terminal_failure().await;
+        loop {
+            match self.upstream.next_event().await {
+                Some(Ok(mut chunk)) => {
+                    if chunk.is_empty() {
+                        return Some(chunk);
+                    }
+                    if chunk.starts_with(b"event: response.failed\n")
+                        || chunk.starts_with(b"event: error\n")
+                    {
+                        redact_provider_stream_failure_message(
+                            &mut chunk,
+                            "Antigravity upstream stream failed",
+                        );
+                    }
+                    let emitted = self.framer.write_chunk(&chunk);
+                    if self.framer.is_failure() {
+                        self.terminal = true;
+                        self.emitted_failure = true;
+                        self.upstream.record_terminal_failure().await;
+                    } else if self.framer.is_terminal() {
+                        self.terminal = true;
+                    }
+                    if !emitted.is_empty() {
+                        return Some(emitted);
+                    }
+                    if self.terminal {
+                        return None;
+                    }
                 }
-                Some(chunk)
+                Some(Err(_)) => return self.failure_chunk().await,
+                None => {
+                    let flushed = self.framer.flush();
+                    if self.framer.is_failure() {
+                        self.terminal = true;
+                        self.emitted_failure = true;
+                        self.upstream.record_terminal_failure().await;
+                    } else if self.framer.is_terminal() {
+                        self.terminal = true;
+                    }
+                    if !flushed.is_empty() {
+                        return Some(flushed);
+                    }
+                    if self.terminal {
+                        return None;
+                    }
+                    return self.failure_chunk().await;
+                }
             }
-            Some(Err(_)) => self.failure_chunk().await,
-            None if self.terminal => None,
-            None => self.failure_chunk().await,
         }
     }
 
@@ -487,13 +717,15 @@ impl OpenAiResponsesAntigravityStream {
             self.terminal = true;
             return None;
         }
+        let sequence = self.framer.data_frames();
         self.emitted_failure = true;
         self.terminal = true;
         self.upstream.record_terminal_failure().await;
-        Some(
-            b"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"upstream_stream_error\",\"message\":\"Antigravity upstream stream failed\"}}}\n\n"
-                .to_vec(),
-        )
+        Some(responses_transport_failure_frame(
+            "Antigravity upstream stream failed",
+            self.codex_client,
+            sequence,
+        ))
     }
 }
 
@@ -511,9 +743,11 @@ impl std::fmt::Debug for OpenAiResponsesAntigravityStream {
 pub struct OpenAiResponsesCodexStream {
     upstream: CodexTrackedResponsesStreamResponse,
     decoder: crate::internal::translator::common::SseDecoder,
+    framer: ResponsesSseFramer,
     pending: VecDeque<Vec<u8>>,
     terminal: bool,
     emitted_failure: bool,
+    codex_client: bool,
 }
 
 impl OpenAiResponsesCodexStream {
@@ -521,10 +755,18 @@ impl OpenAiResponsesCodexStream {
         Self {
             upstream,
             decoder: crate::internal::translator::common::SseDecoder::new(),
+            framer: ResponsesSseFramer::new(false),
             pending: VecDeque::new(),
             terminal: false,
             emitted_failure: false,
+            codex_client: false,
         }
+    }
+
+    fn with_codex_client(mut self, codex_client: bool) -> Self {
+        self.codex_client = codex_client;
+        self.framer = ResponsesSseFramer::new(codex_client);
+        self
     }
 
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
@@ -553,6 +795,16 @@ impl OpenAiResponsesCodexStream {
                     if failed {
                         self.upstream.record_terminal_failure().await;
                     }
+                    let flushed = self.framer.flush();
+                    if self.framer.is_terminal() {
+                        self.terminal = true;
+                    }
+                    if self.framer.is_failure() {
+                        self.upstream.record_terminal_failure().await;
+                    }
+                    if !flushed.is_empty() {
+                        self.pending.push_back(flushed);
+                    }
                     if let Some(chunk) = self.pending.pop_front() {
                         return Some(chunk);
                     }
@@ -573,20 +825,26 @@ impl OpenAiResponsesCodexStream {
         let mut failed = false;
         for mut event in events {
             if let Ok(mut value) = serde_json::from_slice::<Value>(&event.data) {
-                match value.get("type").and_then(Value::as_str) {
-                    Some("response.completed" | "response.incomplete") => self.terminal = true,
-                    Some("response.failed" | "error") => {
-                        self.terminal = true;
-                        failed = true;
-                        redact_json_messages(&mut value, "Codex upstream stream failed");
-                        if let Ok(data) = serde_json::to_vec(&value) {
-                            event.data = data;
-                        }
+                if matches!(
+                    value.get("type").and_then(Value::as_str),
+                    Some("response.failed" | "error")
+                ) {
+                    redact_json_messages(&mut value, "Codex upstream stream failed");
+                    if let Ok(data) = serde_json::to_vec(&value) {
+                        event.data = data;
                     }
-                    _ => {}
                 }
             }
-            self.pending.push_back(encode_sse_event(&event));
+            let encoded = self.framer.write_chunk(&encode_sse_event(&event));
+            if self.framer.is_terminal() {
+                self.terminal = true;
+            }
+            if self.framer.is_failure() {
+                failed = true;
+            }
+            if !encoded.is_empty() {
+                self.pending.push_back(encoded);
+            }
         }
         failed
     }
@@ -596,13 +854,15 @@ impl OpenAiResponsesCodexStream {
             self.terminal = true;
             return None;
         }
+        let sequence = self.framer.data_frames();
         self.emitted_failure = true;
         self.terminal = true;
         self.upstream.record_terminal_failure().await;
-        Some(
-            b"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"upstream_stream_error\",\"message\":\"Codex upstream stream failed\"}}}\n\n"
-                .to_vec(),
-        )
+        Some(responses_transport_failure_frame(
+            "Codex upstream stream failed",
+            self.codex_client,
+            sequence,
+        ))
     }
 }
 
@@ -669,6 +929,7 @@ pub struct OpenAiResponsesStreamBootstrap {
     upstream: ClaudeTrackedMessagesStreamResponse,
     context: TranslationContext,
     decoder: ClaudeResponsesStreamDecoder,
+    framer: ResponsesSseFramer,
     pending: VecDeque<Vec<u8>>,
     terminal: bool,
     failed: bool,
@@ -681,6 +942,7 @@ impl OpenAiResponsesStreamBootstrap {
         original_request: Vec<u8>,
         translated_request: Vec<u8>,
         upstream: ClaudeTrackedMessagesStreamResponse,
+        codex_client: bool,
     ) -> Result<Self, ()> {
         let mut stream = Self {
             model,
@@ -689,6 +951,7 @@ impl OpenAiResponsesStreamBootstrap {
             upstream,
             context: TranslationContext::default(),
             decoder: ClaudeResponsesStreamDecoder::new(),
+            framer: ResponsesSseFramer::new(codex_client),
             pending: VecDeque::new(),
             terminal: false,
             failed: false,
@@ -734,6 +997,16 @@ impl OpenAiResponsesStreamBootstrap {
                         &self.translated_request,
                     );
                     self.enqueue(output);
+                    let flushed = self.framer.flush();
+                    if self.framer.is_terminal() {
+                        self.terminal = true;
+                    }
+                    if self.framer.is_failure() {
+                        self.failed = true;
+                    }
+                    if !flushed.is_empty() {
+                        self.pending.push_back(flushed);
+                    }
                     if self.failed {
                         self.upstream.record_terminal_failure().await;
                     }
@@ -750,15 +1023,16 @@ impl OpenAiResponsesStreamBootstrap {
     fn enqueue(&mut self, chunks: Vec<Vec<u8>>) {
         for mut chunk in chunks {
             redact_stream_failure_message(&mut chunk);
-            if chunk.starts_with(b"event: response.completed\n")
-                || chunk.starts_with(b"event: response.failed\n")
-            {
+            let emitted = self.framer.write_chunk(&chunk);
+            if self.framer.is_terminal() {
                 self.terminal = true;
             }
-            if chunk.starts_with(b"event: response.failed\n") {
+            if self.framer.is_failure() {
                 self.failed = true;
             }
-            self.pending.push_back(chunk);
+            if !emitted.is_empty() {
+                self.pending.push_back(emitted);
+            }
         }
     }
 

@@ -75,6 +75,7 @@ pub struct HomeDispatchSelection {
     next_attempt: AtomicU64,
     retained: AtomicBool,
     ended: AtomicBool,
+    pub(super) model_info: Option<super::home_model_capabilities::HomeDispatchModelInfo>,
 }
 
 impl fmt::Debug for HomeDispatchSelection {
@@ -107,6 +108,17 @@ impl HomeDispatchSelection {
         provider: &str,
         scope: Scope,
     ) -> Result<Arc<Self>, RegistryError> {
+        Self::new_with_model_info(auth, executor, auth_preparer, provider, scope, None)
+    }
+
+    pub(super) fn new_with_model_info(
+        auth: Auth,
+        executor: Arc<dyn ProviderExecutor>,
+        auth_preparer: Option<Arc<dyn AuthPreparer>>,
+        provider: &str,
+        scope: Scope,
+        model_info: Option<super::home_model_capabilities::HomeDispatchModelInfo>,
+    ) -> Result<Arc<Self>, RegistryError> {
         let resources = Arc::new(Mutex::new(SelectionResources::default()));
         let attempts = Arc::new(Mutex::new(AttemptState::default()));
         let resources_for_scope = resources.clone();
@@ -126,6 +138,7 @@ impl HomeDispatchSelection {
             next_attempt: AtomicU64::new(0),
             retained: AtomicBool::new(false),
             ended: AtomicBool::new(false),
+            model_info,
         }))
     }
 

@@ -211,7 +211,8 @@ fn auth_default_and_nested_state_match_the_upstream_json_contract() {
             "unavailable": false,
             "quota": {
                 "exceeded": false,
-                "next_recover_at": "0001-01-01T00:00:00Z"
+                "next_recover_at": "0001-01-01T00:00:00Z",
+                "observed_at": "0001-01-01T00:00:00Z"
             },
             "created_at": "0001-01-01T00:00:00Z",
             "updated_at": "0001-01-01T00:00:00Z",
@@ -233,6 +234,7 @@ fn auth_default_and_nested_state_match_the_upstream_json_contract() {
         reason: "rate limit".into(),
         next_recover_at: chrono::DateTime::from_timestamp(1_700_000_100, 0).expect("quota time"),
         backoff_level: 2,
+        ..QuotaState::default()
     };
     auth.model_states.insert(
         "claude-opus".into(),

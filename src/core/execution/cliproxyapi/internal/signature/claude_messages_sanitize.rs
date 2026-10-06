@@ -15,6 +15,7 @@ pub struct ClaudeSignatureSanitizeReport {
 
 pub fn sanitize_claude_messages_for_claude_upstream(
     payload: &[u8],
+    preserve_empty_thinking_blocks: bool,
 ) -> (Vec<u8>, ClaudeSignatureSanitizeReport) {
     let Ok(mut root) = serde_json::from_slice::<Value>(payload) else {
         return (payload.to_vec(), ClaudeSignatureSanitizeReport::default());
@@ -38,6 +39,10 @@ pub fn sanitize_claude_messages_for_claude_upstream(
                 true
             }
             Some("thinking") => {
+                if preserve_empty_thinking_blocks {
+                    report.preserved += 1;
+                    return true;
+                }
                 let raw = part
                     .get("signature")
                     .and_then(Value::as_str)
@@ -127,7 +132,7 @@ mod tests {
     #[test]
     fn claude_upstream_drops_foreign_thinking_and_tool_provenance() {
         let input = br#"{"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"gpt#encrypted"},{"type":"tool_use","id":"t","name":"run","input":{},"signature":"foreign","model":"gemini","extra_content":{"google":{"thought_signature":"foreign"}}},{"type":"text","text":"ok"}]}]}"#;
-        let (output, report) = sanitize_claude_messages_for_claude_upstream(input);
+        let (output, report) = sanitize_claude_messages_for_claude_upstream(input, false);
         let value: Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(value["messages"][0]["content"].as_array().unwrap().len(), 2);
         assert!(value["messages"][0]["content"][0]
@@ -141,6 +146,22 @@ mod tests {
     #[test]
     fn no_signature_history_is_byte_identical() {
         let input = br#"{ "messages": [{"role":"user","content":[{"type":"text","text":"x"}]}] }"#;
-        assert_eq!(sanitize_claude_messages_for_claude_upstream(input).0, input);
+        assert_eq!(
+            sanitize_claude_messages_for_claude_upstream(input, false).0,
+            input
+        );
+    }
+
+    #[test]
+    fn preserve_empty_thinking_blocks_keeps_opaque_signatures() {
+        let input = br#"{"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"opaque-signature"}]}]}"#;
+        let (output, report) = sanitize_claude_messages_for_claude_upstream(input, true);
+        let value: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            value["messages"][0]["content"][0]["signature"],
+            "opaque-signature"
+        );
+        assert_eq!(report.preserved, 1);
+        assert_eq!(report.dropped_blocks, 0);
     }
 }

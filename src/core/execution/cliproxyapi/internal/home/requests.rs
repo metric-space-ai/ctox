@@ -17,10 +17,20 @@ pub struct AuthDispatchRequest {
     pub concurrency_protocol: i32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent_session_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub node_kind: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub credential_policy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_round: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded_auth_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pinned_auth_id: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -106,4 +116,40 @@ fn is_zero_usize(value: &usize) -> bool {
 }
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_omits_unset_session_routing_fields() {
+        let request = AuthDispatchRequest {
+            request_type: "auth".into(),
+            model: "m".into(),
+            count: 1,
+            ..AuthDispatchRequest::default()
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("parent_session_id").is_none());
+        assert!(json.get("node_kind").is_none());
+        assert!(json.get("retry_round").is_none());
+        assert!(json.get("excluded_auth_ids").is_none());
+        assert!(json.get("pinned_auth_id").is_none());
+
+        let routed = AuthDispatchRequest {
+            parent_session_id: "parent".into(),
+            node_kind: "leaf".into(),
+            retry_round: Some(0),
+            excluded_auth_ids: Some(vec!["auth-a".into()]),
+            pinned_auth_id: "pin".into(),
+            ..request
+        };
+        let json = serde_json::to_value(&routed).unwrap();
+        assert_eq!(json["parent_session_id"], "parent");
+        assert_eq!(json["node_kind"], "leaf");
+        assert_eq!(json["retry_round"], 0);
+        assert_eq!(json["excluded_auth_ids"], serde_json::json!(["auth-a"]));
+        assert_eq!(json["pinned_auth_id"], "pin");
+    }
 }

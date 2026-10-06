@@ -669,3 +669,86 @@ fn json_payload_matches_sse_framing_contract() {
     assert!(json_payload(b"[DONE]").is_none());
     assert!(json_payload(b"plain text").is_none());
 }
+
+#[test]
+fn plugin_responses_usage_keeps_top_level_tokens_beside_service_tier() {
+    let payload = br#"{"id":"resp_1","object":"response","service_tier":"default","usage":{"input_tokens":34,"output_tokens":499,"total_tokens":533}}"#;
+    let detail = parse_plugin_executor_response_usage("openai-response", payload);
+    assert_eq!(
+        (
+            detail.input_tokens,
+            detail.output_tokens,
+            detail.total_tokens
+        ),
+        (34, 499, 533)
+    );
+    assert_eq!(detail.response_service_tier, "default");
+
+    let mut buffer = StreamUsageBuffer::default();
+    observe_plugin_executor_stream(
+        "openai-response",
+        b"data: {\"type\":\"response.completed\",\"service_tier\":\"default\",\"usage\":{\"input_tokens\":34,\"output_tokens\":499,\"total_tokens\":533}}\n\n",
+        &mut buffer,
+    );
+    let observed = buffer.detail().unwrap();
+    assert_eq!(
+        (
+            observed.input_tokens,
+            observed.output_tokens,
+            observed.total_tokens,
+            observed.response_service_tier.as_str(),
+        ),
+        (34, 499, 533, "default")
+    );
+}
+
+#[test]
+fn plugin_responses_usage_shapes_match_upstream() {
+    let cases = [
+        (
+            "openai-response",
+            br#"{"usage":{"input_tokens":34,"output_tokens":499,"total_tokens":533}}"#.as_slice(),
+            34,
+            499,
+            533,
+            "",
+        ),
+        (
+            "codex",
+            br#"{"service_tier":"default","usage":{"input_tokens":34,"output_tokens":499,"total_tokens":533}}"#.as_slice(),
+            34,
+            499,
+            533,
+            "default",
+        ),
+        (
+            "openai-response",
+            br#"{"service_tier":"priority","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"response":{"usage":{"input_tokens":18,"output_tokens":22,"total_tokens":40}}}"#.as_slice(),
+            18,
+            22,
+            40,
+            "priority",
+        ),
+        (
+            "openai-response",
+            br#"{"service_tier":"default"}"#.as_slice(),
+            0,
+            0,
+            0,
+            "default",
+        ),
+    ];
+    for (protocol, payload, input, output, total, tier) in cases {
+        let detail = parse_plugin_executor_response_usage(protocol, payload);
+        assert_eq!(
+            (
+                detail.input_tokens,
+                detail.output_tokens,
+                detail.total_tokens,
+                detail.response_service_tier.as_str(),
+            ),
+            (input, output, total, tier),
+            "{protocol}"
+        );
+    }
+}

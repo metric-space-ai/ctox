@@ -3,16 +3,577 @@
 ## State
 
 - Upstream: `a88197f845c979132c8978ea223c6af05cc81536`
-- Track A, standalone Rust-port release: **COMPLETE**
+- Track A, accepted v7.2.116 standalone Rust-port release: **COMPLETE**
+- Current v8.0.16 update and promotion: **INCOMPLETE**
+- Current v8.0.15 Chat/Completions candidate now dispatches through the actual
+  provider HTTP listener to the existing Responses-shaped account owner.
+  Request-local translation preserves provider/header selection, session/cache
+  identity, structured tools, explicit sampling/token limits and usage. The
+  same live writer handles Claude, Codex and Antigravity streams; legacy
+  Completions convert each chunk instead of buffering the complete response.
+  After partial output, EOF without a nonempty, non-null finish reason emits a
+  terminal 502 error and suppresses [DONE]. First-chunk completion, later usage,
+  undelimited final data, every choice and multiline SSE are covered by 18
+  prepared real HTTP/pool guards. Formatting and declaration preparation are
+  not native execution or promotion. Full composed native/Go checks, exact
+  Antigravity disconnect/production usage binding, outer-host Meta/Devin and
+  thinking/logger registration, installation and real provider/App acceptance
+  remain required.
+- The outer CTOX instance router now forwards client headers to the selected
+  Responses handler. Codex-specific stream failures therefore keep their proper
+  terminal envelope instead of using the ordinary-client envelope. A prepared
+  root-binary regression exercises the real instance router and account pool
+  with both client identities and explicit/default provider selection. The
+  regression has not yet executed; it is separate from the targeted SDK suite.
+
 - Accepted pin: **617/617 production + 442/442 tests strict**, complete
 - Upstream candidate `a88197f`: **111/111 reviews**, **10/10 gates**,
   promotion **YES**, post-promotion full gate **YES**
-- Track B, CTOX provider integration: **tracked independently** in
-  `src/core/execution/cliproxyapi_integration/provider-integration.json`; its open gates do not
-  reduce or inherit Track A's percentage
+- Track B, CTOX provider integration: **tracked independently** from Track A.
+  The previously referenced generated `provider-integration.json` is absent
+  from this checkout; it is not current acceptance evidence. Actual host
+  adapters live in `src/core/execution/cliproxyapi_host.rs`. The current v8
+  Meta/Devin service factories and canonical thinking bridge still require
+  outer-host registration. None of this changes historical accepted-pin
+  Track A evidence or proves current production integration.
 - Historical accepted-pin capability ledger: **1,000 / 1,000 points**; this is
   explicitly not a project-completion percentage
-- Current gate: none; Accepted Pin released, no open upstream candidate
+- Current gate: frozen candidate `d7914afdedca7af95ee974a42453dc49fc1388ce`
+  (tag `v8.0.13`, historical release floor). Current release target v8.0.16
+  is `a2976eb8a303f11b4ea5177bce9f9ff752634dfc`. The accepted
+
+  production pin remains `a88197f845c979132c8978ea223c6af05cc81536`.
+  The earlier v8.0.11 and v8.0.12 reviews remain historical prerequisites;
+  none of these candidates is promoted.
+- Previous observed upstream release: `v8.0.12`, published 2026-10-02 20:21:45 UTC,
+  commit `2044a01f422998de79a5da8015141b878886534d`. This is an additional
+  required follow-up candidate for the requested current-upstream outcome,
+  not a promotion of the frozen v8.0.11 review. Its delta against v8.0.11 is
+  32 files (+3,530 / -77 lines), including Claude auth/date handling, Codex
+  apply_patch and Responses conversion, config auth indexing, plugin routing
+  and conductor unauthorized-refresh/cooldown behavior. Classification,
+  semantic porting, local/Go parity checks and promotion evidence are pending.
+  Preserve the v8.0.11 review; do not claim the full update is current after
+  only that candidate passes.
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.12.
+- Reviewed upstream release floor: v8.0.13, published 2026-10-03 09:02:46 UTC,
+  commit d7914afdedca7af95ee974a42453dc49fc1388ce. Live GitHub API and the exact
+  release page agree. Its additional v8.0.12 delta is21 files (+1,891 / -60),
+  across11 commits: tool integer-field mappings, catalog IDs/token limits,
+  response/Devin stream lifecycles, Claude diagnostics/timeouts/search sources,
+  Codex usage order and auth snapshot synchronization. The integer-field slice
+  now follows explicit schema paths and qualified namespaces across all tool
+  forms, changes only selected raw type values, preserves unrelated/duplicate
+  data and keeps unknown tools unchanged. The exact412-line upstream
+  history/notes fixture is vendored unchanged; six new scoped regressions are
+  prepared. The Claude handler now maps both408 and504 to timeout_error,
+  retains explicit upstream error classifications and supplies the request-timeout
+  fallback message. The prior embedded models.json snapshot matched the exact
+  v8.0.13 file (raw SHA256 f46d38b1ace1da689468daf4c36dbbd2e6af2c0496a3cb3ad4f3b5edac95ea7d).
+  The full-catalog guard retains an exact normalized hash and provider/tier counts.
+  This includes the Antigravity Claude5.5 records, current Codex tier catalogs,
+  Meta models and current headers; Codex/xAI built-in image/video records match
+  the pinned Go metadata and order. Internal native/update capabilities decode
+  into owned Rust snapshots, stay absent from public model JSON and participate
+  in refresh detection. Prepared cases cover buffered JSON errors. The actual
+  Claude stream forwarder
+  now preserves typed transport timeouts as a terminal timeout_error event after
+  partial output, closes after one failure and keeps Connect/Protocol errors
+  redacted. A timeout before the first stream chunk instead returns HTTP408
+  with the shared Claude JSON envelope. Two forwarder-state guards and one
+  bootstrap guard are prepared; native execution and an actual HTTP/SSE timeout
+  acceptance remain unverified.
+  The bounded controller materializes the Go oracle at this exact commit and
+  requires five integer and two Claude-error upstream parent tests; execution, remaining
+  semantic deltas and promotion remain open. Preserve both earlier reviews;
+  the accepted pin is unchanged.
+
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.13.
+- Latest observed upstream release: v8.0.16, published 2026-10-05 21:46:28 UTC,
+  commit a2976eb8a303f11b4ea5177bce9f9ff752634dfc. The exact comparison adds
+  21 commits and 38 paths above v8.0.15. Direct Gemini translation now preserves
+  Claude base64 document blocks and omits filtered-empty turns, while Antigravity
+  keeps its existing media scope. Schema nodes with object-valued properties
+  force the object type; structural array/object union members take precedence
+  without rewriting author-owned name maps. Codex-to-Claude web search now reads
+  action.sources after legacy item/root results, chooses the first array and
+  preserves an explicitly empty array. Public unary and streaming regression
+  guards are prepared. These source changes are not executed native/Go checks,
+  complete semantic parity, production registration or promotion. The actual
+  OpenAI-compatible compact executor now selects reasoning compatibility from
+  the same typed Home/model capability as request translation. Unknown nonempty
+  encrypted formats and cleartext replay remain intact only in that mode;
+  whitespace, null/non-string and recognized foreign signatures are stripped.
+  Native strict requests promote cleartext when summary is missing, null or
+  empty before clearing content, and remove orphan IDs only when store is disabled. Actual injected
+  HTTP guards cover selected-model and Home precedence and reject untrusted
+  metadata/auth flags. These guards are prepared, not executed. Catalog policy,
+  reasoning accounting, shared observations/replay and OAuth alias ownership
+  still require complete review and verification.
+  The OpenAI-compatible stream now consults the actual request-local Responses
+  translator before synthesizing a terminator at clean EOF. Nonempty finish
+  reason, existing output and all closed message/function/reasoning items are
+  required. Late usage is preserved; partial/empty output and read errors fail.
+  A delivered source terminator closes the stream before later bytes/errors.
+  Six injected HTTP/registered-translator guards are prepared, including custom
+  apply_patch output, late usage, same-chunk completion and terminal ownership.
+  Full tool-validation parity, cancellation/usage binding, native execution and
+  promotion remain open.
+  The shared native Claude Messages and token-count body contracts now respect
+  explicit prompt cache mode. Cloaking preserves client ephemeral markers,
+  including TTL, scope and extension fields, across legacy reminders, middle
+  system turns and end-of-history system placement. Synthesized system/date/user
+  blocks gain no automatic markers in explicit mode; caller tool/message TTLs
+  are not normalized. The existing four-marker limit remains enforced. Internal
+  prompt_cache_options is removed before generation signing and count-token
+  transmission. Eight body-contract guards cover OAuth/API and stream flags,
+  strict/automatic policy, all relocation destinations, mixed TTLs, invalid
+  markers, native counting and byte-identical no-op stripping. These are not
+  executed native/Go or live-provider evidence. Full original/pretranslated
+  flag propagation through payload overrides, native probe/header policy,
+  current upstream cache oracle, production cache affinity and promotion remain
+  open.
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.16.
+- Previous observed upstream release: v8.0.15, published 2026-10-04 22:29:27 UTC,
+  commit a4acc9f752bd46571f737a10c04bf413656ab06b. The exact primary
+  release/commit comparison adds two commits and four paths above v8.0.14.
+  The Antigravity stream owner now records terminal delivery independently
+  of upstream EOF. Responses replay settles before delivered completion;
+  Claude replay and observed usage survive client cancellation/drop after
+  terminal delivery. Typed cancellation after terminal output does not
+  cool down the selected account. Partial cancellation and actual protocol
+  failures retain measured failure usage; unconsumed completion is not
+  successful delivery. A buffered final data line is drained before a
+  pending cancellation. Settlement is synchronous and request-owned,
+  without a cleanup task. Callers can attach a fresh per-request usage
+  reporter to the actual tracked stream; production reporter binding remains
+  open. Seven native owner/replay/usage/cooldown guards are prepared.
+  The bounded Go controller now requires the immutable v8.0.15 source,
+  including its three Antigravity disconnect and nine OpenAI truncation
+  parent tests. Native and Go execution, live Chat/Completions forwarding,
+  the Antigravity Chat adapter, remaining full semantic parity and promotion
+  remain open. The accepted production pin is unchanged.
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.15.
+- Previous observed upstream release: v8.0.14, published 2026-10-04 21:51:52 UTC,
+
+  commit16d98881d4bb37adaa827599e4be8f5154e81646. Exact GitHub tag resolution
+  and the release page agree on 2026-10-05. This is the same immutable
+  current-main comparison already retained:24 commits/169 changed paths above
+  the v8.0.13 floor. It is a required current release target, not a promotion.
+  The current embedded catalog now matches its exact118168-byte upstream file:
+  raw SHA2563a97eea65c1df3ea8ad4edac838b37f7714868d1e784b3723d0650b6e848aa9a,
+  Git blob228ef1c7319210501eea759572404daf7fe6a9ee. Only two restored Claude4.6
+  records differ from the prior snapshot; all other provider/tier records retain
+  their bytes and order. The full hash/channel guard and Antigravity metadata
+  guard now require14 records with the restored200k/64k limits and live-registry
+  lookup. The earlier Claude5.5 and other-channel assertions remain intact.
+  Source-byte equality and preparation pass; these native guards are unexecuted.
+  Native Responses-to-Claude history now applies the current model-version
+  parser, excluding provider namespaces and snapshot dates from family checks.
+  Native requests remove terminal thinking before repairing interrupted tool
+  results, then remove unsupported assistant prefill. Compatibility requests keep
+  prefill/thinking while sharing the tool-pairing repair. Missing outputs become
+  explicit interrupted-tool errors; orphan outputs retain visible text/media,
+  and real results precede ordinary user content. A minimal user turn survives
+  history removal. Nine native regressions and six exact current-release Go
+  parent oracles are prepared; compilation and execution remain unverified.
+  This matches33ec5502c38ac6841a0754577ebff2483fa10cef and the actual current
+  history normalization barriers; remaining translator/wire parity stays open.
+  Complete native Claude Messages JSON now feeds both public non-stream Chat
+  and Responses aggregators through the current common adapter. Text, tool input
+  (including raw duplicate/numeric spelling), thinking signatures, redacted
+  carriers, citations, terminal reasons and usage survive conversion. Native
+  model identity overrides the request alias; ordinary SSE request echo stays.
+  Adjacent text blocks merge until any non-text block, and Responses ignores
+  frames after message_stop. Chat now uses reasoning_content, includes the
+  cache-write usage alias, emits one measured trailing usage chunk and numbers
+  streamed tool calls from zero independently of Claude block indexes.
+  Raw JSON is compacted outside string literals before embedding it in SSE,
+  matching upstream RawMessage encoding without changing keys, numbers or
+  escaped string values. Pretty-printed provider bodies remain complete single-line
+  events and are checked through both public translators.
+  Fourteen native regressions plus the two existing Chat response guards are
+  required; the older reasoning guard is strengthened against the legacy field.
+  Exact current-release Go parents cover the common/native converters and the
+  full existing Chat wire suite. Source preparation is not native, Go, host or
+  live-provider acceptance. The accepted production pin is unchanged.
+  OAuth tool aliases now persist in a bounded1024-key FIFO owned by each
+  account executor. Continuations without declarations restore even an empty
+  known mapping; local missing or evicted state returns a request-scoped404
+  before inference transport, without cooldown or credential/account rotation.
+  Unary success,401 replay and completed native streams publish previous/new
+  message keys; partial streams do not publish. Stream owners retain keys only,
+  not the complete request body. Six native regressions and three primary Go
+  parent oracles are required; source preparation does not prove execution.
+  Buffered upstream SSE now follows the separate validation, continuity and
+  tool-restoration branch through both the initial request and401 replay.
+  Invalid, empty, errored or incomplete start/delta envelopes return502 and
+  publish neither aliases nor successful usage. A completed message_stop
+  supplies the continuation ID; streams without it never publish new aliases.
+  Start/delta token and cache measurements merge into one usage record, while
+  unchanged event lines and delimiters retain their bytes. Three additional
+  actual executor guards cover continuation,401/partial state and error cases;
+  current native execution and full parity remain unverified.
+  True streaming now also merges nested message-start and later delta usage,
+  publishing measured fields once on terminal delivery,EOF,cancellation or drop.
+  Event-prefixed frames restore tool names per line rather than as whole JSON.
+  After message_stop the tracked owner stops reading and ignores later transport
+  failures; a final buffered terminal line is processed before a pending failure.
+  Partial measurements never publish continuation aliases. Two actual owner
+  guards and the two current upstream disconnect parent oracles are required;
+  execution and remaining error/publication parity are still open.
+  Claude generation and count-token preparation now keep forwarded caller
+  blocks top-level when consecutive user turns terminate the message array,
+  matching5d890405b59c4b84a2f00ca39c4ee1494ce51a72. Generation retains its
+  identity blocks; counting retains caller blocks only. Legacy reminders,
+  strict-mode omission and ordinary mid-conversation placement remain.
+  Three prepared native regressions and two additional primary Go parents
+  cover this behavior. Rust/default-transport/Go/provider acceptance, the
+  remaining release semantics and promotion remain open.
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.14.
+- Codex/OpenAI Chat URL citations now survive unary and streaming conversion,
+  with Unicode rune offsets over all output-text parts, upstream URL/id
+  deduplication, annotation-added/text-done/part-done/item-done event support,
+  and invalid-range filtering. Three actual converter guards plus its two
+  existing contract guards and the current upstream citation parent are
+  required; native/Go execution and full converter parity remain open.
+- Current-main Claude missing-thread404 detection now reaches unary execution,
+  refresh replay, stream bootstrap and native account selection without
+  credential rotation or cooldown. The manager adapter and Claude envelope
+  carry error.details.error_code=thread_not_found for client history replay.
+  Generic model404 and upstream500 failures retain failover. Raw classification
+  preserves first duplicate keys and large numeric fields. Nine new native
+  guards and four primary Go parent tests at immutable16d98881 are required.
+  The d22cc7b verification stopped during compilation with13 lifetime errors;
+  zero tests executed. The repair explicitly reborrows selected capability
+  views when joining local registry fallbacks, preserving owner metadata and
+  borrowed level storage, and retains formatted gjson paths for their values.
+  Existing guard expectations remain unchanged. Native/default-transport/Go
+  validation and actual HTTP/provider acceptance remain open. The cache limiter
+  now reserves one breakpoint for a present non-null thread, matching immutable
+  current-main26e5efbb. Raw counting and deletion preserve surviving numeric
+  lexemes, duplicate sibling fields and key order. The existing five-phase
+  removal priority retains the final system/tool markers as long as possible.
+  Four prepared regressions cover reservation, first-key/null semantics, zero
+  budgets, unchanged inputs and raw large numbers. The full native cloaking
+  module requires19 tests; three additional current-main Go parent oracles cover
+  reservation, key order and tool-only limits. Neither suite has executed on
+  this revision; the accepted production pin is unchanged.
+- Gemini selected-model translation now uses the frozen v8 API-key compatibility
+  helper for GenerateContent, streaming, token count and converted Interactions
+  input. Explicit Home credential options, including false, take precedence over
+  a local catalog snapshot; public caller metadata cannot select compatibility.
+  Native Interactions input (including an empty source format) bypasses translation
+  and plugin hooks. Vertex uses its distinct ordinary Codex translation helper,
+  as upstream requires for both API-key and service-account credentials.
+  Both executors normalize Codex integer fields before conversion and accept the
+  host's existing owned processor rather than introducing process-global state.
+  Five source-level regressions are prepared for dispatch precedence, native
+  bypass, normalization order and injected owner use across preparation modes.
+  Further preparation now uses the complete payload-rule helper, the original
+  translated baseline, requested aliases and headers. Gemini translates identical
+  backing slices once, but keeps distinct equal copies separate; GenerateContent
+  translates original first, while converted Interactions translates working first.
+  Vertex retains upstream's original-first two-pass inference translation. Both
+  token-count paths stay single-pass and skip payload rules. Existing Gemini
+  typed rules are adapted into the canonical configuration; injected configuration
+  is instance-owned. Four more cases cover original explicit defaults, aliases,
+  header gates, backing identity, call order, legacy rule adaptation and count
+  isolation. These nine Google guards have not executed. Gemini/Vertex now also
+  run the existing thought-signature sanitizer and frozen leading/trailing-user
+  content rules in actual GenerateContent preparation. Inference fixes both
+  conversation boundaries; token counting fixes only the leading boundary, and
+  native Interactions bypasses both helpers. Raw boundary mutation retains nested
+  paths, item bytes, duplicate fields and numeric lexemes; valid large media
+  remains borrowed by the content helper. Five helper and three actual-preparation
+  guards are prepared, alongside four existing sanitizer guards and five frozen-Go
+  parent oracles. Canonical thinking now runs in actual Gemini, native Interactions
+  and shared Vertex preparation before payload rules, using the same instance
+  translator registry and selected owned capabilities. Hosts can inject their
+  existing thinking engine/resolver. Frozen Google callers retain default update
+  intent; current-source effort and original summary use the canonical bridge.
+  Dedicated CountTokens strips tool/generation configuration and uses Gemini even
+  on native Interactions accounts; metadata counting keeps the inference pipeline.
+  Streaming ignores metadata counting and Vertex now emits the upstream SSE/query
+  variants. Six thinking and two scripted selected-client operation guards are
+  prepared across API-key and bearer paths. The Claude compatibility oracle now
+  follows upstream's native-source gate on both account kinds and also tests count.
+  Remaining signature/content semantics, outer-host ownership and live HTTP/full
+  provider acceptance remain open; this is not full Gemini/Vertex parity. Primary references at the frozen d7914afd commit:
+  gemini_executor.go:153-154,279-280,684,888-920;
+  gemini_vertex_executor.go:334-335,471-472,928,1022.
+- The canonical request-thinking bridge now owns the thinking and translator
+  registries through explicit handles. A borrowed capability view carries the
+  manager-selected dynamic ID/provider, arbitrary levels, token ceilings and
+  private flags into the same validation, summary and eight native provider
+  algorithms used by the immutable static registry. It preserves both static
+  unsigned and configured signed bounds without leaked strings or a narrowed
+  level enum. Existing static APIs remain available; legacy plugins that cannot
+  consume owned capabilities fail explicitly rather than discarding metadata.
+  Current source owns effort, with an empty-current fallback; current/original
+  source and normalized target summary precedence use the existing owner-scoped
+  translator helper. Primary routing reference: frozen d7914afd
+  internal/runtime/executor/helps/model_capabilities.go:18-31. Unselected models
+  now resolve full embedded capabilities, rather than the old Claude-only static
+  view. An explicit live-registry resolver reads provider-specific registration
+  and refreshed catalog snapshots from the injected instance. Legacy resolvers
+  retain exact static descriptors, including unsigned bounds. Twelve prepared
+  guards cover all native appliers, configured/static precedence, custom levels,
+  source/summary ownership, lookup/owner/provider isolation, live replacement,
+  Claude ceilings, plugin metadata and signed/unsigned extremes.
+  The canonical Responses amount/update path now preserves supported native
+  baseline/input bytes, reads the latest nonempty update for usage, and removes
+  unsupported updates before validation. Suffixes control the baseline without
+  replacing effective in-turn effort. No-thinking models retain summary and
+  unrelated fields. The plugin-normalized working update decision reaches the
+  pipeline and actual Meta preparation; changed intent never falls back to stale
+  source effort. Raw mutation retains surviving item order, duplicate members
+  and numeric lexemes. Validation errors retain the cleaned target separately
+  from public diagnostics. Twelve additional prepared guards cover native/selected
+  cache baselines, suffix/summary/usage precedence, unsupported/no-thinking
+  cleanup, normalizer removal, malformed targets, raw data, failure bodies and
+  the Meta preparation consumer. Primary references: frozen d7914afd
+  internal/thinking/{configuration_update.go,apply.go,apply_codex_usage_test.go}
+  and internal/thinking/provider/{codex,xai}/apply.go.
+  Native Responses passthrough now emits the original/processed diagnostic pair
+  with effective mode/budget/level and an optional top-level baseline level.
+  ThinkingEngine accepts the host's LogOutputController and typed LogLevel; no
+  package-global logger or environment toggle is introduced. The formatter
+  retains baseline_level, and sink failures cannot change inference success or
+  native cache bytes. Four prepared guards cover the frozen six-case diagnostic
+  table through the actual formatter/sink, embedded/selected capabilities,
+  Codex/Responses/xAI aliases, logging-level gates, absent effort, user-defined
+  models, gateway-output isolation and failing sinks. Native execution, five
+  frozen-Go reasoning parent oracles, production bridge/logging-owner binding
+  and committed-SSE parity remain open. Prepared cases do not prove full parity.
+- Further native Meta request-time integration supplies an owned asynchronous
+
+  preparation/401-refresh capability, sharing one per-account conductor lock and
+  the guarded epoch/three-way manager publication. The injected DCA mint
+  coordinator coalesces concurrent accounts and releases abandoned operations;
+  later 401s do not reuse completed mint results. Configured API keys cannot
+  treat DCA values as inference keys. Newly prepared regressions cover selected
+  transport, failure/cancellation/deadline and content preservation, coalescing,
+  actual unary/stream bootstrap replay, committed-stream non-replay and account
+  replacement/disabling/user-edit races. Source-bound execution covers the subset recorded below; remaining guards are pending.
+  The native Meta ProviderExecutor and service factory now consume the owned
+  preparation contract, selected HTTP client, unary terminal translation,
+  bounded streaming lines, apply_patch state, Claude token translation and
+  fixed O200k token counting. Raw output items and missing IDs survive terminal
+  reconstruction; Responses usage defaults preserve measured cache/reasoning
+  values. Typed quota/reset evidence reaches generic unary, stream bootstrap
+  and committed-stream cooldown consumers. The finite targeted controller
+  requires at least248 actual native tests across33 groups, including eight new
+  Google content/preflight and four existing sanitizer cases, plus all nine
+  Claude error/lifecycle cases and nine Google
+  request-preparation cases, twelve owned-thinking pipeline cases, twelve Responses
+  update/usage cases, four native-reasoning diagnostic cases and41 new Meta
+  tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
+  three new shared cancellation-publication guards,15 existing background-worker
+  guards and six retained
+  canonical thinking-route guards. The preceding06f5 revision compiled and
+  passed128 tests in15 completed groups; the transport group passed13 and failed
+  one missing-usage-detail guard, totaling141 passes/one failure. The38 later
+  targeted tests did not execute. The shared raw setter requires existing parent
+  objects; source6538 now creates absent detail objects like upstream sjson and
+  strengthens the existing usage guard for both roots/raw integers/idempotence.
+  That correction and the subsequent Google changes have not executed.
+
+  Two recent native attempts failed compilation before executing tests:
+  4cf3 found a non-Send stream borrow and an owned/static capability mismatch;
+  774c found five private Auth-field initializers. The subsequent corrections
+  use mutable owned stream state, explicit owned capability forwarding and
+  public Auth::default construction. Format checks do not prove compilation.
+  The full controller also requires174 unique frozen-Go parent tests,
+  including27 Meta executor and10 tool/usage parents; the previously counted
+  stale-mint parent is included once. Controller syntax/count validation passed,
+  but current native/default-transport/Go/provider checks are pending.
+  The Meta executor now also offers canonical owner assembly using the same
+  injected translator registry for request-summary preservation and response
+  translation. The host supplies its thinking engine/model resolver, processor,
+  payload rules and usage context; this creates no transport or credential
+  authority. Two prepared real preparation/selected-HTTP guards cover selected
+  model update cleanup and rejection before HTTP, including cleaned error-body
+  retention. Outer-host construction/registration remains open; this constructor
+  alone is not a deployed production binding.
+  The native factory now constructs preparation, request-time recovery and
+  scheduled refresh from one Meta capability. The scheduled bridge uses the
+  host's existing Tokio handle on the existing blocking worker boundary;
+  cancellation wakes active futures without a polling loop or detached task.
+  The shared coordinator checks cancellation before recording either success
+  or failure and before saving a candidate. Three further tests exercise the
+  real AutoRefreshWorker through that native bridge for success,401 and an
+  aborted body read, including cache/store consistency and next scheduling.
+  These new regressions are prepared,
+  not executed. Production transport/thinking/session/usage-owner, presenter
+  and scheduled-worker registration, plus reviewed promotion, remain open.
+
+- Parent continuation after bounded Grok runs: all six candidate request
+  compatibility facades are now exported, with24 prepared regressions:
+  Claude→Codex/OpenAI Chat/Interactions/Gemini and OpenAI Chat/Responses→Claude.
+  Direct Gemini has an explicit request-local thinking policy; its standard
+  path drops thoughts, compatibility retains their source positions and uses
+  Gemini-model-part signature validation/bypass. Antigravity's signature cache
+  and policy stay separate. Full Gemini role/tool alignment/merge/trailing-turn
+  and Responses default-policy parity are not certified by these tests.
+  One v8.0.12 OAuth change also prevents replaying a single-use refresh token
+  after an ambiguous transport failure, with one prepared four-failure-case
+  regression; explicit retryable HTTP responses keep their existing behavior.
+  SDK registry/envelope and pipeline now carry request-scoped configuration
+  update intent, using exact ordered update-item bytes around plugin
+  normalization. Nine prepared regressions distinguish native conversion,
+  normalizer edits, ordered raw bytes, duplicate-key first-match behavior,
+  ordinary message edits and preserved transform metadata. Snapshot scanning
+  uses the same GJSON semantics as upstream. The executor compatibility helper
+  now dispatches all six facades, applies summary handling before one plugin
+  normalizer, and preserves envelope update intent on normal/native-Codex routes.
+  An injected registry/client processor implements the portable owner contract.
+  Compatibility forces portable multi-agent messages independently of Codex
+  client detection and removes internal per-item metadata through shared raw-JSON
+  mutations. Opt-in collab_spawn orphan delegation consumes matching call counts
+  before downgrading only codex_app create_thread/send_message_to_thread output;
+  untouched siblings, duplicate roots and non-string output bytes remain preserved.
+  Twelve additional helper/client/orphan regressions are prepared, unexecuted.
+  Typed API-key models now accept the upstream is-compat option and carry it in
+  the auth manager's private model snapshot. Generic unary, count and stream
+  attempts resolve aliases and selected capabilities from one immutable snapshot,
+  clear stale authority and rebind after each credential selection/refresh.
+  ExecutorRequest keeps this authority outside its JSON wire; client metadata
+  and headers cannot opt into compatibility. The active OpenAI-compatible
+  executor consumes it before registry translation, normalizes integer schemas
+  before conversion and uses the compatibility dispatcher/plugin normalizer.
+  Home dispatch now binds central model metadata and selected credential options
+  privately on unary, count and stream paths, including refresh replay and retained
+  sessions. Explicit central configuration-update true/false takes precedence;
+  legacy payloads can inherit only a matching selected API-key or Codex OAuth model.
+  Codex OAuth capability comes from the selected account's free/plus/team/pro
+  catalog, including business/go aliases, and never from another account's API-key
+  snapshot. Each rebind clears stale API-key/OAuth authority; configured model
+  snapshots retain complete static model metadata and configured overrides.
+  Direct Codex API-key models now use the same private typed-config generation
+  when no alias-table entry matches, keeping configured flags or bounded static
+  defaults. Credential/base-URL validation and source-aware index/prefix/proxy
+  selection follow the pinned resolver. Six more regressions cover this fallback,
+  config reload, redaction, shared Vertex selection and legacy Home execution.
+  The Home contract now distinguishes absent/invalid credential options from
+  a present empty/null/unmatched model list. Legacy dispatches without model_info
+  retain the selected local fallback; central model_info still defaults compatibility
+  to false. Three regressions cover presence across execution paths and exact prefixes.
+  Twelve hard-coded Devin fallback records and the always-present SWE-1.6 Slow
+  override now retain upstream metadata, namespace provenance and catalog precedence.
+  The separate56-record Devin catalog is also imported byte-identically
+  (SHA256 1aee55bcd7af6be17d18c04046d25aba9c63a635af1088bfa4b7dc04d4be3360).
+  An instance-owned store retains raw bytes, deep snapshots and a separate revision;
+  validation namespaces IDs, rejects null/duplicate records, aggregates thinking
+  variants and preserves base metadata/token maxima/modalities. Registry getters
+  prioritize this active catalog, then the main catalog, then hard-coded records.
+  The existing host-owned updater loop refreshes both catalogs at startup/every3h,
+  bounds full-body reads and cancels in-flight fetches without another task/timer.
+  Rejected updates retain the last valid catalog; only changes notify Devin consumers.
+  Seven new regressions cover validation, aggregation, snapshot/lookup isolation,
+  update rejection/notifications, owned-loop cancellation and delayed HTTP bodies.
+  Actual native/default-transport/Go checks and host/runtime acceptance remain open.
+  Interactions-to-Responses now emits the v8.0.13 reasoning summary part/text
+  lifecycle, stable item/summary indexes and completed reasoning items with one
+  concatenated summary. Two regressions cover empty/multiple summaries and
+  overlapping text/reasoning with a late complete signature; existing guards remain.
+  The initial v8.0.13 audit found no Devin inference/frame executor. The
+  candidate now includes native request preparation, aggregate and streaming
+  response consumers, selected-client HTTP execution and an explicit service
+  factory. Those implementations do not establish production UI/prompt,
+  refresher/context/status ownership or live-provider acceptance.
+  The Connect framing layer now decodes fragmented async body chunks and exact
+  single-reader frames, preserves original flags and earlier emitted frames,
+  validates gzip CRC/concatenated members, bounds both wire/inflated sizes and
+  rejects truncated or failed-stream reuse. Typed trailer errors retain upstream
+  authentication/quota/permission/timeout classifications and null-string behavior.
+  Six additional regressions cover these boundaries. They are prepared, not executed.
+  The protobuf decoder now preserves text/thinking/signature fragments as raw bytes,
+  decodes timestamps, custom/invalid-JSON tool deltas, headers and separate cache-write
+  usage, and accepts inner/enveloped Token Usage dimension groups. Six more prepared
+  regressions cover pinned fixtures, partial children, numeric/wire bounds and ownership.
+  Valid finite dimension values truncate as upstream; Rust float casts explicitly
+  retain Rust's saturating/NaN-zero behavior for non-finite/out-of-range values,
+  for which Go does not guarantee a portable conversion result. Unknown groups are
+  skipped iteratively only inside submessages with a depth bound; invalid field
+  numbers fail the typed boundary. The request encoder now carries client metadata,
+  seeded/random fingerprint and tracing identity, complete history/tool/image/reasoning
+  fields, fixed completion flags and stable cascade/session cache IDs. Instance-owned
+  bounded LRU turn counters retain upstream user-boundary behavior without another
+  mutable global. Pinned system/tool-description normalization and the raw-byte
+  UTF-8 boundary buffer are implemented; seven regressions cover these contracts.
+  The aggregate response consumer now preserves ordered thought/text/tool steps,
+  interleaved raw call IDs, the128-call creation cap, late signatures and original
+  argument JSON (including duplicate keys and large numbers). It merges actual
+  positive usage updates, fills only missing counts from dimension groups and keeps
+  cache-write tokens separate. Success requires a clean EOS; trailer/transport/
+  premature-EOF/legacy-patch failures retain redacted partial observations. A fixed
+  64MiB decoded-response budget and sticky terminal errors are host adaptations.
+  Original apply-patch declaration classification is an explicit typed native hook;
+  actual provider request preparation must bind it rather than trust output names.
+  Seven more prepared regressions cover these aggregate contracts. History preparation
+  now merges assistant text/thought/tool steps, matches pending results exactly (or
+  FIFO only when the result ID is absent), and marks orphan results without consuming
+  real user-image positions. Original signatures/images supplement only missing
+  translated material; image recovery stays bound to the original tool ID.
+  Protocol wrappers and structured text are unpacked while arbitrary business JSON
+  and raw argument/schema bytes retain their original spelling. Stable session-ID
+  precedence, zero/null configuration, namespaced automation filtering and native
+  signature detection/base64 grammar follow the pin. Six more regressions cover this
+  owned preparation. Inbound JSON uses Rust's UTF-8 string boundary; valid UTF-8 raw
+  JSON spelling is retained. Native auth/refresh, the selected-client provider
+  caller and async streaming consumer are now implemented in the candidate.
+  Production owner binding and live-provider acceptance remain open.
+  Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
+  account-kind collisions, legacy Home execution, public JSON boundaries, native
+  capability refresh and built-in metadata. Earlier candidate0d2bfa compiled and
+  passed24 scoped groups before the history group reported five passes and one
+  incorrect oracle; that oracle was corrected later. Its immutable results retain
+  their original source/dependency scope. They do not prove the latest aggregate
+  candidate: its180 targeted native requirements and full Go checks are unrun.
+  The first source-pinned Cargo attempt at a5d8 passed formatting and stopped with23
+  compiler errors. Source repairs now address temporary GJSON/path lifetimes,
+  raw-byte conversions, control-character hex formatting, local catalog iterator
+  drop order, nested cancellation borrows and sibling/public access boundaries.
+  Existing wire/Unicode/ownership/cancellation assertions remain intact; the
+  required native retry and Go oracle execution are still pending.
+  The first admitted57c4 candidate stopped during formatting because an older
+  regression used a non-ASCII Rust raw-byte literal. The fixture now obtains
+  the identical UTF-8 bytes from a string; its Unicode/HTML-preservation guard
+  remains intact. The failed receipt/log and exact formatter-produced source
+  patch are retained durably. Candidate formatting is committed before retry.
+  Narrow formatting and whitespace checks passed. Other executor consumers,
+  host/runtime acceptance of the separate Devin catalog,
+  remaining v8 semantic deltas and live thinking update-intent propagation remain open;
+  this is not runtime or promotion acceptance.
+  Source/target summary extraction
+  now keeps OpenAI Chat reasoning depth separate from Claude display visibility.
+  The xAI subscription client-version header is updated from0.2.93 to upstream
+  1.0.44. API/OAuth mode inference, boolean overrides and nonempty credential
+  precedence now follow the frozen Go source. OAuth chat resolves to the official
+  CLI chat proxy while compact remains on the API; explicit custom origins stay
+  intact. CLI identity headers are scoped to the official chat proxy, custom
+  headers retain their upstream precedence and session affinity uses x-grok-conv-id.
+  Four additional routing/credential/header regressions are prepared; Rust/Go
+  execution and live xAI inference acceptance remain unverified.
+  Two further v8.0.12 response regressions preserve requested Codex web-search
+  source includes and classify Claude pause_turn/max_tokens as incomplete in
+  both transports. They remain unexecuted; full response-path parity is open.
+  Claude continuity now pins the first credential-local date for an active
+  session, including both live execute paths. Midnight cannot rewrite that
+  reminder until continuity expires; missing identity/restart retains the
+  per-request fallback. Diagnostics are still injected after cloaking to retain
+  member order. Two scoped/date-expiry regressions remain prepared, unexecuted.
+  The live Codex model catalog also retains a template's freeform apply-patch
+  support for eligible text models when no routing-capability resolver is
+  supplied, matching v8.0.12. An injected exact-model resolver can restrict it;
+  image/video and explicitly non-text entries cannot inherit conversation tools.
+  Two additional catalog regressions are prepared and unexecuted. Binding a
+  routing-capability resolver in actual consumers remains unverified.
+  Compilation/Rust/Go execution, live executor compatibility/update-intent
+  callers and full candidate parity remain pending. No pin or release gate
+  was promoted.
+
 - Scaffolds: not counted
 - Owner of shared registry/module graph: CTOX integration lane
 
@@ -44,6 +605,128 @@ some CTOX integration work. It remains immutable forensic evidence and is not
 used as the current completion metric for either lane. New upstream work must
 not add Business OS, secret-store or Pi integration points to Track A; those
 changes update Track B only.
+
+## Frozen v8.0.11 review (historical, not promoted)
+
+Verified on 2026-10-02 against `https://github.com/router-for-me/CLIProxyAPI.git`:
+tag `v8.0.11` and `refs/heads/main` both resolved to
+`e2bff0107bb307337aaa19018ccddd55f64253d5`. `v8.0.11` was the newest tag. Do
+not move this candidate if `main` later advances.
+
+`scripts/prepare_upstream_candidate.sh` built a fail-closed review for the
+delta from `a88197f` (v7.2.116). Conservation held: 1,354 files, 510 added,
+837 modified, 7 deleted, 0 renamed. Of the modified Go files, 242 differ only
+by the module path `github.com/router-for-me/CLIProxyAPI/v7` to `/v8`. The
+other 581 modified Go files, plus 492 added Go files, still need a semantic
+port. This section awards zero points. The accepted pin, source anchors, and
+`upstream-lock.json` stay on `a88197f` until the promotion gates pass.
+
+The following slice ledger records the initial v8.0.11 review state. Later
+implementations and check status appear above; the historical statements below
+must not be interpreted as the current candidate's implementation inventory.
+Source anchors intentionally retain the accepted pin until reviewed promotion.
+
+Slices whose Rust behavior was updated in that initial candidate:
+
+- Responses stream error chunks are nested `error` objects. Status 408 reports
+  code `request_timeout` and type `server_error`, so a cut Codex stream stays
+  retryable. `response.failed` is a separate terminal chunk. The handler
+  framer that chooses between those events is not revalidated yet.
+- Config API-key classification uses kind and source. The secret attribute may
+  be absent; the key stays in the injected secret store.
+- Claude server tool types include `advisor_` and `agent_toolset_`.
+- `is_claude_model` is the upstream case-insensitive substring check.
+- Claude function names are sanitized to `^[A-Za-z0-9_-]{1,64}`.
+- OpenAI chat passthrough drops chunks after `[DONE]` for one translation.
+- Codex JWT `plan_type` defaults blank claims to `free`.
+- Discovery default service type is `_ai-gateway._tcp`.
+- Token sums reject a negative component or int64 overflow. The previous Rust
+  `checked_sum` already rejected overflow of a non-negative total; it now
+  rejects any negative operand, matching `nonNegativeSum`.
+- Vertex-compatible credentials accept `disable-cooling` and `request-retry`
+  without collapsing unset into false or zero.
+- Home auth dispatch carries parent session, node kind, retry round, excluded
+  auth ids, and a pinned auth id. Unset fields stay omitted.
+- `parse_gjson_bytes_no_copy` borrows the original document.
+- SSE event frames include their blank-line terminator.
+- JSON string writes can keep `<`, `>`, and `&` unescaped.
+- Claude Code attribution blocks can be stripped from `system` while other
+  system text stays.
+- Header lookup exports the case-insensitive single-value and all-values forms.
+- Claude Messages sanitizing can keep opaque thinking signatures when the
+  caller asks to preserve empty thinking blocks. Callers that do not pass that
+  flag keep the previous drop behavior.
+- SDK config accepts `client.codex.optimize-multi-agent-v2` and
+  `client.codex.enable-apply-patch`. The provider-config mirror still wins
+  when it is set. Runtime-only OAuth, response-steering, and orphan-delegation
+  fields are present and not read from YAML.
+- The Claude Code device-profile baseline is `claude-cli/2.1.280` /
+  `@anthropic-ai/sdk` `0.112.1`. Native detection treats that version as a
+  patch floor. Stored device profiles still require an exact software match,
+  so a newer unmeasured patch falls back to the baseline. The measured TLS
+  fingerprint labeled 2.1.220 is unchanged.
+- Cache control is copied only when `type` is exactly `ephemeral`. OpenAI tool
+  results hoist part-level cache control onto the `tool_result` block, and
+  fall back to message-level control when the part-level object is not valid.
+- JSON Schema `pattern` values and `patternProperties` keys that use `\p{`,
+  `\P{`, or `\0` are removed from schema keyword locations. The same walk
+  leaves `pattern` keys inside `default` and `enum` data alone. Claude to
+  OpenAI schema normalization also turns boolean subschemas into `{}` except
+  `additionalProperties` and a literal `false`.
+- Codex request preparation collapses a pure constant `oneOf` or `anyOf` of
+  at least eight branches into an enum, including namespaced tools, and strips
+  those unsupported patterns. Fields outside `tools`, and tools that do not
+  change, keep their original bytes. That pass does not rewrite numeric types.
+- Codex clients sending tool schemas to a non-Codex executor get `number`
+  rewritten to `integer` on the reserved client fields (`exec_command`,
+  `write_stdin`, `sleep`, `wait`, `wait_agent`, `tool_search`, and
+  `test_sync_tool`, including `functions__` and `collab__` prefixes). Codex
+  and Codex WebSocket targets, other tool names, and non-Codex user agents
+  keep the original bytes. OpenAI-compat, AI Studio, Gemini, Vertex, Kimi,
+  Claude, and Antigravity preparation apply that rule. Antigravity also walks
+  `request.tools`, which upstream's top-level walk does not see. Codex
+  Responses clients still do not integer-normalize their own target.
+- Non-Codex Responses clients receive nested `event: error` stream failures.
+  A Codex user agent or official Originator (`Codex Desktop/`, `codex-tui/`,
+  `codex_cli_rs`, `codex_exec/`, or the matching Originator) still receives
+  `event: response.failed`. The live Responses framer now buffers split
+  frames, drops `responsesapi.*` timing events, drops `codex.*` events for
+  other clients, keeps `codex.response.metadata` for an official Codex
+  client while still dropping `codex.rate_limits`, and fills an empty
+  `response.output` from earlier `response.output_item.done` items.
+  `responsesStreamErrorText` sanitizing inside the framer is still the
+  handler redaction that runs before the frame is repaired.
+- Kimi reorders interleaved Responses tool outputs before chat translation.
+  OpenAI Responses requests run `NormalizeApplyPatchResponsesRequest` first:
+  a winning custom `apply_patch` declaration becomes a function, explicit
+  custom patch history becomes function calls, and a Chat function of the
+  same name wins over the translated custom tool. The streaming input decoder,
+  custom-tool event builders, `ApplyPatchResponsesBridge`, and
+  `ApplyPatchResponsesState` are ported. Both are uncompiled. The state
+  covers dispatcher identity, snapshots, SSE framing, and terminal
+  restoration, with the upstream helper regressions. Kimi still translates
+  the normalized request to chat, and xAI and Meta still have no live
+  response-path caller.
+- API-key model-compatibility helpers integer-normalize before the host
+  processor. The six `Convert*WithCompat` translators are not ported, and
+  the update-intent flag stays false.
+- Plugin Responses usage keeps top-level token counts when a service tier is
+  present without `response.usage`. Devin, Meta, and other providers that
+  have no Rust executor remain gaps.
+
+Track B ledger path
+`src/core/execution/cliproxyapi_integration/provider-integration.json` is cited
+by this file, the dashboard template, and
+`scripts/build_dashboard.sh` / `scripts/build_ctox_integration_impact.sh`, but
+that file is not on this branch. The last copy is commit `3ab0f4b1` (2026-08-09),
+which is not an ancestor of `5a8db7e2`. Its receipts point at ignored
+`runtime/cliproxyapi-track-b-receipts/` and
+`runtime/cliproxyapi-strict-receipts/` objects that are not in this checkout.
+The ledger was not restored: copying August "verified" rows without those
+hashed receipts would present evidence this tree cannot check. Dashboard and
+integration gates stay closed until the ledger and receipts are recovered.
+`docs/architecture.md`, cited by `AGENTS.md`, was removed from the public repo
+in `bb4fa6fc5` and is not required by these gates.
 
 ## Frozen historical 1,000-point semantic ledger
 

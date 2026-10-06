@@ -917,6 +917,6 @@ mod tests {
         )));
         let body: serde_json::Value = serde_json::from_slice(&response[split + 4..]).unwrap();
         assert_eq!(body["channel"], "claude");
-        assert_eq!(body["models"].as_array().unwrap().len(), 15);
+        assert_eq!(body["models"].as_array().unwrap().len(), 18);
     }
 }

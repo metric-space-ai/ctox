@@ -28,10 +28,12 @@ struct ConfiguredRoute {
     model_info: Arc<ModelInfo>,
 }
 
-/// One immutable, manager-published routing generation. It contains only
-/// derived model data; API keys, headers and storage payloads never enter it.
+/// One immutable, manager-published routing generation. The private typed config
+/// is shared with the manager so unlisted models use the same generation.
+/// Keys, headers and storage payloads remain absent from Debug and request JSON.
 #[derive(Clone, Default)]
 pub struct ApiKeyModelRoutingSnapshot {
+    config: Arc<ProviderCompatConfig>,
     routes: BTreeMap<String, BTreeMap<String, Vec<ConfiguredRoute>>>,
 }
 
@@ -47,6 +49,101 @@ impl fmt::Debug for ApiKeyModelRoutingSnapshot {
 #[must_use]
 pub fn resolved_api_key_model_info(request: &Request) -> Option<Arc<ModelInfo>> {
     request.metadata.resolved_api_key_model_info.clone()
+}
+
+/// Effective selected model capability; Codex OAuth stays independently typed.
+/// ref: sdk/cliproxy/auth/api_key_model_capabilities.go @ d7914afd
+#[must_use]
+pub fn resolved_model_info(request: &Request) -> Option<Arc<ModelInfo>> {
+    request
+        .metadata
+        .resolved_codex_oauth_model_info
+        .clone()
+        .or_else(|| request.metadata.resolved_api_key_model_info.clone())
+}
+
+// ref: sdk/cliproxy/auth/api_key_model_capabilities.go:221-246 @ d7914afd
+fn lookup_unlisted_codex_api_key_model_info(
+    snapshot: &ApiKeyModelRoutingSnapshot,
+    auth: &Auth,
+    upstream_model: &str,
+) -> Option<Arc<ModelInfo>> {
+    if auth.auth_kind() != Some(AuthKind::ApiKey)
+        || !auth.provider.trim().eq_ignore_ascii_case("codex")
+        || upstream_model.trim().is_empty()
+    {
+        return None;
+    }
+    let entry = resolve_key(&snapshot.config.codex_api_key, auth)?;
+    let key = auth
+        .attributes
+        .get("api_key")
+        .map_or("", String::as_str)
+        .trim();
+    let base_url = auth
+        .attributes
+        .get("base_url")
+        .map_or("", String::as_str)
+        .trim();
+    if (key.is_empty() && base_url.is_empty())
+        || !key.eq_ignore_ascii_case(entry.api_key.trim())
+        || (!entry.base_url.trim().is_empty()
+            && !base_url.eq_ignore_ascii_case(entry.base_url.trim()))
+    {
+        return None;
+    }
+    for configured in &entry.models {
+        let parsed = parse_suffix(configured.name.trim());
+        let selected = parse_suffix(upstream_model.trim());
+        if configured
+            .name
+            .trim()
+            .eq_ignore_ascii_case(upstream_model.trim())
+            || (!parsed.has_suffix
+                && parsed
+                    .model_name
+                    .trim()
+                    .eq_ignore_ascii_case(selected.model_name.trim()))
+        {
+            let support = configured.thinking.as_ref().map(thinking_support);
+            let mut info =
+                modelconfig::resolve_model_info(upstream_model, "codex", support.as_ref());
+            info.support_configuration_update = configured.support_configuration_update;
+            info.is_compat = configured.is_compat;
+            return Some(Arc::new(info));
+        }
+    }
+    let mut info = modelconfig::resolve_model_info(upstream_model, "codex", None);
+    info.support_configuration_update = false;
+    Some(Arc::new(info))
+}
+
+fn lookup_codex_oauth_model_info(auth: &Auth, upstream_model: &str) -> Option<Arc<ModelInfo>> {
+    if auth.auth_kind() != Some(AuthKind::OAuth)
+        || !auth.provider.trim().eq_ignore_ascii_case("codex")
+    {
+        return None;
+    }
+    let plan = auth
+        .attributes
+        .get("plan_type")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let channel = match plan.as_str() {
+        "plus" => "codex-plus",
+        "team" | "business" | "go" => "codex-team",
+        "free" => "codex-free",
+        _ => "codex-pro",
+    };
+    let selected = parse_suffix(upstream_model.trim()).model_name;
+    let catalog = crate::internal::registry::embedded_models_catalog().ok()?;
+    crate::internal::registry::models_for_channel(&catalog, channel)?
+        .into_iter()
+        .find(|model| model.id.eq_ignore_ascii_case(selected.trim()))
+        .map(ModelInfo::from)
+        .map(Arc::new)
 }
 
 impl AuthManager {
@@ -68,7 +165,8 @@ impl AuthManager {
 
     fn publish_api_key_model_routing(&self, config: &ProviderCompatConfig) {
         let owned_config = Arc::new(config.clone());
-        let snapshot = compile_snapshot(owned_config.as_ref(), &self.lifecycle.snapshot_cached());
+        let snapshot =
+            compile_snapshot(Arc::clone(&owned_config), &self.lifecycle.snapshot_cached());
         *self
             .api_key_config
             .write()
@@ -122,7 +220,11 @@ impl AuthManager {
         let snapshot = self.api_key_model_routing_snapshot();
         let requested_model = rewrite_model_for_auth(route_model, auth);
         let alias = resolve_alias(&snapshot, auth, &requested_model);
-        let routes = matching_routes(&snapshot, &auth.id, &requested_model);
+        let routes = if is_configured_model_routing_auth(auth) {
+            matching_routes(&snapshot, &auth.id, &requested_model)
+        } else {
+            Vec::new()
+        };
         let mut models = Vec::new();
         for route in routes {
             let model = preserve_resolved_model_suffix(
@@ -173,8 +275,14 @@ pub(crate) fn attach_resolved_api_key_model_info(
     upstream_model: &str,
 ) -> Request {
     let requested = rewrite_model_for_auth(route_model, auth);
+    request.metadata.resolved_api_key_model_info = None;
+    request.metadata.resolved_codex_oauth_model_info = None;
     let selected = upstream_model.trim();
-    let routes = matching_routes(snapshot, &auth.id, &requested);
+    let routes = if is_configured_model_routing_auth(auth) {
+        matching_routes(snapshot, &auth.id, &requested)
+    } else {
+        Vec::new()
+    };
     let exact = routes
         .iter()
         .find(|route| route.upstream_model.trim().eq_ignore_ascii_case(selected));
@@ -190,17 +298,30 @@ pub(crate) fn attach_resolved_api_key_model_info(
     });
     if let Some(route) = fallback {
         request.metadata.resolved_api_key_model_info = Some(route.model_info.clone());
+    } else if let Some(info) =
+        lookup_unlisted_codex_api_key_model_info(snapshot, auth, upstream_model)
+    {
+        request.metadata.resolved_api_key_model_info = Some(info);
+    } else {
+        request.metadata.resolved_codex_oauth_model_info =
+            lookup_codex_oauth_model_info(auth, upstream_model);
     }
     request
 }
 
-fn compile_snapshot(config: &ProviderCompatConfig, auths: &[Auth]) -> ApiKeyModelRoutingSnapshot {
-    let mut snapshot = ApiKeyModelRoutingSnapshot::default();
+fn compile_snapshot(
+    config: Arc<ProviderCompatConfig>,
+    auths: &[Auth],
+) -> ApiKeyModelRoutingSnapshot {
+    let mut snapshot = ApiKeyModelRoutingSnapshot {
+        config: Arc::clone(&config),
+        ..ApiKeyModelRoutingSnapshot::default()
+    };
     for auth in auths {
         if !is_configured_model_routing_auth(auth) {
             continue;
         }
-        if let Some(models) = configured_models(config, auth) {
+        if let Some(models) = configured_models(config.as_ref(), auth) {
             let mut by_route = BTreeMap::new();
             for model in models {
                 add_route(&mut by_route, model);
@@ -213,12 +334,18 @@ fn compile_snapshot(config: &ProviderCompatConfig, auths: &[Auth]) -> ApiKeyMode
     snapshot
 }
 
+#[cfg(test)]
+#[path = "api_key_model_compat_test.rs"]
+mod candidate_resolved_model_capability_tests;
+
 #[derive(Clone)]
 struct ModelView {
     name: String,
     alias: String,
     model_type: &'static str,
     force_mapping: bool,
+    is_compat: bool,
+    support_configuration_update: bool,
     thinking: Option<ThinkingSupport>,
 }
 
@@ -236,42 +363,111 @@ fn configured_models(config: &ProviderCompatConfig, auth: &Auth) -> Option<Vec<M
     }
 }
 
-fn resolve_key<'a>(entries: &'a [CodexKey], auth: &Auth) -> Option<&'a CodexKey> {
-    if let Some(index) = config_index(auth) {
-        return entries.get(index);
+trait ApiKeyConfigEntry {
+    fn api_key(&self) -> &str;
+    fn base_url(&self) -> &str;
+    fn prefix(&self) -> &str;
+    fn proxy_url(&self) -> &str;
+}
+
+impl ApiKeyConfigEntry for CodexKey {
+    fn api_key(&self) -> &str {
+        &self.api_key
     }
-    let api_key = auth
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+    fn prefix(&self) -> &str {
+        &self.prefix
+    }
+    fn proxy_url(&self) -> &str {
+        &self.proxy_url
+    }
+}
+
+impl ApiKeyConfigEntry for VertexCompatKey {
+    fn api_key(&self) -> &str {
+        &self.api_key
+    }
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+    fn prefix(&self) -> &str {
+        &self.prefix
+    }
+    fn proxy_url(&self) -> &str {
+        &self.proxy_url
+    }
+}
+
+// ref: sdk/cliproxy/auth/conductor_models.go:732-775 @ d7914afd
+fn resolve_api_key_config<'a, T: ApiKeyConfigEntry>(
+    entries: &'a [T],
+    auth: &Auth,
+) -> Option<&'a T> {
+    let attr_key = auth
         .attributes
         .get("api_key")
         .map_or("", String::as_str)
         .trim();
-    let base_url = auth
+    let attr_base = auth
         .attributes
         .get("base_url")
         .map_or("", String::as_str)
         .trim();
-    entries.iter().find(|entry| {
-        !api_key.is_empty()
-            && entry.api_key.trim() == api_key
-            && (base_url.is_empty() || entry.base_url.trim() == base_url)
-    })
+    let matches_credentials = |entry: &T| {
+        let cfg_key = entry.api_key().trim();
+        let cfg_base = entry.base_url().trim();
+        if !attr_key.is_empty() && !attr_base.is_empty() {
+            cfg_key.eq_ignore_ascii_case(attr_key) && cfg_base.eq_ignore_ascii_case(attr_base)
+        } else if !attr_key.is_empty() {
+            cfg_key.eq_ignore_ascii_case(attr_key)
+                && (cfg_base.is_empty() || cfg_base.eq_ignore_ascii_case(attr_base))
+        } else {
+            !attr_base.is_empty() && cfg_base.eq_ignore_ascii_case(attr_base)
+        }
+    };
+    if auth.auth_source_kind() == Some(AuthSourceKind::Config) {
+        if let Some(entry) = config_index(auth).and_then(|index| entries.get(index)) {
+            if matches_credentials(entry) {
+                return Some(entry);
+            }
+        }
+    }
+    entries
+        .iter()
+        .find(|entry| {
+            matches_credentials(*entry)
+                && entry
+                    .prefix()
+                    .trim()
+                    .eq_ignore_ascii_case(auth.prefix.trim())
+                && entry
+                    .proxy_url()
+                    .trim()
+                    .eq_ignore_ascii_case(auth.proxy_url.trim())
+        })
+        .or_else(|| entries.iter().find(|entry| matches_credentials(*entry)))
+        .or_else(|| {
+            (!attr_key.is_empty())
+                .then(|| {
+                    entries
+                        .iter()
+                        .find(|entry| entry.api_key().trim().eq_ignore_ascii_case(attr_key))
+                })
+                .flatten()
+        })
+}
+
+fn resolve_key<'a>(entries: &'a [CodexKey], auth: &Auth) -> Option<&'a CodexKey> {
+    resolve_api_key_config(entries, auth)
 }
 
 fn resolve_vertex_key<'a>(
     entries: &'a [VertexCompatKey],
     auth: &Auth,
 ) -> Option<&'a VertexCompatKey> {
-    if let Some(index) = config_index(auth) {
-        return entries.get(index);
-    }
-    let api_key = auth
-        .attributes
-        .get("api_key")
-        .map_or("", String::as_str)
-        .trim();
-    entries
-        .iter()
-        .find(|entry| !api_key.is_empty() && entry.api_key.trim() == api_key)
+    resolve_api_key_config(entries, auth)
 }
 
 fn resolve_openai_compat<'a>(
@@ -313,6 +509,8 @@ fn codex_model_view(model: &CodexModel, model_type: &'static str) -> ModelView {
         alias: model.alias.clone(),
         model_type,
         force_mapping: model.force_mapping,
+        is_compat: model.is_compat,
+        support_configuration_update: model_type == "codex" && model.support_configuration_update,
         thinking: model.thinking.as_ref().map(thinking_support),
     }
 }
@@ -325,6 +523,8 @@ fn vertex_model_views(key: &VertexCompatKey) -> Vec<ModelView> {
             alias: model.alias.clone(),
             model_type: "gemini",
             force_mapping: model.force_mapping,
+            is_compat: false,
+            support_configuration_update: false,
             thinking: model.thinking.as_ref().map(thinking_support),
         })
         .collect()
@@ -346,6 +546,8 @@ fn openai_model_views(entry: &OpenAiCompatibility) -> Vec<ModelView> {
                 alias: model.alias.clone(),
                 model_type: "openai-compatibility",
                 force_mapping: model.force_mapping,
+                is_compat: model.is_compat,
+                support_configuration_update: false,
                 thinking,
             }
         })
@@ -375,15 +577,14 @@ fn add_route(by_route: &mut BTreeMap<String, Vec<ConfiguredRoute>>, model: Model
         return;
     }
     let support = model.thinking.as_ref();
+    let mut model_info = modelconfig::resolve_model_info(&name, model.model_type, support);
+    model_info.is_compat = model.is_compat;
+    model_info.support_configuration_update = model.support_configuration_update;
     let route = ConfiguredRoute {
         upstream_model: name.clone(),
         force_mapping: model.force_mapping,
         original_alias: alias.clone(),
-        model_info: Arc::new(modelconfig::resolve_model_info(
-            &name,
-            model.model_type,
-            support,
-        )),
+        model_info: Arc::new(model_info),
     };
     let mut seen = Vec::new();
     for route_model in [&alias, &name] {
@@ -427,6 +628,12 @@ fn resolve_alias(
     let requested = requested.trim();
     if requested.is_empty() {
         return OAuthModelAliasResult::default();
+    }
+    if !is_configured_model_routing_auth(auth) {
+        return OAuthModelAliasResult {
+            upstream_model: requested.to_owned(),
+            ..OAuthModelAliasResult::default()
+        };
     }
     let routes = matching_routes(snapshot, &auth.id, requested);
     let Some(route) = routes.first() else {

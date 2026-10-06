@@ -27,6 +27,7 @@ struct MockClient {
     requests: Mutex<Vec<HttpRequest>>,
     response: Mutex<HttpResponse>,
     stream_chunks: Mutex<Vec<Vec<u8>>>,
+    entered_at: Mutex<Option<std::time::SystemTime>>,
 }
 
 impl MockClient {
@@ -48,6 +49,7 @@ impl MockClient {
 impl HostHttpClient for MockClient {
     fn execute<'a>(&'a self, request: HttpRequest) -> PluginFuture<'a, HttpResponse> {
         Box::pin(async move {
+            *self.entered_at.lock().unwrap() = Some(std::time::SystemTime::now());
             self.requests.lock().unwrap().push(request);
             Ok(self.response.lock().unwrap().clone())
         })
@@ -455,4 +457,217 @@ fn header<'a>(headers: &'a BTreeMap<String, Vec<String>>, name: &str) -> Option<
         .find(|(key, _)| key.eq_ignore_ascii_case(name))
         .and_then(|(_, values)| values.first())
         .map(String::as_str)
+}
+
+#[derive(Default)]
+struct GeminiUsageCollector(
+    Mutex<Vec<crate::sdk::cliproxy::usage::Record>>,
+    Mutex<Vec<crate::sdk::cliproxy::usage::UsageContext>>,
+);
+
+impl crate::sdk::cliproxy::usage::Plugin for GeminiUsageCollector {
+    fn handle_usage(
+        &self,
+        context: &crate::sdk::cliproxy::usage::UsageContext,
+        record: &crate::sdk::cliproxy::usage::Record,
+    ) {
+        self.1.lock().unwrap().push(context.clone());
+        self.0.lock().unwrap().push(record.clone());
+    }
+}
+
+fn usage_executor() -> (
+    GeminiExecutor,
+    Arc<crate::sdk::cliproxy::usage::Manager>,
+    Arc<GeminiUsageCollector>,
+) {
+    let manager = Arc::new(crate::sdk::cliproxy::usage::Manager::new(8));
+    let collector = Arc::new(GeminiUsageCollector::default());
+    manager.register(collector.clone());
+    let executor = GeminiExecutor::new(
+        Arc::new(GeminiExecutorConfig::default()),
+        Arc::new(Registry::new()),
+    )
+    .with_usage_manager(manager.clone());
+    (executor, manager, collector)
+}
+
+#[tokio::test]
+async fn candidate_google_usage_starts_before_transport_and_keeps_cache_reasoning() {
+    let (executor, manager, collector) = usage_executor();
+    let client = MockClient::with_body(
+        br#"{"usageMetadata":{"promptTokenCount":11,"toolUsePromptTokenCount":2,"candidatesTokenCount":3,"thoughtsTokenCount":4,"cachedContentTokenCount":5,"totalTokenCount":20}}"#,
+    );
+    let mut input = request(client.clone());
+    input
+        .metadata
+        .insert("requested_model".into(), json!(" public-gemini "));
+    executor.execute(input).await.unwrap();
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert!(!record.failed);
+    assert_eq!(record.provider, "gemini");
+    assert_eq!(record.model, "gemini-3.1-pro-preview");
+    assert_eq!(record.alias, "public-gemini");
+    assert!(record.requested_at.unwrap() <= client.entered_at.lock().unwrap().unwrap());
+    assert_eq!(record.detail.input_tokens, 13);
+    assert_eq!(record.detail.output_tokens, 3);
+    assert_eq!(record.detail.reasoning_tokens, 4);
+    assert_eq!(record.detail.cache_read_tokens, 5);
+    assert_eq!(record.detail.total_tokens, 20);
+}
+
+#[tokio::test]
+async fn candidate_google_usage_preserves_upstream_failure_once() {
+    let (executor, manager, collector) = usage_executor();
+    let client = MockClient::with_body(b"upstream rejected the account");
+    client.response.lock().unwrap().status_code = 401;
+    assert!(executor.execute(request(client)).await.is_err());
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].failed);
+    assert_eq!(records[0].fail.status_code, 401);
+    assert_eq!(records[0].detail.total_tokens, 0);
+}
+
+#[tokio::test]
+async fn candidate_google_usage_captures_missing_client_bootstrap() {
+    let (executor, manager, collector) = usage_executor();
+    let mut input = request(MockClient::with_body(b"{}"));
+    input.http_client = None;
+    assert!(executor.execute(input).await.is_err());
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].failed);
+    assert!(records[0].fail.body.contains("HTTP client missing"));
+}
+
+struct PendingGeminiUsageClient(tokio::sync::Notify);
+
+impl HostHttpClient for PendingGeminiUsageClient {
+    fn execute<'a>(&'a self, _: HttpRequest) -> PluginFuture<'a, HttpResponse> {
+        Box::pin(async move {
+            self.0.notify_one();
+            std::future::pending().await
+        })
+    }
+
+    fn execute_stream<'a>(&'a self, _: HttpRequest) -> PluginFuture<'a, HttpStreamResponse> {
+        Box::pin(std::future::pending())
+    }
+}
+
+#[tokio::test]
+async fn candidate_google_usage_settles_cancelled_attempt_once() {
+    let (executor, manager, collector) = usage_executor();
+    let client = Arc::new(PendingGeminiUsageClient(tokio::sync::Notify::new()));
+    let mut input = request(MockClient::with_body(b"{}"));
+    input.http_client = Some(client.clone());
+    let task = tokio::spawn(async move { executor.execute(input).await });
+    let started =
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.0.notified()).await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(started.is_ok(), "the request must reach the held transport");
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].failed);
+    assert_eq!(records[0].fail.status_code, 499);
+}
+
+#[tokio::test]
+async fn candidate_google_usage_native_interactions_keeps_its_usage_schema() {
+    let (_, manager, collector) = usage_executor();
+    let executor = GeminiExecutor::interactions(
+        Arc::new(GeminiExecutorConfig::default()),
+        Arc::new(Registry::new()),
+    )
+    .with_usage_manager(manager.clone());
+    let client = MockClient::with_body(
+        br#"{"usage":{"total_input_tokens":11,"total_output_tokens":3,"total_thought_tokens":4,"cache_read_tokens":5,"total_tokens":18}}"#,
+    );
+    let mut input = request(client);
+    input.auth_provider = "gemini-interactions".into();
+    input.source_format = "interactions".into();
+    input.payload = br#"{"input":"hello"}"#.to_vec();
+    executor.execute(input).await.unwrap();
+    manager.stop();
+    let records = collector.0.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].failed);
+    assert_eq!(records[0].detail.input_tokens, 11);
+    assert_eq!(records[0].detail.output_tokens, 3);
+    assert_eq!(records[0].detail.reasoning_tokens, 4);
+    assert_eq!(records[0].detail.cache_read_tokens, 5);
+    assert_eq!(records[0].detail.total_tokens, 18);
+}
+
+#[tokio::test]
+async fn candidate_google_usage_dedicated_counting_is_not_inference() {
+    let (executor, manager, collector) = usage_executor();
+    let client = MockClient::with_body(br#"{"totalTokens":3}"#);
+    executor.count_tokens(request(client)).await.unwrap();
+    manager.stop();
+    assert!(collector.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn candidate_google_usage_keeps_owned_context_and_isolates_requests() {
+    use crate::internal::logging::requestmeta::{
+        get_endpoint, get_response_status, set_response_status, with_endpoint,
+        with_response_status_holder,
+    };
+
+    let (executor, manager, collector) = usage_executor();
+    let first_context = with_response_status_holder(Some(&with_endpoint(None, "/first-inference")));
+    let second_context =
+        with_response_status_holder(Some(&with_endpoint(None, "/second-inference")));
+    set_response_status(Some(&first_context), 201);
+    set_response_status(Some(&second_context), 202);
+    for context in [&first_context, &second_context] {
+        let mut input = request(MockClient::with_body(b"{}"));
+        input.request_context = context.clone();
+        executor.execute(input).await.unwrap();
+    }
+    manager.stop();
+    assert_eq!(collector.0.lock().unwrap().len(), 2);
+    let contexts = collector.1.lock().unwrap();
+    assert_eq!(contexts.len(), 2);
+    let first = contexts
+        .iter()
+        .find(|context| get_endpoint(Some(&context.request)) == "/first-inference")
+        .unwrap();
+    let second = contexts
+        .iter()
+        .find(|context| get_endpoint(Some(&context.request)) == "/second-inference")
+        .unwrap();
+    set_response_status(Some(&first_context), 218);
+    assert_eq!(get_response_status(Some(&first.request)), 218);
+    assert_eq!(get_response_status(Some(&second.request)), 202);
+}
+
+#[test]
+fn candidate_google_usage_request_context_cannot_enter_client_json() {
+    use crate::internal::logging::requestmeta::{get_endpoint, with_endpoint};
+
+    let mut input = request(MockClient::with_body(b"{}"));
+    input.request_context = with_endpoint(None, "/native-owned-context");
+    assert_eq!(
+        get_endpoint(Some(&input.clone().request_context)),
+        "/native-owned-context"
+    );
+    assert!(!format!("{input:?}").contains("native-owned-context"));
+    let mut wire = serde_json::to_value(&input).unwrap();
+    assert!(wire.get("RequestContext").is_none());
+    wire["RequestContext"] = json!({
+        "endpoint": "/client-injected-context",
+        "response_status": 401
+    });
+    let decoded: ExecutorRequest = serde_json::from_value(wire).unwrap();
+    assert_eq!(get_endpoint(Some(&decoded.request_context)), "");
 }

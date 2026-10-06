@@ -143,6 +143,12 @@ fn clean_json_schema(schema: &Value, options: CleanOptions) -> Value {
         remove_placeholder_fields(&mut cleaned);
     }
     cleanup_required_fields(&mut cleaned);
+    // ref: internal/util/gemini_schema.go:162-186 @ a2976eb8
+    walk_maps_mut(&mut cleaned, false, &mut |object, is_name_map| {
+        if !is_name_map && object.get("properties").is_some_and(Value::is_object) {
+            object.insert("type".to_owned(), Value::String("object".to_owned()));
+        }
+    });
     if options.add_placeholder {
         add_empty_schema_placeholder(&mut cleaned, true);
     }
@@ -412,10 +418,20 @@ fn flatten_type_arrays(value: &mut Value, direct_property: bool) {
                     object.insert(
                         "type".to_owned(),
                         Value::String(
-                            non_null
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| "string".to_owned()),
+                            if object.contains_key("items")
+                                && non_null.iter().any(|kind| kind == "array")
+                            {
+                                "array".to_owned()
+                            } else if object.contains_key("properties")
+                                && non_null.iter().any(|kind| kind == "object")
+                            {
+                                "object".to_owned()
+                            } else {
+                                non_null
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| "string".to_owned())
+                            },
                         ),
                     );
                     if non_null.len() > 1 {

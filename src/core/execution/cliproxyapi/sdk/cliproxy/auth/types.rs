@@ -143,6 +143,7 @@ pub struct RecentRequestBucket {
     pub failed: i64,
 }
 
+// ref: sdk/cliproxy/auth/types.go:175-205 @ d7914afdedca7af95ee974a42453dc49fc1388ce
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct QuotaState {
@@ -152,6 +153,11 @@ pub struct QuotaState {
     pub next_recover_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "is_zero_i64")]
     pub backoff_level: i64,
+    // Go encoding/json retains a zero time.Time despite its omitempty tag.
+    pub observed_at: DateTime<Utc>,
+    // One upstream observation, independent of cooldown transitions.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub signals: BTreeMap<String, String>,
 }
 
 impl Default for QuotaState {
@@ -161,7 +167,19 @@ impl Default for QuotaState {
             reason: String::new(),
             next_recover_at: go_zero_time(),
             backoff_level: 0,
+            observed_at: go_zero_time(),
+            signals: BTreeMap::new(),
         }
+    }
+}
+
+impl QuotaState {
+    /// Clear routing cooldown without discarding the last quota observation.
+    pub(crate) fn clear_cooldown(&mut self) {
+        self.exceeded = false;
+        self.reason.clear();
+        self.next_recover_at = go_zero_time();
+        self.backoff_level = 0;
     }
 }
 
@@ -173,6 +191,8 @@ impl fmt::Debug for QuotaState {
             .field("reason_len", &self.reason.len())
             .field("next_recover_at", &self.next_recover_at)
             .field("backoff_level", &self.backoff_level)
+            .field("observed_at", &self.observed_at)
+            .field("signals_len", &self.signals.len())
             .finish()
     }
 }
@@ -230,6 +250,9 @@ pub struct Auth {
     pub id: String,
     #[serde(skip)]
     pub index: String,
+    /// Manager-owned registration cycle; never supplied by JSON or storage.
+    #[serde(skip)]
+    pub registration_epoch: u64,
     pub provider: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub prefix: String,
@@ -277,6 +300,7 @@ impl Default for Auth {
         Self {
             id: String::new(),
             index: String::new(),
+            registration_epoch: 0,
             provider: String::new(),
             prefix: String::new(),
             file_name: String::new(),
@@ -348,6 +372,9 @@ impl Auth {
     /// Preserves process-owned state when an external source supplies a fresh
     /// durable representation of the same auth record.
     pub(crate) fn preserve_runtime_state_from(&mut self, existing: &Self) {
+        if self.registration_epoch == 0 {
+            self.registration_epoch = existing.registration_epoch;
+        }
         if self.index.trim().is_empty() {
             self.index.clone_from(&existing.index);
             self.index_assigned = existing.index_assigned;

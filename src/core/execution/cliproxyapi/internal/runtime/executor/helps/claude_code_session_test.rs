@@ -99,3 +99,20 @@ fn prompt_cache_is_deterministic_and_agent_scoped() {
     assert_ne!(root_first.id, child.id);
     assert_ne!(root_first.id, other_model.id);
 }
+
+#[test]
+fn header_lookup_is_case_insensitive_and_keeps_every_non_empty_value() {
+    let headers = HeaderMap::from([(
+        "X-Trace".to_owned(),
+        vec![" ".to_owned(), "first".to_owned(), " second ".to_owned()],
+    )]);
+    assert_eq!(
+        header_value_case_insensitive(Some(&headers), "x-trace"),
+        "first"
+    );
+    assert_eq!(
+        header_values_case_insensitive(Some(&headers), "x-trace"),
+        vec!["first".to_owned(), "second".to_owned()]
+    );
+    assert!(header_values_case_insensitive(None, "x-trace").is_empty());
+}
