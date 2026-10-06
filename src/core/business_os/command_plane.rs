@@ -677,6 +677,16 @@ fn reject_legacy_external_sql_replay(
     if object.contains_key("native_owner") || object.contains_key("native_authorization") {
         return Ok(None);
     }
+    if status == "failed"
+        && !(canonical["execution_phase"] == "terminal"
+            && canonical["terminal_status"] == "failed"
+            && canonical
+                .pointer("/result/operation")
+                .and_then(Value::as_str)
+                == Some("legacy_unowned_external_sql_rejection"))
+    {
+        return Ok(None);
+    }
     let _legacy_execution_guard = match ActiveExternalSqlControlCommand::try_acquire(command_id) {
         Some(guard) => guard,
         None => {

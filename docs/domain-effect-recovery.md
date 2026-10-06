@@ -84,7 +84,7 @@ peer must authenticate as the actor recorded in the private row, and the replay,
 private row and original Core intent must agree. Core reserves its writer and
 checks the exact identity, accepted phase, empty result and sole untouched
 control-effect claim before recording the failure. Claims with any authority
-field, linked task/saga, advanced phase or different outcome are not rewritten.
+field, linked task/saga, advanced phase or different private/Core outcome are not rewritten.
 The repair changes lifecycle only; it does not adopt an owner, replace the
 admission hash/context/payload, issue authority or enter an effect handler.
 Repeating the same native rejection repairs delivery without a second terminal

@@ -45213,11 +45213,18 @@ pub(super) mod tests {
             "type",
             "actor",
             "invalid_token",
+            "private_failure",
         ] {
             let temp = tempdir()?;
             let root = temp.path();
             let id = format!("legacy-sql-{change}");
             let (mut document, _) = seed_legacy_external_sql_test_command(root, &id)?;
+            if change == "private_failure" {
+                open_store(root)?.execute(
+                    "UPDATE business_commands SET status = 'failed' WHERE command_id = ?1",
+                    params![id],
+                )?;
+            }
             let before = channels::business_command_projection(root, &id)?;
             let private = || -> anyhow::Result<(String, String, String, i64)> {
                 let conn = open_store(root)?;
@@ -45247,6 +45254,7 @@ pub(super) mod tests {
                 "invalid_token" => {
                     document["client_context"]["capability_token"] = Value::from("invalid")
                 }
+                "private_failure" => {}
                 _ => unreachable!(),
             }
             assert!(

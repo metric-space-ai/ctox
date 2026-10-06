@@ -959,6 +959,11 @@ pub(crate) fn reject_legacy_unowned_external_sql_command(
                 .and_then(Value::as_str)
                 == Some(OPERATION)
             && projection["error_message"] == ERROR
+            && projection["error_code"] == "original_native_authorization_missing"
+            && projection
+                .pointer("/result/error_code")
+                .and_then(Value::as_str)
+                == Some("original_native_authorization_missing")
         {
             tx.commit()?;
             return Ok(Some(projection));
