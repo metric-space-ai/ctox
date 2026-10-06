@@ -38,6 +38,7 @@ fn identifier(value: &str) -> anyhow::Result<()> {
 /// override it. This is capacity admission, not a sandbox for untrusted programs.
 pub fn plan(
     grant: &BuildCapability,
+    owner_id: &str,
     task_id: &str,
     run_id: &str,
     source_id: &str,
@@ -45,7 +46,7 @@ pub fn plan(
     timeout_seconds: u32,
 ) -> anyhow::Result<BuildLanePlan> {
     validate_capabilities(&mut vec![ComputerCapability::Build(grant.clone())], false)?;
-    for id in [task_id, run_id, source_id] {
+    for id in [owner_id, task_id, run_id, source_id] {
         identifier(id)?;
     }
     anyhow::ensure!(!args.is_empty() && !args[0].is_empty(), "missing command");
@@ -74,7 +75,7 @@ root={root}
 run={run}
 source={source}
 target={target}
-mkdir -p -- "$root/runs/{task_id}" "$target"
+mkdir -p -- "$root/runs/{task_id}" "$root/run" "$root/wait" "$target"
 # An existing run is never relaunched or overwritten.
 mkdir -- "$run" || exit 73
 cat > "$run/job.sh" <<'{delimiter}'
@@ -89,6 +90,8 @@ finish() {{
     rc=$?
     trap - EXIT
     exec 9>&-
+    [[ -z "${{ticket:-}}" ]] || rm -f -- "$ticket"
+    timeout --kill-after=2s 10s rm -rf -- "$run/tmp" || true
     date -u +%FT%TZ > "$run/finished.tmp"
     mv -- "$run/finished.tmp" "$run/finished"
     printf '%s\n' "$rc" > "$run/exit.tmp"
@@ -96,6 +99,12 @@ finish() {{
 }}
 trap finish EXIT
 date -u +%FT%TZ > "$run/started"
+priority=$(awk -v owner={owner} '$1 == owner {{ print $2; exit }}' "$root/priorities" 2>/dev/null || true)
+[[ "$priority" =~ ^[012]$ ]] || priority=2
+ticket="$root/wait/$priority-$(date +%s%N)-native-{task_id}-{run_id}"
+touch -- "$ticket"
+first=$(LC_ALL=C ls -1 "$root/wait" | LC_ALL=C sort | head -1)
+[[ "$first" == "${{ticket##*/}}" ]] || exit 75
 leased=0
 for ((slot=1; slot<={slots}; slot++)); do
     exec 9>"$root/slot-$slot.lock"
@@ -103,11 +112,15 @@ for ((slot=1; slot<={slots}; slot++)); do
     exec 9>&-
 done
 [[ "$leased" == 1 ]] || exit 75
+rm -f -- "$ticket"
+ticket=""
 printf '%s\n' "$slot" > "$run/slot"
 available=$(df -Pk -- "$root" | awk 'END {{ print $4 }}')
 [[ "$available" =~ ^[0-9]+$ ]] || exit 74
 (( available >= {floor} )) || exit 74
 cd -- "$source"
+export TMPDIR="$run/tmp"
+mkdir -- "$TMPDIR"
 export CARGO_TARGET_DIR="$target"
 export CARGO_BUILD_JOBS={jobs} RUST_TEST_THREADS={jobs} CMAKE_BUILD_PARALLEL_LEVEL={jobs}
 export MAKEFLAGS='-j{jobs}'
@@ -117,8 +130,10 @@ chmod 700 "$run/job.sh"
 # setsid detaches the session; all descriptors are redirected before returning.
 nohup setsid bash "$run/job.sh" </dev/null >"$run/log" 2>&1 &
 printf '%s\n' "$!" > "$run/pid"
+printf '%s\n' "$!" > "$root/run/native-{task_id}-{run_id}.pid"
 printf '%s\n' "$run"
 "#,
+        owner = quote(owner_id)?,
         root = quote(root)?,
         run = quote(&run_dir)?,
         source = quote(&source_dir)?,
@@ -198,7 +213,7 @@ mod tests {
         let args = vec!["bash".into(), "-c".into(),
             "printf '%s' \"$1\"; printf '\\nworkers=%s target=%s' \"$CARGO_BUILD_JOBS\" \"$CARGO_TARGET_DIR\"; exit 17".into(),
             "fixture".into(), hostile.into()];
-        let plan = plan(&grant, "task", "run", "source", &args, 10).unwrap();
+        let plan = plan(&grant, "fixture", "task", "run", "source", &args, 10).unwrap();
         fs::create_dir_all(&plan.source_dir).unwrap();
         launch(&plan);
         assert_eq!(wait_file(&format!("{}/exit", plan.run_dir)).trim(), "17");
@@ -220,6 +235,7 @@ mod tests {
         let (_dir, grant) = fixture();
         let first = plan(
             &grant,
+            "fixture",
             "task",
             "first",
             "source",
@@ -230,11 +246,29 @@ mod tests {
         fs::create_dir_all(&first.source_dir).unwrap();
         launch(&first);
         wait_file(&format!("{}/slot", first.run_dir));
-        let second = plan(&grant, "task", "second", "source", &["true".into()], 10).unwrap();
+        let second = plan(
+            &grant,
+            "fixture",
+            "task",
+            "second",
+            "source",
+            &["true".into()],
+            10,
+        )
+        .unwrap();
         launch(&second);
         assert_eq!(wait_file(&format!("{}/exit", second.run_dir)).trim(), "75");
         assert_eq!(wait_file(&format!("{}/exit", first.run_dir)).trim(), "124");
-        let third = plan(&grant, "task", "third", "source", &["true".into()], 10).unwrap();
+        let third = plan(
+            &grant,
+            "fixture",
+            "task",
+            "third",
+            "source",
+            &["true".into()],
+            10,
+        )
+        .unwrap();
         launch(&third);
         assert_eq!(wait_file(&format!("{}/exit", third.run_dir)).trim(), "0");
     }
@@ -243,11 +277,29 @@ mod tests {
     fn impossible_disk_floor_and_traversal_fail_closed() {
         let (_dir, mut grant) = fixture();
         grant.disk_floor_gib = u32::MAX;
-        let job = plan(&grant, "task", "floor", "source", &["true".into()], 10).unwrap();
+        let job = plan(
+            &grant,
+            "fixture",
+            "task",
+            "floor",
+            "source",
+            &["true".into()],
+            10,
+        )
+        .unwrap();
         fs::create_dir_all(&job.source_dir).unwrap();
         launch(&job);
         assert_eq!(wait_file(&format!("{}/exit", job.run_dir)).trim(), "74");
-        assert!(plan(&grant, "../task", "run", "source", &["true".into()], 1).is_err());
+        assert!(plan(
+            &grant,
+            "fixture",
+            "../task",
+            "run",
+            "source",
+            &["true".into()],
+            1
+        )
+        .is_err());
     }
 
     #[test]
@@ -265,7 +317,16 @@ mod tests {
             .spawn()
             .unwrap();
         wait_file(&marker);
-        let job = plan(&grant, "task", "external", "source", &["true".into()], 10).unwrap();
+        let job = plan(
+            &grant,
+            "fixture",
+            "task",
+            "external",
+            "source",
+            &["true".into()],
+            10,
+        )
+        .unwrap();
         fs::create_dir_all(&job.source_dir).unwrap();
         launch(&job);
         let status = wait_file(&format!("{}/exit", job.run_dir));
@@ -278,5 +339,55 @@ mod tests {
             .unwrap();
         assert!(holder.wait().unwrap().success());
         assert_eq!(status.trim(), "75");
+    }
+
+    #[test]
+    fn higher_priority_queue_blocks_unknown_owner_and_tmp_stays_on_lane() {
+        let (_dir, grant) = fixture();
+        fs::create_dir_all(format!("{}/wait", grant.lane_root)).unwrap();
+        let queued = format!("{}/wait/0-0000000000000000000-prototype", grant.lane_root);
+        fs::write(&queued, "").unwrap();
+        let blocked = plan(
+            &grant,
+            "unknown",
+            "task",
+            "blocked",
+            "source",
+            &["true".into()],
+            10,
+        )
+        .unwrap();
+        fs::create_dir_all(&blocked.source_dir).unwrap();
+        launch(&blocked);
+        assert_eq!(wait_file(&format!("{}/exit", blocked.run_dir)).trim(), "75");
+        assert!(!std::path::Path::new(&format!("{}/slot", blocked.run_dir)).exists());
+        fs::remove_file(queued).unwrap();
+        let allowed = plan(
+            &grant,
+            "unknown",
+            "task",
+            "allowed",
+            "source",
+            &[
+                "bash".into(),
+                "-c".into(),
+                "printf '%s' \"$TMPDIR\"; touch \"$TMPDIR/scratch\"".into(),
+            ],
+            10,
+        )
+        .unwrap();
+        launch(&allowed);
+        assert_eq!(wait_file(&format!("{}/exit", allowed.run_dir)).trim(), "0");
+        assert_eq!(
+            fs::read_to_string(format!("{}/log", allowed.run_dir)).unwrap(),
+            format!("{}/tmp", allowed.run_dir)
+        );
+        assert!(!std::path::Path::new(&format!("{}/tmp", allowed.run_dir)).exists());
+        assert_eq!(
+            fs::read_dir(format!("{}/wait", grant.lane_root))
+                .unwrap()
+                .count(),
+            0
+        );
     }
 }

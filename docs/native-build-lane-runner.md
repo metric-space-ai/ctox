@@ -1,7 +1,7 @@
 # Native Linux build lane runner
 
 `business_os::build_lane_runner::plan` consumes a validated `BuildCapability`,
-opaque task/run/source identifiers, command arguments and a timeout in seconds.
+opaque owner/task/run/source identifiers, command arguments and a timeout in seconds.
 It returns the script and deterministic source, target and run paths. Transport,
 computer authority, source preparation and toolchain selection belong to the
 calling adapter. No host table or credential is part of this module.
@@ -13,7 +13,11 @@ concurrent writes by another account are outside this trust boundary. Run ids
 must be unique; a repeated launch exits 73 without overwriting prior evidence.
 
 The detached session shares the prototype lock namespace (`lane_root/slot-1.lock`
-through `slot-SLOTS.lock`) and owns a nonblocking flock lease until the bounded command
+through `slot-SLOTS.lock`). Admission uses the existing `wait` ticket namespace
+and `priorities` owner mapping (unknown owners are P2). A queued higher-priority
+or earlier equal-priority ticket causes exit 75; the adapter may retry later.
+This runner makes one admission attempt, rather than maintaining a second queue.
+The detached session owns a nonblocking flock lease until the bounded command
 and its inherited lock descriptors exit. Admission rejection exits 75, disk
 floor rejection exits 74 and GNU timeout returns 124. Inspect the run directory
 for `pid`, `started`, `slot`, `log`, atomic `exit` and `finished` files. The parent
@@ -21,7 +25,9 @@ must distinguish an absent exit file from completion and retain/reconcile the
 run after disconnect. Hard host failure or SIGKILL can leave incomplete metadata;
 this planner does not claim power-loss durability or automatic recovery.
 
-Targets are isolated by source identity. The worker cap is declared through
+Targets are isolated by source identity. `TMPDIR` resides beneath the run;
+exit cleanup has a ten-second deadline plus a two-second kill grace. The run
+log and exit metadata remain available even if cleanup cannot finish. The worker cap is declared through
 Cargo, Rust test, CMake and Make environment settings. Operator commands can
 override these settings or start other processes: the adapter must enforce its
 command policy. This runner is not an untrusted-code sandbox. Source ids must
