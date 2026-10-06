@@ -1706,7 +1706,7 @@ mod tests {
             .unwrap();
         let head = std::str::from_utf8(&response[..split]).unwrap();
         let response_body: Value = serde_json::from_slice(&response[split + 4..]).unwrap();
-        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "head={head}, body={response_body}");
         assert_eq!(response_body["object"], "response");
         assert_eq!(response_body["status"], "completed");
         assert_eq!(

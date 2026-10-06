@@ -117,7 +117,7 @@ fn equal_numeric_spellings_and_small_or_mixed_unions_stay() {
 fn migrated_enum_preserves_large_integer_digits() {
     let large = "9007199254740993";
     let input = format!(
-        r#"{{"tools":[{{"type":"custom","name":"id","parameters":{{"type":"object","properties":{{"id":{{"type":"integer","oneOf":[{{"const":{large}}},{{"const":1}},{{"const":2}},{{"const":3}},{{"const":4}},{{"const":5}},{{"const":6}},{{"const":7}}]}}}}}}}}}}"#
+        r#"{{"tools":[{{"type":"custom","name":"id","parameters":{{"type":"object","properties":{{"id":{{"type":"integer","oneOf":[{{"const":{large}}},{{"const":1}},{{"const":2}},{{"const":3}},{{"const":4}},{{"const":5}},{{"const":6}},{{"const":7}}]}}}}}}}}]}}"#
     );
     let output = normalize_codex_tool_schemas(input.as_bytes());
     let parsed: Value = serde_json::from_slice(&output).unwrap();
@@ -157,9 +157,9 @@ fn unsupported_patterns_are_removed_only_from_schema_locations() {
             "parameters":{
                 "type":"object",
                 "properties":{
-                    "file_paths":{"type":"array","items":{"type":"string","pattern":"^[^\0]*$","minLength":1}},
+                    "file_paths":{"type":"array","items":{"type":"string","pattern":"^[^\\0]*$","minLength":1}},
                     "asset_id":{"type":"string","pattern":"^[0-9a-f]{32}$"},
-                    "hex_nul":{"type":"string","pattern":"^[^\x00]*$"},
+                    "hex_nul":{"type":"string","pattern":"^[^\\x00]*$"},
                     "unicode_escape":{"type":"string","pattern":"\u005cp{L}+"},
                     "real_schema":{"type":"string","pattern":"\\p{L}+"},
                     "regex_config":{"type":"object","default":{"pattern":"\\p{L}+"},"enum":[{"pattern":"\\p{N}+"}]}

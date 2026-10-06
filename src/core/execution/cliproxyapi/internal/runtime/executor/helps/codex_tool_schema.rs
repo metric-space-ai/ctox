@@ -15,7 +15,6 @@ use std::collections::{BTreeMap, HashSet};
 use gjson::Kind;
 use serde_json::Value;
 
-use crate::internal::translator::common::set_raw_path;
 use crate::internal::util::strip_unsupported_schema_patterns;
 
 #[cfg(test)]
@@ -296,14 +295,8 @@ fn normalize_integer_tool_json_with_namespace(tool_json: &str, namespace: &str) 
     }
     let updated_parameters =
         normalize_raw_integer_field_types(parameters.json(), codex_integer_fields(&name))?;
-    let updated = set_raw_path(
-        tool_json.as_bytes(),
-        parameter_path,
-        updated_parameters.as_bytes(),
-    );
-    (updated != tool_json.as_bytes())
-        .then(|| String::from_utf8(updated).ok())
-        .flatten()
+    let updated = replace_existing_raw_path(tool_json, parameter_path, &updated_parameters)?;
+    (updated != tool_json).then_some(updated)
 }
 
 /// Keys are explicit paths relative to parameters.properties, never recursive
@@ -413,7 +406,13 @@ fn normalize_raw_integer_field_types(parameters: &str, fields: &[&str]) -> Optio
             None
         };
         if let Some(replacement) = replacement {
-            let updated = set_raw_path(&output, &format!("properties.{field}.type"), &replacement);
+            let document = std::str::from_utf8(&output).ok()?;
+            let replacement = std::str::from_utf8(&replacement).ok()?;
+            let updated = replace_existing_raw_path(
+                document,
+                &format!("properties.{field}.type"),
+                replacement,
+            )?.into_bytes();
             changed |= updated != output;
             output = updated;
         }
@@ -691,6 +690,42 @@ fn equal_canonical_sets(left: &[String], right: &[String]) -> bool {
     }
     let unique = left.iter().collect::<HashSet<_>>();
     unique.len() == left.len() && right.iter().all(|key| unique.contains(key))
+}
+
+/// Splices an existing value without reserializing the enclosing schema.
+/// Explicit integer paths also include array indices such as `anyOf.0.type`.
+fn replace_existing_raw_path(document: &str, path: &str, replacement: &str) -> Option<String> {
+    let mut start = 0;
+    let mut end = document.len();
+    for key in path.split('.') {
+        let current = &document[start..end];
+        let bytes = current.as_bytes();
+        let (relative_start, relative_end) = if bytes.get(skip_ws(bytes, 0)) == Some(&b'[') {
+            let selected = key.parse::<usize>().ok()?;
+            let mut index = skip_ws(bytes, 0) + 1;
+            let mut span = None;
+            for item in 0..=selected {
+                index = skip_ws(bytes, index);
+                let value_start = index;
+                index = skip_json_value(bytes, index)?;
+                if item == selected {
+                    span = Some((value_start, index));
+                    break;
+                }
+                index = skip_ws(bytes, index);
+                if bytes.get(index) != Some(&b',') {
+                    return None;
+                }
+                index += 1;
+            }
+            span?
+        } else {
+            first_object_field_span(current, key)?
+        };
+        end = start + relative_end;
+        start += relative_start;
+    }
+    splice_span(document, start, end, replacement)
 }
 
 fn replace_object_field(object_json: &str, field: &str, new_value: &str) -> Option<String> {

@@ -319,7 +319,11 @@ async fn candidate_google_thinking_native_interactions_uses_canonical_validation
                 );
                 let mut request = request(Kind::Interactions, http.clone(), if valid { "runtime-google(high)" } else { "runtime-google(xhigh)" }, br#"{"input":"hello","contents":[{"role":"model","parts":[{"text":"native-history"}]}]}"#);
                 request.source_format = source.into();
-                request.resolved_model_info = Some(selected(&["low", "high"], 0, 0));
+                let mut capability = selected(&["low", "high"], 0, 0);
+                // A native Interactions capability exercises strict same-family validation.
+                // A Gemini capability is cross-family here and correctly clamps xhigh.
+                Arc::make_mut(&mut capability).provider_type = "interactions".into();
+                request.resolved_model_info = Some(capability);
                 let result = invoke(executor.as_ref(), request, stream, false).await;
                 if valid {
                     result.unwrap();

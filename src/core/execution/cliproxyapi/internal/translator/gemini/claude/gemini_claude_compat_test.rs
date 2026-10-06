@@ -25,7 +25,7 @@ fn standard_drops_thinking_while_compat_preserves_unsigned_thought() {
     let input = json!({"messages":[{"role":"assistant","content":[
         {"type":"thinking","thinking":"reason","signature":""}
     ]}]});
-    assert_eq!(converted(&input, false)["contents"][0]["parts"], json!([]));
+    assert_eq!(converted(&input, false)["contents"], json!([]));
     assert_eq!(
         converted(&input, true)["contents"][0]["parts"][0],
         json!({"text":"reason","thought":true,"thoughtSignature":BYPASS})
@@ -63,7 +63,7 @@ fn compat_retains_empty_null_missing_and_user_thought_blocks() {
                 converted(&input, true)["contents"][0]["parts"][0],
                 json!({"text":"","thought":true,"thoughtSignature":BYPASS})
             );
-            assert_eq!(converted(&input, false)["contents"][0]["parts"], json!([]));
+            assert_eq!(converted(&input, false)["contents"], json!([]));
         }
     }
 }

@@ -37,7 +37,7 @@ fn native_translation_applies_protocol_specific_summary_intent() {
         br#"{"reasoning_effort":"high"}"#,
         false,
     );
-    assert_eq!(json(&output)["thinking"]["display"], "summarized");
+    assert!(json(&output)["thinking"].get("display").is_none());
 
     let responses = translated_registry(
         openai_response(),

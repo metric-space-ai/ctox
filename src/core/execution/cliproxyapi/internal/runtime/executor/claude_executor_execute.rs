@@ -2836,7 +2836,10 @@ mod tests {
             })
             .collect();
         let pool = ClaudeSubscriptionAccountPool::with_clock(
-            Arc::new(AccountRouter::new(cooldowns.clone())),
+            Arc::new(AccountRouter::with_strategy(
+                cooldowns.clone(),
+                crate::sdk::cliproxy::auth::SchedulerStrategy::FillFirst,
+            )),
             candidates,
             HashMap::from([
                 ("account-a".to_owned(), account_a),
