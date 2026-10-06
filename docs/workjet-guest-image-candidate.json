@@ -26,7 +26,8 @@
     "target": "x86_64-unknown-linux-gnu",
     "toolchain": "1.93.0",
     "linux_build_receipt_and_binary_sha256_required": true,
-    "binary_sha256": null,
+    "binary_sha256": "2b8e6e35f1b991c182cd462194a0b57d333be96d9b7cebac2464dfcb65c12c9e",
+    "build_receipt_run": "o04-guest-native-build-20261006T192022Z",
     "source_repair": "V2 source318890469 failed the actual Noble release build with11 existing Sync compiler errors (GPU3 native183650, terminal19:17:55UTC exit101). V3 uses existing PR272 Linux repairs at b3745d911. Guest channel/startup/X11 implementation and endpoint tests are byte-identical; only payload candidate/source markers change. This is a repair of the authorized build, not a new guest authority or a passing artifact claim.",
     "paths": ["src/core/business_os/guest_runtime/startup.rs", "src/core/business_os/guest_runtime/x11.rs", "src/core/business_os/guest_runtime/channel.rs"],
     "entry": "/usr/local/bin/ctox __native-guest-desktop --config /etc/ctox/guest-startup.json"
