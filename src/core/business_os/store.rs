@@ -37232,41 +37232,69 @@ pub(super) mod tests {
         let app_root = root.join("src").join("apps").join("business-os");
         fs::create_dir_all(&app_root)?;
         fs::write(app_root.join("index.html"), b"<!doctype html>")?;
-        write_widget_module(&app_root, "export const v = 1;\n")?;
-        let baseline =
-            record_module_version(root, &app_root, "widget", "install", "Installed", "tester")?
-                .expect("baseline recorded");
+        write_installed_inventory_module(&app_root, "1.0.0")?;
+        let initial_js = fs::read_to_string(app_root.join("installed-modules/inventory/index.js"))?;
+        // Exercise the real mandatory staging validator against a complete app,
+        // rather than depending on an unavailable validator or invalid bundle.
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for relative in [
+            "src/apps/business-os/scripts/validate-app-module.mjs",
+            "src/apps/business-os/scripts/app-audit-scenarios.mjs",
+            "src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs",
+        ] {
+            let target = root.join(relative);
+            fs::create_dir_all(target.parent().context("validator fixture parent")?)?;
+            fs::copy(repo_root.join(relative), target)?;
+        }
+        let baseline = record_module_version(
+            root,
+            &app_root,
+            "inventory",
+            "install",
+            "Installed",
+            "tester",
+        )?
+        .expect("baseline recorded");
         let baseline_id = baseline
             .get("version_id")
             .and_then(Value::as_str)
             .context("version_id")?
             .to_owned();
         fs::write(
-            app_root.join("modules/widget/index.js"),
-            "export const v = 2;\n",
+            app_root.join("installed-modules/inventory/index.js"),
+            format!("{initial_js}\n// Unreleased change.\n"),
         )?;
         seed_business_user(root, "rollback-user", "user")?;
         seed_permission_grant(
             root,
-            "grant_widget_rollback_only",
+            "grant_inventory_rollback_only",
             "user",
             "rollback-user",
             BusinessOsPermission::AppsRollback,
             "module",
-            "widget",
+            "inventory",
         )?;
 
+        assert!(
+            !module_policy_decision(
+                root,
+                &test_session("rollback-user", "user"),
+                BusinessOsPermission::AppsModify,
+                "inventory",
+            )?
+            .allowed
+        );
         let outcome = accept_rxdb_business_command(
             root,
             serde_json::json!({
-                "id": "cmd_widget_source_rollback",
-                "command_id": "cmd_widget_source_rollback",
+                "id": "cmd_inventory_source_rollback",
+                "command_id": "cmd_inventory_source_rollback",
                 "module": "app-store",
                 "command_type": "ctox.module.rollback_version",
-                "record_id": "widget",
+                "record_id": "inventory",
                 "status": "pending_sync",
                 "payload": {
-                    "module_id": "widget",
+                    "module_id": "inventory",
                     "version_id": baseline_id
                 },
                 "client_context": {
@@ -37285,14 +37313,14 @@ pub(super) mod tests {
             outcome.get("error_message")
         );
         assert_eq!(
-            fs::read_to_string(app_root.join("modules/widget/index.js"))?,
-            "export const v = 1;\n"
+            fs::read_to_string(app_root.join("installed-modules/inventory/index.js"))?,
+            initial_js
         );
         let conn = open_store(root)?;
         let payloads = business_event_payloads(
             &conn,
             "business_commands",
-            "cmd_widget_source_rollback",
+            "cmd_inventory_source_rollback",
             "business_os.module.rollback.succeeded",
         )?;
         assert_eq!(payloads.len(), 1);
@@ -37305,7 +37333,7 @@ pub(super) mod tests {
             payload
                 .pointer("/summary/module_id")
                 .and_then(Value::as_str),
-            Some("widget")
+            Some("inventory")
         );
         assert_eq!(
             payload
@@ -44030,12 +44058,12 @@ pub(super) mod tests {
                 "command_id": "cmd_configured_admin_user_upsert",
                 "module": "ctox",
                 "command_type": "ctox.business_os.user.upsert",
-                "record_id": "new-admin",
+                "record_id": "new-user",
                 "status": "pending_sync",
                 "payload": {
-                    "id": "new-admin",
-                    "display_name": "New Admin",
-                    "role": "admin",
+                    "id": "new-user",
+                    "display_name": "New User",
+                    "role": "user",
                     "active": true
                 },
                 "client_context": {
@@ -44062,10 +44090,61 @@ pub(super) mod tests {
         assert_eq!(configured_role, "admin");
         let new_role: String = conn.query_row(
             "SELECT role FROM business_users WHERE user_id = ?1",
-            params!["new-admin"],
+            params!["new-user"],
             |row| row.get(0),
         )?;
-        assert_eq!(new_role, "admin");
+        assert_eq!(new_role, "user");
+        drop(conn);
+
+        // UsersManage permits ordinary account administration. Granting a
+        // workspace authority role additionally requires the native owner;
+        // a claimed chef role cannot promote the configured admin.
+        let denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_configured_admin_grant_authority",
+                "module": "ctox",
+                "command_type": "ctox.business_os.user.upsert",
+                "record_id": "new-admin",
+                "payload": {
+                    "id": "new-admin",
+                    "display_name": "New Admin",
+                    "role": "admin",
+                    "active": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "michael.welsch@metric-space.ai",
+                        "role": "chef"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(denied["status"], "failed");
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some("workspace.manage")
+        );
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let canonical =
+            channels::business_command_projection(root, "cmd_configured_admin_grant_authority")?;
+        assert_eq!(canonical["terminal_status"], "failed");
+        let conn = open_store(root)?;
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM business_users WHERE user_id='new-admin'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            0
+        );
         Ok(())
     }
 
