@@ -48,12 +48,15 @@ export class QueryMetaStorage {
     return record;
   }
 
-  async upsertQueryWindow({ collection, queryFingerprint, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null, permissionDigest = undefined }) {
+  async upsertQueryWindow({ collection, queryFingerprint, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null, permissionDigest = undefined, projection = null, projectionKey = null }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint, offset, limit].join('|'),
     );
     const record = {
+      // Payloads live in the separate bounded projected-query cache. Ordinary
+      // metadata scans and document eviction never materialize partial rows.
+      ...(projection?.length ? { projection: [...projection], projectionKey } : {}),
       collection,
       queryFingerprint,
       offset,
@@ -111,6 +114,15 @@ export class QueryMetaStorage {
     existing.complete = false;
     existing.updatedAt = this.clock();
     await this.backend.putQueryWindow(existing);
+  }
+
+  async putProjectedQueryRows(key, documents) {
+    return this.backend.putProjectedQueryRows(key, documents, this.clock());
+  }
+
+  async getProjectedQueryRows(key) {
+    if (!key) return null;
+    return this.backend.getProjectedQueryRows(key, this.clock());
   }
 
   async touchDocuments(collection, ids, { estimatedBytes = 0, pinReason = PIN_RECENT_READ } = {}) {
