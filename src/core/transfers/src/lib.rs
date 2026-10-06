@@ -22,6 +22,12 @@ use tokio::sync::watch;
 
 mod peer;
 pub use peer::{PeerAccountBinding, PeerRangeSource, PeerSource};
+mod storage;
+pub mod storage_smb;
+pub mod storage_ssh;
+pub use storage::{
+    validate_relative_path, StorageConnection, StorageDirection, StorageResolver, StorageTransfer,
+};
 
 pub const ENGINE_REVISION: &str = "8364bcd7902dbd853a0f746c3dc937bbaadec561";
 
@@ -33,6 +39,8 @@ pub struct DownloadRequest {
     pub sources: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_source: Option<PeerSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<StorageTransfer>,
     pub sha256: String,
     pub size: u64,
 }
@@ -57,6 +65,13 @@ impl DownloadRequest {
             "expected lowercase SHA-256 required"
         );
         ensure!(self.size <= i64::MAX as u64, "content too large");
+        if let Some(storage) = &self.storage {
+            ensure!(
+                self.sources.is_empty() && self.peer_source.is_none(),
+                "storage cannot mix with HTTP or peer sources"
+            );
+            return storage.validate();
+        }
         if let Some(peer) = &self.peer_source {
             ensure!(
                 self.sources.is_empty(),
@@ -288,16 +303,20 @@ impl Store {
 
     /// Exclusive OS lease covers recovery, writes and activation; a PID/clock is not a lease.
     pub fn worker(&self) -> Result<Worker> {
-        self.worker_with_source(None)
+        self.worker_with_sources(None, None)
     }
 
     /// The native host supplies an already authorized peer resolver. Persisted
     /// source claims alone cannot create a connection or select credentials.
     pub fn worker_with_peer(&self, peer: Arc<dyn PeerRangeSource>) -> Result<Worker> {
-        self.worker_with_source(Some(peer))
+        self.worker_with_sources(Some(peer), None)
     }
 
-    fn worker_with_source(&self, peer: Option<Arc<dyn PeerRangeSource>>) -> Result<Worker> {
+    pub fn worker_with_sources(
+        &self,
+        peer: Option<Arc<dyn PeerRangeSource>>,
+        storage: Option<Arc<dyn StorageResolver>>,
+    ) -> Result<Worker> {
         let lease_path = self.artifacts.join("worker.lock");
         regular_or_absent(&lease_path)?;
         let lease = OpenOptions::new()
@@ -315,6 +334,7 @@ impl Store {
             _lease: lease,
             run_gate: tokio::sync::Mutex::new(()),
             peer,
+            storage,
         })
     }
 
@@ -332,6 +352,7 @@ pub struct Worker {
     _lease: File,
     run_gate: tokio::sync::Mutex<()>,
     peer: Option<Arc<dyn PeerRangeSource>>,
+    storage: Option<Arc<dyn StorageResolver>>,
 }
 
 enum SourceOutcome {
@@ -370,6 +391,9 @@ impl Worker {
     }
 
     async fn download(&self, request: &DownloadRequest, stop: &AtomicBool) -> Result<()> {
+        if request.storage.is_some() {
+            return self.transfer_storage(request, stop);
+        }
         let staging = self.store.artifacts.join("staging").join(&request.id);
         private_directory(&staging)?;
         let object = self.store.artifacts.join("objects").join(&request.sha256);
@@ -562,17 +586,26 @@ impl Worker {
             sha256: request.sha256.clone(),
             size: request.size,
             artifact: format!("objects/{}", request.sha256),
-            engine_revision: request
-                .peer_source
-                .is_none()
+            engine_revision: (request.peer_source.is_none() && request.storage.is_none())
                 .then(|| ENGINE_REVISION.into()),
-            transport: if request.peer_source.is_some() {
+            transport: if request.storage.is_some() {
+                "ctox-storage-v1"
+            } else if request.peer_source.is_some() {
                 "ctox-webrtc-file-v1"
             } else {
                 "aria2-http"
             }
             .into(),
         };
+        self.commit_receipt(request, receipt, stop)
+    }
+
+    fn commit_receipt(
+        &self,
+        request: &DownloadRequest,
+        receipt: Receipt,
+        stop: &AtomicBool,
+    ) -> Result<()> {
         let mut c = self.store.connection()?;
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let desired: String = tx.query_row(
@@ -693,6 +726,13 @@ impl DaemonWorker {
     }
     pub fn start_with_peer(store: Store, peer: Arc<dyn PeerRangeSource>) -> Result<Self> {
         Self::start_worker(store.worker_with_peer(peer)?)
+    }
+    pub fn start_with_sources(
+        store: Store,
+        peer: Option<Arc<dyn PeerRangeSource>>,
+        storage: Option<Arc<dyn StorageResolver>>,
+    ) -> Result<Self> {
+        Self::start_worker(store.worker_with_sources(peer, storage)?)
     }
     fn start_worker(worker: Worker) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));

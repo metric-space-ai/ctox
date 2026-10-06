@@ -137,6 +137,7 @@ fn request(id: &str, url: String, body: &[u8]) -> DownloadRequest {
     DownloadRequest {
         id: id.into(),
         sources: vec![url],
+        storage: None,
         peer_source: None,
         sha256: format!("{:x}", Sha256::digest(body)),
         size: body.len() as u64,

@@ -50,6 +50,7 @@ fn request(id: &str, body: &[u8]) -> DownloadRequest {
     DownloadRequest {
         id: id.into(),
         sources: vec![],
+        storage: None,
         peer_source: Some(PeerSource {
             account_binding: None,
             instance_id: "instance".into(),

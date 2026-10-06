@@ -70,6 +70,7 @@ impl PeerDownload {
             sha256: self.sha256.clone(),
             size: self.size,
             sources: Vec::new(),
+            storage: None,
             peer_source: Some(PeerSource {
                 instance_id: account.instance_id.clone(),
                 public_key: account.public_identity.clone(),

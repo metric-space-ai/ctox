@@ -86,6 +86,7 @@ fn job(id: &str, bytes: &[u8], target: &str) -> DownloadRequest {
         sources: vec![],
         sha256: reference(bytes).sha256,
         size: bytes.len() as u64,
+        storage: None,
         peer_source: Some(PeerSource {
             instance_id: "source".into(),
             public_key: "pinned-source".into(),

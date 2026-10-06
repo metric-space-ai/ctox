@@ -100,6 +100,7 @@ fn request(body: &[u8]) -> DownloadRequest {
     DownloadRequest {
         id: "peer-transfer".into(),
         sources: vec![],
+        storage: None,
         peer_source: Some(PeerSource {
             account_binding: None,
             instance_id: "trusted-instance".into(),

@@ -92,6 +92,7 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
             sha256: args[2].clone(),
             size: args[3].parse()?,
             sources: args[4..].to_vec(),
+            storage: None,
             peer_source: None,
         })?,
         Some("peer-download") if args.len() == 6 => crate::transfers_native::enqueue_peer(
@@ -144,6 +145,7 @@ mod tests {
                         .into(),
                     size: 0,
                     sources: vec!["http://127.0.0.1:9/not-requested".into()],
+                    storage: None,
                     peer_source: None,
                 })
                 .unwrap();

@@ -15,5 +15,9 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 url = "2"
 
-[dev-dependencies]
 tempfile = "3"
+ssh2 = "=0.9.6"
+base64 = "0.22"
+smb = { version = "=0.12.1", default-features = false, features = ["single_threaded", "sign", "encrypt"] }
+
+[dev-dependencies]
