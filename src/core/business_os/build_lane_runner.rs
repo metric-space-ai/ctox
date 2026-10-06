@@ -88,6 +88,7 @@ target={target}
 finish() {{
     rc=$?
     trap - EXIT
+    exec 9>&-
     date -u +%FT%TZ > "$run/finished.tmp"
     mv -- "$run/finished.tmp" "$run/finished"
     printf '%s\n' "$rc" > "$run/exit.tmp"
