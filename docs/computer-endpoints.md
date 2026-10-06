@@ -37,6 +37,7 @@ SSH connection example (all identities, host, pin and paths are examples):
   "username": "metricspace",
   "root": "/srv/build-lane",
   "host_key_sha256": "SHA256:BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+  "host_key_algorithm": "ssh-ed25519",
   "private_key": {"scope": "computer-access", "name": "build-key"},
   "passphrase": null
 }
@@ -44,6 +45,14 @@ SSH connection example (all identities, host, pin and paths are examples):
 
 An SSH SHA256 pin must encode exactly 32 bytes using the OpenSSH unpadded form.
 The adapter must verify it during connection; no trust-on-first-use fallback.
+Optional `host_key_algorithm` constrains negotiation to `ssh-ed25519`,
+`ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521`,
+`rsa-sha2-256` or `rsa-sha2-512`. It never replaces the pin check. Omission
+or null keeps library-default negotiation and preserves legacy serialized
+connections and fingerprints. A constraint edit changes native endpoint/job
+authority. Adapters must apply a supplied constraint before connecting and fail
+closed if unsupported. Never retry with another algorithm or pin after
+authentication failure. This names the server host key, not the client key.
 Private key and optional passphrase are existing SecretStore `{scope,name}`
 references. Credential values never belong in endpoint metadata or receipts.
 

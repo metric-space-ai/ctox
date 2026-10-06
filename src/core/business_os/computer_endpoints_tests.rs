@@ -462,3 +462,91 @@ fn native_epoch_stays_outside_the_v1_computer_projection() -> Result<()> {
     assert_eq!(projection["capabilities"], json!(["storage"]));
     Ok(())
 }
+
+#[test]
+fn legacy_ssh_algorithm_omission_preserves_connection_and_job_authority() -> Result<()> {
+    let root = tempdir()?;
+    fixture(root.path())?;
+    let original = ssh();
+    let decoded: ComputerEndpoint = serde_json::from_value(original.clone())?;
+    assert!(matches!(
+        decoded,
+        ComputerEndpoint::Ssh {
+            host_key_algorithm: None,
+            ..
+        }
+    ));
+    assert_eq!(serde_json::to_value(decoded)?, original);
+    let before = resolve_computer_endpoint(root.path(), &request())?;
+    let mut explicit_none = original;
+    explicit_none["host_key_algorithm"] = Value::Null;
+    upsert(root.path(), explicit_none)?;
+    let after = resolve_computer_endpoint(root.path(), &request())?;
+    assert_eq!(after.endpoint_revision, before.endpoint_revision);
+    assert_eq!(after.fingerprint, before.fingerprint);
+    with_current_computer_endpoint(root.path(), &request(), &before.fingerprint, |_, _| Ok(()))?;
+    Ok(())
+}
+
+#[test]
+fn ssh_algorithm_constraint_is_strict_persisted_and_invalidates_old_jobs() -> Result<()> {
+    let root = tempdir()?;
+    fixture(root.path())?;
+    for algorithm in [
+        SshHostKeyAlgorithm::Ed25519,
+        SshHostKeyAlgorithm::EcdsaSha2Nistp256,
+        SshHostKeyAlgorithm::EcdsaSha2Nistp384,
+        SshHostKeyAlgorithm::EcdsaSha2Nistp521,
+        SshHostKeyAlgorithm::RsaSha2_256,
+        SshHostKeyAlgorithm::RsaSha2_512,
+    ] {
+        let before = resolve_computer_endpoint(root.path(), &request())?;
+        let mut connection = ssh();
+        connection["host_key_algorithm"] = json!(algorithm.as_str());
+        upsert(root.path(), connection.clone())?;
+        let after = resolve_computer_endpoint(root.path(), &request())?;
+        assert_eq!(serde_json::to_value(&after.connection)?, connection);
+        assert_ne!(after.fingerprint, before.fingerprint);
+        let mut entered = false;
+        assert!(with_current_computer_endpoint(
+            root.path(),
+            &request(),
+            &before.fingerprint,
+            |_, _| {
+                entered = true;
+                Ok(())
+            }
+        )
+        .is_err());
+        assert!(!entered);
+        with_current_computer_endpoint(
+            root.path(),
+            &request(),
+            &after.fingerprint,
+            |resolved, _| {
+                assert!(matches!(&resolved.connection, ComputerEndpoint::Ssh {
+                host_key_algorithm: Some(value), ..
+            } if *value == algorithm));
+                Ok(())
+            },
+        )?;
+    }
+    let last = resolve_computer_endpoint(root.path(), &request())?;
+    for unsupported in [
+        "ssh-rsa",
+        "ssh-dss",
+        "ed25519",
+        "ecdsa",
+        "ssh-ed25519-cert-v01@openssh.com",
+        "",
+    ] {
+        let mut connection = ssh();
+        connection["host_key_algorithm"] = json!(unsupported);
+        assert!(upsert(root.path(), connection).is_err());
+    }
+    assert_eq!(
+        resolve_computer_endpoint(root.path(), &request())?.fingerprint,
+        last.fingerprint
+    );
+    Ok(())
+}
