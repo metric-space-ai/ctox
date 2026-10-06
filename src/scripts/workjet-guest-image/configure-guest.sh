@@ -7,7 +7,7 @@
 set -eu
 [ "$(uname -s)" = Linux ]
 [ "$(uname -m)" = x86_64 ]
-[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-318890469-v2 ]
+[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-b3745d911-v3 ]
 [ -x /usr/local/bin/ctox ]
 . /etc/os-release
 [ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ]
@@ -197,6 +197,6 @@ systemctl enable ctox-xorg.service ctox-desktop.service ctox-guest-desktop.servi
 install -d -m 0755 /usr/local/share/ctox-image
 dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /usr/local/share/ctox-image/packages.tsv
 sha256sum /usr/local/bin/ctox > /usr/local/share/ctox-image/native-binary.sha256
-printf '%s\n' 318890469b60e11852f14df8b996e422616af269 > /usr/local/share/ctox-image/native-source.commit
+printf '%s\n' b3745d911e2fa054127f04b83f28106b5c28bb3a > /usr/local/share/ctox-image/native-source.commit
 apt-get clean
 rm /etc/ctox-image-build.marker

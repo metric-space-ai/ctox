@@ -1,6 +1,6 @@
 {
   "schema": "ctox.workjet_guest_image_candidate.v1",
-  "candidate_id": "workjet-noble-amd64-20260926-ctox-318890469-v2",
+  "candidate_id": "workjet-noble-amd64-20260926-ctox-b3745d911-v3",
   "status": "approved_build_pending",
   "owner_thread": "01a0879f-fa04-7a72-a9be-f471c2df5471",
   "upstream": {
@@ -21,18 +21,19 @@
   },
   "native_artifact": {
     "repository": "https://github.com/metric-space-ai/ctox",
-    "commit": "318890469b60e11852f14df8b996e422616af269",
-    "tree": "05f058c0ec5fde4b8c65bdba62c069d578bcd6b1",
+    "commit": "b3745d911e2fa054127f04b83f28106b5c28bb3a",
+    "tree": "edf29234576e636b4ad7dd86524cdce5e8829497",
     "target": "x86_64-unknown-linux-gnu",
     "toolchain": "1.93.0",
     "linux_build_receipt_and_binary_sha256_required": true,
     "binary_sha256": null,
+    "source_repair": "V2 source318890469 failed the actual Noble release build with11 existing Sync compiler errors (GPU3 native183650, terminal19:17:55UTC exit101). V3 uses existing PR272 Linux repairs at b3745d911. Guest channel/startup/X11 implementation and endpoint tests are byte-identical; only payload candidate/source markers change. This is a repair of the authorized build, not a new guest authority or a passing artifact claim.",
     "paths": ["src/core/business_os/guest_runtime/startup.rs", "src/core/business_os/guest_runtime/x11.rs", "src/core/business_os/guest_runtime/channel.rs"],
     "entry": "/usr/local/bin/ctox __native-guest-desktop --config /etc/ctox/guest-startup.json"
   },
   "recipe": {
     "guest_setup_source": "src/scripts/workjet-guest-image/configure-guest.sh",
-    "guest_setup_sha256": "ab7504e3726878bb5ef932e3f2a56ceb4c2eb381cb876e259adb125d400c541b",
+    "guest_setup_sha256": "86af3d283f674fa0145831a6e849946dbff092531d35c879d8b9c652d7ddfdad",
     "builder_distribution": "Ubuntu24.04 amd64 at the same signed snapshot; require native binary/source receipt and record ELF dependencies. Do not use a Mac artifact or claim a cross-linker is present.",
     "root_partition": "/dev/sda1 must be verified as the actual Ubuntu root filesystem by libguestfs inspection before resize. A different/unexpected layout fails closed instead of selecting another disk.",
     "host_prerequisites": ["qemu-system-x86", "qemu-utils", "libguestfs-tools", "pax-utils", "gpgv", "gnupg", "curl", "coreutils"],
@@ -52,7 +53,7 @@
     "raw_derivation": "Verify signed fixed upstream checksum; create a new private working copy; expand to8GiB using virt-resize after confirming the actual root partition; configure ONLY that stopped copy; qemu-img convert -f qcow2 -O raw into a new golden-base.raw; sync; record actual raw SHA256, size, package ledger, binary/dependency hashes and command/tool versions. Never modify the downloaded original or an active guest.",
     "derived_raw_sha256": null,
     "raw_checksum_reason": "Acquisition and build of this exact input/recipe are authorized by Claude on2026-10-06. Derived RAW identity remains null until the actual admitted build completes and is hashed; approval is not a fabricated build or activation receipt.",
-    "linux_build_commands": ["cargo +1.93.0 build --release --locked --jobs 2 --bin ctox --target x86_64-unknown-linux-gnu", "readelf -h <verified-ctox> (must be ELF64 x86-64)", "lddtree -l <verified-ctox> (record dependencies and copy only verified libraries into matching guest paths)", "virt-customize --format qcow2 -a <private-stopped-copy> --smp 2 --memsize 2048 --upload <verified-ctox>:/usr/local/bin/ctox --chmod 0755:/usr/local/bin/ctox --chown 0:0:/usr/local/bin/ctox --write /etc/ctox-image-build.marker:workjet-noble-amd64-20260926-ctox-318890469-v2 --run src/scripts/workjet-guest-image/configure-guest.sh", "qemu-img convert -f qcow2 -O raw <configured-copy> <new-golden-base.raw>"],
+    "linux_build_commands": ["cargo +1.93.0 build --release --locked --jobs 2 --bin ctox --target x86_64-unknown-linux-gnu", "readelf -h <verified-ctox> (must be ELF64 x86-64)", "lddtree -l <verified-ctox> (record dependencies and copy only verified libraries into matching guest paths)", "virt-customize --format qcow2 -a <private-stopped-copy> --smp 2 --memsize 2048 --upload <verified-ctox>:/usr/local/bin/ctox --chmod 0755:/usr/local/bin/ctox --chown 0:0:/usr/local/bin/ctox --write /etc/ctox-image-build.marker:workjet-noble-amd64-20260926-ctox-b3745d911-v3 --run src/scripts/workjet-guest-image/configure-guest.sh", "qemu-img convert -f qcow2 -O raw <configured-copy> <new-golden-base.raw>"],
     "build_appliance_network": "Only outgoing signed Ubuntu snapshot package acquisition during an approved bounded image build. Does not enable networking in the worker VM. No host shares or privileged host mount into a running worker.",
     "runtime": {"vcpus": 2, "memory_mib": 4096, "acceleration": "KVM", "firmware": "QEMU PC SeaBIOS", "disk_gib": 8, "network": "none under existing PreparedQemuGuest", "host_transport": "existing owned QMP/virtio Unix sockets; existing native WebRTC guarded frame source"}
   },
