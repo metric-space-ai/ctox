@@ -786,6 +786,26 @@ where
     }
 }
 
+/// The receiving send future owns publication of this queued frame. A different
+/// drain may be carrying it, so caller cancellation must reach the actual IO,
+/// including a transport future that remains Pending without waking itself.
+async fn send_while_owned<T, F>(
+    completion: &mut tokio::sync::oneshot::Sender<Result<(), RxError>>,
+    sending: F,
+) -> RxResult<T>
+where
+    F: std::future::Future<Output = RxResult<T>>,
+{
+    tokio::select! {
+        biased;
+        _ = completion.closed() => Err(new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(serde_json::json!({"message":"queued send owner retired", EXPECTED_PEER_TEARDOWN_PARAM: true})),
+        )),
+        result = sending => result,
+    }
+}
+
 /// Drop-based accounting for one outbound chunked transfer. This guard is kept
 /// alive across every await in `send_framed_text`, so errors and task aborts both
 /// release the active-transfer count and any ACK waiter owned by the operation.
@@ -2764,7 +2784,7 @@ impl WebRTCRsConnectionHandler {
         // BEFORE yielding; a quorum/RPC deadline can cancel this very first poll.
         tokio::task::yield_now().await;
         loop {
-            let item = {
+            let mut item = {
                 let mut queues = self.send_queues.lock();
                 let Some(queue) = queues.get_mut(peer) else {
                     // Queue removed (peer torn down) — nothing left to drain.
@@ -2783,6 +2803,10 @@ impl WebRTCRsConnectionHandler {
                     }
                 }
             };
+            if item.result.is_closed() {
+                self.refresh_send_queue_status();
+                continue;
+            }
             let transfer_guard = QueuedTransferGuard::new(&reset_guard.in_flight);
             self.refresh_send_queue_status();
             self.record_status(|status| {
@@ -2790,24 +2814,24 @@ impl WebRTCRsConnectionHandler {
                 status.last_send_priority = item.priority.as_str();
             });
             let result = if item.text.len() > MAX_INLINE_FRAME_BYTES {
-                self.send_framed_text(
+                self.send_framed_text_owned(
                     peer,
                     Arc::clone(&data_channel),
                     item.text,
                     &reset_guard.available,
+                    Some(&mut item.result),
                 )
                 .await
             } else {
-                match self
-                    .wait_for_send_capacity(peer, &reset_guard.available)
-                    .await
-                {
-                    Ok(()) => data_channel
+                send_while_owned(&mut item.result, async {
+                    self.wait_for_send_capacity(peer, &reset_guard.available)
+                        .await?;
+                    data_channel
                         .send_text(&item.text)
                         .await
-                        .map_err(|e| webrtc_error("send data channel frame", e)),
-                    Err(error) => Err(error),
-                }
+                        .map_err(|e| webrtc_error("send data channel frame", e))
+                })
+                .await
             };
             let _ = item.result.send(result);
             drop(transfer_guard);
@@ -2821,12 +2845,25 @@ impl WebRTCRsConnectionHandler {
         self.refresh_send_queue_status();
     }
 
+    #[cfg(test)]
     async fn send_framed_text(
         &self,
         peer: &WebRTCRsPeer,
         data_channel: Arc<dyn DataChannel>,
         text: String,
         available: &Arc<tokio::sync::Notify>,
+    ) -> Result<(), RxError> {
+        self.send_framed_text_owned(peer, data_channel, text, available, None)
+            .await
+    }
+
+    async fn send_framed_text_owned(
+        &self,
+        peer: &WebRTCRsPeer,
+        data_channel: Arc<dyn DataChannel>,
+        text: String,
+        available: &Arc<tokio::sync::Notify>,
+        mut completion: Option<&mut tokio::sync::oneshot::Sender<Result<(), RxError>>>,
     ) -> Result<(), RxError> {
         let transfer_id = format!(
             "{}|frame|{}",
@@ -2850,7 +2887,7 @@ impl WebRTCRsConnectionHandler {
 
         let mut transfer_attempt = 0usize;
         let start = transport_start_frame(&transfer_id, transfer_attempt, chunks.len(), text.len());
-        send_json_text(&data_channel, &start).await?;
+        send_json_text_owned(&data_channel, &start, completion.as_deref_mut()).await?;
         self.record_sent_transport_frame(&start);
 
         for window_start in (0..chunks.len()).step_by(FRAME_ACK_WINDOW) {
@@ -2864,7 +2901,8 @@ impl WebRTCRsConnectionHandler {
                 if restart_from_zero {
                     let restart =
                         transport_start_frame(&transfer_id, attempt, chunks.len(), text.len());
-                    send_json_text(&data_channel, &restart).await?;
+                    send_json_text_owned(&data_channel, &restart, completion.as_deref_mut())
+                        .await?;
                     self.record_sent_transport_frame(&restart);
                 }
                 let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
@@ -2887,13 +2925,22 @@ impl WebRTCRsConnectionHandler {
                     // never bursts past what the channel can deliver in real
                     // time (which would overrun the buffer and get the channel
                     // killed by the browser).
-                    if let Err(error) = self.wait_for_send_capacity(peer, available).await {
+                    let capacity = match completion.as_deref_mut() {
+                        Some(owner) => {
+                            send_while_owned(owner, self.wait_for_send_capacity(peer, available))
+                                .await
+                        }
+                        None => self.wait_for_send_capacity(peer, available).await,
+                    };
+                    if let Err(error) = capacity {
                         self.pending_frame_acks.lock().remove(&ack_key);
                         self.refresh_dynamic_transport_status();
                         return Err(error);
                     }
                     let chunk = transport_chunk_frame(&transfer_id, attempt, seq, data);
-                    if let Err(error) = send_json_text(&data_channel, &chunk).await {
+                    if let Err(error) =
+                        send_json_text_owned(&data_channel, &chunk, completion.as_deref_mut()).await
+                    {
                         self.pending_frame_acks.lock().remove(&ack_key);
                         self.refresh_dynamic_transport_status();
                         return Err(error);
@@ -2910,8 +2957,18 @@ impl WebRTCRsConnectionHandler {
                 let deadline = tokio::time::Instant::now() + FRAME_ACK_TIMEOUT;
                 tokio::pin!(ack_rx);
                 let ack_result = loop {
+                    // Interleaved frames retain their own sender; retiring this
+                    // transfer does not cancel a different owner's active IO.
                     self.drain_high_priority_inline_frames(peer, &data_channel, available)
                         .await?;
+                    if completion.as_ref().is_some_and(|owner| owner.is_closed()) {
+                        return Err(new_rx_error(
+                            "RC_WEBRTC_PEER",
+                            Some(
+                                serde_json::json!({"message":"queued send owner retired", EXPECTED_PEER_TEARDOWN_PARAM: true}),
+                            ),
+                        ));
+                    }
                     let now = tokio::time::Instant::now();
                     if now >= deadline {
                         break None;
@@ -2996,22 +3053,33 @@ impl WebRTCRsConnectionHandler {
                     .filter(|queue| Arc::ptr_eq(&queue.drain_available, available))
                     .and_then(PeerSendQueue::pop_high_priority_inline)
             };
-            let Some(item) = item else {
+            let Some(mut item) = item else {
                 break;
             };
+            if item.result.is_closed() {
+                self.refresh_send_queue_status();
+                continue;
+            }
             self.refresh_send_queue_status();
             self.record_status(|status| {
                 status.sent_scheduled_frames = status.sent_scheduled_frames.saturating_add(1);
                 status.last_send_priority = SendPriority::High.as_str();
             });
-            let send_result = match self.wait_for_send_capacity(peer, available).await {
-                Ok(()) => data_channel
+            let send_result = send_while_owned(&mut item.result, async {
+                self.wait_for_send_capacity(peer, available).await?;
+                data_channel
                     .send_text(&item.text)
                     .await
-                    .map_err(|error| webrtc_error("send interleaved high-priority frame", error)),
-                Err(error) => Err(error),
+                    .map_err(|error| webrtc_error("send interleaved high-priority frame", error))
+            })
+            .await;
+            // Retiring this inline sender must not abort somebody else's
+            // enclosing framed transfer or discard that sender's live queue.
+            let failure = if item.result.is_closed() {
+                None
+            } else {
+                send_result.as_ref().err().map(|error| error.to_string())
             };
-            let failure = send_result.as_ref().err().map(|error| error.to_string());
             let _ = item.result.send(send_result);
             if let Some(message) = failure {
                 return Err(new_rx_error(
@@ -4310,6 +4378,17 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+async fn send_json_text_owned(
+    data_channel: &Arc<dyn DataChannel>,
+    value: &Value,
+    completion: Option<&mut tokio::sync::oneshot::Sender<Result<(), RxError>>>,
+) -> RxResult<()> {
+    match completion {
+        Some(owner) => send_while_owned(owner, send_json_text(data_channel, value)).await,
+        None => send_json_text(data_channel, value).await,
+    }
+}
+
 async fn send_json_text(data_channel: &Arc<dyn DataChannel>, value: &Value) -> RxResult<()> {
     let text = serde_json::to_string(value).map_err(|e| {
         new_rx_error(
@@ -4459,6 +4538,127 @@ mod tests {
     // (used by `apply_active_collections` + the send path) and reach the tests
     // through this glob.
     use super::*;
+
+    #[tokio::test]
+    async fn retired_send_owner_never_polls_transport() {
+        for retired in [true, false] {
+            let (mut completion, receiver) = tokio::sync::oneshot::channel::<Result<(), RxError>>();
+            let _receiver = if retired {
+                drop(receiver);
+                None
+            } else {
+                Some(receiver)
+            };
+            let polled = std::sync::atomic::AtomicBool::new(false);
+            let result = send_while_owned(&mut completion, async {
+                polled.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+            assert_eq!(result.is_err(), retired);
+            assert_eq!(polled.load(Ordering::SeqCst), !retired);
+        }
+    }
+
+    #[tokio::test]
+    async fn retiring_send_owner_wakes_a_transport_that_never_wakes() {
+        let (mut completion, receiver) = tokio::sync::oneshot::channel::<Result<(), RxError>>();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let sending_started = started.clone();
+        let sending = tokio::spawn(async move {
+            send_while_owned(&mut completion, async move {
+                sending_started.notify_one();
+                std::future::pending::<RxResult<()>>().await
+            })
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .unwrap();
+        drop(receiver);
+        let result = tokio::time::timeout(Duration::from_secs(1), sending)
+            .await
+            .expect("retired owner must wake pending send")
+            .expect("send task must not panic");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn retired_queued_business_data_frames_never_reach_normal_drain() {
+        for framed in [false, true] {
+            let handler = WebRTCRsConnectionHandler::new();
+            let peer = format!("retired-business-data-{framed}");
+            install_test_connection(&handler, &peer, 1).await;
+            let pc = handler.peers.lock()[&peer].peer_connection.clone();
+            let channel: Arc<dyn DataChannel> =
+                pc.create_data_channel("retired-owner", None).await.unwrap();
+            let frame = WebRTCWireFrame::Response(WebRTCResponse {
+                id: "retired-query".into(),
+                result: serde_json::json!({"protected": if framed {
+                    "private".repeat(MAX_INLINE_FRAME_BYTES)
+                } else { "private".into() }}),
+                error: None,
+                collection: None,
+            });
+            let text = serde_json::to_string(&frame).unwrap();
+            let queued = handler
+                .enqueue_text(&peer, classify_send_frame(&frame, &text))
+                .unwrap();
+            let available = queued.available.clone();
+            drop(queued.result);
+            let guard = {
+                let mut queues = handler.send_queues.lock();
+                queues.get_mut(&peer).unwrap().draining = true;
+                DrainResetGuard {
+                    queues: handler.send_queues.clone(),
+                    peer: peer.clone(),
+                    available,
+                    in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    armed: true,
+                }
+            };
+            handler.drain_send_queue(&peer, channel, guard).await;
+            assert_eq!(handler.frame_transport_status().sent_scheduled_frames, 0);
+            assert_eq!(handler.frame_transport_status().active_transfers, 0);
+            let queues = handler.send_queues.lock();
+            let queue = &queues[&peer];
+            assert!(queue.high.is_empty() && queue.normal.is_empty() && queue.low.is_empty());
+            assert!(!queue.draining);
+            drop(queues);
+            handler.close().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn retired_queued_business_data_frame_never_reaches_inline_drain() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "retired-inline-business-data".to_owned();
+        install_test_connection(&handler, &peer, 1).await;
+        let pc = handler.peers.lock()[&peer].peer_connection.clone();
+        let channel: Arc<dyn DataChannel> = pc
+            .create_data_channel("retired-inline", None)
+            .await
+            .unwrap();
+        let frame = WebRTCWireFrame::Response(WebRTCResponse {
+            id: "retired-watch".into(),
+            result: serde_json::json!({"protected":"private"}),
+            error: None,
+            collection: None,
+        });
+        let text = serde_json::to_string(&frame).unwrap();
+        let queued = handler
+            .enqueue_text(&peer, classify_send_frame(&frame, &text))
+            .unwrap();
+        let available = queued.available.clone();
+        drop(queued.result);
+        handler
+            .drain_high_priority_inline_frames(&peer, &channel, &available)
+            .await
+            .unwrap();
+        assert_eq!(handler.frame_transport_status().sent_scheduled_frames, 0);
+        assert!(handler.send_queues.lock()[&peer].high.is_empty());
+        handler.close().await.unwrap();
+    }
 
     #[tokio::test]
     async fn best_effort_send_error_policy_suppresses_close_and_publishes_transport_failure() {
