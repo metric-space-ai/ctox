@@ -1180,6 +1180,23 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         )
         .await;
 
+        // Failed setup must retire only its pending pump. The accepted A
+        // observation must still deliver its next authorized state below.
+        send_request(
+            &mut client_a,
+            "observe-unowned-command",
+            NativeBusinessDataOperation::ObserveCommand {
+                session: session_a.clone(),
+                command_id: "unowned-command".into(),
+            },
+        )
+        .await;
+        assert_rejected(
+            read_frame(&mut client_a).await,
+            NativeBusinessDataErrorCode::Unauthorized,
+        );
+        assert_no_frame(&mut client_a, "rejected command setup").await;
+
         server_db
             .collection("business_commands")
             .unwrap()
