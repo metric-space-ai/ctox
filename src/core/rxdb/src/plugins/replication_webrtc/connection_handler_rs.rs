@@ -6248,13 +6248,14 @@ mod tests {
             let sending_peer = peer.clone();
             let sending_text = text.clone();
             let guard: Arc<dyn WebRTCPublicationGuard> = state.clone();
+            let available = test_send_queue(&handler, &peer);
             let sending = tokio::spawn(async move {
                 sending_handler
                     .send_framed_text_owned(
                         &sending_peer,
                         sending_channel,
                         sending_text,
-                        &Arc::new(tokio::sync::Notify::new()),
+                        &available,
                         Some(&mut owner),
                         Some(&guard),
                     )
