@@ -8,7 +8,48 @@ use ctox_sync::authority::{Job, Receipt, Request, WorkerMembership};
 use serde_json::json;
 use std::{future::Future, pin::Pin};
 
+#[test]
+fn native_prepared_overlay_accepts_private_helper_layout_and_rejects_foreign_aliases() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let state = tempfile::tempdir().unwrap();
+    let runtime = state.path().join("runtime-guest");
+    std::fs::create_dir(&runtime).unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // Match the actual QemuOverlayPreparation directory and retained filename.
+    let disk = tempfile::Builder::new()
+        .prefix("guest-disk-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(&runtime)
+        .unwrap();
+    let overlay = disk.path().join("root.qcow2");
+    std::fs::write(&overlay, b"native disk").unwrap();
+    validate_prepared_guest_overlay(&runtime, &overlay).unwrap();
+    assert!(validate_prepared_guest_overlay(state.path(), &overlay).is_err());
+
+    let alias = runtime.join("foreign.qcow2");
+    symlink(&overlay, &alias).unwrap();
+    assert!(validate_prepared_guest_overlay(&runtime, &alias).is_err());
+    std::fs::remove_file(&alias).unwrap();
+    std::fs::hard_link(&overlay, &alias).unwrap();
+    assert!(validate_prepared_guest_overlay(&runtime, &overlay).is_err());
+    std::fs::remove_file(&alias).unwrap();
+
+    std::fs::set_permissions(disk.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(validate_prepared_guest_overlay(&runtime, &overlay).is_err());
+    std::fs::set_permissions(disk.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(&overlay, std::fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(validate_prepared_guest_overlay(&runtime, &overlay).is_err());
+    std::fs::set_permissions(&overlay, std::fs::Permissions::from_mode(0o600)).unwrap();
+    validate_prepared_guest_overlay(&runtime, &overlay).unwrap();
+
+    // Existing native reconstruction may place its disk directly in the assignment.
+    let restored = runtime.join("restored.qcow2");
+    std::fs::write(&restored, b"restored disk").unwrap();
+    validate_prepared_guest_overlay(&runtime, &restored).unwrap();
+}
+
 struct RejectAuthority;
+
 impl ExecutionAuthority for RejectAuthority {
     fn node_id(&self) -> u64 {
         4
