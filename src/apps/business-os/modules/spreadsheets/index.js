@@ -254,8 +254,9 @@ async function openSpreadsheetFile(state, input) {
   assertSpreadsheetIngestionAllowed(ingestion);
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sourceSha = await sha256Hex(bytes);
+  assertSpreadsheetSnapshotBytes(ingestion, sourceSha);
   await refreshSpreadsheets(state);
-  const existing = spreadsheetBySourceSha(state.spreadsheets, sourceSha);
+  const existing = spreadsheetBySourceSha(state.spreadsheets, sourceSha, ingestion);
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
   if (!await saveSpreadsheetBeforeLeaving(state)) return;
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
@@ -272,10 +273,23 @@ async function openSpreadsheetFile(state, input) {
   return selectedRecord(state);
 }
 
-function spreadsheetBySourceSha(records = [], sourceSha = '') {
+function spreadsheetBySourceSha(records = [], sourceSha = '', ingestion = null) {
   const expected = String(sourceSha || '').trim().toLowerCase();
   if (!expected) return null;
-  return records.find((record) => String(record?.source_sha256 || '').trim().toLowerCase() === expected) || null;
+  return records.find((record) => String(record?.source_sha256 || '').trim().toLowerCase() === expected
+    && (!ingestion || spreadsheetIngestionMatches(record, ingestion))) || null;
+}
+
+function spreadsheetIngestionMatches(record, ingestion) {
+  const lineage = record?.knowledge_lineage || {};
+  const research = isResearchDerivedSpreadsheet([record], arrayValue(record?.linked_records));
+  if (ingestion.kind !== RESEARCH_GENERATED_KIND) {
+    return !research && lineage.open_purpose !== 'snapshot_report';
+  }
+  return research && lineage.open_purpose === 'snapshot_report'
+    && lineage.evidence_eligible === false
+    && JSON.stringify(normalizeReportSnapshot(lineage.report_snapshot))
+      === JSON.stringify(ingestion.report_snapshot);
 }
 
 function renderSpreadsheetOpenError(state, error) {
@@ -583,6 +597,8 @@ async function importSpreadsheetFile(state, file, tags = [], ingestionInput = {}
   const isXlsx = file.name.toLowerCase().endsWith('.xlsx') || file.type === XLSX_MIME;
   const isTsv = file.name.toLowerCase().endsWith('.tsv') || file.type === TSV_MIME;
   const bytes = new Uint8Array(await file.arrayBuffer());
+  const sourceSha = await sha256Hex(bytes);
+  assertSpreadsheetSnapshotBytes(ingestion, sourceSha);
   const fileText = isXlsx ? '' : new TextDecoder().decode(bytes);
 
   const documentId = `sheet_${crypto.randomUUID()}`;
@@ -659,7 +675,7 @@ async function importSpreadsheetFile(state, file, tags = [], ingestionInput = {}
     spreadsheet_type: isXlsx ? 'xlsx' : isTsv ? 'tsv' : 'csv',
     owner_id: '',
     current_version_id: versionId,
-    source_sha256: await sha256Hex(bytes),
+    source_sha256: sourceSha,
     row_count: isXlsx ? 0 : modelJson.data.length,
     col_count: isXlsx ? 0 : modelJson.columns.length,
     diagnostics_count: 0,
@@ -755,18 +771,32 @@ function normalizeSpreadsheetIngestion(input = {}) {
     ...claimIds.map((id) => ({ kind: 'claim', id })),
     ...evidenceIds.map((id) => ({ kind: 'evidence', id })),
   ]);
-  const kind = isResearchDerivedSpreadsheet(objects, normalizedLinkedRecords)
+  // The explicit opening purpose survives the second normalization in import.
+  // Caller validity/evidence assertions never authorize the evidence path.
+  const openPurpose = candidates[0]?.open_purpose;
+  const reportSnapshot = openPurpose === 'snapshot_report'
+    ? normalizeReportSnapshot(candidates[0]?.report_snapshot) : null;
+  const kind = openPurpose === 'snapshot_report'
+    || isResearchDerivedSpreadsheet(objects, normalizedLinkedRecords)
     ? RESEARCH_GENERATED_KIND
     : USER_IMPORT_KIND;
   const knowledgeVersion = firstKnowledgeVersion(objects, normalizedLinkedRecords);
   const lineage = {
     kind,
+    ingestion_kind: kind,
+    open_purpose: openPurpose,
+    report_snapshot: reportSnapshot,
     linkedRecords: normalizedLinkedRecords,
     sourceReceiptSnapshotHashes,
     knowledgeVersion,
     knowledgeLineage: {
       source_receipt_snapshot_hashes: sourceReceiptSnapshotHashes,
       knowledge_version: knowledgeVersion,
+      ...(openPurpose === 'snapshot_report' ? {
+        open_purpose: openPurpose,
+        report_snapshot: reportSnapshot,
+        evidence_eligible: false,
+      } : {}),
     },
   };
   const validation = validateSpreadsheetLineage(lineage);
@@ -782,10 +812,40 @@ function assertSpreadsheetIngestionAllowed(ingestion) {
 
 function validateSpreadsheetLineage(ingestion = {}) {
   if (ingestion.kind !== RESEARCH_GENERATED_KIND) return { valid: true, message: '' };
+  if (ingestion.open_purpose === 'snapshot_report' && ingestion.report_snapshot) {
+    return { valid: true, message: '' };
+  }
   return {
     valid: false,
     message: 'This spreadsheet needs confirmed provenance before it can be opened as evidence.',
   };
+}
+
+function normalizeReportSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+  const { source_module, source_collection, source_record_ids, captured_at_ms, file_sha256 } = snapshot;
+  if (typeof source_module !== 'string' || !source_module.trim()
+    || typeof source_collection !== 'string' || !source_collection.trim()
+    || !Array.isArray(source_record_ids) || !source_record_ids.length
+    || source_record_ids.some((id) => typeof id !== 'string' || !id.trim())
+    || !Number.isSafeInteger(captured_at_ms) || captured_at_ms <= 0
+    || !Number.isFinite(new Date(captured_at_ms).getTime())
+    || typeof file_sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(file_sha256)) return null;
+  return {
+    source_module: source_module.trim(),
+    source_collection: source_collection.trim(),
+    source_record_ids: source_record_ids.map((id) => id.trim()),
+    captured_at_ms,
+    file_sha256: file_sha256.toLowerCase(),
+  };
+}
+
+function assertSpreadsheetSnapshotBytes(ingestion, sourceSha) {
+  if (ingestion.open_purpose !== 'snapshot_report') return;
+  if (ingestion.report_snapshot?.file_sha256 === sourceSha) return;
+  const error = new Error('The report snapshot does not match the supplied spreadsheet bytes.');
+  error.code = 'SPREADSHEET_LINEAGE_REQUIRED';
+  throw error;
 }
 
 function nestedLineageObjects(value) {
@@ -1501,7 +1561,15 @@ async function renderCenter(state) {
 
   const head = paneHeadFragment(state, 'editor');
   const kicker = head.querySelector('[data-spreadsheets-editor-kicker]');
-  if (kicker) kicker.textContent = record.filename;
+  if (kicker) {
+    kicker.textContent = record.filename;
+    const origin = record.knowledge_lineage?.report_snapshot;
+    if (record.knowledge_lineage?.open_purpose === 'snapshot_report' && origin) {
+      const label = state.t('snapshotReportOriginUnverified', 'Bericht aus gespeichertem Stand · Herkunft ungeprüft · Kein Nachweis');
+      kicker.textContent += ` · ${label}`;
+      kicker.setAttribute('title', `${label}: ${origin.source_module} / ${origin.source_collection} / ${origin.source_record_ids.join(', ')} / ${new Date(origin.captured_at_ms).toISOString()}`);
+    }
+  }
   const titleEl = head.querySelector('[data-spreadsheets-editor-title]');
   if (titleEl) {
     titleEl.textContent = record.title;

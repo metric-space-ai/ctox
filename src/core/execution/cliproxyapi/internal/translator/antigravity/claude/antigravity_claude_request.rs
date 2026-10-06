@@ -12,8 +12,9 @@ use crate::internal::cache::{
 };
 use crate::internal::signature::{
     compatible_antigravity_claude_thinking_signature, compatible_gemini_signature,
-    compatible_signature_for_provider, sanitize_gemini_request_thought_signatures,
-    signature_provider_from_model_name, SignatureProvider,
+    compatible_signature_for_provider, compatible_signature_for_provider_block,
+    sanitize_gemini_request_thought_signatures, signature_provider_from_model_name,
+    SignatureBlockKind, SignatureProvider,
 };
 use crate::internal::translator::common::claude_message_system_reminder_text;
 use crate::internal::util::claude_attribution::is_claude_code_attribution_system_text;
@@ -40,6 +41,37 @@ const SAFETY: &[(&str, &str)] = &[
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AntigravityClaudeRequestCapabilities {
     pub native_google_search: bool,
+}
+
+/// Direct Gemini has a different replay contract from Antigravity. Keep that
+/// request-local choice explicit without changing Antigravity signature/cache
+/// behavior or reconstructing source block positions after conversion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClaudeThinkingPolicy {
+    Antigravity,
+    GeminiStandard,
+    GeminiCompatibility,
+}
+
+pub(crate) fn convert_claude_request_for_direct_gemini(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+    preserve_thinking: bool,
+) -> Vec<u8> {
+    convert_claude_request_with_policy(
+        model_name,
+        input,
+        stream,
+        AntigravityClaudeRequestCapabilities::default(),
+        None,
+        if preserve_thinking {
+            ClaudeThinkingPolicy::GeminiCompatibility
+        } else {
+            ClaudeThinkingPolicy::GeminiStandard
+        },
+    )
+    .unwrap_or_else(|_| input.to_vec())
 }
 
 pub fn convert_claude_request_to_antigravity(
@@ -77,9 +109,27 @@ pub fn convert_claude_request_to_antigravity_with_capabilities(
 pub fn convert_claude_request_to_antigravity_with_runtime(
     model_name: &str,
     input: &[u8],
+    stream: bool,
+    capabilities: AntigravityClaudeRequestCapabilities,
+    signature_store: Option<&dyn SignatureKvStore>,
+) -> Result<Vec<u8>, AntigravityClaudeRequestTranslationError> {
+    convert_claude_request_with_policy(
+        model_name,
+        input,
+        stream,
+        capabilities,
+        signature_store,
+        ClaudeThinkingPolicy::Antigravity,
+    )
+}
+
+fn convert_claude_request_with_policy(
+    model_name: &str,
+    input: &[u8],
     _stream: bool,
     capabilities: AntigravityClaudeRequestCapabilities,
     signature_store: Option<&dyn SignatureKvStore>,
+    thinking_policy: ClaudeThinkingPolicy,
 ) -> Result<Vec<u8>, AntigravityClaudeRequestTranslationError> {
     let Ok(root) = serde_json::from_slice::<Value>(input) else {
         return Ok(input.to_vec());
@@ -99,6 +149,7 @@ pub fn convert_claude_request_to_antigravity_with_runtime(
         &function_name_map,
         &mut enable_thought_translate,
         signature_store,
+        thinking_policy,
     )?;
     let tools = convert_tools(&root, &function_name_map);
     let has_tools = tools
@@ -138,7 +189,9 @@ pub fn convert_claude_request_to_antigravity_with_runtime(
                 .collect(),
         ),
     );
-    if signature_provider_from_model_name(model_name) == SignatureProvider::Gemini {
+    if thinking_policy == ClaudeThinkingPolicy::Antigravity
+        && signature_provider_from_model_name(model_name) == SignatureProvider::Gemini
+    {
         let sanitized = sanitize_gemini_request_thought_signatures(
             &serde_json::to_vec(&Value::Object(request.clone())).unwrap_or_default(),
         );
@@ -205,6 +258,7 @@ fn convert_messages(
     function_name_map: &HashMap<String, String>,
     enable_thought_translate: &mut bool,
     signature_store: Option<&dyn SignatureKvStore>,
+    thinking_policy: ClaudeThinkingPolicy,
 ) -> Result<Vec<Value>, AntigravityClaudeRequestTranslationError> {
     let mut output = Vec::new();
     let mut tool_name_by_id = HashMap::<String, String>::new();
@@ -238,9 +292,15 @@ fn convert_messages(
                 &mut tool_name_by_id,
                 enable_thought_translate,
                 signature_store,
+                thinking_policy,
             )?;
-            if !converted.is_empty() {
-                output.push(content(role, reorder_model_parts(role, converted)));
+            if thinking_policy == ClaudeThinkingPolicy::Antigravity {
+                if !converted.is_empty() {
+                    output.push(content(role, reorder_model_parts(role, converted)));
+                }
+            } else if !converted.is_empty() {
+                // ref: gemini/claude/gemini_claude_request.go:211-216 @ a2976eb8
+                output.push(content(role, converted));
             }
         } else if let Some(text) = message_content.as_str() {
             output.push(content(
@@ -264,6 +324,7 @@ fn convert_message_parts(
     tool_name_by_id: &mut HashMap<String, String>,
     enable_thought_translate: &mut bool,
     signature_store: Option<&dyn SignatureKvStore>,
+    thinking_policy: ClaudeThinkingPolicy,
 ) -> Result<Vec<Value>, AntigravityClaudeRequestTranslationError> {
     let gemini = signature_provider_from_model_name(model_name) == SignatureProvider::Gemini;
     let mut parts = Vec::new();
@@ -272,6 +333,32 @@ fn convert_message_parts(
     for (index, item) in source.iter().enumerate() {
         match item.get("type").and_then(Value::as_str).unwrap_or_default() {
             "thinking" => {
+                // ref: gemini/claude/gemini_claude_request.go:129-137 @ e2bff010
+                if thinking_policy != ClaudeThinkingPolicy::Antigravity {
+                    if thinking_policy == ClaudeThinkingPolicy::GeminiCompatibility {
+                        let thinking = match item.get("thinking").unwrap_or(&Value::Null) {
+                            Value::Null => String::new(),
+                            Value::String(text) => text.clone(),
+                            other => other.to_string(),
+                        };
+                        let raw_signature = item
+                            .get("signature")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let signature = compatible_signature_for_provider_block(
+                            SignatureProvider::Gemini,
+                            raw_signature,
+                            SignatureBlockKind::GeminiModelPart,
+                        )
+                        .unwrap_or_else(|| GEMINI_BYPASS.to_owned());
+                        parts.push(json!({
+                            "text": thinking,
+                            "thought": true,
+                            "thoughtSignature": signature
+                        }));
+                    }
+                    continue;
+                }
                 if original_role != "assistant" {
                     continue;
                 }
@@ -481,6 +568,12 @@ fn convert_message_parts(
                     parts.push(json!({"inlineData":inline}));
                 }
             }
+            // ref: gemini/claude/gemini_claude_request.go:191-207 @ a2976eb8
+            "document" if thinking_policy != ClaudeThinkingPolicy::Antigravity => {
+                if let Some(inline) = inline_media(item, true) {
+                    parts.push(json!({"inlineData":inline}));
+                }
+            }
             _ => {}
         }
     }
@@ -639,7 +732,12 @@ fn tool_result_part(
 }
 
 fn inline_image(item: &Value) -> Option<Value> {
-    if item.get("type").and_then(Value::as_str) != Some("image")
+    inline_media(item, false)
+}
+
+fn inline_media(item: &Value, allow_document: bool) -> Option<Value> {
+    let kind = item.get("type").and_then(Value::as_str);
+    if !(kind == Some("image") || (allow_document && kind == Some("document")))
         || item.pointer("/source/type").and_then(Value::as_str) != Some("base64")
     {
         return None;

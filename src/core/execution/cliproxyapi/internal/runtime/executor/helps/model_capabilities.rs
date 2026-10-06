@@ -3,8 +3,13 @@
 // License: MIT (upstream); modifications AGPL-3.0-only
 
 use crate::internal::registry::ModelInfo;
-use crate::internal::thinking::ThinkingError;
+use std::sync::Arc;
+
+use crate::internal::thinking::{
+    ModelInfoView, ResolvedCapabilityThinkingRequest, ThinkingEngine, ThinkingError,
+};
 use crate::sdk::cliproxy::executor::{Options, Request};
+use crate::sdk::translator::Registry;
 
 /// Complete request view passed to the canonical thinking engine.
 ///
@@ -20,12 +25,16 @@ pub struct RequestThinkingInput<'a> {
     pub from_format: &'a str,
     pub to_format: &'a str,
     pub provider: &'a str,
+    pub normalized_updates_changed: bool,
     pub resolved_model_info: Option<&'a ModelInfo>,
+    /// Manager-selected owned capability. When present this takes precedence
+    /// over the static registry view, without leaking dynamic strings.
+    pub resolved_config_model_info: Option<&'a crate::internal::modelconfig::ModelInfo>,
 }
 
-/// Adapter implemented by the canonical top-level thinking pipeline once it is
-/// available. Keeping this boundary injected avoids cloning its capability or
-/// JSON-mutation rules into executor helpers.
+/// Canonical top-level thinking boundary. It resolves summary intent with the
+/// owning translator registry and shares capability validation/provider mutation
+/// with the engine instead of duplicating those rules in executor helpers.
 pub trait RequestThinkingEngine {
     fn apply_request_thinking(
         &self,
@@ -39,6 +48,9 @@ pub struct RequestThinkingRoute<'a> {
     pub to_format: &'a str,
     pub provider: &'a str,
     pub resolved_model_info: Option<&'a ModelInfo>,
+    /// Manager-selected owned capability. When present this takes precedence
+    /// over the static registry view, without leaking dynamic strings.
+    pub resolved_config_model_info: Option<&'a crate::internal::modelconfig::ModelInfo>,
 }
 
 /// Preserves the upstream executor routing rule: an explicitly selected API
@@ -50,6 +62,21 @@ pub fn apply_request_thinking<Engine>(
     request: &Request,
     options: &Options,
     route: RequestThinkingRoute<'_>,
+) -> Result<Vec<u8>, ThinkingError>
+where
+    Engine: RequestThinkingEngine + ?Sized,
+{
+    apply_request_thinking_with_update_intent(engine, body, request, options, route, false)
+}
+
+/// Carries the actual translator/plugin update decision into canonical thinking.
+pub fn apply_request_thinking_with_update_intent<Engine>(
+    engine: &Engine,
+    body: &[u8],
+    request: &Request,
+    options: &Options,
+    route: RequestThinkingRoute<'_>,
+    normalized_updates_changed: bool,
 ) -> Result<Vec<u8>, ThinkingError>
 where
     Engine: RequestThinkingEngine + ?Sized,
@@ -67,6 +94,68 @@ where
         from_format: route.from_format,
         to_format: route.to_format,
         provider: route.provider,
+        normalized_updates_changed,
         resolved_model_info: route.resolved_model_info,
+        resolved_config_model_info: route.resolved_config_model_info,
     })
+}
+
+/// Owner-scoped bridge from account-selected model records to the complete
+/// canonical pipeline. Both registries belong to the same gateway instance.
+#[derive(Clone)]
+pub struct RequestThinkingPipeline {
+    engine: Arc<ThinkingEngine>,
+    translators: Arc<Registry>,
+}
+
+impl RequestThinkingPipeline {
+    pub fn new(engine: Arc<ThinkingEngine>, translators: Arc<Registry>) -> Self {
+        Self {
+            engine,
+            translators,
+        }
+    }
+}
+
+impl RequestThinkingEngine for RequestThinkingPipeline {
+    fn apply_request_thinking(
+        &self,
+        input: RequestThinkingInput<'_>,
+    ) -> Result<Vec<u8>, ThinkingError> {
+        let summary = super::thinking::translated_request_summary_config(
+            &self.translators,
+            input.body,
+            input.current_source_payload,
+            input.original_source_payload,
+            input.model,
+            input.from_format,
+            input.to_format,
+        );
+        // ref: internal/runtime/executor/helps/model_capabilities.go:22-31 @ d7914afd
+        // Current/plugin-normalized source owns effort; original source participates
+        // in summary preservation. Empty current input falls back to the original.
+        let source_body = if input.current_source_payload.is_empty() {
+            input.original_source_payload
+        } else {
+            input.current_source_payload
+        };
+        let view = input
+            .resolved_config_model_info
+            .map(ModelInfoView::from)
+            .or_else(|| input.resolved_model_info.map(ModelInfoView::from));
+        self.engine.apply_thinking_with_capability_info_and_summary(
+            ResolvedCapabilityThinkingRequest {
+                body: input.body,
+                source_body,
+                model: input.model,
+                from_format: input.from_format,
+                to_format: input.to_format,
+                provider_key: input.provider,
+                model_info: view.as_ref(),
+                model_info_resolved: view.is_some(),
+                normalized_updates_changed: input.normalized_updates_changed,
+            },
+            &summary,
+        )
+    }
 }

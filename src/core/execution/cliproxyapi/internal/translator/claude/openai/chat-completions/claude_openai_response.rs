@@ -37,6 +37,7 @@ impl Usage {
 
 #[derive(Default)]
 struct ToolCall {
+    index: usize,
     id: String,
     name: String,
     arguments: String,
@@ -49,6 +50,8 @@ pub struct ClaudeToChatStreamState {
     finish_reason: String,
     usage: Usage,
     tools: BTreeMap<usize, ToolCall>,
+    trailing_usage_sent: bool,
+    next_tool_call_index: usize,
 }
 
 pub fn convert_claude_response_to_openai_chat_stream(
@@ -94,6 +97,7 @@ pub fn convert_claude_response_to_openai_chat_stream(
                     .to_owned();
                 state.created_at = unix_time();
                 state.tools.clear();
+                state.next_tool_call_index = 0;
                 state.usage.merge(message.get("usage"));
                 output["id"] = Value::String(state.response_id.clone());
                 output["created"] = Value::from(state.created_at);
@@ -107,9 +111,12 @@ pub fn convert_claude_response_to_openai_chat_stream(
             };
             if block.get("type").and_then(Value::as_str) == Some("tool_use") {
                 let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let tool_index = state.next_tool_call_index;
+                state.next_tool_call_index += 1;
                 state.tools.insert(
                     index,
                     ToolCall {
+                        index: tool_index,
                         id: block
                             .get("id")
                             .and_then(Value::as_str)
@@ -173,7 +180,7 @@ pub fn convert_claude_response_to_openai_chat_stream(
                 tool.arguments = "{}".to_owned();
             }
             output["choices"][0]["delta"]["tool_calls"] = json!([{
-                "index":index,
+                "index":tool.index,
                 "id":tool.id,
                 "type":"function",
                 "function":{"name":tool.name,"arguments":tool.arguments}
@@ -195,10 +202,28 @@ pub fn convert_claude_response_to_openai_chat_stream(
                     "total_tokens":prompt + state.usage.output,
                     "prompt_tokens_details":{
                         "cached_tokens":state.usage.cache_read,
-                        "cached_creation_tokens":state.usage.cache_creation
+                        "cached_creation_tokens":state.usage.cache_creation,
+                        "cache_write_tokens":state.usage.cache_creation
                     }
                 });
             }
+            encode_stream_value(output)
+        }
+        // ref: upstream claude_openai_response.go:264-290 @ 16d98881d4bb37adaa827599e4be8f5154e81646
+        "message_stop" if state.usage.seen && !state.trailing_usage_sent => {
+            state.trailing_usage_sent = true;
+            let prompt = state.usage.input + state.usage.cache_creation + state.usage.cache_read;
+            output["choices"] = json!([]);
+            output["usage"] = json!({
+                "prompt_tokens":prompt,
+                "completion_tokens":state.usage.output,
+                "total_tokens":prompt + state.usage.output,
+                "prompt_tokens_details":{
+                    "cached_tokens":state.usage.cache_read,
+                    "cached_creation_tokens":state.usage.cache_creation,
+                    "cache_write_tokens":state.usage.cache_creation
+                }
+            });
             encode_stream_value(output)
         }
         "message_stop" | "ping" => Vec::new(),
@@ -217,11 +242,13 @@ fn unix_time() -> i64 {
         .unwrap_or(0)
 }
 
+// ref: internal/translator/claude/openai/chat-completions/claude_openai_response.go:341-495 @ 16d98881d4bb37adaa827599e4be8f5154e81646
 pub fn convert_claude_response_to_openai_chat_non_stream(
     _original_request: &[u8],
     _request: &[u8],
     raw: &[u8],
 ) -> Vec<u8> {
+    let (raw, _) = crate::internal::translator::common::claude_messages_json_to_sse(raw);
     let mut message_id = String::new();
     let mut model = String::new();
     let mut created_at = 0;
@@ -264,6 +291,7 @@ pub fn convert_claude_response_to_openai_chat_non_stream(
                     tools.insert(
                         index,
                         ToolCall {
+                            index: 0,
                             id: block
                                 .get("id")
                                 .and_then(Value::as_str)
@@ -326,7 +354,7 @@ pub fn convert_claude_response_to_openai_chat_non_stream(
 
     let mut message = json!({"role":"assistant", "content":text});
     if !reasoning.is_empty() {
-        message["reasoning"] = Value::String(reasoning);
+        message["reasoning_content"] = Value::String(reasoning);
     }
     if !tools.is_empty() {
         message["tool_calls"] = Value::Array(
@@ -355,7 +383,8 @@ pub fn convert_claude_response_to_openai_chat_non_stream(
     if usage.seen {
         output["usage"]["prompt_tokens_details"] = json!({
             "cached_tokens":usage.cache_read,
-            "cached_creation_tokens":usage.cache_creation
+            "cached_creation_tokens":usage.cache_creation,
+            "cache_write_tokens":usage.cache_creation
         });
     }
     serde_json::to_vec(&output).unwrap_or_else(|_| raw.to_vec())
@@ -404,7 +433,8 @@ data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"outpu
 
         assert_eq!(output["id"], "msg_1");
         assert!(output["created"].as_i64().unwrap_or_default() > 0);
-        assert_eq!(output["choices"][0]["message"]["reasoning"], "why");
+        assert_eq!(output["choices"][0]["message"]["reasoning_content"], "why");
+        assert!(output["choices"][0]["message"].get("reasoning").is_none());
         assert_eq!(
             output["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
             r#"{"ok":true}"#

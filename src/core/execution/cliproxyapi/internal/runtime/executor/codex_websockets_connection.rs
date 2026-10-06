@@ -78,7 +78,8 @@ pub fn build_codex_responses_websocket_url(http_url: &str) -> Result<String, Cod
 }
 
 pub fn build_codex_websocket_request_body(body: &[u8]) -> Vec<u8> {
-    let body = super::helps::sanitize_codex_input_item_ids(body);
+    let body = super::helps::normalize_codex_tool_schemas(body);
+    let body = super::helps::sanitize_codex_input_item_ids(&body);
     let Ok(mut value) = serde_json::from_slice::<Value>(&body) else {
         return body;
     };

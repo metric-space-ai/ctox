@@ -1,5 +1,21 @@
 # THESEN MCP app authority repair
 
+## Managed connector rotation
+
+A connection reaching its configured maximum age is a planned rotation: reconnect
+immediately and reset accumulated failure backoff. Unexpected stream closure,
+handshake errors and transport failures retain capped exponential backoff. With
+reconnect disabled, return after that one connection; cancelling the connector
+drops its active connection or pending delay. The finite lifecycle tests cover
+these cases without provider connections or wall-clock sleeps.
+
+The current PR149 composition preserves main's newer authenticated app authority,
+source resolvers, policy checks, generated task inventory and packaging. Its
+remaining native delta is this connector lifecycle and its tests. Compilation
+and installed THESEN checks remain pending; this document is not acceptance.
+
+## Existing authority and source binding
+
 Source-only repair, based on `952838429` (origin/main). No tenant app/store edits,
 deployment, native build or local compilation performed by this package.
 

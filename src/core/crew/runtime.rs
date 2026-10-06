@@ -448,7 +448,7 @@ pub(crate) fn repair_selection_events(root: &Path, conn: &Connection) -> Result<
     ensure_selection_event_index(conn)?;
     // The correlated NOT EXISTS was planned as a full scan of the partial
     // index per attempt (SCAN, not SEARCH): 4.4 s per cockpit sweep for 711
-    // attempts on the THESEN on-prem host. NOT IN over the indexed id set is
+    // attempts on the measured on-prem host. NOT IN over the indexed id set is
     // one pass (16 ms there); NULL ids are excluded so NOT IN keeps the
     // NOT EXISTS semantics.
     let mut cursor = String::new();

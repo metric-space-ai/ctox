@@ -302,7 +302,10 @@ pub struct SecretRecordWrite<'a> {
 /// Reads a credential tuple from one SQLite snapshot. No partially rotated
 /// combination can be observed between the individual values.
 pub fn read_secret_values(root: &Path, keys: &[(&str, &str)]) -> Result<Vec<String>> {
-    let (key_bytes, _) = ensure_secret_master_key(root)?;
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (key_bytes, _) = load_existing_secret_master_key(root)?;
     let mut conn = open_secret_db(root)?;
     let tx = conn.transaction()?;
     let mut values = Vec::with_capacity(keys.len());
@@ -1166,9 +1169,38 @@ fn load_secret_record(root: &Path, scope: &str, name: &str) -> Result<Option<Sec
 }
 
 fn get_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let (nonce_b64, ciphertext_b64): (String, String) = conn
+    read_secret_value_optional(root, scope, name)?.context("secret not found")
+}
+
+/// Sanitized failure categories for native capability adapters. Missing rows
+/// remain distinct from unavailable stores, keys and corrupt ciphertext.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretReadError {
+    Unavailable,
+    DecryptionFailed,
+    InvalidEncoding,
+}
+
+impl std::fmt::Display for SecretReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unavailable => "secret store or key unavailable",
+            Self::DecryptionFailed => "secret decryption failed",
+            Self::InvalidEncoding => "secret value is not valid UTF-8",
+        })
+    }
+}
+impl std::error::Error for SecretReadError {}
+
+/// Read an exact encrypted reference. Only an absent row returns `None`.
+pub fn read_secret_value_optional(
+    root: &Path,
+    scope: &str,
+    name: &str,
+) -> std::result::Result<Option<String>, SecretReadError> {
+    let conn = open_secret_db(root).map_err(|_| SecretReadError::Unavailable)?;
+    ensure_secret_schema(&conn).map_err(|_| SecretReadError::Unavailable)?;
+    let record: Option<(String, String)> = conn
         .query_row(
             r#"
             SELECT nonce_b64, ciphertext_b64
@@ -1179,13 +1211,18 @@ fn get_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
             params![scope, name],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()?
-        .context("secret not found")?;
-    let (key_bytes, _) = ensure_secret_master_key(root)?;
-    let value = decrypt_secret_value(&key_bytes, &nonce_b64, &ciphertext_b64)?;
+        .optional()
+        .map_err(|_| SecretReadError::Unavailable)?;
+    let Some((nonce_b64, ciphertext_b64)) = record else {
+        return Ok(None);
+    };
+    let (key_bytes, _) =
+        load_existing_secret_master_key(root).map_err(|_| SecretReadError::Unavailable)?;
+    let value = decrypt_secret_value(&key_bytes, &nonce_b64, &ciphertext_b64)
+        .map_err(|_| SecretReadError::DecryptionFailed)?;
     std::str::from_utf8(&value)
-        .map(str::to_owned)
-        .context("secret value is not valid UTF-8")
+        .map(|value| Some(value.to_owned()))
+        .map_err(|_| SecretReadError::InvalidEncoding)
 }
 
 fn delete_secret(root: &Path, scope: &str, name: &str) -> Result<()> {
@@ -1359,6 +1396,19 @@ fn master_key_guard(root: &Path) -> MasterKeyGuard {
 }
 
 fn ensure_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str)> {
+    resolve_secret_master_key(root, true)
+}
+
+/// Reading existing ciphertext must never generate a replacement key. Legacy
+/// keys may still migrate through the same guarded conflict checks as writes.
+fn load_existing_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str)> {
+    resolve_secret_master_key(root, false)
+}
+
+fn resolve_secret_master_key(
+    root: &Path,
+    create_if_missing: bool,
+) -> Result<(SecretMaterial, &'static str)> {
     let guard = master_key_guard(root);
     let _guard = guard.lock().unwrap_or_else(|error| error.into_inner());
     let conn = open_secret_db(root)?;
@@ -1428,6 +1478,7 @@ fn ensure_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str
         return Ok((key, "migrated_protected_file"));
     }
 
+    anyhow::ensure!(create_if_missing, "secret master key unavailable");
     let mut key = Zeroizing::new(vec![0u8; 32]);
     SystemRandom::new()
         .fill(&mut key)
@@ -1875,6 +1926,103 @@ mod tests {
     }
 
     #[test]
+    fn optional_secret_read_distinguishes_absence_from_unavailable_or_corrupt_storage() -> Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let scope = "credentials";
+        let name = "FIXTURE_OPTIONAL_READ";
+        let canary = "synthetic-secret-read-canary";
+        put_secret(root.path(), scope, name, canary, None, json!({}))?;
+        assert_eq!(
+            read_secret_value_optional(root.path(), scope, "ABSENT_FIXTURE")?,
+            None
+        );
+        assert_eq!(
+            read_secret_value_optional(root.path(), scope, name)?,
+            Some(canary.to_owned())
+        );
+        let conn = open_secret_db(root.path())?;
+        let (key, _) = load_existing_secret_master_key(root.path())?;
+        let invalid_utf8 = encrypt_secret_value(&key, &[0xff, 0xfe])?;
+        conn.execute(
+            "UPDATE ctox_secret_records SET nonce_b64 = ?1, ciphertext_b64 = ?2 WHERE scope = ?3 AND secret_name = ?4",
+            params![invalid_utf8.nonce_b64, invalid_utf8.ciphertext_b64, scope, name],
+        )?;
+        assert_eq!(
+            read_secret_value_optional(root.path(), scope, name),
+            Err(SecretReadError::InvalidEncoding)
+        );
+        conn.execute(
+            "UPDATE ctox_secret_records SET ciphertext_b64 = ?1 WHERE scope = ?2 AND secret_name = ?3",
+            params!["not-valid-base64", scope, name],
+        )?;
+        let error = read_secret_value_optional(root.path(), scope, name).unwrap_err();
+        assert_eq!(error, SecretReadError::DecryptionFailed);
+        assert!(!error.to_string().contains(canary));
+
+        let unavailable_root = root.path().join("not-a-directory");
+        fs::write(&unavailable_root, b"fixture")?;
+        assert_eq!(
+            read_secret_value_optional(&unavailable_root, scope, name),
+            Err(SecretReadError::Unavailable)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn optional_read_never_replaces_a_lost_key_and_can_migrate_an_existing_key() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let scope = "credentials";
+        let name = "FIXTURE_OPTIONAL_READ";
+        let canary = "synthetic-lost-key-canary";
+        put_secret(root.path(), scope, name, canary, None, json!({}))?;
+        let key_path = master_key_path(root.path());
+        let original_key = fs::read_to_string(&key_path)?;
+        let conn = open_secret_db(root.path())?;
+        let ciphertext = || -> rusqlite::Result<(String, String)> {
+            conn.query_row("SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2", params![scope, name], |row| Ok((row.get(0)?, row.get(1)?)))
+        };
+        let original_ciphertext = ciphertext()?;
+        fs::remove_file(&key_path)?;
+        assert_eq!(
+            read_secret_value_optional(root.path(), scope, name),
+            Err(SecretReadError::Unavailable)
+        );
+        assert!(
+            !key_path.exists(),
+            "read must not generate a replacement master key"
+        );
+        assert_eq!(ciphertext()?, original_ciphertext);
+        assert!(read_secret_value(root.path(), scope, name).is_err());
+        assert!(
+            !key_path.exists(),
+            "required-value wrapper must also remain read-only for key creation"
+        );
+        assert!(read_secret_values(root.path(), &[(scope, name)]).is_err());
+        assert!(read_secret_values(root.path(), &[])?.is_empty());
+        assert!(
+            !key_path.exists(),
+            "tuple reads must never create a replacement master key"
+        );
+        assert_eq!(ciphertext()?, original_ciphertext);
+        conn.execute(
+            &format!("INSERT INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2)"),
+            params![MASTER_KEY_STORAGE_KEY, original_key.trim()],
+        )?;
+        assert_eq!(
+            read_secret_value_optional(root.path(), scope, name)?,
+            Some(canary.to_string())
+        );
+        assert_eq!(fs::read_to_string(&key_path)?.trim(), original_key.trim());
+        assert_eq!(
+            read_secret_values(root.path(), &[(scope, name)])?,
+            vec![canary.to_string()]
+        );
+        assert_eq!(ciphertext()?, original_ciphertext);
+        Ok(())
+    }
+
+    #[test]
     fn secret_store_encrypts_values_at_rest_and_round_trips() -> Result<()> {
         let root = temp_root("roundtrip");
         fs::create_dir_all(&root)?;
@@ -2155,12 +2303,25 @@ mod tests {
             );
         }
         // The previous absent legacy value must not become a cached decision.
+        let protected_key_before = fs::read(master_key_path(root.path()))?;
         let conflicting = BASE64_STANDARD.encode([0u8; 32]);
         persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, Some(&conflicting))?;
         let error = get_secret_value(root.path(), "reader-fixture", "token").unwrap_err();
-        assert!(error
+        assert_eq!(
+            error.downcast_ref::<SecretReadError>(),
+            Some(&SecretReadError::Unavailable)
+        );
+        assert_eq!(error.to_string(), "secret store or key unavailable");
+        // The public reader sanitizes diagnostics, while the key loader must
+        // still detect the actual conflict and never replace the protected key.
+        let key_error = load_existing_secret_master_key(root.path()).unwrap_err();
+        assert!(key_error
             .to_string()
             .contains("conflicts with the legacy runtime key"));
+        assert_eq!(
+            fs::read(master_key_path(root.path()))?,
+            protected_key_before
+        );
         persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, None)?;
         assert_eq!(
             get_secret_value(root.path(), "reader-fixture", "token")?,

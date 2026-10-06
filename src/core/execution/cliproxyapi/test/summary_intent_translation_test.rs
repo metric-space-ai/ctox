@@ -23,7 +23,7 @@ fn summary_intent_translation_uses_registered_translators() {
     let registry = Registry::new();
     register_all(&registry);
     let cases = [
-        Case { from: openai(), to: claude(), model: "claude-opus-5", body: br#"{"model":"claude-opus-5","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}"#, pointer: "/thinking/display", expected: Some(json!("summarized")) },
+        Case { from: openai(), to: claude(), model: "claude-opus-5", body: br#"{"model":"claude-opus-5","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}"#, pointer: "/thinking/display", expected: None },
         Case { from: openai(), to: claude(), model: "claude-opus-5", body: br#"{"model":"claude-opus-5","reasoning_effort":"none","messages":[{"role":"user","content":"hi"}]}"#, pointer: "/thinking/display", expected: None },
         Case { from: claude(), to: codex(), model: "gpt-5.4", body: br#"{"model":"gpt-5.4","max_tokens":1024,"thinking":{"type":"adaptive","display":"summarized"},"messages":[{"role":"user","content":"hi"}]}"#, pointer: "/reasoning/summary", expected: Some(json!("auto")) },
         Case { from: openai_response(), to: claude(), model: "claude-opus-5", body: br#"{"model":"claude-opus-5","reasoning":{"effort":"high","summary":"auto"},"input":"hi"}"#, pointer: "/thinking/display", expected: Some(json!("summarized")) },

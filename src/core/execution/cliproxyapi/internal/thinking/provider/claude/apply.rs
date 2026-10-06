@@ -6,9 +6,11 @@ use serde_json::Value;
 
 use crate::internal::{
     registry::ModelInfo,
+    thinking::ModelInfoView,
     thinking::{
-        convert_level_to_budget, is_user_defined_model,
+        convert_level_to_budget,
         json::{get_path, remove_empty_object, remove_path, serialize_if_changed, set_path},
+        model_view::is_user_defined_model_view as is_user_defined_model,
         ProviderApplier, ThinkingConfig, ThinkingError, ThinkingMode,
     },
 };
@@ -55,7 +57,7 @@ impl Applier {
         &self,
         body: &[u8],
         budget_tokens: isize,
-        model_info: &ModelInfo,
+        model_info: &ModelInfoView<'_>,
     ) -> Vec<u8> {
         if budget_tokens <= 0 {
             return body.to_vec();
@@ -78,7 +80,7 @@ impl Applier {
             .thinking
             .as_ref()
             .and_then(|support| support.min)
-            .map(u64_to_isize)
+            .map(|value| value.clamp(isize::MIN as i128, isize::MAX as i128) as isize)
             .unwrap_or(0);
         if min_budget > 0 && adjusted_budget > 0 && adjusted_budget < min_budget {
             return serialize_if_changed(body, &original, &document);
@@ -96,6 +98,16 @@ impl ProviderApplier for Applier {
         body: &[u8],
         config: &ThinkingConfig,
         model_info: Option<&ModelInfo>,
+    ) -> Result<Vec<u8>, ThinkingError> {
+        let view = model_info.map(ModelInfoView::from);
+        self.apply_model_info(body, config, view.as_ref())
+    }
+
+    fn apply_model_info(
+        &self,
+        body: &[u8],
+        config: &ThinkingConfig,
+        model_info: Option<&ModelInfoView<'_>>,
     ) -> Result<Vec<u8>, ThinkingError> {
         if is_user_defined_model(model_info) {
             return self.apply_compatible(body, config);
@@ -211,7 +223,7 @@ fn mutate(body: &[u8], operation: impl FnOnce(&mut Value)) -> Vec<u8> {
 
 pub(in crate::internal::thinking::provider) fn effective_max_tokens(
     document: &Value,
-    model_info: &ModelInfo,
+    model_info: &ModelInfoView<'_>,
     path: &str,
 ) -> (isize, bool) {
     if let Some(value) = get_path(document, path).and_then(json_integer) {
@@ -249,10 +261,6 @@ pub(in crate::internal::thinking::provider) fn set_signed(
     value: isize,
 ) {
     set_path(document, path, Value::Number((value as i64).into()));
-}
-
-fn u64_to_isize(value: u64) -> isize {
-    value.min(isize::MAX as u64) as isize
 }
 
 fn i64_to_isize(value: i64) -> isize {

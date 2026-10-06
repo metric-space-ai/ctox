@@ -110,6 +110,16 @@ impl ProviderExecutor for ClaudeProviderExecutor {
                 .map_err(plugin_pool_error)?;
             let response = outcome.outcome().response();
             if !(200..300).contains(&response.status()) {
+                if let Some(body) = crate::internal::clienterror::claude_thread_replay_body(
+                    response.status(),
+                    response.body(),
+                ) {
+                    return Err(Arc::new(RequestTerminatedError {
+                        http_status: response.status(),
+                        headers: response.headers().clone(),
+                        body,
+                    }) as PluginExecutionError);
+                }
                 if fast_request {
                     return Err(Arc::new(claude_fast_direct_response_error(
                         response.status(),
@@ -160,6 +170,17 @@ impl ProviderExecutor for ClaudeProviderExecutor {
                 .map_err(plugin_pool_error)?;
             let status = outcome.outcome().response().status();
             if !(200..300).contains(&status) {
+                let response = outcome.outcome().response();
+                if let Some(body) = crate::internal::clienterror::claude_thread_replay_body(
+                    status,
+                    response.error_body(),
+                ) {
+                    return Err(Arc::new(RequestTerminatedError {
+                        http_status: status,
+                        headers: response.headers().clone(),
+                        body,
+                    }) as PluginExecutionError);
+                }
                 if fast_request {
                     let response = outcome.outcome().response();
                     return Err(Arc::new(claude_fast_direct_response_error(

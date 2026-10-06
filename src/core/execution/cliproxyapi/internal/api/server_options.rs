@@ -44,6 +44,7 @@ impl fmt::Debug for ServerOptions {
 #[must_use]
 pub fn effective_sdk_config(sdk: &SdkConfig, providers: &ProviderCompatConfig) -> SdkConfig {
     let mut effective = sdk.clone();
-    effective.codex_optimize_multi_agent_v2 = providers.codex.optimize_multi_agent_v2;
+    effective.codex_optimize_multi_agent_v2 =
+        providers.codex.optimize_multi_agent_v2 || sdk.client.codex.optimize_multi_agent_v2;
     effective
 }

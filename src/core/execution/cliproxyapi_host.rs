@@ -2446,6 +2446,19 @@ impl OpenAiResponsesRouteHandler for InstanceResponsesRouter {
         body: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
         Box::pin(async move {
+            let headers = std::collections::BTreeMap::new();
+            self.handle_provider_route_with_headers(provider, &headers, body)
+                .await
+        })
+    }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a std::collections::BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
             let provider = provider.unwrap_or(&self.default_provider).trim();
             if provider.eq_ignore_ascii_case("kimi") {
                 return match &self.kimi {
@@ -2459,7 +2472,11 @@ impl OpenAiResponsesRouteHandler for InstanceResponsesRouter {
                 };
             }
             match &self.portable {
-                Some(router) => router.handle_provider_route(Some(provider), body).await,
+                Some(router) => {
+                    router
+                        .handle_provider_route_with_headers(Some(provider), headers, body)
+                        .await
+                }
                 None => OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
                     400,
                     "requested provider is not configured",
@@ -3838,6 +3855,8 @@ impl std::error::Error for CtoxCliproxyRuntimeBuildError {}
 
 #[cfg(test)]
 mod tests {
+    include!("cliproxyapi_instance_headers_candidate_test.rs");
+
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

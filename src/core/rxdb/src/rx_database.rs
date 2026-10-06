@@ -1166,6 +1166,28 @@ mod tests {
 
     #[tokio::test]
     async fn create_database_and_add_collection() {
+        // Other tests open and close databases concurrently. Keep the global
+        // counter assertions in a child running only this lifecycle test.
+        const CHILD_MARKER: &str = "CTOX_RXDB_TEST_DATABASE_COUNT_CHILD";
+        if std::env::var_os(CHILD_MARKER).as_deref() != Some(std::ffi::OsStr::new("1")) {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "rx_database::tests::create_database_and_add_collection",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_MARKER, "1")
+                .output()
+                .expect("start isolated database lifecycle test");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() && stdout.contains("1 passed; 0 failed"),
+                "isolated database lifecycle test failed: {stdout}\n{stderr}"
+            );
+            return;
+        }
+
         let storage = get_rx_storage_memory(());
         let before_count = db_count();
         let database = create_rx_database(RxDatabaseCreator {
@@ -1187,7 +1209,7 @@ mod tests {
         assert!(!database.token.is_empty());
         assert!(!database.storage_token.is_empty());
         assert!(database.is_first_time_instantiated().await.unwrap());
-        assert!(db_count() >= before_count + 1);
+        assert_eq!(db_count(), before_count + 1);
 
         let collections = database
             .add_collections(HashMap::from([(
@@ -1220,6 +1242,7 @@ mod tests {
             Some(json!("alice"))
         );
         database.close().await.unwrap();
+        assert_eq!(db_count(), before_count);
     }
 
     /// A closed database must actually be reclaimed. `RxCollection` keeps a

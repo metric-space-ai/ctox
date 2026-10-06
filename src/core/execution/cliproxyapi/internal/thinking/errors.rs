@@ -51,12 +51,13 @@ impl fmt::Display for ErrorCode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ThinkingError {
     pub code: ErrorCode,
     pub message: String,
     pub model: String,
     pub details: Option<BTreeMap<String, Value>>,
+    target_body: Option<Vec<u8>>,
 }
 
 impl ThinkingError {
@@ -66,6 +67,7 @@ impl ThinkingError {
             message: message.into(),
             model: String::new(),
             details: None,
+            target_body: None,
         }
     }
 
@@ -79,12 +81,43 @@ impl ThinkingError {
             message: message.into(),
             model: model.into(),
             details: None,
+            target_body: None,
         }
+    }
+
+    /// The cleaned target returned alongside validation/application failure.
+    /// This retains Go's (body, error) outcome without making body bytes part
+    /// of the displayed diagnostic or public error details.
+    pub fn target_body(&self) -> Option<&[u8]> {
+        self.target_body.as_deref()
+    }
+
+    pub fn with_target_body(mut self, body: &[u8]) -> Self {
+        if self.target_body.is_none() {
+            self.target_body = Some(body.to_vec());
+        }
+        self
     }
 
     /// Portable HTTP status used by the Go error and the Rust handlers.
     pub const fn status_code(&self) -> u16 {
         400
+    }
+}
+
+impl fmt::Debug for ThinkingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ThinkingError")
+            .field("code", &self.code)
+            .field("message", &self.message)
+            .field("model", &self.model)
+            .field("details", &self.details)
+            .field(
+                "target_body_bytes",
+                &self.target_body.as_ref().map(Vec::len),
+            )
+            .finish()
     }
 }
 

@@ -21,6 +21,7 @@ use crate::sdk::pluginapi::{
 use crate::sdk::translator::{Format, Registry, TranslationContext, TranslationState};
 
 use super::gemini_executor::fix_gemini_image_aspect_ratio;
+use super::helps::{RequestThinkingEngine, RequestThinkingInput, RequestThinkingPipeline};
 
 pub const VERTEX_API_VERSION: &str = "v1";
 pub const VERTEX_DEFAULT_BASE_URL: &str = "https://aiplatform.googleapis.com";
@@ -80,9 +81,12 @@ impl std::error::Error for VertexExecutorError {}
 
 pub struct GeminiVertexExecutor {
     registry: Arc<Registry>,
+    request_thinking: RequestThinkingPipeline,
     token_provider: Option<Arc<dyn VertexAccessTokenProvider>>,
     cancellation: TranslationContext,
     response_sequence: AtomicU64,
+    payload_config: Arc<super::helps::PayloadApplyConfig>,
+    request_processor: Option<Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>>,
 }
 
 impl GeminiVertexExecutor {
@@ -92,10 +96,16 @@ impl GeminiVertexExecutor {
         token_provider: Option<Arc<dyn VertexAccessTokenProvider>>,
     ) -> Self {
         Self {
+            request_thinking: RequestThinkingPipeline::new(
+                Arc::new(crate::internal::thinking::ThinkingEngine::default()),
+                registry.clone(),
+            ),
             registry,
             token_provider,
             cancellation: TranslationContext::default(),
             response_sequence: AtomicU64::new(1),
+            payload_config: Arc::new(super::helps::PayloadApplyConfig::default()),
+            request_processor: None,
         }
     }
 
@@ -106,11 +116,43 @@ impl GeminiVertexExecutor {
         cancellation: TranslationContext,
     ) -> Self {
         Self {
+            request_thinking: RequestThinkingPipeline::new(
+                Arc::new(crate::internal::thinking::ThinkingEngine::default()),
+                registry.clone(),
+            ),
             registry,
             token_provider,
             cancellation,
             response_sequence: AtomicU64::new(1),
+            payload_config: Arc::new(super::helps::PayloadApplyConfig::default()),
+            request_processor: None,
         }
+    }
+
+    /// Bind the host's existing client configuration and model catalog owner.
+    #[must_use]
+    pub fn with_request_processor(
+        mut self,
+        processor: Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>,
+    ) -> Self {
+        self.request_processor = Some(processor);
+        self
+    }
+
+    #[must_use]
+    pub fn with_payload_config(mut self, config: Arc<super::helps::PayloadApplyConfig>) -> Self {
+        self.payload_config = config;
+        self
+    }
+
+    /// Bind the owning gateway engine to the same instance translator registry.
+    #[must_use]
+    pub fn with_canonical_thinking(
+        mut self,
+        engine: Arc<crate::internal::thinking::ThinkingEngine>,
+    ) -> Self {
+        self.request_thinking = RequestThinkingPipeline::new(engine, self.registry.clone());
+        self
     }
 
     async fn authorization(
@@ -149,17 +191,44 @@ impl GeminiVertexExecutor {
                 Format::from("gemini"),
             ));
         }
+        let count_action = vertex_request_action(request, &model, stream, count) == "countTokens";
         let from = source_format(request);
         let to = Format::from("gemini");
-        let mut body = self.registry.translate_request(
-            &self.cancellation,
-            &from,
-            &to,
-            &model,
-            &request.payload,
-            stream,
-        );
+        // Vertex upstream translates the baseline first, including when the
+        // original and working slices are identical. Token counting is single-pass.
+        let original = if count {
+            Vec::new()
+        } else {
+            self.translate_body(
+                request,
+                &from,
+                &to,
+                &model,
+                stream,
+                original_request(request),
+            )
+        };
+        let mut body = self.translate_body(request, &from, &to, &model, stream, &request.payload);
+        // ref: gemini_vertex_executor.go:337,474,601,769,928,1022 @ d7914afd
+        body = self
+            .request_thinking
+            .apply_request_thinking(RequestThinkingInput {
+                body: &body,
+                current_source_payload: &request.payload,
+                original_source_payload: original_request(request),
+                model: &request.model,
+                from_format: from.as_str(),
+                to_format: to.as_str(),
+                provider: "vertex",
+                normalized_updates_changed: false,
+                resolved_model_info: None,
+                resolved_config_model_info: request.resolved_model_info.as_deref(),
+            })
+            .map_err(|error| Arc::new(error) as PluginExecutionError)?;
         body = fix_gemini_image_aspect_ratio(&model, &body);
+        if !count {
+            body = self.apply_request_payload(request, &from, &to, &model, &body, &original);
+        }
         let mut value: Value = serde_json::from_slice(&body)
             .map_err(|error| plugin_error(VertexExecutorError::InvalidJson(error.to_string())))?;
         let object = value.as_object_mut().ok_or_else(|| {
@@ -177,7 +246,89 @@ impl GeminiVertexExecutor {
         }
         body = serde_json::to_vec(&value)
             .map_err(|error| plugin_error(VertexExecutorError::InvalidJson(error.to_string())))?;
+        // ref: gemini_vertex_executor.go:348-359,612-615,940-941 @ d7914afd
+        // Both API-key and service-account paths share this preparation.
+        body = crate::internal::signature::sanitize_gemini_request_thought_signatures(&body);
+        body = if count_action {
+            super::helps::ensure_gemini_leading_user_content(&body, "contents").into_owned()
+        } else {
+            super::helps::ensure_gemini_boundary_user_content(&body, "contents").into_owned()
+        };
         Ok((body, to))
+    }
+
+    fn apply_request_payload(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        body: &[u8],
+        original: &[u8],
+    ) -> Vec<u8> {
+        let requested = request
+            .metadata
+            .get("requested_model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&request.model);
+        let path = request
+            .metadata
+            .get("request_path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        super::helps::apply_payload_config_with_request(
+            &self.payload_config,
+            model,
+            to.as_str(),
+            from.as_str(),
+            "",
+            body,
+            Some(original),
+            requested,
+            path,
+            &request.headers,
+        )
+    }
+
+    // ref: gemini_vertex_executor.go:334-335,471-472,928,1022 @ d7914afd
+    fn translate_body(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        stream: bool,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        // Vertex uses ordinary Codex translation for both credential kinds.
+        let translate = |processor: &dyn super::helps::CodexMultiAgentV2Processor| {
+            super::helps::translate_request_with_codex_multi_agent_v2_for_executor(
+                processor,
+                &request.headers,
+                "vertex",
+                from,
+                to,
+                model,
+                payload,
+                stream,
+            )
+        };
+        if let Some(processor) = &self.request_processor {
+            return translate(processor.as_ref());
+        }
+        let client =
+            crate::internal::client::codex::optimize_multi_agent_v2::MultiAgentV2Context::default();
+        let metadata = |_: &str| None;
+        translate(&super::helps::RegistryCodexMultiAgentV2Processor {
+            registry: &self.registry,
+            context: &self.cancellation,
+            client: &client,
+            model_metadata: &metadata,
+            orphan_delegation_compatibility: false,
+        })
     }
 
     async fn build_request(
@@ -189,11 +340,7 @@ impl GeminiVertexExecutor {
     ) -> Result<HttpRequest, PluginExecutionError> {
         let authorization = self.authorization(execution).await?;
         let model = base_model(&execution.model);
-        let action = if count {
-            "countTokens"
-        } else {
-            vertex_action(&model, stream)
-        };
+        let action = vertex_request_action(execution, &model, stream, count);
         let base = vertex_request_base_url(execution)?;
         let mut url = match authorization {
             VertexAuthorization::ApiKey(_) => {
@@ -205,9 +352,14 @@ impl GeminiVertexExecutor {
                 format!("{base}/{VERTEX_API_VERSION}/projects/{project}/locations/{location}/publishers/google/models/{model}:{action}")
             }
         };
-        if stream && !execution.alt.is_empty() {
-            url.push_str("?$alt=");
-            url.push_str(&execution.alt);
+        // ref: gemini_vertex_executor.go:351-367,487-508,614-628 @ d7914afd
+        if action != "countTokens" {
+            if stream && !is_imagen_model(&model) && execution.alt.is_empty() {
+                url.push_str("?alt=sse");
+            } else if !execution.alt.is_empty() {
+                url.push_str("?$alt=");
+                url.push_str(&execution.alt);
+            }
         }
         let mut request = HttpRequest {
             method: "POST".into(),
@@ -474,6 +626,24 @@ pub fn vertex_action(model: &str, stream: bool) -> &'static str {
     }
 }
 
+// Metadata counting retains the inference preparation pipeline; the separate
+// CountTokens operation alone strips generation and tool configuration.
+fn vertex_request_action(
+    request: &ExecutorRequest,
+    model: &str,
+    stream: bool,
+    count: bool,
+) -> &'static str {
+    if count
+        || (!stream
+            && request.metadata.get("action").and_then(Value::as_str) == Some("countTokens"))
+    {
+        "countTokens"
+    } else {
+        vertex_action(model, stream)
+    }
+}
+
 pub fn convert_to_imagen_request(payload: &[u8]) -> Result<Vec<u8>, PluginExecutionError> {
     let value: Value = serde_json::from_slice(payload)
         .map_err(|error| plugin_error(VertexExecutorError::InvalidJson(error.to_string())))?;
@@ -689,6 +859,10 @@ fn set_header(headers: &mut Headers, name: &str, value: String) {
 fn plugin_error(error: VertexExecutorError) -> PluginExecutionError {
     Arc::new(error)
 }
+
+#[cfg(test)]
+#[path = "gemini_vertex_executor_candidate_test.rs"]
+mod candidate_google_requests;
 
 #[cfg(test)]
 mod tests {

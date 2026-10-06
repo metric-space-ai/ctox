@@ -3,16 +3,20 @@
 // License: MIT (upstream); modifications AGPL-3.0-only
 
 use super::{
-    Format, PluginHooks, RequestTransform, ResponseTransform, TranslationContext, TranslationState,
+    Format, PluginHooks, RequestEnvelope, RequestEnvelopeTransform, RequestTransform,
+    ResponseTransform, TranslationContext, TranslationState,
 };
-use crate::internal::thinking::{apply_summary_config_for_model, extract_summary_config};
-use crate::internal::translator::common::set_top_level_string;
+use crate::internal::thinking::{
+    apply_summary_config_for_model, extract_translated_summary_config,
+};
+use crate::internal::translator::common::set_json_string;
+use crate::internal::util::valid_json_bytes;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 #[derive(Default)]
 struct RegistryState {
-    requests: HashMap<(Format, Format), RequestTransform>,
+    requests: HashMap<(Format, Format), RequestEnvelopeTransform>,
     responses: HashMap<(Format, Format), ResponseTransform>,
     hooks: Option<Arc<dyn PluginHooks>>,
 }
@@ -32,6 +36,18 @@ impl Registry {
         from: Format,
         to: Format,
         request: Option<RequestTransform>,
+        response: ResponseTransform,
+    ) {
+        self.register_request_envelope(from, to, request.map(wrap_request_transform), response);
+    }
+
+    /// ref: sdk/translator/registry.go:118-195 @ e2bff010
+    /// Registers a transform that can preserve request-local update intent.
+    pub fn register_request_envelope(
+        &self,
+        from: Format,
+        to: Format,
+        request: Option<RequestEnvelopeTransform>,
         response: ResponseTransform,
     ) {
         let mut state = self.state.write().expect("translator registry poisoned");
@@ -54,9 +70,10 @@ impl Registry {
         response: ResponseTransform,
     ) {
         let mut state = self.state.write().expect("translator registry poisoned");
-        state
-            .requests
-            .insert((client.clone(), provider.clone()), request);
+        state.requests.insert(
+            (client.clone(), provider.clone()),
+            wrap_request_transform(request),
+        );
         state.responses.insert((client, provider), response);
     }
 
@@ -108,6 +125,32 @@ impl Registry {
         raw_json: &[u8],
         stream: bool,
     ) -> Vec<u8> {
+        self.translate_request_envelope(
+            context,
+            from,
+            to,
+            RequestEnvelope {
+                format: from.clone(),
+                model: model.to_owned(),
+                stream,
+                body: raw_json.to_vec(),
+                configuration_updates_changed: false,
+            },
+        )
+        .body
+    }
+
+    /// ref: sdk/translator/registry.go:118-195 @ e2bff010
+    /// Only plugin normalization and explicit envelope transforms report update
+    /// intent. A normal cross-protocol conversion dropping updates is not a
+    /// plugin configuration edit.
+    pub fn translate_request_envelope(
+        &self,
+        context: &TranslationContext,
+        from: &Format,
+        to: &Format,
+        mut request: RequestEnvelope,
+    ) -> RequestEnvelope {
         let (transform, hooks) = {
             let state = self.state.read().expect("translator registry poisoned");
             (
@@ -117,23 +160,85 @@ impl Registry {
         };
 
         if let Some(transform) = transform {
-            let summary = extract_summary_config(raw_json, from.as_str());
-            let translated = transform(model, raw_json, stream);
-            let body = apply_summary_config_for_model(&translated, to.as_str(), model, &summary);
-            return hooks.map_or(body.clone(), |hooks| {
-                hooks.normalize_request(context, from, to, model, body, stream)
-            });
+            let summary =
+                extract_translated_summary_config(&request.body, from.as_str(), to.as_str());
+            request = transform(context, request);
+            request.body = apply_summary_config_for_model(
+                &request.body,
+                to.as_str(),
+                &request.model,
+                &summary,
+            );
+            if let Some(hooks) = hooks {
+                let before = configuration_updates(&request.body);
+                request.body = hooks.normalize_request(
+                    context,
+                    from,
+                    to,
+                    &request.model,
+                    request.body,
+                    request.stream,
+                );
+                request.configuration_updates_changed |=
+                    before != configuration_updates(&request.body);
+            }
+            request.format = to.clone();
+            return request;
         }
 
-        let mut body = normalize_model(raw_json, model);
+        request.body = normalize_model(&request.body, &request.model);
+        if let Some(hooks) = hooks {
+            let before = configuration_updates(&request.body);
+            request.body = hooks.normalize_request(
+                context,
+                from,
+                to,
+                &request.model,
+                request.body,
+                request.stream,
+            );
+            request.configuration_updates_changed |= before != configuration_updates(&request.body);
+            let summary =
+                extract_translated_summary_config(&request.body, from.as_str(), to.as_str());
+            if let Some(translated) = hooks.translate_request(
+                context,
+                from,
+                to,
+                &request.model,
+                &request.body,
+                request.stream,
+            ) {
+                request.body = apply_summary_config_for_model(
+                    &translated,
+                    to.as_str(),
+                    &request.model,
+                    &summary,
+                );
+            }
+        }
+        request.format = to.clone();
+        request
+    }
+
+    /// Runs only the selected plugin normalizer, as compatibility translators
+    /// already own protocol and thinking-summary conversion.
+    pub fn normalize_request(
+        &self,
+        context: &TranslationContext,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        body: Vec<u8>,
+        stream: bool,
+    ) -> Vec<u8> {
+        let hooks = self
+            .state
+            .read()
+            .expect("translator registry poisoned")
+            .hooks
+            .clone();
         let Some(hooks) = hooks else { return body };
-        body = hooks.normalize_request(context, from, to, model, body, stream);
-        let summary = extract_summary_config(&body, from.as_str());
-        hooks
-            .translate_request(context, from, to, model, &body, stream)
-            .map_or(body, |translated| {
-                apply_summary_config_for_model(&translated, to.as_str(), model, &summary)
-            })
+        hooks.normalize_request(context, from, to, model, body, stream)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -307,9 +412,48 @@ impl Registry {
     }
 }
 
+fn wrap_request_transform(transform: RequestTransform) -> RequestEnvelopeTransform {
+    Arc::new(move |_, mut request| {
+        request.body = transform(&request.model, &request.body, request.stream);
+        request
+    })
+}
+
+/// ref: sdk/translator/registry.go:177-195 @ e2bff010
+/// Preserve exact update item bytes and their order, matching gjson item.Raw;
+/// changes to ordinary messages or surrounding array whitespace do not count.
+fn configuration_updates(body: &[u8]) -> Vec<String> {
+    let input = crate::internal::util::get_gjson_bytes_no_copy(body, "input");
+    if input.kind() != gjson::Kind::Array {
+        return Vec::new();
+    }
+    let mut updates = Vec::new();
+    input.each(|_, item| {
+        if item.get("type").str() == "configuration_update" {
+            updates.push(item.json().to_owned());
+        }
+        true
+    });
+    updates
+}
+
 fn normalize_model(raw_json: &[u8], model: &str) -> Vec<u8> {
-    if model.is_empty() {
+    // ref: sdk/translator/registry.go:140-146 — sjson changes only the model.
+    // Re-encoding siblings changes raw configuration-update comparisons and
+    // can lose duplicate keys, large numbers or deeply nested schemas.
+    if model.is_empty() || !valid_json_bytes(raw_json) {
         return raw_json.to_vec();
     }
-    set_top_level_string(raw_json, "model", model)
+    let Ok(document) = std::str::from_utf8(raw_json) else {
+        return raw_json.to_vec();
+    };
+    let root = gjson::parse(document);
+    if root.kind() != gjson::Kind::Object {
+        return raw_json.to_vec();
+    }
+    let current = root.get("model");
+    if current.kind() == gjson::Kind::String && current.str() == model {
+        return raw_json.to_vec();
+    }
+    set_json_string(raw_json, "model", model)
 }

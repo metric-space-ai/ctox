@@ -2,6 +2,7 @@
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+pub mod apply_patch;
 pub mod live;
 pub mod models;
 
