@@ -455,7 +455,14 @@ async fn actual_download_receipt_survives_reopen_and_duplicate_is_noop() {
     );
     worker.run_next(&AtomicBool::new(false)).await.unwrap();
     let result = store.get("download").unwrap();
-    assert_eq!(result.state, "completed", "{result:?}");
+    assert_eq!(
+        result.state,
+        "completed",
+        "{result:?}; loopback GETs={}, bytes={}, ranges={:?}",
+        source.gets.load(Ordering::SeqCst),
+        source.bytes.load(Ordering::SeqCst),
+        source.ranges.lock().unwrap()
+    );
     let receipt = result.receipt.unwrap();
     assert_eq!(
         std::fs::read(temp.path().join("transfers").join(receipt.artifact)).unwrap(),
