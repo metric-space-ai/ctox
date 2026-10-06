@@ -252,6 +252,25 @@ pub(super) fn rxdb_collection_table_name(
     rxdb_collection_table_name_from_tables(&tables, &expected, collection)
 }
 
+/// Resolve against the caller's held SQLite catalog, without path caches,
+/// opening a connection or creating any schema.
+pub(super) fn rxdb_collection_table_name_from_connection(
+    conn: &Connection,
+    collection: &str,
+) -> anyhow::Result<Option<String>> {
+    let mut statement = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?;
+    let tables = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let expected = format!(
+        "ctox_business_os__{collection}__v{}",
+        rxdb_schema_version(collection)
+    );
+    Ok(rxdb_collection_table_name_from_tables(
+        &tables, &expected, collection,
+    ))
+}
+
 fn rxdb_collection_table_name_from_tables(
     tables: &BTreeSet<String>,
     expected: &str,

@@ -249,3 +249,35 @@ async fn malformed_or_uncorrelated_endpoint_session_is_unknown_and_retired() {
         );
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn physical_frame_poll_checks_pinned_socket_without_await_or_consuming_reply() {
+    use tokio::io::AsyncWriteExt;
+    let (host, mut guest) = tokio::net::UnixStream::pair().unwrap();
+    let mut channel = GuestChannel::new(host);
+    channel.session = Some(GuestEndpointSession {
+        guest_id: "guest-a".into(),
+        session_id: "session-a".into(),
+    });
+    let remote = RemoteGuestDriver::bind("guest-a".into(), channel).unwrap();
+    assert!(remote.ensure_current_endpoint("session-a").is_ok());
+    assert!(remote.ensure_current_endpoint("foreign-session").is_err());
+    guest.write_all(&[7]).await.unwrap();
+    assert!(remote.ensure_current_endpoint("session-a").is_err());
+    let mut byte = [0u8];
+    {
+        let channel = remote.channel.try_lock().unwrap();
+        // Test-only readiness wait, outside every native publication fence.
+        channel.stream.readable().await.unwrap();
+        channel.stream.try_read(&mut byte).unwrap();
+    }
+    assert_eq!(
+        byte,
+        [7],
+        "the liveness check must not consume protocol bytes"
+    );
+    assert!(remote.ensure_current_endpoint("session-a").is_ok());
+    drop(guest);
+    assert!(remote.ensure_current_endpoint("session-a").is_err());
+}

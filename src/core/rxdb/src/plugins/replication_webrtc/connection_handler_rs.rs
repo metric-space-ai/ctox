@@ -37,8 +37,9 @@ use crate::plugins::replication_webrtc::protocol_contract_generated::{
 use crate::plugins::replication_webrtc::signaling_client::SignalingClient;
 use crate::plugins::replication_webrtc::signaling_protocol::{PeerId, RoomId, ServerToClient};
 use crate::plugins::replication_webrtc::webrtc_types::{
-    PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse,
-    WebRTCWireFrame, CTOX_BROWSER_INPUT_RESPONSE_COLLECTION, CTOX_BROWSER_LIVE_RESPONSE_COLLECTION,
+    PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCMessage,
+    WebRTCPublicationGuard, WebRTCResponse, WebRTCWireFrame,
+    CTOX_BROWSER_INPUT_RESPONSE_COLLECTION, CTOX_BROWSER_LIVE_RESPONSE_COLLECTION,
 };
 use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rxjs_compat::{RxStream, RxSubject};
@@ -528,6 +529,8 @@ struct QueuedSend {
     /// stay Low (a large background transfer) even if its collection is active.
     oversized_write: bool,
     queued_at_ms: u64,
+    /// The exact native authority follows this item through shared queue drains.
+    publication: Option<Arc<dyn WebRTCPublicationGuard>>,
     result: tokio::sync::oneshot::Sender<Result<(), RxError>>,
 }
 
@@ -806,6 +809,98 @@ where
     }
 }
 
+/// Poll physical IO only while the native mutation fence is held.
+async fn send_under_publication<T, F>(
+    publication: Option<&Arc<dyn WebRTCPublicationGuard>>,
+    sending: F,
+) -> RxResult<T>
+where
+    F: std::future::Future<Output = RxResult<T>>,
+{
+    poll_under_publication(publication, sending, true).await
+}
+
+/// Capacity waiting emits no bytes and takes the peer lifecycle lock itself.
+/// Probe current authority on each poll, then release it before waiting; the
+/// later physical send reacquires all fences. Never poll this wait under them.
+async fn wait_under_publication<T, F>(
+    publication: Option<&Arc<dyn WebRTCPublicationGuard>>,
+    waiting: F,
+) -> RxResult<T>
+where
+    F: std::future::Future<Output = RxResult<T>>,
+{
+    poll_under_publication(publication, waiting, false).await
+}
+
+/// A finite timer revalidates even a future that never wakes itself.
+async fn poll_under_publication<T, F>(
+    publication: Option<&Arc<dyn WebRTCPublicationGuard>>,
+    sending: F,
+    hold_fence: bool,
+) -> RxResult<T>
+where
+    F: std::future::Future<Output = RxResult<T>>,
+{
+    let Some(publication) = publication else {
+        return sending.await;
+    };
+    tokio::pin!(sending);
+    let mut recheck = tokio::time::interval(Duration::from_millis(16));
+    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let polling = std::future::poll_fn(|cx| {
+        let mut result = None;
+        let mut invoked = false;
+        let checked = publication.with_current(&mut || {
+            if invoked {
+                return Err(new_rx_error(
+                    "ctox_webrtc_publication_callback_repeated",
+                    None,
+                ));
+            }
+            invoked = true;
+            if hold_fence {
+                result = Some(sending.as_mut().poll(cx));
+            }
+            Ok(())
+        });
+        if let Err(error) = checked {
+            return std::task::Poll::Ready(Err(new_rx_error(
+                "ctox_webrtc_publication_denied",
+                Some(serde_json::json!({"cause": error.code()})),
+            )));
+        }
+        if !invoked {
+            return std::task::Poll::Ready(Err(new_rx_error(
+                "ctox_webrtc_publication_callback_missing",
+                None,
+            )));
+        }
+        if !hold_fence {
+            result = Some(sending.as_mut().poll(cx));
+        }
+        let Some(result) = result else {
+            return std::task::Poll::Ready(Err(new_rx_error(
+                "ctox_webrtc_publication_callback_missing",
+                None,
+            )));
+        };
+        if result.is_pending() && recheck.poll_tick(cx).is_ready() {
+            cx.waker().wake_by_ref();
+        }
+        result
+    });
+    if hold_fence {
+        tokio::time::timeout(SEND_CAPACITY_WAIT_TIMEOUT, polling)
+            .await
+            .map_err(|_| new_rx_error("ctox_webrtc_publication_timeout", None))?
+    } else {
+        // The capacity method owns its original timeout and terminal peer
+        // teardown. A competing outer deadline must not bypass that cleanup.
+        polling.await
+    }
+}
+
 /// Drop-based accounting for one outbound chunked transfer. This guard is kept
 /// alive across every await in `send_framed_text`, so errors and task aborts both
 /// release the active-transfer count and any ACK waiter owned by the operation.
@@ -948,6 +1043,57 @@ pub(crate) fn publish_best_effort_send_error(error_subject: &RxSubject<RxError>,
         .unwrap_or(false);
     if !expected_peer_close {
         error_subject.next(error);
+    }
+}
+
+/// Bind host publication authority to the accepted native connection. Policy
+/// guards may use peer getters, so enter them BEFORE taking lifecycle here.
+/// A token mutation, close or replacement takes this same lifecycle lock.
+struct PeerPublicationGuard {
+    native: Arc<dyn WebRTCPublicationGuard>,
+    peer: WebRTCRsConnection,
+    capability: Option<String>,
+    lifecycle: Arc<Mutex<()>>,
+    peers: Arc<Mutex<HashMap<WebRTCRsPeer, PeerEntry>>>,
+    capabilities: Arc<Mutex<HashMap<WebRTCRsPeer, String>>>,
+    closed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl WebRTCPublicationGuard for PeerPublicationGuard {
+    fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+        let mut invoked = false;
+        self.native.with_current(&mut || {
+            if invoked {
+                return Err(new_rx_error(
+                    "ctox_webrtc_publication_callback_repeated",
+                    None,
+                ));
+            }
+            let _lifecycle = self.lifecycle.lock();
+            if self.closed.load(Ordering::SeqCst)
+                || !self
+                    .peers
+                    .lock()
+                    .get(&self.peer.peer_id)
+                    .is_some_and(|entry| {
+                        entry.generation == self.peer.generation && entry.data_channel_open
+                    })
+                || self.capabilities.lock().get(&self.peer.peer_id) != self.capability.as_ref()
+            {
+                return Err(stale_connection_error(&self.peer));
+            }
+            invoked = true;
+            // One physical poll only; Pending releases both native authority
+            // and the lifecycle fence before either is reacquired.
+            publish()
+        })?;
+        if !invoked {
+            return Err(new_rx_error(
+                "ctox_webrtc_publication_callback_missing",
+                None,
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -2131,35 +2277,17 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     }
 
     async fn send(&self, peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), RxError> {
-        let text = serde_json::to_string(&frame).map_err(|e| {
-            new_rx_error(
-                "RC_WEBRTC_PEER",
-                Some(serde_json::json!({
-                    "message": format!("serialize WebRTC frame failed: {e}"),
-                    "peer": peer.peer_id(),
-                    "connectionGeneration": peer.generation(),
-                })),
-            )
-        })?;
-        // Phase 2: derive the collection-aware priority class. Control frames
-        // are intrinsically High; oversized writes are Low; everything else is
-        // High when its collection is in the peer's active set, else Normal.
-        let class = classify_send_frame(&frame, &text);
-        let (data_channel, queued) = {
-            // Resolve and enqueue under the same lifetime lock. A sender holding
-            // an old handle must never enqueue onto its successor's queue.
-            let _lifecycle = self.peer_lifecycle.lock();
-            let data_channel = self
-                .peers
-                .lock()
-                .get(&peer.peer_id)
-                .filter(|entry| entry.generation == peer.generation && entry.data_channel_open)
-                .and_then(|entry| entry.data_channel.clone())
-                .ok_or_else(|| stale_connection_error(peer))?;
-            let queued = self.enqueue_text(&peer.peer_id, class)?;
-            (data_channel, queued)
-        };
-        self.finish_send(&peer.peer_id, data_channel, queued).await
+        self.send_with_publication(peer, frame, None).await
+    }
+
+    async fn send_guarded(
+        &self,
+        peer: &Self::Peer,
+        frame: WebRTCWireFrame,
+        publication: Arc<dyn WebRTCPublicationGuard>,
+    ) -> Result<(), RxError> {
+        self.send_with_publication(peer, frame, Some(publication))
+            .await
     }
 
     async fn send_auxiliary(
@@ -2675,10 +2803,75 @@ impl WebRTCRsConnectionHandler {
         }));
     }
 
+    async fn send_with_publication(
+        &self,
+        peer: &WebRTCRsConnection,
+        frame: WebRTCWireFrame,
+        publication: Option<Arc<dyn WebRTCPublicationGuard>>,
+    ) -> RxResult<()> {
+        let text = serde_json::to_string(&frame).map_err(|e| {
+            new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": format!("serialize WebRTC frame failed: {e}"),
+                    "peer": peer.peer_id(),
+                    "connectionGeneration": peer.generation(),
+                })),
+            )
+        })?;
+        // Phase 2: derive the collection-aware priority class. Control frames
+        // are intrinsically High; oversized writes are Low; everything else is
+        // High when its collection is in the peer's active set, else Normal.
+        let class = classify_send_frame(&frame, &text);
+        let (data_channel, queued) = {
+            // Resolve and enqueue under the same lifetime lock. A sender holding
+            // an old handle must never enqueue onto its successor's queue.
+            let _lifecycle = self.peer_lifecycle.lock();
+            let data_channel = self
+                .peers
+                .lock()
+                .get(&peer.peer_id)
+                .filter(|entry| entry.generation == peer.generation && entry.data_channel_open)
+                .and_then(|entry| entry.data_channel.clone())
+                .ok_or_else(|| stale_connection_error(peer))?;
+            // Capture the exact generation and token under their mutation
+            // fence. The native guard enters first at each physical poll;
+            // lifecycle/token validation then stays held through that poll.
+            let publication = publication.map(|native| {
+                Arc::new(PeerPublicationGuard {
+                    native,
+                    peer: peer.clone(),
+                    capability: self
+                        .peer_capability_tokens
+                        .lock()
+                        .get(&peer.peer_id)
+                        .cloned(),
+                    lifecycle: Arc::clone(&self.peer_lifecycle),
+                    peers: Arc::clone(&self.peers),
+                    capabilities: Arc::clone(&self.peer_capability_tokens),
+                    closed: Arc::clone(&self.closed),
+                }) as Arc<dyn WebRTCPublicationGuard>
+            });
+            let queued = self.enqueue_with_publication(&peer.peer_id, class, publication)?;
+            (data_channel, queued)
+        };
+        self.finish_send(&peer.peer_id, data_channel, queued).await
+    }
+
+    #[cfg(test)]
     fn enqueue_text(
         &self,
         peer: &WebRTCRsPeer,
         class: SendFrameClass,
+    ) -> Result<EnqueuedSend, RxError> {
+        self.enqueue_with_publication(peer, class, None)
+    }
+
+    fn enqueue_with_publication(
+        &self,
+        peer: &WebRTCRsPeer,
+        class: SendFrameClass,
+        publication: Option<Arc<dyn WebRTCPublicationGuard>>,
     ) -> Result<EnqueuedSend, RxError> {
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         // Phase 2: resolve the priority against THIS peer's active-collection
@@ -2720,6 +2913,7 @@ impl WebRTCRsConnectionHandler {
                 intrinsic_high: class.intrinsic_high,
                 oversized_write: class.oversized_write,
                 queued_at_ms: now_ms(),
+                publication,
                 result: result_tx,
             });
             Arc::clone(&queue.drain_available)
@@ -2818,16 +3012,23 @@ impl WebRTCRsConnectionHandler {
                     item.text,
                     &reset_guard.available,
                     Some(&mut item.result),
+                    item.publication.as_ref(),
                 )
                 .await
             } else {
                 send_while_owned(&mut item.result, async {
-                    self.wait_for_send_capacity(peer, &reset_guard.available)
-                        .await?;
-                    data_channel
-                        .send_text(&item.text)
-                        .await
-                        .map_err(|e| webrtc_error("send data channel frame", e))
+                    wait_under_publication(
+                        item.publication.as_ref(),
+                        self.wait_for_send_capacity(peer, &reset_guard.available),
+                    )
+                    .await?;
+                    send_under_publication(item.publication.as_ref(), async {
+                        data_channel
+                            .send_text(&item.text)
+                            .await
+                            .map_err(|e| webrtc_error("send data channel frame", e))
+                    })
+                    .await
                 })
                 .await
             };
@@ -2851,7 +3052,7 @@ impl WebRTCRsConnectionHandler {
         text: String,
         available: &Arc<tokio::sync::Notify>,
     ) -> Result<(), RxError> {
-        self.send_framed_text_owned(peer, data_channel, text, available, None)
+        self.send_framed_text_owned(peer, data_channel, text, available, None, None)
             .await
     }
 
@@ -2862,6 +3063,7 @@ impl WebRTCRsConnectionHandler {
         text: String,
         available: &Arc<tokio::sync::Notify>,
         mut completion: Option<&mut tokio::sync::oneshot::Sender<Result<(), RxError>>>,
+        publication: Option<&Arc<dyn WebRTCPublicationGuard>>,
     ) -> Result<(), RxError> {
         let transfer_id = format!(
             "{}|frame|{}",
@@ -2885,7 +3087,13 @@ impl WebRTCRsConnectionHandler {
 
         let mut transfer_attempt = 0usize;
         let start = transport_start_frame(&transfer_id, transfer_attempt, chunks.len(), text.len());
-        send_json_text_owned(&data_channel, &start, completion.as_deref_mut()).await?;
+        send_json_text_owned(
+            &data_channel,
+            &start,
+            completion.as_deref_mut(),
+            publication,
+        )
+        .await?;
         self.record_sent_transport_frame(&start);
 
         for window_start in (0..chunks.len()).step_by(FRAME_ACK_WINDOW) {
@@ -2899,8 +3107,13 @@ impl WebRTCRsConnectionHandler {
                 if restart_from_zero {
                     let restart =
                         transport_start_frame(&transfer_id, attempt, chunks.len(), text.len());
-                    send_json_text_owned(&data_channel, &restart, completion.as_deref_mut())
-                        .await?;
+                    send_json_text_owned(
+                        &data_channel,
+                        &restart,
+                        completion.as_deref_mut(),
+                        publication,
+                    )
+                    .await?;
                     self.record_sent_transport_frame(&restart);
                 }
                 let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
@@ -2923,12 +3136,13 @@ impl WebRTCRsConnectionHandler {
                     // never bursts past what the channel can deliver in real
                     // time (which would overrun the buffer and get the channel
                     // killed by the browser).
+                    let waiting = wait_under_publication(
+                        publication,
+                        self.wait_for_send_capacity(peer, available),
+                    );
                     let capacity = match completion.as_deref_mut() {
-                        Some(owner) => {
-                            send_while_owned(owner, self.wait_for_send_capacity(peer, available))
-                                .await
-                        }
-                        None => self.wait_for_send_capacity(peer, available).await,
+                        Some(owner) => send_while_owned(owner, waiting).await,
+                        None => waiting.await,
                     };
                     if let Err(error) = capacity {
                         self.pending_frame_acks.lock().remove(&ack_key);
@@ -2936,8 +3150,13 @@ impl WebRTCRsConnectionHandler {
                         return Err(error);
                     }
                     let chunk = transport_chunk_frame(&transfer_id, attempt, seq, data);
-                    if let Err(error) =
-                        send_json_text_owned(&data_channel, &chunk, completion.as_deref_mut()).await
+                    if let Err(error) = send_json_text_owned(
+                        &data_channel,
+                        &chunk,
+                        completion.as_deref_mut(),
+                        publication,
+                    )
+                    .await
                     {
                         self.pending_frame_acks.lock().remove(&ack_key);
                         self.refresh_dynamic_transport_status();
@@ -3064,16 +3283,28 @@ impl WebRTCRsConnectionHandler {
                 status.last_send_priority = SendPriority::High.as_str();
             });
             let send_result = send_while_owned(&mut item.result, async {
-                self.wait_for_send_capacity(peer, available).await?;
-                data_channel
-                    .send_text(&item.text)
-                    .await
-                    .map_err(|error| webrtc_error("send interleaved high-priority frame", error))
+                wait_under_publication(
+                    item.publication.as_ref(),
+                    self.wait_for_send_capacity(peer, available),
+                )
+                .await?;
+                send_under_publication(item.publication.as_ref(), async {
+                    data_channel.send_text(&item.text).await.map_err(|error| {
+                        webrtc_error("send interleaved high-priority frame", error)
+                    })
+                })
+                .await
             })
             .await;
             // Retiring this inline sender must not abort somebody else's
             // enclosing framed transfer or discard that sender's live queue.
-            let failure = if item.result.is_closed() {
+            let publication_rejected = send_result.as_ref().err().is_some_and(|error| {
+                matches!(
+                    error.code(),
+                    "ctox_webrtc_publication_denied" | "ctox_webrtc_publication_callback_missing"
+                )
+            });
+            let failure = if item.result.is_closed() || publication_rejected {
                 None
             } else {
                 send_result.as_ref().err().map(|error| error.to_string())
@@ -4380,10 +4611,12 @@ async fn send_json_text_owned(
     data_channel: &Arc<dyn DataChannel>,
     value: &Value,
     completion: Option<&mut tokio::sync::oneshot::Sender<Result<(), RxError>>>,
+    publication: Option<&Arc<dyn WebRTCPublicationGuard>>,
 ) -> RxResult<()> {
+    let sending = send_under_publication(publication, send_json_text(data_channel, value));
     match completion {
-        Some(owner) => send_while_owned(owner, send_json_text(data_channel, value)).await,
-        None => send_json_text(data_channel, value).await,
+        Some(owner) => send_while_owned(owner, sending).await,
+        None => sending.await,
     }
 }
 
@@ -4536,6 +4769,400 @@ mod tests {
     // (used by `apply_active_collections` + the send path) and reach the tests
     // through this glob.
     use super::*;
+
+    struct TestPublicationGuard {
+        allowed: Mutex<bool>,
+        checks: AtomicU64,
+    }
+
+    impl WebRTCPublicationGuard for TestPublicationGuard {
+        fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+            let allowed = self.allowed.lock();
+            self.checks.fetch_add(1, Ordering::SeqCst);
+            if !*allowed {
+                return Err(new_rx_error("publication_fixture_revoked", None));
+            }
+            publish()
+        }
+    }
+
+    #[tokio::test]
+    async fn publication_guard_holds_authority_and_rechecks_without_transport_wake() {
+        let state = Arc::new(TestPublicationGuard {
+            allowed: Mutex::new(true),
+            checks: AtomicU64::new(0),
+        });
+        let guard: Arc<dyn WebRTCPublicationGuard> = state.clone();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let signalled = started.clone();
+        let poll_state = state.clone();
+        let polls = Arc::new(AtomicU64::new(0));
+        let transport_polls = polls.clone();
+        let sending = tokio::spawn(async move {
+            send_under_publication(
+                Some(&guard),
+                std::future::poll_fn(move |_| {
+                    assert!(
+                        poll_state.allowed.try_lock().is_none(),
+                        "native mutation fence must stay held through physical IO poll"
+                    );
+                    transport_polls.fetch_add(1, Ordering::SeqCst);
+                    signalled.notify_one();
+                    std::task::Poll::<RxResult<()>>::Pending
+                }),
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .unwrap();
+        *state.allowed.lock() = false;
+        let result = tokio::time::timeout(Duration::from_secs(1), sending)
+            .await
+            .expect("revocation must wake a permanently Pending transport")
+            .expect("guarded send task must not panic");
+        assert_eq!(result.unwrap_err().code(), "ctox_webrtc_publication_denied");
+        assert!(polls.load(Ordering::SeqCst) > 0);
+        assert!(state.checks.load(Ordering::SeqCst) > polls.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn publication_guard_denies_missing_or_repeated_callback() {
+        struct InvalidGuard(usize);
+        impl WebRTCPublicationGuard for InvalidGuard {
+            fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+                for _ in 0..self.0 {
+                    publish()?;
+                }
+                Ok(())
+            }
+        }
+        for count in [0, 1, 2] {
+            let guard: Arc<dyn WebRTCPublicationGuard> = Arc::new(InvalidGuard(count));
+            let polls = AtomicU64::new(0);
+            let result = send_under_publication(Some(&guard), async {
+                polls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+            assert_eq!(result.is_ok(), count == 1);
+            assert_eq!(polls.load(Ordering::SeqCst), u64::from(count != 0));
+        }
+    }
+
+    /// Obtain the guard installed by the real send_guarded admission path,
+    /// before its first yield can enter the physical drain.
+    struct GuardedQueueFixture {
+        handler: Arc<WebRTCRsConnectionHandler>,
+        peer: WebRTCRsConnection,
+        guard: Arc<dyn WebRTCPublicationGuard>,
+        state: Arc<TestPublicationGuard>,
+        available: Arc<tokio::sync::Notify>,
+    }
+
+    struct PeerReadingPublicationGuard {
+        handler: std::sync::Weak<WebRTCRsConnectionHandler>,
+        peer: WebRTCRsConnection,
+        state: Arc<TestPublicationGuard>,
+    }
+
+    impl WebRTCPublicationGuard for PeerReadingPublicationGuard {
+        fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+            let handler = self.handler.upgrade().unwrap();
+            assert!(
+                handler.peer_lifecycle.try_lock().is_some(),
+                "native policy must enter before the peer fence to permit its getters"
+            );
+            let _current = handler.peer_capability_token(&self.peer);
+            self.state.with_current(publish)
+        }
+    }
+
+    async fn prepare_guarded_queue() -> GuardedQueueFixture {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = install_test_connection(&handler, "guarded-native-peer", 1).await;
+        let pc = handler.peers.lock()[peer.peer_id()].peer_connection.clone();
+        let channel: Arc<dyn DataChannel> = pc
+            .create_data_channel("guarded-native-queue", None)
+            .await
+            .unwrap();
+        handler
+            .peers
+            .lock()
+            .get_mut(peer.peer_id())
+            .unwrap()
+            .data_channel = Some(channel);
+        handler.set_peer_capability_token(&peer, "capability-a".into());
+        let state = Arc::new(TestPublicationGuard {
+            allowed: Mutex::new(true),
+            checks: AtomicU64::new(0),
+        });
+        let native: Arc<dyn WebRTCPublicationGuard> = Arc::new(PeerReadingPublicationGuard {
+            handler: Arc::downgrade(&handler),
+            peer: peer.clone(),
+            state: state.clone(),
+        });
+        let mut sending = Box::pin(handler.send_guarded(
+            &peer,
+            WebRTCWireFrame::Response(WebRTCResponse {
+                id: "guarded-native-query".into(),
+                result: serde_json::json!({"private":"guarded-native-fixture"}),
+                error: None,
+                collection: None,
+            }),
+            native,
+        ));
+        assert!(futures::poll!(sending.as_mut()).is_pending());
+        let (guard, available) = {
+            let queues = handler.send_queues.lock();
+            let queue = queues.get(peer.peer_id()).unwrap();
+            (
+                queue.high.front().unwrap().publication.clone().unwrap(),
+                queue.drain_available.clone(),
+            )
+        };
+        drop(sending);
+        GuardedQueueFixture {
+            handler,
+            peer,
+            guard,
+            state,
+            available,
+        }
+    }
+
+    #[tokio::test]
+    async fn native_guarded_queue_holds_peer_fence_and_retires_exact_binding() {
+        let GuardedQueueFixture {
+            handler,
+            peer,
+            guard,
+            state,
+            ..
+        } = prepare_guarded_queue().await;
+        let mut published = 0;
+        guard
+            .with_current(&mut || {
+                assert!(state.allowed.try_lock().is_none());
+                assert!(
+                    handler.peer_lifecycle.try_lock().is_none(),
+                    "accepted generation/token fence must reach the physical poll"
+                );
+                published += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert!(handler.peer_lifecycle.try_lock().is_some());
+        assert!(state.allowed.try_lock().is_some());
+
+        // The actual setter serializes against the fence just exercised.
+        handler.set_peer_capability_token(&peer, "capability-b".into());
+        assert!(guard
+            .with_current(&mut || {
+                published += 1;
+                Ok(())
+            })
+            .is_err());
+        handler.set_peer_capability_token(&peer, "capability-a".into());
+        {
+            let _lifecycle = handler.peer_lifecycle.lock();
+            handler
+                .peers
+                .lock()
+                .get_mut(peer.peer_id())
+                .unwrap()
+                .generation += 1;
+        }
+        assert!(guard
+            .with_current(&mut || {
+                published += 1;
+                Ok(())
+            })
+            .is_err());
+        {
+            let _lifecycle = handler.peer_lifecycle.lock();
+            handler
+                .peers
+                .lock()
+                .get_mut(peer.peer_id())
+                .unwrap()
+                .generation = peer.generation();
+        }
+        handler.close().await.unwrap();
+        assert!(guard
+            .with_current(&mut || {
+                published += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(
+            published, 1,
+            "prepared bytes cannot move to a changed binding"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_peer_token_change_retires_pending_io_without_transport_wake() {
+        let GuardedQueueFixture {
+            handler,
+            peer,
+            guard,
+            state,
+            ..
+        } = prepare_guarded_queue().await;
+        let started = Arc::new(tokio::sync::Notify::new());
+        let signalled = started.clone();
+        let transport_handler = handler.clone();
+        let sending = tokio::spawn(async move {
+            send_under_publication(
+                Some(&guard),
+                std::future::poll_fn(move |_| {
+                    assert!(transport_handler.peer_lifecycle.try_lock().is_none());
+                    assert!(state.allowed.try_lock().is_none());
+                    signalled.notify_one();
+                    std::task::Poll::<RxResult<()>>::Pending
+                }),
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .unwrap();
+        handler.set_peer_capability_token(&peer, "capability-b".into());
+        let result = tokio::time::timeout(Duration::from_secs(1), sending)
+            .await
+            .expect("a token change must retire physical Pending IO without a wakeup")
+            .expect("physical publication task must not panic");
+        assert_eq!(result.unwrap_err().code(), "ctox_webrtc_publication_denied");
+        handler.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn guarded_capacity_wait_releases_peer_fence_and_detects_token_change() {
+        let GuardedQueueFixture {
+            handler,
+            peer,
+            guard,
+            state,
+            available,
+        } = prepare_guarded_queue().await;
+        // This real capacity method takes peer_lifecycle itself. Holding the
+        // publication fence while polling it would recursively deadlock.
+        wait_under_publication(
+            Some(&guard),
+            handler.wait_for_send_capacity(&peer.peer_id, &available),
+        )
+        .await
+        .unwrap();
+        let bp = handler.peer_backpressure(&peer.peer_id);
+        bp.set_high();
+        let waiting = wait_under_publication(
+            Some(&guard),
+            handler.wait_for_send_capacity(&peer.peer_id, &available),
+        );
+        tokio::pin!(waiting);
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        assert!(handler.peer_lifecycle.try_lock().is_some());
+        assert!(state.allowed.try_lock().is_some());
+        handler.set_peer_capability_token(&peer, "capability-b".into());
+        let result = tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("token mutation must retire a capacity wait without a buffer wakeup");
+        assert_eq!(result.unwrap_err().code(), "ctox_webrtc_publication_denied");
+        assert!(
+            bp.is_high(),
+            "fixture did not accidentally release backpressure"
+        );
+        handler.close().await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn guarded_capacity_timeout_preserves_terminal_peer_cleanup() {
+        let GuardedQueueFixture {
+            handler,
+            peer,
+            guard,
+            available,
+            ..
+        } = prepare_guarded_queue().await;
+        handler.peer_backpressure(&peer.peer_id).set_high();
+        let result = wait_under_publication(
+            Some(&guard),
+            handler.wait_for_send_capacity(&peer.peer_id, &available),
+        )
+        .await;
+        assert_eq!(result.unwrap_err().code(), SEND_BUFFER_STALLED_ERROR_CODE);
+        assert!(!handler.is_peer_current(&peer));
+        assert!(!handler.send_queues.lock().contains_key(peer.peer_id()));
+        assert!(!handler.backpressure.lock().contains_key(peer.peer_id()));
+        assert_eq!(handler.transport_status.lock().backpressure_stall_count, 1);
+        handler.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn queued_publication_revalidates_at_normal_and_inline_physical_drain() {
+        for inline in [false, true] {
+            for framed in [false, true] {
+                if inline && framed {
+                    continue;
+                }
+                let handler = WebRTCRsConnectionHandler::new();
+                let peer = format!("guarded-queued-{inline}-{framed}");
+                install_test_connection(&handler, &peer, 1).await;
+                let pc = handler.peers.lock()[&peer].peer_connection.clone();
+                let channel: Arc<dyn DataChannel> =
+                    pc.create_data_channel("guarded-queue", None).await.unwrap();
+                let state = Arc::new(TestPublicationGuard {
+                    allowed: Mutex::new(true),
+                    checks: AtomicU64::new(0),
+                });
+                let guard: Arc<dyn WebRTCPublicationGuard> = state.clone();
+                let frame = WebRTCWireFrame::Response(WebRTCResponse {
+                    id: "guarded-query".into(),
+                    result: serde_json::json!({"protected": if framed {
+                        "private".repeat(MAX_INLINE_FRAME_BYTES)
+                    } else { "private".into() }}),
+                    error: None,
+                    collection: None,
+                });
+                let text = serde_json::to_string(&frame).unwrap();
+                let queued = handler
+                    .enqueue_with_publication(
+                        &peer,
+                        classify_send_frame(&frame, &text),
+                        Some(guard),
+                    )
+                    .unwrap();
+                let available = queued.available.clone();
+                *state.allowed.lock() = false;
+                if inline {
+                    handler
+                        .drain_high_priority_inline_frames(&peer, &channel, &available)
+                        .await
+                        .expect("one revoked publication must not abort another framed owner");
+                } else {
+                    let reset = {
+                        let mut queues = handler.send_queues.lock();
+                        queues.get_mut(&peer).unwrap().draining = true;
+                        DrainResetGuard {
+                            queues: handler.send_queues.clone(),
+                            peer: peer.clone(),
+                            available,
+                            in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                            armed: true,
+                        }
+                    };
+                    handler.drain_send_queue(&peer, channel, reset).await;
+                }
+                let result = queued.result.await.unwrap();
+                assert_eq!(result.unwrap_err().code(), "ctox_webrtc_publication_denied");
+                assert_eq!(state.checks.load(Ordering::SeqCst), 1);
+                assert_eq!(handler.frame_transport_status().active_transfers, 0);
+                assert!(handler.pending_frame_acks.lock().is_empty());
+                handler.close().await.unwrap();
+            }
+        }
+    }
 
     #[tokio::test]
     async fn retired_send_owner_never_polls_transport() {
@@ -5282,6 +5909,7 @@ mod tests {
             intrinsic_high: true,
             oversized_write: false,
             queued_at_ms: now_ms(),
+            publication: None,
             result: tx,
         });
         handler.send_queues.lock().insert(peer.clone(), replacement);
@@ -6112,6 +6740,7 @@ mod tests {
                     intrinsic_high: false,
                     oversized_write: false,
                     queued_at_ms: now_ms(),
+                    publication: None,
                     result: tx,
                 },
                 _rx,
@@ -6158,6 +6787,7 @@ mod tests {
                 intrinsic_high: true,
                 oversized_write: false,
                 queued_at_ms: now_ms(),
+                publication: None,
                 result: tx,
             }
         };
@@ -6193,6 +6823,7 @@ mod tests {
                 intrinsic_high: true,
                 oversized_write: false,
                 queued_at_ms: now_ms(),
+                publication: None,
                 result: tx,
             }
         };
@@ -6656,6 +7287,7 @@ mod tests {
             intrinsic_high: true,
             oversized_write: false,
             queued_at_ms: now_ms(),
+            publication: None,
             result: high_tx,
         });
         queue.push(QueuedSend {
@@ -6665,6 +7297,7 @@ mod tests {
             intrinsic_high: false,
             oversized_write: true,
             queued_at_ms: now_ms(),
+            publication: None,
             result: low_tx,
         });
         handler
@@ -6700,6 +7333,7 @@ mod tests {
                 intrinsic_high: true,
                 oversized_write: false,
                 queued_at_ms: now_ms(),
+                publication: None,
                 result: tx,
             });
         }
@@ -6711,6 +7345,7 @@ mod tests {
             intrinsic_high: false,
             oversized_write: true,
             queued_at_ms: now_ms(),
+            publication: None,
             result: low_tx,
         });
         let mut low_position = None;
@@ -6856,6 +7491,7 @@ mod tests {
                 intrinsic_high: false,
                 oversized_write: false,
                 queued_at_ms: now_ms(),
+                publication: None,
                 result: queued_tx,
             });
 

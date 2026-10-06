@@ -13,7 +13,7 @@ use serde_json::json;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -182,6 +182,94 @@ pub fn list_secret_records(root: &Path, scope: Option<&str>) -> Result<Vec<Secre
 
 pub fn read_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
     get_secret_value(root, scope, name)
+}
+
+/// Holds current encrypted-record authority through one synchronous publication
+/// callback. Enter BEFORE worker, Core, policy or controller locks. The callback
+/// must perform at most one bounded IO poll, never await or reenter secret APIs.
+/// No cached plaintext, schema initialization, migration or key generation is
+/// permitted here. SQLite rotations/deletions are fenced until the callback
+/// returns; the next poll rereads the current record and protected master key.
+/// Protected filesystem replacement is governed by native runtime ownership,
+/// not by SQLite's writer lock.
+pub(crate) fn with_current_secret_value<T>(
+    root: &Path,
+    scope: &str,
+    name: &str,
+    apply: impl FnOnce(&[u8]) -> Result<T>,
+) -> Result<T> {
+    let master = master_key_guard(root);
+    let _master = master
+        .try_lock()
+        .map_err(|_| anyhow::anyhow!("secret master-key authority is unavailable"))?;
+    let conn = Connection::open_with_flags(
+        resolve_db_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )?;
+    conn.busy_timeout(std::time::Duration::ZERO)?;
+    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+    // This file is reread, rather than treating a formerly valid key as current.
+    // Bound its read independently of an accidentally replaced large file.
+    let mut raw = Zeroizing::new(String::new());
+    fs::File::open(master_key_path(root))?
+        .take(129)
+        .read_to_string(&mut raw)?;
+    anyhow::ensure!(raw.len() <= 128, "secret master-key file is oversized");
+    let key = decode_master_key(&raw, "failed to decode current secret master key")?;
+    let embedded: Option<String> = tx
+        .query_row(
+            "SELECT value FROM ctox_secret_kv WHERE key = ?1",
+            [MASTER_KEY_STORAGE_KEY],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(embedded) = embedded {
+        anyhow::ensure!(
+            embedded.trim() == raw.trim(),
+            "secret master key conflicts with the embedded legacy key"
+        );
+    }
+    // Retain legacy conflict detection without invoking persistence helpers
+    // that initialize a database or write migrations while authority is held.
+    let legacy_path = persistence::sqlite_path(root);
+    let legacy = if legacy_path.try_exists()? {
+        let conn =
+            Connection::open_with_flags(legacy_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        conn.busy_timeout(std::time::Duration::ZERO)?;
+        Some(conn)
+    } else {
+        None
+    };
+    // Core owns this same legacy database. Do not acquire another Core writer
+    // transaction here: the callback must obtain its own native worker/Core
+    // authority, and a second connection would self-conflict. Legacy key rows
+    // are migration conflict diagnostics, not the canonical issuer record.
+    if let Some(legacy) = &legacy {
+        let value: Option<String> = legacy
+            .query_row(
+                "SELECT kv_value FROM ctox_kv_store WHERE kv_key = ?1",
+                [MASTER_KEY_STORAGE_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(value) = value {
+            anyhow::ensure!(
+                value.trim() == raw.trim(),
+                "secret master key conflicts with the legacy runtime key"
+            );
+        }
+    }
+    let (nonce, ciphertext): (String, String) = tx
+        .query_row(
+            "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
+            params![scope, name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .context("current secret not found")?;
+    let value = decrypt_secret_value(&key, &nonce, &ciphertext)?;
+    apply(&value)
 }
 
 /// One encrypted secret mutation used by callers that must rotate a credential
@@ -1209,12 +1297,24 @@ fn load_legacy_master_key(root: &Path) -> Result<Option<String>> {
     persistence::load_text_value(root, MASTER_KEY_STORAGE_KEY)
 }
 
-fn ensure_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str)> {
-    static MASTER_KEY_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-    let _guard = MASTER_KEY_GUARD
-        .get_or_init(|| Mutex::new(()))
+type MasterKeyGuard = std::sync::Arc<Mutex<()>>;
+
+fn master_key_guard(root: &Path) -> MasterKeyGuard {
+    static GUARDS: OnceLock<Mutex<HashMap<PathBuf, MasterKeyGuard>>> = OnceLock::new();
+    let mut guards = GUARDS
+        .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|error| error.into_inner());
+    std::sync::Arc::clone(
+        guards
+            .entry(master_key_path(root))
+            .or_insert_with(|| std::sync::Arc::new(Mutex::new(()))),
+    )
+}
+
+fn ensure_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str)> {
+    let guard = master_key_guard(root);
+    let _guard = guard.lock().unwrap_or_else(|error| error.into_inner());
     let conn = open_secret_db(root)?;
     let key_path = master_key_path(root);
     if key_path.is_file() {
@@ -1794,6 +1894,146 @@ mod tests {
         assert_eq!(records.len(), 1);
 
         let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn current_secret_publication_fences_rotation_and_reads_the_next_issuer() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        persistence::store_text_value(root.path(), "publication_fixture", Some("present"))?;
+        put_secret(
+            root.path(),
+            "issuer-fixture",
+            "token",
+            "before",
+            None,
+            json!({}),
+        )?;
+        let writer = Connection::open(resolve_db_path(root.path()))?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        let changes = writer.total_changes();
+        with_current_secret_value(root.path(), "issuer-fixture", "token", |value| {
+            assert_eq!(value, b"before");
+            let error = writer.execute(
+                "UPDATE ctox_secret_records SET ciphertext_b64='invalid' WHERE scope='issuer-fixture' AND secret_name='token'",
+                [],
+            ).expect_err("rotation cannot cross the bounded publication callback");
+            assert!(
+                matches!(error, rusqlite::Error::SqliteFailure(code, _) if matches!(
+                    code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ))
+            );
+            // The issuer fence must not own a second Core writer transaction.
+            let core = Connection::open(persistence::sqlite_path(root.path()))?;
+            core.busy_timeout(std::time::Duration::ZERO)?;
+            let _core_tx = rusqlite::Transaction::new_unchecked(
+                &core,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            Ok(())
+        })?;
+        assert_eq!(writer.total_changes(), changes);
+        put_secret(
+            root.path(),
+            "issuer-fixture",
+            "token",
+            "after",
+            None,
+            json!({}),
+        )?;
+        with_current_secret_value(root.path(), "issuer-fixture", "token", |value| {
+            assert_eq!(value, b"after");
+            Ok(())
+        })?;
+        delete_secret(root.path(), "issuer-fixture", "token")?;
+        let mut called = false;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called, "a deleted issuer cannot publish cached plaintext");
+        Ok(())
+    }
+
+    #[test]
+    fn current_secret_publication_denies_busy_missing_and_conflicting_authority() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut called = false;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
+        assert!(
+            !root.path().join("runtime").exists(),
+            "verification cannot create runtime state"
+        );
+        put_secret(
+            root.path(),
+            "issuer-fixture",
+            "token",
+            "present",
+            None,
+            json!({}),
+        )?;
+        let writer = Connection::open(resolve_db_path(root.path()))?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        {
+            let _tx = rusqlite::Transaction::new_unchecked(
+                &writer,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            assert!(
+                with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                    called = true;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert!(!called);
+        }
+        let conflict = BASE64_STANDARD.encode([0u8; 32]);
+        writer.execute(
+            "INSERT INTO ctox_secret_kv (key, value) VALUES (?1, ?2)",
+            params![MASTER_KEY_STORAGE_KEY, conflict],
+        )?;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
+        writer.execute(
+            "DELETE FROM ctox_secret_kv WHERE key=?1",
+            [MASTER_KEY_STORAGE_KEY],
+        )?;
+        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, Some(&conflict))?;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
+        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, None)?;
+        fs::write(master_key_path(root.path()), "invalid-protected-key")?;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
         Ok(())
     }
 

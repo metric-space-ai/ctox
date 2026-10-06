@@ -45,6 +45,8 @@ fn observation() -> Observation {
         delivered: false,
         delivery_offset: 0,
         consumed: false,
+        pending: None,
+        transfer_cancelled: None,
         _permit: permit,
     }
 }
@@ -149,4 +151,122 @@ fn native_frame_expiry_blocks_delivery_and_input_without_callback() {
             &GuestInput::Type { text: "a".into() }
         )
         .is_err());
+}
+
+#[test]
+fn native_pending_chunk_is_not_input_or_another_send_permit() {
+    let mut frame = observation();
+    let pending = frame.begin_chunk(0, 3, false).unwrap();
+    assert!(frame.consumed);
+    assert!(frame.begin_chunk(0, 3, false).is_err());
+    assert!(frame
+        .consume_input(
+            "frame",
+            "actual-turn",
+            &GuestInput::Type { text: "a".into() }
+        )
+        .is_err());
+    frame
+        .finish_chunk(
+            &pending,
+            &[1, 2, 3],
+            &json!({"owner_user_id":"actual-owner"}),
+        )
+        .unwrap();
+    assert!(!frame.delivered);
+    let terminal = frame.begin_chunk(3, 0, true).unwrap();
+    frame
+        .finish_chunk(&terminal, &[], &json!({"owner_user_id":"actual-owner"}))
+        .unwrap();
+    assert!(frame.delivered && !frame.consumed);
+    assert!(frame
+        .validate_chunk(&terminal, &[], &frame.metadata)
+        .is_err());
+}
+#[test]
+fn native_pending_chunk_rejects_replaced_bytes_owner_and_generation() {
+    let mut frame = observation();
+    let pending = frame.begin_chunk(0, 3, false).unwrap();
+    assert!(frame
+        .validate_chunk(&pending, &[1, 2, 4], &frame.metadata)
+        .is_err());
+    assert!(frame
+        .validate_chunk(&pending, &[1, 2, 3], &json!({"owner_user_id":"foreign"}))
+        .is_err());
+    let mut foreign = pending.clone();
+    foreign.nonce = "other-queue-generation".into();
+    assert!(frame
+        .validate_chunk(&foreign, &[1, 2, 3], &frame.metadata)
+        .is_err());
+    frame.deadline = Instant::now() - Duration::from_millis(1);
+    assert!(frame
+        .finish_chunk(&pending, &[1, 2, 3], &frame.metadata.clone())
+        .is_err());
+    assert!(frame.consumed && !frame.delivered);
+}
+
+#[test]
+fn native_frame_aborted_completion_cannot_grant_input_after_terminal_bytes() {
+    let mut frame = observation();
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    frame.transfer_cancelled = Some(cancelled.clone());
+    complete(&mut frame);
+    assert!(frame.delivered && !frame.consumed);
+    cancelled.store(true, Ordering::SeqCst);
+    assert!(frame
+        .consume_input(
+            "frame",
+            "actual-turn",
+            &GuestInput::Type { text: "a".into() }
+        )
+        .is_err());
+}
+
+#[test]
+fn native_frame_peer_validation_uses_held_issuer_and_policy_without_reentry() -> Result<()> {
+    use super::super::super::store;
+    let root = tempfile::tempdir()?;
+    let at_ms = i64::try_from(store::now_ms())?;
+    let (owner, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "actual-owner",
+        "Owner",
+        "chef",
+        at_ms,
+    )?;
+    let (foreign, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "foreign-admin",
+        "Foreign",
+        "admin",
+        at_ms,
+    )?;
+    let mut policy = store::open_store(root.path())?;
+    let competitor = Connection::open(policy.path().context("policy fixture path")?)?;
+    competitor.busy_timeout(Duration::ZERO)?;
+    store::with_current_webrtc_capability_signer(root.path(), |secret| {
+        let tx = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let metadata = json!({"owner_user_id":"actual-owner"});
+        validate_frame_peer(&tx, secret, &owner, &metadata)?;
+        assert!(
+            validate_frame_peer(&tx, secret, &foreign, &metadata).is_err(),
+            "another admin cannot read this owner's frame"
+        );
+        assert!(validate_frame_peer(&tx, secret, "untrusted-wire-token", &metadata).is_err());
+        let blocked = competitor
+            .execute(
+                "UPDATE business_users SET active=0 WHERE user_id='actual-owner'",
+                [],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(blocked, rusqlite::Error::SqliteFailure(ref code, _)
+            if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
+        );
+        // Same held connection observes current authority; no second schema/
+        // actor read connection is opened inside the verifier.
+        tx.execute("UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id='actual-owner'", [])?;
+        assert!(validate_frame_peer(&tx, secret, &owner, &metadata).is_err());
+        Ok(())
+    })
 }

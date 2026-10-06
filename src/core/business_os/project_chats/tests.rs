@@ -631,6 +631,174 @@ fn private_execution_results_follow_native_command_and_task_relationships() -> a
 }
 
 #[test]
+fn held_visibility_readers_preserve_native_lineage_and_fence_owner_mutation() -> anyhow::Result<()>
+{
+    use crate::mission::channels;
+    let root = fixture()?;
+    let initial = add(root.path(), "held-add")?;
+    let chat = initial["first_chat_id"].as_str().unwrap();
+    let private = command(
+        "business_os.chat.task",
+        "held-private",
+        json!({"thread_id":chat, "instruction":"Private bounded fixture"}),
+    );
+    let admitted = channels::claim_business_command_with_queue(
+        root.path(),
+        store::business_command_core_claim("held-private", &private)?,
+        channels::QueueTaskCreateRequest {
+            title: "Private task".into(),
+            prompt: "Private bounded fixture".into(),
+            thread_key: "held-private-thread".into(),
+            workspace_root: Some(root.path().display().to_string()),
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"business_os_command_id":"held-private"})),
+        },
+    )?;
+    let document = json!({"id":"held-run", "task_id":admitted.task.message_key});
+    let core = channels::open_channel_db(&crate::paths::core_db(root.path()))?;
+    let store_conn = open_store(root.path())?;
+    let writer = open_store(root.path())?;
+    writer.busy_timeout(std::time::Duration::ZERO)?;
+    let mut project = outbound_load_record(&writer, "workjet_projects", "project")?.unwrap();
+    project["owner_user_id"] = json!("new-owner");
+    {
+        let core_tx =
+            rusqlite::Transaction::new_unchecked(&core, rusqlite::TransactionBehavior::Immediate)?;
+        let store_tx = rusqlite::Transaction::new_unchecked(
+            &store_conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let core_path = crate::paths::core_db(root.path());
+        channels::reset_channel_db_open_count_for_tests(&core_path);
+        assert_eq!(
+            document_visible_from_connections(&core_tx, &store_tx, "ctox_runs", &document, "owner",),
+            Some(true)
+        );
+        assert_eq!(
+            document_visible_from_connections(
+                &core_tx,
+                &store_tx,
+                "ctox_runs",
+                &document,
+                "other-user",
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            document_visible_from_connections(
+                &core_tx,
+                &store_tx,
+                "ctox_runs",
+                &json!({"id":"missing-run","task_id":"missing-native-task"}),
+                "owner",
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            channels::channel_db_open_count_for_tests(&core_path),
+            0,
+            "borrowed authority must not reopen or initialize Core"
+        );
+        let error = store::upsert_business_record(
+            &writer,
+            "workjet_projects",
+            "project",
+            2,
+            project.clone(),
+        )
+        .expect_err("another writer cannot revoke ownership during held authority");
+        assert!(matches!(error.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(code, _)) if matches!(code.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)));
+    }
+    store::upsert_business_record(&writer, "workjet_projects", "project", 2, project)?;
+    let core_tx =
+        rusqlite::Transaction::new_unchecked(&core, rusqlite::TransactionBehavior::Immediate)?;
+    let store_tx = rusqlite::Transaction::new_unchecked(
+        &store_conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )?;
+    assert_eq!(
+        document_visible_from_connections(&core_tx, &store_tx, "ctox_runs", &document, "owner",),
+        Some(false),
+        "next held callback must observe native ownership revocation"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_business_data_document_view_reuses_private_core_lineage_and_owner_revocation(
+) -> anyhow::Result<()> {
+    use crate::business_os::rxdb_peer_business_data_source::NativeBusinessDataPolicy;
+    use crate::mission::channels;
+    use ctox_sync::business_data_remote::BusinessDataAccessPolicy;
+    let root = fixture()?;
+    let initial = add(root.path(), "native-read-add")?;
+    let chat = initial["first_chat_id"].as_str().unwrap();
+    let private = command(
+        "business_os.chat.task",
+        "native-read-private",
+        json!({"thread_id":chat, "instruction":"Private native read fixture"}),
+    );
+    let admitted = channels::claim_business_command_with_queue(
+        root.path(),
+        store::business_command_core_claim("native-read-private", &private)?,
+        channels::QueueTaskCreateRequest {
+            title: "Native read task".into(),
+            prompt: "Private native read fixture".into(),
+            thread_key: "native-read-private-thread".into(),
+            workspace_root: Some(root.path().display().to_string()),
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"business_os_command_id":"native-read-private"})),
+        },
+    )?;
+    let policy = NativeBusinessDataPolicy::new(root.path().to_path_buf());
+    let doc = json!({"id":"native-read-run","task_id":admitted.task.message_key});
+    let mut owner = None;
+    for user in ["owner", "foreign"] {
+        store::tests::seed_business_user(root.path(), user, "chef")?;
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            user,
+            user,
+            "chef",
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        let identity = policy
+            .identity(&token)
+            .await
+            .expect("current native fixture actor");
+        let legacy = threads::replication_document_filter(root.path(), &token, "ctox_runs");
+        assert_eq!(legacy(&doc), user == "owner");
+        assert_eq!(
+            policy.document_view(&identity, &token, "ctox_runs", &doc).await?,
+            (user == "owner").then(|| doc.clone()),
+            "native collection authority cannot bypass the canonical private task/command relationship"
+        );
+        if user == "owner" {
+            owner = Some((identity, token));
+        }
+    }
+    let writer = open_store(root.path())?;
+    let mut project = outbound_load_record(&writer, "workjet_projects", "project")?.unwrap();
+    project["owner_user_id"] = json!("foreign");
+    store::upsert_business_record(&writer, "workjet_projects", "project", 2, project)?;
+    let (identity, token) = owner.unwrap();
+    assert_eq!(
+        policy
+            .document_view(&identity, &token, "ctox_runs", &doc)
+            .await?,
+        None,
+        "the next real policy call must see ownership mutation through native Core lineage"
+    );
+    Ok(())
+}
+
+#[test]
 fn private_threads_reject_foreign_human_mentions_and_admin_mutation() -> anyhow::Result<()> {
     let root = fixture()?;
     let initial = add(root.path(), "add")?;

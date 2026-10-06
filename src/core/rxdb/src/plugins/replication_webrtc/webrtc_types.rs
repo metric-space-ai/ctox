@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::rx_error::RxError;
+use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rxjs_compat::RxStream;
 use crate::types::RxStorageDefaultCheckpoint;
 
@@ -108,6 +108,15 @@ pub struct PeerWithResponse<P: Clone> {
     pub response: WebRTCResponse,
 }
 
+/// Native authority retained by a queued publication, never constructed from a
+/// wire field. Implementations validate current policy and hold its mutation
+/// fence through exactly one bounded callback. The callback only polls IO:
+/// it must not await, retain references or re-enter the authority's store.
+/// Guards are released on Pending and reacquired before the next physical poll.
+pub trait WebRTCPublicationGuard: Send + Sync {
+    fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>;
+}
+
 // ref: rxdb/src/plugins/replication-webrtc/webrtc-types.ts:32-40
 /// A connection-handler abstracts the actual transport (simple-peer / WebRTC,
 /// p2pcf, webtorrent in upstream; webrtc-rs in CTOX). Implementations expose
@@ -147,6 +156,20 @@ pub trait WebRTCConnectionHandler: Send + Sync {
     }
 
     async fn send(&self, peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), RxError>;
+
+    /// Guard support is explicit. Falling back to send would discard authority
+    /// before an independently draining queue reaches physical IO.
+    async fn send_guarded(
+        &self,
+        _peer: &Self::Peer,
+        _frame: WebRTCWireFrame,
+        _publication: Arc<dyn WebRTCPublicationGuard>,
+    ) -> Result<(), RxError> {
+        Err(new_rx_error(
+            "ctox_webrtc_publication_guard_unsupported",
+            None,
+        ))
+    }
 
     async fn send_auxiliary(
         &self,
@@ -318,7 +341,7 @@ pub type WebRTCPeerSessionValidator =
 /// Per-peer document visibility predicate shared by replication and query fetch.
 pub type WebRTCDocumentFilter = Arc<dyn Fn(&Value) -> bool + Send + Sync>;
 
-pub(crate) fn retain_readable_fields(document: &mut Value, fields: &[String]) {
+pub fn retain_readable_fields(document: &mut Value, fields: &[String]) {
     if let Some(object) = document.as_object_mut() {
         object.retain(|key, _| {
             fields.contains(key)
@@ -342,7 +365,7 @@ pub(crate) fn mask_master_response(response: &mut Value, fields: &[String]) {
     }
 }
 
-pub(crate) fn readable_query_fields(query: &Value, fields: &[String]) -> bool {
+pub fn readable_query_fields(query: &Value, fields: &[String]) -> bool {
     fn selector(value: &Value, fields: &[String]) -> bool {
         match value {
             Value::Object(object) => object.iter().all(|(key, value)| {
