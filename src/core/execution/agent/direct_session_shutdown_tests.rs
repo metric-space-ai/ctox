@@ -92,6 +92,8 @@ fn fixture(root: &Path) -> (PersistentSession, std_mpsc::Receiver<()>) {
         native_guest_registry: None,
         #[cfg(unix)]
         native_guest_execution: None,
+        #[cfg(unix)]
+        native_capture_owner: None,
         poisoned: false,
     };
     (session, drop_rx)
@@ -143,4 +145,26 @@ fn persistent_public_shutdown_from_async_owner_is_cleanup_without_success() {
         .recv_timeout(Duration::from_secs(1))
         .expect("owned fixture task was retired without nested-runtime panic");
     caller_runtime.shutdown_timeout(Duration::from_secs(1));
+}
+
+#[cfg(unix)]
+#[test]
+fn persistent_native_capture_rejects_ordinary_and_ambiguous_sources() {
+    for poisoned in [false, true] {
+        let home = tempfile::tempdir().expect("fixture home");
+        let (mut session, stopped) = fixture(home.path());
+        session.poisoned = poisoned;
+        let error = session
+            .quiesce_native_capture()
+            .err()
+            .expect("ordinary or ambiguous session cannot mint native capture authority");
+        assert!(error.to_string().contains(if poisoned {
+            "requires reconciliation"
+        } else {
+            "has not retired to capture authority"
+        }));
+        stopped
+            .recv_timeout(Duration::from_secs(1))
+            .expect("denied capture still drains its actual owned runtime");
+    }
 }

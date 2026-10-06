@@ -913,12 +913,63 @@ pub(crate) struct PersistentSession {
     )>,
     #[cfg(unix)]
     native_guest_execution: Option<crate::business_os::NativeGuestExecution>,
+    #[cfg(unix)]
+    native_capture_owner: Option<crate::channels::NativeProviderCaptureOwner>,
     /// Set when a turn ended ambiguously (e.g. `turn/start` timed out with
     /// the request still detached server-side). A poisoned session refuses
     /// further turns: reusing it could overlap or steer into the original
     /// turn and duplicate side effects (ctox#21 re-review). Owners must
     /// rebuild the session.
     poisoned: bool,
+}
+
+/// Checked native source teardown with current capture-only authority.
+/// Private native objects cannot be reconstructed from a manifest or wire claim.
+/// Artifact enumeration/export and the protected transport remain separate.
+#[cfg(unix)]
+pub(crate) struct NativeSessionCapture {
+    source: crate::channels::NativeProviderCaptureOwner,
+    execution: crate::business_os::NativeGuestExecution,
+    thread_id: String,
+    root: PathBuf,
+    command_session_token: String,
+    command_context: JsonValue,
+}
+
+#[cfg(unix)]
+impl NativeSessionCapture {
+    pub(crate) fn with_current<T>(
+        &self,
+        capture: impl FnOnce(
+            &ctox_sync::contracts::ExecutionSpec,
+            &ctox_sync::authority::Ownership,
+        ) -> Result<T>,
+    ) -> Result<T> {
+        self.verify_command_authority()?;
+        let captured = self
+            .execution
+            .with_capture_authority(&self.source, |spec, ownership| {
+                anyhow::ensure!(
+                    spec.session_id == self.thread_id,
+                    "native capture session differs from the actual producer"
+                );
+                capture(spec, ownership)
+            })?;
+        self.verify_command_authority()?;
+        Ok(captured)
+    }
+
+    fn verify_command_authority(&self) -> Result<()> {
+        let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
+            &self.root,
+            &self.command_session_token,
+        )?;
+        anyhow::ensure!(
+            current == self.command_context,
+            "native capture command authority changed"
+        );
+        Ok(())
+    }
 }
 
 impl PersistentSession {
@@ -1371,6 +1422,8 @@ impl PersistentSession {
             native_guest_registry: None,
             #[cfg(unix)]
             native_guest_execution: None,
+            #[cfg(unix)]
+            native_capture_owner: None,
             poisoned: false,
         })
     }
@@ -1529,6 +1582,8 @@ impl PersistentSession {
                 native_guest_registry.as_ref(),
                 #[cfg(unix)]
                 &mut self.native_guest_execution,
+                #[cfg(unix)]
+                &mut self.native_capture_owner,
             )
             .await
         });
@@ -1556,6 +1611,47 @@ impl PersistentSession {
             "persistent session shutdown ownership is missing"
         );
         Ok(())
+    }
+
+    /// Consume the actual native producer. No capture authority escapes a
+    /// failed/forced teardown, stale worker/account/policy, or ambiguous turn.
+    /// This does not export artifacts or certify provider continuation.
+    #[cfg(unix)]
+    pub(crate) fn quiesce_native_capture(mut self) -> Result<NativeSessionCapture> {
+        anyhow::ensure!(
+            !self.poisoned,
+            "ambiguous native turn requires reconciliation"
+        );
+        anyhow::ensure!(
+            self.runtime.is_some() && self.client.is_some(),
+            "native capture requires both actual shutdown owners"
+        );
+        let capture = NativeSessionCapture {
+            source: self
+                .native_capture_owner
+                .take()
+                .context("native turn has not retired to capture authority")?,
+            execution: self
+                .native_guest_execution
+                .take()
+                .context("native capture has no actual admitted guest execution")?,
+            thread_id: self.thread_id.clone(),
+            root: self.root.clone(),
+            command_session_token: self
+                .native_command_session_token
+                .take()
+                .context("native capture has no retained signed command authorization")?,
+            command_context: self
+                .native_command_context
+                .take()
+                .context("native capture has no verified command context")?,
+        };
+        let before = capture.with_current(|_, _| Ok(()));
+        let shutdown = self.shutdown_inner("quiescing native capture");
+        before?;
+        shutdown?;
+        capture.with_current(|_, _| Ok(()))?;
+        Ok(capture)
     }
 
     // --- Internal async helpers ---
@@ -1955,6 +2051,7 @@ impl PersistentSession {
             String,
         )>,
         #[cfg(unix)] native_guest_execution: &mut Option<crate::business_os::NativeGuestExecution>,
+        #[cfg(unix)] native_capture_owner: &mut Option<crate::channels::NativeProviderCaptureOwner>,
     ) -> Result<String> {
         let native_guest = native_checkpoint_binding.is_some();
         let lease_reader = queue_turn_lease
@@ -2288,6 +2385,8 @@ impl PersistentSession {
         // `TurnStarted` for OUR turn_id; everything before that belongs to an
         // earlier turn and is ignored for reply attribution.
         let mut saw_our_turn_started = false;
+        #[cfg(unix)]
+        let mut saw_our_turn_completed = false;
         let turn_started_at = Instant::now();
         let mut last_usage_event_at = turn_started_at;
         let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;
@@ -2652,6 +2751,11 @@ impl PersistentSession {
                                 // Preserve a witnessed explicit final answer
                                 // when the terminal item is only Crew metadata.
                                 // The reducer also rejects known commentary.
+                                #[cfg(unix)]
+                                {
+                                    saw_our_turn_completed = legacy_notification_thread_id(&notif)
+                                        == Some(thread_id.as_str());
+                                }
                                 completion_message = tc.last_agent_message;
                                 break;
                             }
@@ -2761,7 +2865,31 @@ impl PersistentSession {
             ),
         );
 
-        final_message.ok_or_else(|| anyhow::anyhow!("turn completed without assistant message"))
+        let final_message = final_message
+            .ok_or_else(|| anyhow::anyhow!("turn completed without assistant message"))?;
+        #[cfg(unix)]
+        if prepared_guest {
+            if !saw_our_turn_completed {
+                return Err(SessionPoisoned(
+                    "native capture requires the exact completed thread/turn witness".into(),
+                )
+                .into());
+            }
+            anyhow::ensure!(
+                native_capture_owner.is_none() && native_guest_execution.is_some(),
+                "native source owner already retired or lacks admitted execution"
+            );
+            // This follows the exact TurnComplete witness. It retires command
+            // and frame consumers; checked shutdown still has to drain the
+            // actual session task and journal before returning capture authority.
+            *native_capture_owner = Some(
+                provider_owner
+                    .take()
+                    .context("native terminal turn lost its actual provider owner")?
+                    .retire_turn_for_capture(&thread_id, &turn_id)?,
+            );
+        }
+        Ok(final_message)
     }
 }
 
