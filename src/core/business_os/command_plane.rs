@@ -912,6 +912,24 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
             if let Ok(mut lifecycle_outcome) =
                 channels::business_command_projection(root, &command_id)
             {
+                // Some chat edits become control commands only during dispatch.
+                // Their terminal replay must still validate the immutable intent
+                // before returning or republishing the previously stored result.
+                if control_claim.is_none()
+                    && lifecycle_outcome
+                        .get("execution_mode")
+                        .and_then(Value::as_str)
+                        == Some("control")
+                {
+                    channels::claim_business_control_command(
+                        root,
+                        business_command_core_claim_with_authorization(
+                            &command_id,
+                            &command,
+                            native_authorization.as_ref(),
+                        )?,
+                    )?;
+                }
                 if let Some(object) = lifecycle_outcome.as_object_mut() {
                     let stored_chat_id = stored_outcome
                         .get("chat_id")
