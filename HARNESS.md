@@ -172,6 +172,53 @@ older harness-flow stream remains an audit and observability projection, not
 the persistence authority.
 
 
+## Checked embedded-runtime shutdown
+
+The in-process runtime and its client facade propagate failed shutdown
+requests/acknowledgements, task panics, bounded drain timeouts and incomplete
+native thread shutdown reports. An acknowledgement alone does not replace
+the runtime's checked termination result. Cleanup still runs after an error
+response; cancellation, including an unpolled client shutdown future, retains
+abort ownership of the facade/runtime and its processor/router tasks.
+
+Tracked session shutdown requires both the real shutdown handler's journal-I/O
+result and checked session-task termination. Panic or cancellation of that task
+remains a failure for every waiter, even after a successful journal receipt.
+The recorder flushes writes preceding its shutdown request and terminates
+even while clones exist. A writer failure remains a failure for every shutdown
+waiter; the lifecycle `ShutdownComplete` notification does not override it.
+
+The outer CTOX `PersistentSession` owner returns the checked client shutdown
+result too. Forced cleanup from an async context or missing runtime/client
+ownership fails; cleanup still retires whichever owner remains. Explicit review
+callers require successful teardown before returning a successful report, while
+an earlier turn failure remains the primary error. Drop performs bounded cleanup
+but cannot issue a successful checkpoint or quiescence receipt.
+
+The admitted native guest lane now transfers its actual turn owner to a distinct
+capture-only owner after the exact scoped TurnComplete witness. Ordinary provider
+bindings, lookup, retained MCP emitters and command witnesses reject that phase.
+The persistent session retains the linear capture owner through checked teardown;
+quiesce_native_capture validates the same producer record, worker/account and
+native policy/controller before and after shutdown. The retained signed command
+session is also reverified around each callback; changed or terminal command
+authority denies the returned source. Forced or ambiguous teardown cannot return
+that handle. Dropping either untransferred turn authority or the
+capture owner revokes the original record; ordinary queue sessions keep their
+existing lifetime.
+
+The handle is current native source authority only, not fresh Raft ownership,
+artifact enumeration, an exported provider state or protected-byte publication.
+The native guest factory and capture/quiescence consumer still require production
+lifecycle wiring. Subsequent guest turns keep their reconciliation refusal.
+
+This is file-I/O completion, not filesystem power-loss durability or a portable
+checkpoint. An unmaterialized fresh recorder is not materialized by shutdown.
+Native handoff must retain its own execution authority, verify the exact
+materialized provider journal and reconciled effects, and reject unknown/forced
+teardown before checkpoint protection or takeover. Production capture enrollment,
+protected-byte transfer and actual provider continuation remain required.
+
 ## Cockpit-Projektionen und Steuerbefehle
 
 The cockpit is an observer of the durable execution state. It does not close work,

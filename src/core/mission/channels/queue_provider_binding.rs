@@ -35,6 +35,8 @@ struct ProviderState {
     /// an uncommitted or ambiguously failed preparation into live authority.
     committed: bool,
     turn_id: Option<String>,
+    /// Only the distinct capture owner may use the record after turn retirement.
+    capture_only: bool,
 }
 
 struct ProviderRecord {
@@ -55,6 +57,13 @@ fn registry() -> &'static Mutex<Registry> {
 /// Only the actual direct-session scope retains this owner. Consumers get a
 /// different handle; cloning a consumer cannot prolong the provider's lifetime.
 pub(crate) struct NativeProviderTurnOwner {
+    record: Arc<ProviderRecord>,
+    transferred_to_capture: bool,
+}
+
+/// Linear native source authority after mutable turn rights have ended.
+/// This is not a journal-flush, artifact or provider-resume receipt.
+pub(crate) struct NativeProviderCaptureOwner {
     record: Arc<ProviderRecord>,
 }
 
@@ -288,6 +297,7 @@ impl NativeProviderTurnOwner {
                     live: true,
                     committed: false,
                     turn_id: None,
+                    capture_only: false,
                 }),
                 emitted_commands: Mutex::new(HashSet::new()),
             });
@@ -296,7 +306,10 @@ impl NativeProviderTurnOwner {
         })?;
         // If commit fails, even a registry lookup that raced and upgraded the
         // weak reference sees committed=false and cannot obtain a consumer.
-        let owner = Self { record };
+        let owner = Self {
+            record,
+            transferred_to_capture: false,
+        };
         owner
             .record
             .state
@@ -304,6 +317,61 @@ impl NativeProviderTurnOwner {
             .map_err(|_| anyhow::anyhow!("native provider preparation state poisoned"))?
             .committed = true;
         Ok(owner)
+    }
+
+    /// Called only after the actual producer observes its exact terminal turn.
+    /// Stop all mutable consumers before handing source authority to the
+    /// session owner. Checked client/journal teardown must still follow.
+    pub(crate) fn retire_turn_for_capture(
+        mut self,
+        provider_session_id: &str,
+        turn_id: &str,
+    ) -> Result<NativeProviderCaptureOwner> {
+        ensure!(
+            provider_session_id == self.record.facts.provider_session_id
+                && valid_id(turn_id)
+                && self.record.checkpoint.is_some(),
+            "capture requires the exact account-bound native provider turn"
+        );
+        self.record.execution.with_current_transaction(|tx| {
+            let mut state = self
+                .record
+                .state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native provider state poisoned"))?;
+            ensure!(
+                state.live
+                    && state.committed
+                    && !state.capture_only
+                    && state.turn_id.as_deref() == Some(turn_id),
+                "native provider changed before capture retirement"
+            );
+            let _account_guard = self
+                .record
+                .checkpoint
+                .as_ref()
+                .context("native capture account is missing")?
+                .auth
+                .current_runtime_account_guard()?;
+            let current: (String, Option<String>, Option<i64>) = tx.query_row(
+                "SELECT facts_json, provider_turn_id, finished_at_ms
+                 FROM native_worker_provider_bindings WHERE binding_id=?1",
+                [&self.record.facts.binding_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            ensure!(
+                current.0 == self.record.facts_json
+                    && current.1 == state.turn_id
+                    && current.2.is_none(),
+                "native capture record changed or ended"
+            );
+            state.capture_only = true;
+            Ok(())
+        })?;
+        self.transferred_to_capture = true;
+        Ok(NativeProviderCaptureOwner {
+            record: Arc::clone(&self.record),
+        })
     }
 
     pub(crate) fn binding(&self) -> NativeProviderBinding {
@@ -347,7 +415,7 @@ impl NativeProviderTurnOwner {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("native provider state poisoned"))?;
             ensure!(
-                state.live && state.committed && state.turn_id.is_none(),
+                state.live && state.committed && !state.capture_only && state.turn_id.is_none(),
                 "native provider turn already bound/closed"
             );
             let _account_guard = self
@@ -428,33 +496,60 @@ impl NativeProviderBinding {
             Option<&str>,
         ) -> Result<T>,
     ) -> Result<T> {
-        self.record.execution.with_current_transaction(|tx| {
-            let state = self
-                .record
-                .state
-                .lock()
-                .map_err(|_| anyhow::anyhow!("native provider state poisoned"))?;
+        with_current_record(&self.record, false, publish)
+    }
+}
+
+fn with_current_record<T>(
+    record: &ProviderRecord,
+    capture_only: bool,
+    publish: impl FnOnce(&rusqlite::Transaction<'_>, &NativeProviderFacts, Option<&str>) -> Result<T>,
+) -> Result<T> {
+    record.execution.with_current_transaction(|tx| {
+        let state = record
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native provider state poisoned"))?;
+        ensure!(
+            state.live && state.committed && state.capture_only == capture_only,
+            "native provider lifetime or consumer phase is no longer current"
+        );
+        let (json, turn, finished): (String, Option<String>, Option<i64>) = tx.query_row(
+            "SELECT facts_json, provider_turn_id, finished_at_ms
+             FROM native_worker_provider_bindings WHERE binding_id=?1",
+            [&record.facts.binding_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        ensure!(
+            json == record.facts_json && turn == state.turn_id && finished.is_none(),
+            "native provider witness changed, ended or was replayed"
+        );
+        let _account_guard = record
+            .checkpoint
+            .as_ref()
+            .map(|binding| binding.auth.current_runtime_account_guard())
+            .transpose()?;
+        publish(tx, &record.facts, state.turn_id.as_deref())
+    })
+}
+
+impl NativeProviderCaptureOwner {
+    pub(crate) fn matches_provider(&self, provider: &NativeProviderBinding) -> bool {
+        Arc::ptr_eq(&self.record, &provider.record)
+    }
+
+    /// Reacquire the original worker and actual pinned account every time.
+    /// No command emitter or live-provider binding can be minted from this owner.
+    pub(crate) fn with_current_capture_transaction<T>(
+        &self,
+        capture: impl FnOnce(&rusqlite::Transaction<'_>, &NativeProviderFacts) -> Result<T>,
+    ) -> Result<T> {
+        with_current_record(&self.record, true, |tx, facts, turn| {
             ensure!(
-                state.live && state.committed,
-                "native provider lifetime ended or preparation not committed"
+                facts.checkpoint_contract.is_some() && turn.is_some(),
+                "native capture has no bound account or terminal turn"
             );
-            let (json, turn, finished): (String, Option<String>, Option<i64>) = tx.query_row(
-                "SELECT facts_json, provider_turn_id, finished_at_ms
-                 FROM native_worker_provider_bindings WHERE binding_id=?1",
-                [&self.record.facts.binding_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?;
-            ensure!(
-                json == self.record.facts_json && turn == state.turn_id && finished.is_none(),
-                "native provider witness changed, ended or was replayed"
-            );
-            let _account_guard = self
-                .record
-                .checkpoint
-                .as_ref()
-                .map(|binding| binding.auth.current_runtime_account_guard())
-                .transpose()?;
-            publish(tx, &self.record.facts, state.turn_id.as_deref())
+            capture(tx, facts)
         })
     }
 }
@@ -576,38 +671,50 @@ pub(crate) fn lookup_native_provider_binding(
 
 impl Drop for NativeProviderTurnOwner {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.record.state.lock() {
-            state.live = false;
+        if !self.transferred_to_capture {
+            retire_provider_record(&self.record);
         }
-        // Marking closed is best-effort evidence; a row is never a stop witness
-        // or permission without the retained live native object.
-        // The path may now name a replacement store. Closing evidence must
-        // obey the same retained store/worker binding as other native writes.
-        // Cancellation/expiry may deny this optional marker; live=false above
-        // remains the authority revocation even when no marker can be written.
-        let _ = self.record.execution.with_current_transaction(|tx| {
-            tx.execute(
-                "UPDATE native_worker_provider_bindings SET finished_at_ms=?2
+    }
+}
+
+impl Drop for NativeProviderCaptureOwner {
+    fn drop(&mut self) {
+        retire_provider_record(&self.record);
+    }
+}
+
+fn retire_provider_record(record: &Arc<ProviderRecord>) {
+    if let Ok(mut state) = record.state.lock() {
+        state.live = false;
+    }
+    // Marking closed is best-effort evidence; a row is never a stop witness
+    // or permission without the retained live native object.
+    // The path may now name a replacement store. Closing evidence must
+    // obey the same retained store/worker binding as other native writes.
+    // Cancellation/expiry may deny this optional marker; live=false above
+    // remains the authority revocation even when no marker can be written.
+    let _ = record.execution.with_current_transaction(|tx| {
+        tx.execute(
+            "UPDATE native_worker_provider_bindings SET finished_at_ms=?2
                 WHERE binding_id=?1 AND facts_json=?3",
-                rusqlite::params![
-                    self.record.facts.binding_id,
-                    chrono::Utc::now().timestamp_millis(),
-                    self.record.facts_json
-                ],
-            )?;
-            Ok(())
-        });
-        if let Ok(mut entries) = registry().lock() {
-            let key = (
-                self.record.execution.root().to_owned(),
-                self.record.facts.attempt_id.clone(),
-            );
-            if entries
-                .get(&key)
-                .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(&self.record)))
-            {
-                entries.remove(&key);
-            }
+            rusqlite::params![
+                record.facts.binding_id,
+                chrono::Utc::now().timestamp_millis(),
+                record.facts_json
+            ],
+        )?;
+        Ok(())
+    });
+    if let Ok(mut entries) = registry().lock() {
+        let key = (
+            record.execution.root().to_owned(),
+            record.facts.attempt_id.clone(),
+        );
+        if entries
+            .get(&key)
+            .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(record)))
+        {
+            entries.remove(&key);
         }
     }
 }
@@ -1143,6 +1250,132 @@ pub(super) mod tests {
             .await
             .is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn native_capture_owner_retires_mutable_consumers_and_keeps_exact_source() -> Result<()> {
+        let (root, execution, _) = admitted()?;
+        let (owner, _) = prepare_guest(&execution, root.path())?;
+        owner.bind_turn("actual-thread", "actual-turn")?;
+        let binding = owner.binding();
+        let emitter = owner.command_emitter();
+        let command = guest_command("before-capture");
+        let witness =
+            owner.admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| Ok(()))?;
+        let captured = owner.retire_turn_for_capture("actual-thread", "actual-turn")?;
+        assert!(captured.matches_provider(&binding));
+        assert!(binding
+            .with_live_provider(|_, _| -> Result<()> { panic!("retired live consumer published") })
+            .is_err());
+        assert!(lookup_native_provider_binding(
+            execution.root(),
+            execution.attempt_id(),
+            "actual-thread",
+        )
+        .is_err());
+        assert!(emitter
+            .admit_emitted_guest_command(
+                "actual-turn",
+                &guest_command("after-capture"),
+                |_, _, _, _| { panic!("retired emitter admitted a command") },
+            )
+            .is_err());
+        assert!(witness
+            .with_current_command_transaction(&command, |_, _, _| {
+                panic!("pre-retirement command performed an effect")
+            })
+            .is_err());
+        let binding_id = captured.with_current_capture_transaction(|tx, facts| {
+            assert_eq!(facts.provider_session_id, "actual-thread");
+            assert_eq!(
+                facts
+                    .checkpoint_contract
+                    .as_ref()
+                    .unwrap()
+                    .gateway_account_id,
+                "account_id",
+            );
+            let competing = rusqlite::Connection::open(tx.path().unwrap())?;
+            competing.busy_timeout(std::time::Duration::ZERO)?;
+            let error = competing
+                .execute(
+                    "UPDATE native_worker_provider_bindings SET finished_at_ms=1",
+                    [],
+                )
+                .expect_err("capture lost its current worker transaction");
+            assert!(matches!(error, rusqlite::Error::SqliteFailure(failure, _)
+                if matches!(failure.code, rusqlite::ErrorCode::DatabaseBusy
+                    | rusqlite::ErrorCode::DatabaseLocked)));
+            Ok(facts.binding_id.clone())
+        })?;
+        drop(captured);
+        assert!(binding.with_live_provider(|_, _| Ok(())).is_err());
+        let finished: Option<i64> =
+            super::super::open_channel_db(&super::super::resolve_db_path(root.path(), None))?
+                .query_row(
+                "SELECT finished_at_ms FROM native_worker_provider_bindings WHERE binding_id=?1",
+                [binding_id],
+                |row| row.get(0),
+            )?;
+        assert!(
+            finished.is_some(),
+            "dropping the source retires its original record"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_capture_owner_rejects_unbound_foreign_and_unpinned_turns() -> Result<()> {
+        for mode in ["unbound", "foreign-session", "foreign-turn", "unpinned"] {
+            let (root, execution, _) = admitted()?;
+            let owner = if mode == "unpinned" {
+                prepare(&execution)?
+            } else {
+                prepare_guest(&execution, root.path())?.0
+            };
+            let binding = owner.binding();
+            if mode != "unbound" {
+                owner.bind_turn("actual-thread", "actual-turn")?;
+            }
+            let session = if mode == "foreign-session" {
+                "foreign-thread"
+            } else {
+                "actual-thread"
+            };
+            let turn = if mode == "foreign-turn" {
+                "foreign-turn"
+            } else {
+                "actual-turn"
+            };
+            assert!(owner.retire_turn_for_capture(session, turn).is_err());
+            assert!(
+                binding.with_live_provider(|_, _| Ok(())).is_err(),
+                "failed consumed owner retained mutable authority"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_capture_owner_rechecks_worker_and_pinned_account() -> Result<()> {
+        for revoke_worker in [false, true] {
+            let (root, execution, lifetime) = admitted()?;
+            let (owner, auth) = prepare_guest(&execution, root.path())?;
+            owner.bind_turn("actual-thread", "actual-turn")?;
+            let captured = owner.retire_turn_for_capture("actual-thread", "actual-turn")?;
+            captured.with_current_capture_transaction(|_, _| Ok(()))?;
+            if revoke_worker {
+                lifetime.revoke();
+            } else {
+                auth.reload();
+            }
+            assert!(captured
+                .with_current_capture_transaction(|_, _| -> Result<()> {
+                    panic!("revoked native source published")
+                })
+                .is_err());
+        }
         Ok(())
     }
 

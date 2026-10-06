@@ -380,16 +380,169 @@ fn actor_may_replicate_document_with_reader(
     collection_read_allowed: bool,
     visibility: &mut super::project_chats::VisibilityReadContext,
 ) -> bool {
+    actor_may_replicate_document_using_reader(
+        collection,
+        document,
+        user_id,
+        role,
+        collection_read_allowed,
+        &mut RootReplicationReader { root, visibility },
+    )
+}
+
+trait ReplicationPolicyReader {
+    fn private_visibility(
+        &mut self,
+        collection: &str,
+        document: &Value,
+        user: &str,
+    ) -> Option<bool>;
+    fn browser_visible(&mut self, collection: &str, document: &Value, user: &str) -> bool;
+    fn communication_visible(&mut self, collection: &str, document: &Value, user: &str) -> bool;
+    fn command_visible(&mut self, document: &Value, user: &str) -> bool;
+    fn task_visible(&mut self, document: &Value, user: &str) -> bool;
+    fn thread_visible(&mut self, document: &Value, user: &str) -> bool;
+}
+
+struct RootReplicationReader<'a> {
+    root: &'a Path,
+    visibility: &'a mut super::project_chats::VisibilityReadContext,
+}
+
+impl ReplicationPolicyReader for RootReplicationReader<'_> {
+    fn private_visibility(
+        &mut self,
+        collection: &str,
+        document: &Value,
+        user: &str,
+    ) -> Option<bool> {
+        self.visibility.visible(collection, document, user)
+    }
+    fn browser_visible(&mut self, collection: &str, document: &Value, user: &str) -> bool {
+        browser_document_visible_to_actor(self.root, collection, document, user)
+    }
+    fn communication_visible(&mut self, collection: &str, document: &Value, user: &str) -> bool {
+        communication_document_visible_to_actor(self.root, collection, document, user)
+    }
+    fn command_visible(&mut self, document: &Value, user: &str) -> bool {
+        ctox_command_document_visible_to_user(self.root, document, user)
+    }
+    fn task_visible(&mut self, document: &Value, user: &str) -> bool {
+        ctox_task_document_visible_to_user(self.root, document, user)
+    }
+    fn thread_visible(&mut self, document: &Value, user: &str) -> bool {
+        thread_document_visible_to_user(self.root, document, user)
+    }
+}
+
+struct HeldReplicationReader<'a> {
+    core: &'a Connection,
+    store: &'a Connection,
+    projection: &'a Connection,
+}
+
+impl HeldReplicationReader<'_> {
+    fn read(&self, collection: &str, id: &str) -> anyhow::Result<Option<Value>> {
+        store::pull_collection_record_from_connections(self.store, self.projection, collection, id)
+    }
+}
+
+impl ReplicationPolicyReader for HeldReplicationReader<'_> {
+    fn private_visibility(
+        &mut self,
+        collection: &str,
+        document: &Value,
+        user: &str,
+    ) -> Option<bool> {
+        super::project_chats::document_visible_from_connections(
+            self.core, self.store, collection, document, user,
+        )
+    }
+    // These collections are explicitly outside NativeBusinessData's allowlist.
+    // The entry point rejects them before dispatch; their ordinary root readers
+    // retain the existing browser/channel authority and are never substituted.
+    fn browser_visible(&mut self, _: &str, _: &Value, _: &str) -> bool {
+        false
+    }
+    fn communication_visible(&mut self, _: &str, _: &Value, _: &str) -> bool {
+        false
+    }
+    fn command_visible(&mut self, document: &Value, user: &str) -> bool {
+        ctox_command_document_visible_with_reader(document, user, &mut |collection, id| {
+            self.read(collection, id)
+        })
+    }
+    fn task_visible(&mut self, document: &Value, user: &str) -> bool {
+        ctox_task_document_visible_with_reader(document, user, &mut |collection, id| {
+            self.read(collection, id)
+        })
+    }
+    fn thread_visible(&mut self, document: &Value, user: &str) -> bool {
+        thread_document_visible_with_reader(document, user, &mut |collection, id| {
+            self.read(collection, id)
+        })
+    }
+}
+
+/// Actor/grant already verified on the caller's held current policy. This
+/// value is input to the policy algorithm, never wire-created authority.
+pub(super) struct ReplicationActor<'a> {
+    pub user_id: &'a str,
+    pub role: &'a str,
+    pub collection_read_allowed: bool,
+}
+
+/// The same complete replication decision for every eligible BusinessData
+/// collection, borrowing held Core, relationship and RxDB projection readers.
+pub(super) fn native_business_data_document_visible_from_connections(
+    core: &Connection,
+    store: &Connection,
+    projection: &Connection,
+    collection: &str,
+    document: &Value,
+    actor: ReplicationActor<'_>,
+) -> anyhow::Result<bool> {
+    anyhow::ensure!(
+        super::rxdb_peer_business_data_source::READABLE_COLLECTIONS.contains(&collection)
+            && !is_browser_collection(collection)
+            && !matches!(
+                collection,
+                "communication_accounts" | "communication_threads" | "communication_messages"
+            ),
+        "collection requires a different native source reader"
+    );
+    Ok(actor_may_replicate_document_using_reader(
+        collection,
+        document,
+        actor.user_id,
+        actor.role,
+        actor.collection_read_allowed,
+        &mut HeldReplicationReader {
+            core,
+            store,
+            projection,
+        },
+    ))
+}
+
+fn actor_may_replicate_document_using_reader(
+    collection: &str,
+    document: &Value,
+    user_id: &str,
+    role: &str,
+    collection_read_allowed: bool,
+    reader: &mut impl ReplicationPolicyReader,
+) -> bool {
     if collection == "guest_frames" {
         // These fields are supplied only by the held native guest owner.
         // Administrator collection access does not transfer another controller.
         return collection_read_allowed && value_string(document, "owner_user_id") == user_id;
     }
-    if let Some(allowed) = visibility.visible(collection, document, user_id) {
+    if let Some(allowed) = reader.private_visibility(collection, document, user_id) {
         return allowed && collection_read_allowed;
     }
     if is_browser_collection(collection) {
-        return browser_document_visible_to_actor(root, collection, document, user_id);
+        return reader.browser_visible(collection, document, user_id);
     }
     if matches!(
         super::policy::parse_role(role),
@@ -410,13 +563,13 @@ fn actor_may_replicate_document_with_reader(
         collection,
         "communication_accounts" | "communication_threads" | "communication_messages"
     ) {
-        return communication_document_visible_to_actor(root, collection, document, user_id);
+        return reader.communication_visible(collection, document, user_id);
     }
     if collection == "business_commands" {
-        return ctox_command_document_visible_to_user(root, document, user_id);
+        return reader.command_visible(document, user_id);
     }
     if collection == "ctox_queue_tasks" {
-        return ctox_task_document_visible_to_user(root, document, user_id);
+        return reader.task_visible(document, user_id);
     }
     if !is_threads_owned_collection(collection) {
         return true;
@@ -427,7 +580,7 @@ fn actor_may_replicate_document_with_reader(
             value_string(document, "requester_user_id") == user_id
                 || value_string(document, "reviewer_user_id") == user_id
                 || value_string(document, "decision_by_id") == user_id
-                || thread_document_visible_to_user(root, document, user_id)
+                || reader.thread_visible(document, user_id)
         }
         "user_threads" => thread_record_visible_to_user(document, user_id),
         "user_thread_messages" => {
@@ -435,9 +588,9 @@ fn actor_may_replicate_document_with_reader(
                 || array_strings(document.get("target_user_ids"))
                     .iter()
                     .any(|target_user_id| target_user_id == user_id)
-                || thread_document_visible_to_user(root, document, user_id)
+                || reader.thread_visible(document, user_id)
         }
-        "user_thread_links" => thread_document_visible_to_user(root, document, user_id),
+        "user_thread_links" => reader.thread_visible(document, user_id),
         _ => false,
     }
 }
@@ -4379,6 +4532,16 @@ fn ctox_command_document_directly_visible_to_user(document: &Value, user_id: &st
 }
 
 fn ctox_command_document_visible_to_user(root: &Path, document: &Value, user_id: &str) -> bool {
+    ctox_command_document_visible_with_reader(document, user_id, &mut |collection, id| {
+        load_record(root, collection, id)
+    })
+}
+
+fn ctox_command_document_visible_with_reader(
+    document: &Value,
+    user_id: &str,
+    read: &mut impl FnMut(&str, &str) -> anyhow::Result<Option<Value>>,
+) -> bool {
     if ctox_command_document_directly_visible_to_user(document, user_id) {
         return true;
     }
@@ -4396,7 +4559,7 @@ fn ctox_command_document_visible_to_user(root: &Path, document: &Value, user_id:
         {
             continue;
         }
-        if load_record(root, "business_commands", &parent_command_id)
+        if read("business_commands", &parent_command_id)
             .ok()
             .flatten()
             .as_ref()
@@ -4409,6 +4572,16 @@ fn ctox_command_document_visible_to_user(root: &Path, document: &Value, user_id:
 }
 
 fn ctox_task_document_visible_to_user(root: &Path, document: &Value, user_id: &str) -> bool {
+    ctox_task_document_visible_with_reader(document, user_id, &mut |collection, id| {
+        load_record(root, collection, id)
+    })
+}
+
+fn ctox_task_document_visible_with_reader(
+    document: &Value,
+    user_id: &str,
+    read: &mut impl FnMut(&str, &str) -> anyhow::Result<Option<Value>>,
+) -> bool {
     if document_mentions_user(document, user_id)
         || nested_string(document, &["actor", "id"]).as_deref() == Some(user_id)
     {
@@ -4418,10 +4591,10 @@ fn ctox_task_document_visible_to_user(root: &Path, document: &Value, user_id: &s
     if command_id.is_empty() {
         return false;
     }
-    load_record(root, "business_commands", &command_id)
+    read("business_commands", &command_id)
         .ok()
         .flatten()
-        .map(|command| ctox_command_document_visible_to_user(root, &command, user_id))
+        .map(|command| ctox_command_document_visible_with_reader(&command, user_id, read))
         .unwrap_or(false)
 }
 
@@ -4458,11 +4631,21 @@ fn document_mentions_user(document: &Value, user_id: &str) -> bool {
 }
 
 fn thread_document_visible_to_user(root: &Path, document: &Value, user_id: &str) -> bool {
+    thread_document_visible_with_reader(document, user_id, &mut |collection, id| {
+        load_record(root, collection, id)
+    })
+}
+
+fn thread_document_visible_with_reader(
+    document: &Value,
+    user_id: &str,
+    read: &mut impl FnMut(&str, &str) -> anyhow::Result<Option<Value>>,
+) -> bool {
     let thread_id = value_string(document, "thread_id");
     if thread_id.is_empty() {
         return false;
     }
-    load_record(root, "user_threads", &thread_id)
+    read("user_threads", &thread_id)
         .ok()
         .flatten()
         .map(|thread| thread_record_visible_to_user(&thread, user_id))

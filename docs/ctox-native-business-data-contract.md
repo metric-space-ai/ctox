@@ -99,9 +99,34 @@ poll rereads the issuer and protected master key. Missing, busy, malformed or
 conflicting issuer authority denies publication without generating a key.
 Legacy Core key rows remain migration-conflict diagnostics and do not acquire
 a second Core writer lock; protected filesystem replacement belongs to native
-runtime ownership. No guard is retained across an await. These source helpers
+runtime ownership. Native issuer/SQL fences release at each Pending. These source helpers
 and their adversarial regressions still require composed compiler/runtime
-validation and wiring into the actual BusinessData response/event publishers.
+validation. The actual BusinessData source now registers the guarded auxiliary
+handler with the exact accepted connection and sends Watch/Observe events through
+send_guarded. Native response/event guards retain the prepared payload separately
+from wire JSON and reacquire current issuer, Core, policy and projection authority
+inside every physical IO poll. Query rows require current source visibility/scope,
+their prepared field projection and the original scoped Mango selector. Even an
+empty page rechecks query-field permission. Command responses/events require
+current canonical Core ownership and the exact prepared command state; Submit
+publication checks DataWrite, observation checks DataRead.
+
+The source's synchronous lifetime fence retires queued output before shutdown's
+first await and prevents installing later snapshot/watch tasks. Subscription
+publication shares its session/terminal/binding-epoch fence with resume and
+Unwatch. A reconnect retaining the same wire session still changes that local
+epoch. Data-free Watch acknowledgements can release already-buffered Error/Reset
+after a producer failure; resume, Unwatch, source shutdown and exact peer/token
+retirement still fence them. Fixed Error/Reset/Revoked controls and exact Unwatched
+acknowledgements carry no data authority. Arbitrary native error text is sanitized;
+unsupported policies/transports cannot fall back to an ordinary data send.
+
+The auxiliary request is the direct generated Request used by remote_request;
+the WebRTC response envelope carries its WireResult directly. Source decoding
+uses the existing bounded decoder. These source changes have not passed compiler,
+real queue/service adversarial execution or performance validation. Immediate
+SQLite fences fail closed on contention; availability under concurrent writers
+and arbitrary filesystem replacement remain unproved.
 
 ## Command ownership and existing records
 
@@ -194,18 +219,66 @@ publication rather than dropping the guard into ordinary send. An inline
 authority rejection is delivered to its own caller without aborting a different
 framed owner; genuine transport errors retain the existing failure behavior.
 
+Guarded auxiliary registration now returns a native response value and a
+mandatory publication guard separately from wire JSON. The handler receives
+the exact accepted connection, not a later signaling-ID lookup. Guarded
+registration cannot opt into public identity admission or replace an existing
+method owner. Setup failures use a fixed public error, never arbitrary native
+error text. The pool retains its synchronous cancellation fence through each
+callback and invalidates it before its first asynchronous teardown step.
+Unsupported guarded transports reject without retrying ordinary send.
+
+For every native guarded queue item, admission captures the accepted connection
+generation and its capability token under peer lifecycle authority. Each IO
+poll enters native policy first, then holds that same lifecycle lock while
+checking the captured generation/token and polling the DataChannel. Token
+mutation, replacement and close use that lock. Capacity waits do not emit bytes:
+they probe authority on each bounded recheck, release the fences before polling
+the capacity method, and reacquire them for physical IO. Holding lifecycle while
+polling capacity would recursively acquire it and deadlock. Pending IO releases
+all fences; a token change retires it even without a transport wakeup.
+
 This transport implementation is a prerequisite, not native BusinessData
-policy wiring. The current source response/event publishers still use ordinary
-send. Their adapter must carry the same retained authority through both the
-auxiliary response and Watch/Observe queues. It must use the existing signed
+policy wiring. Its actual Query/Watch/Observe source publishers still use plain
+auxiliary registration and ordinary send. Their adapter must supply the real
+retained policy authority through the new guarded auxiliary registration and
+Watch/Observe queues. It must use the existing signed
 actor/device claims, native collection/query/field policy, exact command owner
 and authoritative document visibility. Those decisions read both the Business
 OS relationship store and Core execution state: holding one independently
 opened transaction while helpers reopen stores or perform schema initialization
 does not establish a common publication boundary. Checks must borrow the held
 native authority, without awaiting or re-entering its store inside the IO
-callback. Production wiring and external SQLite mutation regressions remain
-required; the transport regressions have not run.
+callback.
+
+NativeBusinessDataPolicy.document_view now uses the complete shared replication
+decision on held Core, Business OS and RxDB readers. The ordinary replication
+filter retains its existing browser/channel hooks and decision order. Both
+readers share command parent/workflow inheritance, task-command and thread
+membership predicates; the held reader preserves the ordinary domain-first
+relationship lookup and RxDB projection fallback. It resolves schema tables
+from the held SQLite catalog rather than a path-stamped cache. This entry point
+uses the same explicit NativeBusinessData collection allowlist; it does not
+substitute for the separate browser or communication source readers.
+
+The synchronous read callback enters current issuer -> Core -> policy -> RxDB,
+using existing databases with zero busy timeout and immediate mutation fences.
+It verifies current signed/paired actor, epoch, collection grant and existing
+native instance, binds authority to that exact collection, and applies current
+crew field projection on the same claims. Missing or busy authority fails
+closed; it creates no schema, instance or secret. Fences release before the
+async document_view call returns. Instance-file checks remain native filesystem
+ownership, not a proof that arbitrary external file replacement is atomically
+fenced.
+
+This implements the actual document policy path but does not yet retain those
+fences through response/event IO. The new native guard factory must reacquire
+this callback and check the exact prepared payload, query fields, scope and
+owned command at every publication poll. Source/subscription terminal and
+resume changes also need the shared local publication fence. Production queue
+wiring, concurrency/availability/performance evidence and external SQLite
+mutation regressions remain required. The new real-policy and transport tests
+are source-only and unrun.
 
 ## Existing implementation and reuse boundary
 

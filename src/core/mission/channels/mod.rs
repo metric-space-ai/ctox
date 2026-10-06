@@ -54,8 +54,8 @@ pub(crate) use queue_execution_fence::{QueueExecutionFence, QueueWorkerLifetime}
 #[cfg(unix)]
 pub(crate) use queue_provider_binding::{
     lookup_native_provider_binding, NativeProviderAdmission, NativeProviderBinding,
-    NativeProviderCommand, NativeProviderCommandEmitter, NativeProviderFacts,
-    NativeProviderTurnOwner,
+    NativeProviderCaptureOwner, NativeProviderCommand, NativeProviderCommandEmitter,
+    NativeProviderFacts, NativeProviderTurnOwner,
 };
 mod outbound_review;
 use crate::communication_store::parse_string_json_array;

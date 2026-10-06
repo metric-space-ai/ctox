@@ -344,7 +344,7 @@ pub struct Codex {
     pub(crate) session_loop_termination: SessionLoopTermination,
 }
 
-pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
+pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, Result<(), ()>>>;
 
 // Remove receipts when a caller is cancelled, including while enqueueing.
 struct PendingTurnInterrupt {
@@ -694,8 +694,18 @@ impl Codex {
             Err(CodexErr::InternalAgentDied) => {}
             Err(err) => return Err(err),
         }
-        session_loop_termination.await;
-        Ok(())
+        session_loop_termination
+            .await
+            .map_err(|()| CodexErr::InternalAgentDied)?;
+        match self.session.shutdown_journal_result.get() {
+            Some(Ok(())) => Ok(()),
+            Some(Err(kind)) => Err(std::io::Error::new(
+                *kind,
+                "session shutdown did not flush its rollout journal",
+            )
+            .into()),
+            None => Err(CodexErr::InternalAgentDied),
+        }
     }
 
     pub async fn next_event(&self) -> CodexResult<Event> {
@@ -729,7 +739,7 @@ impl Codex {
         let result = tokio::select! {
             biased;
             result = rx => result.map_err(|_| CodexErr::InternalAgentDied),
-            () = self.session_loop_termination.clone() => Err(CodexErr::InternalAgentDied),
+            _ = self.session_loop_termination.clone() => Err(CodexErr::InternalAgentDied),
         };
         drop(receipt);
         result
@@ -779,17 +789,13 @@ impl Codex {
 
 #[cfg(test)]
 pub(crate) fn completed_session_loop_termination() -> SessionLoopTermination {
-    futures::future::ready(()).boxed().shared()
+    futures::future::ready(Ok(())).boxed().shared()
 }
 
 pub(crate) fn session_loop_termination_from_handle(
     handle: JoinHandle<()>,
 ) -> SessionLoopTermination {
-    async move {
-        let _ = handle.await;
-    }
-    .boxed()
-    .shared()
+    async move { handle.await.map_err(|_| ()) }.boxed().shared()
 }
 
 /// Context for an initialized model agent
@@ -808,6 +814,9 @@ pub(crate) struct Session {
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     interrupt_receipts: std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    /// Only the real shutdown handler can certify the journal I/O boundary.
+    /// Termination, channel closure, or a prior error event is not that receipt.
+    shutdown_journal_result: std::sync::OnceLock<Result<(), std::io::ErrorKind>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -1909,6 +1918,7 @@ impl Session {
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             interrupt_receipts: std::sync::Mutex::new(HashMap::new()),
+            shutdown_journal_result: std::sync::OnceLock::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -5200,9 +5210,17 @@ mod handlers {
             let mut guard = sess.services.rollout.lock().await;
             guard.take()
         };
-        if let Some(rec) = recorder_opt
-            && let Err(e) = rec.shutdown().await
-        {
+        let journal_result = match recorder_opt {
+            Some(rec) => rec.shutdown().await,
+            None => Ok(()),
+        };
+        let _ = sess.shutdown_journal_result.set(
+            journal_result
+                .as_ref()
+                .map(|_| ())
+                .map_err(|err| err.kind()),
+        );
+        if let Err(e) = journal_result {
             warn!("failed to shutdown rollout recorder: {e}");
             let event = Event {
                 id: sub_id.clone(),

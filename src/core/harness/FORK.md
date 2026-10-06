@@ -65,6 +65,37 @@ The core regressions exercise actual MCP handler dispatch and argument rejection
 plus registry scoping/teardown. Native queue regressions test emitter lifetime and
 default-consumer denial. Execution and installed VM acceptance are separate.
 
+## 2026-10 Checked embedding shutdown
+
+In-process shutdown carries checked background/thread-drain and task-join
+results to the embedding client. Forced timeouts, lost acknowledgements and
+panics return safe errors instead of success; an error response still awaits
+bounded owned cleanup. Runtime processor/router tasks and client shutdown
+futures retain abort ownership on cancellation, including before the facade
+future's first poll. The awaited public call shape remains
+`client.shutdown().await`.
+
+The outer `AppServerClient` enum constructs the embedded shutdown future at
+the public call boundary too. Its unpolled-future regression uses the actual
+enum wrapper and a raw owned fixture worker, not a preconstructed cleanup guard.
+
+Tracked sessions retain a one-time result from the real shutdown handler's
+recorder I/O. The shared session-loop future also retains the checked task-join
+result. Shutdown waiters reject a failed recorder, a missing receipt or a failed
+task join, even if the real handler already acknowledged journal I/O. Panic
+and cancellation remain sanitized failures for repeated waiters. Recorder shutdown flushes
+preceding writes, propagates the real file error and closes its writer despite
+retained clones. Existing multiple-waiter fixtures now invoke the actual shutdown
+handler rather than treating a sleeping loop's exit as successful shutdown.
+The unchanged lifecycle completion event is not a success receipt.
+
+Real in-process event-pressure, persistent-resume, guardian and retained-manager
+checks remain required. A file-I/O receipt adds no fsync/power-loss guarantee;
+empty deferred threads are not materialized. It also does not prove reconciled
+effects, independently enrolled capture authority or a transferable provider
+checkpoint. Production capture/transfer and cross-host continuation remain
+unfinished work.
+
 ## 2026-10 Rollout writer acknowledgement and publication
 
 Recorder `persist` and `flush` replies carry the writer's actual I/O result.

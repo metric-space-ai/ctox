@@ -112,6 +112,7 @@ type FixtureIpcStream = BufReader<tokio::io::DuplexStream>;
 
 #[derive(Default)]
 struct QueryGate {
+    publication_fence: std::sync::Mutex<()>,
     armed: AtomicBool,
     reject_queries: AtomicBool,
     reject_documents: AtomicBool,
@@ -123,14 +124,130 @@ struct QueryGate {
     release: tokio::sync::Notify,
 }
 
+impl QueryGate {
+    fn set_query_rejection(&self, rejected: bool) {
+        let _fence = self.publication_fence.lock().unwrap();
+        self.reject_queries.store(rejected, Ordering::SeqCst);
+    }
+    fn set_document_rejection(&self, rejected: bool) {
+        let _fence = self.publication_fence.lock().unwrap();
+        self.reject_documents.store(rejected, Ordering::SeqCst);
+    }
+}
+
 struct FixtureSourcePolicy {
     query_gate: Arc<QueryGate>,
+}
+
+/// Synthetic issuer used only by these real-WebRTC/private-IPC lifecycle tests.
+/// Native SQLite owner/field authority is tested by NativeBusinessDataPolicy.
+struct FixturePublication {
+    gate: Arc<QueryGate>,
+    query: Option<Value>,
+    documents: bool,
+}
+
+impl rxdb::plugins::replication_webrtc::WebRTCPublicationGuard for FixturePublication {
+    fn with_current(
+        &self,
+        publish: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
+    ) -> rxdb::rx_error::RxResult<()> {
+        let _fence = self.gate.publication_fence.lock().unwrap();
+        if self.query.as_ref().is_some_and(|query| {
+            self.gate.reject_queries.load(Ordering::SeqCst)
+                || !rxdb::plugins::replication_webrtc::webrtc_types::readable_query_fields(
+                    query,
+                    &["id".into()],
+                )
+        }) || (self.documents && self.gate.reject_documents.load(Ordering::SeqCst))
+        {
+            return Err(rxdb::rx_error::new_rx_error(
+                "FIXTURE_PUBLICATION_REVOKED",
+                None,
+            ));
+        }
+        publish()
+    }
+}
+
+impl FixtureSourcePolicy {
+    fn publication(
+        &self,
+        identity: &ctox_sync::business_data_remote::RemoteIdentity,
+        token: &str,
+        query: Option<Value>,
+        documents: bool,
+    ) -> io::Result<Arc<dyn rxdb::plugins::replication_webrtc::WebRTCPublicationGuard>> {
+        if token != FIXTURE_CAPABILITY
+            || identity.user_id != "fixture-user"
+            || identity.authorization_epoch != AUTHORIZATION_EPOCH
+            || identity.instance_id != "fixture-instance"
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "fixture actor changed",
+            ));
+        }
+        Ok(Arc::new(FixturePublication {
+            gate: self.query_gate.clone(),
+            query,
+            documents,
+        }))
+    }
 }
 
 const FIXTURE_CAPABILITY: &str = "fixture-private-read";
 
 #[async_trait::async_trait]
 impl ctox_sync::business_data_remote::BusinessDataAccessPolicy for FixtureSourcePolicy {
+    fn response_publication(
+        &self,
+        identity: &ctox_sync::business_data_remote::RemoteIdentity,
+        token: &str,
+        request: &NativeBusinessDataRequest,
+        response: &NativeBusinessDataResponse,
+    ) -> io::Result<Arc<dyn rxdb::plugins::replication_webrtc::WebRTCPublicationGuard>> {
+        if response.request_id != request.request_id || response.version != request.version {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "fixture response changed",
+            ));
+        }
+        let query = match &request.operation {
+            NativeBusinessDataOperation::Query { query, .. }
+            | NativeBusinessDataOperation::Watch { query, .. } => Some(query.query.clone()),
+            NativeBusinessDataOperation::ObserveCommand { .. } => {
+                Some(json!({"selector":{}, "sort":[{"id":"asc"}]}))
+            }
+            NativeBusinessDataOperation::SubmitCommand { .. } => None,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "fixture data operation unsupported",
+                ))
+            }
+        };
+        let documents = matches!(&response.result, NativeBusinessDataResult::Page { records, .. } if !records.is_empty());
+        self.publication(identity, token, query, documents)
+    }
+
+    fn event_publication(
+        &self,
+        identity: &ctox_sync::business_data_remote::RemoteIdentity,
+        token: &str,
+        query: &ctox_sync::business_data_contract::NativeBusinessDataQuery,
+        _command_id: Option<&str>,
+        event: &ctox_sync::business_data_contract::NativeBusinessDataEvent,
+    ) -> io::Result<Arc<dyn rxdb::plugins::replication_webrtc::WebRTCPublicationGuard>> {
+        let documents = matches!(&event.payload,
+            NativeBusinessDataEventPayload::SnapshotPage { records, .. } if !records.is_empty()
+        ) || matches!(
+            &event.payload,
+            NativeBusinessDataEventPayload::Upsert { .. }
+        );
+        self.publication(identity, token, Some(query.query.clone()), documents)
+    }
+
     async fn identity(
         &self,
         capability_token: &str,
@@ -1708,7 +1825,7 @@ async fn exercise_session(
                 _ => panic!("expected query response"),
             };
 
-            query_gate.reject_queries.store(true, Ordering::SeqCst);
+            query_gate.set_query_rejection(true);
             send_request(
                 &mut client,
                 "query-page-policy-revoked",
@@ -1719,7 +1836,7 @@ async fn exercise_session(
                 read_frame(&mut client).await,
                 NativeBusinessDataErrorCode::Unauthorized,
             );
-            query_gate.reject_queries.store(false, Ordering::SeqCst);
+            query_gate.set_query_rejection(false);
 
             // An unknown page cursor must fail closed with ResetRequired; the
             // following valid cursor proves recovery uses the same snapshot only
@@ -1836,7 +1953,7 @@ async fn exercise_session(
                 NativeBusinessDataErrorCode::ResetRequired,
             );
 
-            query_gate.reject_documents.store(true, Ordering::SeqCst);
+            query_gate.set_document_rejection(true);
             send_request(
                 &mut client,
                 "watch-failed-snapshot",
@@ -1896,7 +2013,7 @@ async fn exercise_session(
                     _ => panic!("unexpected frame during failed snapshot cleanup"),
                 }
             }
-            query_gate.reject_documents.store(false, Ordering::SeqCst);
+            query_gate.set_document_rejection(false);
 
             // Reset cannot stand in for a snapshot: start without a cursor and
             // require the full snapshot sequence before declaring caught up.
@@ -2136,7 +2253,7 @@ async fn exercise_session(
                 owner_checks_before + 1,
                 "observation must reach the owner gate before rejection",
             );
-            query_gate.reject_documents.store(true, Ordering::SeqCst);
+            query_gate.set_document_rejection(true);
             server_db
                 .collection("records")
                 .unwrap()
@@ -2152,7 +2269,7 @@ async fn exercise_session(
                     code: NativeBusinessDataErrorCode::ResetRequired,
                 }
             ));
-            query_gate.reject_documents.store(false, Ordering::SeqCst);
+            query_gate.set_document_rejection(false);
 
             send_request(
                 &mut client,
@@ -2188,13 +2305,13 @@ async fn exercise_session(
             timeout(Duration::from_secs(5), query_gate.entered.notified())
                 .await
                 .expect("query must enter source document policy");
-            query_gate.reject_queries.store(true, Ordering::SeqCst);
+            query_gate.set_query_rejection(true);
             query_gate.release.notify_one();
             assert_rejected(
                 read_frame(&mut client).await,
                 NativeBusinessDataErrorCode::Unauthorized,
             );
-            query_gate.reject_queries.store(false, Ordering::SeqCst);
+            query_gate.set_query_rejection(false);
 
             query_gate.armed.store(true, Ordering::SeqCst);
             send_request(
