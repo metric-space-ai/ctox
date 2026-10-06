@@ -1,7 +1,7 @@
 {
   "schema": "ctox.workjet_guest_image_candidate.v1",
   "candidate_id": "workjet-noble-amd64-20260926-ctox-318890469-v2",
-  "status": "proposal_not_approved_or_built",
+  "status": "approved_build_pending",
   "owner_thread": "01a0879f-fa04-7a72-a9be-f471c2df5471",
   "upstream": {
     "publisher": "Canonical Ubuntu Cloud Images",
@@ -51,14 +51,14 @@
     "per_assignment_config_required": "RetainedQemuDesktop supplies the actual enrolled guest_id to QemuProcess::spawn_paused. A native-owned mode0600 JSON in the private process directory is exposed only via opt/org.ctox/guest-startup fw_cfg, with fixed display/xauthority and no host credentials or controller authority. The required root oneshot copies at most4096bytes into this guest overlay, atomically owned1500:1500/mode0600, before the endpoint starts. Missing/oversized firmware data or a failed unit denies endpoint startup even after restore. This is source integration; actual VM boot remains unverified.",
     "raw_derivation": "Verify signed fixed upstream checksum; create a new private working copy; expand to8GiB using virt-resize after confirming the actual root partition; configure ONLY that stopped copy; qemu-img convert -f qcow2 -O raw into a new golden-base.raw; sync; record actual raw SHA256, size, package ledger, binary/dependency hashes and command/tool versions. Never modify the downloaded original or an active guest.",
     "derived_raw_sha256": null,
-    "raw_checksum_reason": "Cannot truthfully hash an image that has not been approved, downloaded or built. Approval requested is for this exact input and recipe; derived base identity is mandatory before enrollment/activation.",
+    "raw_checksum_reason": "Acquisition and build of this exact input/recipe are authorized by Claude on2026-10-06. Derived RAW identity remains null until the actual admitted build completes and is hashed; approval is not a fabricated build or activation receipt.",
     "linux_build_commands": ["cargo +1.93.0 build --release --locked --jobs 2 --bin ctox --target x86_64-unknown-linux-gnu", "readelf -h <verified-ctox> (must be ELF64 x86-64)", "lddtree -l <verified-ctox> (record dependencies and copy only verified libraries into matching guest paths)", "virt-customize --format qcow2 -a <private-stopped-copy> --smp 2 --memsize 2048 --upload <verified-ctox>:/usr/local/bin/ctox --chmod 0755:/usr/local/bin/ctox --chown 0:0:/usr/local/bin/ctox --write /etc/ctox-image-build.marker:workjet-noble-amd64-20260926-ctox-318890469-v2 --run src/scripts/workjet-guest-image/configure-guest.sh", "qemu-img convert -f qcow2 -O raw <configured-copy> <new-golden-base.raw>"],
     "build_appliance_network": "Only outgoing signed Ubuntu snapshot package acquisition during an approved bounded image build. Does not enable networking in the worker VM. No host shares or privileged host mount into a running worker.",
     "runtime": {"vcpus": 2, "memory_mib": 4096, "acceleration": "KVM", "firmware": "QEMU PC SeaBIOS", "disk_gib": 8, "network": "none under existing PreparedQemuGuest", "host_transport": "existing owned QMP/virtio Unix sockets; existing native WebRTC guarded frame source"}
   },
   "host_constraints": {
-    "yoda": "135.125.223.119: DevOps verified KVM device O_RDWR after approved existing-group grant; root3.94GiB/no alternate durable data mount, tools absent. Not suitable until DevOps-approved storage yields adequate headroom.",
-    "gpu3": "100.71.114.101: root39.66GiB/nvme356.55GiB; user KVM access and QEMU tools absent, sudo requires authenticated Admin. No ACL/privilege bypass.",
+    "second_host": "Claude selected GPU4 (metricspace@100.120.16.93) or the Mac; Yoda retired. Root verified GPU4 has no /dev/kvm or VMX CPU flag and modprobe kvm_intel fails Operation not supported. The ARM Mac cannot accelerate this amd64 guest. A second accelerated guest host remains an explicit hardware dependency; no silent TCG production fallback.",
+    "gpu3": "Claude cleared QEMU6.2/KVM, qemu-img, guestfish, virt-customize and scanelf on2026-10-06 and authorized this input/recipe. Fresh Root SSH confirms metricspace kvm group and /dev/kvm O_RDWR. Staging /mnt/nvme1 initially91GiB free, root38GiB; recheck actual capacity on admission. No password or ACL bypass.",
     "admission": "Main all12 Mac repair remains P0. One admitted image build, at most2 workers/vCPUs, bounded45minutes, at least60GiB staging free before source-build/image preparation, keeping at least20GiB free on system and staging throughout. On Mac all build/cache/temp stays on /Volumes/tmp under mandatory shared admission; remote build only under explicit host capacity/ownership clearance.",
     "durability": "Approved final raw image and receipt require durable approved storage and an independent verified copy before cleanup. /Volumes/tmp is only disposable staging, never sole golden image custody. Do not delete shared Docker images or unrelated task data."
   },
