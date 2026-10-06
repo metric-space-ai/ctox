@@ -96,7 +96,7 @@ impl WebRTCConnectionHandler for Transport {
         self.capabilities.lock().unwrap().get(peer).cloned()
     }
     fn document_fields_for_peer(&self, _: &Peer, _: &str) -> Option<Vec<String>> {
-        // This service-only fixture grants no collection document fields.
+        // This auxiliary-only fixture exposes no replicated document fields.
         Some(Vec::new())
     }
     async fn send(&self, _: &Peer, frame: WebRTCWireFrame) -> RxResult<()> {
@@ -307,7 +307,7 @@ impl PendingReply {
             events,
             result: Value::Null,
         };
-        pending.result = match pending.next().await {
+        pending.result = match pending.next("prepare").await {
             Event::Prepared(value) => value,
             Event::Completed(_) => panic!("response denied before the initial Pending poll"),
             Event::PlainTransferResponse => panic!("service bypassed guarded transport"),
@@ -317,10 +317,16 @@ impl PendingReply {
         pending
     }
 
-    async fn next(&mut self) -> Event {
+    async fn next(&mut self, phase: &str) -> Event {
         tokio::time::timeout(Duration::from_secs(5), self.events.recv())
             .await
-            .expect("transfer queue deadline")
+            .unwrap_or_else(|_| {
+                panic!(
+                    "transfer queue {phase} deadline: polls={}, bytes={}",
+                    self.transport.polls.load(Ordering::SeqCst),
+                    self.transport.bytes.load(Ordering::SeqCst)
+                )
+            })
             .expect("queue event")
     }
 
@@ -340,7 +346,7 @@ impl PendingReply {
     pub async fn finish(mut self, allowed: bool) {
         self.transport.released.store(true, Ordering::SeqCst);
         self.transport.waker.wake();
-        let delivered = match self.next().await {
+        let delivered = match self.next("resume").await {
             Event::Completed(delivered) => delivered,
             Event::Prepared(_) => panic!("queued reply prepared twice"),
             Event::PlainTransferResponse => panic!("denied guard fell back to plain send"),
