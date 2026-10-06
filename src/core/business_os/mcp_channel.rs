@@ -4943,7 +4943,12 @@ pub fn propose_action(
         let mut policy_arguments = arguments_with_module_id(arguments, module_id);
         policy_arguments["action_id"] = Value::String(action_id.to_string());
         policy_arguments["payload"] = payload.clone();
-        enforce_business_os_mcp_policy(root, context, "business_os.execute_action", &policy_arguments)?;
+        enforce_business_os_mcp_policy(
+            root,
+            context,
+            "business_os.execute_action",
+            &policy_arguments,
+        )?;
         // A retry after an interrupted response must identify the same native
         // control claim, rather than reinstalling with a new random command ID.
         let actor = resolved_mcp_actor_context(root, context)?;
@@ -5068,7 +5073,10 @@ fn delegate_action_command_id(
     // Older callers without a key retain their existing one-shot behavior.
     // A supplied key must never silently fall back to a random command ID.
     let Some(value) = arguments.get("idempotency_key") else {
-        anyhow::ensure!(action_id != "ctox.app_store.install", "install idempotency_key is required");
+        anyhow::ensure!(
+            action_id != "ctox.app_store.install",
+            "install idempotency_key is required"
+        );
         return Ok(None);
     };
     let key = value
@@ -5093,7 +5101,11 @@ fn delegate_action_command_id(
     let identity = serde_json::to_vec(&(actor_id, module_id, action_id, key))?;
     Ok(Some(format!(
         "{}{}",
-        if action_id == "ctox.app_store.install" { "ctox_install_" } else { "ctox_delegate_" },
+        if action_id == "ctox.app_store.install" {
+            "ctox_install_"
+        } else {
+            "ctox_delegate_"
+        },
         URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, &identity).as_ref())
     )))
 }
@@ -5198,7 +5210,9 @@ pub fn execute_action(
         let command_id = if action_id == "web_stack.person_research" {
             person_research_command_id(context, &proposal, arguments)?
         } else if action_id == "ctox.app_store.install" {
-            delegate_command_id.clone().context("install idempotency key is required")?
+            delegate_command_id
+                .clone()
+                .context("install idempotency key is required")?
         } else {
             native_mcp_control_command_id(context, module_id, action_id, &proposal.payload)
         };
@@ -5211,7 +5225,10 @@ pub fn execute_action(
             "payload": proposal.payload,
             "client_context": client_context,
         });
-        let outcome = if matches!(action_id, "ctox.coding.models" | "ctox.coding.turn" | "ctox.app_store.install") {
+        let outcome = if matches!(
+            action_id,
+            "ctox.coding.models" | "ctox.coding.turn" | "ctox.app_store.install"
+        ) {
             // Presets and account readiness belong to the running daemon, not
             // the short-lived MCP connector. A present socket fails closed.
             crate::service::dispatch_business_command(root, document)?
@@ -5235,7 +5252,8 @@ pub fn execute_action(
             .map(str::to_string);
         return Ok(BusinessOsActionExecution {
             ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(true)
-                && (!(action_id.starts_with("ctox.coding.") || action_id == "ctox.app_store.install")
+                && (!(action_id.starts_with("ctox.coding.")
+                    || action_id == "ctox.app_store.install")
                     || !matches!(status.as_str(), "failed" | "cancelled" | "blocked")),
             action: proposal.action,
             module_id: module_id.to_string(),
@@ -6138,13 +6156,25 @@ fn business_os_mcp_policy_decision(
         )?)),
         "business_os.execute_action" => {
             let module_id = required_arg(arguments, "module_id")?;
-            if arguments.get("action_id").and_then(Value::as_str) == Some("ctox.app_store.install") {
-                anyhow::ensure!(module_id == "app-store", "install action requires app-store scope");
-                let payload = app_store_install_action_payload(arguments.get("payload").cloned().unwrap_or(Value::Null))?;
-                enforce_module_policy(root, payload["module_id"].as_str().context("install target")?)?;
+            if arguments.get("action_id").and_then(Value::as_str) == Some("ctox.app_store.install")
+            {
+                anyhow::ensure!(
+                    module_id == "app-store",
+                    "install action requires app-store scope"
+                );
+                let payload = app_store_install_action_payload(
+                    arguments.get("payload").cloned().unwrap_or(Value::Null),
+                )?;
+                enforce_module_policy(
+                    root,
+                    payload["module_id"].as_str().context("install target")?,
+                )?;
                 return Ok(Some(trusted_mcp_actor_policy_decision(
-                    root, context, BusinessOsPermission::AppsInstall,
-                    BusinessOsScopeType::Module, payload["module_id"].as_str(),
+                    root,
+                    context,
+                    BusinessOsPermission::AppsInstall,
+                    BusinessOsScopeType::Module,
+                    payload["module_id"].as_str(),
                 )?));
             }
             let permission = match arguments.get("action_id").and_then(Value::as_str) {
@@ -7804,10 +7834,15 @@ fn required_object(name: &'static str) -> (&'static str, Value, bool) {
 // caller-chosen local path/URL, authority envelope, or moving branch/ref.
 // Native install_app_module still performs source/archive/provenance checks.
 fn app_store_install_action_payload(payload: Value) -> anyhow::Result<Value> {
-    let object = payload.as_object().context("install payload must be an object")?;
+    let object = payload
+        .as_object()
+        .context("install payload must be an object")?;
     for key in object.keys() {
         anyhow::ensure!(
-            matches!(key.as_str(), "module_id" | "source_kind" | "repo" | "git_ref" | "subpath"),
+            matches!(
+                key.as_str(),
+                "module_id" | "source_kind" | "repo" | "git_ref" | "subpath"
+            ),
             "unsupported install payload field: {key}"
         );
     }
@@ -7816,23 +7851,40 @@ fn app_store_install_action_payload(payload: Value) -> anyhow::Result<Value> {
         sanitize_app_module_id(&module_id)? == module_id,
         "install module_id must be canonical"
     );
-    anyhow::ensure!(payload["source_kind"].as_str() == Some("github"), "only pinned GitHub installs are supported");
+    anyhow::ensure!(
+        payload["source_kind"].as_str() == Some("github"),
+        "only pinned GitHub installs are supported"
+    );
     let repo = required_arg(&payload, "repo")?;
     let parts = repo.split('/').collect::<Vec<_>>();
     anyhow::ensure!(
-        parts.len() == 2 && parts.iter().all(|part| {
-            !part.is_empty() && *part != "." && *part != ".." && part.len() <= 100
-                && part.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        }),
+        parts.len() == 2
+            && parts.iter().all(|part| {
+                !part.is_empty()
+                    && *part != "."
+                    && *part != ".."
+                    && part.len() <= 100
+                    && part.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            }),
         "repo must be a GitHub owner/name"
     );
     let git_ref = required_arg(&payload, "git_ref")?;
-    anyhow::ensure!(git_ref.len() == 40 && git_ref.bytes().all(|byte| byte.is_ascii_hexdigit()), "git_ref must be a full commit SHA");
+    anyhow::ensure!(
+        git_ref.len() == 40 && git_ref.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "git_ref must be a full commit SHA"
+    );
     let subpath = required_arg(&payload, "subpath")?;
     anyhow::ensure!(
-        subpath.len() <= 1024 && !subpath.contains('\\')
-            && subpath.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
-            && Path::new(&subpath).components().all(|part| matches!(part, Component::Normal(_))),
+        subpath.len() <= 1024
+            && !subpath.contains('\\')
+            && subpath
+                .split('/')
+                .all(|part| !part.is_empty() && part != "." && part != "..")
+            && Path::new(&subpath)
+                .components()
+                .all(|part| matches!(part, Component::Normal(_))),
         "subpath must be a relative module directory"
     );
     Ok(serde_json::json!({
@@ -13493,13 +13545,23 @@ mod tests {
         let root = temp.path();
         write_module(root, "app-store", "App Store", &[])?;
         seed_default_mcp_admin(root)?;
-        let proposal = propose_action(root, &test_context("business_os.propose_action"),
-            "app-store", "ctox.app_store.install", &pinned_install_arguments())?;
+        let proposal = propose_action(
+            root,
+            &test_context("business_os.propose_action"),
+            "app-store",
+            "ctox.app_store.install",
+            &pinned_install_arguments(),
+        )?;
         assert_eq!(proposal.command_type, "ctox.app_store.install");
         assert_eq!(proposal.payload, pinned_install_arguments()["payload"]);
-        assert_eq!(proposal.client_context["writeback_contract"], "app_store/install");
+        assert_eq!(
+            proposal.client_context["writeback_contract"],
+            "app_store/install"
+        );
         assert!(!proposal.would_execute);
-        assert!(!root.join("runtime/business-os/installed-modules/mail").exists());
+        assert!(!root
+            .join("runtime/business-os/installed-modules/mail")
+            .exists());
         Ok(())
     }
 
@@ -13512,23 +13574,42 @@ mod tests {
         seed_default_mcp_admin(root)?;
         let context = test_context("business_os.propose_action");
         for (key, value) in [
-            ("actor", json!({"id":"admin"})), ("source_path", json!("/tmp/source")),
+            ("actor", json!({"id":"admin"})),
+            ("source_path", json!("/tmp/source")),
             ("download_url", json!("http://localhost/archive.zip")),
-            ("source_kind", json!("zip")), ("git_ref", json!("main")),
-            ("module_id", json!("../mail")), ("subpath", json!("../mail")),
-            ("subpath", json!("/absolute/mail")), ("repo", json!("https://github.com/o/r")),
+            ("source_kind", json!("zip")),
+            ("git_ref", json!("main")),
+            ("module_id", json!("../mail")),
+            ("subpath", json!("../mail")),
+            ("subpath", json!("/absolute/mail")),
+            ("repo", json!("https://github.com/o/r")),
         ] {
             let mut args = pinned_install_arguments();
             args["payload"][key] = value;
-            assert!(propose_action(root, &context, "app-store", "ctox.app_store.install", &args).is_err(), "{key}");
+            assert!(
+                propose_action(root, &context, "app-store", "ctox.app_store.install", &args)
+                    .is_err(),
+                "{key}"
+            );
         }
         let mut args = pinned_install_arguments();
         args.as_object_mut().unwrap().remove("idempotency_key");
-        assert!(propose_action(root, &context, "app-store", "ctox.app_store.install", &args).is_err());
+        assert!(
+            propose_action(root, &context, "app-store", "ctox.app_store.install", &args).is_err()
+        );
         args = pinned_install_arguments();
         args["record_id"] = json!("lead");
-        assert!(propose_action(root, &context, "app-store", "ctox.app_store.install", &args).is_err());
-        assert!(propose_action(root, &context, "mail", "ctox.app_store.install", &pinned_install_arguments()).is_err());
+        assert!(
+            propose_action(root, &context, "app-store", "ctox.app_store.install", &args).is_err()
+        );
+        assert!(propose_action(
+            root,
+            &context,
+            "mail",
+            "ctox.app_store.install",
+            &pinned_install_arguments()
+        )
+        .is_err());
         Ok(())
     }
 
@@ -13541,21 +13622,30 @@ mod tests {
         let context = test_context("business_os.execute_action");
         let mut args = pinned_install_arguments();
         args["action_id"] = json!("ctox.coding.models");
-        let error = execute_action(root, &context, "app-store", "ctox.app_store.install", &args).unwrap_err();
-        assert_eq!(error.downcast_ref::<BusinessOsMcpError>().context("policy denial")?.code,
-            BusinessOsMcpErrorCode::PermissionDenied);
+        let error = execute_action(root, &context, "app-store", "ctox.app_store.install", &args)
+            .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<BusinessOsMcpError>()
+                .context("policy denial")?
+                .code,
+            BusinessOsMcpErrorCode::PermissionDenied
+        );
         seed_default_mcp_admin(root)?;
         let mut policy = default_mcp_policy();
         policy.allowed_modules = vec!["app-store".to_string()];
         save_mcp_policy(root, &policy)?;
-        assert!(propose_action(root, &context, "app-store", "ctox.app_store.install", &args).is_err(),
-            "app-store visibility does not authorize an excluded target");
+        assert!(
+            propose_action(root, &context, "app-store", "ctox.app_store.install", &args).is_err(),
+            "app-store visibility does not authorize an excluded target"
+        );
         Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn app_store_install_dispatches_pinned_native_command_and_reuses_retry_id() -> anyhow::Result<()> {
+    fn app_store_install_dispatches_pinned_native_command_and_reuses_retry_id() -> anyhow::Result<()>
+    {
         use std::io::{BufRead, BufReader, Write};
         use std::os::unix::net::UnixListener;
         let temp = tempdir()?;
@@ -13563,43 +13653,89 @@ mod tests {
         write_module(root, "app-store", "App Store", &[])?;
         seed_default_mcp_admin(root)?;
         let listener = UnixListener::bind(root.join("runtime/ctox_service.sock"))?;
+        listener.set_nonblocking(true)?;
         // Fixture daemon: verifies the actual IPC command envelope; no GitHub
         // call or installation occurs. Native control-claim replay remains the
         // command plane's existing atomic authority.
         let handle = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
             let mut documents = Vec::new();
             for _ in 0..2 {
-                let (mut stream, _) = listener.accept()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            anyhow::ensure!(
+                                std::time::Instant::now() < deadline,
+                                "fixture daemon timed out waiting for install dispatch"
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                };
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+                stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
                 let mut request = String::new();
                 BufReader::new(stream.try_clone()?).read_line(&mut request)?;
                 let request: Value = serde_json::from_str(&request)?;
                 assert_eq!(request["kind"], "business_command_dispatch");
                 documents.push(request["document"].clone());
-                writeln!(stream, "{}", json!({"kind":"json","status":200,"payload":{
-                    "ok":true,"status":"failed","result":{"error":"fixture install failure"}
-                }}))?;
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"kind":"json","status":200,"payload":{
+                        "ok":true,"status":"failed","result":{"error":"fixture install failure"}
+                    }})
+                )?;
             }
             Ok(documents)
         });
-        let first = execute_action(root, &test_context("business_os.execute_action"),
-            "app-store", "ctox.app_store.install", &pinned_install_arguments())?;
+        let first = execute_action(
+            root,
+            &test_context("business_os.execute_action"),
+            "app-store",
+            "ctox.app_store.install",
+            &pinned_install_arguments(),
+        )?;
         let mut context = test_context("business_os.execute_action");
         context.request_id = "retry-after-response-loss".to_string();
-        let retry = execute_action(root, &context,
-            "app-store", "ctox.app_store.install", &pinned_install_arguments())?;
+        let retry = execute_action(
+            root,
+            &context,
+            "app-store",
+            "ctox.app_store.install",
+            &pinned_install_arguments(),
+        )?;
         let documents = handle.join().expect("fixture daemon")?;
         assert_eq!(first.command_id, retry.command_id);
-        assert!(!first.ok && !retry.ok, "failed replay is never reported successful");
+        assert!(
+            !first.ok && !retry.ok,
+            "failed replay is never reported successful"
+        );
         for document in documents {
             assert_eq!(document["module"], "app-store");
             assert_eq!(document["command_type"], "ctox.app_store.install");
             assert_eq!(document["payload"], pinned_install_arguments()["payload"]);
-            assert_eq!(document["client_context"]["actor"]["id"], "chatgpt:test-user");
-            assert_eq!(document["client_context"]["idempotency_key"], "mail-canonical-d33500fb");
+            assert_eq!(
+                document["client_context"]["actor"]["id"],
+                "chatgpt:test-user"
+            );
+            assert_eq!(
+                document["client_context"]["idempotency_key"],
+                "mail-canonical-d33500fb"
+            );
         }
         let actor = json!({"id":"different-actor"});
-        assert_ne!(Some(first.command_id), delegate_action_command_id("app-store",
-            "ctox.app_store.install", &pinned_install_arguments(), &actor)?);
+        assert_ne!(
+            Some(first.command_id),
+            delegate_action_command_id(
+                "app-store",
+                "ctox.app_store.install",
+                &pinned_install_arguments(),
+                &actor
+            )?
+        );
         Ok(())
     }
 
