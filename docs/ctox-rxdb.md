@@ -1,5 +1,13 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### CLI app command admission
+
+CLI app create/modify and app-bench requests persist and enqueue the real coding
+task. Admission leaves generated app files and execution completion to the
+bounded worker and its existing review/validation lifecycle, as the Business OS
+MCP path does. A modify request still requires its existing module manifest.
+Synchronous starter materialization remains available to its other callers.
+
 ### Native field-review view
 
 Outbound App consumers can request `ctox.outbound.field_review_view.v1` over the
@@ -33,7 +41,7 @@ timestamps; pending writes/conflicts and the24-hour retention window survive.
 These paths no longer hold the complete pending WAL payload in memory. Batch
 atomicity and the v4 schema are unchanged; individual batch payloads and the
 ID/order summaries still consume memory. This source repair does not establish
-the THESEN renderer-crash cause or actual Windows8GiB startup acceptance.
+the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acceptance.
 
 ### Browser live-query single-flight
 
@@ -258,6 +266,23 @@ settles the helper and requests continuation of the original task, under the
 existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
+
+### D&B classification evidence
+
+Direct authenticated company capture keeps WZ 2008 (DE) distinct from NACE,
+SIC, NOGA and OENACE. It accepts a five-digit WZ subclass only from the
+observed company profile with the expected company ID and an exact observed
+company heading or title. Conflicting WZ values produce no `wz_code`.
+The result retains the literal WZ section in `source_quote`; an NACE value
+never supplies a missing WZ digit. These browser-capture source gates do not
+certify an installed capture or the independently registered scrape script.
+
+The separate Direct+ JSON parser is compiled from Workjet, selected by the
+Cargo Git revision. Its WZ correction and executing regressions belong in
+native/web-stack, followed by a reviewed CTOX dependency and lockfile update.
+The resolved package must execute the explicit-WZ, foreign-scheme, incomplete,
+conflicting and equivalent-notation cases. Editing CTOX's inactive
+src/tools/web-stack copy does not change the compiled parser.
 
 ### Outbound research source receipts
 
@@ -628,6 +653,10 @@ option also passes through scoped, maintenance and permission-guarded shell
 collection facades. Unsubscribing retires the timer, listeners and foreground
 lease. Ordinary snapshot and `emitPendingChanges` subscriptions retain their
 existing behavior; `invalidateOnly` takes precedence when both are requested.
+
+Crew presence, chat tracking and the desktop command stream also use this
+option for bounded query refreshes. Chat tracking looks up only messages
+that still need sync (`trackedMessageNeedsSync`).
 
 Crew app presence retains the last valid queue snapshot when a read fails.
 An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;
@@ -1546,6 +1575,29 @@ state so a resume after completion gets a final ack. Flow control: browser
 no buffered-amount getter). Sends are prioritised high/normal/low; control
 frames are intrinsically high, oversized `masterWrite`s stay low, frames for
 active collections are high.
+
+**Pipelining (2026-10).** The native sender keeps up to
+`FRAME_PIPELINE_WINDOWS = 24` ack windows (96 chunks, ~1 MB, just under the
+native 1 MiB buffered-amount high-water mark) in flight
+instead of stop-and-wait per window; browser acks are cumulative, so an ack
+for sequence *n* settles every outstanding window at or below *n*
+(`take_pending_frame_acks`). Browsers reaching the peer through a TURN relay
+over a slow UDP path measured 400–900 ms RTT, so throughput is bounded by
+bytes-in-flight per round trip, not by bandwidth.
+
+**Compression (`ctox-rxdb-frame-deflate-v1`).** When the browser advertises
+this capability in its `ctoxProtocol` handshake (only where
+`DecompressionStream` exists), the native peer deflates (raw deflate, fast
+level) every framed payload of at least 32 KiB and base64-encodes it; it is
+only used when the result is below 90% of the plain text. The `start` frame
+then carries `"encoding": "deflate-raw-base64"` (also on restarts), and
+`totalBytes`/chunking apply to the transmitted base64 text. The browser
+reassembles, checks `totalBytes`, inflates through
+`DecompressionStream('deflate-raw')` with a 16× `MAX_TRANSFER_BYTES` inflate
+ceiling, and only then parses JSON. Replication documents compress 5–10×, so
+this is the main lever on slow uplinks. Peers without the capability keep
+receiving plain frames; an unknown `encoding` is a decode error, never a
+silent pass-through.
 
 ### 6.4 Demand-loading RPCs (V1.5)
 

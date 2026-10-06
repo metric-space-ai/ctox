@@ -785,6 +785,17 @@ Process mining records compact command and state evidence in
 write and transition evidence remains active. The harness-flow process-mining
 branch reports total process events and sqlite-access debug events.
 
+Row-change capture uses SQLite triggers only on the tables the core
+state-machine rules read (`CAPTURED_TABLE_PATTERNS` in
+`src/core/service/process_mining.rs`: communication, mail, routing state,
+queue, ticket, work item, commitment, deadline, schedule, cron, repair,
+knowledge, plus the LCM continuity tables). Capturing every table put ~440
+triggers and 3 MB of trigger SQL into the core schema, which SQLite parses on
+every connection open and compiles into every write; no runtime decision reads
+the captured rows, so the scope follows the analyses instead. `ensure` drops
+capture triggers from tables outside that scope. A guard test fails when a
+core transition rule reads a table pattern that is not captured.
+
 The service also starts a harness audit watcher. It periodically builds a
 harness-mining brief and writes confirmed findings to `ctox_hm_findings` through
 a two-tick gate. The audit watcher is read-only against domain tables and writes

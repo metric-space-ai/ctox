@@ -25,19 +25,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
-if [[ -x "$ROOT/runtime/build/cargo-target/debug/ctox" ]]; then
-  CTOX="$ROOT/runtime/build/cargo-target/debug/ctox"
-elif [[ -x "$ROOT/runtime/build/cargo-target/release/ctox" ]]; then
-  CTOX="$ROOT/runtime/build/cargo-target/release/ctox"
-elif [[ -x "$ROOT/target.nosync/debug/ctox" ]]; then
-  CTOX="$ROOT/target.nosync/debug/ctox"
-elif [[ -x "$ROOT/target/debug/ctox" ]]; then
-  CTOX="$ROOT/target/debug/ctox"
-elif [[ -x "$ROOT/target/release/ctox" ]]; then
-  CTOX="$ROOT/target/release/ctox"
-else
-  CTOX="$ROOT/target/debug/ctox"
-fi
+
 
 QUICK=0
 case "${1:-}" in
@@ -54,6 +42,7 @@ log()  { printf "\n\033[36m[%s]\033[0m %s\n" "$(date +%H:%M:%S)" "$*"; }
 ok()   { printf "\033[32m  ok\033[0m %s\n" "$*"; }
 die()  { printf "\033[31m  FAIL\033[0m %s\n" "$*" >&2; exit 1; }
 
+CTOX="$(python3 "$ROOT/scripts/web_stack_source.py" daemon-path)"
 [[ -x "$CTOX" ]] || die "ctox binary missing at $CTOX — run 'cargo build -p ctox' first"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 

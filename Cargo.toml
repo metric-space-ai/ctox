@@ -32,7 +32,7 @@ ctox-pdf-parse = { path = "src/tools/pdf-parse" }
 ctox-qwen3-embedding-0-6b = { path = "src/core/inference/models/qwen3_embedding_0_6b" }
 ctox-voxtral-mini-4b-realtime-2602 = { path = "src/core/inference/models/voxtral_mini_4b_realtime_2602" }
 ctox-voxtral-4b-tts-2603 = { path = "src/core/inference/models/voxtral_4b_tts_2603" }
-ctox-web-stack = { git = "https://github.com/metric-space-ai/workjet", rev = "de83eb267b211b4e4fc5914cf1d9128e1706b68b" }
+ctox-web-stack = { git = "https://github.com/metric-space-ai/workjet", rev = "5a4e5480f6abf9fbdebf0b7c0f5c33865b09605d" }
 ctox-sqlserver-adapter = { path = "src/tools/sqlserver-mcp" }
 ctox-postgres-adapter = { path = "src/tools/postgres-adapter" }
 rxdb = { package = "ctox-rxdb", path = "src/core/rxdb" }
@@ -101,6 +101,14 @@ tokio-tungstenite = { version = "0.28.0", features = [
 ] }
 rustls = { version = "0.23", features = ["ring"] }
 whatsapp = { path = "src/core/communication/whatsapp_rust/crates/whatsapp" }
+
+# Linux service builds use mimalloc for Rust allocations: glibc capped at
+# M_ARENA_MAX=4 (see main.rs) left every tokio/peer/HTTP thread contending on
+# four arena locks — 35 % of service CPU in malloc/free + lock waits while a
+# browser pulled replication data (perf on an on-prem host, 06.10.2026).
+# C libraries (SQLite, BoringSSL) keep the system allocator (no override).
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+mimalloc = { version = "0.1.52", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

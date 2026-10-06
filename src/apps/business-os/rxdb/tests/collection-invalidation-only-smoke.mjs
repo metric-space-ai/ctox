@@ -94,4 +94,3 @@ for (const mode of ['direct', 'control-plane', 'maintenance-scope', 'permission-
   }
 }
 console.log('collection invalidation-only smoke PASS: zero snapshot reads, scopes, permissions, store/window/generation hints and retirement');
-

@@ -1160,6 +1160,9 @@ export async function mount(ctx) {
   function subscribeCommandStream() {
     if (!ctx.notifications) return () => {};
     let lastSeenAt = Date.now();
+    // invalidateOnly: the listener never received a per-document change here
+    // (a `$` emission is a {collectionName, documents} snapshot), so the full
+    // 200-command window it fetched on every start bought nothing.
     const sub = commandsCollection.$.subscribe((change) => {
       const doc = change?.documentData || change?.doc?._data || change?.doc;
       if (!doc) return;
@@ -1175,7 +1178,7 @@ export async function mount(ctx) {
           callback: () => openDesktopTarget({ target_module: doc.module, label: titleForModule(doc.module) }),
         } : undefined,
       });
-    });
+    }, { invalidateOnly: true });
     return () => sub.unsubscribe?.();
   }
 

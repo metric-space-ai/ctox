@@ -375,14 +375,26 @@ try {
     expect(m.windowMaxRight <= m.stageRight + 0.5, `the fan must not hang off the right stage edge: max right ${m.windowMaxRight} > stage ${m.stageRight}`);
   });
 
+  const presenceBoot = 'chat-presence-boot';
+  const presenceWorkers = ['task_doc_1', 'task_doc_2'].map(task_id => ({
+    task_id, boot_id: presenceBoot, attempt: 1,
+    lease_worker_id: presenceBoot + ':' + task_id,
+    leased_at: new Date(Date.now() - 1000).toISOString(),
+    lease_expires_at: new Date(Date.now() + 60000).toISOString(),
+  }));
   await scenario(page, 'crew-presence-on-app-window-and-desktop-icon', {
+    harnessStatus: {
+      id: 'harness', service_running: true, boot_id: presenceBoot,
+      active_task_ids: presenceWorkers.map(worker => worker.task_id),
+      current_queue_workers: presenceWorkers,
+    },
     count: 1,
     activeIndex: 0,
     crewMembers: 3,
     appPresence: true,
     queueTasks: [
-      { id: 'task_doc_1', status: 'running', module: 'documents', crew_member_id: 'member_0', updated_at_ms: Date.now() },
-      { id: 'task_doc_2', status: 'leased', module: 'documents', crew_member_id: 'member_1', updated_at_ms: Date.now() - 1000 },
+      { id: 'task_doc_1', attempt: 1, lease_worker_id: presenceWorkers[0].lease_worker_id, status: 'running', module: 'documents', crew_member_id: 'member_0', updated_at_ms: Date.now() },
+      { id: 'task_doc_2', attempt: 1, lease_worker_id: presenceWorkers[1].lease_worker_id, status: 'leased', module: 'documents', crew_member_id: 'member_1', updated_at_ms: Date.now() - 1000 },
       { id: 'task_ctox_done', status: 'succeeded', module: 'ctox', crew_member_id: 'member_2', updated_at_ms: Date.now() - 2000 },
     ],
   }, async () => {
@@ -1391,9 +1403,9 @@ function harnessHtml() {
       document.body.innerHTML = '<main class="harness-app">' + ['Tickets', 'Conversations', 'Notizen', 'Documents', 'Knowledge', 'Kunden', 'App Store', 'Source Editor'].map((name) => '<div class="harness-module">' + name + '</div>').join('') + '</main>';
       if (options.appPresence) {
         // Shell stand-ins: a v2 window per app plus the desktop icon grid,
-        // shaped like window-manager.js / app.js render them.
-        document.body.insertAdjacentHTML('beforeend', ['documents', 'ctox'].map((id) => '<div class="shell-window" data-owner-id="module:' + id + '" style="position:absolute;top:120px;left:' + (id === 'ctox' ? 700 : 300) + 'px;width:320px;height:200px;border:1px solid #333"><div class="shell-window-v2-icon" style="position:absolute;top:0;left:0;width:44px;height:44px;overflow:hidden;background:#222"><span data-window-app-label>' + id[0].toUpperCase() + '</span></div></div>').join('')
-          + '<div data-desktop-icons style="position:absolute;top:400px;left:900px;display:flex;gap:24px">' + ['documents', 'ctox'].map((id) => '<button class="desktop-icon" data-target="' + id + '"><span class="desktop-icon-glyph" style="display:block;width:56px;height:56px;border-radius:14px;background:#2a2a2a"></span><span class="desktop-icon-label">' + id + '</span></button>').join('') + '</div>');
+        // Use the 80px window/desktop glyph contract in app.css (--shell-v2-icon-size).
+        document.body.insertAdjacentHTML('beforeend', ['documents', 'ctox'].map((id) => '<div class="shell-window" data-owner-id="module:' + id + '" style="position:absolute;top:120px;left:' + (id === 'ctox' ? 700 : 300) + 'px;width:320px;height:200px;border:1px solid #333"><div class="shell-window-v2-icon" style="position:absolute;top:0;left:0;width:80px;height:80px;overflow:hidden;background:#222"><span data-window-app-label>' + id[0].toUpperCase() + '</span></div></div>').join('')
+          + '<div data-desktop-icons style="position:absolute;top:400px;left:900px;display:flex;gap:24px">' + ['documents', 'ctox'].map((id) => '<button class="desktop-icon" data-target="' + id + '"><span class="desktop-icon-glyph" style="display:block;width:80px;height:80px;border-radius:14px;background:#2a2a2a"></span><span class="desktop-icon-label">' + id + '</span></button>').join('') + '</div>');
       }
       localStorage.clear();
       sessionStorage.clear();
@@ -1460,8 +1472,8 @@ function harnessHtml() {
 
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
-        sync: makeReadiness(),
-        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, queueTasks, Boolean(options.holdChatReads), commandDocs),
+        sync: makeReadiness(options),
+        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError), Number(options.crewMembers) || 0, queueTasks, Boolean(options.holdChatReads), commandDocs, options.harnessStatus),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
@@ -1619,12 +1631,19 @@ function harnessHtml() {
       await waitForPaint();
     }
 
-    function makeReadiness() {
+    function makeReadiness(options) {
       const callbacks = new Set();
       const stats = { subscriptions: 0 };
       window.chatHarness.readinessStats = stats;
       window.chatHarness.emitReadiness = () => { for (const token of [...callbacks]) token.callback({ state: 'ready' }); };
       return {
+        collectionFreshness: collection => ({
+          ready: collection === 'ctox_harness_status' && Boolean(options.harnessStatus),
+        }),
+        subscribeCollectionFreshness: (collection, callback) => {
+          callback({ ready: collection === 'ctox_harness_status' && Boolean(options.harnessStatus) });
+          return () => {};
+        },
         subscribeCollectionReadiness: (_collection, callback) => {
           const token = { callback };
           callbacks.add(token);
@@ -1666,7 +1685,7 @@ function harnessHtml() {
       }));
     }
 
-    function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = [], holdChatReads = false, commandDocs = []) {
+    function makeDb(chats, delayMs, transientError, deleteError, crewMemberCount = 0, queueTasks = [], holdChatReads = false, commandDocs = [], harnessStatus = null) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
       const readStats = { started: 0, completed: 0, crewReads: 0, crewSubscriptions: 0 };
       const chatReadGate = new Promise((resolve) => {
@@ -1743,7 +1762,22 @@ function harnessHtml() {
                 return { unsubscribe: () => chatCollectionSubscribers.delete(callback) };
               },
             },
-            find: () => ({ exec: async () => { readStats.started += 1; await chatReadGate; await maybeThrow(); readStats.completed += 1; return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
+            find: (query = {}) => ({
+              $: {
+                subscribe: (callback) => {
+                  chatCollectionSubscribers.add(callback);
+                  return { unsubscribe: () => chatCollectionSubscribers.delete(callback) };
+                },
+              },
+              exec: async () => {
+                readStats.started += 1;
+                await chatReadGate;
+                await maybeThrow();
+                readStats.completed += 1;
+                const docs = Array.from(store.keys()).map(docFor).filter(Boolean);
+                return Number.isInteger(query.limit) ? docs.slice(0, query.limit) : docs;
+              },
+            }),
             findOne: (id) => ({ exec: async () => { await maybeThrow(); return docFor(id); } }),
             insert: async (doc) => { await maybeThrow(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
           },
@@ -1759,6 +1793,14 @@ function harnessHtml() {
               await maybeThrow();
               const row = commands.find((item) => item.id === id);
               return row ? { toJSON: () => structuredClone(row) } : null;
+            } }),
+          },
+          ctox_harness_status: {
+            $: { subscribe: () => ({ unsubscribe() {} }) },
+            find: query => ({ exec: async () => {
+              await maybeThrow();
+              return harnessStatus && query?.selector?.id === harnessStatus.id
+                ? [{ toJSON: () => structuredClone(harnessStatus) }] : [];
             } }),
           },
           ctox_queue_tasks: {

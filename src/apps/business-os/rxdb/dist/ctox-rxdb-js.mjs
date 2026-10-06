@@ -4614,6 +4614,37 @@ var FRAME_ACK_TIMEOUT_MS = 3e4;
 var STALLED_INCOMING_TRANSFER_TIMEOUT_MS = FRAME_ACK_TIMEOUT_MS * 3;
 var MAX_INCOMING_FRAME_TRANSFERS = 8;
 var MAX_INCOMING_FRAME_BUFFERED_BYTES = MAX_TRANSFER_BYTES * 4;
+var CTOX_FRAME_DEFLATE_CAPABILITY = "ctox-rxdb-frame-deflate-v1";
+var FRAME_ENCODING_DEFLATE_BASE64 = "deflate-raw-base64";
+var MAX_INFLATED_FRAME_BYTES = MAX_TRANSFER_BYTES * 16;
+function frameDeflateSupported() {
+  return typeof DecompressionStream === "function" && typeof atob === "function";
+}
+async function decodeFramePayload(text, encoding) {
+  if (encoding !== FRAME_ENCODING_DEFLATE_BASE64) {
+    throw new Error(`unsupported WebRTC frame encoding: ${encoding}`);
+  }
+  const binary = atob(text);
+  const compressed = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    compressed[index] = binary.charCodeAt(index);
+  }
+  const reader = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+  const decoder = new TextDecoder();
+  let inflatedBytes = 0;
+  let out = "";
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    inflatedBytes += value.byteLength;
+    if (inflatedBytes > MAX_INFLATED_FRAME_BYTES) {
+      await reader.cancel();
+      throw new Error(`inflated WebRTC frame exceeds ${MAX_INFLATED_FRAME_BYTES} bytes`);
+    }
+    out += decoder.decode(value, { stream: true });
+  }
+  return out + decoder.decode();
+}
 var MAX_INBOUND_REQUESTS = 32;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
@@ -5866,6 +5897,7 @@ var CtoxWebRtcNativePeer = class {
         // a slow-but-live transfer is never discarded.
         lastProgressAt: Date.now(),
         attempt: Number(payload.attempt || 0),
+        encoding: typeof payload.encoding === "string" ? payload.encoding : "",
         contiguousSeq: -1,
         nextAckSeq: Math.min(FRAME_ACK_WINDOW - 1, totalFrames - 1)
       });
@@ -6035,7 +6067,8 @@ var CtoxWebRtcNativePeer = class {
       completedAckCacheSize: this.completedFrameAcks.size
     });
     try {
-      await this.handleDataChannelFrame(peerId, JSON.parse(text));
+      const decoded = entry.encoding ? await decodeFramePayload(text, entry.encoding) : text;
+      await this.handleDataChannelFrame(peerId, JSON.parse(decoded));
     } catch (error) {
       this.events.emit("error", {
         code: "ctox_webrtc_frame_decode_failed",
@@ -10503,7 +10536,10 @@ var BROWSER_CAPABILITIES = [
   CTOX_PRESENCE_CAPABILITY,
   CTOX_COMMAND_LIFECYCLE_CAPABILITY,
   CTOX_BROWSER_LIVE_CAPABILITY,
-  CTOX_WORKJET_DEVICE_CONTROL_CAPABILITY
+  CTOX_WORKJET_DEVICE_CONTROL_CAPABILITY,
+  // Only advertised where the browser can inflate; the native peer otherwise
+  // keeps sending plain frames.
+  ...frameDeflateSupported() ? [CTOX_FRAME_DEFLATE_CAPABILITY] : []
 ];
 function remoteSupportsPresence(remoteProtocol) {
   if (!remoteProtocol || typeof remoteProtocol !== "object") return false;
