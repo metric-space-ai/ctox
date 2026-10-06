@@ -201,7 +201,9 @@ try {
     assert.equal(leads.schema.version, 0);
     assert.equal(leads.schema.primaryKey, 'id');
     assert.equal(leads.schema.syncProfile, undefined);
-    for (const key of ['contacts', 'evidence', 'field_status', 'payload']) assert.ok(leads.schema.properties[key]);
+    const original = JSON.parse(readFileSync(new URL('./fixtures/outbound-lead-schema-v0.json', import.meta.url), 'utf8'));
+    assert.deepEqual(leads.schema, original, 'demand-only must not migrate the installed lead schema');
+    assert.equal(leads.schema.additionalProperties, true, 'field_status remains permitted as an additional property');
   });
 } finally {
   rmSync(fixture, { recursive: true, force: true });
