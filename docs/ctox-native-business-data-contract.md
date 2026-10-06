@@ -224,8 +224,36 @@ OS relationship store and Core execution state: holding one independently
 opened transaction while helpers reopen stores or perform schema initialization
 does not establish a common publication boundary. Checks must borrow the held
 native authority, without awaiting or re-entering its store inside the IO
-callback. Production wiring and external SQLite mutation regressions remain
-required; the transport regressions have not run.
+callback.
+
+NativeBusinessDataPolicy.document_view now uses the complete shared replication
+decision on held Core, Business OS and RxDB readers. The ordinary replication
+filter retains its existing browser/channel hooks and decision order. Both
+readers share command parent/workflow inheritance, task-command and thread
+membership predicates; the held reader preserves the ordinary domain-first
+relationship lookup and RxDB projection fallback. It resolves schema tables
+from the held SQLite catalog rather than a path-stamped cache. This entry point
+uses the same explicit NativeBusinessData collection allowlist; it does not
+substitute for the separate browser or communication source readers.
+
+The synchronous read callback enters current issuer -> Core -> policy -> RxDB,
+using existing databases with zero busy timeout and immediate mutation fences.
+It verifies current signed/paired actor, epoch, collection grant and existing
+native instance, binds authority to that exact collection, and applies current
+crew field projection on the same claims. Missing or busy authority fails
+closed; it creates no schema, instance or secret. Fences release before the
+async document_view call returns. Instance-file checks remain native filesystem
+ownership, not a proof that arbitrary external file replacement is atomically
+fenced.
+
+This implements the actual document policy path but does not yet retain those
+fences through response/event IO. The new native guard factory must reacquire
+this callback and check the exact prepared payload, query fields, scope and
+owned command at every publication poll. Source/subscription terminal and
+resume changes also need the shared local publication fence. Production queue
+wiring, concurrency/availability/performance evidence and external SQLite
+mutation regressions remain required. The new real-policy and transport tests
+are source-only and unrun.
 
 ## Existing implementation and reuse boundary
 

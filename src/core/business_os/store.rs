@@ -11235,27 +11235,66 @@ pub fn pull_collection_record(
         }
         _ => {}
     }
-    let payload_json = with_store_connection(root, |conn| {
-        Ok(conn
-            .query_row(
-                "SELECT payload_json FROM business_records
-                 WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
-                params![collection, record_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?)
-    })?;
-    if let Some(payload_json) = payload_json {
-        let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
+    if let Some(record) = with_store_connection(root, |conn| {
+        pull_business_record_from_connection(conn, collection, record_id)
+    })? {
+        return Ok(Some(record));
+    }
+    load_rxdb_collection_record(root, collection, record_id)
+}
+
+fn pull_business_record_from_connection(
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let payload_json = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+         WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+            params![collection, record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(payload_json.map(|raw| {
+        let mut payload = serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
         if let Some(object) = payload.as_object_mut() {
             object
                 .entry("id".to_string())
                 .or_insert_with(|| Value::String(record_id.to_string()));
             object.insert("_deleted".to_string(), Value::Bool(false));
         }
-        return Ok(Some(payload));
+        payload
+    }))
+}
+
+/// The ordinary relationship lookup's exact domain-first/projection fallback.
+/// Both stores belong to the caller's held publication authority; no open,
+/// schema initialization or path-stamped cache can re-enter that authority.
+pub(super) fn pull_collection_record_from_connections(
+    store: &Connection,
+    projection: &Connection,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    anyhow::ensure!(
+        !matches!(
+            collection,
+            "ctox_runtime_settings"
+                | "business_workspace_branding"
+                | "communication_accounts"
+                | "communication_threads"
+                | "communication_messages"
+        ),
+        "collection requires its separate native source reader"
+    );
+    if collection.trim().is_empty() || record_id.trim().is_empty() {
+        return Ok(None);
     }
-    load_rxdb_collection_record(root, collection, record_id)
+    if let Some(record) = pull_business_record_from_connection(store, collection, record_id)? {
+        return Ok(Some(record));
+    }
+    load_rxdb_collection_record_from_connection(projection, collection, record_id)
 }
 
 fn pull_runtime_settings_records(
@@ -11681,12 +11720,35 @@ pub(super) fn load_rxdb_collection_record(
         return Ok(None);
     }
     let conn = Connection::open(&path)?;
-    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+    let table = rxdb_collection_table_name(&path, &conn, collection);
+    load_rxdb_collection_record_in_table(&conn, table.as_deref(), record_id)
+}
+
+pub(super) fn load_rxdb_collection_record_from_connection(
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    anyhow::ensure!(
+        is_safe_rxdb_collection_name(collection),
+        "invalid collection name"
+    );
+    let table = rxdb_collection_table_name_from_connection(conn, collection)?;
+    load_rxdb_collection_record_in_table(conn, table.as_deref(), record_id)
+}
+
+fn load_rxdb_collection_record_in_table(
+    conn: &Connection,
+    table: Option<&str>,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let Some(table) = table else {
         return Ok(None);
     };
+    let quoted = sqlite_quote_identifier(table);
     let raw = conn
         .query_row(
-            &format!("SELECT data FROM {table} WHERE id = ?1"),
+            &format!("SELECT data FROM {quoted} WHERE id = ?1"),
             [record_id],
             |row| row.get::<_, String>(0),
         )
@@ -27220,32 +27282,39 @@ pub(super) fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
+/// Read current native instance authority without creating a runtime directory,
+/// identity, secret, cache or migration state during publication.
+pub(super) fn existing_instance_id(root: &Path) -> anyhow::Result<String> {
+    let path = root.join("runtime/business-os-instance-id");
+    let metadata = std::fs::symlink_metadata(&path)?;
+    anyhow::ensure!(
+        metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+        "Business OS instance identity is not a protected regular file"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        anyhow::ensure!(
+            metadata.permissions().mode() & 0o022 == 0,
+            "Business OS instance identity is writable by group or other users"
+        );
+    }
+    let value = std::fs::read_to_string(&path)?;
+    let trimmed = value.trim();
+    anyhow::ensure!(
+        !trimmed.is_empty(),
+        "Business OS instance identity is empty"
+    );
+    Ok(trimmed.to_string())
+}
+
 pub(super) fn stable_instance_id(root: &Path) -> anyhow::Result<String> {
     let runtime = root.join("runtime");
     std::fs::create_dir_all(&runtime)
         .with_context(|| format!("failed to create runtime dir {}", runtime.display()))?;
     let path = runtime.join("business-os-instance-id");
     if path.exists() {
-        let metadata = std::fs::symlink_metadata(&path)?;
-        anyhow::ensure!(
-            metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
-            "Business OS instance identity is not a protected regular file"
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            anyhow::ensure!(
-                metadata.permissions().mode() & 0o022 == 0,
-                "Business OS instance identity is writable by group or other users"
-            );
-        }
-        let value = std::fs::read_to_string(&path)?;
-        let trimmed = value.trim();
-        anyhow::ensure!(
-            !trimmed.is_empty(),
-            "Business OS instance identity is empty"
-        );
-        return Ok(trimmed.to_string());
+        return existing_instance_id(root);
     }
     let id = format!("biz_{}", Uuid::new_v4());
     let temporary = runtime.join(format!(".business-os-instance-id-{}.tmp", Uuid::new_v4()));

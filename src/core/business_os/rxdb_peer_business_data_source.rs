@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::{io, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
-const READABLE_COLLECTIONS: &[&str] = &[
+pub(super) const READABLE_COLLECTIONS: &[&str] = &[
     "business_records",
     "business_commands",
     "ctox_queue_tasks",
@@ -29,6 +29,7 @@ const READABLE_COLLECTIONS: &[&str] = &[
     "workjet_transfers",
 ];
 
+#[derive(Clone)]
 pub struct NativeBusinessDataPolicy {
     root: PathBuf,
 
@@ -61,6 +62,128 @@ impl NativeBusinessDataPolicy {
                 "scope is not eligible",
             ))
         }
+    }
+}
+
+/// These readers exist only inside one synchronous current-authority callback.
+/// All policy/lineage/projection methods borrow them and cannot open/migrate state.
+struct NativeReadAuthority<'a> {
+    core: &'a rusqlite::Connection,
+    policy: &'a rusqlite::Connection,
+    projection: &'a rusqlite::Connection,
+    collection: &'a str,
+    claims: super::capability::CapabilityClaims,
+}
+
+impl NativeReadAuthority<'_> {
+    fn document_view(&self, collection: &str, document: &Value) -> anyhow::Result<Option<Value>> {
+        anyhow::ensure!(
+            collection == self.collection,
+            "read authority belongs to another collection"
+        );
+        if !super::threads::native_business_data_document_visible_from_connections(
+            self.core,
+            self.policy,
+            self.projection,
+            collection,
+            document,
+            super::threads::ReplicationActor {
+                user_id: &self.claims.user_id,
+                role: &self.claims.role,
+                collection_read_allowed: true,
+            },
+        )? {
+            return Ok(None);
+        }
+        let mut visible = document.clone();
+        if collection == "ctox_crew_members" {
+            if let Some(fields) = super::policy::crew_fields_for_role(&self.claims.role) {
+                rxdb::plugins::replication_webrtc::webrtc_types::retain_readable_fields(
+                    &mut visible,
+                    &fields,
+                );
+            }
+        }
+        Ok(Some(visible))
+    }
+}
+
+impl NativeBusinessDataPolicy {
+    fn with_current_read_authority<T>(
+        &self,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        collection: &str,
+        scope: &Scope,
+        apply: impl FnOnce(&NativeReadAuthority<'_>) -> anyhow::Result<T>,
+    ) -> io::Result<T> {
+        self.allowed(collection, scope)?;
+        store::with_current_webrtc_capability_signer(&self.root, |signer| {
+            // No CREATE flag, schema preparation, cached credentials or waits.
+            // Enter issuer -> Core -> policy -> projection, then borrow all
+            // readers for one bounded synchronous check/publication callback.
+            let open = |path: PathBuf| -> anyhow::Result<rusqlite::Connection> {
+                let conn = rusqlite::Connection::open_with_flags(
+                    path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+                )?;
+                conn.busy_timeout(std::time::Duration::ZERO)?;
+                Ok(conn)
+            };
+            let mut core = open(crate::paths::core_db(&self.root))?;
+            let core = core.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let mut policy = open(store::business_os_store_path(&self.root))?;
+            let policy =
+                policy.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let mut projection = open(store::rxdb_store_path(&self.root))?;
+            let projection =
+                projection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let at_ms = chrono::Utc::now().timestamp_millis();
+            let claims = store::verified_webrtc_capability_claims_from_connection(
+                &policy,
+                capability_token,
+                signer,
+                at_ms,
+            )
+            .ok_or_else(|| anyhow::anyhow!("current native actor is unavailable"))?;
+            anyhow::ensure!(
+                claims.user_id == identity.user_id
+                    && u64::try_from(claims.actor_epoch).ok() == Some(identity.authorization_epoch)
+                    && store::existing_instance_id(&self.root)? == identity.instance_id,
+                "native actor or instance changed"
+            );
+            anyhow::ensure!(
+                store::webrtc_capability_allows_collection_permission_from_connection(
+                    &policy,
+                    capability_token,
+                    signer,
+                    collection,
+                    store::BusinessOsPermission::DataRead,
+                    at_ms,
+                ),
+                "current native collection access denied"
+            );
+            let result = apply(&NativeReadAuthority {
+                core: &core,
+                policy: &policy,
+                projection: &projection,
+                collection,
+                claims,
+            })?;
+            anyhow::ensure!(
+                store::existing_instance_id(&self.root)? == identity.instance_id,
+                "native instance changed during callback"
+            );
+            // Read-only publication: dropping the immediate transactions
+            // releases the mutation fences, without writing or committing data.
+            Ok(result)
+        })
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "native read authority unavailable",
+            )
+        })
     }
 }
 
@@ -126,6 +249,267 @@ fn owned_command_projection(
 #[cfg(test)]
 mod owner_receipt_tests {
     use super::*;
+
+    struct ReadFixture {
+        root: tempfile::TempDir,
+        policy: NativeBusinessDataPolicy,
+        token: String,
+        identity: RemoteIdentity,
+        table: String,
+    }
+
+    async fn read_fixture(role: &str) -> anyhow::Result<ReadFixture> {
+        let root = tempfile::tempdir()?;
+        crate::mission::channels::open_channel_db(&crate::paths::core_db(root.path()))?;
+        store::tests::seed_business_user(root.path(), "alice", role)?;
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "alice",
+            "Alice",
+            role,
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        let projection = rusqlite::Connection::open(store::rxdb_store_path(root.path()))?;
+        let schemas: Value =
+            serde_json::from_str(include_str!("business_os_schema_contract.json"))?;
+        let version = schemas["business_commands"]["version"]
+            .as_u64()
+            .expect("canonical command schema");
+        let table = format!("ctox_business_os__business_commands__v{version}");
+        projection.execute_batch(&format!(
+            "CREATE TABLE {table} (id TEXT PRIMARY KEY, data TEXT NOT NULL)"
+        ))?;
+        let policy = NativeBusinessDataPolicy::new(root.path().to_path_buf());
+        let identity = policy
+            .identity(&token)
+            .await
+            .expect("current signed actor and instance");
+        Ok(ReadFixture {
+            root,
+            policy,
+            token,
+            identity,
+            table,
+        })
+    }
+
+    fn grant_read(root: &std::path::Path, user: &str, collection: &str) -> anyhow::Result<()> {
+        store::open_store(root)?.execute(
+            "INSERT INTO business_permission_grants
+             (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+              active, reason, created_by, created_at_ms, updated_at_ms)
+             VALUES (?1, 'user', ?2, ?4, 'collection', ?3, 1, 'fixture', 'fixture', 1, 1)",
+            rusqlite::params![
+                format!("read-{user}-{collection}"),
+                user,
+                collection,
+                store::BusinessOsPermission::DataRead.as_str()
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_document_view_preserves_domain_parent_then_projection_fallback(
+    ) -> anyhow::Result<()> {
+        let fixture = read_fixture("user").await?;
+        grant_read(fixture.root.path(), "alice", "business_commands")?;
+        let domain = store::open_store(fixture.root.path())?;
+        store::upsert_business_record(
+            &domain,
+            "business_commands",
+            "parent",
+            1,
+            json!({"id":"parent", "client_context":{"actor":{"id":"alice"}}}),
+        )?;
+        let projection = rusqlite::Connection::open(store::rxdb_store_path(fixture.root.path()))?;
+        projection.execute(
+            &format!(
+                "INSERT INTO {} (id,data) VALUES ('parent',?1)",
+                fixture.table
+            ),
+            [json!({"id":"parent", "client_context":{"actor":{"id":"foreign"}}}).to_string()],
+        )?;
+        let child = json!({"id":"child", "command_id":"child", "payload":{"workflow_id":"parent"}});
+        let legacy = super::super::threads::replication_document_filter(
+            fixture.root.path(),
+            &fixture.token,
+            "business_commands",
+        );
+        assert!(legacy(&child));
+        assert_eq!(
+            fixture
+                .policy
+                .document_view(
+                    &fixture.identity,
+                    &fixture.token,
+                    "business_commands",
+                    &child,
+                )
+                .await?,
+            Some(child.clone())
+        );
+
+        // A deleted domain record falls back exactly as the ordinary reader.
+        domain.execute(
+            "UPDATE business_records SET deleted=1 WHERE collection='business_commands' AND record_id='parent'",
+            [],
+        )?;
+        assert!(!legacy(&child));
+        assert_eq!(
+            fixture
+                .policy
+                .document_view(
+                    &fixture.identity,
+                    &fixture.token,
+                    "business_commands",
+                    &child,
+                )
+                .await?,
+            None
+        );
+        projection.execute(
+            &format!("UPDATE {} SET data=?1 WHERE id='parent'", fixture.table),
+            [json!({"id":"parent", "client_context":{"actor":{"id":"alice"}}}).to_string()],
+        )?;
+        assert!(legacy(&child));
+        assert_eq!(
+            fixture
+                .policy
+                .document_view(
+                    &fixture.identity,
+                    &fixture.token,
+                    "business_commands",
+                    &child,
+                )
+                .await?,
+            Some(child)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn current_native_read_authority_holds_all_readers_and_rejects_role_change(
+    ) -> anyhow::Result<()> {
+        let fixture = read_fixture("chef").await?;
+        let writers = [
+            crate::paths::core_db(fixture.root.path()),
+            store::business_os_store_path(fixture.root.path()),
+            store::rxdb_store_path(fixture.root.path()),
+        ]
+        .into_iter()
+        .map(|path| {
+            let conn = rusqlite::Connection::open(path)?;
+            conn.busy_timeout(std::time::Duration::ZERO)?;
+            Ok(conn)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+        let core_path = crate::paths::core_db(fixture.root.path());
+        crate::mission::channels::reset_channel_db_open_count_for_tests(&core_path);
+        fixture.policy.with_current_read_authority(
+            &fixture.identity, &fixture.token, "ctox_crew_members", &Scope::Instance {},
+            |authority| {
+                let crew = json!({"id":"crew","name":"Crew","soul":{"private":"fixture"}});
+                assert_eq!(authority.document_view("ctox_crew_members", &crew)?, Some(crew));
+                for writer in &writers {
+                    let error = writer.execute_batch("BEGIN IMMEDIATE")
+                        .expect_err("native mutation cannot cross the current read callback");
+                    assert!(matches!(error, rusqlite::Error::SqliteFailure(code, _)
+                        if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)));
+                }
+                assert_eq!(authority.core.total_changes(), 0);
+                assert_eq!(authority.policy.total_changes(), 0);
+                assert_eq!(authority.projection.total_changes(), 0);
+                assert!(authority.document_view("business_records", &json!({"id":"other"})).is_err());
+                Ok(())
+            },
+        )?;
+        assert_eq!(
+            crate::mission::channels::channel_db_open_count_for_tests(&core_path),
+            0
+        );
+        for writer in &writers {
+            writer.execute_batch("BEGIN IMMEDIATE; ROLLBACK")?;
+        }
+        writers[1].execute(
+            "UPDATE business_users SET role='user' WHERE user_id='alice'",
+            [],
+        )?;
+        let mut called = false;
+        assert!(fixture
+            .policy
+            .with_current_read_authority(
+                &fixture.identity,
+                &fixture.token,
+                "ctox_crew_members",
+                &Scope::Instance {},
+                |_| {
+                    called = true;
+                    Ok(())
+                },
+            )
+            .is_err());
+        assert!(
+            !called,
+            "an old signed actor cannot enter the callback after native role change"
+        );
+
+        let (current_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            fixture.root.path(),
+            "alice",
+            "Alice",
+            "user",
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        let identity = fixture
+            .policy
+            .identity(&current_token)
+            .await
+            .expect("fresh native user");
+        let crew = json!({"id":"crew","name":"Crew","soul":{"private":"fixture"}});
+        let projected = fixture
+            .policy
+            .document_view(&identity, &current_token, "ctox_crew_members", &crew)
+            .await?
+            .expect("public crew remains readable");
+        assert_eq!(projected["id"], "crew");
+        assert_eq!(projected["name"], "Crew");
+        assert!(
+            projected.get("soul").is_none(),
+            "current role's field projection must remain authoritative"
+        );
+        std::fs::write(
+            fixture.root.path().join("runtime/business-os-instance-id"),
+            "another-native-instance\n",
+        )?;
+        assert!(
+            fixture
+                .policy
+                .document_view(&identity, &current_token, "ctox_crew_members", &crew)
+                .await
+                .is_err(),
+            "cached connection identity cannot authorize a changed native instance"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_instance_read_never_initializes_missing_authority() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        assert!(store::existing_instance_id(root.path()).is_err());
+        assert!(!root.path().join("runtime").exists());
+        let id = store::stable_instance_id(root.path())?;
+        assert_eq!(store::existing_instance_id(root.path())?, id);
+        std::fs::write(
+            root.path().join("runtime/business-os-instance-id"),
+            "changed-native-instance\n",
+        )?;
+        assert_eq!(
+            store::existing_instance_id(root.path())?,
+            "changed-native-instance"
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn signed_queue_admission_preserves_exact_observation_owner() -> anyhow::Result<()> {
@@ -432,37 +816,19 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
             &Scope::Instance {},
         )
         .await?;
-        let root = self.root.clone();
+        let policy = self.clone();
         let token = capability_token.to_owned();
+        let identity = identity.clone();
         let requested_collection = collection.to_owned();
-        let mut visible = document.clone();
+        let document = document.clone();
         tokio::task::spawn_blocking(move || {
-            let filter =
-                super::threads::replication_document_filter(&root, &token, &requested_collection);
-            if !filter(&visible) {
-                return Ok(None);
-            }
-            let fields = if requested_collection == "ctox_crew_members" {
-                store::verify_webrtc_capability_actor(&root, &token)
-                    .map(|(_, role)| role)
-                    .ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::PermissionDenied,
-                            "BusinessData capability is no longer valid",
-                        )
-                    })?
-            } else {
-                String::new()
-            };
-            if requested_collection == "ctox_crew_members" {
-                if let Some(allowed) = super::policy::crew_fields_for_role(&fields) {
-                    rxdb::plugins::replication_webrtc::webrtc_types::retain_readable_fields(
-                        &mut visible,
-                        &allowed,
-                    );
-                }
-            }
-            Ok(Some(visible))
+            policy.with_current_read_authority(
+                &identity,
+                &token,
+                &requested_collection,
+                &Scope::Instance {},
+                |authority| authority.document_view(&requested_collection, &document),
+            )
         })
         .await
         .map_err(|_| io::Error::other("BusinessData document policy task failed"))?
