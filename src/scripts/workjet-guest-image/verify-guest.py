@@ -211,7 +211,9 @@ def main():
         receipt["status"] = "component_passed"
     except BaseException as e:
         receipt.update(status="failed", error=str(e))
-        signal.alarm(0)
+        # Failure diagnostics have a separate short deadline; they must not
+        # extend a timed-out probe while the owned QEMU waits to be reaped.
+        signal.alarm(5)
         if proc and proc.poll() is None and "monitor" in locals():
             try:
                 monitor("screendump", dict(filename=str(out / "boot-display.ppm")))
