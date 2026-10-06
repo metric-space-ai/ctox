@@ -249,6 +249,7 @@ struct SnapshotSession {
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+#[derive(Clone)]
 struct HistoryEntry {
     sequence: u64,
     cursor: String,
@@ -886,8 +887,8 @@ impl BusinessDataSource {
             ));
         }
         mango.selector = Some(scope_selector(&query.scope, mango.selector.take()));
-        let normalized = normalize_mango_query(schema, mango);
-        let prepared = prepare_query(schema, normalized).map_err(|error| {
+        let normalized = normalize_mango_query(&schema.json_schema, mango);
+        let prepared = prepare_query(&schema.json_schema, normalized).map_err(|error| {
             RemoteError::new(ErrorCode::SchemaMismatch, error.to_string(), false)
         })?;
         Ok((collection, prepared, query_fingerprint(query)))
@@ -2063,8 +2064,8 @@ impl Subscription {
             "sort": [{ "id": "asc" }]
         }))
         .ok()?;
-        let normalized = normalize_mango_query(schema, mango);
-        let prepared = prepare_query(schema, normalized).ok()?;
+        let normalized = normalize_mango_query(&schema.json_schema, mango);
+        let prepared = prepare_query(&schema.json_schema, normalized).ok()?;
         let result = collection.storage_instance.query(&prepared).await.ok()?;
         Some(result.documents.iter().any(|value| value == document))
     }
@@ -2462,9 +2463,9 @@ pub async fn remote_request(
             "BusinessData peer is not ready",
         ));
     }
+    let params = vec![serde_json::to_value(request)
+        .map_err(|_| io::Error::other("BusinessData request encoding failed"))?];
     let exchange = async {
-        let params = vec![serde_json::to_value(request)
-            .map_err(|_| io::Error::other("BusinessData request encoding failed"))?];
         send_message_and_await_answer(
             pool.connection_handler.clone(),
             peer,

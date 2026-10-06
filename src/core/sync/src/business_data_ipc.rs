@@ -13,6 +13,8 @@ use std::{collections::HashSet, future::Future, io, pin::Pin, sync::Arc};
 use tokio::sync::mpsc;
 
 const MAX_IN_FLIGHT: usize = 4;
+// Bound queued frames, the active writer and unconsumed write acknowledgements.
+const MAX_PENDING_WRITES: usize = 8;
 /// Serializes authority invalidation with the first accepted frame byte for a
 /// watch event or gated response. A pending write has published nothing and is
 /// cancellable. Acceptance of the first byte is the linearization point: the
