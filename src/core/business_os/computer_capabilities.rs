@@ -2,8 +2,8 @@
 // License: AGPL-3.0-only
 
 //! Native operational settings for an opaque, assigned Workjet computer.
-//! Endpoint references are resolved by the TransferEngine/secret store, never
-//! interpreted as computer identities or credentials by this registry.
+//! Endpoint references are resolved by the native computer_endpoints registry,
+//! shared by build adapters and TransferEngine, never interpreted as identities.
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
