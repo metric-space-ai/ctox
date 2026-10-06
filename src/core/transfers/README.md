@@ -47,7 +47,7 @@ a receipt. An accepted cancellation cannot be reversed by a late pause/resume.
 ## Engine source and limits
 
 The private Git dependency is `mkh-welsch/aria2-rust` at
-`aea4d55e3ce0bcd1b5dd9e4832e3888c070b9504`, based on remote main
+`8364bcd7902dbd853a0f746c3dc937bbaadec561`, based on remote main
 `7bfacc2cf27e55d4755b06623c1b997880d0c697`. Its LICENSE and manifest declare
 GPL-2.0-or-later. The patch adds optional `ctox-expected-length` checks before
 allocation and at all storage write entry points, with a direct boundary test.
@@ -74,18 +74,21 @@ for diagnosis, but the enrolled native adapter rejects them. Grant IDs are also
 immutable: a restart cannot silently mint or select a replacement grant. The
 adapter requires an explicit grant-admission checker with no permissive default;
 current account/file permission alone cannot validate an arbitrary grant ID.
-Workjet owns the permission-checked grant issue/lookup/revoke and source nonce
-validator in existing CTOX policy/secret stores. Those production APIs are still
-pending; the grant ID itself carries no authority.
+The native source implements permission-checked grant issue/lookup/revoke and
+nonce-bound device validation in the existing CTOX policy/secret stores. The
+grant ID itself carries no authority. Grant and account replies use the guarded
+auxiliary dispatcher and recheck current authority at each physical send poll;
+see [`docs/native-transfer-grants.md`](../../../docs/native-transfer-grants.md).
 
 The enrolled adapter checks current host enrollment/account, a fresh signed peer
 principal, and the existing remote file-fetch policy using an empty range before
 cache reuse and publication. Account state is checked again after the exchange.
-This implementation still needs the production daemon-owned session resolver and
-its service/command wiring; the per-IPC BusinessDataService cannot by itself keep
-a transfer alive after UI disconnect. The new account-binding changes and reopen
-regression are pending compilation/execution behind the shared resource gate;
-previous passing checks apply only to their recorded earlier revisions.
+The production daemon constructs a NativeTransferAccountHost and daemon-owned
+NativeTransferPeerResolver. The lease-owning worker retains its query database
+and native session across UI disconnects and drains them during bounded shutdown.
+Pairing, grant admission and peer downloads use the native command/service path.
+Historical passing checks below apply only to their recorded revisions; final
+runtime verification and installed two-host acceptance must identify their source.
 
 Existing `business_os/workjet_transfer_git.rs` owns Git bundle/patch/untracked
 packing and apply. Its index extension preserves staged and unstaged changes
@@ -109,8 +112,9 @@ hook must consult current enrolled account/epoch, session generation and file
 policy; source identity and a previous receipt cannot substitute for admission.
 The worker checks admission before cache reuse, each range and publication,
 including fully checkpointed resumes, and cancels pending admission on pause or
-cancel. Range reads carry the complete job identity. The daemon hook implementation
-and production command/session registration remain to be connected and verified.
+cancel. Range reads carry the complete job identity. The production daemon hook
+and command/session registration are connected through transfers_native and the
+native account host; real two-host execution verifies their installed behavior.
 
 Peer ranges are at most 1 MiB. The worker flushes each range before committing
 its offset to the existing SQLite job. Reopen truncates uncommitted tail bytes;
@@ -130,11 +134,15 @@ wrong hashes/lengths, exclusive worker ownership, pause/resume, terminal cancell
 mirror isolation/failover, rejected-prefix recovery and publication-crash recovery.
 `tests/peer_authorization.rs` covers cache reuse across jobs, missing admission,
 revocation before publication/fully checkpointed reopen, and cancellation during
-admission. Run with two compiler workers and one test thread via the shared admission gate on the Mac:
+admission. Run Linux checks through the shared gpu3 build lane, retaining one
+stable task name for the PR so source and compiler caches are reused:
 
 ```
-cargo test --manifest-path src/core/transfers/Cargo.toml -j 2 -- --test-threads=1
+~/.codex/bin/gpu-build-run.sh --owner THREAD_ID --task ctox-pr227 --src WORKTREE -- \
+  cargo test --locked --manifest-path src/core/transfers/Cargo.toml -j 6 -- --test-threads=2
 ```
+
+Mac-only build and acceptance steps use the Mac admission gate.
 
 The macOS run on 2026-09-27 passed all 27 targeted checks: five native file
 and seven shared query-reader tests on native `ff5b233225`, nine HTTP download
@@ -155,7 +163,8 @@ only unused-item warnings from the isolated harness; it does not exercise a real
 daemon account-admission implementation. Full root integration and installed acceptance remain
 unverified. Directory durability is implemented for Unix only; Windows
 activation explicitly fails instead of issuing an unproven durable receipt.
-No platform is claimed accepted yet. Native command/progress projection through
-CTOX Sync, peer capability-scoped requests, native peer interruption/resume,
-Git worktree integration and DevOps two-host
-acceptance remain open.
+These historical component checks do not establish platform acceptance. Native
+command/progress projection, capability-scoped peer requests, interruption/resume
+and Git worktree packing/apply are implemented. Acceptance requires the installed
+Mac and gpu3 workflow, original account/grant continuity and exact Git staging
+and file fidelity; a directory transfer alone does not resume execution.
