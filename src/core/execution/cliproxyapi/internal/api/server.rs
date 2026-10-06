@@ -1453,7 +1453,7 @@ mod tests {
     }
 
     fn claude_sse() -> Vec<u8> {
-        b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_http\",\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n\
+        b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_http\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5-20250929\",\"content\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n\
           data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
           data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello from Claude\"}}\n\n\
           data: {\"type\":\"content_block_stop\",\"index\":0}\n\n\
