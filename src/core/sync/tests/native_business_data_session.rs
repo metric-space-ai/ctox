@@ -1108,40 +1108,68 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         );
         assert_eq!(state.result, Some(json!({"generation": "retired"})));
 
-        // A replayed CaughtUp may arrive before the response frame. Consume it
-        // explicitly, then require the positive Subscribed acknowledgement for
-        // A before publishing the next generation.
-        let mut resume_acknowledged = false;
-        while !resume_acknowledged {
-            match read_frame(&mut client_a).await {
-                Frame::Response { response }
-                    if response.request_id == "resume-in-flight-command" =>
-                {
-                    let NativeBusinessDataResult::Subscribed {
-                        session,
-                        subscription_id,
-                    } = response.result
-                    else {
-                        panic!("expected resumed subscription: {response:?}");
-                    };
-                    assert_eq!(session, session_a);
-                    assert_eq!(subscription_id, "command:overlap-command");
-                    resume_acknowledged = true;
-                }
-                Frame::Event { event } => {
-                    assert_eq!(event.session, session_a);
-                    assert_eq!(event.subscription_id, "command:overlap-command");
-                    assert!(
-                        matches!(
-                            event.payload,
-                            NativeBusinessDataEventPayload::CaughtUp { .. }
-                        ),
-                        "resume must not deliver a stale command event: {event:?}"
-                    );
-                }
-                other => panic!("expected in-flight resume response: {}", frame_kind(&other)),
+        // A document Watch cannot reinterpret an ObserveCommand cursor. The
+        // in-flight command stays with B; A must reset and establish an actual
+        // command observation after explicit retirement.
+        assert_rejected(
+            read_frame(&mut client_a).await,
+            NativeBusinessDataErrorCode::ResetRequired,
+        );
+        assert_no_frame(&mut client_a, "command cursor mode mismatch").await;
+        send_request(
+            &mut client_b,
+            "retire-b-command",
+            NativeBusinessDataOperation::Unwatch {
+                session: session_b.clone(),
+                subscription_id: "command:overlap-command".into(),
+            },
+        )
+        .await;
+        match read_frame(&mut client_b).await {
+            Frame::Response { response } if response.request_id == "retire-b-command" => {
+                let NativeBusinessDataResult::Unwatched {
+                    session,
+                    subscription_id,
+                } = response.result
+                else {
+                    panic!("expected B retirement: {response:?}");
+                };
+                assert_eq!(session, session_b);
+                assert_eq!(subscription_id, "command:overlap-command");
             }
+            other => panic!("expected B retirement response: {}", frame_kind(&other)),
         }
+        send_request(
+            &mut client_a,
+            "observe-a-current",
+            NativeBusinessDataOperation::ObserveCommand {
+                session: session_a.clone(),
+                command_id: "overlap-command".into(),
+            },
+        )
+        .await;
+        match read_frame(&mut client_a).await {
+            Frame::Response { response } if response.request_id == "observe-a-current" => {
+                let NativeBusinessDataResult::Command { session, state } = response.result else {
+                    panic!("expected fresh A command observation: {response:?}");
+                };
+                assert_eq!(session, session_a);
+                assert_eq!(state.command_id, "overlap-command");
+                assert_eq!(
+                    state.status,
+                    ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Completed
+                );
+                assert_eq!(state.result, Some(json!({"generation": "retired"})));
+            }
+            other => panic!("expected fresh A command response: {}", frame_kind(&other)),
+        }
+        wait_for_caught_up(
+            &mut client_a,
+            &session_a,
+            "command:overlap-command",
+            "fresh A command snapshot",
+        )
+        .await;
 
         server_db
             .collection("business_commands")
@@ -1415,6 +1443,8 @@ async fn wait_for_caught_up(
     context: &str,
 ) -> String {
     let mut last_sequence = 0;
+    let mut saw_start = false;
+    let mut saw_end = false;
     loop {
         let event = read_event(stream, context).await;
         assert_eq!(event.session, *session);
@@ -1423,7 +1453,9 @@ async fn wait_for_caught_up(
         last_sequence = event.sequence;
         match event.payload {
             NativeBusinessDataEventPayload::SnapshotStart { snapshot_id } => {
+                assert!(!saw_start && !saw_end);
                 assert_eq!(snapshot_id, subscription_id);
+                saw_start = true;
             }
             NativeBusinessDataEventPayload::SnapshotPage {
                 snapshot_id,
@@ -1436,10 +1468,23 @@ async fn wait_for_caught_up(
                     "{context} unexpectedly received records"
                 );
             }
-            NativeBusinessDataEventPayload::SnapshotEnd { snapshot_id, .. } => {
-                assert_eq!(snapshot_id, subscription_id);
+            NativeBusinessDataEventPayload::Command { state } => {
+                assert!(saw_start && !saw_end);
+                assert_eq!(
+                    subscription_id.strip_prefix("command:"),
+                    Some(state.command_id.as_str())
+                );
             }
-            NativeBusinessDataEventPayload::CaughtUp { cursor } => return cursor,
+            NativeBusinessDataEventPayload::SnapshotEnd { snapshot_id, .. } => {
+                assert!(saw_start && !saw_end);
+                assert_eq!(snapshot_id, subscription_id);
+                saw_end = true;
+            }
+            NativeBusinessDataEventPayload::CaughtUp { cursor } => {
+                assert!(saw_start && saw_end);
+                assert!(!cursor.is_empty());
+                return cursor;
+            }
             other => panic!("{context} received unexpected event: {other:?}"),
         }
     }
