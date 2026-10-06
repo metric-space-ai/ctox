@@ -7,7 +7,7 @@
 set -eu
 [ "$(uname -s)" = Linux ]
 [ "$(uname -m)" = x86_64 ]
-[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-b3745d911-v3 ]
+[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-b3745d911-v4 ]
 [ -x /usr/local/bin/ctox ]
 . /etc/os-release
 [ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ]
@@ -194,6 +194,11 @@ UNIT
 touch /etc/cloud/cloud-init.disabled
 systemctl mask ssh.service ssh.socket getty@tty1.service
 systemctl enable ctox-xorg.service ctox-desktop.service ctox-guest-desktop.service
+# virt-resize can renumber GPT partitions. Reinstall the BIOS loader against
+# this stopped appliance disk; retain UUID-based Linux boot configuration.
+test -d /usr/lib/grub/i386-pc
+grub-install --target=i386-pc --recheck /dev/sda
+update-grub
 install -d -m 0755 /usr/local/share/ctox-image
 dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /usr/local/share/ctox-image/packages.tsv
 sha256sum /usr/local/bin/ctox > /usr/local/share/ctox-image/native-binary.sha256
