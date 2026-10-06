@@ -107,6 +107,9 @@ def collect(base, repositories=REPOS):
                       project="External registry", snapshot_at=now())
             gathered.append(pr)
     snapshot = dict(version=1, collected_at=now(), repositories=list(repositories), prs=gathered)
+    current_path = base / "terminal-evidence/current.json"
+    previous = load(current_path) if current_path.exists() else {}
+    snapshot["terminal_event_history"] = retain_terminal_history(previous, gathered)
     destination = base / "terminal-evidence/snapshots" / (sha(snapshot) + ".json")
     save(destination, snapshot)
     save(base / "terminal-evidence/current.json", snapshot)
@@ -192,6 +195,30 @@ def historical_merge_target(pr, records):
 def terminal_event(pr):
     """A reopened/reclosed PR is a distinct delivery even at the same head."""
     return {key: pr.get(key) for key in ("state", "headRefOid", "closedAt", "mergedAt")}
+
+def retain_terminal_history(previous, prs):
+    """Keep event changes and verified metadata through delta or full recollection."""
+    current = {pr["url"]: pr for pr in prs}
+    prior = {pr["url"]: pr for pr in previous.get("prs", [])}
+    history = {url: list(events) for url, events in
+               previous.get("terminal_event_history", {}).items()}
+    for url, pr in prior.items():
+        if url not in current or terminal_event(pr) != terminal_event(current[url]):
+            events = history.setdefault(url, [])
+            event = terminal_event(pr)
+            if event not in events:
+                events.append(event)
+    for pr in prs:
+        events = [event for event in history.get(pr["url"], [])
+                  if event != terminal_event(pr)]
+        if events:
+            pr["previous_terminal_events"] = events
+        if pr["url"] in prior and terminal_event(prior[pr["url"]]) == terminal_event(pr):
+            old = prior[pr["url"]]
+            for key in ("closing_review", "rework_iterations", "whole_pr_rework_iterations_lower_bound"):
+                if key in old:
+                    pr.setdefault(key, old[key])
+    return history
 
 def current_assessment(row, pr):
     if row.get("terminal_event") is not None:
@@ -573,7 +600,11 @@ def bootstrap(base):
             if terminal(p):
                 p.update(repository=repo, project=PROJECTS[repo], snapshot_at=now())
                 prs.append(p)
-    save(base / "terminal-evidence/current.json", dict(version=1, collected_at=now(), repositories=list(REPOS), prs=prs))
+    current_path = base / "terminal-evidence/current.json"
+    previous = load(current_path) if current_path.exists() else {}
+    history = retain_terminal_history(previous, prs)
+    save(current_path, dict(version=1, collected_at=now(), repositories=list(REPOS),
+                            prs=prs, terminal_event_history=history))
     return build(base)
 
 def main():

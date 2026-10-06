@@ -77,16 +77,9 @@ def detail(repository, change):
 
 def reconcile(base, previous, changes, since, query_at):
     """Stage the whole five-repository delta before publishing any inventory."""
-    mapping = {pr["url"]: pr for pr in previous["prs"]}
+    mapping = {pr["url"]: dict(pr) for pr in previous["prs"]}
     if len(mapping) != len(previous["prs"]):
         raise ValueError("Duplicate PR URLs in current inventory")
-    history = {url: list(events) for url, events in
-               previous.get("terminal_event_history", {}).items()}
-    def remember(pr):
-        events = history.setdefault(pr["url"], [])
-        event = report.terminal_event(pr)
-        if event not in events:
-            events.append(event)
     added, refreshed, reopened = [], [], []
     for repository in report.REPOS:
         for change in changes[repository]:
@@ -94,7 +87,6 @@ def reconcile(base, previous, changes, since, query_at):
             prior = mapping.get(url)
             if change["state"] == "open":
                 if prior is not None:
-                    remember(prior)
                     reopened.append(url)
                     del mapping[url]
                 continue
@@ -110,16 +102,9 @@ def reconcile(base, previous, changes, since, query_at):
             pr = detail(repository, change)
             if pr is None:
                 if prior is not None:
-                    remember(prior)
                     reopened.append(url)
                     del mapping[url]
                 continue
-            if prior is not None:
-                remember(prior)
-            events = [event for event in history.get(url, [])
-                      if event != report.terminal_event(pr)]
-            if events:
-                pr["previous_terminal_events"] = events
             evidence = base / "terminal-evidence/source" / (
                 "daily-" + repository.replace("/", "-") + "-" +
                 str(pr["number"]) + "-" + report.sha(pr) + ".json")
@@ -130,6 +115,7 @@ def reconcile(base, previous, changes, since, query_at):
     if not all(report.terminal(pr) for pr in mapping.values()):
         raise ValueError("Active PR in terminal inventory")
     snapshot = dict(previous)
+    history = report.retain_terminal_history(previous, list(mapping.values()))
     snapshot.update(repositories=list(report.REPOS), prs=list(mapping.values()),
                     delta_updated_at=query_at, terminal_event_history=history)
     return snapshot, dict(added=added, refreshed=refreshed, reopened=reopened)

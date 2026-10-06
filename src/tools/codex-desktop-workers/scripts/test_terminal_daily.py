@@ -194,6 +194,22 @@ class DailyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "different terminal event"):
                 report.record(self.base, dict(entry, terminal_event=report.terminal_event(old)))
 
+    def test_full_collection_preserves_event_history_and_verified_closing_metadata(self):
+        first = self.pr(self.change(9, closed="2026-10-06T01:00:00Z"))
+        second = self.pr(self.change(9, closed="2026-10-06T02:00:00Z"))
+        prior = dict(second, closing_review=dict(model="verified-model", turn_id="closing-turn"))
+        history = {second["url"]: [report.terminal_event(first)]}
+        report.save(self.base / "terminal-evidence/current.json",
+                    dict(prs=[prior], terminal_event_history=history))
+        response = dict(data=dict(repository=dict(pullRequests=dict(
+            totalCount=1, pageInfo=dict(hasNextPage=False), nodes=[second]))))
+        with patch.object(report, "jobs", return_value=[]), \
+             patch.object(report, "command", return_value=json.dumps(response)):
+            result = report.collect(self.base, repositories=[report.REPOS[0]])
+        self.assertEqual(result["terminal_event_history"], history)
+        self.assertEqual(result["prs"][0]["closing_review"], prior["closing_review"])
+        self.assertEqual(result["prs"][0]["previous_terminal_events"], history[second["url"]])
+
     def test_bootstrap_includes_all_five_repository_inputs(self):
         names = ["ctox", "workjet", "ctox-dev", "greppy", "miltonticket-app"]
         self.assertEqual(len(report.REPOS), 5)
