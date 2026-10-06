@@ -112,5 +112,36 @@ await testAsync('Multiple workbook sheets merge consistent mappings and reject c
   assert.equal(merged.meta.skippedOutsideTable,6); assert.equal(buildWzMapping(merged.meta.sheets['WZ-Code']).get('20'),'Chemie');
   await assert.rejects(api.extractImportRows(payload,{extractCompanyRowsFromWorkbookFile:async file=>response(file.name==='a.xlsx'?'Chemie':'Andere Liste')}),/Konflikt/);
 });
+test('Selection is by row identity: an unselected duplicate cannot suppress or leak into a selected list', () => {
+  const a=company('same','64 Finance'), b=company('same','20 Chemie');
+  const entries=[a,b].map((row,i)=>({row,rowNumber:i+2,problems:[],hints:[row===a?'unselected hint':'selected hint']}));
+  const selected=selectImportGroups([a,b],sheet).groups.find(g=>g.label==='Herstellung von chemischen Erzeugnissen').id;
+  const result=api.finalizeImportAnalysis(entries,{sheets:{'WZ-Code':sheet}},[selected],true);
+  assert.deepEqual(result.validRows,[b]); assert.equal(result.duplicateCount,0);
+  assert.deepEqual(result.hinweise,[{rowNumber:3,text:'selected hint'}]);
+  assert.equal(result.groups.find(g=>g.id===selected).selected,true);
+});
+test('Invalid diagnostics are selected-only, capped, and never increase valid group counts', () => {
+  const selected='list:'+encodeURIComponent('Herstellung von chemischen Erzeugnissen');
+  const entries=[{row:company('valid','20 Chemie'),rowNumber:2,problems:[],hints:[]}];
+  for(let i=0;i<40;i++) entries.push({row:company('bad'+i,'20 Chemie'),rowNumber:i+3,problems:['Firmenname fehlt'],hints:['Hinweis']});
+  entries.push({row:company('foreign','64 Finance'),rowNumber:100,problems:['unselected error'],hints:['unselected hint']});
+  const r=api.finalizeImportAnalysis(entries,{sheets:{'WZ-Code':sheet}},[selected],true);
+  assert.equal(r.groups.length,1); assert.equal(r.groups[0].count,1); assert.equal(r.selectedCount,1);
+  assert.equal(r.invalidCount,40); assert.equal(r.invalid.length,30); assert.equal(r.hintCount,40); assert.equal(r.hinweise.length,30);
+  assert.ok(r.canProceed); assert.ok(r.invalid.every(x=>x.rowNumber!==100));
+});
+test('Selection is required for workbooks; prepared rows retain deduplication and enforce the cap without truncation', () => {
+  const entries=[company('a','20 Chemie'),company('a','20 Chemie')].map((row,i)=>({row,rowNumber:i+1,problems:[],hints:[]}));
+  const empty=api.finalizeImportAnalysis(entries,{sheets:{'WZ-Code':sheet}},[],true);
+  assert.equal(empty.canProceed,false); assert.equal(empty.validRows.length,0);
+  const prepared=api.finalizeImportAnalysis(entries,{},undefined,false);
+  assert.equal(prepared.canProceed,true); assert.equal(prepared.validRows.length,1); assert.equal(prepared.duplicateCount,1);
+  assert.equal(prepared.groups,null);
+  const big=Array.from({length:5001},(_,i)=>({row:company('x'+i,'20 Chemie'),rowNumber:i,problems:[],hints:[]}));
+  const over=api.finalizeImportAnalysis(big,{},undefined,false);
+  assert.equal(over.validRows.length,5001); assert.equal(over.canProceed,false); assert.match(over.message,/5000/);
+});
+
 console.log(passed + ' import grouping regressions passed');
 

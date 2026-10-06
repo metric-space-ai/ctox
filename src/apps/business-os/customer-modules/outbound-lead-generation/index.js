@@ -4,7 +4,8 @@ import {
   normalizeCompanyRow,
   openUniversalImporter,
   parseDelimitedText,
-} from '../../shared/universal-importer.js?v=20260827-leadgen-import-preview-v1';
+} from '../../shared/universal-importer.js?v=20261006-import-preview-groups-v1';
+import { extractImportRows, finalizeImportAnalysis, buildImportPreviewExtras } from './import-preview-groups.js';
 import {
   showBusinessAlert as shellAlert,
   showBusinessConfirm as shellConfirm,
@@ -9183,6 +9184,7 @@ function rohWebsiteMitFremdemSchema(raw) {
 
 async function analyzeImportPayload(payload) {
   let rows = [];
+  let meta = { skippedOutsideTable: 0, sheets: {}, hasWorkbookMeta: false };
   let rowOffset = 1;
   if (Array.isArray(payload.rows)) {
     // Vorbereitete Zeilen (Sellify-Kampagnen-Import) durchlaufen dieselbe
@@ -9209,7 +9211,12 @@ async function analyzeImportPayload(payload) {
         });
     }
   } else {
-    rows = await extractRows(payload);
+    const extracted = await extractImportRows(payload, {
+      extractCompanyRowsFromWorkbookFile, extractCompanyRowsFromText,
+      parseDelimitedText, importDateiText, normalizeCompanyRow,
+    });
+    rows = extracted.rows;
+    meta = extracted.meta;
     // Dateien mit Kopfzeile: Datenzeile 1 steht in Zeile 2 (P1 D-P1-04).
     const ersteDatei = (payload.source?.files || [])[0];
     if (ersteDatei && /\.xlsx$/i.test(ersteDatei.name || '')) rowOffset = 2;
@@ -9238,14 +9245,12 @@ async function analyzeImportPayload(payload) {
       raw: {},
     }];
   }
-  const invalid = [];
-  const duplicates = [];
-  const hinweise = [];
-  const unique = new Map();
+  const entries = [];
   for (const [index, raw] of rows.entries()) {
     const row = { ...normalisiereImportzeile(raw, index) };
     const rowNumber = Number(row.row_index) + rowOffset;
     const problems = [];
+    const hints = [];
     if (!row.name) problems.push('Firmenname fehlt');
     // Eine unlesbare Website oder ein ausgeschriebenes Land kostete bisher den
     // ganzen Lead: ein Excel aus Sellify ergab "0 gueltige Leads", jede Zeile
@@ -9254,7 +9259,7 @@ async function analyzeImportPayload(payload) {
     // Feld bleibt leer, und die Vorschau nennt den gelesenen Wert.
     const fremdesSchema = rohWebsiteMitFremdemSchema(raw);
     if ((row.website && (!/^https?:\/\//i.test(row.website) || !domainFromUrl(row.website))) || fremdesSchema) {
-      hinweise.push({ rowNumber, text: `Website „${String(fremdesSchema || row.website).slice(0, 60)}“ nicht lesbar – bleibt leer und wird recherchiert` });
+      hints.push(`Website „${String(fremdesSchema || row.website).slice(0, 60)}“ nicht lesbar – bleibt leer und wird recherchiert`);
       row.website = '';
       row.domain = '';
     }
@@ -9263,22 +9268,15 @@ async function analyzeImportPayload(payload) {
       if (iso) {
         row.country = iso;
       } else {
-        hinweise.push({ rowNumber, text: `Land „${String(row.country).slice(0, 40)}“ nicht erkannt – bleibt leer und wird recherchiert` });
+        hints.push(`Land „${String(row.country).slice(0, 40)}“ nicht erkannt – bleibt leer und wird recherchiert`);
         row.country = '';
       }
     }
-    if (problems.length) {
-      invalid.push({ rowNumber, problems });
-      continue;
-    }
-    const id = `lead_${fingerprint(`${row.name}|${row.domain || row.website}|${row.country}`)}`;
-    if (unique.has(id)) {
-      duplicates.push({ rowNumber, name: row.name, id });
-      continue;
-    }
-    unique.set(id, { ...row, id });
+    row.id = `lead_${fingerprint(`${row.name}|${row.domain || row.website}|${row.country}`)}`;
+    entries.push({ row, rowNumber, problems, hints });
   }
-  return { rows, validRows: [...unique.values()], invalid, duplicates, hinweise };
+  return finalizeImportAnalysis(entries, meta, payload.selected_groups,
+    !Array.isArray(payload.rows) && (payload.source?.files || []).some((file) => /\.xlsx$/i.test(file.name || '')));
 }
 
 async function importPreview(payload) {
@@ -9310,13 +9308,18 @@ async function importPreview(payload) {
   }
   if (existingCount) items.push({ kind: 'warning', text: `${existingCount} vorhandene Leads werden aktualisiert, nicht dupliziert.` });
   if (andereKampagne) items.push({ kind: 'warning', text: `${andereKampagne === 1 ? '1 Firma ist' : `${andereKampagne} Firmen sind`} bereits in einer anderen Kampagne und ${andereKampagne === 1 ? 'bleibt' : 'bleiben'} dort.` });
+  const extras = buildImportPreviewExtras(analysis);
+  items.push(...extras.items);
   return {
+    groups: extras.groups,
+    groupsLabel: extras.groupsLabel,
+    groupLimit: extras.groupLimit,
     heading: 'Importvorschau',
     items,
-    canProceed: analysis.validRows.length > 0 && !zielKampagne.startsWith('Sellify:'),
-    message: analysis.validRows.length
+    canProceed: extras.canProceed && !zielKampagne.startsWith('Sellify:'),
+    message: extras.message || (analysis.validRows.length
       ? 'Vorschau geprüft. Nur die gültigen, eindeutigen Leads werden importiert.'
-      : 'Der Import enthält keine gültigen Leads.',
+      : 'Der Import enthält keine gültigen Leads.'),
   };
 }
 
@@ -9329,6 +9332,9 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
   const importId = resumeImportId || `import_${crypto.randomUUID()}`;
   const analysis = await analyzeImportPayload(payload);
   const normalizedRows = analysis.validRows;
+  if (!analysis.canProceed || normalizedRows.length > 5000) {
+    throw new Error(analysis.message || 'Bitte eine gültige Auswahl mit höchstens 5.000 Firmen wählen.');
+  }
   if (!resumeImportId) {
     await state.collections.imports.insert({
       id: importId, title: payload.title || 'Lead-Import', source_type: payload.source_type || 'text',
@@ -9364,6 +9370,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
   // gesammelt und blockweise angelegt, mit Fortschrittsmeldung.
   const bekannteIds = new Set(state.leads.map((lead) => lead.id));
   const neueLeads = [];
+  const neueLeadIds = new Set();
   const gesamt = normalizedRows.length;
   const melde = (text) => { try { fortschritt?.(text); } catch { /* nur Anzeige */ } };
   // Vorhandene Leads in wenigen Sammelabfragen laden statt je Firma einzeln:
@@ -9416,7 +9423,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
         existing = await holeDoc(id);
         if (!existing) { verschoben.push(`${row.name} (vorhanden, gerade nicht ladbar – unverändert)`); continue; }
       }
-      if (neueLeads.some((lead) => lead.id === id)) continue;
+      if (neueLeadIds.has(id)) continue;
     }
     const bisherigeKampagne = String(existing?.campaign || '').trim();
     if (existing && bisherigeKampagne && bisherigeKampagne !== zielKampagne) {
@@ -9465,6 +9472,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
       created_at_ms: now, updated_at_ms: now,
     };
     neueLeads.push(lead);
+    neueLeadIds.add(lead.id);
   }
   const block = 10;
   for (let offset = 0; offset < neueLeads.length; offset += block) {
@@ -13606,6 +13614,9 @@ function icon(name) {
 }
 
 export const __leadgenOutboundTestHooks = {
+  analyzeImportPayload,
+  importPreview,
+  importPayload,
   derivedMaintenanceValues,
   operatorAttestedField,
   emailVerdictIsDeliverable,

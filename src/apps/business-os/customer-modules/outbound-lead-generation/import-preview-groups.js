@@ -291,3 +291,51 @@ export async function extractImportRows(payload, helpers) {
     },
   };
 }
+export function finalizeImportAnalysis(entries, meta, selectedGroups, grouped) {
+  const rows = entries.map(e => e.row);
+  const sheet = meta && meta.sheets && meta.sheets['WZ-Code'];
+  let groups = null, groupLimit = 5000, groupCanProceed = true, message = '';
+  let selectedEntries = entries, selectedCount = entries.length;
+  if (grouped) {
+    const problemFree = rows.filter((_, i) => !entries[i].problems?.length);
+    const groupsResult = selectImportGroups(problemFree, sheet, selectedGroups);
+    groups = groupsResult.groups;
+    const sel = selectImportGroups(rows, sheet, selectedGroups);
+    const selectedRowSet = new Set(sel.selectedRows);
+    selectedEntries = entries.filter(e => selectedRowSet.has(e.row));
+    selectedCount = groupsResult.selectedCount;
+    groupLimit = groupsResult.groupLimit;
+    groupCanProceed = groupsResult.canProceed;
+    message = groupsResult.message;
+  }
+  const seen = new Set(), validRows = [], duplicates = [];
+  for (const e of selectedEntries) {
+    if (e.problems && e.problems.length) continue;
+    if (seen.has(e.row.id)) duplicates.push({ rowNumber: e.rowNumber, name: e.row.name || '', id: e.row.id });
+    else { seen.add(e.row.id); validRows.push(e.row); }
+  }
+  const invalid = selectedEntries.filter(e => e.problems && e.problems.length).map(e => ({ rowNumber: e.rowNumber, problems: e.problems }));
+  const hinweise = [];
+  for (const e of selectedEntries) if (e.hints) for (const t of e.hints) hinweise.push({ rowNumber: e.rowNumber, text: t });
+  const overCap = validRows.length > 5000;
+  if (!grouped && overCap) message = `Mehr als 5000 gültige Zeilen (${validRows.length}) – Import nicht möglich.`;
+  if (!grouped) selectedCount = validRows.length;
+  const canProceed = grouped ? groupCanProceed && validRows.length > 0 : validRows.length > 0 && !overCap;
+  return {
+    rows, meta, validRows,
+    invalid: invalid.slice(0, 30),
+    duplicates: duplicates.slice(0, 30),
+    hinweise: hinweise.slice(0, 30),
+    invalidCount: invalid.length, duplicateCount: duplicates.length, hintCount: hinweise.length,
+    groups, groupLimit, groupCanProceed, selectedCount, canProceed, message,
+  };
+}
+
+export function buildImportPreviewExtras(analysis){
+  const items=[];
+  for(const [count,shown,label] of [[analysis.invalidCount,analysis.invalid.length,'ungültige Zeilen'],[analysis.duplicateCount,analysis.duplicates.length,'Dubletten'],[analysis.hintCount,analysis.hinweise.length,'Hinweise']]){
+    if(count>shown) items.push({kind:'warning',text:'… und '+(count-shown)+' weitere '+label});
+  }
+  if(analysis.meta.skippedOutsideTable>0) items.push({kind:'info',text:analysis.meta.skippedOutsideTable+' Zeilen außerhalb der Excel-Tabelle ignoriert'});
+  return{items,groups:analysis.groups||undefined,groupsLabel:'Vorauswahl nach THESEN-Liste',groupLimit:5000,canProceed:analysis.canProceed,message:analysis.message||''};
+}
