@@ -127,6 +127,7 @@ try {
       } }),
     }]));
     Object.assign(state, {
+      ctx: { host: { querySelector: () => null } },
       collections: db, sources: [], adapters: [], imports: [], leads: [existingLead],
       collectionBindingGeneration: 1, leadHydrationBindingGeneration: 1, reloadAngewendetJeSammlung: new Map(),
       sourceToggleIntent: new Map(), pendingLeadPatches: new Map(),
@@ -226,7 +227,7 @@ try {
     const first = leads[0].contacts[0];
     state.recipientEligibility = new Map([['lead_0|contact_0', { status: 'free', reason: 'saved' }]]);
     state.recipientEligibilityReady = new Set(['lead_0']);
-    state.ctx = { actions: { openApp: (app, args) => {
+    state.ctx = { ...state.ctx, actions: { openApp: (app, args) => {
       assert.equal(downloaded.length, 1, 'download precedes receiver handoff');
       opened.push({ app, args });
     } }, commands: { execute: () => { throw Error('Export must not dispatch'); } } };
