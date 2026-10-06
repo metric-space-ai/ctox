@@ -34,15 +34,14 @@ pub(in crate::business_os) struct PreparedQemuGuest {
     pub overlay_qcow2: PathBuf,
     pub memory_mib: u32,
     pub vcpus: u8,
-    pub acceleration: QemuAcceleration,
+    pub acceleration: super::QemuAcceleration,
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum QemuAcceleration {
+pub(in crate::business_os) enum QemuAcceleration {
     Kvm,
-    /// Software emulation is only used by bounded CI process tests. No silent
-    /// production fallback from unavailable KVM to a slow emulated desktop.
-    #[cfg(test)]
+    /// Explicit native-owner selection for an admitted software-emulation
+    /// host. Unavailable KVM never selects this mode automatically.
     Tcg,
 }
 
@@ -115,7 +114,6 @@ fn prepare_command(
         "-accel",
         match config.acceleration {
             QemuAcceleration::Kvm => "kvm",
-            #[cfg(test)]
             QemuAcceleration::Tcg => "tcg,thread=single",
         },
     ]);
