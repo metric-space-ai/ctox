@@ -45,6 +45,8 @@ fn observation() -> Observation {
         delivered: false,
         delivery_offset: 0,
         consumed: false,
+        pending: None,
+        transfer_cancelled: None,
         _permit: permit,
     }
 }
@@ -143,6 +145,75 @@ fn native_frame_expiry_blocks_delivery_and_input_without_callback() {
     complete(&mut delivered);
     delivered.deadline = Instant::now() - Duration::from_millis(1);
     assert!(delivered
+        .consume_input(
+            "frame",
+            "actual-turn",
+            &GuestInput::Type { text: "a".into() }
+        )
+        .is_err());
+}
+
+#[test]
+fn native_pending_chunk_is_not_input_or_another_send_permit() {
+    let mut frame = observation();
+    let pending = frame.begin_chunk(0, 3, false).unwrap();
+    assert!(frame.consumed);
+    assert!(frame.begin_chunk(0, 3, false).is_err());
+    assert!(frame
+        .consume_input(
+            "frame",
+            "actual-turn",
+            &GuestInput::Type { text: "a".into() }
+        )
+        .is_err());
+    frame
+        .finish_chunk(
+            &pending,
+            &[1, 2, 3],
+            &json!({"owner_user_id":"actual-owner"}),
+        )
+        .unwrap();
+    assert!(!frame.delivered);
+    let terminal = frame.begin_chunk(3, 0, true).unwrap();
+    frame
+        .finish_chunk(&terminal, &[], &json!({"owner_user_id":"actual-owner"}))
+        .unwrap();
+    assert!(frame.delivered && !frame.consumed);
+    assert!(frame
+        .validate_chunk(&terminal, &[], &frame.metadata)
+        .is_err());
+}
+#[test]
+fn native_pending_chunk_rejects_replaced_bytes_owner_and_generation() {
+    let mut frame = observation();
+    let pending = frame.begin_chunk(0, 3, false).unwrap();
+    assert!(frame
+        .validate_chunk(&pending, &[1, 2, 4], &frame.metadata)
+        .is_err());
+    assert!(frame
+        .validate_chunk(&pending, &[1, 2, 3], &json!({"owner_user_id":"foreign"}))
+        .is_err());
+    let mut foreign = pending.clone();
+    foreign.nonce = "other-queue-generation".into();
+    assert!(frame
+        .validate_chunk(&foreign, &[1, 2, 3], &frame.metadata)
+        .is_err());
+    frame.deadline = Instant::now() - Duration::from_millis(1);
+    assert!(frame
+        .finish_chunk(&pending, &[1, 2, 3], &frame.metadata.clone())
+        .is_err());
+    assert!(frame.consumed && !frame.delivered);
+}
+
+#[test]
+fn native_frame_aborted_completion_cannot_grant_input_after_terminal_bytes() {
+    let mut frame = observation();
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    frame.transfer_cancelled = Some(cancelled.clone());
+    complete(&mut frame);
+    assert!(frame.delivered && !frame.consumed);
+    cancelled.store(true, Ordering::SeqCst);
+    assert!(frame
         .consume_input(
             "frame",
             "actual-turn",

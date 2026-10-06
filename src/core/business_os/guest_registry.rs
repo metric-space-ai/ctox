@@ -908,6 +908,15 @@ impl NativeGuestExecution {
         facts: &NativeProviderFacts,
         apply: impl FnOnce(&mut Registration, &dyn Fn() -> Result<()>) -> Result<T>,
     ) -> Result<T> {
+        self.with_held_worker_policy(worker_tx, facts, |entry, verify, _| apply(entry, verify))
+    }
+
+    fn with_held_worker_policy<T>(
+        &self,
+        worker_tx: &Connection,
+        facts: &NativeProviderFacts,
+        apply: impl FnOnce(&mut Registration, &dyn Fn() -> Result<()>, &Connection) -> Result<T>,
+    ) -> Result<T> {
         self.registry
             .verify_runtime_root(self.provider.runtime_root())?;
         let contract = facts
@@ -975,7 +984,7 @@ impl NativeGuestExecution {
                 verify_worker_current(worker_tx, facts)?;
                 validate_provider(facts, &destination)
             };
-            let result = apply(&mut entry, &verify)?;
+            let result = apply(&mut entry, &verify, tx)?;
             if let Err(error) = verify() {
                 // A late lease/authority failure must retire current pixels
                 // before another native command can acquire this controller.

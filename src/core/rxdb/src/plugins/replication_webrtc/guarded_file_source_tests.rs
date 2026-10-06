@@ -116,9 +116,9 @@ use parking_lot::Mutex;
 use std::sync::atomic::AtomicUsize;
 
 struct Source {
-    lock: Mutex<()>,
-    live: AtomicBool,
-    delivered: AtomicBool,
+    lock: Arc<Mutex<()>>,
+    live: Arc<AtomicBool>,
+    delivered: Arc<AtomicBool>,
     reads: AtomicUsize,
     bytes: Vec<u8>,
     deadline: Instant,
@@ -126,9 +126,9 @@ struct Source {
 impl Source {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            lock: Mutex::new(()),
-            live: AtomicBool::new(true),
-            delivered: AtomicBool::new(false),
+            lock: Arc::new(Mutex::new(())),
+            live: Arc::new(AtomicBool::new(true)),
+            delivered: Arc::new(AtomicBool::new(false)),
             reads: AtomicUsize::new(0),
             bytes: vec![7; 8 * 1024 + 1],
             deadline: Instant::now() + Duration::from_secs(30),
@@ -140,62 +140,103 @@ impl GuardedFileSource for Source {
         self.reads.fetch_add(1, Ordering::SeqCst);
         Ok(self.bytes.len() as u64)
     }
-    fn with_current_chunk(
+    fn prepare_chunk(
         &self,
         _: &str,
         offset: u64,
         max: usize,
         terminal: bool,
-        _capability_token: &str,
-        send: &mut super::GuardedChunkSend<'_>,
-    ) -> RxResult<()> {
+        _: &str,
+        cancelled: Arc<AtomicBool>,
+    ) -> RxResult<GuardedFileChunk> {
         let _guard = self.lock.lock();
         if !self.live.load(Ordering::SeqCst) {
             return Err(denied("revoked native source"));
         }
         self.reads.fetch_add(1, Ordering::SeqCst);
-        send(
-            &json!({"owner_user_id":"actual-owner"}),
-            &self.bytes[offset as usize..offset as usize + max],
-            &mut || {
-                if self.live.load(Ordering::SeqCst) && Instant::now() < self.deadline {
-                    Ok(())
-                } else {
-                    Err(denied("native source authority expired or revoked"))
-                }
-            },
-        )?;
-        if terminal {
+        Ok(GuardedFileChunk {
+            metadata: json!({"owner_user_id":"actual-owner"}),
+            bytes: Arc::from(&self.bytes[offset as usize..offset as usize + max]),
+            lease: Arc::new(SourceLease {
+                lock: self.lock.clone(),
+                live: self.live.clone(),
+                delivered: self.delivered.clone(),
+                deadline: self.deadline,
+                terminal,
+                active: AtomicBool::new(true),
+                cancelled,
+            }),
+        })
+    }
+}
+struct SourceLease {
+    lock: Arc<Mutex<()>>,
+    live: Arc<AtomicBool>,
+    delivered: Arc<AtomicBool>,
+    deadline: Instant,
+    terminal: bool,
+    active: AtomicBool,
+    cancelled: Arc<AtomicBool>,
+}
+impl SourceLease {
+    fn check(&self) -> RxResult<()> {
+        if !self.cancelled.load(Ordering::SeqCst)
+            && self.active.load(Ordering::SeqCst)
+            && self.live.load(Ordering::SeqCst)
+            && Instant::now() < self.deadline
+        {
+            Ok(())
+        } else {
+            Err(denied("native source authority expired or revoked"))
+        }
+    }
+}
+impl WebRTCPublicationGuard for SourceLease {
+    fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+        let _guard = self.lock.lock();
+        self.check()?;
+        publish()?;
+        self.check()
+    }
+}
+impl GuardedChunkLease for SourceLease {
+    fn complete(&self, current: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+        let _guard = self.lock.lock();
+        self.check()?;
+        current()?;
+        if self.terminal {
             self.delivered.store(true, Ordering::SeqCst);
         }
+        self.active.store(false, Ordering::SeqCst);
         Ok(())
     }
 }
+
 struct Handler {
     source: Arc<Source>,
-    sent: Mutex<Vec<WebRTCWireFrame>>,
+    sent: Arc<Mutex<Vec<WebRTCWireFrame>>>,
     capability: bool,
     backpressured: bool,
     policy: bool,
     fail_at: Option<usize>,
     revoke_after_first: bool,
     hold_terminal: bool,
-    terminal_started: tokio::sync::Notify,
-    terminal_release: tokio::sync::Notify,
+    terminal_started: Arc<tokio::sync::Notify>,
+    terminal_release: Arc<tokio::sync::Notify>,
 }
 impl Handler {
     fn new(source: Arc<Source>) -> Self {
         Self {
             source,
-            sent: Mutex::new(Vec::new()),
+            sent: Arc::new(Mutex::new(Vec::new())),
             capability: true,
             backpressured: false,
             policy: true,
             fail_at: None,
             revoke_after_first: false,
             hold_terminal: false,
-            terminal_started: tokio::sync::Notify::new(),
-            terminal_release: tokio::sync::Notify::new(),
+            terminal_started: Arc::new(tokio::sync::Notify::new()),
+            terminal_release: Arc::new(tokio::sync::Notify::new()),
         }
     }
 }
@@ -235,35 +276,85 @@ impl WebRTCConnectionHandler for Handler {
             Arc::new(|doc: &Value| doc["owner_user_id"] == "actual-owner") as WebRTCDocumentFilter
         })
     }
-    async fn send(&self, _: &String, frame: WebRTCWireFrame) -> RxResult<()> {
-        assert!(
-            self.source.lock.try_lock().is_none(),
-            "actual send escaped native guard"
-        );
-        let terminal = match &frame {
-            WebRTCWireFrame::Message(message) => {
-                message
-                    .params
-                    .first()
-                    .and_then(|params| params.get("complete"))
-                    .and_then(Value::as_bool)
-                    == Some(true)
+    async fn send(&self, _: &String, _: WebRTCWireFrame) -> RxResult<()> {
+        panic!("native frame must not use unguarded transport")
+    }
+    async fn send_guarded(
+        &self,
+        _: &String,
+        frame: WebRTCWireFrame,
+        publication: Arc<dyn WebRTCPublicationGuard>,
+    ) -> RxResult<()> {
+        let source = self.source.clone();
+        let sent = self.sent.clone();
+        let fail_at = self.fail_at;
+        let revoke_after_first = self.revoke_after_first;
+        let hold_terminal = self.hold_terminal;
+        let terminal_started = self.terminal_started.clone();
+        let terminal_release = self.terminal_release.clone();
+        // This queue drains in a DIFFERENT task. The awaiting request cannot
+        // lend it a lock/checker or authorize physical IO by polling its receipt.
+        let queue = tokio::spawn(async move {
+            use std::future::Future;
+            let terminal = match &frame {
+                WebRTCWireFrame::Message(message) => {
+                    message
+                        .params
+                        .first()
+                        .and_then(|params| params.get("complete"))
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                }
+                _ => false,
+            };
+            if terminal && hold_terminal {
+                let waiting = terminal_release.notified();
+                tokio::pin!(waiting);
+                terminal_started.notify_one();
+                let mut watchdog = tokio::time::interval(Duration::from_millis(16));
+                watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                std::future::poll_fn(|cx| {
+                    while watchdog.poll_tick(cx).is_ready() {}
+                    let mut polled = None;
+                    let check = publication.with_current(&mut || {
+                        assert!(
+                            source.lock.try_lock().is_none(),
+                            "physical poll escaped native fence"
+                        );
+                        polled = Some(waiting.as_mut().poll(cx));
+                        Ok(())
+                    });
+                    // Native mutations can run while the actual transport is Pending.
+                    assert!(
+                        source.lock.try_lock().is_some(),
+                        "native fence retained across await"
+                    );
+                    match check {
+                        Err(error) => std::task::Poll::Ready(Err(error)),
+                        Ok(()) => polled.unwrap().map(|_| Ok(())),
+                    }
+                })
+                .await?;
             }
-            _ => false,
-        };
-        if terminal && self.hold_terminal {
-            self.terminal_started.notify_one();
-            self.terminal_release.notified().await;
-        }
-        let mut sent = self.sent.lock();
-        if self.fail_at == Some(sent.len()) {
-            return Err(denied("actual send failed"));
-        }
-        sent.push(frame);
-        if self.revoke_after_first {
-            self.source.live.store(false, Ordering::SeqCst);
-        }
-        Ok(())
+            publication.with_current(&mut || {
+                assert!(
+                    source.lock.try_lock().is_none(),
+                    "actual write escaped native fence"
+                );
+                let mut sent = sent.lock();
+                if fail_at == Some(sent.len()) {
+                    return Err(denied("actual send failed"));
+                }
+                sent.push(frame.clone());
+                if revoke_after_first {
+                    source.live.store(false, Ordering::SeqCst);
+                }
+                Ok(())
+            })
+        });
+        queue
+            .await
+            .map_err(|_| denied("fixture physical queue stopped"))?
     }
     async fn close(&self) -> RxResult<()> {
         Ok(())
