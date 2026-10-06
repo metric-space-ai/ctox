@@ -45,7 +45,10 @@ fn handle_command(root: &Path, command: &BusinessCommand, owner: &str) -> anyhow
     Ok(result)
 }
 
-fn fixture() -> anyhow::Result<TempDir> {
+// Empty canonical projection tables and one owned project only. This is not
+// fresh-root bootstrap evidence; native task admission must not need the
+// worker/computer/private-chat records added by the richer fixture below.
+fn project_fixture() -> anyhow::Result<TempDir> {
     let root = tempdir()?;
     super::super::store_workjet_projects::tests::create_workjet_rxdb_projection_tables(
         root.path(),
@@ -78,6 +81,12 @@ fn fixture() -> anyhow::Result<TempDir> {
         1,
         json!({"id":"project","name":"Project","owner_user_id":"owner","status":"active","created_at_ms":1,"is_deleted":false}),
     )?;
+    Ok(root)
+}
+
+fn fixture() -> anyhow::Result<TempDir> {
+    let root = project_fixture()?;
+    let conn = open_store(root.path())?;
     store::upsert_business_record(
         &conn,
         "workjet_computers",
@@ -967,7 +976,7 @@ fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> a
 #[test]
 fn native_project_command_and_execution_reads_require_current_project_owner() -> anyhow::Result<()>
 {
-    let root = fixture()?;
+    let root = project_fixture()?;
     let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
         root.path(),
         "owner",
@@ -1116,7 +1125,16 @@ fn native_project_command_and_execution_reads_require_current_project_owner() ->
 #[test]
 fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> anyhow::Result<()> {
     use crate::mission::channels;
-    let root = fixture()?;
+    let root = project_fixture()?;
+    for collection in [
+        "workjet_computers",
+        worker_profile_bindings::COLLECTION,
+        CHATS,
+        MEMBERS,
+        THREADS,
+    ] {
+        assert_eq!(count(root.path(), collection)?, 0, "{collection}");
+    }
     let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
         root.path(),
         "owner",
@@ -1154,6 +1172,15 @@ fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> a
         super::super::project_crew_member_for_task(root.path(), task_id)?,
         None
     );
+    for collection in [
+        "workjet_computers",
+        worker_profile_bindings::COLLECTION,
+        CHATS,
+        MEMBERS,
+        THREADS,
+    ] {
+        assert_eq!(count(root.path(), collection)?, 0, "{collection}");
+    }
 
     let cancel_request = json!({
         "target_command_id":command_id,
