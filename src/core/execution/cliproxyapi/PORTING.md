@@ -107,9 +107,9 @@
   Native strict requests promote cleartext when summary is missing, null or
   empty before clearing content, and remove orphan IDs only when store is disabled. Actual injected
   HTTP guards cover selected-model and Home precedence and reject untrusted
-  metadata/auth flags. These guards are prepared, not executed. Explicit Claude
-  cache options, catalog policy, reasoning accounting, shared observations/replay
-  and OAuth alias ownership still require complete review and verification.
+  metadata/auth flags. These guards are prepared, not executed. Catalog policy,
+  reasoning accounting, shared observations/replay and OAuth alias ownership
+  still require complete review and verification.
   The OpenAI-compatible stream now consults the actual request-local Responses
   translator before synthesizing a terminator at clean EOF. Nonempty finish
   reason, existing output and all closed message/function/reasoning items are
@@ -119,6 +119,20 @@
   apply_patch output, late usage, same-chunk completion and terminal ownership.
   Full tool-validation parity, cancellation/usage binding, native execution and
   promotion remain open.
+  The shared native Claude Messages and token-count body contracts now respect
+  explicit prompt cache mode. Cloaking preserves client ephemeral markers,
+  including TTL, scope and extension fields, across legacy reminders, middle
+  system turns and end-of-history system placement. Synthesized system/date/user
+  blocks gain no automatic markers in explicit mode; caller tool/message TTLs
+  are not normalized. The existing four-marker limit remains enforced. Internal
+  prompt_cache_options is removed before generation signing and count-token
+  transmission. Eight body-contract guards cover OAuth/API and stream flags,
+  strict/automatic policy, all relocation destinations, mixed TTLs, invalid
+  markers, native counting and byte-identical no-op stripping. These are not
+  executed native/Go or live-provider evidence. Full original/pretranslated
+  flag propagation through payload overrides, native probe/header policy,
+  current upstream cache oracle, production cache affinity and promotion remain
+  open.
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.16.
 - Previous observed upstream release: v8.0.15, published 2026-10-04 22:29:27 UTC,
   commit a4acc9f752bd46571f737a10c04bf413656ab06b. The exact primary

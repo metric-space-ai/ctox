@@ -305,6 +305,7 @@ pub fn try_inject_claude_system_instructions(
         validate_claude_caller_system_blocks(original_system.as_ref())?;
     }
     let original_parts = collect_forwarded_claude_system_prompt_blocks(original_system.as_ref());
+    let explicit_cache = explicit_claude_prompt_cache_mode_root(&root);
     let fingerprint_text = claude_billing_fingerprint_message_text(payload);
     let entrypoint = if policy.entrypoint.trim().is_empty() {
         parse_claude_entrypoint(&policy.client_user_agent)
@@ -326,7 +327,11 @@ pub fn try_inject_claude_system_instructions(
         "system".to_owned(),
         Value::Array(vec![
             json!({"type":"text","text":billing}),
-            json!({"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude.","cache_control":{"type":"ephemeral"}}),
+            if explicit_cache {
+                json!({"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."})
+            } else {
+                json!({"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude.","cache_control":{"type":"ephemeral"}})
+            },
         ]),
     );
     if !policy.strict_mode && !original_parts.is_empty() {
@@ -334,9 +339,11 @@ pub fn try_inject_claude_system_instructions(
             prepend_claude_system_reminders_to_first_user_message(&mut root, &original_parts);
         } else if claude_mid_conversation_system_messages_at_end(&root) {
             if let Some(blocks) = root.get_mut("system").and_then(Value::as_array_mut) {
-                blocks.extend(original_parts.iter().map(
-                    |text| json!({"type":"text","text":text,"cache_control":{"type":"ephemeral"}}),
-                ));
+                blocks.extend(
+                    original_parts.iter().map(|block| {
+                        forwarded_claude_text_block(&block.text, block, explicit_cache)
+                    }),
+                );
             }
         } else {
             insert_claude_mid_conversation_system_messages(&mut root, &original_parts);
@@ -354,19 +361,54 @@ pub fn sanitize_forwarded_claude_system_prompt(text: &str) -> String {
         .to_owned()
 }
 
-fn system_text_parts(value: Option<&Value>) -> Vec<String> {
-    match value {
-        Some(Value::String(text)) if !text.trim().is_empty() => vec![text.trim().to_owned()],
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(str::to_owned)
-            .collect(),
-        _ => Vec::new(),
+// ref: internal/runtime/executor/claude_executor_cloaking.go:339-410 @ eb6a768d103da08c039c20dfad28aad2c936fbbc
+struct ForwardedClaudeSystemPromptBlock {
+    text: String,
+    cache_control: Option<Value>,
+}
+
+fn forwarded_claude_text_block(
+    text: &str,
+    source: &ForwardedClaudeSystemPromptBlock,
+    explicit_cache: bool,
+) -> Value {
+    let mut block = json!({"type":"text","text":text});
+    if explicit_cache {
+        if let Some(control) = &source.cache_control {
+            block["cache_control"] = control.clone();
+        }
+    } else {
+        block["cache_control"] = json!({"type":"ephemeral"});
     }
+    block
+}
+
+fn explicit_claude_prompt_cache_mode_root(root: &Value) -> bool {
+    root.pointer("/prompt_cache_options/mode")
+        .and_then(Value::as_str)
+        .is_some_and(|mode| mode.trim().eq_ignore_ascii_case("explicit"))
+}
+
+// ref: internal/runtime/executor/claude_executor_cloaking.go:1827-1873 @ eb6a768d103da08c039c20dfad28aad2c936fbbc
+pub fn is_explicit_claude_prompt_cache_mode(payloads: &[&[u8]]) -> bool {
+    payloads.iter().any(|payload| {
+        serde_json::from_slice::<Value>(payload)
+            .ok()
+            .is_some_and(|root| explicit_claude_prompt_cache_mode_root(&root))
+    })
+}
+
+pub fn strip_claude_prompt_cache_options(payload: &[u8]) -> Vec<u8> {
+    let Ok(mut root) = serde_json::from_slice::<Value>(payload) else {
+        return payload.to_vec();
+    };
+    let Some(object) = root.as_object_mut() else {
+        return payload.to_vec();
+    };
+    if object.remove("prompt_cache_options").is_none() {
+        return payload.to_vec();
+    }
+    encode_or_original(&root, payload)
 }
 
 pub fn validate_claude_caller_system_blocks(
@@ -417,6 +459,7 @@ pub fn relocate_claude_system_prompt_for_count_tokens(
     } else {
         collect_forwarded_claude_system_prompt_blocks(Some(&system))
     };
+    let explicit_cache = explicit_claude_prompt_cache_mode_root(&root);
     if !forwarded.is_empty() {
         if claude_uses_legacy_system_reminder(&root) {
             prepend_claude_system_reminders_to_first_user_message(&mut root, &forwarded);
@@ -424,9 +467,7 @@ pub fn relocate_claude_system_prompt_for_count_tokens(
             root["system"] = Value::Array(
                 forwarded
                     .iter()
-                    .map(|text| {
-                        json!({"type":"text","text":text,"cache_control":{"type":"ephemeral"}})
-                    })
+                    .map(|block| forwarded_claude_text_block(&block.text, block, explicit_cache))
                     .collect(),
             );
         } else {
@@ -436,14 +477,43 @@ pub fn relocate_claude_system_prompt_for_count_tokens(
     encode_or_original(&root, payload)
 }
 
-fn collect_forwarded_claude_system_prompt_blocks(value: Option<&Value>) -> Vec<String> {
-    system_text_parts(value)
-        .into_iter()
-        .filter(|text| {
-            !text.starts_with("x-anthropic-billing-header:")
-                && text != "You are Claude Code, Anthropic's official CLI for Claude."
-        })
-        .collect()
+fn collect_forwarded_claude_system_prompt_blocks(
+    value: Option<&Value>,
+) -> Vec<ForwardedClaudeSystemPromptBlock> {
+    let mut blocks = Vec::new();
+    let mut append = |text: &str, control: Option<&Value>| {
+        let text = text.trim();
+        if text.is_empty()
+            || text.starts_with("x-anthropic-billing-header:")
+            || text == "You are Claude Code, Anthropic's official CLI for Claude."
+        {
+            return;
+        }
+        let cache_control = control
+            .filter(|control| {
+                control.is_object()
+                    && control.get("type").and_then(Value::as_str) == Some("ephemeral")
+            })
+            .cloned();
+        blocks.push(ForwardedClaudeSystemPromptBlock {
+            text: text.to_owned(),
+            cache_control,
+        });
+    };
+    match value {
+        Some(Value::String(text)) => append(text, None),
+        Some(Value::Array(parts)) => {
+            for part in parts {
+                if part.get("type").and_then(Value::as_str) == Some("text") {
+                    if let Some(text) = part.get("text").and_then(Value::as_str) {
+                        append(text, part.get("cache_control"));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    blocks
 }
 
 const CLAUDE_LEGACY_SYSTEM_REMINDER_MODELS: &[&str] = &[
@@ -495,7 +565,11 @@ fn first_claude_user_message_index(root: &Value) -> Option<usize> {
         .position(|message| message.get("role").and_then(Value::as_str) == Some("user"))
 }
 
-fn prepend_claude_system_reminders_to_first_user_message(root: &mut Value, texts: &[String]) {
+fn prepend_claude_system_reminders_to_first_user_message(
+    root: &mut Value,
+    texts: &[ForwardedClaudeSystemPromptBlock],
+) {
+    let explicit_cache = explicit_claude_prompt_cache_mode_root(root);
     let Some(index) = first_claude_user_message_index(root) else {
         return;
     };
@@ -509,7 +583,14 @@ fn prepend_claude_system_reminders_to_first_user_message(root: &mut Value, texts
     };
     let reminders = texts
         .iter()
-        .map(|text| json!({"type":"text","text":claude_caller_system_reminder(text)}))
+        .map(|block| {
+            let text = claude_caller_system_reminder(&block.text);
+            if explicit_cache {
+                forwarded_claude_text_block(&text, block, true)
+            } else {
+                json!({"type":"text","text":text})
+            }
+        })
         .collect::<Vec<_>>();
     match content {
         Value::String(text) => {
@@ -561,7 +642,11 @@ fn claude_mid_conversation_system_messages_at_end(root: &Value) -> bool {
     insert_at > first_user + 1 && insert_at == messages.len()
 }
 
-fn insert_claude_mid_conversation_system_messages(root: &mut Value, texts: &[String]) {
+fn insert_claude_mid_conversation_system_messages(
+    root: &mut Value,
+    texts: &[ForwardedClaudeSystemPromptBlock],
+) {
+    let explicit_cache = explicit_claude_prompt_cache_mode_root(root);
     let Some(first_user) = first_claude_user_message_index(root) else {
         return;
     };
@@ -575,21 +660,21 @@ fn insert_claude_mid_conversation_system_messages(root: &mut Value, texts: &[Str
     {
         insert_at += 1;
     }
-    let already_present = texts.iter().enumerate().all(|(offset, text)| {
+    let already_present = texts.iter().enumerate().all(|(offset, block)| {
         messages.get(insert_at + offset).is_some_and(|message| {
             message.get("role").and_then(Value::as_str) == Some("system")
                 && message
                     .get("content")
                     .and_then(message_content_text)
                     .as_deref()
-                    == Some(text)
+                    == Some(block.text.as_str())
         })
     });
     if already_present {
         return;
     }
-    let inserted = texts.iter().map(|text| {
-        json!({"role":"system","content":[{"type":"text","text":text,"cache_control":{"type":"ephemeral"}}]})
+    let inserted = texts.iter().map(|block| {
+        json!({"role":"system","content":[forwarded_claude_text_block(&block.text, block, explicit_cache)]})
     });
     messages.splice(insert_at..insert_at, inserted);
 }
@@ -620,6 +705,7 @@ fn date_in_timezone_at(now: chrono::DateTime<Utc>, timezone: Tz) -> String {
 }
 
 fn inject_claude_code_current_date(root: &mut Value, current_date: Option<&str>, timezone: Tz) {
+    let explicit_cache = explicit_claude_prompt_cache_mode_root(root);
     let Some(index) = first_claude_user_message_index(root) else {
         return;
     };
@@ -641,9 +727,13 @@ fn inject_claude_code_current_date(root: &mut Value, current_date: Option<&str>,
     };
     match content {
         Value::String(text) => {
+            let mut user_block = json!({"type":"text","text":text});
+            if !explicit_cache {
+                user_block["cache_control"] = json!({"type":"ephemeral"});
+            }
             *content = json!([
                 {"type":"text","text":reminder},
-                {"type":"text","text":text,"cache_control":{"type":"ephemeral"}}
+                user_block
             ]);
         }
         Value::Array(blocks) => {
@@ -655,7 +745,7 @@ fn inject_claude_code_current_date(root: &mut Value, current_date: Option<&str>,
                     text.starts_with("<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is ")
                 })
             });
-            if let Some(block) = blocks.iter_mut().find(|block| {
+            if let Some(block) = blocks.iter_mut().filter(|_| !explicit_cache).find(|block| {
                 block.get("type").and_then(Value::as_str) == Some("text")
                     && !block
                         .get("text")

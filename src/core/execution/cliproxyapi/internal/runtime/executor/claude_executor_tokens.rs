@@ -7,7 +7,8 @@ use std::fmt;
 use serde_json::{value::RawValue, Value};
 
 use super::claude_executor_cloaking::{
-    validate_claude_caller_system_blocks, ClaudeCallerSystemBlockError,
+    is_explicit_claude_prompt_cache_mode, validate_claude_caller_system_blocks,
+    ClaudeCallerSystemBlockError,
 };
 use super::helps::{
     build_sensitive_word_matcher, count_claude_input_tokens, obfuscate_sensitive_words,
@@ -114,6 +115,8 @@ pub fn prepare_claude_first_party_token_count_body(
     policy: &ClaudeCloakPolicy,
     oauth_alias_secret: &str,
 ) -> Result<ClaudeFirstPartyTokenCountBody, ClaudeCallerSystemBlockError> {
+    // ref: internal/runtime/executor/claude_executor_tokens.go:172-235 @ eb6a768d103da08c039c20dfad28aad2c936fbbc
+    let explicit_cache = is_explicit_claude_prompt_cache_mode(&[body]);
     let mut body = set_claude_count_tokens_model(body, model);
     let cloaked = policy.should_cloak_request();
     if cloaked {
@@ -127,7 +130,9 @@ pub fn prepare_claude_first_party_token_count_body(
     }
 
     body = enforce_claude_cache_control_limit(&body, 4);
-    body = normalize_claude_cache_control_ttl(&body);
+    if !explicit_cache {
+        body = normalize_claude_cache_control_ttl(&body);
+    }
     let (mut requested_betas, mut body) = extract_and_remove_claude_betas(&body);
     if !requested_betas
         .iter()

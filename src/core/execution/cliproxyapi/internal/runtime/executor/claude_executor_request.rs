@@ -4,6 +4,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::claude_executor_cloaking::{
+    is_explicit_claude_prompt_cache_mode, strip_claude_prompt_cache_options,
+};
 use serde_json::Value;
 
 use super::helps::{
@@ -264,6 +267,8 @@ pub fn prepare_claude_upstream_body_with_identity(
     caller_secret: &str,
     oauth: bool,
 ) -> (Vec<u8>, Vec<String>, HashMap<String, String>) {
+    // ref: internal/runtime/executor/claude_executor_execute.go:94-199 @ eb6a768d103da08c039c20dfad28aad2c936fbbc
+    let explicit_cache = is_explicit_claude_prompt_cache_mode(&[body]);
     let body = sanitize_claude_web_search_domains(body);
     let body = disable_claude_thinking_if_tool_choice_forced(&body);
     let body = normalize_claude_sampling_for_upstream(&body);
@@ -273,13 +278,18 @@ pub fn prepare_claude_upstream_body_with_identity(
     } else {
         body
     };
-    let body = if count_claude_cache_controls(&body) == 0 {
+    let body = if !explicit_cache && count_claude_cache_controls(&body) == 0 {
         ensure_claude_cache_control(&body)
     } else {
         body
     };
     let body = enforce_claude_cache_control_limit(&body, 4);
-    let body = normalize_claude_cache_control_ttl(&body);
+    let body = if explicit_cache {
+        body
+    } else {
+        normalize_claude_cache_control_ttl(&body)
+    };
+    let body = strip_claude_prompt_cache_options(&body);
     let (requested_betas, body) = extract_and_remove_claude_betas(&body);
     let requested = claude_requested_betas("", &requested_betas);
     let betas = claude_code_cli_betas(&body, &requested, oauth)
@@ -319,6 +329,7 @@ pub fn prepare_claude_first_party_count_tokens_body(body: &[u8]) -> Vec<u8> {
     object.remove("metadata");
     object.remove("context_management");
     object.remove("diagnostics");
+    object.remove("prompt_cache_options");
     encode_or_original(&root, body)
 }
 
