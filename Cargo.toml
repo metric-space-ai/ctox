@@ -102,6 +102,14 @@ tokio-tungstenite = { version = "0.28.0", features = [
 rustls = { version = "0.23", features = ["ring"] }
 whatsapp = { path = "src/core/communication/whatsapp_rust/crates/whatsapp" }
 
+# Linux service builds use mimalloc for Rust allocations: glibc capped at
+# M_ARENA_MAX=4 (see main.rs) left every tokio/peer/HTTP thread contending on
+# four arena locks — 35 % of service CPU in malloc/free + lock waits while a
+# browser pulled replication data (perf on an on-prem host, 06.10.2026).
+# C libraries (SQLite, BoringSSL) keep the system allocator (no override).
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+mimalloc = { version = "0.1.52", default-features = false }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

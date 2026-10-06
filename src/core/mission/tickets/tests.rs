@@ -3984,3 +3984,65 @@ fn self_work_lifecycle_supports_assign_notes_and_transition() -> Result<()> {
     let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }
+
+#[test]
+fn rejected_self_work_transition_writes_no_remote_events_or_notes() -> Result<()> {
+    let root = temp_root("self-work-rejected-transition");
+    std::fs::create_dir_all(&root)?;
+
+    let item = put_ticket_self_work_item(
+        &root,
+        TicketSelfWorkUpsertInput {
+            source_system: "local".to_string(),
+            kind: "founder-communication-rework".to_string(),
+            title: "Founder communication rework: stale".to_string(),
+            body_text: "Stale rework without a success proof.".to_string(),
+            state: "open".to_string(),
+            metadata: json!({}),
+        },
+        true,
+    )?;
+    let item = transition_ticket_self_work_item(
+        &root,
+        &item.work_id,
+        "blocked",
+        "ctox",
+        Some("Blocked for the regression."),
+        "internal",
+    )?;
+    let remote_ticket_id = item
+        .remote_ticket_id
+        .clone()
+        .context("missing remote ticket id")?;
+    let notes_before = list_ticket_self_work_notes(&root, &item.work_id, 100)?.len();
+    let events_before =
+        ticket_local_native::list_local_ticket_events(&root, &remote_ticket_id, 100)?.len();
+
+    // Closing without a terminal success proof is rejected by the core state
+    // guard. The service retries this every router tick, so a rejection must
+    // not leave a remote status change, comment or note behind.
+    for _ in 0..3 {
+        let result = transition_ticket_self_work_item(
+            &root,
+            &item.work_id,
+            "closed",
+            "ctox-service",
+            Some("Founder communication already has a reviewed sent reply; closing stale internal work."),
+            "internal",
+        );
+        assert!(result.is_err(), "closing without proof must be rejected");
+    }
+
+    assert_eq!(
+        list_ticket_self_work_notes(&root, &item.work_id, 100)?.len(),
+        notes_before
+    );
+    assert_eq!(
+        ticket_local_native::list_local_ticket_events(&root, &remote_ticket_id, 100)?.len(),
+        events_before
+    );
+    let shown =
+        load_ticket_self_work_item(&root, &item.work_id)?.context("internal work item missing")?;
+    assert_eq!(shown.state, "blocked");
+    Ok(())
+}

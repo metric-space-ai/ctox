@@ -513,6 +513,14 @@ pub(crate) fn transition_ticket_self_work_item(
     let mut conn = open_ticket_db(root)?;
     let item = load_ticket_self_work_item_raw(&conn, work_id)?
         .context("ticket internal work item not found")?;
+    // Evaluate the state guard before any side effect. The real enforcement
+    // below runs inside a transaction that rolls back on rejection, so without
+    // this preflight a rejected transition still wrote the remote ticket
+    // transition and the note first; callers that retry every router tick
+    // (stale founder-rework cleanup) then appended a comment, a status event
+    // and a note every 12 s forever. The preflight transaction is rolled back,
+    // so it records nothing; the accepted transition is recorded once below.
+    preflight_ticket_self_work_state_transition(&mut conn, work_id, &item.state, state, note)?;
     let mut remote_event_ids = Vec::new();
     if let Some(remote_ticket_id) = item.remote_ticket_id.as_deref() {
         let adapter = ticket_adapters::adapter_for_system(&item.source_system)
@@ -2025,6 +2033,28 @@ pub(super) fn ticket_self_work_core_event(state: &str) -> Result<CoreEvent> {
             )
         }
     }
+}
+
+fn preflight_ticket_self_work_state_transition(
+    conn: &mut Connection,
+    work_id: &str,
+    from_state: &str,
+    to_state: &str,
+    failure_reason: Option<&str>,
+) -> Result<()> {
+    let tx = conn.transaction()?;
+    let verdict = enforce_ticket_self_work_state_transition(
+        &tx,
+        work_id,
+        from_state,
+        to_state,
+        "ctox-ticket",
+        "set_ticket_self_work_state",
+        failure_reason,
+        None,
+    );
+    tx.rollback()?;
+    verdict
 }
 
 pub(super) fn set_ticket_self_work_state_internal(
