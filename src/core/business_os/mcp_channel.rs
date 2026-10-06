@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -60,6 +61,10 @@ const MCP_POLICY_PAYLOAD_KEY: &str = "business_os.mcp_policy.v1";
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const APPSEC_MCP_MODULE_ID: &str = "appsec-pentest";
 const DEFAULT_GATEWAY_RECONNECT_MAX_DELAY_MS: u64 = 30_000;
+/// MCP requests a gateway connection works on at the same time.
+const GATEWAY_CONCURRENT_REQUESTS: usize = 4;
+/// How long a planned max-age rotation waits for running requests.
+const GATEWAY_ROTATION_GRACE: Duration = Duration::from_secs(60);
 const DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
 const DEFAULT_GATEWAY_MAX_CONNECTION_AGE_MS: u64 = 15 * 60 * 1000;
 const MAX_APP_SOURCE_WRITE_BYTES: usize = 1024 * 1024;
@@ -1092,6 +1097,14 @@ async fn connect_managed_gateway_once(
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let reconnect_after = tokio::time::sleep(Duration::from_millis(max_connection_age_ms));
     tokio::pin!(reconnect_after);
+    // Requests are handled off the socket loop, a bounded number at a time,
+    // and answered as they finish (responses carry their request_id). Handling
+    // them inline serialized every tool call behind the slowest one and froze
+    // the heartbeat with it; on a slow host clients hit 90 s timeouts.
+    let (response_tx, mut response_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let permits = Arc::new(tokio::sync::Semaphore::new(GATEWAY_CONCURRENT_REQUESTS));
+    let mut in_flight = 0_usize;
+    let mut rotating = false;
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
@@ -1101,9 +1114,26 @@ async fn connect_managed_gateway_once(
                     .context("Business OS MCP gateway heartbeat failed")?;
             }
             _ = &mut reconnect_after => {
-                return Ok(ManagedGatewayConnectionExit::MaxAgeReached);
+                if rotating || in_flight == 0 {
+                    return Ok(ManagedGatewayConnectionExit::MaxAgeReached);
+                }
+                // Planned rotation waits for answers already being worked on.
+                rotating = true;
+                reconnect_after
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + GATEWAY_ROTATION_GRACE);
             }
-            message = read.next() => {
+            Some(response) = response_rx.recv() => {
+                in_flight = in_flight.saturating_sub(1);
+                write
+                    .send(Message::Text(response.into()))
+                    .await
+                    .context("Business OS MCP gateway websocket write failed")?;
+                if rotating && in_flight == 0 {
+                    return Ok(ManagedGatewayConnectionExit::MaxAgeReached);
+                }
+            }
+            message = read.next(), if !rotating => {
                 let Some(message) = message else {
                     break;
                 };
@@ -1111,14 +1141,26 @@ async fn connect_managed_gateway_once(
                 let Message::Text(text) = message else {
                     continue;
                 };
-                let response = handle_gateway_message(root, text.as_ref());
-                write
-                    .send(Message::Text(response.into()))
-                    .await
-                    .context("Business OS MCP gateway websocket write failed")?;
+                in_flight += 1;
+                let root = root.to_path_buf();
+                let response_tx = response_tx.clone();
+                let permits = Arc::clone(&permits);
+                tokio::spawn(async move {
+                    let _permit = permits.acquire_owned().await;
+                    let text = text.to_string();
+                    let response =
+                        tokio::task::spawn_blocking(move || handle_gateway_message(&root, &text))
+                            .await
+                            .unwrap_or_else(|_| {
+                                r#"{"type":"mcp_response","request_id":"","status":500,"headers":{"content-type":"application/json; charset=utf-8"},"body":"{}"}"#.to_string()
+                            });
+                    let _ = response_tx.send(response);
+                });
             }
         }
     }
+    // Requests still running when the gateway closes the stream cannot be
+    // answered any more; the socket is gone.
     Ok(ManagedGatewayConnectionExit::StreamEnded)
 }
 
@@ -15788,5 +15830,78 @@ mod tests {
             Some("changes_requested")
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod gateway_socket_tests {
+    use super::*;
+
+    #[test]
+    fn gateway_answers_pipelined_requests() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.expect("accept");
+                let mut ws = tokio_tungstenite::accept_async(socket).await.expect("ws");
+                // Three requests before reading any answer: all must come back.
+                for index in 0..3 {
+                    ws.send(Message::Text(
+                        serde_json::json!({ "type": "not_a_request", "request_id": format!("r{index}") })
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .expect("send");
+                }
+                let mut answered = BTreeSet::new();
+                while answered.len() < 3 {
+                    let Some(Ok(Message::Text(text))) = ws.next().await else {
+                        panic!("gateway closed before answering");
+                    };
+                    let value: Value = serde_json::from_str(text.as_ref()).expect("json");
+                    if value.get("type").and_then(Value::as_str) == Some("mcp_response") {
+                        answered.insert(
+                            value
+                                .get("request_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                        );
+                    }
+                }
+                ws.close(None).await.ok();
+                answered
+            });
+            let root = tempfile::tempdir().expect("root");
+            let options = BusinessOsMcpGatewayConnectOptions {
+                url: format!("ws://{addr}"),
+                token: None,
+                reconnect: false,
+                max_reconnect_delay_ms: 1_000,
+                heartbeat_interval_ms: 5_000,
+                max_connection_age_ms: 60_000,
+            };
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                connect_managed_gateway_once(root.path(), &options),
+            )
+            .await
+            .expect("gateway session finished");
+            assert!(result.is_ok(), "orderly close ends the session: {result:?}");
+            let answered = server.await.expect("server");
+            assert_eq!(
+                answered.into_iter().collect::<Vec<_>>(),
+                vec!["r0".to_string(), "r1".to_string(), "r2".to_string()]
+            );
+        });
     }
 }

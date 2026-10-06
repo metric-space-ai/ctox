@@ -1,5 +1,13 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### CLI app command admission
+
+CLI app create/modify and app-bench requests persist and enqueue the real coding
+task. Admission leaves generated app files and execution completion to the
+bounded worker and its existing review/validation lifecycle, as the Business OS
+MCP path does. A modify request still requires its existing module manifest.
+Synchronous starter materialization remains available to its other callers.
+
 ### Native field-review view
 
 Outbound App consumers can request `ctox.outbound.field_review_view.v1` over the
@@ -33,7 +41,7 @@ timestamps; pending writes/conflicts and the24-hour retention window survive.
 These paths no longer hold the complete pending WAL payload in memory. Batch
 atomicity and the v4 schema are unchanged; individual batch payloads and the
 ID/order summaries still consume memory. This source repair does not establish
-the THESEN renderer-crash cause or actual Windows8GiB startup acceptance.
+the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acceptance.
 
 ### Browser live-query single-flight
 
@@ -334,6 +342,23 @@ settles the helper and requests continuation of the original task, under the
 existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
+
+### D&B classification evidence
+
+Direct authenticated company capture keeps WZ 2008 (DE) distinct from NACE,
+SIC, NOGA and OENACE. It accepts a five-digit WZ subclass only from the
+observed company profile with the expected company ID and an exact observed
+company heading or title. Conflicting WZ values produce no `wz_code`.
+The result retains the literal WZ section in `source_quote`; an NACE value
+never supplies a missing WZ digit. These browser-capture source gates do not
+certify an installed capture or the independently registered scrape script.
+
+The separate Direct+ JSON parser is compiled from Workjet, selected by the
+Cargo Git revision. Its WZ correction and executing regressions belong in
+native/web-stack, followed by a reviewed CTOX dependency and lockfile update.
+The resolved package must execute the explicit-WZ, foreign-scheme, incomplete,
+conflicting and equivalent-notation cases. Editing CTOX's inactive
+src/tools/web-stack copy does not change the compiled parser.
 
 ### Outbound research source receipts
 
@@ -712,6 +737,19 @@ must distinguish it from a complete snapshot. The built-in Crew subscribes this
 way only for harness status and triggers its existing authoritative row read;
 it does not render the changed-document payload as a fully loaded collection.
 The shell's scoped collection facade preserves this subscription option.
+
+A consumer that only needs to know *that* something changed — because it
+re-runs its own bounded query — subscribes with
+`subscribe(listener, { invalidateOnly: true })`. It never reads the collection:
+the listener receives `{ collectionName, invalidated: true }` once right after
+subscribing and then, debounced, whenever the local store or the demand loader
+reports a change. A plain `$` subscription materializes the 200-document demand
+window first and, for the control-plane ledgers (`business_commands`,
+`ctox_queue_tasks`), refetches it after each change; crew presence, chat
+tracking and the desktop command stream used it purely as a change trigger and
+downloaded ~1.5 MB of ledger documents per shell start that way (on-prem deployment,
+06.10.2026). They now use `invalidateOnly`. Chat tracking additionally looks up
+only messages that still need a sync (`trackedMessageNeedsSync`).
 
 Crew app presence retains the last valid queue snapshot when a read fails.
 An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;
@@ -1631,6 +1669,29 @@ no buffered-amount getter). Sends are prioritised high/normal/low; control
 frames are intrinsically high, oversized `masterWrite`s stay low, frames for
 active collections are high.
 
+**Pipelining (2026-10).** The native sender keeps up to
+`FRAME_PIPELINE_WINDOWS = 24` ack windows (96 chunks, ~1 MB, just under the
+native 1 MiB buffered-amount high-water mark) in flight
+instead of stop-and-wait per window; browser acks are cumulative, so an ack
+for sequence *n* settles every outstanding window at or below *n*
+(`take_pending_frame_acks`). Browsers reaching the peer through a TURN relay
+over a slow UDP path measured 400–900 ms RTT, so throughput is bounded by
+bytes-in-flight per round trip, not by bandwidth.
+
+**Compression (`ctox-rxdb-frame-deflate-v1`).** When the browser advertises
+this capability in its `ctoxProtocol` handshake (only where
+`DecompressionStream` exists), the native peer deflates (raw deflate, fast
+level) every framed payload of at least 32 KiB and base64-encodes it; it is
+only used when the result is below 90% of the plain text. The `start` frame
+then carries `"encoding": "deflate-raw-base64"` (also on restarts), and
+`totalBytes`/chunking apply to the transmitted base64 text. The browser
+reassembles, checks `totalBytes`, inflates through
+`DecompressionStream('deflate-raw')` with a 16× `MAX_TRANSFER_BYTES` inflate
+ceiling, and only then parses JSON. Replication documents compress 5–10×, so
+this is the main lever on slow uplinks. Peers without the capability keep
+receiving plain frames; an unknown `encoding` is a decode error, never a
+silent pass-through.
+
 ### 6.4 Demand-loading RPCs (V1.5)
 
 The native `NativeSyncSession::file_range` consumer uses the existing
@@ -2157,6 +2218,35 @@ ACK windows, retries and the WebRTC-only data boundary remain unchanged.
 `hidden-transfer-smoke.mjs` verifies both directions with all page progress
 timers held. Transport diagnostics report page visibility and a bounded,
 expiring observed timer-delay sample; visibility alone does not prove throttling.
+
+
+### Projected query windows
+
+List reads may pass `projection: ['id', 'payload.weitere_kampagnen', 'payload.tasks.status']`
+to `find({ selector, sort, skip, limit, projection })`. Projections include the
+collection primary key, `_rev`, and `_deleted`, normalize duplicates and parent
+paths, and have separate query fingerprints. An absent, null, or empty projection
+preserves the existing full-query fingerprint. Nested arrays retain their positions.
+
+Projected RxDocuments and their direct `toJSON()` values are read-only.
+Before mutation, bulk actions, or export, hydrate the selected full document
+through an unprojected query. For an authoritative edit use a fresh
+`requireRevision` token; a missing or replaced bridge cannot satisfy that read
+from a prior generation.
+
+Projected payloads never enter the primary document store. Their separate
+IndexedDB cache retains at most 16 MiB and 64 windows; each window contains at
+most 200 rows and 1 MiB. Window metadata records the payload key and current
+read-permission digest. Missing/evicted payloads refetch, and unknown or changed
+permission identities cannot authorize cached rows. Metadata scans do not read
+payload blobs. Revalidation notifies query subscriptions without synthetic
+canonical writes.
+
+Every projected native chunk confirms the normalized fields in
+`appliedProjection`, including compressed and terminal chunks. A peer that
+omits or changes the confirmation fails with `QUERY_PROJECTION_NOT_SUPPORTED`;
+there is no transfer of full rows as a fallback. Server document filters and
+field policy remain authoritative.
 
 ## 10. Build & release
 

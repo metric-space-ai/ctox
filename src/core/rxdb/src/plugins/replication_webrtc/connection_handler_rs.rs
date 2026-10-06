@@ -52,7 +52,17 @@ const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_RESUME_TIMEOUT: Duration = Duration::from_secs(1);
 const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
 /// ACK windows a framed transfer keeps in flight (each FRAME_ACK_WINDOW chunks).
-const FRAME_PIPELINE_WINDOWS: usize = 8;
+/// 24 windows are ~1 MB, just under DATA_CHANNEL_BUFFERED_HIGH_WATER. Browsers
+/// that reach the peer through a TURN relay over a slow UDP path showed
+/// 400-900 ms RTT (06.10.2026); with 8 windows (~320 KB) such a link capped
+/// framed throughput at well under 1 MB/s regardless of bandwidth.
+const FRAME_PIPELINE_WINDOWS: usize = 24;
+/// Browser capability: accepts `start.encoding = FRAME_ENCODING_DEFLATE_BASE64`.
+pub const CTOX_FRAME_DEFLATE_CAPABILITY: &str = "ctox-rxdb-frame-deflate-v1";
+/// Framed payload encoding: raw deflate of the UTF-8 text, base64 encoded.
+pub const FRAME_ENCODING_DEFLATE_BASE64: &str = "deflate-raw-base64";
+/// Payloads below this size are framed uncompressed.
+const FRAME_COMPRESSION_MIN_BYTES: usize = 32 * 1024;
 static AUXILIARY_TRANSFER_COUNTER: AtomicU64 = AtomicU64::new(1);
 // Phase 1 (constant real-time stream): native -> browser SCTP send-buffer
 // watermarks. webrtc-rs exposes no buffered-amount *getter*, only threshold
@@ -1126,6 +1136,7 @@ pub struct WebRTCRsConnectionHandler {
     incoming_frames: Arc<Mutex<HashMap<TransferStateKey, IncomingFrame>>>,
     completed_frame_acks: Arc<Mutex<HashMap<TransferStateKey, CompletedFrameAck>>>,
     pending_frame_acks: Arc<Mutex<HashMap<PendingFrameAckKey, PendingFrameAck>>>,
+    frame_compression_peers: Arc<Mutex<HashSet<PeerId>>>,
     send_queues: Arc<Mutex<HashMap<WebRTCRsPeer, PeerSendQueue>>>,
     /// Phase 2: per-peer "active collection" set. A browser sends
     /// `rxdb.activeCollections` (params: `[[collectionNames]]`) whenever its
@@ -1330,6 +1341,7 @@ impl WebRTCRsConnectionHandler {
             incoming_frames: Arc::new(Mutex::new(HashMap::new())),
             completed_frame_acks: Arc::new(Mutex::new(HashMap::new())),
             pending_frame_acks: Arc::new(Mutex::new(HashMap::new())),
+            frame_compression_peers: Arc::new(Mutex::new(HashSet::new())),
             send_queues: Arc::new(Mutex::new(HashMap::new())),
             active_collections: Arc::new(Mutex::new(HashMap::new())),
             presence: Arc::new(Mutex::new(HashMap::new())),
@@ -2242,6 +2254,12 @@ fn should_rebuild_peer_for_inbound_offer(peer_exists: bool, _data_channel_open: 
 impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     type Peer = WebRTCRsConnection;
 
+    fn enable_frame_compression_for_peer(&self, peer: &Self::Peer) {
+        self.frame_compression_peers
+            .lock()
+            .insert(peer.peer_id.clone());
+    }
+
     fn local_peer_role(&self) -> super::NativePeerRole {
         self.peer_role
     }
@@ -3083,10 +3101,26 @@ impl WebRTCRsConnectionHandler {
                 })),
             ));
         }
+        // Peers that advertised CTOX_FRAME_DEFLATE_CAPABILITY receive large
+        // payloads deflated + base64 (JSON documents shrink several-fold, and
+        // base64 needs no JSON escaping in the chunk frames). A relayed
+        // channel moved ~1-4 MB/s of raw JSON (on-prem deployment, 06.10.2026).
+        let encoding = if text.len() >= FRAME_COMPRESSION_MIN_BYTES
+            && self.frame_compression_peers.lock().contains(peer)
+        {
+            compress_frame_payload(&text)
+        } else {
+            None
+        };
+        let (text, encoding) = match encoding {
+            Some(compressed) => (compressed, Some(FRAME_ENCODING_DEFLATE_BASE64)),
+            None => (text, None),
+        };
         let chunks = split_chunks_for_frame(&text, &transfer_id);
         let _transfer_guard = FramedTransferGuard::new(self, peer, &transfer_id);
 
         let mut transfer_attempt = 0usize;
+<<<<<<< HEAD
         let start = transport_start_frame(&transfer_id, transfer_attempt, chunks.len(), text.len());
         send_json_text_owned(
             &data_channel,
@@ -3095,6 +3129,16 @@ impl WebRTCRsConnectionHandler {
             publication,
         )
         .await?;
+=======
+        let start = transport_start_frame(
+            &transfer_id,
+            transfer_attempt,
+            chunks.len(),
+            text.len(),
+            encoding,
+        );
+        send_json_text(&data_channel, &start).await?;
+>>>>>>> origin/main
         self.record_sent_transport_frame(&start);
 
         let windows: Vec<(usize, usize)> = (0..chunks.len())
@@ -3108,8 +3152,13 @@ impl WebRTCRsConnectionHandler {
             .collect();
         'attempts: loop {
             if transfer_attempt > 0 {
-                let restart =
-                    transport_start_frame(&transfer_id, transfer_attempt, chunks.len(), text.len());
+                let restart = transport_start_frame(
+                    &transfer_id,
+                    transfer_attempt,
+                    chunks.len(),
+                    text.len(),
+                    encoding,
+                );
                 send_json_text_owned(
                     &data_channel,
                     &restart,
@@ -3826,8 +3875,9 @@ fn transport_start_frame(
     attempt: usize,
     total_frames: usize,
     total_bytes: usize,
+    encoding: Option<&str>,
 ) -> Value {
-    serde_json::json!({
+    let mut frame = serde_json::json!({
         "ctoxFrame": CTOX_FRAME_PROTOCOL,
         "kind": "start",
         "transferId": transfer_id,
@@ -3835,7 +3885,22 @@ fn transport_start_frame(
         "attempt": attempt,
         "totalFrames": total_frames,
         "totalBytes": total_bytes,
-    })
+    });
+    if let (Some(encoding), Some(object)) = (encoding, frame.as_object_mut()) {
+        object.insert("encoding".to_string(), Value::String(encoding.to_string()));
+    }
+    frame
+}
+
+/// Raw deflate + base64 of a framed payload; `None` when it does not shrink.
+fn compress_frame_payload(text: &str) -> Option<String> {
+    use base64::Engine as _;
+    use std::io::Write as _;
+    let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(text.as_bytes()).ok()?;
+    let compressed = encoder.finish().ok()?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(compressed);
+    (encoded.len() < text.len() / 10 * 9).then_some(encoded)
 }
 
 fn transport_chunk_frame(transfer_id: &str, attempt: usize, seq: usize, data: &str) -> Value {
@@ -7571,7 +7636,7 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap();
 
-        let start = transport_start_frame(transfer_id, 0, 3, 30000);
+        let start = transport_start_frame(transfer_id, 0, 3, 30000, None);
         assert_eq!(start, fixture["frames"]["start"]);
 
         let chunk = transport_chunk_frame(transfer_id, 0, 1, "payload-fragment");
@@ -8148,5 +8213,68 @@ mod tests {
         assert!(!handler.presence_sweep_armed.load(Ordering::SeqCst));
         assert!(handler.presence_sweep_task.lock().is_none());
         assert!(handler.presence.lock().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod frame_compression_tests {
+    use super::*;
+
+    #[test]
+    fn large_json_payloads_deflate_and_round_trip() {
+        use base64::Engine as _;
+        use std::io::Read as _;
+        let documents: Vec<Value> = (0..400)
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("lead_{index}"),
+                    "name": format!("Firma {index} GmbH"),
+                    "evidence": "https://www.northdata.de/registry evidence ".repeat(6),
+                })
+            })
+            .collect();
+        let text = serde_json::json!({ "result": { "documents": documents } }).to_string();
+        let encoded = compress_frame_payload(&text).expect("JSON payload compresses");
+        assert!(
+            encoded.len() * 3 < text.len(),
+            "expected at least 3x reduction"
+        );
+
+        let compressed = base64::engine::general_purpose::STANDARD
+            .decode(&encoded)
+            .expect("base64");
+        let mut decoded = String::new();
+        flate2::read::DeflateDecoder::new(compressed.as_slice())
+            .read_to_string(&mut decoded)
+            .expect("inflate");
+        assert_eq!(decoded, text);
+
+        let start = transport_start_frame(
+            "peer|frame|1",
+            0,
+            2,
+            encoded.len(),
+            Some(FRAME_ENCODING_DEFLATE_BASE64),
+        );
+        assert_eq!(start["encoding"], FRAME_ENCODING_DEFLATE_BASE64);
+        assert!(transport_start_frame("peer|frame|2", 0, 1, 10, None)
+            .get("encoding")
+            .is_none());
+    }
+
+    #[test]
+    fn incompressible_payloads_stay_plain() {
+        // High-entropy printable text: deflate gains little and base64 adds a
+        // third, so sending it compressed would only cost CPU on both ends.
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let noise: String = (0..40_000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                char::from(b'!' + (state % 94) as u8)
+            })
+            .collect();
+        assert!(compress_frame_payload(&noise).is_none());
     }
 }

@@ -20,6 +20,12 @@ on:
       - 'src/tools/web-stack/src/surface.rs'
       - 'src/tools/web-stack/src/sources/**'
       - 'src/tools/web-stack/scripts/test_web_search_e2e.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/web_stack_source.py'
+      - 'scripts/test_web_stack_source.py'
+      - 'scripts/web_stack_mutation.py'
+      - 'scripts/test_web_stack_mutation.py'
       - '.github/workflows/web-search.yml'
   pull_request:
     branches: [main]
@@ -28,6 +34,12 @@ on:
       - 'src/tools/web-stack/src/surface.rs'
       - 'src/tools/web-stack/src/sources/**'
       - 'src/tools/web-stack/scripts/test_web_search_e2e.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/web_stack_source.py'
+      - 'scripts/test_web_stack_source.py'
+      - 'scripts/web_stack_mutation.py'
+      - 'scripts/test_web_stack_mutation.py'
       - '.github/workflows/web-search.yml'
   workflow_dispatch:
     inputs:
@@ -42,6 +54,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: "2"
+  RUST_TEST_THREADS: "2"
   CARGO_TARGET_DIR: target
 
 jobs:
@@ -69,8 +83,11 @@ jobs:
             libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev \
             jq sqlite3
 
+      - name: Test web-stack source binding
+        run: python3 -m unittest discover -s scripts -p 'test_web_stack*.py'
+
       - name: Build ctox
-        run: cargo build --locked -p ctox
+        run: python3 scripts/web_stack_source.py daemon-build
 
       - name: Run search E2E
         env:

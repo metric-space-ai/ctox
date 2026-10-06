@@ -79,10 +79,13 @@ export function batchSizeFor(collection) {
   // can exceed the framed WebRTC transfer ceiling and strand later documents.
   if (collection === 'knowledge_tables') return 1;
   if (collection.includes('attachment') || collection.includes('chunk')) return 8;
-  // Regular business docs are small (≤ ~2 KB); 20 per round-trip halves the
-  // initial catch-up round-trips without approaching frame limits (the
-  // frame protocol chunks large answers transparently).
-  return 20;
+  // Regular business docs are small (≤ ~2 KB). Each pull round-trip pays a
+  // fixed request/response/storage cost (~0.2–0.5 s on an on-prem
+  // tenant, 06.10.2026), so 20 docs per round capped small-document catch-up
+  // at a few dozen KB per round. The native master bounds every answer by
+  // bytes (master_response_ceiling_bytes) and the pull drain is
+  // truncation-aware, so large documents still arrive in byte-bounded pages.
+  return 100;
 }
 
 export function nativeRxdbPeerReady(config, db) {

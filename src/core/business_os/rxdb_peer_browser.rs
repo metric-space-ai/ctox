@@ -464,6 +464,14 @@ async fn handle_browser_live_webrtc_request_inner(
     {
         return Err("browser live controller lease is missing or expired".to_string());
     }
+    let tab_id = session_doc
+        .get("current_tab_id")
+        .and_then(Value::as_str)
+        .unwrap_or("browser_tab_default");
+    let expected_generation = browser_live_optional_binding(&request, "runtime_generation")?;
+    let expected_tab_id = browser_live_optional_binding(&request, "active_tab_id")?;
+    // Authorize and validate the entire batch before accessing any live runner.
+    let events = browser_live_input_events(&request, session_id, tab_id)?;
     let manager = browser_runtime_manager();
     let session = manager
         .get(session_id)
@@ -493,9 +501,16 @@ async fn handle_browser_live_webrtc_request_inner(
             json!({ "timeoutMs": 30_000 })
         };
         let result = manager
-            .request(&session, operation, op_params)
+            .request_for_surface(
+                &session,
+                operation,
+                op_params,
+                expected_generation,
+                expected_tab_id,
+            )
             .await
             .map_err(|error| format!("browser live navigation failed: {error:#}"))?;
+        ensure_browser_live_navigation_succeeded(&result)?;
         let nav = result.get("nav").cloned().unwrap_or(Value::Null);
         let final_url = nav
             .get("url")
@@ -572,36 +587,34 @@ async fn handle_browser_live_webrtc_request_inner(
         )
         .await
         .map_err(|error| format!("browser live session projection failed: {error:#}"))?;
-        return Ok(result);
+        return Ok(bind_browser_live_response(
+            result,
+            session_id,
+            tab_id,
+            session.runtime_generation(),
+        ));
     }
-    let events = request
-        .get("events")
-        .and_then(Value::as_array)
-        .map(|events| {
-            events
-                .iter()
-                .take(64)
-                .map(browser_runtime_input_event)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let max_seq = request
-        .get("events")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|event| event.get("seq").and_then(Value::as_u64))
-        .max()
-        .unwrap_or(0);
     if operation == "input" {
         let response = manager
-            .request(&session, "input", json!({ "events": events }))
+            .request_for_surface(
+                &session,
+                "input",
+                json!({ "events": events }),
+                expected_generation,
+                expected_tab_id,
+            )
             .await
             .map_err(|error| format!("browser live input request failed: {error:#}"))?;
+        let max_seq = browser_live_applied_input_seq(&request, &response);
         if max_seq > 0 {
             session.record_input_seq(max_seq);
         }
-        return Ok(response);
+        return Ok(bind_browser_live_response(
+            response,
+            session_id,
+            tab_id,
+            session.runtime_generation(),
+        ));
     }
     // Read the automation script this session is actually running. Operators
     // asked to switch between the live view and the script inside the app,
@@ -629,7 +642,7 @@ async fn handle_browser_live_webrtc_request_inner(
         return Err(format!("unsupported browser live operation: {operation}"));
     }
     let response = manager
-        .request(
+        .request_for_surface(
             &session,
             "live",
             json!({
@@ -641,13 +654,119 @@ async fn handle_browser_live_webrtc_request_inner(
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
             }),
+            expected_generation,
+            expected_tab_id,
         )
         .await
         .map_err(|error| format!("browser live runtime request failed: {error:#}"))?;
+    let max_seq = browser_live_applied_input_seq(&request, &response);
     if max_seq > 0 {
         session.record_input_seq(max_seq);
     }
-    Ok(response)
+    Ok(bind_browser_live_response(
+        response,
+        session_id,
+        tab_id,
+        session.runtime_generation(),
+    ))
+}
+
+fn ensure_browser_live_navigation_succeeded(response: &Value) -> Result<(), String> {
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(format!(
+            "browser navigation failed: {}",
+            response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("runner did not confirm navigation")
+        ));
+    }
+    Ok(())
+}
+
+fn browser_live_optional_binding(request: &Value, field: &str) -> Result<Option<String>, String> {
+    let Some(value) = request.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(|value| Some(value.to_string()))
+        .ok_or_else(|| format!("browser live {field} must be a nonempty string"))
+}
+
+fn browser_live_input_events(
+    request: &Value,
+    session_id: &str,
+    tab_id: &str,
+) -> Result<Vec<Value>, String> {
+    let Some(events) = request.get("events") else {
+        return Ok(Vec::new());
+    };
+    let events = events
+        .as_array()
+        .ok_or_else(|| "browser live events must be an array".to_string())?;
+    if events.len() > 64 {
+        return Err("browser live input batch exceeds 64 events".to_string());
+    }
+    for event in events {
+        if !event.is_object() {
+            return Err("browser live input event must be an object".to_string());
+        }
+        for (field, expected) in [("session_id", session_id), ("tab_id", tab_id)] {
+            if event
+                .get(field)
+                .is_some_and(|value| value.as_str() != Some(expected))
+            {
+                return Err(format!(
+                    "browser live input {field} does not match requested surface"
+                ));
+            }
+        }
+    }
+    Ok(events.iter().map(browser_runtime_input_event).collect())
+}
+
+fn browser_live_applied_input_seq(request: &Value, response: &Value) -> u64 {
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return 0;
+    }
+    let events = request.get("events").and_then(Value::as_array);
+    response
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|result| result.get("ok").and_then(Value::as_bool) == Some(true))
+        .filter_map(|result| result.get("index").and_then(Value::as_u64))
+        .filter_map(|index| usize::try_from(index).ok())
+        .filter_map(|index| events?.get(index)?.get("seq")?.as_u64())
+        .max()
+        .unwrap_or(0)
+}
+
+fn bind_browser_live_response(
+    mut response: Value,
+    session_id: &str,
+    tab_id: &str,
+    runtime_generation: &str,
+) -> Value {
+    let active_tab_id = response
+        .pointer("/nav/active_tab_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    if let Some(response) = response.as_object_mut() {
+        response.insert(
+            "binding".to_string(),
+            json!({
+                "session_id": session_id,
+                "tab_id": tab_id,
+                "runtime_generation": runtime_generation,
+                "active_tab_id": active_tab_id,
+            }),
+        );
+    }
+    response
 }
 
 async fn start_browser_live_webrtc_session(
@@ -730,6 +849,7 @@ async fn start_browser_live_webrtc_session(
         )
         .await
         .map_err(|error| format!("browser direct navigation failed: {error:#}"))?;
+    ensure_browser_live_navigation_succeeded(&navigation)?;
     let nav = navigation.get("nav").cloned().unwrap_or(Value::Null);
     let final_url = nav
         .get("url")
@@ -794,11 +914,19 @@ async fn start_browser_live_webrtc_session(
         "tab_id": tab_id,
         "lease_id": lease_id,
         "lease_expires_at_ms": now + 120_000,
+        "binding": {
+            "session_id": session_id,
+            "tab_id": tab_id,
+            "runtime_generation": session.runtime_generation(),
+            "active_tab_id": nav.get("active_tab_id").cloned().unwrap_or(Value::Null),
+        },
         "nav": {
             "url": final_url,
             "title": title,
             "can_go_back": can_go_back,
-            "can_go_forward": can_go_forward
+            "can_go_forward": can_go_forward,
+            "active_tab_id": nav.get("active_tab_id").cloned().unwrap_or(Value::Null),
+            "tabs": nav.get("tabs").cloned().unwrap_or_else(|| json!([]))
         }
     }))
 }
@@ -3691,6 +3819,256 @@ mod tests {
     use rusqlite::{params, Connection};
     use rxdb::rx_database::RxCollectionCreator;
     use std::collections::HashMap;
+
+    #[test]
+    fn failed_browser_navigation_cannot_be_projected_as_active_success() {
+        assert!(ensure_browser_live_navigation_succeeded(&json!({"ok": true})).is_ok());
+        assert!(ensure_browser_live_navigation_succeeded(
+            &json!({"ok": false, "error": "blocked egress"})
+        )
+        .unwrap_err()
+        .contains("blocked egress"));
+        assert!(ensure_browser_live_navigation_succeeded(
+            &json!({"nav": {"url": "https://example.com/"}})
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn browser_live_signed_handler_rejects_foreign_input_before_runner_lookup() {
+        let root = tempfile::tempdir().expect("isolated browser authorization root");
+        let database = open_test_database(root.path().join("browser-live-authorization.sqlite3"))
+            .await
+            .expect("open real isolated native database");
+        database
+            .add_collections(HashMap::from([(
+                "browser_sessions".to_string(),
+                RxCollectionCreator {
+                    schema: business_os_schema("browser_sessions", "id"),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]))
+            .await
+            .expect("register actual browser session collection");
+        let now = now_ms() as i64;
+        let (foreign_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "browser-test-bob",
+            "Browser test Bob",
+            "chef",
+            now,
+        )
+        .expect("native signed foreign owner fixture");
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "browser-test-alice",
+            "Browser test Alice",
+            "chef",
+            now,
+        )
+        .expect("native signed session owner fixture");
+        assert!(store::webrtc_capability_allows_collection_permission(
+            root.path(),
+            &token,
+            "browser_sessions",
+            BusinessOsPermission::DataRead,
+        ));
+        assert!(store::webrtc_capability_allows_collection_permission(
+            root.path(),
+            &token,
+            "browser_sessions",
+            BusinessOsPermission::DataWrite,
+        ));
+        assert_eq!(
+            store::verify_webrtc_capability_actor(root.path(), &foreign_token)
+                .expect("foreign token valid, not merely a bad signature")
+                .0,
+            "browser-test-bob"
+        );
+        let now = now_ms() as i64;
+        let session_id = format!("browser_signed_guard_{}", uuid::Uuid::new_v4());
+        let tab_id = "browser-logical-tab";
+        let access = BrowserSessionAccess {
+            tenant_id: Some("browser-test-tenant".to_string()),
+            owner_user_id: Some("browser-test-alice".to_string()),
+            controller_user_id: Some("browser-test-alice".to_string()),
+            controller_lease_id: Some("browser-test-lease".to_string()),
+            controller_lease_expires_at_ms: Some(now as u64 + 120_000),
+        };
+        upsert_browser_session(
+            &database,
+            &session_id,
+            tab_id,
+            "active",
+            "active",
+            "https://example.test/",
+            "Browser test",
+            1280,
+            720,
+            None,
+            0,
+            "browser.session.start",
+            now as u64,
+            None,
+            Some(&access),
+            None,
+        )
+        .await
+        .expect("owned session with actual controller lease");
+        let before = find_browser_document(&database, "browser_sessions", &session_id)
+            .await
+            .expect("initial persisted session");
+        let valid = json!({
+            "op": "input", "session_id": session_id, "lease_id": "browser-test-lease",
+            "events": [{"session_id": session_id, "tab_id": tab_id, "seq": 1,
+                        "type": "mouseDown", "x": 42, "y": 84}]
+        });
+        for (field, other) in [("session_id", "another-session"), ("tab_id", "another-tab")] {
+            let mut request = valid.clone();
+            request["events"][0][field] = json!(other);
+            let error = handle_browser_live_webrtc_request_inner(
+                root.path(),
+                &database,
+                &token,
+                vec![request],
+            )
+            .await
+            .expect_err("foreign surface must be refused before a missing runtime");
+            assert_eq!(
+                error,
+                format!("browser live input {field} does not match requested surface")
+            );
+        }
+        let error = handle_browser_live_webrtc_request_inner(
+            root.path(),
+            &database,
+            &foreign_token,
+            vec![valid.clone()],
+        )
+        .await
+        .expect_err("signed foreign owner must be refused");
+        assert_eq!(error, "browser live session belongs to another user");
+        let mut wrong_lease = valid.clone();
+        wrong_lease["lease_id"] = json!("wrong-lease");
+        assert_eq!(
+            handle_browser_live_webrtc_request_inner(
+                root.path(),
+                &database,
+                &token,
+                vec![wrong_lease],
+            )
+            .await
+            .expect_err("wrong lease must be refused"),
+            "browser live controller lease is missing or expired"
+        );
+        let mut malformed_generation = valid.clone();
+        malformed_generation["runtime_generation"] = json!("");
+        assert_eq!(
+            handle_browser_live_webrtc_request_inner(
+                root.path(),
+                &database,
+                &token,
+                vec![malformed_generation],
+            )
+            .await
+            .expect_err("empty generation must be refused before runtime access"),
+            "browser live runtime_generation must be a nonempty string"
+        );
+        assert_eq!(
+            handle_browser_live_webrtc_request_inner(root.path(), &database, &token, vec![valid],)
+                .await
+                .expect_err("valid identity reaches the deliberately absent runner"),
+            "browser live runtime is not running"
+        );
+        assert_eq!(
+            find_browser_document(&database, "browser_sessions", &session_id)
+                .await
+                .expect("persisted session after refusals"),
+            before,
+            "refused requests must not mutate persisted session or input watermark"
+        );
+    }
+
+    #[test]
+    fn browser_live_inputs_reject_foreign_surface_and_oversized_batches() {
+        for (field, foreign) in [("session_id", "xing-session"), ("tab_id", "xing-tab")] {
+            let mut event =
+                json!({"session_id": "dnb-session", "tab_id": "dnb-tab", "type": "mouseDown"});
+            event[field] = json!(foreign);
+            assert!(browser_live_input_events(
+                &json!({"events": [event]}),
+                "dnb-session",
+                "dnb-tab"
+            )
+            .is_err());
+        }
+        assert!(browser_live_input_events(&json!({"events": [{"session_id": "dnb-session", "tab_id": "dnb-tab", "type": "mouseDown", "x": 42}]}), "dnb-session", "dnb-tab").is_ok());
+        assert!(browser_live_input_events(
+            &json!({"events": [{"type": "keyDown"}]}),
+            "dnb-session",
+            "dnb-tab"
+        )
+        .is_ok());
+        assert!(browser_live_input_events(
+            &json!({"events": vec![json!({"type": "mouseMove"}); 65]}),
+            "dnb-session",
+            "dnb-tab"
+        )
+        .is_err());
+        assert!(browser_live_optional_binding(
+            &json!({"runtime_generation": ""}),
+            "runtime_generation"
+        )
+        .is_err());
+        assert!(
+            browser_live_optional_binding(&json!({}), "runtime_generation")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn browser_live_response_carries_native_identity_without_relabeling_navigation() {
+        let response = bind_browser_live_response(
+            json!({"ok": true, "nav": {"url": "https://example.com/", "active_tab_id": "runner-tab"}, "screenshot": {"base64": "fixture"}}),
+            "session",
+            "logical-tab",
+            "generation",
+        );
+        assert_eq!(
+            response["binding"],
+            json!({"session_id": "session", "tab_id": "logical-tab", "runtime_generation": "generation", "active_tab_id": "runner-tab"})
+        );
+        assert_eq!(response["nav"]["active_tab_id"], "runner-tab");
+        assert_eq!(response["screenshot"]["base64"], "fixture");
+    }
+
+    #[test]
+    fn browser_live_input_watermark_excludes_failed_or_unprocessed_events() {
+        let request = json!({"events": [{"seq": 1}, {"seq": 2}, {"seq": 3}]});
+        assert_eq!(
+            browser_live_applied_input_seq(
+                &request,
+                &json!({"ok": true, "results": [{"index": 0, "ok": true}, {"index": 1, "ok": false}]})
+            ),
+            1
+        );
+        assert_eq!(
+            browser_live_applied_input_seq(
+                &request,
+                &json!({"ok": false, "results": [{"index": 2, "ok": true}]})
+            ),
+            0
+        );
+        assert_eq!(
+            browser_live_applied_input_seq(
+                &request,
+                &json!({"ok": true, "results": [{"index": 99, "ok": true}]})
+            ),
+            0
+        );
+    }
 
     #[test]
     fn browser_runtime_command_trace_is_single_line_and_identifies_start() {

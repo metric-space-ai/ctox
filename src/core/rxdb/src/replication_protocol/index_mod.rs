@@ -1016,7 +1016,10 @@ mod tests {
                 .master_changes_since(checkpoint.clone(), 20)
                 .await
                 .unwrap();
-            assert!(serde_json::to_vec(&page).unwrap().len() < 1024 * 1024 + 1024);
+            assert!(
+                serde_json::to_vec(&page).unwrap().len()
+                    < crate::collection_policy::DEFAULT_MASTER_RESPONSE_CEILING_BYTES + 1024
+            );
             if page.documents.is_empty() {
                 break;
             }

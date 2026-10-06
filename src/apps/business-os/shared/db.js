@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261006-shell-v2-app-store-warm-mount-v453';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261006-shell-v2-sync-invalidate-v455';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

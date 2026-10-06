@@ -2884,10 +2884,115 @@ fn web_stack_secret_configured(
         || env::var(secret_name).is_ok_and(|value| !value.trim().is_empty())
 }
 
+/// Content revisions of module directories, reused while the directory's
+/// metadata (relative paths, sizes, modification times) is unchanged. The
+/// revision is the same content hash as before; it is only recomputed when a
+/// file changed. Reading and hashing every file of every module ran on each
+/// index document load through module_catalog_for_rxdb (on-prem deployment,
+/// 06.10.2026).
+fn module_asset_revision_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, (String, String)>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, (String, String)>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
 pub(super) fn module_asset_revision(module_dir: &Path) -> anyhow::Result<String> {
     if !module_dir.is_dir() {
         return Ok(String::new());
     }
+    let Some(metadata) = module_asset_metadata_fingerprint(module_dir)? else {
+        // A file changed within the last moments: its mtime may not yet differ
+        // from an earlier same-size write (coarse filesystem clocks), so the
+        // metadata cannot vouch for the content. Hash without caching.
+        return module_asset_content_revision(module_dir);
+    };
+    if let Some((cached_metadata, revision)) = module_asset_revision_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(module_dir)
+    {
+        if *cached_metadata == metadata {
+            return Ok(revision.clone());
+        }
+    }
+    let revision = module_asset_content_revision(module_dir)?;
+    module_asset_revision_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(module_dir.to_path_buf(), (metadata, revision.clone()));
+    Ok(revision)
+}
+
+/// Fingerprint of the module directory's file metadata, or `None` when a file
+/// was modified too recently for its mtime to be trusted (the "racy git"
+/// problem: two same-size writes inside one filesystem clock tick).
+fn module_asset_metadata_fingerprint(module_dir: &Path) -> anyhow::Result<Option<String>> {
+    const RACY_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+    fn walk(
+        root: &Path,
+        current: &Path,
+        hasher: &mut Sha256,
+        file_count: &mut usize,
+        newest: &mut std::time::SystemTime,
+    ) -> anyhow::Result<()> {
+        let mut entries = fs::read_dir(current)
+            .with_context(|| format!("read module asset dir {}", current.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| format!("list module asset dir {}", current.display()))?;
+        entries.sort_by(|left, right| left.path().cmp(&right.path()));
+        for entry in entries {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || matches!(name.as_ref(), "node_modules" | "target") {
+                continue;
+            }
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                walk(root, &path, hasher, file_count, newest)?;
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            *file_count += 1;
+            if *file_count > MODULE_CATALOG_SOURCE_STAMP_FILE_LIMIT + 1 {
+                return Ok(());
+            }
+            let meta = entry.metadata()?;
+            if let Ok(time) = meta.modified() {
+                *newest = (*newest).max(time);
+            }
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default();
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy();
+            update_module_catalog_stamp_hash(hasher, &rel);
+            hasher.update(meta.len().to_le_bytes());
+            hasher.update(modified.to_le_bytes());
+        }
+        Ok(())
+    }
+    let mut hasher = Sha256::new();
+    let mut file_count = 0usize;
+    let mut newest = std::time::UNIX_EPOCH;
+    walk(
+        module_dir,
+        module_dir,
+        &mut hasher,
+        &mut file_count,
+        &mut newest,
+    )?;
+    let settled = std::time::SystemTime::now()
+        .duration_since(newest)
+        .is_ok_and(|age| age >= RACY_WINDOW);
+    Ok(settled.then(|| format!("{:x}", hasher.finalize())))
+}
+
+fn module_asset_content_revision(module_dir: &Path) -> anyhow::Result<String> {
     let mut hasher = Sha256::new();
     let mut file_count = 0usize;
     let mut truncated = false;
@@ -7165,7 +7270,17 @@ fn maybe_materialize_and_complete_runtime_app_starter(
     command: &BusinessCommand,
     queue_task: Option<&channels::QueueTaskView>,
 ) -> anyhow::Result<Option<CommandAccepted>> {
-    if command.client_context.get("source").and_then(Value::as_str) == Some("business-os-mcp") {
+    // CLI and MCP app requests describe work for the bounded coding worker.
+    // Admission must not manufacture app files or claim a queued task completed.
+    if matches!(
+        command.client_context.get("source").and_then(Value::as_str),
+        Some(
+            "business-os-mcp"
+                | "ctox-cli.business-os-app-create"
+                | "ctox-cli.business-os-app-modify"
+                | "ctox-cli.business-os-app-bench"
+        )
+    ) {
         return Ok(None);
     }
     let is_import = command
@@ -11761,6 +11876,42 @@ fn load_rxdb_collection_record_in_table(
             .or_insert_with(|| Value::String(record_id.to_string()));
     }
     Ok(Some(record))
+}
+
+/// Batch form of `load_rxdb_collection_record`: one connection and one table
+/// lookup for many ids. Returns only the ids present in the RxDB store.
+pub(super) fn load_rxdb_collection_records_by_ids(
+    root: &Path,
+    collection: &str,
+    record_ids: &[String],
+) -> anyhow::Result<std::collections::HashMap<String, Value>> {
+    let mut found = std::collections::HashMap::new();
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if record_ids.is_empty() || !path.is_file() {
+        return Ok(found);
+    }
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok(found);
+    };
+    let mut stmt = conn.prepare(&format!("SELECT data FROM {table} WHERE id = ?1"))?;
+    for record_id in record_ids {
+        let raw = stmt
+            .query_row([record_id], |row| row.get::<_, String>(0))
+            .optional()?;
+        let Some(raw) = raw else { continue };
+        let mut record: Value = serde_json::from_str(&raw)?;
+        if let Some(object) = record.as_object_mut() {
+            object
+                .entry("id".to_string())
+                .or_insert_with(|| Value::String(record_id.clone()));
+        }
+        found.insert(record_id.clone(), record);
+    }
+    Ok(found)
 }
 
 /// List all live records of one RxDB-backed Business OS collection.
@@ -46051,5 +46202,28 @@ BRbBv2mhaOAuKib7tmks74He
         )?;
         assert_eq!(persisted, "ctox_spreadsheets");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod module_asset_revision_cache_tests {
+    use super::{module_asset_content_revision, module_asset_revision};
+
+    #[test]
+    fn cached_revision_matches_content_hash_and_follows_changes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("index.js"), "export const a = 1;\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("core")).unwrap();
+        std::fs::write(dir.path().join("core/view.js"), "export default 1;\n").unwrap();
+
+        let first = module_asset_revision(dir.path()).unwrap();
+        assert_eq!(first, module_asset_content_revision(dir.path()).unwrap());
+        assert_eq!(module_asset_revision(dir.path()).unwrap(), first);
+
+        // Same size, written immediately: must not be served from the cache.
+        std::fs::write(dir.path().join("core/view.js"), "export default 2;\n").unwrap();
+        let changed = module_asset_revision(dir.path()).unwrap();
+        assert_ne!(changed, first);
+        assert_eq!(changed, module_asset_content_revision(dir.path()).unwrap());
     }
 }
