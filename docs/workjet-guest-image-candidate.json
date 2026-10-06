@@ -1,6 +1,6 @@
 {
   "schema": "ctox.workjet_guest_image_candidate.v1",
-  "candidate_id": "workjet-noble-amd64-20260926-ctox-318890469-v1",
+  "candidate_id": "workjet-noble-amd64-20260926-ctox-318890469-v2",
   "status": "proposal_not_approved_or_built",
   "owner_thread": "01a0879f-fa04-7a72-a9be-f471c2df5471",
   "upstream": {
@@ -32,14 +32,14 @@
   },
   "recipe": {
     "guest_setup_source": "src/scripts/workjet-guest-image/configure-guest.sh",
-    "guest_setup_sha256": "c08f028914ca4136bd6043714b646873fd41cbd56062e9c270d342342b3c7ded",
+    "guest_setup_sha256": "ab7504e3726878bb5ef932e3f2a56ceb4c2eb381cb876e259adb125d400c541b",
     "builder_distribution": "Ubuntu24.04 amd64 at the same signed snapshot; require native binary/source receipt and record ELF dependencies. Do not use a Mac artifact or claim a cross-linker is present.",
     "root_partition": "/dev/sda1 must be verified as the actual Ubuntu root filesystem by libguestfs inspection before resize. A different/unexpected layout fails closed instead of selecting another disk.",
     "host_prerequisites": ["qemu-system-x86", "qemu-utils", "libguestfs-tools", "pax-utils", "gpgv", "gnupg", "curl", "coreutils"],
 
     "apt_snapshot": "20261001T000000Z",
     "apt_snapshot_reference": "https://snapshot.ubuntu.com/",
-    "packages": ["xserver-xorg-core", "xserver-xorg-video-all", "xserver-xorg-input-libinput", "xauth", "x11-utils", "x11-xserver-utils", "xfce4-session", "xfce4-panel", "xfwm4", "xfdesktop4", "xfce4-settings", "xfce4-terminal", "thunar", "mousepad", "dbus-x11", "fonts-dejavu-core", "maim", "xdotool"],
+    "packages": ["xserver-xorg-core", "xserver-xorg-video-all", "xserver-xorg-input-libinput", "xauth", "x11-utils", "x11-xserver-utils", "xfce4-session", "xfce4-panel", "xfwm4", "xfdesktop4", "xfce4-settings", "xfce4-terminal", "thunar", "mousepad", "dbus-x11", "fonts-dejavu-core", "maim", "xdotool", "kmod"],
     "desktop": "Real Xorg modesetting on the QEMU virtio-vga device; XFCE session, file manager, terminal and text editor. No Xvfb/dummy display.",
     "desktop_uid_gid": 1500,
     "desktop_user": "ctox-desktop",
@@ -48,11 +48,11 @@
     "virtio_port": "/dev/virtio-ports/org.ctox.guest.desktop",
     "controller_or_host_credentials_in_image": false,
     "static_guest_id_in_golden_image": false,
-    "per_assignment_config_required": "Native owner must inject its actual enrolled guest_id into the writable overlay, JSON with only guest_id/display/xauthority, mode0600 owned1500:1500, before starting QEMU. Existing operational injection caller is still missing; recipe does not fabricate it.",
+    "per_assignment_config_required": "RetainedQemuDesktop supplies the actual enrolled guest_id to QemuProcess::spawn_paused. A native-owned mode0600 JSON in the private process directory is exposed only via opt/org.ctox/guest-startup fw_cfg, with fixed display/xauthority and no host credentials or controller authority. The required root oneshot copies at most4096bytes into this guest overlay, atomically owned1500:1500/mode0600, before the endpoint starts. Missing/oversized firmware data or a failed unit denies endpoint startup even after restore. This is source integration; actual VM boot remains unverified.",
     "raw_derivation": "Verify signed fixed upstream checksum; create a new private working copy; expand to8GiB using virt-resize after confirming the actual root partition; configure ONLY that stopped copy; qemu-img convert -f qcow2 -O raw into a new golden-base.raw; sync; record actual raw SHA256, size, package ledger, binary/dependency hashes and command/tool versions. Never modify the downloaded original or an active guest.",
     "derived_raw_sha256": null,
     "raw_checksum_reason": "Cannot truthfully hash an image that has not been approved, downloaded or built. Approval requested is for this exact input and recipe; derived base identity is mandatory before enrollment/activation.",
-    "linux_build_commands": ["cargo +1.93.0 build --release --locked --jobs 2 --bin ctox --target x86_64-unknown-linux-gnu", "readelf -h <verified-ctox> (must be ELF64 x86-64)", "lddtree -l <verified-ctox> (record dependencies and copy only verified libraries into matching guest paths)", "virt-customize --format qcow2 -a <private-stopped-copy> --smp 2 --memsize 2048 --upload <verified-ctox>:/usr/local/bin/ctox --chmod 0755:/usr/local/bin/ctox --chown 0:0:/usr/local/bin/ctox --write /etc/ctox-image-build.marker:workjet-noble-amd64-20260926-ctox-318890469-v1 --run src/scripts/workjet-guest-image/configure-guest.sh", "qemu-img convert -f qcow2 -O raw <configured-copy> <new-golden-base.raw>"],
+    "linux_build_commands": ["cargo +1.93.0 build --release --locked --jobs 2 --bin ctox --target x86_64-unknown-linux-gnu", "readelf -h <verified-ctox> (must be ELF64 x86-64)", "lddtree -l <verified-ctox> (record dependencies and copy only verified libraries into matching guest paths)", "virt-customize --format qcow2 -a <private-stopped-copy> --smp 2 --memsize 2048 --upload <verified-ctox>:/usr/local/bin/ctox --chmod 0755:/usr/local/bin/ctox --chown 0:0:/usr/local/bin/ctox --write /etc/ctox-image-build.marker:workjet-noble-amd64-20260926-ctox-318890469-v2 --run src/scripts/workjet-guest-image/configure-guest.sh", "qemu-img convert -f qcow2 -O raw <configured-copy> <new-golden-base.raw>"],
     "build_appliance_network": "Only outgoing signed Ubuntu snapshot package acquisition during an approved bounded image build. Does not enable networking in the worker VM. No host shares or privileged host mount into a running worker.",
     "runtime": {"vcpus": 2, "memory_mib": 4096, "acceleration": "KVM", "firmware": "QEMU PC SeaBIOS", "disk_gib": 8, "network": "none under existing PreparedQemuGuest", "host_transport": "existing owned QMP/virtio Unix sockets; existing native WebRTC guarded frame source"}
   },

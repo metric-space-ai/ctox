@@ -981,9 +981,7 @@ impl NativeSessionCapture {
             let bytes = self.journal.read_bytes(limits.max_bytes)?;
             let expected = PortableJournalExpectation {
                 format: PortableJournalFormat::current(),
-                session_id: self
-                    .thread_id
-                    .parse()
+                session_id: ctox_protocol::ThreadId::from_string(&self.thread_id)
                     .context("native capture producer identity is invalid")?,
             };
             let artifact = PortableArtifactRef {
@@ -2077,8 +2075,7 @@ impl PersistentSession {
         let timeouts = production_session_control_timeouts();
         let thread_id = bind_session_thread(&client, &mut seq, &spec, &timeouts).await?;
         let native_capture_thread = if native_guest {
-            let actual_id = thread_id
-                .parse::<ctox_protocol::ThreadId>()
+            let actual_id = ctox_protocol::ThreadId::from_string(&thread_id)
                 .context("native producer returned an invalid thread identity")?;
             Some(
                 thread_manager

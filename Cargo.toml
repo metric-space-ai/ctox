@@ -17,6 +17,7 @@ path = "src/core/main.rs"
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.10"
@@ -115,7 +116,6 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
-async-trait = "0.1"
 ctox-core = { path = "src/core/harness/core", features = ["integration-test-support"] }
 tempfile = "3"
 

@@ -7,7 +7,7 @@
 set -eu
 [ "$(uname -s)" = Linux ]
 [ "$(uname -m)" = x86_64 ]
-[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-318890469-v1 ]
+[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-318890469-v2 ]
 [ -x /usr/local/bin/ctox ]
 . /etc/os-release
 [ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ]
@@ -33,7 +33,7 @@ apt-get --snapshot 20261001T000000Z -y --no-install-recommends install \
   xserver-xorg-core xserver-xorg-video-all xserver-xorg-input-libinput \
   xauth x11-utils x11-xserver-utils xfce4-session xfce4-panel xfwm4 \
   xfdesktop4 xfce4-settings xfce4-terminal thunar mousepad dbus-x11 \
-  fonts-dejavu-core maim xdotool
+  fonts-dejavu-core maim xdotool kmod
 # Refuse an existing UID/GID/name instead of reassigning another image user.
 if getent passwd ctox-desktop || getent passwd 1500 \
     || getent group ctox-desktop || getent group 1500; then
@@ -46,11 +46,42 @@ useradd --uid 1500 --gid 1500 --create-home --shell /bin/bash ctox-desktop
 passwd --lock ctox-desktop
 install -d -m 0750 -o root -g ctox-desktop /etc/ctox
 install -d -m 0755 /usr/local/libexec /etc/X11/xorg.conf.d
-# No guest ID in the golden image. The actual native enrolled owner injects
-# /etc/ctox/guest-startup.json into its OWN writable overlay before first boot:
-# {"guest_id":"<actual enrolled ID>","display":":0",
-#  "xauthority":"/run/ctox-desktop/Xauthority"}, owned1500:1500/mode0600.
+# No guest ID in the golden image. Native QEMU supplies only its actual enrolled
+# ID and fixed display paths through fw_cfg. Before the endpoint starts, the
+# root unit copies that bounded blob into THIS guest's writable overlay.
 [ ! -e /etc/ctox/guest-startup.json ]
+cat > /usr/local/libexec/ctox-install-guest-startup <<'STARTUP'
+#!/bin/sh
+set -eu
+umask 077
+source=/sys/firmware/qemu_fw_cfg/by_name/opt/org.ctox/guest-startup/raw
+[ -r "$source" ]
+temporary=$(mktemp /etc/ctox/.guest-startup.XXXXXX)
+trap 'rm -f "$temporary"' EXIT
+trap 'exit 1' HUP INT TERM
+# One bounded read; a missing/empty/oversized blob cannot reuse a restored ID.
+# Native startup parses the exact JSON fields before opening the fixed device.
+dd if="$source" of="$temporary" bs=4097 count=1 iflag=fullblock status=none
+[ -s "$temporary" ] && [ "$(wc -c < "$temporary")" -le 4096 ]
+chown 1500:1500 "$temporary"
+chmod 0600 "$temporary"
+mv -T "$temporary" /etc/ctox/guest-startup.json
+sync -f /etc/ctox/guest-startup.json
+STARTUP
+chmod 0755 /usr/local/libexec/ctox-install-guest-startup
+cat > /etc/systemd/system/ctox-guest-startup.service <<'UNIT'
+[Unit]
+Description=CTOX native assignment configuration for this guest
+Before=ctox-guest-desktop.service
+[Service]
+Type=oneshot
+User=root
+ExecStartPre=/usr/sbin/modprobe qemu_fw_cfg
+ExecStart=/usr/local/libexec/ctox-install-guest-startup
+RemainAfterExit=yes
+TimeoutStartSec=10
+TimeoutStopSec=10
+UNIT
 cat > /etc/udev/rules.d/99-ctox-guest-desktop.rules <<'UDEV'
 SUBSYSTEM=="virtio-ports", ATTR{name}=="org.ctox.guest.desktop", GROUP="ctox-desktop", MODE="0660"
 UDEV
@@ -143,10 +174,9 @@ UNIT
 cat > /etc/systemd/system/ctox-guest-desktop.service <<'UNIT'
 [Unit]
 Description=CTOX bounded native guest desktop endpoint
-Requires=ctox-desktop.service
+Requires=ctox-desktop.service ctox-guest-startup.service
 BindsTo=ctox-desktop.service
-After=ctox-desktop.service
-ConditionPathExists=/etc/ctox/guest-startup.json
+After=ctox-desktop.service ctox-guest-startup.service
 [Service]
 Type=simple
 User=ctox-desktop
