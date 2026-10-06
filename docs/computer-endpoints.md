@@ -67,7 +67,7 @@ endpoint/Transfer increment, and is explicitly rejected here.
   usage and non-secret fingerprint.
 - `with_current_computer_endpoint(root, &request, expected_fingerprint, callback)`
   rereads current authority and holds endpoint/grant and secret rotation fences
-  through one synchronous bounded IO poll. Credential slices are borrowed in
+  through one synchronous bounded protocol operation. Credential slices are borrowed in
   order: SSH key then optional passphrase, or SMB password.
 
 Resolution requires the current assigned, undeleted, owned computer and enabled,
@@ -90,7 +90,11 @@ updates, and is excluded from schema-v1 browser projection.
 
 Acquire endpoint authority before worker/Core/controller locks. Never await,
 reenter registry/secret APIs, retain credentials, or run a full transfer while
-inside the callback. A callback protects one bounded poll only. Adapters must
+inside the callback. A callback protects one bounded operation only: connect/auth,
+one read/write/flush of at most 1 MiB, or one metadata/rename operation, with the
+adapter's fixed deadline (currently 10 seconds). Reusing an authenticated transport
+is allowed; secret byte buffers must be dropped/zeroized before callback return,
+and every next operation must revalidate the original fingerprint. Adapters must
 independently enforce paths against remote symlinks, destination permissions,
 quota/free space, host pin verification, stop/resume and atomic publication.
 A registry descriptor is authority metadata, not evidence of reachable storage.

@@ -281,14 +281,22 @@ fn handle_workjet_computer_assign_command(
         "an agentless computer cannot advertise agent toolchains"
     );
     let capability_value = serde_json::to_value(&capability_config)?;
-    let capability_epoch = existing.as_ref()
-        .and_then(|record| record["capability_epoch"].as_u64()).unwrap_or(0);
-    let same_grant = existing.as_ref().is_some_and(|record|
-        record["status"] == "assigned" && record["is_deleted"] != true
+    let capability_epoch = existing
+        .as_ref()
+        .and_then(|record| record["capability_epoch"].as_u64())
+        .unwrap_or(0);
+    let same_grant = existing.as_ref().is_some_and(|record| {
+        record["status"] == "assigned"
+            && record["is_deleted"] != true
             && record.get("capability_config") == Some(&capability_value)
-            && record["agentless"].as_bool().unwrap_or(false) == agentless);
-    let capability_epoch = if !configured || same_grant { capability_epoch } else {
-        capability_epoch.checked_add(1).context("computer capability epoch exhausted")?
+            && record["agentless"].as_bool().unwrap_or(false) == agentless
+    });
+    let capability_epoch = if !configured || same_grant {
+        capability_epoch
+    } else {
+        capability_epoch
+            .checked_add(1)
+            .context("computer capability epoch exhausted")?
     };
     let now = super::store::now_ms() as i64;
     let created_at_ms = existing
@@ -382,8 +390,11 @@ fn handle_workjet_computer_unassign_command(
     let mut computer = existing;
     computer["status"] = Value::String("unassigned".to_owned());
     if computer.get("capability_config").is_some() {
-        let epoch = computer["capability_epoch"].as_u64().unwrap_or(0)
-            .checked_add(1).context("computer capability epoch exhausted")?;
+        let epoch = computer["capability_epoch"]
+            .as_u64()
+            .unwrap_or(0)
+            .checked_add(1)
+            .context("computer capability epoch exhausted")?;
         computer["capability_epoch"] = Value::from(epoch);
     }
     computer["updated_at_ms"] = Value::from(now);

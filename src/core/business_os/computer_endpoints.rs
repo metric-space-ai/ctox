@@ -70,7 +70,11 @@ impl ComputerEndpoint {
     /// or SMB password. Values are borrowed only while native authority is held.
     pub fn credential_references(&self) -> Vec<&SecretReference> {
         match self {
-            Self::Ssh { private_key, passphrase, .. } => {
+            Self::Ssh {
+                private_key,
+                passphrase,
+                ..
+            } => {
                 let mut refs = vec![private_key];
                 refs.extend(passphrase.iter());
                 refs
@@ -81,32 +85,58 @@ impl ComputerEndpoint {
 
     fn validate(&self) -> Result<()> {
         let (host, port, username) = match self {
-            Self::Ssh { host, port, username, host_key_sha256, .. } => {
-                let pin = host_key_sha256.strip_prefix("SHA256:")
+            Self::Ssh {
+                host,
+                port,
+                username,
+                host_key_sha256,
+                ..
+            } => {
+                let pin = host_key_sha256
+                    .strip_prefix("SHA256:")
                     .context("SSH requires a SHA256 host-key pin")?;
-                let decoded = STANDARD_NO_PAD.decode(pin)
+                let decoded = STANDARD_NO_PAD
+                    .decode(pin)
                     .context("invalid SSH host-key pin")?;
-                anyhow::ensure!(decoded.len() == 32 && STANDARD_NO_PAD.encode(decoded) == pin,
-                    "invalid SSH host-key pin");
+                anyhow::ensure!(
+                    decoded.len() == 32 && STANDARD_NO_PAD.encode(decoded) == pin,
+                    "invalid SSH host-key pin"
+                );
                 (host, port, username)
             }
-            Self::Smb { host, port, username, share, .. } => {
+            Self::Smb {
+                host,
+                port,
+                username,
+                share,
+                ..
+            } => {
                 label(share, 128)?;
-                anyhow::ensure!(!share.contains(['/', '\\', ':']) && share != "." && share != "..",
-                    "invalid SMB share");
+                anyhow::ensure!(
+                    !share.contains(['/', '\\', ':']) && share != "." && share != "..",
+                    "invalid SMB share"
+                );
                 (host, port, username)
             }
         };
         label(host, 253)?;
         let ip = host.parse::<std::net::IpAddr>().is_ok();
-        let dns = host.split('.').all(|part| !part.is_empty() && part.len() <= 63
-            && !part.starts_with('-') && !part.ends_with('-')
-            && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+        let dns = host.split('.').all(|part| {
+            !part.is_empty()
+                && part.len() <= 63
+                && !part.starts_with('-')
+                && !part.ends_with('-')
+                && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        });
         anyhow::ensure!(ip || dns, "host must be an IP address or DNS name");
         anyhow::ensure!(*port > 0, "endpoint port must be positive");
         label(username, 128)?;
-        anyhow::ensure!(!username.starts_with('-') && !username.chars().any(char::is_whitespace)
-            && !username.contains(['/', ':', '@']), "invalid endpoint username");
+        anyhow::ensure!(
+            !username.starts_with('-')
+                && !username.chars().any(char::is_whitespace)
+                && !username.contains(['/', ':', '@']),
+            "invalid endpoint username"
+        );
         absolute_root(self.root())?;
         for reference in self.credential_references() {
             label(&reference.scope, 256)?;
@@ -159,16 +189,20 @@ pub fn resolve_computer_endpoint(
 }
 
 /// Enter before worker/Core/controller locks. Perform at most one bounded,
-/// synchronous IO poll; never await, retain credentials, or reenter store/secret
+/// synchronous protocol operation; never await, retain credentials, or reenter
 /// APIs. Both native endpoint/grant mutations and secret rotation are fenced
-/// until this callback returns. Call again before every chunk and resume.
+/// until this callback returns. Adapters enforce a deadline (currently 10s) and
+/// at most 1 MiB per data operation. Call again before every operation and resume.
 pub fn with_current_computer_endpoint<T>(
     root: &Path,
     request: &ComputerEndpointRequest,
     expected_fingerprint: &str,
     apply: impl FnOnce(&ResolvedComputerEndpoint, &[&[u8]]) -> Result<T>,
 ) -> Result<T> {
-    anyhow::ensure!(!expected_fingerprint.is_empty(), "job endpoint fingerprint is missing");
+    anyhow::ensure!(
+        !expected_fingerprint.is_empty(),
+        "job endpoint fingerprint is missing"
+    );
     with_endpoint_authority(root, request, Some(expected_fingerprint), apply)
 }
 
@@ -183,28 +217,43 @@ fn with_endpoint_authority<T>(
     conn.busy_timeout(std::time::Duration::ZERO)?;
     let initial = resolve_record(&conn, request)?;
     let refs = initial.connection.credential_references();
-    let keys = refs.iter().map(|r| (r.scope.as_str(), r.name.as_str())).collect::<Vec<_>>();
-    crate::secrets::with_current_secret_values_and_fingerprint(root, &keys, |values, credential_revision| {
-        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)?;
-        let mut current = resolve_record(&tx, request)?;
-        anyhow::ensure!(current.connection.credential_references() == refs,
-            "endpoint credential references changed; resolve again");
-        current.fingerprint = format!("sha256:{:x}", Sha256::digest(
-            serde_json::to_vec(&json!({
-                "endpoint": current,
-                "credential_revision": credential_revision,
-            }))?
-        ));
-        if let Some(expected) = expected {
-            anyhow::ensure!(current.fingerprint == expected,
-                "job endpoint authority changed; explicit new job required");
-        }
-        // tx and the secret-store fence stay alive through the bounded IO poll.
-        apply(&current, values)
-    })
+    let keys = refs
+        .iter()
+        .map(|r| (r.scope.as_str(), r.name.as_str()))
+        .collect::<Vec<_>>();
+    crate::secrets::with_current_secret_values_and_fingerprint(
+        root,
+        &keys,
+        |values, credential_revision| {
+            let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)?;
+            let mut current = resolve_record(&tx, request)?;
+            anyhow::ensure!(
+                current.connection.credential_references() == refs,
+                "endpoint credential references changed; resolve again"
+            );
+            current.fingerprint = format!(
+                "sha256:{:x}",
+                Sha256::digest(serde_json::to_vec(&json!({
+                    "endpoint": current,
+                    "credential_revision": credential_revision,
+                }))?)
+            );
+            if let Some(expected) = expected {
+                anyhow::ensure!(
+                    current.fingerprint == expected,
+                    "job endpoint authority changed; explicit new job required"
+                );
+            }
+            // tx and the secret-store fence stay alive through the bounded operation.
+            apply(&current, values)
+        },
+    )
 }
 
-fn resolve_record(conn: &Connection, request: &ComputerEndpointRequest) -> Result<ResolvedComputerEndpoint> {
+fn resolve_record(
+    conn: &Connection,
+    request: &ComputerEndpointRequest,
+) -> Result<ResolvedComputerEndpoint> {
     label(&request.owner_user_id, 256)?;
     label(&request.computer_id, 256)?;
     opaque_ref(&request.endpoint_ref)?;
@@ -212,8 +261,10 @@ fn resolve_record(conn: &Connection, request: &ComputerEndpointRequest) -> Resul
     let record = outbound_load_record(conn, ENDPOINTS, &request.endpoint_ref)?
         .context("computer endpoint is not registered")?;
     ensure_binding(&record, &request.owner_user_id, &request.computer_id)?;
-    anyhow::ensure!(record["enabled"] == true && record["is_deleted"] != true && record["_deleted"] != true,
-        "computer endpoint is disabled");
+    anyhow::ensure!(
+        record["enabled"] == true && record["is_deleted"] != true && record["_deleted"] != true,
+        "computer endpoint is disabled"
+    );
     let connection: ComputerEndpoint = serde_json::from_value(record["connection"].clone())
         .context("invalid persisted computer endpoint")?;
     connection.validate()?;
@@ -222,22 +273,33 @@ fn resolve_record(conn: &Connection, request: &ComputerEndpointRequest) -> Resul
             .context("computer has no valid capability configuration")?;
     let agentless = computer["agentless"].as_bool().unwrap_or(false);
     validate_capabilities(&mut capabilities, agentless)?;
-    let grant = capabilities.into_iter().find(|capability| match (&request.usage, capability) {
-        (EndpointUse::Build, ComputerCapability::Build(build)) =>
-            !agentless && build.ssh_endpoint_ref == request.endpoint_ref
-                && connection.protocol() == StorageProtocol::Ssh
-                && contained_root(connection.root(), &build.lane_root),
-        (EndpointUse::Storage { purpose }, ComputerCapability::Storage(storage)) =>
-            storage.endpoint_ref == request.endpoint_ref && storage.protocol == connection.protocol()
-                && contained_root(connection.root(), &storage.root) && storage.purposes.contains(purpose),
-        _ => false,
-    }).context("current computer capability does not authorize this endpoint, root or purpose")?;
+    let grant = capabilities
+        .into_iter()
+        .find(|capability| match (&request.usage, capability) {
+            (EndpointUse::Build, ComputerCapability::Build(build)) => {
+                !agentless
+                    && build.ssh_endpoint_ref == request.endpoint_ref
+                    && connection.protocol() == StorageProtocol::Ssh
+                    && contained_root(connection.root(), &build.lane_root)
+            }
+            (EndpointUse::Storage { purpose }, ComputerCapability::Storage(storage)) => {
+                storage.endpoint_ref == request.endpoint_ref
+                    && storage.protocol == connection.protocol()
+                    && contained_root(connection.root(), &storage.root)
+                    && storage.purposes.contains(purpose)
+            }
+            _ => false,
+        })
+        .context("current computer capability does not authorize this endpoint, root or purpose")?;
     Ok(ResolvedComputerEndpoint {
         contract: COMPUTER_ENDPOINT_CONTRACT.to_owned(),
         owner_user_id: request.owner_user_id.clone(),
         computer_id: request.computer_id.clone(),
         endpoint_ref: request.endpoint_ref.clone(),
-        endpoint_revision: record["_rev"].as_str().context("endpoint revision missing")?.to_owned(),
+        endpoint_revision: record["_rev"]
+            .as_str()
+            .context("endpoint revision missing")?
+            .to_owned(),
         capability_epoch: computer["capability_epoch"].as_u64().unwrap_or(0),
         connection,
         grant,
@@ -274,8 +336,12 @@ struct ListPayload {
 }
 
 pub(super) fn is_endpoint_command(command_type: &str) -> bool {
-    matches!(command_type, "ctox.workjet.computer.endpoint.upsert"
-        | "ctox.workjet.computer.endpoint.disable" | "ctox.workjet.computer.endpoint.list")
+    matches!(
+        command_type,
+        "ctox.workjet.computer.endpoint.upsert"
+            | "ctox.workjet.computer.endpoint.disable"
+            | "ctox.workjet.computer.endpoint.list"
+    )
 }
 
 /// Only reached after verified Owner/Admin and IntegrationsManage policy checks.
@@ -298,15 +364,29 @@ pub(super) fn handle_command(root: &Path, command: &BusinessCommand, owner: &str
                 "owner_user_id": owner, "computer_id": payload.computer_id,
                 "connection": payload.connection, "enabled": true, "is_deleted": false,
             });
-            let unchanged = existing.as_ref().is_some_and(|record|
-                ["owner_user_id", "computer_id", "connection", "enabled", "is_deleted"]
-                    .iter().all(|field| record[*field] == desired[*field]));
+            let unchanged = existing.as_ref().is_some_and(|record| {
+                [
+                    "owner_user_id",
+                    "computer_id",
+                    "connection",
+                    "enabled",
+                    "is_deleted",
+                ]
+                .iter()
+                .all(|field| record[*field] == desired[*field])
+            });
             let record = if unchanged {
                 existing.unwrap()
             } else {
-                upsert_business_record(&tx, ENDPOINTS, &payload.endpoint_ref,
-                    super::store::now_ms() as i64, desired)?;
-                outbound_load_record(&tx, ENDPOINTS, &payload.endpoint_ref)?.context("endpoint reload failed")?
+                upsert_business_record(
+                    &tx,
+                    ENDPOINTS,
+                    &payload.endpoint_ref,
+                    super::store::now_ms() as i64,
+                    desired,
+                )?;
+                outbound_load_record(&tx, ENDPOINTS, &payload.endpoint_ref)?
+                    .context("endpoint reload failed")?
             };
             json!({"ok": true, "endpoint": record})
         }
@@ -315,20 +395,30 @@ pub(super) fn handle_command(root: &Path, command: &BusinessCommand, owner: &str
             opaque_ref(&payload.endpoint_ref)?;
             let mut record = outbound_load_record(&tx, ENDPOINTS, &payload.endpoint_ref)?
                 .context("computer endpoint is not registered")?;
-            anyhow::ensure!(record["owner_user_id"] == owner, "endpoint belongs to a different owner");
+            anyhow::ensure!(
+                record["owner_user_id"] == owner,
+                "endpoint belongs to a different owner"
+            );
             if record["enabled"] != false {
                 record["enabled"] = json!(false);
-                upsert_business_record(&tx, ENDPOINTS, &payload.endpoint_ref,
-                    super::store::now_ms() as i64, record)?;
-                record = outbound_load_record(&tx, ENDPOINTS, &payload.endpoint_ref)?.context("endpoint reload failed")?;
+                upsert_business_record(
+                    &tx,
+                    ENDPOINTS,
+                    &payload.endpoint_ref,
+                    super::store::now_ms() as i64,
+                    record,
+                )?;
+                record = outbound_load_record(&tx, ENDPOINTS, &payload.endpoint_ref)?
+                    .context("endpoint reload failed")?;
             }
             json!({"ok": true, "endpoint": record})
         }
         "ctox.workjet.computer.endpoint.list" => {
             let payload: ListPayload = serde_json::from_value(command.payload.clone())?;
-            let mut endpoints = outbound_load_records_by_string_field(&tx, ENDPOINTS, "owner_user_id", owner)?;
+            let mut endpoints =
+                outbound_load_records_by_string_field(&tx, ENDPOINTS, "owner_user_id", owner)?;
             endpoints.retain(|record| record["is_deleted"] != true && record["_deleted"] != true);
-            endpoints.sort_by(|a,b| a["id"].as_str().cmp(&b["id"].as_str()));
+            endpoints.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
             endpoints.truncate(payload.limit.unwrap_or(100).clamp(1, 100));
             json!({"ok": true, "endpoints": endpoints})
         }
@@ -339,48 +429,79 @@ pub(super) fn handle_command(root: &Path, command: &BusinessCommand, owner: &str
 }
 
 fn assigned_computer(conn: &Connection, owner: &str, computer_id: &str) -> Result<Value> {
-    let record = outbound_load_record(conn, super::store_workjet_computers::COMPUTERS_COLLECTION, computer_id)?
-        .context("computer is not registered")?;
-    anyhow::ensure!(record["owner_user_id"] == owner, "computer belongs to a different owner");
-    anyhow::ensure!(record["status"] == "assigned" && record["is_deleted"] != true
-        && record["_deleted"] != true
-        && matches!(record["hosting_mode"].as_str(), Some("workstation" | "self_hosted")),
-        "computer is not an assigned self-hosted/workstation target");
+    let record = outbound_load_record(
+        conn,
+        super::store_workjet_computers::COMPUTERS_COLLECTION,
+        computer_id,
+    )?
+    .context("computer is not registered")?;
+    anyhow::ensure!(
+        record["owner_user_id"] == owner,
+        "computer belongs to a different owner"
+    );
+    anyhow::ensure!(
+        record["status"] == "assigned"
+            && record["is_deleted"] != true
+            && record["_deleted"] != true
+            && matches!(
+                record["hosting_mode"].as_str(),
+                Some("workstation" | "self_hosted")
+            ),
+        "computer is not an assigned self-hosted/workstation target"
+    );
     Ok(record)
 }
 
 fn ensure_binding(record: &Value, owner: &str, computer_id: &str) -> Result<()> {
-    anyhow::ensure!(record["owner_user_id"] == owner && record["computer_id"] == computer_id,
-        "endpoint owner/computer binding is immutable");
+    anyhow::ensure!(
+        record["owner_user_id"] == owner && record["computer_id"] == computer_id,
+        "endpoint owner/computer binding is immutable"
+    );
     Ok(())
 }
 
 fn label(value: &str, limit: usize) -> Result<()> {
-    anyhow::ensure!(!value.is_empty() && value == value.trim() && value.chars().count() <= limit
-        && !value.chars().any(char::is_control), "invalid endpoint field");
+    anyhow::ensure!(
+        !value.is_empty()
+            && value == value.trim()
+            && value.chars().count() <= limit
+            && !value.chars().any(char::is_control),
+        "invalid endpoint field"
+    );
     Ok(())
 }
 
 fn opaque_ref(value: &str) -> Result<()> {
     label(value, 256)?;
-    anyhow::ensure!(value.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b)),
-        "endpoint_ref must be opaque");
+    anyhow::ensure!(
+        value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b)),
+        "endpoint_ref must be opaque"
+    );
     Ok(())
 }
 
 fn absolute_root(value: &str) -> Result<()> {
     label(value, 4096)?;
-    anyhow::ensure!(value.starts_with('/') && !value.contains('\\')
-        && (value == "/" || !value.ends_with('/'))
-        && !value.contains("//")
-        && !value.split('/').any(|part| part == "." || part == ".."),
-        "endpoint root must be an absolute normalized path");
+    anyhow::ensure!(
+        value.starts_with('/')
+            && !value.contains('\\')
+            && (value == "/" || !value.ends_with('/'))
+            && !value.contains("//")
+            && !value.split('/').any(|part| part == "." || part == ".."),
+        "endpoint root must be an absolute normalized path"
+    );
     Ok(())
 }
 
 fn contained_root(parent: &str, child: &str) -> bool {
-    absolute_root(child).is_ok() && (parent == "/" || parent == child
-        || child.strip_prefix(parent).is_some_and(|suffix| suffix.starts_with('/')))
+    absolute_root(child).is_ok()
+        && (parent == "/"
+            || parent == child
+            || child
+                .strip_prefix(parent)
+                .is_some_and(|suffix| suffix.starts_with('/')))
 }
 
 #[cfg(test)]
