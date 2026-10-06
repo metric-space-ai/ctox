@@ -7,15 +7,14 @@
 //! request response has been released to the private IPC stream.
 
 use crate::business_data_contract::{
-    NativeBusinessDataBinding as Binding, NativeBusinessDataCommand as Command,
-    NativeBusinessDataCommandState as CommandState, NativeBusinessDataCommandStatus,
-    NativeBusinessDataErrorCode as ErrorCode, NativeBusinessDataEvent as Event,
-    NativeBusinessDataEventPayload as EventPayload, NativeBusinessDataOperation as Operation,
-    NativeBusinessDataQuery as Query, NativeBusinessDataRecord as Record,
-    NativeBusinessDataRequest as Request, NativeBusinessDataResponse as Response,
-    NativeBusinessDataResult as WireResult, NativeBusinessDataScope as Scope,
-    NativeBusinessDataSessionRef as SessionRef, CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES,
-    CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
+    NativeBusinessDataCommand as Command, NativeBusinessDataCommandState as CommandState,
+    NativeBusinessDataCommandStatus, NativeBusinessDataErrorCode as ErrorCode,
+    NativeBusinessDataEvent as Event, NativeBusinessDataEventPayload as EventPayload,
+    NativeBusinessDataOperation as Operation, NativeBusinessDataQuery as Query,
+    NativeBusinessDataRecord as Record, NativeBusinessDataRequest as Request,
+    NativeBusinessDataResponse as Response, NativeBusinessDataResult as WireResult,
+    NativeBusinessDataScope as Scope, NativeBusinessDataSessionRef as SessionRef,
+    CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES, CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
 };
 use crate::native::NativePool;
 use async_trait::async_trait;
@@ -2104,7 +2103,7 @@ impl Subscription {
             .cloned()
             .collect();
         for entry in entries {
-            if let Err(error) = self.send_history(entry, true).await {
+            if let Err(error) = self.send_history(entry).await {
                 let _ = self
                     .emit(
                         EventPayload::Reset {
@@ -2261,7 +2260,7 @@ impl Subscription {
         self.send(&event).await
     }
 
-    async fn send_history(&self, entry: HistoryEntry, recovery: bool) -> Result<(), String> {
+    async fn send_history(&self, entry: HistoryEntry) -> Result<(), String> {
         self.ensure_authorized().await?;
         let payload = match entry.payload {
             // Only this recovery attempt may declare itself caught up, after
