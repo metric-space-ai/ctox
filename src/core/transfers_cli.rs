@@ -11,7 +11,11 @@ fn store(root: &Path) -> Result<Store> {
 }
 
 pub fn start_daemon(root: &Path) -> Result<DaemonWorker> {
-    DaemonWorker::start_with_peer(store(root)?, crate::transfers_native::daemon_peer(root))
+    DaemonWorker::start_with_sources(
+        store(root)?,
+        Some(crate::transfers_native::daemon_peer(root)),
+        Some(crate::transfers_storage::resolver(root)),
+    )
 }
 
 /// Called by native account bootstrap once its saved-target credential providers
@@ -21,11 +25,12 @@ pub(crate) fn start_daemon_with_native_accounts(
     host: std::sync::Arc<dyn ctox_sync::business_data_session::BusinessDataSessionHost>,
     providers: std::collections::BTreeMap<String, ctox_sync::native::NativeSessionTargetProvider>,
 ) -> Result<DaemonWorker> {
-    DaemonWorker::start_with_peer(
+    DaemonWorker::start_with_sources(
         store(root)?,
-        std::sync::Arc::new(crate::transfers_peer::NativeTransferPeerResolver::new(
-            host, providers,
+        Some(std::sync::Arc::new(
+            crate::transfers_peer::NativeTransferPeerResolver::new(host, providers),
         )),
+        Some(crate::transfers_storage::resolver(root)),
     )
 }
 
@@ -36,7 +41,11 @@ pub(crate) fn start_daemon_with_account_host(
     host: std::sync::Arc<crate::native_transfer_accounts::NativeTransferAccountHost>,
 ) -> Result<DaemonWorker> {
     let resolver = crate::transfers_peer::NativeTransferPeerResolver::with_account_host(host);
-    DaemonWorker::start_with_peer(store(root)?, std::sync::Arc::new(resolver))
+    DaemonWorker::start_with_sources(
+        store(root)?,
+        Some(std::sync::Arc::new(resolver)),
+        Some(crate::transfers_storage::resolver(root)),
+    )
 }
 
 fn run_worker_window(root: &Path, seconds: &str) -> Result<()> {
@@ -87,6 +96,8 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
     }
     let store = store(root)?;
     let transfer = match args.first().map(String::as_str) {
+        Some("storage-upload") if args.len() == 10 => crate::transfers_storage::enqueue(root, &store, args, ctox_transfers::StorageDirection::Upload)?,
+        Some("storage-download") if args.len() == 9 => crate::transfers_storage::enqueue(root, &store, args, ctox_transfers::StorageDirection::Download)?,
         Some("download") if args.len() >= 5 => store.enqueue(DownloadRequest {
             id: args[1].clone(),
             sha256: args[2].clone(),
@@ -107,7 +118,7 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
         Some(action @ ("pause" | "resume" | "cancel")) if args.len() == 2 => {
             store.control(&args[1], action)?
         }
-        _ => bail!("usage: ctox transfer run SECONDS | source-identity | publish FILE | pair TARGET SOURCE_PUBLIC_IDENTITY INVITE_FILE | download ID SHA256 SIZE URL [MIRROR...] | peer-download ID TARGET SHA256 SIZE FILE_ID | status ID | pause ID | resume ID | cancel ID"),
+        _ => bail!("usage: ctox transfer run SECONDS | source-identity | publish FILE | pair TARGET SOURCE_PUBLIC_IDENTITY INVITE_FILE | download ID SHA256 SIZE URL [MIRROR...] | peer-download ID TARGET SHA256 SIZE FILE_ID | storage-upload ID OWNER COMPUTER ENDPOINT PURPOSE SHA256 SIZE RELATIVE_PATH FILE | storage-download ID OWNER COMPUTER ENDPOINT PURPOSE SHA256 SIZE RELATIVE_PATH | status ID | pause ID | resume ID | cancel ID"),
     };
     println!("{}", serde_json::to_string_pretty(&transfer)?);
     Ok(())

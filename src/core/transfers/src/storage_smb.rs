@@ -44,7 +44,8 @@ pub fn connect(options: SmbStorageOptions<'_>) -> Result<Box<dyn StorageConnecti
     config.connection.compression_enabled = false;
     let client = Client::new(config);
     let share = UncPath::from_str(&format!("\\\\{}\\{}", options.host, options.share))?;
-    if let Err(error) = client.share_connect(&share, &options.username, options.password.to_owned()) {
+    if let Err(error) = client.share_connect(&share, &options.username, options.password.to_owned())
+    {
         let _ = client.close();
         return Err(error.into());
     }

@@ -47,6 +47,7 @@ mod transfers_cli;
 mod transfers_grant;
 mod transfers_native;
 mod transfers_peer;
+mod transfers_storage;
 mod ui;
 mod web_stack;
 
