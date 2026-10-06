@@ -87,6 +87,22 @@ bootstrap. Source-side document visibility, field projection and query-field
 authorization reuse Business OS replication policy. Their complete runtime
 coverage remains an acceptance requirement.
 
+Native publication now has borrowed policy and visibility entry points in
+Business OS. The signed/paired verifier and collection permission evaluator
+read the already-held policy connection; private execution visibility reads
+the caller's Core and relationship connections with the existing canonical
+command/task lineage rules. They never initialize or reopen those stores.
+The issuer wrapper enters first and rereads the encrypted signing record under
+an immediate secret-store transaction, retaining it through one bounded
+synchronous callback. Rotation/deletion cannot cross that callback; each next
+poll rereads the issuer and protected master key. Missing, busy, malformed or
+conflicting issuer authority denies publication without generating a key.
+Legacy Core key rows remain migration-conflict diagnostics and do not acquire
+a second Core writer lock; protected filesystem replacement belongs to native
+runtime ownership. No guard is retained across an await. These source helpers
+and their adversarial regressions still require composed compiler/runtime
+validation and wiring into the actual BusinessData response/event publishers.
+
 ## Command ownership and existing records
 
 ObserveCommand must resolve the requested command in the canonical native

@@ -299,6 +299,43 @@ impl<S> RemoteGuestDriver<S> {
         &self.guest_id
     }
 }
+#[cfg(unix)]
+impl RemoteGuestDriver<tokio::net::UnixStream> {
+    /// Only a retained host channel can validate this pinned endpoint. No IO
+    /// future or guest-channel lock escapes the current physical-poll fence.
+    pub(super) fn ensure_current_endpoint(&self, expected_session: &str) -> Result<()> {
+        use std::os::fd::AsRawFd;
+        let channel = self
+            .channel
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("guest endpoint is busy"))?;
+        ensure!(
+            channel.usable
+                && channel
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.guest_id == self.guest_id
+                        && session.session_id == expected_session),
+            "guest endpoint session retired or replaced"
+        );
+        let mut byte = 0u8;
+        // No bytes are consumed. EOF, unexpected pending replies, and syscall
+        // errors retire the send; EAGAIN means the same socket is still open.
+        let read = unsafe {
+            libc::recv(
+                channel.stream.as_raw_fd(),
+                (&mut byte as *mut u8).cast(),
+                1,
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        ensure!(
+            read < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock,
+            "guest endpoint closed or has an unresolved reply"
+        );
+        Ok(())
+    }
+}
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> GuestDriver for RemoteGuestDriver<S> {
     fn guest_id(&self) -> &str {

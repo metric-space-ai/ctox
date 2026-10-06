@@ -217,6 +217,29 @@ impl RetainedQemuDesktop {
         result
     }
 
+    /// A synchronous physical-poll check of this exact retained child/channel.
+    pub(in crate::business_os) fn ensure_live_endpoint_current(
+        &mut self,
+        expected: &GuestLiveEndpoint,
+    ) -> Result<()> {
+        self.ensure_live_process()?;
+        let result = (|| {
+            ensure!(
+                expected.process_instance_id == self.process_instance_id
+                    && self.endpoint_id.as_deref() == Some(expected.endpoint_id.as_str()),
+                "native frame endpoint belongs to another child"
+            );
+            self.driver
+                .as_ref()
+                .context("guest endpoint unavailable")?
+                .ensure_current_endpoint(&expected.guest_session_id)
+        })();
+        if result.is_err() {
+            self.phase = DesktopPhase::EndpointUnavailable;
+        }
+        result
+    }
+
     /// Used inside the retained controller guard before polling a frame send.
     /// A dead owned child retires readiness even if the transport is pending.
     pub(in crate::business_os) fn ensure_live_process(&mut self) -> Result<()> {
