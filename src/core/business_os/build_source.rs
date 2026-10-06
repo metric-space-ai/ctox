@@ -272,19 +272,12 @@ pub fn capture(
     if let Some(base) = &public_base {
         if base.revision != revision {
             let path = staging.path().join("commits.bundle");
+            let bundle_path = path.to_str().context("bundle path")?;
             // A temporary named ref pins captured HEAD even if the live ref moves.
             let reference = format!("refs/ctox-build-source/{}", uuid::Uuid::new_v4());
             git_output(&root, &["update-ref", &reference, &revision, ""])?;
             let range = format!("{}..{}", base.revision, reference);
-            let bundled = git_output(
-                &root,
-                &[
-                    "bundle",
-                    "create",
-                    path.to_str().context("bundle path")?,
-                    &range,
-                ],
-            );
+            let bundled = git_output(&root, &["bundle", "create", bundle_path, &range]);
             let removed = git_output(&root, &["update-ref", "-d", &reference, &revision]);
             bundled?;
             removed?;
