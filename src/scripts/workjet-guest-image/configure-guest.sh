@@ -7,7 +7,7 @@
 set -eu
 [ "$(uname -s)" = Linux ]
 [ "$(uname -m)" = x86_64 ]
-[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-318890469-v2 ]
+[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-b3745d911-v5 ]
 [ -x /usr/local/bin/ctox ]
 . /etc/os-release
 [ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ]
@@ -33,7 +33,10 @@ apt-get --snapshot 20261001T000000Z -y --no-install-recommends install \
   xserver-xorg-core xserver-xorg-video-all xserver-xorg-input-libinput \
   xauth x11-utils x11-xserver-utils xfce4-session xfce4-panel xfwm4 \
   xfdesktop4 xfce4-settings xfce4-terminal thunar mousepad dbus-x11 \
-  fonts-dejavu-core maim xdotool kmod
+  fonts-dejavu-core maim xdotool kmod linux-modules-extra-6.8.0-142-generic
+# The fixed cloud image omits the fw_cfg module used for fresh assignments.
+# Validate against the GUEST kernel, never the build appliance's uname release.
+modinfo -k 6.8.0-142-generic qemu_fw_cfg >/dev/null
 # Refuse an existing UID/GID/name instead of reassigning another image user.
 if getent passwd ctox-desktop || getent passwd 1500 \
     || getent group ctox-desktop || getent group 1500; then
@@ -76,6 +79,8 @@ Before=ctox-guest-desktop.service
 [Service]
 Type=oneshot
 User=root
+StandardOutput=journal+console
+StandardError=journal+console
 ExecStartPre=/usr/sbin/modprobe qemu_fw_cfg
 ExecStart=/usr/local/libexec/ctox-install-guest-startup
 RemainAfterExit=yes
@@ -192,11 +197,16 @@ UNIT
 # A native fixed virtio endpoint is the only guest control channel. Production
 # QEMU still has no NIC and no host filesystem sharing. Do not add SSH keys.
 touch /etc/cloud/cloud-init.disabled
-systemctl mask ssh.service ssh.socket getty@tty1.service
+systemctl mask ssh.service ssh.socket getty@tty1.service systemd-networkd-wait-online.service
 systemctl enable ctox-xorg.service ctox-desktop.service ctox-guest-desktop.service
+# virt-resize can renumber GPT partitions. Reinstall the BIOS loader against
+# this stopped appliance disk; retain UUID-based Linux boot configuration.
+test -d /usr/lib/grub/i386-pc
+grub-install --target=i386-pc --recheck /dev/sda
+update-grub
 install -d -m 0755 /usr/local/share/ctox-image
 dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /usr/local/share/ctox-image/packages.tsv
 sha256sum /usr/local/bin/ctox > /usr/local/share/ctox-image/native-binary.sha256
-printf '%s\n' 318890469b60e11852f14df8b996e422616af269 > /usr/local/share/ctox-image/native-source.commit
+printf '%s\n' b3745d911e2fa054127f04b83f28106b5c28bb3a > /usr/local/share/ctox-image/native-source.commit
 apt-get clean
 rm /etc/ctox-image-build.marker
