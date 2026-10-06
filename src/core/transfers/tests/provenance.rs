@@ -56,7 +56,10 @@ fn receipt_revision_matches_the_in_tree_engine_source() {
     imported_files(&engine, &engine, &mut actual);
     let mut expected: std::collections::BTreeSet<String> = files.keys().cloned().collect();
     expected.insert("PROVENANCE.json".into());
-    assert_eq!(actual, expected, "reject unlisted engine source/build files");
+    assert_eq!(
+        actual, expected,
+        "reject unlisted engine source/build files"
+    );
     for (name, expected) in files {
         let bytes = std::fs::read(engine.join(name)).unwrap_or_else(|error| {
             panic!("imported engine file {name} must remain available: {error}")
