@@ -2426,7 +2426,7 @@ impl Subscription {
         };
         self.sender
             .send(
-                &peer,
+                peer,
                 &event,
                 Arc::new(SourcePublicationGuard {
                     native,
