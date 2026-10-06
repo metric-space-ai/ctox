@@ -7,7 +7,7 @@
 set -eu
 [ "$(uname -s)" = Linux ]
 [ "$(uname -m)" = x86_64 ]
-[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-b3745d911-v4 ]
+[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-b3745d911-v5 ]
 [ -x /usr/local/bin/ctox ]
 . /etc/os-release
 [ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ]
@@ -76,6 +76,8 @@ Before=ctox-guest-desktop.service
 [Service]
 Type=oneshot
 User=root
+StandardOutput=journal+console
+StandardError=journal+console
 ExecStartPre=/usr/sbin/modprobe qemu_fw_cfg
 ExecStart=/usr/local/libexec/ctox-install-guest-startup
 RemainAfterExit=yes
@@ -192,7 +194,7 @@ UNIT
 # A native fixed virtio endpoint is the only guest control channel. Production
 # QEMU still has no NIC and no host filesystem sharing. Do not add SSH keys.
 touch /etc/cloud/cloud-init.disabled
-systemctl mask ssh.service ssh.socket getty@tty1.service
+systemctl mask ssh.service ssh.socket getty@tty1.service systemd-networkd-wait-online.service
 systemctl enable ctox-xorg.service ctox-desktop.service ctox-guest-desktop.service
 # virt-resize can renumber GPT partitions. Reinstall the BIOS loader against
 # this stopped appliance disk; retain UUID-based Linux boot configuration.
