@@ -478,7 +478,6 @@ dependencies = [
 [[package]]
 name = "aria2-rust"
 version = "0.1.0"
-source = "git+https://github.com/mkh-welsch/aria2-rust?rev=8364bcd7902dbd853a0f746c3dc937bbaadec561#8364bcd7902dbd853a0f746c3dc937bbaadec561"
 dependencies = [
  "axum",
  "bytes",

@@ -29,6 +29,36 @@ pub struct SecretReference {
     pub name: String,
 }
 
+/// Negotiation constraint in addition to the mandatory SHA256 host-key pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum SshHostKeyAlgorithm {
+    #[serde(rename = "ssh-ed25519")]
+    Ed25519,
+    #[serde(rename = "ecdsa-sha2-nistp256")]
+    EcdsaSha2Nistp256,
+    #[serde(rename = "ecdsa-sha2-nistp384")]
+    EcdsaSha2Nistp384,
+    #[serde(rename = "ecdsa-sha2-nistp521")]
+    EcdsaSha2Nistp521,
+    #[serde(rename = "rsa-sha2-256")]
+    RsaSha2_256,
+    #[serde(rename = "rsa-sha2-512")]
+    RsaSha2_512,
+}
+
+impl SshHostKeyAlgorithm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ed25519 => "ssh-ed25519",
+            Self::EcdsaSha2Nistp256 => "ecdsa-sha2-nistp256",
+            Self::EcdsaSha2Nistp384 => "ecdsa-sha2-nistp384",
+            Self::EcdsaSha2Nistp521 => "ecdsa-sha2-nistp521",
+            Self::RsaSha2_256 => "rsa-sha2-256",
+            Self::RsaSha2_512 => "rsa-sha2-512",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ComputerEndpoint {
@@ -38,6 +68,8 @@ pub enum ComputerEndpoint {
         username: String,
         root: String,
         host_key_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_key_algorithm: Option<SshHostKeyAlgorithm>,
         private_key: SecretReference,
         #[serde(default)]
         passphrase: Option<SecretReference>,

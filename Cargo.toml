@@ -143,6 +143,7 @@ exclude = [
     "src/core/rxdb",
     "src/core/sync",
     "src/core/transfers",
+    "src/core/transfers/aria2-rust",
     "src/tools/appsec-pentest",
     "src/tools/doc-stack",
     "src/tools/google-fetch",

@@ -26,6 +26,19 @@ feature into a privileged native transfer; introduce the native lifecycle with
 its own explicit authorization and retire superseded execution paths only after
 its acceptance evidence exists.
 
+## Native guest acceleration selection
+
+The native lifecycle owner can explicitly select KVM or single-threaded QEMU
+TCG in `PreparedQemuGuest`. Both choices are available in production builds;
+the enum is restricted to the native Business OS module and is not deserialized
+from renderer or model requests. KVM never falls back automatically to TCG.
+Both choices retain the same memory/vCPU bounds, paused process startup,
+private transport, disk ownership and controller/quorum checks.
+
+The approved second-host path uses GPU3 with KVM and GPU4 with explicitly
+selected TCG. This option enables native configuration; it does not prove
+guest restoration, target session continuation or measured desktop performance.
+
 ## Native producer ownership before the capture transition
 
 Source inspection at CTOX `5f2d52c362c628b0eea673c7eda8fe60d6e9be70`
