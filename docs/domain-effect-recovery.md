@@ -70,6 +70,26 @@ a concurrent domain commit changed the source. Missing source/collection,
 corrupt receipt or continued source churn fails delivery and retains the proof.
 No cross-WAL atomicity is claimed.
 
+Accepted background controls without a domain application receipt still require
+their original native authorization receipt. Recovery with a redacted token
+reconstructs context in memory, rechecks the same actor's current module policy,
+and only then persists the private context. A denial leaves the original context,
+payload, admission hash and Core lifecycle unchanged. This ordering does not
+claim a cross-store authorization transaction or permit ownerless legacy effects
+to execute.
+
+Historical external-SQL controls that have neither native owner nor native
+authorization are rejected through a separate native invariant repair. A live
+peer must authenticate as the actor recorded in the private row, and the replay,
+private row and original Core intent must agree. Core reserves its writer and
+checks the exact identity, accepted phase, empty result and sole untouched
+control-effect claim before recording the failure. Claims with any authority
+field, linked task/saga, advanced phase or different private/Core outcome are not rewritten.
+The repair changes lifecycle only; it does not adopt an owner, replace the
+admission hash/context/payload, issue authority or enter an effect handler.
+Repeating the same native rejection repairs delivery without a second terminal
+transition. Cross-WAL atomicity and external-effect quiescence are not claimed.
+
 The original command result is preserved even when subsequent domain edits
 changed the referenced records. Core completion is idempotent. A receipt that
 conflicts with an existing failed/cancelled terminal outcome is stopped for

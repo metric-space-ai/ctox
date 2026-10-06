@@ -1,0 +1,210 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createCollectionReloader } from '../../customer-modules/outbound-lead-generation/collection-reloader.mjs';
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function clock() {
+  const jobs = new Map(); let next = 0;
+  return {
+    jobs,
+    setTimer: (fn, delay) => { const id = ++next; jobs.set(id, { fn, delay }); return id; },
+    clearTimer: (id) => jobs.delete(id),
+    run: () => { const [id, job] = jobs.entries().next().value; jobs.delete(id); return job.fn(); },
+  };
+}
+function collections(names = ['sources', 'leads']) {
+  const result = {}, listeners = {}, options = {}, reads = [];
+  for (const key of names) result[key] = {
+    find: () => { reads.push(key); throw new Error('Subscription must not query'); },
+    $: { subscribe: (cb, opts) => {
+      listeners[key] = cb; options[key] = opts;
+      return { unsubscribe: () => delete listeners[key] };
+    } },
+  };
+  return { result, listeners, options, reads };
+}
+
+test('invalidation subscriptions do not materialize any document window', () => {
+  const c = collections(['sources', 'adapters', 'imports', 'researchPolicies', 'leads']);
+  const timer = clock();
+  const reader = createCollectionReloader({ collections: c.result, reload: () => {}, ...timer });
+  assert.deepEqual(c.reads, []);
+  assert.equal(Object.keys(c.listeners).length, 5);
+  for (const value of Object.values(c.options)) assert.deepEqual(value, { invalidateOnly: true });
+  reader.dispose();
+  assert.equal(Object.keys(c.listeners).length, 0);
+});
+test('a burst coalesces only affected keys; another change during a read survives', async () => {
+  const c = collections(); const timer = clock(); const blocked = deferred(); const calls = [];
+  const reader = createCollectionReloader({ collections: c.result, ...timer,
+    reload: async (keys) => { calls.push(keys); if (calls.length === 1) await blocked.promise; },
+  });
+  for (let i = 0; i < 40; i++) c.listeners.sources();
+  assert.equal(timer.jobs.size, 1);
+  const inFlight = timer.run();
+  c.listeners.leads(); c.listeners.leads();
+  assert.equal(timer.jobs.size, 0, 'no overlapping read');
+  blocked.resolve(); await inFlight;
+  await timer.run();
+  assert.deepEqual(calls, [['sources'], ['leads']]);
+  assert.equal(timer.jobs.size, 0);
+  reader.dispose();
+});
+test('failed reads retain their keys and retry with bounded backoff, including new changes', async () => {
+  const c = collections(); const timer = clock(); const calls = []; let reported = 0;
+  const reader = createCollectionReloader({ collections: c.result, ...timer,
+    reload: async (keys) => { calls.push(keys); if (calls.length === 1) throw new Error('timeout'); },
+    onError: () => { reported++; throw new Error('reporting failure'); },
+  });
+  c.listeners.sources(); await timer.run();
+  assert.equal(reported, 1);
+  assert.equal([...timer.jobs.values()][0].delay, 2000);
+  c.listeners.leads();
+  assert.equal(timer.jobs.size, 1);
+  await timer.run();
+  assert.deepEqual(calls, [['sources'], ['sources', 'leads']]);
+  reader.dispose();
+});
+test('closing during a read drops completion, retries and late invalidations', async () => {
+  const c = collections(); const timer = clock(); const blocked = deferred(); let after = 0;
+  const reader = createCollectionReloader({ collections: c.result, ...timer,
+    reload: () => blocked.promise, afterReload: () => after++,
+  });
+  const late = c.listeners.leads;
+  late(); const running = timer.run(); reader.dispose(); late();
+  blocked.reject(new Error('closed')); await running;
+  assert.equal(after, 0); assert.equal(timer.jobs.size, 0);
+  assert.equal(Object.keys(c.listeners).length, 0);
+});
+test('a missing shell invalidation API fails without falling back to find().$', () => {
+  const c = collections(); c.result.leads = { find: c.result.leads.find };
+  assert.throws(() => createCollectionReloader({ collections: c.result, reload: () => {} }), /shell collection invalidation API/);
+  assert.equal(Object.keys(c.listeners).length, 0);
+  assert.deepEqual(c.reads, []);
+});
+
+// Exercise the shipped App reload path; only its Shell imports are replaced.
+const fixture = mkdtempSync(join(tmpdir(), 'outbound-scoped-reload-'));
+const source = fileURLToPath(new URL('../../customer-modules/outbound-lead-generation/', import.meta.url));
+mkdirSync(join(fixture, 'modules', 'olg'), { recursive: true });
+mkdirSync(join(fixture, 'shared'), { recursive: true });
+writeFileSync(join(fixture, 'package.json'), '{"type":"module"}');
+for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
+writeFileSync(join(fixture, 'shared', 'universal-importer.js'), [
+  'extractCompanyRowsFromWorkbookFile', 'extractCompanyRowsFromText', 'normalizeCompanyRow', 'openUniversalImporter', 'parseDelimitedText',
+].map((name) => `export function ${name}() {}`).join('\n'));
+writeFileSync(join(fixture, 'shared', 'dialogs.js'),
+  'export async function showBusinessAlert() {}\nexport async function showBusinessConfirm() { return false; }\nexport async function showBusinessPrompt() { return null; }');
+writeFileSync(join(fixture, 'shared', 'i18n.js'), 'export async function loadModuleMessages() { return {}; }');
+try {
+  const hooks = (await import(pathToFileURL(join(fixture, 'modules', 'olg', 'index.js')).href)).__leadgenOutboundTestHooks;
+  const state = hooks.testState();
+  function setup(overrides = {}) {
+    const reads = [];
+    const existingLead = { id: 'lead_a', _rev: '1-a', name: 'Firma', campaign: 'K', updated_at_ms: 1, contacts: [], selected_contact_ids: [] };
+    const values = {
+      sources: [{ id: 'source_a', label: 'Register', enabled: true }], adapters: [], imports: [], researchPolicies: [], leads: [existingLead],
+    };
+    const db = Object.fromEntries(Object.keys(values).map((key) => [key, {
+      find: (query = {}) => ({ exec: async () => {
+        reads.push(key);
+        if (overrides[key]) return overrides[key](query);
+        return values[key].filter((doc) => !query.selector?.id?.$gt || doc.id > query.selector.id.$gt)
+          .map((value) => ({ toJSON: () => structuredClone(value) }));
+      } }),
+    }]));
+    Object.assign(state, {
+      collections: db, sources: [], adapters: [], imports: [], leads: [existingLead],
+      collectionBindingGeneration: 1, leadHydrationBindingGeneration: 1, reloadAngewendetJeSammlung: new Map(),
+      sourceToggleIntent: new Map(), pendingLeadPatches: new Map(),
+      selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
+      researchPolicyLoaded: true, researchPolicy: 'saved', researchPolicyDraft: 'unsaved',
+      syncPending: false, syncWaitingCollections: new Set(),
+    });
+    return { reads, existingLead };
+  }
+  await test('channel recovery replaces subscriptions and disposes the cancelled handles', async () => {
+    const names = ['sources', 'adapters', 'imports', 'researchPolicies', 'leads'];
+    const old = collections(names), recovered = collections(names);
+    setup(); state.collections = old.result; state.uiMounted = true;
+    state.ctx = { sync: { restartCollection: async () => {} },
+      db: { collection: (name) => recovered.result[name.replace('outbound_lead_generation_', '').replace('research_policies', 'researchPolicies')] } };
+    hooks.bindCollections(); const generation = state.collectionBindingGeneration;
+    try {
+      await hooks.recoverCommandChannel('regression');
+      assert.equal(Object.keys(old.listeners).length, 0);
+      assert.equal(Object.keys(recovered.listeners).length, 5);
+      assert.equal(state.collectionBindingGeneration, generation + 1);
+      assert.deepEqual(old.reads, []); assert.deepEqual(recovered.reads, []);
+    } finally { state.collectionReloader.dispose(); state.collectionReloader = null; state.uiMounted = undefined; }
+  });
+  await test('actual source/adapters/policy/import reloads never read the leads collection', async () => {
+    for (const key of ['sources', 'adapters', 'researchPolicies', 'imports']) {
+      const { reads, existingLead } = setup();
+      await hooks.reload([key]);
+      assert.deepEqual(reads, [key]);
+      assert.equal(state.leads[0], existingLead, 'other collections preserve the complete lead object');
+      assert.equal(state.selectedLeadId, 'lead_a');
+      assert.equal(state.researchPolicyDraft, 'unsaved');
+    }
+  });
+  await test('pagination retrieves all leads, not just the default 200-window', async () => {
+    const rows = Array.from({ length: 351 }, (_, i) => ({ id: 'lead_' + String(i).padStart(4, '0'), campaign: 'K', updated_at_ms: i, _rev: '1-' + i }));
+    const { reads } = setup({ leads: async (query) => rows
+      .filter((row) => !query.selector.id || (query.selector.id.$in ? query.selector.id.$in.includes(row.id) : row.id > query.selector.id.$gt))
+      .slice(0, query.limit).map((row) => ({ toJSON: () => row })) });
+    await hooks.reload(['leads']);
+    assert.equal(state.leads.length, 351);
+    assert.equal(new Set(state.leads.map((row) => row.id)).size, 351);
+    assert.ok(reads.every((key) => key === 'leads'));
+  });
+  await test('a newer read of another collection does not suppress a delayed result', async () => {
+    const blocked = deferred();
+    setup({ sources: () => blocked.promise });
+    const sources = hooks.reload(['sources']);
+    await hooks.reload(['adapters']);
+    blocked.resolve([{ toJSON: () => ({ id: 'late_source', label: 'Fresh' }) }]);
+    await sources;
+    assert.equal(state.sources[0].id, 'late_source');
+  });
+  await test('an older read of the same collection cannot overwrite a newer result', async () => {
+    const blocked = deferred(); let reads = 0;
+    setup({ sources: () => ++reads === 1 ? blocked.promise : [{ toJSON: () => ({ id: 'new', label: 'New' }) }] });
+    const old = hooks.reload(['sources']); await hooks.reload(['sources']);
+    blocked.resolve([{ toJSON: () => ({ id: 'old', label: 'Old' }) }]); await old;
+    assert.equal(state.sources[0].id, 'new');
+  });
+  await test('a closed or recovered binding cannot apply its delayed documents', async () => {
+    const blocked = deferred(); setup({ sources: () => blocked.promise });
+    const old = hooks.reload(['sources']); state.collectionBindingGeneration++;
+    blocked.resolve([{ toJSON: () => ({ id: 'old', label: 'Old' }) }]); await old;
+    assert.deepEqual(state.sources, []);
+  });
+  await test('a late render after unmount cannot query or recreate the old module host', () => {
+    const previous = state.ctx;
+    state.ctx = { host: new Proxy({}, { get: () => { throw new Error('closed host accessed'); } }) };
+    state.uiMounted = false;
+    try { hooks.__render.render(); } finally { state.ctx = previous; state.uiMounted = undefined; }
+  });
+  await test('demand-only is wrapper metadata; persisted lead schema version stays zero', () => {
+    const manifest = JSON.parse(readFileSync(join(source, 'collections.schema.json'), 'utf8'));
+    const leads = manifest.collections.outbound_lead_generation_leads;
+    assert.equal(leads.syncProfile, 'demand-only');
+    assert.equal(leads.schema.version, 0);
+    assert.equal(leads.schema.primaryKey, 'id');
+    assert.equal(leads.schema.syncProfile, undefined);
+    const original = JSON.parse(readFileSync(new URL('./fixtures/outbound-lead-schema-v0.json', import.meta.url), 'utf8'));
+    assert.deepEqual(leads.schema, original, 'demand-only must not migrate the installed lead schema');
+    assert.equal(leads.schema.additionalProperties, true, 'field_status remains permitted as an additional property');
+  });
+} finally {
+  rmSync(fixture, { recursive: true, force: true });
+}

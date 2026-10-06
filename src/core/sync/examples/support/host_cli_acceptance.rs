@@ -184,7 +184,7 @@ fn bundle(root: &Path, binary: &Path) -> Result<()> {
     Ok(())
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 pub async fn run() -> Result<()> {
     let mut arguments = std::env::args_os().skip(1);
     let binary = std::fs::canonicalize(arguments.next().ok_or("expected CTOX binary")?)?;

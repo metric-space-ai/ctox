@@ -1,4 +1,4 @@
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn network_timing_confirms_delayed_quorum_but_denies_isolated_leader() {
     let timing = ctox_sync::authority::timing::AuthorityTiming::default();
     // An 80 ms RPC cannot satisfy the old implicit 50 ms read deadline.
@@ -45,7 +45,7 @@ async fn network_timing_confirms_delayed_quorum_but_denies_isolated_leader() {
     // the surviving majority can authorize its own new execution instead.
     let mut next_spec = spec();
     next_spec.job_id = "survivor-job".into();
-    let Receipt::Applied(next_job) = c
+    let next_job = match c
         .send(
             replacement,
             "survivor-create",
@@ -55,9 +55,19 @@ async fn network_timing_confirms_delayed_quorum_but_denies_isolated_leader() {
             },
         )
         .await
-    else {
-        panic!("surviving majority did not create an execution");
+    {
+        Receipt::Applied(job) => job,
+        Receipt::Replayed(job) => {
+            // Routing may lose the first committed reply during leader change.
+            // The retained request ID proves the same creation, not permission
+            // to execute: require a fresh quorum ownership check below.
+            eprintln!("survivor-create returned its durable replay receipt");
+            job
+        }
+        other => panic!("surviving majority did not create an execution: {other:?}"),
     };
+    assert_eq!(next_job.spec.job_id, "survivor-job");
+    assert_eq!(next_job.ownership.node_id, replacement);
     c.nodes[&replacement]
         .validate_ownership("survivor-job", &next_job.ownership)
         .await
@@ -71,7 +81,7 @@ async fn network_timing_confirms_delayed_quorum_but_denies_isolated_leader() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nonvoting_worker_uses_local_ipc_and_survives_authority_leader_loss() {
     use ctox_sync::{
         authority::{
@@ -257,7 +267,7 @@ async fn nonvoting_worker_uses_local_ipc_and_survives_authority_leader_loss() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn minority_cannot_confirm_worker_admission() {
     use ctox_sync::authority::{store::SqliteStore, WorkerMembership};
     let c = Cluster::new().await;
@@ -579,7 +589,7 @@ impl Cluster {
     }
 }
 #[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
     use ctox_sync::{
         contracts::{SyncIpcOperation, SyncIpcRequest, SyncIpcResponse, SyncIpcResult},
@@ -670,7 +680,7 @@ async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
 }
 
 #[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
     use ctox_sync::local_host::LocalIpcHost;
     use std::process::Stdio;
@@ -1179,7 +1189,7 @@ fn resume(
     )
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn minority_cannot_authorize_and_majority_fences_old_owner() {
     let c = Cluster::new().await;
     c.create().await;
@@ -1241,7 +1251,7 @@ async fn minority_cannot_authorize_and_majority_fences_old_owner() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unconfirmed_external_effect_blocks_takeover() {
     let c = Cluster::new().await;
     c.create().await;
@@ -1285,7 +1295,7 @@ async fn unconfirmed_external_effect_blocks_takeover() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn state_and_receipts_survive_all_peer_restarts() {
     let mut c = Cluster::new().await;
     let created = c.create().await;
@@ -1347,7 +1357,7 @@ async fn state_and_receipts_survive_all_peer_restarts() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn checkpoint_protection_requires_distinct_authentic_matching_durable_copies() {
     let c = Cluster::new().await;
     c.create().await;
@@ -1457,7 +1467,7 @@ async fn checkpoint_protection_requires_distinct_authentic_matching_durable_copi
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn witness_cannot_claim_execution_or_count_as_data_copy() {
     let c = Cluster::new().await;
     c.create().await;
@@ -1518,7 +1528,7 @@ async fn witness_cannot_claim_execution_or_count_as_data_copy() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn additional_worker_requires_committed_membership_but_never_gets_a_vote() {
     use ctox_sync::{
         authority::{
@@ -1782,7 +1792,7 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn checkpoint_and_takeover_require_current_signed_handoff_evidence() {
     let c = Cluster::new().await;
     c.create().await;

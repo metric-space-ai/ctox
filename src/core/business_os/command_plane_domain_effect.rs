@@ -143,6 +143,11 @@ pub(super) fn recover_applied_domain_effect(
         applied.result,
     )?;
     let canonical = channels::business_command_projection(root, command_id)?;
+    // The required domain-delivery write must preserve the same native
+    // presentation as the completion mirror, rather than overwriting it with
+    // Core's reduced lifecycle shape. Core intent and authorization stay intact.
+    let canonical =
+        crate::business_os::store::persist_business_command_lifecycle_projection(root, &canonical)?;
     let updated = canonical["updated_at_ms"]
         .as_i64()
         .context("canonical timestamp missing")?;

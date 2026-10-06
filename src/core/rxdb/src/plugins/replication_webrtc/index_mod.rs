@@ -1707,7 +1707,7 @@ where
                             let mut protocol = ctox_protocol_response_with_flag(
                                 target.as_ref(),
                                 peer_session_id.as_deref(),
-                                ProtocolReadiness {
+                                CtoxProtocolReadCapabilities {
                                     query_demand_loading_enabled: flag,
                                     rows_fetch_registered,
                                 },
@@ -1960,7 +1960,7 @@ where
                     let mut local_protocol = ctox_protocol_response_with_flag(
                         representative.as_ref(),
                         peer_session_id.as_deref(),
-                        ProtocolReadiness {
+                        CtoxProtocolReadCapabilities {
                             query_demand_loading_enabled: local_flag,
                             rows_fetch_registered,
                         },
@@ -2424,10 +2424,9 @@ async fn collection_checkpoints_payload(collections: &[Arc<RxCollection>]) -> Va
     Value::Object(map)
 }
 
-/// Registry readiness captured for this handshake; query and row sources remain
-/// independently advertised rather than granting access through a wire field.
+/// Independently advertised read capabilities captured at handshake build.
 #[derive(Clone, Copy)]
-struct ProtocolReadiness {
+struct CtoxProtocolReadCapabilities {
     query_demand_loading_enabled: bool,
     rows_fetch_registered: bool,
 }
@@ -2435,7 +2434,7 @@ struct ProtocolReadiness {
 async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     collection: Option<&Arc<RxCollection>>,
     peer_session_id: Option<&str>,
-    readiness: ProtocolReadiness,
+    read_capabilities: CtoxProtocolReadCapabilities,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
@@ -2462,7 +2461,7 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     let mut payload = ctox_protocol_response_payload_with_flag(
         collection_payload,
         peer_session_id,
-        readiness,
+        read_capabilities,
         collection_schemas,
         collection_checkpoints,
         storage_generation,
@@ -2477,11 +2476,51 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
 }
 
 #[cfg(test)]
+#[test]
+fn protocol_read_capabilities_remain_independent() {
+    for (query_demand_loading_enabled, rows_fetch_registered) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let payload = ctox_protocol_response_payload_with_flag(
+            Value::Null,
+            Some("read-capability-matrix"),
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled,
+                rows_fetch_registered,
+            },
+            None,
+            None,
+            Some("storage-generation"),
+            NativePeerRole::CtoxInstance,
+        );
+        let capabilities = payload["capabilities"].as_array().expect("capability list");
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|value| value.as_str() == Some(CTOX_QUERY_FETCH_CAPABILITY)),
+            query_demand_loading_enabled,
+        );
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|value| value.as_str() == Some(CTOX_ROWS_FETCH_CAPABILITY)),
+            rows_fetch_registered,
+        );
+        assert_eq!(
+            payload
+                .pointer("/v1_5/queryDemandLoadingEnabled")
+                .and_then(Value::as_bool),
+            Some(query_demand_loading_enabled),
+        );
+    }
+}
+
+#[cfg(test)]
 fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
     ctox_protocol_response_payload_with_flag(
         collection,
         peer_session_id,
-        ProtocolReadiness {
+        CtoxProtocolReadCapabilities {
             query_demand_loading_enabled: true,
             rows_fetch_registered: false,
         },
@@ -2495,16 +2534,16 @@ fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&st
 fn ctox_protocol_response_payload_with_flag(
     collection: Value,
     peer_session_id: Option<&str>,
-    readiness: ProtocolReadiness,
+    read_capabilities: CtoxProtocolReadCapabilities,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
     peer_role: NativePeerRole,
 ) -> Value {
-    let ProtocolReadiness {
+    let CtoxProtocolReadCapabilities {
         query_demand_loading_enabled,
         rows_fetch_registered,
-    } = readiness;
+    } = read_capabilities;
     let peer_session_id = peer_session_id
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
@@ -3735,7 +3774,7 @@ mod tests {
         let multiplexed = ctox_protocol_response_payload_with_flag(
             collection_payload,
             Some("rxdb-rs-run-a"),
-            ProtocolReadiness {
+            CtoxProtocolReadCapabilities {
                 query_demand_loading_enabled: true,
                 rows_fetch_registered: false,
             },
@@ -4010,7 +4049,7 @@ mod tests {
             let payload = ctox_protocol_response_payload_with_flag(
                 Value::Null,
                 Some("session"),
-                ProtocolReadiness {
+                CtoxProtocolReadCapabilities {
                     query_demand_loading_enabled: true,
                     rows_fetch_registered: false,
                 },
@@ -4041,7 +4080,7 @@ mod tests {
         let single = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
-            ProtocolReadiness {
+            CtoxProtocolReadCapabilities {
                 query_demand_loading_enabled: true,
                 rows_fetch_registered: false,
             },
@@ -4057,7 +4096,7 @@ mod tests {
         let multi = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
-            ProtocolReadiness {
+            CtoxProtocolReadCapabilities {
                 query_demand_loading_enabled: true,
                 rows_fetch_registered: false,
             },
@@ -4858,7 +4897,7 @@ mod tests {
         let protocol = ctox_protocol_response_with_flag(
             None,
             Some("worker-session"),
-            ProtocolReadiness {
+            CtoxProtocolReadCapabilities {
                 query_demand_loading_enabled: false,
                 rows_fetch_registered: false,
             },
@@ -4922,7 +4961,7 @@ mod tests {
             let protocol = ctox_protocol_response_with_flag(
                 None,
                 Some("control-session"),
-                ProtocolReadiness {
+                CtoxProtocolReadCapabilities {
                     query_demand_loading_enabled: false,
                     rows_fetch_registered: false,
                 },
