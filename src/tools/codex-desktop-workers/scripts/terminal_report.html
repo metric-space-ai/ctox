@@ -218,4 +218,3 @@ $('prev').onclick=()=>{page--;draw()};$('next').onclick=()=>{page++;draw()};$('s
 $('export').onclick=()=>{const b=new Blob([JSON.stringify(D,null,2)],{type:'application/json'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='MODEL-EXPERIENCE.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),0)};
 refresh();
 </script></body></html>
-

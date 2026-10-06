@@ -8,6 +8,7 @@ async fn exact_turn_interrupt_session_exit_rejects_unprocessed_request() {
     let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
     Arc::get_mut(&mut client).unwrap().session_loop_termination = async move {
         let _ = exit_rx.await;
+        Ok(())
     }
     .boxed()
     .shared();
@@ -36,7 +37,7 @@ fn interrupt_client(
         rx_event,
         agent_status,
         session,
-        session_loop_termination: std::future::pending::<()>().boxed().shared(),
+        session_loop_termination: std::future::pending::<Result<(), ()>>().boxed().shared(),
     });
     (codex, rx_sub)
 }

@@ -100,6 +100,246 @@ async fn recorder_flush_propagates_writer_failure() -> std::io::Result<()> {
     );
     Ok(())
 }
+async fn exercise_recorder_shutdown(writable: bool) -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    let path = home.path().join("shutdown-rollout.jsonl");
+    fs::write(&path, b"original\n")?;
+    let file = if writable {
+        File::options().append(true).open(&path)?
+    } else {
+        File::open(&path)?
+    };
+    let mut file = tokio::fs::File::from_std(file);
+    tokio::io::AsyncWriteExt::write_all(&mut file, b"queued\n").await?;
+    let (tx, rx) = mpsc::channel(1);
+    let recorder = RolloutRecorder {
+        tx,
+        rollout_path: path.clone(),
+        materialization_pending: Arc::new(AtomicBool::new(false)),
+        materialization_staging_path: None,
+        state_db: None,
+        event_persistence_mode: EventPersistenceMode::Limited,
+    };
+    let retained = recorder.clone();
+    let writer = rollout_writer(
+        Some(file),
+        None,
+        rx,
+        None,
+        home.path().to_path_buf(),
+        path.clone(),
+        None,
+        None,
+        "test-provider".to_string(),
+        false,
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (shutdown, write) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(recorder.shutdown(), writer)
+    })
+    .await
+    .expect("shutdown must finish the writer while a recorder clone remains");
+    if writable {
+        shutdown?;
+        write?;
+        assert_eq!(fs::read(&path)?, b"original\nqueued\n");
+    } else {
+        let shutdown_error = shutdown.expect_err("failed journal I/O cannot acknowledge shutdown");
+        let write_error = write.expect_err("read-only writer must fail");
+        assert_eq!(shutdown_error.kind(), write_error.kind());
+        assert_eq!(shutdown_error.to_string(), write_error.to_string());
+        assert_eq!(fs::read(&path)?, b"original\n");
+    }
+    assert!(
+        retained.flush().await.is_err(),
+        "retained clones cannot keep a terminated writer alive"
+    );
+    assert!(
+        retained
+            .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
+                AgentMessageEvent {
+                    message: "after-shutdown".to_string(),
+                    phase: None,
+                },
+            ))])
+            .await
+            .is_err(),
+        "terminated writer cannot admit another persisted event"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_shutdown_flushes_and_terminates_with_retained_clone() -> std::io::Result<()> {
+    exercise_recorder_shutdown(true).await
+}
+
+#[tokio::test]
+async fn recorder_shutdown_propagates_writer_failure() -> std::io::Result<()> {
+    exercise_recorder_shutdown(false).await
+}
+
+async fn native_journal_recorder_fixture(home: &Path) -> std::io::Result<RolloutRecorder> {
+    let config = ConfigBuilder::default()
+        .codex_home(home.to_path_buf())
+        .build()
+        .await?;
+    RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            ThreadId::new(),
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        None,
+        None,
+    )
+    .await
+}
+
+fn native_journal_message(message: &str) -> RolloutItem {
+    RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+        message: message.to_string(),
+        phase: None,
+    }))
+}
+
+#[tokio::test]
+async fn native_journal_reader_uses_actual_writer_and_requires_shutdown() -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    let recorder = native_journal_recorder_fixture(home.path()).await?;
+    recorder
+        .record_items(&[native_journal_message("before-retention")])
+        .await?;
+    recorder.persist().await?;
+    let reader = recorder.retain_native_journal().await?;
+    assert!(
+        reader.read_bytes(1024 * 1024).is_err(),
+        "live writer cannot export"
+    );
+    assert!(
+        recorder.retain_native_journal().await.is_err(),
+        "retention is linear"
+    );
+
+    // Swap the public name before shutdown. The export must read the original
+    // descriptor, including writes processed after retention, never the new path.
+    let owned_path = recorder.rollout_path().with_extension("owned");
+    fs::rename(recorder.rollout_path(), &owned_path)?;
+    fs::write(recorder.rollout_path(), b"foreign replacement\n")?;
+    recorder
+        .record_items(&[native_journal_message("after-retention")])
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), recorder.shutdown())
+        .await
+        .expect("bounded real recorder shutdown")?;
+    let bytes = reader.read_bytes(1024 * 1024)?;
+    assert_eq!(bytes, fs::read(&owned_path)?);
+    let text = std::str::from_utf8(&bytes).expect("actual JSONL writer");
+    assert!(text.contains("before-retention"));
+    assert!(text.contains("after-retention"));
+    assert!(!text.contains("foreign replacement"));
+    assert!(reader.read_bytes(bytes.len() as u64 - 1).is_err());
+    assert_eq!(
+        reader.read_bytes(1024 * 1024)?,
+        bytes,
+        "repeat read is exact"
+    );
+    assert!(
+        recorder.flush().await.is_err(),
+        "reader cannot keep writer alive"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_journal_reader_rejects_changes_after_shutdown() -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    let recorder = native_journal_recorder_fixture(home.path()).await?;
+    recorder
+        .record_items(&[native_journal_message("owned")])
+        .await?;
+    recorder.persist().await?;
+    let reader = recorder.retain_native_journal().await?;
+    recorder.shutdown().await?;
+    assert!(!reader.read_bytes(1024 * 1024)?.is_empty());
+    let mut foreign_writer = File::options().append(true).open(recorder.rollout_path())?;
+    foreign_writer.write_all(b"modified after seal\n")?;
+    foreign_writer.flush()?;
+    assert!(
+        reader.read_bytes(1024 * 1024).is_err(),
+        "sealed metadata must still match"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_journal_reader_rejects_failed_writer_shutdown() -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    let path = home.path().join("failed-native-journal.jsonl");
+    fs::write(&path, b"owned\n")?;
+    let (tx, rx) = mpsc::channel(4);
+    let recorder = RolloutRecorder {
+        tx,
+        rollout_path: path.clone(),
+        materialization_pending: Arc::new(AtomicBool::new(false)),
+        materialization_staging_path: None,
+        state_db: None,
+        event_persistence_mode: EventPersistenceMode::Limited,
+    };
+    let writer = tokio::spawn(rollout_writer(
+        Some(tokio::fs::File::from_std(File::open(&path)?)),
+        None,
+        rx,
+        None,
+        home.path().to_path_buf(),
+        path,
+        None,
+        None,
+        "test-provider".to_string(),
+        false,
+        Arc::new(AtomicBool::new(false)),
+    ));
+    let reader = recorder.retain_native_journal().await?;
+    recorder
+        .record_items(&[native_journal_message("cannot-write")])
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        assert!(
+            recorder.shutdown().await.is_err(),
+            "actual flush failure must propagate"
+        );
+        assert!(writer.await.expect("writer task did not panic").is_err());
+    })
+    .await
+    .expect("bounded failed writer teardown");
+    assert!(
+        reader.read_bytes(1024 * 1024).is_err(),
+        "failed writer cannot seal bytes"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_journal_retention_does_not_materialize_deferred_threads() -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    let recorder = native_journal_recorder_fixture(home.path()).await?;
+    recorder
+        .record_items(&[native_journal_message("buffered only")])
+        .await?;
+    assert!(recorder.retain_native_journal().await.is_err());
+    assert!(
+        !recorder.rollout_path().exists(),
+        "capture must not publish an empty/deferred thread"
+    );
+    recorder.shutdown().await?;
+    assert!(!recorder.rollout_path().exists());
+    Ok(())
+}
+
 fn staging_paths(path: &Path) -> Vec<PathBuf> {
     let Some(parent) = path.parent() else {
         return Vec::new();

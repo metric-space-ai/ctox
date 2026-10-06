@@ -377,6 +377,22 @@ impl InProcessClientSender {
     }
 }
 
+async fn finish_shutdown_task(
+    handle: &mut tokio_util::task::AbortOnDropHandle<IoResult<()>>,
+    budget: Duration,
+    message: &'static str,
+) -> IoResult<()> {
+    match timeout(budget, &mut *handle).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(IoError::other(message)),
+        Err(_) => {
+            handle.abort();
+            let _ = handle.await;
+            Err(IoError::new(ErrorKind::TimedOut, message))
+        }
+    }
+}
+
 /// Handle used by an in-process client to call app-server and consume events.
 ///
 /// This is the low-level runtime handle. Higher-level callers should usually go
@@ -385,7 +401,7 @@ impl InProcessClientSender {
 pub struct InProcessClientHandle {
     client: InProcessClientSender,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
-    runtime_handle: Option<tokio::task::JoinHandle<()>>,
+    runtime_handle: Option<tokio::task::JoinHandle<IoResult<()>>>,
 }
 
 impl Drop for InProcessClientHandle {
@@ -445,34 +461,57 @@ impl InProcessClientHandle {
         self.event_rx.recv().await
     }
 
-    /// Requests runtime shutdown and waits for worker termination.
+    /// Requests runtime shutdown and waits for checked worker termination.
     ///
-    /// Shutdown is bounded by internal timeouts and may abort background tasks
-    /// if graceful drain does not complete in time.
-    pub async fn shutdown(mut self) -> IoResult<()> {
+    /// Forced drain, a lost acknowledgement or task failure returns an error.
+    /// Success does not certify recorder I/O or provider continuation.
+    pub async fn shutdown(self) -> IoResult<()> {
+        self.shutdown_with_timeout(SHUTDOWN_TIMEOUT).await
+    }
+
+    async fn shutdown_with_timeout(mut self, budget: Duration) -> IoResult<()> {
         let mut runtime_handle = match self.runtime_handle.take() {
-            Some(handle) => handle,
+            Some(handle) => tokio_util::task::AbortOnDropHandle::new(handle),
             None => return Ok(()),
         };
         let (done_tx, done_rx) = oneshot::channel();
-
-        if timeout(
-            SHUTDOWN_TIMEOUT,
+        let request_result = match timeout(
+            budget,
             self.client
                 .client_tx
                 .send(InProcessClientMessage::Shutdown { done_tx }),
         )
         .await
-        .is_ok_and(|send_result| send_result.is_ok())
         {
-            let _ = timeout(SHUTDOWN_TIMEOUT, done_rx).await;
-        }
-
-        if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut runtime_handle).await {
-            runtime_handle.abort();
-            let _ = runtime_handle.await;
-        }
-        Ok(())
+            Ok(Ok(())) => match timeout(budget, done_rx).await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(_)) => Err(IoError::new(
+                    ErrorKind::BrokenPipe,
+                    "in-process runtime shutdown acknowledgement lost",
+                )),
+                Err(_) => Err(IoError::new(
+                    ErrorKind::TimedOut,
+                    "in-process runtime shutdown acknowledgement timed out",
+                )),
+            },
+            Ok(Err(_)) => Err(IoError::new(
+                ErrorKind::BrokenPipe,
+                "in-process runtime shutdown channel closed",
+            )),
+            Err(_) => Err(IoError::new(
+                ErrorKind::TimedOut,
+                "in-process runtime shutdown request timed out",
+            )),
+        };
+        // Always finish bounded cleanup, even after admission/acknowledgement
+        // failure. The guard also aborts this owned task if our future is dropped.
+        let runtime_result = finish_shutdown_task(
+            &mut runtime_handle,
+            budget,
+            "in-process runtime shutdown did not finish",
+        )
+        .await;
+        request_result.and(runtime_result)
     }
 
     pub fn sender(&self) -> InProcessClientSender {
@@ -533,15 +572,17 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 /*disconnect_sender*/ None,
             ),
         );
-        let mut outbound_handle = tokio::spawn(async move {
+        let outbound_handle = tokio::spawn(async move {
             while let Some(envelope) = outgoing_rx.recv().await {
                 route_outgoing_envelope(&mut outbound_connections, envelope).await;
             }
+            Ok(())
         });
+        let mut outbound_handle = tokio_util::task::AbortOnDropHandle::new(outbound_handle);
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
-        let mut processor_handle = tokio::spawn(async move {
+        let processor_handle = tokio::spawn(async move {
             let mut processor = MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
@@ -625,9 +666,11 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             processor.clear_runtime_references();
             processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
             processor.clear_all_thread_listeners().await;
-            processor.drain_background_tasks().await;
-            processor.shutdown_threads().await;
+            let background_result = processor.drain_background_tasks_checked().await;
+            let thread_result = processor.shutdown_threads_checked().await;
+            background_result.and(thread_result)
         });
+        let mut processor_handle = tokio_util::task::AbortOnDropHandle::new(processor_handle);
         let mut pending_request_responses =
             HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
         let mut shutdown_ack = None;
@@ -869,18 +912,23 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             }));
         }
 
-        if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut processor_handle).await {
-            processor_handle.abort();
-            let _ = processor_handle.await;
-        }
-        if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut outbound_handle).await {
-            outbound_handle.abort();
-            let _ = outbound_handle.await;
-        }
+        let processor_result = finish_shutdown_task(
+            &mut processor_handle,
+            SHUTDOWN_TIMEOUT,
+            "in-process processor shutdown did not finish",
+        )
+        .await;
+        let outbound_result = finish_shutdown_task(
+            &mut outbound_handle,
+            SHUTDOWN_TIMEOUT,
+            "in-process outbound shutdown did not finish",
+        )
+        .await;
 
         if let Some(done_tx) = shutdown_ack {
             let _ = done_tx.send(());
         }
+        processor_result.and(outbound_result)
     });
 
     InProcessClientHandle {
@@ -889,6 +937,10 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         runtime_handle: Some(runtime_handle),
     }
 }
+
+#[cfg(test)]
+#[path = "in_process_shutdown_tests.rs"]
+mod shutdown_tests;
 
 #[cfg(test)]
 #[path = "in_process_interrupt_tests.rs"]

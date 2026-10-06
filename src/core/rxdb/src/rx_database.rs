@@ -1209,7 +1209,7 @@ mod tests {
         assert!(!database.token.is_empty());
         assert!(!database.storage_token.is_empty());
         assert!(database.is_first_time_instantiated().await.unwrap());
-        assert!(db_count() >= before_count + 1);
+        assert_eq!(db_count(), before_count + 1);
 
         let collections = database
             .add_collections(HashMap::from([(
@@ -1242,6 +1242,7 @@ mod tests {
             Some(json!("alice"))
         );
         database.close().await.unwrap();
+        assert_eq!(db_count(), before_count);
     }
 
     /// A closed database must actually be reclaimed. `RxCollection` keeps a

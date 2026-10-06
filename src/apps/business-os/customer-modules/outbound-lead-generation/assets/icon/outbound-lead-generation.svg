@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Outbound Lead Generation">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f6a55e"/>
+      <stop offset="1" stop-color="#de6b68"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#background)" d="M0 0h1024v1024H0z"/>
+  <path fill="none" stroke="#fff" stroke-width="96" stroke-linecap="round" d="M465 760c-169 0-306-137-306-306s137-306 306-306c136 0 251 89 291 211"/>
+  <path fill="none" stroke="#fff" stroke-width="96" stroke-linecap="round" stroke-linejoin="round" d="m590 605 268-268M686 337h172v172"/>
+  <circle cx="465" cy="454" r="88" fill="#fff"/>
+</svg>

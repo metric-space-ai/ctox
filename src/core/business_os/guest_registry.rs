@@ -329,6 +329,38 @@ fn private_directory(path: &Path) -> Result<FileIdentity> {
     Ok(FileIdentity(metadata.dev(), metadata.ino()))
 }
 
+/// Accept the native image helper's one private disk directory, or a native
+/// reconstruction directly in the assignment. Never admit arbitrary descendants.
+fn validate_prepared_guest_overlay(runtime_parent: &Path, overlay: &Path) -> Result<()> {
+    private_directory(runtime_parent)?;
+    let disk_parent = overlay
+        .parent()
+        .context("guest overlay parent is unavailable")?;
+    if disk_parent != runtime_parent {
+        ensure!(
+            disk_parent.parent() == Some(runtime_parent)
+                && disk_parent
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("guest-disk-"))
+                && overlay.file_name().is_some_and(|name| name == "root.qcow2"),
+            "prepared guest overlay is outside the native image layout"
+        );
+        private_directory(disk_parent)?;
+    }
+    let metadata = std::fs::symlink_metadata(overlay)?;
+    ensure!(
+        metadata.is_file()
+            && !metadata.file_type().is_symlink()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o022 == 0
+            && metadata.nlink() == 1
+            && std::fs::canonicalize(overlay)? == overlay,
+        "prepared guest overlay is not a canonical native file"
+    );
+    Ok(())
+}
+
 impl NativeGuestRegistry {
     pub(crate) fn new(
         root: &Path,
@@ -900,6 +932,25 @@ impl NativeGuestExecution {
             })
     }
 
+    /// Read current capture authority on the exact retained producer record.
+    /// Ordinary guest effects continue to require the live turn phase.
+    pub(crate) fn with_capture_authority<T>(
+        &self,
+        source: &crate::channels::NativeProviderCaptureOwner,
+        capture: impl FnOnce(&ExecutionSpec, &Ownership) -> Result<T>,
+    ) -> Result<T> {
+        ensure!(
+            source.matches_provider(&self.provider),
+            "capture belongs to another native provider owner"
+        );
+        source.with_current_capture_transaction(|worker_tx, facts| {
+            self.with_held_worker(worker_tx, facts, |_, verify| {
+                verify()?;
+                capture(&self.binding.spec, &self.binding.ownership)
+            })
+        })
+    }
+
     /// The command witness already owns the real worker/provider transaction.
     /// This shared path acquires only current policy and controller guards.
     fn with_held_worker<T>(
@@ -1082,12 +1133,10 @@ impl NativeGuestExecution {
                 "guest needs a registered import and fresh process attempt"
             );
             ensure!(
-                config.runtime_parent == entry.assignment.runtime_parent()
-                    && config.overlay_qcow2.parent() == Some(config.runtime_parent.as_path())
-                    && std::fs::canonicalize(&config.overlay_qcow2)? == config.overlay_qcow2,
+                config.runtime_parent == entry.assignment.runtime_parent(),
                 "prepared QEMU runtime/overlay is outside this native guest assignment"
             );
-            private_directory(&config.runtime_parent)?;
+            validate_prepared_guest_overlay(&config.runtime_parent, &config.overlay_qcow2)?;
             verify()?;
             // Retain the attempt BEFORE the first quorum await. Cancellation or
             // uncertain admission never creates another process/effect attempt.

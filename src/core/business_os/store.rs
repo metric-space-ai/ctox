@@ -411,7 +411,8 @@ struct RuntimeSettingsCacheStamp {
 type SyncConnectionConfigCacheStamp = (
     BusinessOsFileChangeStamp,
     BusinessOsFileChangeStamp,
-    BusinessOsFileChangeStamp,
+    BusinessOsSqliteStoreStamp,
+    Option<String>,
 );
 
 #[derive(Debug, Clone)]
@@ -2547,7 +2548,14 @@ fn sync_connection_config_cache_stamp(root: &Path) -> SyncConnectionConfigCacheS
     (
         business_os_file_change_stamp(&runtime.join("business-os-instance-id")),
         business_os_file_change_stamp(&runtime.join(BUSINESS_OS_SIGNALING_URLS_FILE)),
-        business_os_file_change_stamp(&runtime.join("ctox-secrets.sqlite3")),
+        business_os_sqlite_store_stamp(&crate::secrets::secret_store_path(root)),
+        crate::secrets::secret_record_content_version(
+            root,
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME,
+        )
+        .ok()
+        .flatten(),
     )
 }
 
@@ -6260,7 +6268,10 @@ pub(super) fn ensure_delegated_app_modify_target_supported(
     let app_root = resolve_business_os_app_root(root)?;
     let (module_root, _) = resolve_module_source_root_for_root(root, &app_root, module_id)?;
     anyhow::ensure!(
-        module_root.parent().and_then(Path::file_name).and_then(|name| name.to_str())
+        module_root
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
             != Some("local-modules"),
         "local_app_authoring_unsupported: module `{module_id}` is operator-owned under local-modules; delegated modify_app has no local sandbox/validation lifecycle contract and must not create an installed-module shadow"
     );
@@ -6780,6 +6791,7 @@ fn record_command_inner(
         &command_id,
         &command,
         observed_at_ms,
+        native_authorization.as_ref(),
     )? {
         return Ok(completed);
     }
@@ -6919,14 +6931,7 @@ fn record_command_inner(
         root,
         queue_task.as_ref().map(|task| task.message_key.as_str()),
     );
-    if let Some(completed) = maybe_materialize_and_complete_runtime_app_starter(
-        root,
-        &command_id,
-        &command,
-        queue_task.as_ref(),
-    )? {
-        return Ok(completed);
-    }
+    maybe_materialize_runtime_app_starter(root, &command, queue_task.as_ref())?;
     project_outbound_lead_queued(
         root,
         &command,
@@ -7182,6 +7187,7 @@ fn maybe_complete_documents_chat_markdown_edit_immediately(
     command_id: &str,
     command: &BusinessCommand,
     observed_at_ms: i64,
+    native_authorization: Option<&Value>,
 ) -> anyhow::Result<Option<CommandAccepted>> {
     if command.module != "documents" || command.command_type != "business_os.chat.task" {
         return Ok(None);
@@ -7202,6 +7208,23 @@ fn maybe_complete_documents_chat_markdown_edit_immediately(
         return Ok(None);
     }
 
+    // This deterministic edit has no worker queue. Claim its immutable intent
+    // before writing the document, then use the native control completion
+    // barrier before exposing terminal state to command readers.
+    let claim = channels::claim_business_control_command(
+        root,
+        business_command_core_claim_with_authorization(command_id, command, native_authorization)?,
+    )?;
+    if claim.disposition == "terminal" {
+        let mut replay = replayed_queue_command(root, conn, command_id, command)?;
+        replay.execution_mode = "control";
+        return Ok(Some(replay));
+    }
+    anyhow::ensure!(
+        claim.disposition == "new",
+        "document append has an uncertain native claim; recovery is required before another write"
+    );
+
     let payload_json = serde_json::to_string(&command.payload)?;
     let context_json = serde_json::to_string(&command.client_context)?;
     conn.execute(
@@ -7221,10 +7244,20 @@ fn maybe_complete_documents_chat_markdown_edit_immediately(
 
     let reply = "Die Markdown-Änderung wurde direkt als neue Dokumentversion persistiert.";
     let mut completed = process_business_chat_reply(root, conn, command_id, command, None, reply)?;
-    if completed.task_id.is_none() {
-        completed.task_id = Some(command_id.to_string());
-        completed.task_status = Some("completed".to_string());
-    }
+    conn.execute(
+        "UPDATE business_commands SET status='completed', observed_at_ms=?2 WHERE command_id=?1",
+        params![command_id, now_ms() as i64],
+    )?;
+    let mut writers = RxdbProjectionWriterCache::new(root);
+    super::command_plane::complete_and_project_business_control_command(
+        root,
+        command_id,
+        "completed",
+        completed.result.as_ref().unwrap_or(&Value::Null),
+        None,
+        &mut writers,
+    )?;
+    completed.execution_mode = "control";
     Ok(Some(completed))
 }
 
@@ -7264,14 +7297,13 @@ const RUNTIME_APP_STARTER_V2_LOCALE_DE: &str =
 const RUNTIME_APP_STARTER_V2_LOCALE_EN: &str =
     include_str!("../../apps/business-os/app-starter/v2/locales/en.json");
 
-fn maybe_materialize_and_complete_runtime_app_starter(
+fn maybe_materialize_runtime_app_starter(
     root: &Path,
-    command_id: &str,
     command: &BusinessCommand,
     queue_task: Option<&channels::QueueTaskView>,
-) -> anyhow::Result<Option<CommandAccepted>> {
-    // CLI and MCP app requests describe work for the bounded coding worker.
-    // Admission must not manufacture app files or claim a queued task completed.
+) -> anyhow::Result<()> {
+    // CLI and MCP requests belong to the queued coding worker. Admission
+    // must not materialize or complete their app work synchronously.
     if matches!(
         command.client_context.get("source").and_then(Value::as_str),
         Some(
@@ -7281,66 +7313,36 @@ fn maybe_materialize_and_complete_runtime_app_starter(
                 | "ctox-cli.business-os-app-bench"
         )
     ) {
-        return Ok(None);
+        return Ok(());
     }
-    let is_import = command
-        .payload
-        .get("import_source")
-        .is_some_and(Value::is_object);
-    let Some(queue_task) = queue_task else {
-        return Ok(None);
-    };
+    if queue_task.is_none() {
+        return Ok(());
+    }
     let Some((module_id, install_target, _artifact_directory)) =
         business_os_app_command_target_metadata(command)
     else {
-        return Ok(None);
+        return Ok(());
     };
     if install_target != "runtime-installed-module" {
-        return Ok(None);
+        return Ok(());
     }
     let action = match command.command_type.as_str() {
         "ctox.business_os.app.create" => RuntimeAppStarterAction::Create,
         "ctox.business_os.app.modify" => RuntimeAppStarterAction::Modify,
-        _ => return Ok(None),
+        _ => return Ok(()),
     };
     let materialized =
         materialize_runtime_app_starter_artifacts(root, command, &module_id, action)?;
-    if !materialized.should_validate {
-        return Ok(None);
-    }
-    match validate_runtime_app_starter_artifacts(root, &module_id) {
-        Ok(()) => {}
-        Err(err) => {
+    if materialized.should_validate {
+        if let Err(err) = validate_runtime_app_starter_artifacts(root, &module_id) {
             eprintln!(
                 "[business-os] runtime app starter for `{module_id}` stayed in queue because validation failed: {err:#}"
             );
-            return Ok(None);
         }
     }
-    if is_import {
-        return Ok(None);
-    }
-    let Some(result) = complete_business_command_from_app_validation_success(
-        root,
-        &queue_task.message_key,
-        Some(&module_id),
-        "Business OS runtime app starter materialized and validated synchronously",
-    )?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(CommandAccepted {
-        ok: result.get("status").and_then(Value::as_str) == Some("completed"),
-        command_id: command_id.to_string(),
-        status: "completed",
-        task_id: Some(queue_task.message_key.clone()),
-        task_status: result
-            .get("task_status")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| Some("completed".to_string())),
-        ..CommandAccepted::default()
-    }))
+    // Starter validation proves only that scaffolding can load. It cannot
+    // finish a queued command before its owned worker and completion review.
+    Ok(())
 }
 
 fn materialize_runtime_app_starter_artifacts(
@@ -10682,7 +10684,10 @@ pub fn complete_business_command_from_app_validation_success(
         &module_id,
         &install_target,
         completed_at_ms,
-    )?;
+    )
+    .with_context(|| {
+        format!("module catalog projection does not contain validated module `{module_id}`")
+    })?;
     write_module_catalog_projection_to_rxdb_for_module(root, &module_id)?;
     let (asset_revision, catalog_revision, catalog_fingerprint) =
         runtime_app_delivery_evidence(root, &module_id)?;
@@ -18137,7 +18142,9 @@ pub(super) fn stored_rxdb_business_command_outcome(
         );
         obj.insert("already_accepted".to_string(), Value::Bool(true));
     }
-    Ok(Some(payload))
+    Ok(Some(command_projection_with_native_identity(
+        conn, &payload,
+    )?))
 }
 
 const CAPABILITY_SECRET_SCOPE: &str = "credentials";
@@ -19467,16 +19474,6 @@ pub(super) fn authorize_recoverable_background_control_command(
 ) -> anyhow::Result<BusinessCommand> {
     let permission = recoverable_background_control_permission(&command.command_type)
         .context("command type is not recoverable")?;
-    if let Ok(session) = rxdb_authenticated_session(root, command) {
-        let decision = module_policy_decision(root, &session, permission, &command.module)?;
-        anyhow::ensure!(
-            decision.allowed,
-            "accepted recoverable command authorization is no longer valid: {}",
-            decision.display_reason
-        );
-        return Ok(command.clone());
-    }
-
     let command_id = command
         .id
         .as_deref()
@@ -19515,6 +19512,23 @@ pub(super) fn authorize_recoverable_background_control_command(
         .filter(|value| !value.is_empty())
         .context("accepted recoverable command authorized actor is missing")?;
 
+    // Authentication now is not authority for an earlier accepted effect.
+    // Require its original native receipt even when a live token is supplied,
+    // then revalidate the same actor against current module policy.
+    if let Ok(session) = rxdb_authenticated_session(root, command) {
+        anyhow::ensure!(
+            session_user_id(&session) == Some(actor_id),
+            "accepted recoverable command authenticated actor changed after admission"
+        );
+        let decision = module_policy_decision(root, &session, permission, &command.module)?;
+        anyhow::ensure!(
+            decision.allowed,
+            "accepted recoverable command authorization is no longer valid: {}",
+            decision.display_reason
+        );
+        return Ok(command.clone());
+    }
+
     let mut recovered = command.clone();
     recovered.origin = CommandOrigin::TrustedLocal;
     let mut recovered_context = recovered
@@ -19532,6 +19546,15 @@ pub(super) fn authorize_recoverable_background_control_command(
         Value::String("ctox-business-command-authorization-v1".to_string()),
     );
     recovered.client_context = Value::Object(recovered_context);
+    // Rebuilding context is preparation, not authority to persist it. A
+    // revoked current policy must leave the accepted private context intact.
+    let session = rxdb_authenticated_session(root, &recovered)?;
+    let decision = module_policy_decision(root, &session, permission, &recovered.module)?;
+    anyhow::ensure!(
+        decision.allowed,
+        "accepted recoverable command authorization is no longer valid: {}",
+        decision.display_reason
+    );
     let conn = open_store(root)?;
     conn.execute(
         "UPDATE business_commands
@@ -19544,13 +19567,6 @@ pub(super) fn authorize_recoverable_background_control_command(
         ],
     )?;
     drop(conn);
-    let session = rxdb_authenticated_session(root, &recovered)?;
-    let decision = module_policy_decision(root, &session, permission, &recovered.module)?;
-    anyhow::ensure!(
-        decision.allowed,
-        "accepted recoverable command authorization is no longer valid: {}",
-        decision.display_reason
-    );
     Ok(recovered)
 }
 
@@ -19783,15 +19799,25 @@ fn command_projection_with_native_identity(
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
         .context("business command projection is missing command_id")?;
-    let native_context: Option<String> = conn
+    let native_command: Option<(String, String, String, String, String)> = conn
         .query_row(
-            "SELECT client_context_json FROM business_commands WHERE command_id = ?1",
+            "SELECT client_context_json, module, command_type, status, payload_json
+             FROM business_commands WHERE command_id = ?1",
             params![command_id],
-            |row| row.get(0),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()?;
-    let native_context: Value = native_context
-        .and_then(|raw| serde_json::from_str(&raw).ok())
+    let native_context: Value = native_command
+        .as_ref()
+        .and_then(|(raw, _, _, _, _)| serde_json::from_str(raw).ok())
         .unwrap_or(Value::Null);
     let owner_id = native_context
         .get("owner_user_id")
@@ -19801,6 +19827,82 @@ fn command_projection_with_native_identity(
         native_context.pointer("/actor/id").and_then(Value::as_str) == Some(*owner)
     });
     let mut projected = document.clone();
+    // Typed native control handlers normalize and redact their command payload
+    // before completing Core. Preserve that private-store presentation payload;
+    // Core's immutable admission intent is neither changed nor republished as
+    // an unsanitized replacement. Replica business_records are not consulted.
+    if let Some((_, module, command_type, status, payload)) = native_command.as_ref() {
+        if document["execution_mode"] == "control"
+            && document["module"].as_str() == Some(module.as_str())
+            && document["command_type"].as_str() == Some(command_type.as_str())
+            && document["status"].as_str() == Some(status.as_str())
+            && matches!(status.as_str(), "completed" | "failed" | "cancelled")
+        {
+            projected["payload"] = serde_json::from_str(payload)
+                .context("invalid native control presentation payload")?;
+            // Use the handler's normalized values for context fields already
+            // present in the public projection. A sanitized native command can
+            // remove private selections as well as secrets from its payload.
+            // Private-only context fields do not become public here.
+            if let Some(context) = projected
+                .get_mut("client_context")
+                .and_then(Value::as_object_mut)
+            {
+                context.retain(|key, value| {
+                    if let Some(safe_value) = native_context
+                        .as_object()
+                        .and_then(|safe_context| safe_context.get(key))
+                    {
+                        *value = safe_value.clone();
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
+        }
+    }
+    // Chat navigation is derived from the immutable command intent and its
+    // private accepted context, never from a cached public mirror. Core's
+    // reduced lifecycle projection does not carry this presentation field.
+    let matching_native_command =
+        native_command
+            .as_ref()
+            .filter(|(_, module, command_type, _, _)| {
+                document["module"].as_str() == Some(module.as_str())
+                    && document["command_type"].as_str() == Some(command_type.as_str())
+            });
+    let presentation_context = matching_native_command
+        .map(|_| native_context.clone())
+        .unwrap_or(Value::Null);
+    let presentation_payload = matching_native_command
+        .map(|(_, _, _, _, payload)| serde_json::from_str(payload))
+        .transpose()
+        .context("invalid native command presentation payload")?
+        .unwrap_or(Value::Null);
+    // This value is only input to read-only display helpers, never admission
+    // or execution; it carries no trusted-local origin or authorization.
+    let presentation_command = BusinessCommand {
+        origin: CommandOrigin::ReplicatedPeer,
+        id: Some(command_id.to_owned()),
+        module: document["module"].as_str().unwrap_or_default().to_owned(),
+        command_type: document["command_type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        record_id: document["record_id"].as_str().map(str::to_owned),
+        payload: presentation_payload,
+        client_context: presentation_context,
+    };
+    if matching_native_command.is_some() {
+        // Core's lifecycle shape omits routing presentation. Recover it only
+        // from the matching private command, without changing its intent.
+        projected["inbound_channel"] =
+            Value::String(command_inbound_channel(&presentation_command));
+    }
+    if document["execution_mode"] == "queue" && is_business_chat_command(&presentation_command) {
+        projected["chat_id"] = Value::String(business_chat_id(&presentation_command, command_id));
+    }
     let context = projected
         .as_object_mut()
         .context("business command projection must be an object")?
@@ -20105,8 +20207,8 @@ fn write_business_os_command_outbox_mirror(
     let record_id = projection
         .get("record_id")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
     let status = projection
         .get("status")
         .and_then(Value::as_str)
@@ -20131,8 +20233,8 @@ fn write_business_os_command_outbox_mirror(
     if !applied {
         return Ok(false);
     }
-    // Preserve the accepted private context. The mirror is a redacted public
-    // document and cannot replace the native command's authority record.
+    // Preserve the accepted private context and any typed native payload
+    // normalization. The public mirror cannot replace either private value.
     conn.execute(
         "INSERT INTO business_commands
             (command_id, module, command_type, record_id, status, payload_json,
@@ -20143,7 +20245,6 @@ fn write_business_os_command_outbox_mirror(
             command_type = excluded.command_type,
             record_id = excluded.record_id,
             status = excluded.status,
-            payload_json = excluded.payload_json,
             observed_at_ms = excluded.observed_at_ms",
         params![
             command_id,
@@ -25485,13 +25586,31 @@ fn business_os_app_import_prompt_block(manifest: &Value) -> anyhow::Result<Strin
         .and_then(Value::as_str)
         .context("app import manifest has no resolved revision")?;
     Ok(format!(
-        "\nImported application source (immutable evidence):\n- source_directory: {source_directory}\n- source_kind: {}\n- source_profile: {}\n- entry_path: {}\n- resolved_revision: {revision}\n- manifest_sha256: {}\n- file_count: {}\n- total_bytes: {}\n\nPorting contract:\n- Treat source_directory as read-only evidence. Write only the requested runtime-installed module target.\n- CTOX pre-materializes the canonical App Starter V2 in app_directory. Keep its valid Shell-V2 wiring, but treat its visible UI and sample records as disposable scaffolding rather than product design.\n- Remove every placeholder record, generic CRUD label, demo panel, and unused starter control before release.\n- Reimplement the complete user workflows as a functional Shell-V2 app; do not translate framework syntax mechanically.\n- For standalone HTML sources, first render entry_path and record a visual/interaction inventory. Preserve its recognizable composition, content density, typography, controls, animation, audio, game logic, keyboard/pointer behavior, and saved state unless Shell V2 requires a documented adaptation.\n- Compare source and mounted app at matching desktop and narrow viewports. A merely mountable app, static imitation, or generic dashboard is a failed port.\n- The delivered app must have no QML, Quickshell, mpv, Python, shell, or original native runtime dependency.\n- Use shell-provided database handles for app-owned RxDB collections; do not import upstream rxdb or create an HTTP data bridge.\n- Browser media playback must use HTMLAudioElement with HTTPS streams. Filter or clearly mark HTTP-only streams; do not add an SSRF/media proxy.\n- Add deterministic fixtures for external APIs and audio. The go/no-go gate requires exact data.read/data.write grants for every app-owned collection, static validation, and a real tenant-actor browser smoke.\n- The final report must enumerate every source workflow and its passing test or explicitly mark the job failed; partial parity must never be published as live.\n- Do not claim completion or catalog visibility yourself. CTOX publishes the imported module only after core-recorded passed smoke evidence.\n\nBounded implementation contract:\n- After the required plan update, inspect the skill entrypoint, the pre-materialized starter, and the immutable source evidence.\n- Run the first validation before substantial edits, then inspect the source entrypoints and one closest reference app; one bounded reference-catalog query is enough.\n- Continue from existing target artifacts on later slices. Do not restart source or reference discovery, and never leave app_directory invalid at the end of a slice.\n",
-        manifest.get("kind").and_then(Value::as_str).unwrap_or("unknown"),
-        manifest.get("profile").and_then(Value::as_str).unwrap_or("default"),
-        manifest.get("entry_path").and_then(Value::as_str).unwrap_or(""),
-        manifest.get("manifest_sha256").and_then(Value::as_str).unwrap_or(""),
-        manifest.get("file_count").and_then(Value::as_u64).unwrap_or(0),
-        manifest.get("total_bytes").and_then(Value::as_u64).unwrap_or(0),
+        "\nImported application source (immutable evidence):\n- source_directory: {source_directory}\n- source_kind: {}\n- source_profile: {}\n- entry_path: {}\n- resolved_revision: {revision}\n- manifest_sha256: {}\n- file_count: {}\n- total_bytes: {}\n\nPorting contract:\n- Treat source_directory as read-only evidence. Write only the requested runtime-installed module target.\n- CTOX pre-materializes the canonical App Starter V2 in app_directory. Keep its valid Shell-V2 wiring, but treat its visible UI and sample records as disposable scaffolding rather than product design.\n- Remove every placeholder record, generic CRUD label, demo panel, and unused starter control before release.\n- Reimplement the complete user workflows as a functional Shell-V2 app; do not translate framework syntax mechanically.\n- For standalone HTML sources, first render entry_path and record a visual/interaction inventory. Preserve its recognizable composition, content density, typography, controls, animation, audio, game logic, keyboard/pointer behavior, and saved state unless Shell V2 requires a documented adaptation.\n- For every source type, keep a behavior inventory that maps each workflow, input, saved state, recovery, and permission boundary to a concrete verification.\n- Package browser dependencies using static local relative browser-ESM imports. Remote scripts, stylesheets, import maps, and CDN runtime dependencies are forbidden; package the required assets locally.\n- Require real Shell-V2 visual/interaction proof using the tenant actor and actual pointer and keyboard workflows. Compare source and mounted app at matching desktop and narrow viewports. A merely mountable app, static imitation, or generic dashboard is a failed port.\n- The delivered app must have no QML, Quickshell, mpv, Python, shell, or original native runtime dependency.\n- Use shell-provided database handles for app-owned RxDB collections; do not import upstream rxdb or create an HTTP data bridge.\n- Browser media playback must use HTMLAudioElement with HTTPS streams. Filter or clearly mark HTTP-only streams; do not add an SSRF/media proxy.\n- Add deterministic fixtures for external APIs and audio. The go/no-go gate requires exact data.read/data.write grants for every app-owned collection, static validation, and a real tenant-actor browser smoke.\n- The final report must enumerate every source workflow and its passing test or explicitly mark the job failed; partial parity must never be published as live.\n- Do not claim completion or catalog visibility yourself. CTOX publishes the imported module only after core-recorded passed smoke evidence.\n\nBounded implementation contract:\n- After the required plan update, inspect the skill entrypoint, the pre-materialized starter, and the immutable source evidence.\n- Run the first validation before substantial edits, then inspect the source entrypoints and one closest reference app; one bounded reference-catalog query is enough.\n- Continue from existing target artifacts on later slices. Do not restart source or reference discovery, and never leave app_directory invalid at the end of a slice.\n",
+        manifest
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        manifest
+            .get("profile")
+            .and_then(Value::as_str)
+            .unwrap_or("default"),
+        manifest
+            .get("entry_path")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        manifest
+            .get("manifest_sha256")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        manifest
+            .get("file_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        manifest
+            .get("total_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
     ))
 }
 
@@ -26114,8 +26233,10 @@ pub(super) fn clamp_projected_document_to_wire_budget(
             payload.get("content").is_some_and(Value::is_string),
             "invalid module source content for {record_id}; restore its canonical projection"
         );
-        anyhow::ensure!(total <= rxdb::collection_policy::DEFAULT_MASTER_RESPONSE_CEILING_BYTES,
-            "module source {record_id} exceeds the lossless inline projection limit; content was not truncated");
+        anyhow::ensure!(
+            total <= rxdb::collection_policy::DEFAULT_MASTER_RESPONSE_CEILING_BYTES,
+            "module source {record_id} exceeds the lossless inline projection limit; content was not truncated"
+        );
         return Ok(());
     }
     let Some(object) = payload.as_object_mut() else {
@@ -29658,6 +29779,10 @@ pub(super) mod tests {
             repo_root.join("src/apps/business-os/scripts/validate-app-module.mjs"),
             &validator,
         )?;
+        fs::copy(
+            repo_root.join("src/apps/business-os/scripts/app-audit-scenarios.mjs"),
+            validator.with_file_name("app-audit-scenarios.mjs"),
+        )?;
         let checker = root.join(
             "src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs",
         );
@@ -31070,17 +31195,15 @@ pub(super) mod tests {
             Ok(status)
         };
 
-        // Replicated peer, no token, claiming chef → inert "user", no DataWrite
-        // → policy-denied, never processed.
+        // Authentication rejects a tokenless peer before policy or recording.
         let denied = accept_rxdb_business_command_with_origin(
             root.path(),
             cmd("d1", serde_json::json!({ "actor": { "id": "chef1" } })),
             CommandOrigin::ReplicatedPeer,
-        )?;
-        assert!(
-            is_failed(&denied),
-            "no-token fall-through data command must be policy-denied: {denied:?}"
-        );
+        )
+        .expect_err("tokenless fall-through command must fail authentication");
+        assert!(denied.to_string().contains("valid capability token"));
+        assert_eq!(command_status(root.path(), "d1")?, None);
         assert_ne!(
             command_status(root.path(), "d1")?.as_deref(),
             Some("accepted"),
@@ -31334,16 +31457,10 @@ pub(super) mod tests {
     // only require_manage_all ones). A replicated peer claiming a chef id without
     // a token must NOT pass the SecretsManage policy gate.
     //
-    // INTENTIONALLY RED (SM16, 01.08.). The guarantee still holds — it now holds
-    // earlier. A tokenless peer is refused at the authentication boundary and
-    // never receives the synthetic user whose policy this test then inspects, so
-    // the assertion below waits for a rejection that can no longer happen at that
-    // stage. Turning it green would mean asserting the weaker of two guarantees.
-    //
-    // The repair is to split it: one test that the auth boundary refuses a
-    // tokenless peer, one that the SecretsManage gate refuses an authenticated
-    // non-chef. Left red rather than adjusted, because an assertion edited to
-    // match today's behaviour stops being evidence about it.
+    // The tokenless-peer regression proves rejection before command persistence.
+    // The separate authenticated-peer regression below exercises SecretsManage
+    // with a valid user token and a forged chef hint. The valid-chef control
+    // remains in this test.
     #[test]
     fn replicated_peer_without_token_cannot_manage_secrets() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
@@ -31360,18 +31477,22 @@ pub(super) mod tests {
             })
         };
 
-        // Replicated peer claiming chef, no token → SecretsManage denied (role is
-        // downgraded to user). The handler returns a non-completed (failed) outcome.
         let denied = accept_rxdb_business_command_with_origin(
             root.path(),
             secret_list("s1", serde_json::json!({ "actor": { "id": "chef1" } })),
             CommandOrigin::ReplicatedPeer,
+        )
+        .expect_err("tokenless secret.list must fail authentication");
+        assert!(denied.to_string().contains("valid capability token"));
+        let conn = open_store(root.path())?;
+        let stored_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_commands WHERE command_id = 's1'",
+            [],
+            |row| row.get(0),
         )?;
-        assert_ne!(
-            denied.get("status").and_then(Value::as_str),
-            Some("completed"),
-            "replicated no-token secret.list must not succeed: {denied:?}"
-        );
+        assert_eq!(stored_count, 0, "unauthenticated command must not persist");
+        drop(conn);
+        assert!(channels::list_queue_tasks(root.path(), &[], 32)?.is_empty());
 
         // Same command with a valid chef token → allowed.
         let now = now_ms() as i64;
@@ -31386,6 +31507,47 @@ pub(super) mod tests {
             Some("completed"),
             "valid chef token must pass SecretsManage: {allowed:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn authenticated_replicated_peer_without_secret_permission_cannot_manage_secrets(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "chef1", "chef")?;
+        seed_business_user(root.path(), "viewer", "user")?;
+        let (token, _) =
+            issue_business_os_capability_token(root.path(), "viewer", now_ms() as i64)?;
+        let denied = accept_rxdb_business_command_with_origin(
+            root.path(),
+            serde_json::json!({
+                "id": "secret_policy_denied",
+                "command_id": "secret_policy_denied",
+                "module": "credentials",
+                "type": "ctox.secret.list",
+                "payload": {},
+                "client_context": {
+                    "capability_token": token,
+                    "actor": { "id": "viewer", "role": "chef" }
+                }
+            }),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert_ne!(denied["status"], "completed");
+        assert_eq!(denied["status"], "failed");
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some(BusinessOsPermission::SecretsManage.as_str())
+        );
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(channels::list_queue_tasks(root.path(), &[], 32)?.is_empty());
         Ok(())
     }
 
@@ -32434,6 +32596,7 @@ pub(super) mod tests {
     fn accepted_business_chat_is_persisted_with_prompt_and_queue_tracking() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        create_repair_rxdb_tables(root)?;
         let accepted = record_command(
             root,
             BusinessCommand {
@@ -32491,6 +32654,46 @@ pub(super) mod tests {
             stored.get("chat_id").and_then(Value::as_str),
             Some("chat_persisted")
         );
+        let mut forged_shadow = stored.clone();
+        forged_shadow["chat_id"] = Value::String("forged_cached_chat".to_owned());
+        forged_shadow["payload"]["chat_id"] = Value::String("forged_payload_chat".to_owned());
+        assert_eq!(
+            conn.execute(
+                "UPDATE business_records SET payload_json=?1 WHERE collection=?2 AND record_id=?3",
+                params![
+                    serde_json::to_string(&forged_shadow)?,
+                    "business_commands",
+                    "cmd_persisted_chat"
+                ],
+            )?,
+            1
+        );
+        let forged_outcome = stored_rxdb_business_command_outcome(&conn, "cmd_persisted_chat")?
+            .context("stored outcome after public mirror tampering")?;
+        assert_eq!(forged_outcome["chat_id"], "chat_persisted");
+        drop(conn);
+        channels::lease_queue_task(root, task_id, "ctox-service")?;
+        channels::transition_business_command_for_task(
+            root,
+            task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "chat navigation regression",
+        )?;
+        let delivery = deliver_business_command_outbox(root, 32)?;
+        assert_eq!(delivery["failed"], 0);
+        let reopened = open_store(root)?;
+        let delivered = stored_rxdb_business_command_outcome(&reopened, "cmd_persisted_chat")?
+            .context("delivered command outcome")?;
+        let replicated =
+            load_rxdb_collection_record(root, "business_commands", "cmd_persisted_chat")?
+                .context("replicated chat command")?;
+        for mirror in [delivered, replicated] {
+            assert_eq!(mirror["chat_id"], "chat_persisted");
+            assert_eq!(mirror["task_id"].as_str(), Some(task_id));
+        }
         Ok(())
     }
 
@@ -33177,6 +33380,7 @@ pub(super) mod tests {
     fn app_create_rxdb_command_accepts_type_alias_from_cli_dispatch() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_test_business_os_app_root(root)?;
         let accepted = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -33210,6 +33414,17 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(command_type, "ctox.business_os.app.create");
+        let canonical = channels::business_command_projection(root, "cmd_app_type_alias")?;
+        assert_eq!(
+            canonical.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            canonical.get("task_status").and_then(Value::as_str),
+            Some("queued"),
+            "valid starter scaffolding must not complete an unleased app command"
+        );
+        assert_eq!(canonical["terminal_status"], "none");
         let task_id = accepted
             .get("task_id")
             .and_then(Value::as_str)
@@ -33250,6 +33465,7 @@ pub(super) mod tests {
     fn app_create_ignores_legacy_shared_creator_thread_key() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_test_business_os_app_root(root)?;
         let accepted = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -33290,6 +33506,8 @@ pub(super) mod tests {
     fn app_modify_ignores_legacy_shared_creator_thread_key() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        write_minimal_runtime_app_artifacts(root, "inventory")?;
         let accepted = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -33358,6 +33576,26 @@ pub(super) mod tests {
             .context("expected queued task id")?
             .to_string();
         channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        // Leasing the route does not start command execution. Model the
+        // worker's durable phases before submitting its validation result.
+        for phase in ["leased", "running"] {
+            assert!(channels::transition_business_command_for_task(
+                root,
+                &task_id,
+                phase,
+                None,
+                None,
+                None,
+                "app validation fixture enters worker execution",
+            )?);
+        }
+        assert_eq!(
+            channels::inspect_business_command_for_task(root, &task_id)?
+                .context("expected canonical app command")?
+                .pointer("/command/execution_phase")
+                .and_then(Value::as_str),
+            Some("running")
+        );
         thread::sleep(Duration::from_millis(1100));
         write_minimal_runtime_app_artifacts(root, module_id)?;
 
@@ -33680,6 +33918,26 @@ pub(super) mod tests {
             .context("expected queued task id")?
             .to_string();
         channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        // Leasing the route does not start command execution. Model the
+        // worker's durable phases before submitting its validation result.
+        for phase in ["leased", "running"] {
+            assert!(channels::transition_business_command_for_task(
+                root,
+                &task_id,
+                phase,
+                None,
+                None,
+                None,
+                "app validation fixture enters worker execution",
+            )?);
+        }
+        assert_eq!(
+            channels::inspect_business_command_for_task(root, &task_id)?
+                .context("expected canonical app command")?
+                .pointer("/command/execution_phase")
+                .and_then(Value::as_str),
+            Some("running")
+        );
         thread::sleep(Duration::from_millis(1100));
         write_minimal_runtime_app_artifacts(root, module_id)?;
 
@@ -33750,6 +34008,26 @@ pub(super) mod tests {
             .context("expected queued task id")?
             .to_string();
         channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        // Leasing the route does not start command execution. Model the
+        // worker's durable phases before submitting its validation result.
+        for phase in ["leased", "running"] {
+            assert!(channels::transition_business_command_for_task(
+                root,
+                &task_id,
+                phase,
+                None,
+                None,
+                None,
+                "app validation fixture enters worker execution",
+            )?);
+        }
+        assert_eq!(
+            channels::inspect_business_command_for_task(root, &task_id)?
+                .context("expected canonical app command")?
+                .pointer("/command/execution_phase")
+                .and_then(Value::as_str),
+            Some("running")
+        );
         thread::sleep(Duration::from_millis(1100));
         write_minimal_runtime_app_artifacts(root, module_id)?;
         let module_dir = root
@@ -33802,6 +34080,9 @@ pub(super) mod tests {
     fn app_build_commands_enforce_policy_before_queueing() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        write_minimal_runtime_app_artifacts(root, "inventory")?;
+        write_minimal_runtime_app_artifacts(root, "sales")?;
         seed_business_user(root, "viewer", "user")?;
         seed_business_user(root, "app_owner", "founder")?;
         seed_business_user(root, "ops_admin", "admin")?;
@@ -34648,13 +34929,68 @@ pub(super) mod tests {
             }
         }
         let canonical_ids = system_module_ids().iter().cloned().collect::<BTreeSet<_>>();
-        assert_eq!(canonical_ids.len(), 10);
+        let expected_core_ids = [
+            "desktop",
+            "app-store",
+            "creator",
+            "explorer",
+            "file-viewer",
+            "appsec-pentest",
+            "browser",
+            "coding-agents",
+            "importer",
+            "credentials",
+            "ctox",
+            "documents",
+            "iot",
+            "knowledge",
+            "notes",
+            "reports",
+            "research",
+            "spreadsheets",
+            "threads",
+            "tickets",
+            "kundenpipeline",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+        assert_eq!(canonical_ids, expected_core_ids);
         assert_eq!(manifest_ids, canonical_ids);
         let marketplace = load_marketplace_module_manifests(
             repository_root,
             modules_root.parent().context("Business OS source root")?,
         )?;
-        assert_eq!(marketplace.len(), 24);
+        let expected_marketplace_ids = [
+            "buchhaltung",
+            "calendar",
+            "consent",
+            "conversations",
+            "customers",
+            "cv-print-builder",
+            "esign",
+            "intake",
+            "interviews",
+            "invoices",
+            "mail",
+            "matching",
+            "nachweise",
+            "outbound",
+            "placements",
+            "shiftflow",
+            "submissions",
+            "support",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+        let marketplace_ids = marketplace
+            .iter()
+            .filter_map(|module| module.get("id").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(marketplace.len(), expected_marketplace_ids.len());
+        assert_eq!(marketplace_ids, expected_marketplace_ids);
         let invalid_marketplace = marketplace
             .iter()
             .filter(|module| {
@@ -36269,6 +36605,7 @@ pub(super) mod tests {
     fn audit_retention_policy_set_is_users_manage_gated_and_sanitized() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        create_repair_rxdb_tables(root)?;
         seed_business_user(root, "ops_admin", "admin")?;
         seed_business_user(root, "viewer", "user")?;
 
@@ -36354,6 +36691,38 @@ pub(super) mod tests {
         let stored_text = serde_json::to_string(&stored)?;
         assert!(!allowed_text.contains("SECRET_AUDIT_POLICY_PROMPT"));
         assert!(!stored_text.contains("SECRET_AUDIT_POLICY_PROMPT"));
+        drop(conn);
+
+        // Core retains the admission intent. Public delivery must not put its
+        // discarded prompt back into either the native presentation payload or
+        // the replicated command, including after reopening the store.
+        let intent =
+            channels::business_command_projection(root, "cmd_audit_retention_policy_allowed")?;
+        assert_eq!(intent["payload"]["prompt"], "SECRET_AUDIT_POLICY_PROMPT");
+        for _ in 0..2 {
+            let delivery = deliver_business_command_outbox(root, 32)?;
+            assert_eq!(delivery["failed"], 0);
+            let reopened = open_store(root)?;
+            for command_id in [
+                "cmd_audit_retention_policy_denied",
+                "cmd_audit_retention_policy_allowed",
+            ] {
+                let native = load_business_command(&reopened, command_id)?;
+                assert_eq!(native.payload["retention_days"], 14);
+                assert!(native.payload.get("prompt").is_none());
+                let public =
+                    load_business_record_payload(&reopened, "business_commands", command_id)?
+                        .context("public retention policy command")?;
+                let replicated =
+                    load_rxdb_collection_record(root, "business_commands", command_id)?
+                        .context("replicated retention policy command")?;
+                for mirror in [public, replicated] {
+                    assert_eq!(mirror["payload"]["retention_days"], 14);
+                    assert!(mirror["payload"].get("prompt").is_none());
+                    assert!(!serde_json::to_string(&mirror)?.contains("SECRET_AUDIT_POLICY_PROMPT"));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -37112,7 +37481,9 @@ pub(super) mod tests {
         let detached_integrity =
             business_os_inspect_backup_manifest_integrity(root, &detached_manifest)?;
         assert_eq!(
-            detached_integrity.get("signature_valid").and_then(Value::as_bool),
+            detached_integrity
+                .get("signature_valid")
+                .and_then(Value::as_bool),
             Some(true),
             "manifest verification must work with the external signing key and no backup artifact access"
         );
@@ -37292,15 +37663,17 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn runtime_settings_uses_ctox_proxy_for_minimax_when_configured() {
+    fn runtime_settings_preserve_provider_identity_with_proxy_credentials() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
             crate::inference::runtime_state::CTOX_LLM_PROXY_API_KEY_ENV.to_owned(),
             "configured".to_owned(),
         );
+        // Match the runtime's explicit provider/credential authority: an
+        // unrelated proxy key must never reroute a selected MiniMax account.
         assert_eq!(
             runtime_settings_api_upstream_base_url("minimax", &env_map),
-            "https://llm.ctox.dev"
+            "https://api.minimax.io"
         );
         assert_eq!(
             runtime_settings_api_upstream_base_url("ctox_proxy", &env_map),
@@ -37313,7 +37686,19 @@ pub(super) mod tests {
         );
         assert_eq!(
             runtime_settings_api_upstream_base_url("minimax", &env_map),
+            "https://api.minimax.io"
+        );
+        assert_eq!(
+            runtime_settings_api_upstream_base_url("ctox_proxy", &env_map),
             "https://example.ctox.dev/api/fallback-llm"
+        );
+        env_map.insert(
+            "CTOX_UPSTREAM_BASE_URL".to_owned(),
+            "https://api.minimax.io/v1".to_owned(),
+        );
+        assert_eq!(
+            runtime_settings_api_upstream_base_url("minimax", &env_map),
+            "https://api.minimax.io/v1"
         );
     }
 
@@ -37551,41 +37936,69 @@ pub(super) mod tests {
         let app_root = root.join("src").join("apps").join("business-os");
         fs::create_dir_all(&app_root)?;
         fs::write(app_root.join("index.html"), b"<!doctype html>")?;
-        write_widget_module(&app_root, "export const v = 1;\n")?;
-        let baseline =
-            record_module_version(root, &app_root, "widget", "install", "Installed", "tester")?
-                .expect("baseline recorded");
+        write_installed_inventory_module(&app_root, "1.0.0")?;
+        let initial_js = fs::read_to_string(app_root.join("installed-modules/inventory/index.js"))?;
+        // Exercise the real mandatory staging validator against a complete app,
+        // rather than depending on an unavailable validator or invalid bundle.
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for relative in [
+            "src/apps/business-os/scripts/validate-app-module.mjs",
+            "src/apps/business-os/scripts/app-audit-scenarios.mjs",
+            "src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs",
+        ] {
+            let target = root.join(relative);
+            fs::create_dir_all(target.parent().context("validator fixture parent")?)?;
+            fs::copy(repo_root.join(relative), target)?;
+        }
+        let baseline = record_module_version(
+            root,
+            &app_root,
+            "inventory",
+            "install",
+            "Installed",
+            "tester",
+        )?
+        .expect("baseline recorded");
         let baseline_id = baseline
             .get("version_id")
             .and_then(Value::as_str)
             .context("version_id")?
             .to_owned();
         fs::write(
-            app_root.join("modules/widget/index.js"),
-            "export const v = 2;\n",
+            app_root.join("installed-modules/inventory/index.js"),
+            format!("{initial_js}\n// Unreleased change.\n"),
         )?;
         seed_business_user(root, "rollback-user", "user")?;
         seed_permission_grant(
             root,
-            "grant_widget_rollback_only",
+            "grant_inventory_rollback_only",
             "user",
             "rollback-user",
             BusinessOsPermission::AppsRollback,
             "module",
-            "widget",
+            "inventory",
         )?;
 
+        assert!(
+            !module_policy_decision(
+                root,
+                &test_session("rollback-user", "user"),
+                BusinessOsPermission::AppsModify,
+                "inventory",
+            )?
+            .allowed
+        );
         let outcome = accept_rxdb_business_command(
             root,
             serde_json::json!({
-                "id": "cmd_widget_source_rollback",
-                "command_id": "cmd_widget_source_rollback",
+                "id": "cmd_inventory_source_rollback",
+                "command_id": "cmd_inventory_source_rollback",
                 "module": "app-store",
                 "command_type": "ctox.module.rollback_version",
-                "record_id": "widget",
+                "record_id": "inventory",
                 "status": "pending_sync",
                 "payload": {
-                    "module_id": "widget",
+                    "module_id": "inventory",
                     "version_id": baseline_id
                 },
                 "client_context": {
@@ -37599,17 +38012,19 @@ pub(super) mod tests {
         )?;
         assert_eq!(
             outcome.get("status").and_then(Value::as_str),
-            Some("completed")
+            Some("completed"),
+            "rollback-only command error: {:?}",
+            outcome.get("error_message")
         );
         assert_eq!(
-            fs::read_to_string(app_root.join("modules/widget/index.js"))?,
-            "export const v = 1;\n"
+            fs::read_to_string(app_root.join("installed-modules/inventory/index.js"))?,
+            initial_js
         );
         let conn = open_store(root)?;
         let payloads = business_event_payloads(
             &conn,
             "business_commands",
-            "cmd_widget_source_rollback",
+            "cmd_inventory_source_rollback",
             "business_os.module.rollback.succeeded",
         )?;
         assert_eq!(payloads.len(), 1);
@@ -37622,7 +38037,7 @@ pub(super) mod tests {
             payload
                 .pointer("/summary/module_id")
                 .and_then(Value::as_str),
-            Some("widget")
+            Some("inventory")
         );
         assert_eq!(
             payload
@@ -38331,17 +38746,11 @@ pub(super) mod tests {
             "ctox_business_os__business_module_releases__v{}",
             rxdb_schema_version("business_module_releases")
         );
+        // Admission registers the canonical collection. Reproduce the missing
+        // release projection while preserving its real registered schema.
         rxdb_conn.execute(
-            &format!(
-                "CREATE TABLE {release_table} (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    revision TEXT,
-                    deleted INTEGER NOT NULL DEFAULT 0,
-                    lastWriteTime REAL NOT NULL DEFAULT 0,
-                    data TEXT NOT NULL
-                )"
-            ),
-            [],
+            &format!("DELETE FROM {release_table} WHERE id = ?1"),
+            params![release_id.as_str()],
         )?;
         drop(rxdb_conn);
 
@@ -39448,6 +39857,72 @@ pub(super) mod tests {
                 .and_then(Value::as_i64)
                 .unwrap()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn sync_connection_cache_observes_secret_wal_and_rejects_stale_builds() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let initial = sync_config(root)?;
+        let secret_path = crate::secrets::secret_store_path(root);
+        let held_connection = Connection::open(&secret_path)?;
+        held_connection.pragma_update(None, "journal_mode", "WAL")?;
+        assert_eq!(
+            held_connection
+                .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))?,
+            "wal"
+        );
+        held_connection.execute_batch("BEGIN")?;
+        let _: i64 =
+            held_connection.query_row("SELECT COUNT(*) FROM ctox_secret_records", [], |row| {
+                row.get(0)
+            })?;
+        let old_connection_config = sync_connection_config(root)?;
+        let source_stamp = sync_connection_config_cache_stamp(root);
+        let before_main = business_os_file_change_stamp(&secret_path);
+        let password = format!("ctox-room-{}", Uuid::new_v4().simple());
+        crate::secrets::write_secret_record(
+            root,
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME,
+            &password,
+            Some("WAL cache regression".to_owned()),
+            serde_json::json!({"source": "native_test"}),
+        )?;
+        assert_eq!(
+            before_main,
+            business_os_file_change_stamp(&secret_path),
+            "the held WAL connection must retain the credential change outside the main file"
+        );
+        let changed_stamp = sync_connection_config_cache_stamp(root);
+        assert_ne!(
+            source_stamp.3, changed_stamp.3,
+            "the authoritative protected credential changed"
+        );
+        assert_ne!(source_stamp, changed_stamp);
+        let reloaded = sync_config(root)?;
+        assert_eq!(reloaded.signaling_room_password, password);
+        assert_ne!(initial.sync_room, reloaded.sync_room);
+        assert_ne!(
+            initial.signaling_browser_token_hash,
+            reloaded.signaling_browser_token_hash
+        );
+        assert_eq!(
+            initial.signaling_native_token_hash,
+            reloaded.signaling_native_token_hash
+        );
+        assert!(
+            !cache_sync_connection_config_if_unchanged(
+                root,
+                &business_os_root_cache_key(root),
+                source_stamp,
+                &old_connection_config,
+            ),
+            "a pre-write builder must not overwrite the fresh cached configuration"
+        );
+        assert_eq!(sync_config(root)?.signaling_room_password, password);
+        drop(held_connection);
         Ok(())
     }
 
@@ -41474,6 +41949,11 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(after, private_context);
+        assert_eq!(
+            load_business_command(&conn, command_id)?.record_id,
+            None,
+            "the public outbox must preserve an absent native record id"
+        );
         let public = load_business_record_payload(&conn, "business_commands", command_id)?
             .context("public command mirror")?;
         assert!(public
@@ -42536,6 +43016,7 @@ pub(super) mod tests {
 
         let temp = tempdir()?;
         let root = temp.path();
+        drop(create_repair_rxdb_tables(root)?);
         let conn = open_store(root)?;
         let now = now_ms() as i64;
         let document_id = "doc_test_markdown";
@@ -42589,32 +43070,30 @@ pub(super) mod tests {
         drop(conn);
 
         let instruction = "Bitte ergänze ganz am Ende eine kurze Prüfnotiz: Diese Fassung wurde gegen die wiederhergestellte SKF Knowledge Base validiert (322 Quellen, 816 Messpunkte, 192 Knowledge Records); numerische Lastdaten sind metrisch mit Dezimalkomma zu interpretieren.";
-        let accepted = accept_rxdb_business_command(
-            root,
-            serde_json::json!({
-                "id": "cmd_documents_pruefnotiz",
-                "command_id": "cmd_documents_pruefnotiz",
+        let command_document = serde_json::json!({
+            "id": "cmd_documents_pruefnotiz",
+            "command_id": "cmd_documents_pruefnotiz",
+            "module": "documents",
+            "command_type": "business_os.chat.task",
+            "record_id": document_id,
+            "status": "pending_sync",
+            "payload": {
+                "title": "Documents bearbeiten · Test Markdown",
+                "instruction": instruction,
+                "prompt": instruction,
+                "user_message": instruction,
+                "message_id": "chatmsg_documents_pruefnotiz",
+                "mode": "data"
+            },
+            "client_context": {
+                "source": "business-os-chat",
                 "module": "documents",
-                "command_type": "business_os.chat.task",
-                "record_id": document_id,
-                "status": "pending_sync",
-                "payload": {
-                    "title": "Documents bearbeiten · Test Markdown",
-                    "instruction": instruction,
-                    "prompt": instruction,
-                    "user_message": instruction,
-                    "message_id": "chatmsg_documents_pruefnotiz",
-                    "mode": "data"
-                },
-                "client_context": {
-                    "source": "business-os-chat",
-                    "module": "documents",
-                    "mode": "data",
-                    "document_id": document_id,
-                    "owner_user_id": "tester"
-                }
-            }),
-        )?;
+                "mode": "data",
+                "document_id": document_id,
+                "owner_user_id": "tester"
+            }
+        });
+        let accepted = accept_rxdb_business_command(root, command_document.clone())?;
 
         assert_eq!(
             accepted.get("status").and_then(Value::as_str),
@@ -42663,6 +43142,69 @@ pub(super) mod tests {
         assert!(text.contains("Prüfnotiz"));
         assert!(text.contains("322 Quellen, 816 Messpunkte, 192 Knowledge Records"));
         assert!(text.contains("Dezimalkomma"));
+        let canonical = channels::business_command_projection(root, "cmd_documents_pruefnotiz")?;
+        assert_eq!(canonical["execution_mode"], "control");
+        assert_eq!(canonical["terminal_status"], "completed");
+        let private_status: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = 'cmd_documents_pruefnotiz'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(private_status, "completed");
+        let rxdb_command =
+            load_rxdb_collection_record(root, "business_commands", "cmd_documents_pruefnotiz")?
+                .context("completed immediate edit must be visible over RxDB")?;
+        assert_eq!(rxdb_command["terminal_status"], "completed");
+        let version_count = || -> anyhow::Result<i64> {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM business_records WHERE collection = 'document_versions' AND json_extract(payload_json, '$.document_id') = ?1",
+                [document_id],
+                |row| row.get(0),
+            )?)
+        };
+        let before_replay = version_count()?;
+        let replay = accept_rxdb_business_command(root, command_document.clone())?;
+        assert_eq!(replay["status"], "completed");
+        assert_eq!(replay["execution_mode"], "control");
+        assert_eq!(
+            replay["result"]["document_writeback"]["version_id"],
+            next_version
+        );
+        assert_eq!(version_count()?, before_replay);
+        let mut changed = command_document.clone();
+        changed["payload"]["user_message"] =
+            serde_json::json!("Bitte ergänze am Ende eine Prüfnotiz: anderer Inhalt.");
+        let conflict = accept_rxdb_business_command(root, changed)
+            .expect_err("reusing the command id must not append a different section");
+        assert!(conflict.to_string().contains("idempotency_conflict"));
+        assert_eq!(version_count()?, before_replay);
+
+        let mut uncertain_document = command_document;
+        let uncertain_id = "cmd_documents_uncertain_pruefnotiz";
+        uncertain_document["id"] = serde_json::json!(uncertain_id);
+        uncertain_document["command_id"] = serde_json::json!(uncertain_id);
+        let uncertain_command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some(uncertain_id.to_owned()),
+            module: "documents".to_owned(),
+            command_type: "business_os.chat.task".to_owned(),
+            record_id: Some(document_id.to_owned()),
+            payload: uncertain_document["payload"].clone(),
+            client_context: uncertain_document["client_context"].clone(),
+        };
+        let claim = channels::claim_business_control_command(
+            root,
+            business_command_core_claim(uncertain_id, &uncertain_command)?,
+        )?;
+        assert_eq!(claim.disposition, "new");
+        let recovery_error = accept_rxdb_business_command(root, uncertain_document)
+            .expect_err("a nonterminal claim must not repeat an unproven document write");
+        assert!(recovery_error.to_string().contains("recovery is required"));
+        assert_eq!(version_count()?, before_replay);
+        assert!(find_queue_task_for_command(root, uncertain_id).is_none());
+        let uncertain = channels::business_command_projection(root, uncertain_id)?;
+        assert_eq!(uncertain["execution_phase"], "accepted");
+        assert_eq!(uncertain["terminal_status"], "none");
         Ok(())
     }
 
@@ -42847,11 +43389,15 @@ pub(super) mod tests {
         )?;
         fs::write(
             dashboard_dir.join("semantic_graph_nodes.csv"),
-            format!("research_run_id,research_command_id,node_id,label\n{lineage},node-1,Bearing load\n"),
+            format!(
+                "research_run_id,research_command_id,node_id,label\n{lineage},node-1,Bearing load\n"
+            ),
         )?;
         fs::write(
             dashboard_dir.join("semantic_graph_edges.csv"),
-            format!("research_run_id,research_command_id,edge_id,relation\n{lineage},edge-1,measured_by\n"),
+            format!(
+                "research_run_id,research_command_id,edge_id,relation\n{lineage},edge-1,measured_by\n"
+            ),
         )?;
         fs::write(
             dashboard_dir.join("source_catalog.csv"),
@@ -43161,8 +43707,21 @@ pub(super) mod tests {
             pull_collection_record(root, "business_module_source_files", "probe:index.js")?
                 .unwrap();
         assert_eq!(canonical["content"], original["content"]);
+        // Main's framed transport admits lossless source records up to the
+        // master-response ceiling. Check that actual boundary, not an obsolete
+        // two-MiB fixture which is now a valid document.
+        let ceiling = rxdb::collection_policy::DEFAULT_MASTER_RESPONSE_CEILING_BYTES;
+        let mut at_limit = original.clone();
+        at_limit["content"] = serde_json::json!("");
+        let content_bytes = ceiling - serde_json::to_vec(&at_limit)?.len();
+        at_limit["content"] = serde_json::json!("x".repeat(content_bytes));
+        assert_eq!(serde_json::to_vec(&at_limit)?.len(), ceiling);
+        let boundary_original = at_limit.clone();
+        clamp_projected_document_to_wire_budget(table, "probe:index.js", &mut at_limit)?;
+        assert_eq!(at_limit, boundary_original);
         let mut too_large = original.clone();
-        too_large["content"] = serde_json::json!("x".repeat(2 * 1024 * 1024));
+        too_large["content"] = serde_json::json!("x".repeat(content_bytes + 1));
+        assert_eq!(serde_json::to_vec(&too_large)?.len(), ceiling + 1);
         let unchanged = too_large.clone();
         assert!(
             clamp_projected_document_to_wire_budget(table, "probe:index.js", &mut too_large)
@@ -43915,7 +44474,17 @@ pub(super) mod tests {
 
         let module_root = app_root.join("modules").join("test-module");
         fs::create_dir_all(&module_root)?;
-        fs::write(module_root.join("module.json"), "{}")?;
+        fs::write(
+            module_root.join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": "test-module",
+                "title": "Snapshot fixture",
+                "entry": "app.js",
+                "version": "1.0.0",
+                "install_scope": "store",
+                "editable": true
+            }))?,
+        )?;
 
         // 2. Save initial version
         let mutation1 = ModuleSourceSaveMutation {
@@ -44207,12 +44776,12 @@ pub(super) mod tests {
                 "command_id": "cmd_configured_admin_user_upsert",
                 "module": "ctox",
                 "command_type": "ctox.business_os.user.upsert",
-                "record_id": "new-admin",
+                "record_id": "new-user",
                 "status": "pending_sync",
                 "payload": {
-                    "id": "new-admin",
-                    "display_name": "New Admin",
-                    "role": "admin",
+                    "id": "new-user",
+                    "display_name": "New User",
+                    "role": "user",
                     "active": true
                 },
                 "client_context": {
@@ -44224,7 +44793,12 @@ pub(super) mod tests {
             }),
         )?;
 
-        assert_eq!(outcome["status"], "completed");
+        assert_eq!(
+            outcome["status"],
+            "completed",
+            "configured admin command error: {:?}",
+            outcome.get("error_message")
+        );
         let conn = open_store(root)?;
         let configured_role: String = conn.query_row(
             "SELECT role FROM business_users WHERE user_id = ?1",
@@ -44234,10 +44808,61 @@ pub(super) mod tests {
         assert_eq!(configured_role, "admin");
         let new_role: String = conn.query_row(
             "SELECT role FROM business_users WHERE user_id = ?1",
-            params!["new-admin"],
+            params!["new-user"],
             |row| row.get(0),
         )?;
-        assert_eq!(new_role, "admin");
+        assert_eq!(new_role, "user");
+        drop(conn);
+
+        // UsersManage permits ordinary account administration. Granting a
+        // workspace authority role additionally requires the native owner;
+        // a claimed chef role cannot promote the configured admin.
+        let denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_configured_admin_grant_authority",
+                "module": "ctox",
+                "command_type": "ctox.business_os.user.upsert",
+                "record_id": "new-admin",
+                "payload": {
+                    "id": "new-admin",
+                    "display_name": "New Admin",
+                    "role": "admin",
+                    "active": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "michael.welsch@metric-space.ai",
+                        "role": "chef"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(denied["status"], "failed");
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some("workspace.manage")
+        );
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let canonical =
+            channels::business_command_projection(root, "cmd_configured_admin_grant_authority")?;
+        assert_eq!(canonical["terminal_status"], "failed");
+        let conn = open_store(root)?;
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM business_users WHERE user_id='new-admin'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            0
+        );
         Ok(())
     }
 
@@ -44516,11 +45141,209 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn accepted_external_sql_without_authorization_receipt_fails_terminally() -> anyhow::Result<()>
-    {
+    fn recoverable_control_requires_original_receipt_even_with_live_capability(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        let command_id = "cmd_external_sql_missing_authorization";
+        let command_id = "recovery-live-token-missing-receipt";
+        seed_business_user(root, "operator", "chef")?;
+        let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+        let command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.into()),
+            module: "inventory".into(),
+            command_type: "external_sql.write".into(),
+            record_id: Some("inventory-item-42".into()),
+            payload: serde_json::json!({"source_id":"primary", "item_id":42}),
+            client_context: serde_json::json!({
+                "capability_token": token,
+                "actor": {"id":"operator"}
+            }),
+        };
+        assert_eq!(
+            session_user_id(&rxdb_authenticated_session(root, &command)?),
+            Some("operator")
+        );
+        channels::claim_business_control_command(
+            root,
+            business_command_core_claim(command_id, &command)?,
+        )?;
+        let before = channels::business_command_projection(root, command_id)?;
+        let error = authorize_recoverable_background_control_command(root, &command)
+            .expect_err("a live token cannot supply missing historical authority");
+        assert!(error.to_string().contains("native authorization receipt"));
+        let after = channels::business_command_projection(root, command_id)?;
+        assert_eq!(after["payload_hash"], before["payload_hash"]);
+        assert_eq!(after["execution_phase"], "accepted");
+        assert!(after.get("native_authorization").is_none());
+        assert!(after.get("native_owner").is_none());
+        let commands: i64 = open_store(root)?.query_row(
+            "SELECT COUNT(*) FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(commands, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn recoverable_control_rejects_changed_live_actor() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "recovery-live-token-wrong-actor";
+        seed_business_user(root, "alice", "chef")?;
+        seed_business_user(root, "bob", "chef")?;
+        let (alice_token, _) = issue_business_os_capability_token(root, "alice", now_ms() as i64)?;
+        let (bob_token, _) = issue_business_os_capability_token(root, "bob", now_ms() as i64)?;
+        let mut command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.into()),
+            module: "inventory".into(),
+            command_type: "external_sql.write".into(),
+            record_id: Some("inventory-item-42".into()),
+            payload: serde_json::json!({"source_id":"primary", "item_id":42}),
+            client_context: serde_json::json!({
+                "capability_token": alice_token,
+                "actor": {"id":"alice"}
+            }),
+        };
+        let authorization = recoverable_background_control_authorization(root, &command)
+            .context("original native actor requires a receipt")?;
+        assert_eq!(authorization["allowed"], true);
+        channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&authorization),
+            )?,
+        )?;
+        let before = channels::business_command_projection(root, command_id)?;
+        let same_actor = authorize_recoverable_background_control_command(root, &command)?;
+        assert_eq!(same_actor.client_context, command.client_context);
+        command.client_context = serde_json::json!({
+            "capability_token": bob_token,
+            "actor": {"id":"bob"}
+        });
+        assert_eq!(
+            session_user_id(&rxdb_authenticated_session(root, &command)?),
+            Some("bob")
+        );
+        let error = authorize_recoverable_background_control_command(root, &command)
+            .expect_err("another valid actor cannot recover the admitted effect");
+        assert!(error.to_string().contains("authenticated actor changed"));
+        let after = channels::business_command_projection(root, command_id)?;
+        assert_eq!(after["payload_hash"], before["payload_hash"]);
+        assert_eq!(after["native_authorization"]["actor"]["id"], "alice");
+        assert_eq!(after["execution_phase"], "accepted");
+        let commands: i64 = open_store(root)?.query_row(
+            "SELECT COUNT(*) FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(commands, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn recoverable_control_denied_policy_preserves_private_context() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "recovery-redacted-token-revoked-policy";
+        seed_business_user(root, "operator", "chef")?;
+        let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+        let mut command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.into()),
+            module: "inventory".into(),
+            command_type: "external_sql.write".into(),
+            record_id: Some("inventory-item-42".into()),
+            payload: serde_json::json!({"source_id": "primary", "item_id": 42}),
+            client_context: serde_json::json!({
+                "capability_token": token, "actor": {"id": "operator"}
+            }),
+        };
+        let authorization = recoverable_background_control_authorization(root, &command)
+            .context("original native actor requires a receipt")?;
+        assert_eq!(authorization["allowed"], true);
+        channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&authorization),
+            )?,
+        )?;
+        command.client_context = redact_client_context_secrets(&command.client_context);
+        let conn = open_store(root)?;
+        conn.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status, payload_json,
+                 client_context_json, observed_at_ms)
+             VALUES (?1, ?2, ?3, ?4, 'accepted', ?5, ?6, 1)",
+            params![
+                command_id,
+                command.module,
+                command.command_type,
+                command.record_id,
+                serde_json::to_string(&command.payload)?,
+                serde_json::to_string(&command.client_context)?
+            ],
+        )?;
+        conn.execute(
+            "UPDATE business_users SET role = 'user' WHERE user_id = 'operator'",
+            [],
+        )?;
+        drop(conn);
+        let private_state = || -> anyhow::Result<(String, String, String, i64)> {
+            Ok(open_store(root)?.query_row(
+                "SELECT payload_json, client_context_json, status, observed_at_ms
+                 FROM business_commands WHERE command_id = ?1",
+                [command_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?)
+        };
+        let before = private_state()?;
+        let before_core = channels::business_command_projection(root, command_id)?;
+        let mut probe = command.clone();
+        probe.origin = CommandOrigin::TrustedLocal;
+        probe.client_context = serde_json::json!({
+            "owner_user_id": "operator", "actor": authorization["actor"].clone()
+        });
+        let current_session = rxdb_authenticated_session(root, &probe)?;
+        assert!(
+            !module_policy_decision(
+                root,
+                &current_session,
+                BusinessOsPermission::DataWrite,
+                "inventory"
+            )?
+            .allowed
+        );
+        let error = authorize_recoverable_background_control_command(root, &command)
+            .expect_err("current policy denial must precede context publication");
+        assert!(error
+            .to_string()
+            .contains("authorization is no longer valid"));
+        assert_eq!(
+            private_state()?,
+            before,
+            "denial cannot mutate accepted private state"
+        );
+        assert_eq!(
+            channels::business_command_projection(root, command_id)?,
+            before_core,
+            "denial cannot rewrite original intent, authority or lifecycle"
+        );
+        Ok(())
+    }
+
+    fn legacy_external_sql_test_command(
+        root: &Path,
+        command_id: &str,
+    ) -> anyhow::Result<(Value, BusinessCommand)> {
+        seed_business_user(root, "operator", "admin")?;
+        let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
         let document = serde_json::json!({
             "id": command_id,
             "command_id": command_id,
@@ -44534,6 +45357,7 @@ pub(super) mod tests {
                 "item_id": 42
             },
             "client_context": {
+                "capability_token": token,
                 "actor": { "id": "operator", "display_name": "Operator" }
             }
         });
@@ -44546,10 +45370,17 @@ pub(super) mod tests {
             payload: document["payload"].clone(),
             client_context: document["client_context"].clone(),
         };
-        let claim = channels::claim_business_control_command(
-            root,
-            business_command_core_claim(command_id, &command)?,
-        )?;
+        Ok((document, command))
+    }
+
+    fn seed_legacy_external_sql_test_command(
+        root: &Path,
+        command_id: &str,
+    ) -> anyhow::Result<(Value, BusinessCommand)> {
+        let (document, command) = legacy_external_sql_test_command(root, command_id)?;
+        let claim_request = business_command_core_claim(command_id, &command)?;
+        assert!(claim_request.intent.get("native_authorization").is_none());
+        let claim = channels::claim_business_control_command(root, claim_request)?;
         assert_eq!(claim.disposition, "new");
         let conn = open_store(root)?;
         conn.execute(
@@ -44566,13 +45397,29 @@ pub(super) mod tests {
             ],
         )?;
         drop(conn);
+        Ok((document, command))
+    }
+
+    #[test]
+    fn accepted_external_sql_without_authorization_receipt_fails_terminally() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "cmd_external_sql_missing_authorization";
+        let (document, command) = seed_legacy_external_sql_test_command(root, command_id)?;
+        let before = channels::business_command_projection(root, command_id)?;
 
         let outcome = accept_rxdb_business_command_with_origin(
             root,
-            document,
+            document.clone(),
             CommandOrigin::ReplicatedPeer,
         )?;
-        assert_eq!(outcome["status"], "failed");
+        assert_eq!(
+            outcome["status"],
+            "failed",
+            "historical accepted control replay error: {:?}",
+            outcome.get("error_message")
+        );
         assert!(outcome["error_message"]
             .as_str()
             .is_some_and(|error| error.contains("native authorization receipt")));
@@ -44583,6 +45430,206 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(status, "failed");
+        let private: (String, String) = conn.query_row(
+            "SELECT payload_json, client_context_json FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(serde_json::from_str::<Value>(&private.0)?, command.payload);
+        assert_eq!(
+            serde_json::from_str::<Value>(&private.1)?,
+            command.client_context
+        );
+        drop(conn);
+        let terminal = channels::business_command_projection(root, command_id)?;
+        assert_eq!(terminal["payload_hash"], before["payload_hash"]);
+        assert_eq!(terminal["payload"], before["payload"]);
+        assert_eq!(terminal["client_context"], before["client_context"]);
+        assert!(terminal.get("native_owner").is_none());
+        assert!(terminal.get("native_authorization").is_none());
+        assert_eq!(terminal["terminal_status"], "failed");
+        assert_eq!(terminal["projection_version"], 2);
+        let repeated = accept_rxdb_business_command_with_origin(
+            root,
+            document,
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert_eq!(repeated["status"], "failed");
+        assert_eq!(
+            channels::business_command_projection(root, command_id)?,
+            terminal
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_external_sql_rejection_preserves_changed_replay() -> anyhow::Result<()> {
+        for change in [
+            "payload",
+            "module",
+            "record",
+            "type",
+            "actor",
+            "invalid_token",
+            "private_failure",
+        ] {
+            let temp = tempdir()?;
+            let root = temp.path();
+            let id = format!("legacy-sql-{change}");
+            let (mut document, _) = seed_legacy_external_sql_test_command(root, &id)?;
+            if change == "private_failure" {
+                open_store(root)?.execute(
+                    "UPDATE business_commands SET status = 'failed' WHERE command_id = ?1",
+                    params![id],
+                )?;
+            }
+            let before = channels::business_command_projection(root, &id)?;
+            let private = || -> anyhow::Result<(String, String, String, i64)> {
+                let conn = open_store(root)?;
+                Ok(conn.query_row(
+                    "SELECT payload_json, client_context_json, status, observed_at_ms
+                     FROM business_commands WHERE command_id = ?1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?)
+            };
+            let original = private()?;
+            match change {
+                "payload" => document["payload"]["item_id"] = Value::from(99),
+                "module" => document["module"] = Value::from("another-module"),
+                "record" => document["record_id"] = Value::from("another-record"),
+                "type" => document["command_type"] = Value::from("external_sql.sync.refresh"),
+                "actor" => {
+                    seed_business_user(root, "another-operator", "admin")?;
+                    let (token, _) = issue_business_os_capability_token(
+                        root,
+                        "another-operator",
+                        now_ms() as i64,
+                    )?;
+                    document["client_context"]["capability_token"] = Value::from(token);
+                    document["client_context"]["actor"]["id"] = Value::from("another-operator");
+                }
+                "invalid_token" => {
+                    document["client_context"]["capability_token"] = Value::from("invalid")
+                }
+                "private_failure" => {}
+                _ => unreachable!(),
+            }
+            assert!(
+                accept_rxdb_business_command_with_origin(
+                    root,
+                    document,
+                    CommandOrigin::ReplicatedPeer
+                )
+                .is_err(),
+                "{change}"
+            );
+            assert_eq!(
+                channels::business_command_projection(root, &id)?,
+                before,
+                "{change}"
+            );
+            assert_eq!(private()?, original, "{change}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_external_sql_rejection_preserves_authority_and_advanced_core() -> anyhow::Result<()> {
+        for state in [
+            "native_owner",
+            "native_authorization",
+            "null_authorization",
+            "running",
+            "completed",
+            "effect_result",
+            "corrupt_hash",
+        ] {
+            let temp = tempdir()?;
+            let root = temp.path();
+            let id = format!("legacy-sql-protected-{state}");
+            let (_, command) = legacy_external_sql_test_command(root, &id)?;
+            let original = business_command_core_claim(&id, &command)?;
+            let mut claim = business_command_core_claim(&id, &command)?;
+            match state {
+                "native_owner" => bind_business_command_claim_owner(&mut claim, "operator")?,
+                "native_authorization" => {
+                    let authorization =
+                        recoverable_background_control_claim_authorization(root, &command)
+                            .context("real native authorization is required")?;
+                    claim = business_command_core_claim_with_authorization(
+                        &id,
+                        &command,
+                        Some(&authorization),
+                    )?;
+                }
+                "null_authorization" => {
+                    claim.intent["native_authorization"] = Value::Null;
+                    claim.payload_hash = format!(
+                        "sha256:{:x}",
+                        Sha256::digest(serde_json::to_vec(&claim.intent)?)
+                    );
+                }
+                _ => {}
+            }
+            assert_eq!(
+                channels::claim_business_control_command(root, claim)?.disposition,
+                "new"
+            );
+            match state {
+                "running" => channels::progress_business_control_command(
+                    root,
+                    &id,
+                    "running",
+                    &serde_json::json!({"started": true}),
+                )?,
+                "completed" => channels::complete_business_control_command(
+                    root,
+                    &id,
+                    "completed",
+                    &serde_json::json!({"ok": true}),
+                    None,
+                )?,
+                "effect_result" => {
+                    Connection::open(crate::paths::core_db(root))?.execute(
+                        "UPDATE business_command_effects SET result_json = '{\"applied\":true}' WHERE command_id = ?1", params![id],
+                    )?;
+                }
+                "corrupt_hash" => {
+                    Connection::open(crate::paths::core_db(root))?.execute(
+                        "UPDATE business_command_aggregates SET payload_hash = 'sha256:corrupt' WHERE command_id = ?1", params![id],
+                    )?;
+                }
+                _ => {}
+            }
+            let before = channels::business_command_projection(root, &id)?;
+            let effect = || -> anyhow::Result<(String, Option<String>, Option<String>, i64)> {
+                let conn = Connection::open(crate::paths::core_db(root))?;
+                Ok(conn.query_row(
+                    "SELECT status, result_json, error_message, updated_at_ms
+                     FROM business_command_effects WHERE command_id = ?1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?)
+            };
+            let original_effect = effect()?;
+            let result =
+                channels::reject_legacy_unowned_external_sql_command(root, &original, &original);
+            if matches!(
+                state,
+                "native_owner" | "native_authorization" | "null_authorization" | "completed"
+            ) {
+                assert!(result?.is_none(), "{state}");
+            } else {
+                assert!(result.is_err(), "{state}");
+            }
+            assert_eq!(
+                channels::business_command_projection(root, &id)?,
+                before,
+                "{state}"
+            );
+            assert_eq!(effect()?, original_effect, "{state}");
+        }
         Ok(())
     }
 
@@ -44828,9 +45875,19 @@ pub(super) mod tests {
             payload: document["payload"].clone(),
             client_context: document["client_context"].clone(),
         };
+        // Match real intake before the crash: the original native permission
+        // receipt is part of admission, never backfilled by a later token.
+        let authorization = recoverable_background_control_authorization(root, &command)
+            .context("accepted research fixture requires original native authorization")?;
+        assert_eq!(authorization["allowed"], true);
+        assert_eq!(authorization["permission"], "data.read");
         let claim = channels::claim_business_control_command(
             root,
-            business_command_core_claim(command_id, &command)?,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&authorization),
+            )?,
         )?;
         assert_eq!(claim.disposition, "new");
 
@@ -45943,6 +47000,53 @@ BRbBv2mhaOAuKib7tmks74He
         seed_test_business_os_app_root(root)?;
         write_private_runtime_module(root, "team-one", "1.0.0")?;
         seed_business_user(root, "team_member", "user")?;
+        seed_business_user(root, "release-owner", "chef")?;
+
+        let private = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_why_team_one_before_release",
+                "module": "ctox",
+                "type": "ctox.business_os.why",
+                "payload": { "module_id": "team-one" },
+                "client_context": { "actor": { "id": "team_member" } }
+            }),
+        )?;
+        assert_eq!(private["status"], "completed", "{private}");
+        assert_eq!(
+            private
+                .pointer("/result/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("private")
+        );
+        assert_eq!(
+            private
+                .pointer("/result/decisions/visibility/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let release = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_release_team_one",
+                "module": "ctox",
+                "type": "ctox.module.release",
+                "payload": {
+                    "module_id": "team-one",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "responsible_user_ids": ["release-owner"],
+                    "data_access_review": {
+                        "completed": true,
+                        "collections": [],
+                        "reviewed_by": "release-owner"
+                    }
+                },
+                "client_context": { "actor": { "id": "release-owner" } }
+            }),
+        )?;
+        assert_eq!(release["status"], "completed", "{release}");
 
         let outcome = accept_rxdb_business_command(
             root,

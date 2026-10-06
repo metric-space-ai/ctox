@@ -114,7 +114,7 @@ async fn shared_host_loop_withdraws_its_listener_after_stop() {
     );
     database.close().await.unwrap();
 }
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_host_publication_closes_the_native_session_and_listener() {
     let signal = SignalingFixture::start().await;
     let (config, key) = config();

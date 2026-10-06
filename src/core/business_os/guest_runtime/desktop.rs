@@ -41,7 +41,7 @@ impl RetainedQemuDesktop {
     ) -> Result<Self> {
         ensure!(identifier(&guest_id), "guest identity is invalid");
         // Actual process ownership exists before the first asynchronous operation.
-        let process = QemuProcess::spawn_paused(config)?;
+        let process = QemuProcess::spawn_paused(config, &guest_id)?;
         let process_instance_id = format!("qemu:{}:{}", process.pid(), uuid::Uuid::new_v4());
         Ok(Self {
             process,

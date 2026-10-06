@@ -200,4 +200,3 @@ assert.ok(!document.getElementById('workerboard').innerHTML.includes('Codex Desk
 assert.ok(!document.getElementById('prlist').innerHTML.includes('Codex Desktop'));
 assert.ok(!html.includes('<div class="filters">'));
 console.log('PASS: sortable 4/5/7 columns, numeric and null ordering, full-list sorting before pagination, score bars, chart with real edges and first/end/arrows/color controls.');
-

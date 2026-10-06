@@ -141,7 +141,7 @@ async fn real_overlay_is_small_retained_and_used_by_the_owned_qemu_process() -> 
             vcpus: 1,
             acceleration: QemuAcceleration::Tcg,
         };
-        guest = Some(QemuProcess::spawn_paused(&config)?);
+        guest = Some(QemuProcess::spawn_paused(&config, "isolated-ci-guest")?);
         ensure!(
             !guest.as_mut().unwrap().connect_monitor().await?.running,
             "prepared guest was not paused"
