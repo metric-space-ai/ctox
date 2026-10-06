@@ -283,7 +283,7 @@ struct Subscription {
     collection: String,
     mode: WatchMode,
     command_id: Option<String>,
-    visible_ids: Mutex<HashSet<String>>,
+    visible_records: Mutex<HashMap<String, [u8; 32]>>,
     last_command_state: Mutex<Option<CommandState>>,
     authority: AuthorizedContext,
     policy: Arc<dyn BusinessDataAccessPolicy>,
@@ -1418,7 +1418,7 @@ impl BusinessDataSource {
             collection: query.collection.clone(),
             mode,
             command_id: command_id.map(str::to_owned),
-            visible_ids: Mutex::new(HashSet::new()),
+            visible_records: Mutex::new(HashMap::new()),
             last_command_state: Mutex::new(None),
             authority,
             policy: Arc::clone(&self.policy),
@@ -1906,6 +1906,12 @@ pub fn scope_selector(scope: &Scope, selector: Option<Value>) -> Value {
     Value::Object(selector)
 }
 
+fn record_fingerprint(record: &Record) -> Result<[u8; 32], String> {
+    let encoded = serde_json::to_vec(record)
+        .map_err(|_| "BusinessData record encoding failed".to_string())?;
+    Ok(Sha256::digest(encoded).into())
+}
+
 impl Subscription {
     fn retire(&self) {
         let _fence = self
@@ -2172,19 +2178,29 @@ impl Subscription {
             other => other,
         };
         {
-            let mut visible_ids = self
-                .visible_ids
+            let mut visible_records = self
+                .visible_records
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             match &payload {
                 EventPayload::SnapshotPage { records, .. } => {
-                    visible_ids.extend(records.iter().map(|record| record.document_id.clone()));
+                    for record in records {
+                        visible_records
+                            .insert(record.document_id.clone(), record_fingerprint(record)?);
+                    }
                 }
                 EventPayload::Upsert { record, .. } => {
-                    visible_ids.insert(record.document_id.clone());
+                    let fingerprint = record_fingerprint(record)?;
+                    // The local and persistent feeds may describe one update.
+                    // Retain only hashes of the authorized public record, and
+                    // suppress its duplicate before allocating a new sequence.
+                    if visible_records.get(&record.document_id) == Some(&fingerprint) {
+                        return Ok(());
+                    }
+                    visible_records.insert(record.document_id.clone(), fingerprint);
                 }
                 EventPayload::Remove { document_id, .. } => {
-                    if !visible_ids.remove(document_id) {
+                    if visible_records.remove(document_id).is_none() {
                         return Ok(());
                     }
                 }

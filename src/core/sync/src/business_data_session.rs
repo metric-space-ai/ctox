@@ -144,6 +144,8 @@ impl OwnedStartup {
 struct OwnedWatch {
     request_id: String,
     pump: OwnedEventPump,
+    /// Keep existing event pumps behind a resumed Watch's private IPC ACK.
+    response_barrier: Option<tokio::sync::OwnedRwLockWriteGuard<()>>,
 }
 
 /// Metadata for the one currently valid handle generation. The native session
@@ -158,6 +160,7 @@ struct OwnedSession {
     connection: rxdb::plugins::replication_webrtc::WebRTCRsConnection,
     pool: crate::native::NativePool,
     watches: Arc<tokio::sync::Mutex<HashMap<String, OwnedWatch>>>,
+    event_publication: Arc<tokio::sync::RwLock<()>>,
     /// Shared first-byte gate for every response and event published under
     /// this owned session generation.
     publication: Arc<crate::business_data_ipc::WatchLifetime>,
@@ -393,6 +396,7 @@ impl BusinessDataService {
                     connection: connection.clone(),
                     pool: session.pool_clone(),
                     watches: Arc::default(),
+                    event_publication: Arc::default(),
                     publication: Arc::new(crate::business_data_ipc::WatchLifetime::new()),
                 };
                 let registered = {
@@ -766,6 +770,10 @@ impl BusinessDataService {
                 if !Arc::ptr_eq(&owned.watches, &expected_watches) {
                     return false;
                 }
+                // An existing pump can receive resumed events while the remote
+                // Watch is still returning. Its final IPC check waits until the
+                // corresponding response has actually completed its write.
+                let _publication = owned.event_publication.read().await;
                 service
                     .ensure_owned_is_current(&session, &owned)
                     .await
@@ -836,6 +844,8 @@ impl BusinessDataService {
         let (_, _, owned, _, _) = self.resolve(session)?;
         let owned = owned.ok_or_else(|| unknown("BusinessData session is not ready"))?;
         self.revalidate(&owned).await?;
+        let response_barrier = owned.event_publication.clone().write_owned().await;
+        self.ensure_owned_is_current(session, &owned).await?;
         let pump = spawn_remote_event_pump(
             owned_session_pool(&owned),
             owned.connection.clone(),
@@ -886,6 +896,7 @@ impl BusinessDataService {
             OwnedWatch {
                 request_id: request_id.to_owned(),
                 pump,
+                response_barrier: Some(response_barrier),
             },
         );
         drop(watches);
@@ -1045,6 +1056,7 @@ impl BusinessDataService {
                     OwnedWatch {
                         request_id: request_id.to_owned(),
                         pump,
+                        response_barrier: None,
                     },
                 );
                 drop(watches);
@@ -1100,7 +1112,7 @@ impl BusinessDataDispatcher for BusinessDataServiceDispatcher {
             let Ok((_, _, Some(owned), _, _)) = self.service.resolve(session) else {
                 return Ok(());
             };
-            let watches = owned.watches.lock().await;
+            let mut watches = owned.watches.lock().await;
             if self
                 .service
                 .ensure_owned_is_current(session, &owned)
@@ -1109,8 +1121,11 @@ impl BusinessDataDispatcher for BusinessDataServiceDispatcher {
             {
                 return Ok(());
             }
-            if let Some(watch) = watches.get(&subscription_id) {
+            if let Some(watch) = watches.get_mut(&subscription_id) {
                 if watch.request_id == response.request_id {
+                    // response_sent runs only after the complete private frame
+                    // write. Retiring the old pump happens before this release.
+                    watch.response_barrier.take();
                     watch.pump.release();
                 }
             }

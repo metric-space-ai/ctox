@@ -56,6 +56,7 @@ struct ResponsePublicationGate {
     armed: AtomicBool,
     blocked: AtomicBool,
     completed_query_page: AtomicBool,
+    completed_watch_response: AtomicBool,
     blocked_at_header: AtomicBool,
     entered: tokio::sync::Notify,
     writer_waker: futures_util::task::AtomicWaker,
@@ -77,6 +78,12 @@ impl BusinessDataDispatcher for WitnessDispatcher {
             if response.request_id == "blocked-query" {
                 gate.completed_query_page.store(
                     matches!(response.result, NativeBusinessDataResult::Page { .. }),
+                    Ordering::SeqCst,
+                );
+            }
+            if response.request_id == "resume-watch-a" {
+                gate.completed_watch_response.store(
+                    matches!(response.result, NativeBusinessDataResult::Subscribed { .. }),
                     Ordering::SeqCst,
                 );
             }
@@ -806,12 +813,13 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         .await
         .unwrap();
 
+        let resume_gate = Arc::new(ResponsePublicationGate::default());
         let (a_root, a_db, mut client_a, session_a, service_a, serve_a) = open_ipc_client(
             &signaling.url,
             &source_pin,
             device.clone(),
             credential_requests.clone(),
-            None,
+            Some(resume_gate.clone()),
         )
         .await;
         let (b_root, b_db, mut client_b, session_b, service_b, serve_b) = open_ipc_client(
@@ -1298,6 +1306,49 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                 if record.document_id == "query-a"
         ));
         assert_no_frame(&mut client_b, "A-targeted query on B").await;
+
+        // Hold the actual resumed Watch ACK at zero accepted bytes. Existing
+        // pumps must not publish recovery ahead of its complete private frame.
+        let NativeBusinessDataEventPayload::Upsert { cursor, .. } = &a_live.payload else {
+            panic!("expected A query cursor");
+        };
+        let NativeBusinessDataOperation::Watch { query, .. } =
+            records_watch_request(&session_a, "query-a")
+        else {
+            panic!("expected A query operation");
+        };
+        resume_gate.armed.store(true, Ordering::SeqCst);
+        send_request(
+            &mut client_a,
+            "resume-watch-a",
+            NativeBusinessDataOperation::Watch {
+                session: session_a.clone(),
+                query,
+                resume_cursor: Some(cursor.clone()),
+            },
+        )
+        .await;
+        timeout(Duration::from_secs(5), resume_gate.entered.notified())
+            .await
+            .expect("resumed Watch ACK must reach the zero-byte sink");
+        assert!(resume_gate.completed_watch_response.load(Ordering::SeqCst));
+        assert!(resume_gate.blocked_at_header.load(Ordering::SeqCst));
+        assert_no_frame(&mut client_a, "resume ACK held before byte zero").await;
+        resume_gate.blocked.store(false, Ordering::SeqCst);
+        resume_gate.writer_waker.wake();
+        assert_eq!(
+            read_subscribed(&mut client_a, &session_a, "resume-watch-a").await,
+            query_a
+        );
+        let recovered = read_event(&mut client_a, "A resume after complete ACK").await;
+        assert_eq!(recovered.session, session_a);
+        assert_eq!(recovered.subscription_id, query_a);
+        assert!(recovered.sequence > a_live.sequence);
+        assert!(matches!(
+            recovered.payload,
+            NativeBusinessDataEventPayload::CaughtUp { ref cursor } if !cursor.is_empty()
+        ));
+        assert_no_frame(&mut client_b, "A resume on B").await;
 
         server_db
             .collection("records")
