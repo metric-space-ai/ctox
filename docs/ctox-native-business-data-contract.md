@@ -128,6 +128,12 @@ real queue/service adversarial execution or performance validation. Immediate
 SQLite fences fail closed on contention; availability under concurrent writers
 and arbitrary filesystem replacement remain unproved.
 
+Standalone Sync verification must enable `--features webrtc`: this crate has no
+default WebRTC feature, so featureless success does not compile or exercise the
+BusinessData source. The isolated native CLI acceptance example uses two runtime
+workers and a freshly built binary from the same composed source. Browser,
+installed Linux and two-host acceptance remain separate obligations.
+
 ## Command ownership and existing records
 
 ObserveCommand must resolve the requested command in the canonical native
@@ -145,6 +151,14 @@ remain unchanged so background recovery can reproduce their hashes. Existing
 ownerless commands must not acquire an owner from the next requester. They
 remain unavailable to owner-scoped observation and conflict with a newly bound
 intent; no automatic ownership backfill is implemented.
+
+Recovery of an accepted background control first requires its original native
+authorization receipt, including its permission, module scope and trusted actor.
+A current capability cannot replace a missing receipt or adopt that actor's
+effect. When a live capability is supplied, its authenticated user must match
+the original actor before current module policy is checked. Token-redacted
+native recovery still derives its actor from the unchanged receipt. A rejected
+recovery does not rewrite the admission hash or install a new owner/receipt.
 
 Tests for canonical store replay/conflict and receipt validation are present as
 source but have not been executed for this rework. Full authenticated intake,

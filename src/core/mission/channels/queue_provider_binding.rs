@@ -870,8 +870,15 @@ pub(super) mod tests {
         let path = resolve_db_path(root.path(), None);
         let replacement = root.path().join("replacement.sqlite3");
         let conn = Connection::open(&path)?;
-        // A real consistent snapshot preserves the witness while changing
-        // the store inode; no connection remains open across replacement.
+        // Retire the source WAL before replacing its main file. A snapshot
+        // must not reopen against old pages left by an idle pooled connection.
+        let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+        assert_eq!(
+            busy, 0,
+            "source WAL must be checkpointed before replacement"
+        );
+        // VACUUM produces a consistent witness-preserving replacement with a
+        // new inode; the current-provider fence must still reject it.
         conn.execute("VACUUM INTO ?1", [replacement.to_string_lossy().as_ref()])?;
         drop(conn);
         std::fs::rename(&replacement, &path)?;

@@ -75,16 +75,21 @@ immutable: a restart cannot silently mint or select a replacement grant. The
 adapter requires an explicit grant-admission checker with no permissive default;
 current account/file permission alone cannot validate an arbitrary grant ID.
 Workjet owns the permission-checked grant issue/lookup/revoke and source nonce
-validator in existing CTOX policy/secret stores. Those production APIs are still
-pending; the grant ID itself carries no authority.
+validator in existing CTOX policy/secret stores. The composed source registers
+the grant/account handlers on the real native peer pool and retains current
+issuer, principal, policy and secret-tuple authority through physical publication.
+The grant ID itself carries no authority. Fresh composed compilation, service
+regressions and installed enrollment remain unverified; see
+[`docs/native-transfer-grants.md`](../../../docs/native-transfer-grants.md).
 
 The enrolled adapter checks current host enrollment/account, a fresh signed peer
 principal, and the existing remote file-fetch policy using an empty range before
 cache reuse and publication. Account state is checked again after the exchange.
-This implementation still needs the production daemon-owned session resolver and
-its service/command wiring; the per-IPC BusinessDataService cannot by itself keep
-a transfer alive after UI disconnect. The new account-binding changes and reopen
-regression are pending compilation/execution behind the shared resource gate;
+The composed source includes the daemon-owned session resolver and starts its
+worker from the foreground service; a per-IPC BusinessDataService alone cannot
+keep a transfer alive after UI disconnect. These source bindings and the new
+account/service-publication and reopen regressions still require fresh composed
+compilation/execution behind the shared resource gate;
 previous passing checks apply only to their recorded earlier revisions.
 
 Existing `business_os/workjet_transfer_git.rs` owns Git bundle/patch/untracked
@@ -109,8 +114,9 @@ hook must consult current enrolled account/epoch, session generation and file
 policy; source identity and a previous receipt cannot substitute for admission.
 The worker checks admission before cache reuse, each range and publication,
 including fully checkpointed resumes, and cancels pending admission on pause or
-cancel. Range reads carry the complete job identity. The daemon hook implementation
-and production command/session registration remain to be connected and verified.
+cancel. Range reads carry the complete job identity. The daemon hooks and native
+command/session registration are present in the composed source; their real
+runtime lifecycle and installed acceptance remain to be verified.
 
 Peer ranges are at most 1 MiB. The worker flushes each range before committing
 its offset to the existing SQLite job. Reopen truncates uncommitted tail bytes;

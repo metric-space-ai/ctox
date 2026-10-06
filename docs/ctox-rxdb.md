@@ -188,6 +188,25 @@ connection's committed write until the standby timeout. Local update hooks and
 changed-table generations still suppress duplicate notifications. The fallback
 adds no per-collection poller and changes no replication authority or transport.
 
+### Sync connection cache and credential rotation
+
+The connection cache stamps the Secret Store's resolved SQLite file and its
+WAL/SHM sidecars and reads a private digest of the protected room-password row
+through a read-only connection. File size and timestamps alone may miss a
+committed update. An unreadable or absent protected row cannot authorize reuse
+or publication of a cached configuration. A credential update still in WAL
+invalidates the old room and browser signaling credential without waiting for
+a checkpoint or the five-minute cache TTL. The native-only credential retains
+its own identity. A configuration build that spans a source change is returned
+without caching; it cannot publish an old value tagged with the newer store
+stamp. Cache readers capture their source stamp after acquiring the cache lock,
+and builders recheck it under that same lock before publication. Waiting for
+another builder therefore cannot preserve a stale pre-lock decision. Initial
+store setup follows the same rule. The optional read-only version probe has a
+100ms busy timeout; failure bypasses caching and leaves the authoritative Secret
+Store read unchanged. This cache coherence rule does not replace native policy
+or the peer lifecycle fence, and installed acceptance remains separate.
+
 ### Native query cache shutdown
 
 Closing a native collection drains its query cache and marks those queries
@@ -459,6 +478,23 @@ Early operator probes require signed native `data.write` authorization;
 worker command sessions cannot grant that exception. A successful probe only
 clears the generation it owns, so a late result cannot erase a newer refusal.
 
+### Runtime app starter preparation
+
+Native app admission may prepare and validate starter files, but that proves
+only that scaffolding can load. The command remains queued until its owned
+worker runs and the existing app-validation/completion path accepts the result.
+Starter preparation never moves an unleased command into review or success.
+
+### Immediate document edits
+
+The deterministic Markdown append in a Documents chat uses a native control
+claim before changing the document, without creating a worker queue task. Its
+completion passes through the existing Core terminal barrier and mirrors that
+terminal result to the private command store and RxDB. An identical completed
+replay returns the saved result without making another version; a different
+intent with the same command ID is rejected. An unfinished claim requires
+recovery before another write and is never reported as successful.
+
 ### Command projection identity
 
 Terminal and outbox projections retain the actor ID from the accepted native
@@ -469,6 +505,16 @@ canonical core intent, payload hash and authorization semantics are unchanged.
 The same enriched document is mirrored locally and to RxDB. Outbox delivery
 preserves an existing native client_context_json, including the credential
 needed for execution-time revalidation; public projections remain redacted.
+Absent native record IDs remain SQL NULL rather than becoming empty IDs during
+outbox delivery. The private native payload also survives public mirror updates.
+For a completed, failed or cancelled control command, the public projection
+uses the matching native command’s normalized presentation payload. Module,
+command type and terminal status must match Core; no replica row supplies this
+payload. This preserves typed defaults and discarded sensitive fields without
+rewriting Core’s immutable admission intent or weakening authorization.
+Queue command chat navigation is derived from the immutable intent and a
+matching private command context. A cached public chat ID cannot replace that
+binding. This is presentation metadata and creates no execution authority.
 
 A projection that lacks matching native admission identity does not manufacture
 an actor from incoming metadata. The regression covers terminal state, outbox
@@ -738,7 +784,7 @@ snapshots as `{ collectionName, documents }`, starting only after its initial
 query succeeds. Committed changes during that query are merged into the first
 snapshot; a pending or failed query is never presented as an empty ready list.
 
-An invalidation-only consumer may explicitly opt into
+A consumer may request committed deltas before its initial snapshot with
 `subscribe(listener, { emitPendingChanges: true })`. While initialization is
 pending, debounced committed changes additionally emit
 `{ collectionName, initialPending: true, changedDocuments }`. This event has
@@ -748,18 +794,20 @@ way only for harness status and triggers its existing authoritative row read;
 it does not render the changed-document payload as a fully loaded collection.
 The shell's scoped collection facade preserves this subscription option.
 
-A consumer that only needs to know *that* something changed — because it
-re-runs its own bounded query — subscribes with
-`subscribe(listener, { invalidateOnly: true })`. It never reads the collection:
-the listener receives `{ collectionName, invalidated: true }` once right after
-subscribing and then, debounced, whenever the local store or the demand loader
-reports a change. A plain `$` subscription materializes the 200-document demand
-window first and, for the control-plane ledgers (`business_commands`,
-`ctox_queue_tasks`), refetches it after each change; crew presence, chat
-tracking and the desktop command stream used it purely as a change trigger and
-downloaded ~1.5 MB of ledger documents per shell start that way (on-prem deployment,
-06.10.2026). They now use `invalidateOnly`. Chat tracking additionally looks up
-only messages that still need a sync (`trackedMessageNeedsSync`).
+Consumers that only need a change hint use
+`collection.$.subscribe(listener, { invalidateOnly: true })`. This emits
+`{ collectionName, invalidated: true }` after subscription and debounces store,
+loader-generation and projected-window changes. It performs no initial query,
+snapshot read or document materialization. The listener runs its own bounded
+query; the hint alone confirms neither readiness nor read permission. The
+option also passes through scoped, maintenance and permission-guarded shell
+collection facades. Unsubscribing retires the timer, listeners and foreground
+lease. Ordinary snapshot and `emitPendingChanges` subscriptions retain their
+existing behavior; `invalidateOnly` takes precedence when both are requested.
+
+Crew presence, chat tracking and the desktop command stream also use this
+option for bounded query refreshes. Chat tracking looks up only messages
+that still need sync (`trackedMessageNeedsSync`).
 
 Crew app presence retains the last valid queue snapshot when a read fails.
 An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;

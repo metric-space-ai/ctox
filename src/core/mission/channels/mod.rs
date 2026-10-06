@@ -141,10 +141,11 @@ pub(crate) use command_saga::{
     progress_business_control_command, reconcile_business_command_invariants,
     record_business_command_applied_effect_delivery_failure,
     record_business_command_intake_failure, record_business_command_review,
-    record_business_command_saga_step_evidence, resolve_business_command_intake_failures,
-    retry_failed_app_create_business_command, runtime_business_command_action_snapshot,
-    start_business_command_saga, start_runtime_business_command_saga,
-    transition_business_command_for_task, BusinessOsQueueMirrorSnapshot,
+    record_business_command_saga_step_evidence, reject_legacy_unowned_external_sql_command,
+    resolve_business_command_intake_failures, retry_failed_app_create_business_command,
+    runtime_business_command_action_snapshot, start_business_command_saga,
+    start_runtime_business_command_saga, transition_business_command_for_task,
+    BusinessOsQueueMirrorSnapshot,
 };
 pub(crate) use route_status::QueueRouteStatus;
 
@@ -6143,7 +6144,10 @@ fn ack_messages(
     if let Some(root) = projection_root {
         attach_queue_projection_store(root, conn)?;
     }
-    let tx = conn.unchecked_transaction()?;
+    // Acknowledgement reads before updating Core and its attached projection
+    // store. Reserve both writers first so a concurrent WAL commit cannot
+    // invalidate the read snapshot during promotion (SQLITE_BUSY_SNAPSHOT).
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let updated = ack_messages_in_transaction(
         &tx,
         message_keys,
