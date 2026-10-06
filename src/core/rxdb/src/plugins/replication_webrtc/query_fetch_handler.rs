@@ -618,14 +618,21 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
     let authorized = if registry.check_authorized(&peer_identity, &request.collection_name) {
         match authorize_demand_query(handler.as_ref(), &peer, &request.collection_name).await {
             Ok(authorized) => authorized,
-            Err(_) => {
+            Err(error) => {
+                let retryable = error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE";
+                let reason = if retryable {
+                    "native collection authority is temporarily unavailable"
+                } else {
+                    "native collection authorization failed"
+                };
                 tracing::warn!(collection = %request.collection_name,
+                    error_code = error.code(),
                     "rxdb.query.fetch collection authority unavailable");
                 send_error(
                     handler.as_ref(), &peer, &message.id, &request.request_id,
                     QUERY_FETCH_ERROR_REMOTE,
-                    &format!("native collection authority is temporarily unavailable for {}", request.collection_name),
-                    true,
+                    &format!("{reason} for {}", request.collection_name),
+                    retryable,
                 ).await;
                 return Ok(());
             }
@@ -1811,6 +1818,7 @@ mod tests {
         document_filter: Arc<TokioMutex<Option<Arc<DocumentFilterFn>>>>,
         collection_authorized: Arc<AtomicBool>,
         authority_failures: std::sync::atomic::AtomicUsize,
+        authority_error_code: &'static str,
         authority_checks: std::sync::atomic::AtomicUsize,
         document_fields: Arc<TokioMutex<Option<Vec<String>>>>,
     }
@@ -1824,6 +1832,7 @@ mod tests {
                 document_filter: Arc::new(TokioMutex::new(None)),
                 collection_authorized: Arc::new(AtomicBool::new(true)),
                 authority_failures: std::sync::atomic::AtomicUsize::new(0),
+                authority_error_code: "COLLECTION_AUTHORITY_UNAVAILABLE",
                 authority_checks: std::sync::atomic::AtomicUsize::new(0),
                 document_fields: Arc::new(TokioMutex::new(None)),
             }
@@ -1886,7 +1895,7 @@ mod tests {
             if self.authority_failures.fetch_update(
                 Ordering::SeqCst, Ordering::SeqCst, |remaining| remaining.checked_sub(1),
             ).is_ok() {
-                return Err(new_rx_error("COLLECTION_AUTHORITY_UNAVAILABLE", None));
+                return Err(new_rx_error(self.authority_error_code, None));
             }
             Ok(self.is_collection_authorized_for_peer(peer, collection))
         }
@@ -2659,6 +2668,27 @@ mod tests {
         }).expect("terminal error frame");
         assert_eq!(error["retryable"], json!(true));
         assert!(error["message"].as_str().unwrap().contains("business_records"));
+    }
+
+    #[tokio::test]
+    async fn query_fetch_does_not_retry_other_authorization_errors() {
+        let collection = seeded_collection(3).await;
+        let registry = authorized_query_registry(4);
+        registry.register(collection);
+        let handler = Arc::new(MockHandler {
+            authority_error_code: "AUTHORITY_CORRUPT",
+            ..MockHandler::new()
+        });
+        handler.authority_failures.store(2, Ordering::SeqCst);
+        run_query_fetch(registry, handler.clone(), MockPeer("p1"), "p1".into(),
+            make_request("authority-terminal", "business_records", 0)).await.unwrap();
+        assert_eq!(handler.authority_checks.load(Ordering::SeqCst), 1);
+        let frames = handler.sent.lock();
+        let error = frames.iter().find_map(|frame| match frame {
+            WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_ERROR => message.params.first(),
+            _ => None,
+        }).expect("terminal error");
+        assert_eq!(error["retryable"], json!(false));
     }
 
     #[tokio::test]
