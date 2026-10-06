@@ -89,7 +89,7 @@ pub type FileChunkStreamFn = dyn Fn(&str, &str, Option<&FileRange>, &mut dyn FnM
     + Send
     + Sync;
 pub type FileAuthCheckFn = dyn Fn(&str, &str) -> bool + Send + Sync;
-pub use super::guarded_file_source::GuardedFileSource;
+pub use super::guarded_file_source::{GuardedChunkSend, GuardedFileSource};
 
 /// Native-only slot lease. Drop removes only this owner's exact source;
 /// captured source callbacks retain their own live authority guards.
@@ -603,7 +603,7 @@ mod tests {
             _: usize,
             _: bool,
             _: &str,
-            _: &mut dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
+            _: &mut super::GuardedChunkSend<'_>,
         ) -> RxResult<()> {
             panic!("slot fixture must not send files")
         }
