@@ -64,3 +64,15 @@ protocol fixtures must pass again. The required real acceptance is gpu3 → ASUS
 durable job. The operator approved `/volume1/Build-Tmp/build-lane-offload` and the
 pinned SSH endpoint. Native Owner enrollment and SecretStore provisioning remain
 owned by Instances; no credential value is stored in this document.
+
+## SSH dependency compatibility
+
+The SSH adapter pins russh 0.59.0 because SMB 0.12.1 pins incompatible
+prereleases of curve25519-dalek and the elliptic-curve packages. This keeps the
+stable SSH crypto dependency line separate from SMB's prerelease line.
+RUSTSEC-2026-0153 affects russh-cryptovec through SSH-agent frame processing in
+this version; this adapter does not use an SSH agent or agent forwarding. The
+remote transport/compression paths described by the advisory were removed in
+russh 0.58.0. The remaining unused agent-code exposure is a known dependency risk,
+not a claim that the package is patched. Upgrade to a compatible patched russh/SMB
+combination when their dependency constraints allow it.

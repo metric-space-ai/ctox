@@ -155,7 +155,7 @@ async fn checked_path(sftp: &RawSftpSession, root: &str, relative: &str) -> Resu
             !relative.contains('/')
                 && relative.ends_with(".part")
                 && relative.len() == 84
-                && relative[15..79].bytes().all(|b| b.is_ascii_hexdigit()),
+                && relative.as_bytes()[15..79].iter().all(u8::is_ascii_hexdigit),
             "invalid storage staging path"
         );
     } else {
