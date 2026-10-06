@@ -30141,7 +30141,7 @@ pub(super) mod tests {
             CAPABILITY_SECRET_NAME,
             "rotated-native-issuer-fixture-only",
             None,
-            json!({}),
+            serde_json::json!({}),
         )?;
         assert!(
             check()?.is_none(),
