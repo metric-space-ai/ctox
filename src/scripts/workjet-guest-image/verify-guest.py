@@ -199,6 +199,8 @@ def main():
             code = proc.wait(timeout=45)
             assertion("guest_acpi_powerdown", exit=code)
             receipt["guest_graceful_powerdown"] = code == 0
+            if code != 0:
+                raise RuntimeError("owned QEMU exited nonzero after ACPI powerdown: " + str(code))
         except subprocess.TimeoutExpired:
             receipt["guest_graceful_powerdown"] = False
             raise RuntimeError("ACPI powerdown did not complete; no consistent checkpoint claimed")
