@@ -1,0 +1,1910 @@
+.outbound-lead-generation {
+  --leadgen-left: 300px;
+  --leadgen-right: 360px;
+  container-type: inline-size;
+  container-name: business-app-window;
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+  background: var(--bg);
+  font: 13px/1.4 var(--font-sans);
+}
+
+/* Shell V2 detail workspace ------------------------------------------------ */
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation-layout {
+  grid-template-columns: var(--leadgen-left) 12px minmax(320px, 1fr) 12px var(--leadgen-right);
+}
+
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-resizer {
+  position: relative;
+  width: 100%;
+  min-width: 8px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+}
+
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-resizer::before {
+  content: '';
+  position: absolute;
+  left: auto;
+  top: 50%;
+  width: 3px;
+  height: 48px;
+  border-radius: 999px;
+  background: var(--shell-v2-local-accent, var(--accent));
+  opacity: .5;
+  transform: translate(-50%, -50%);
+  transition: width 150ms ease, opacity 150ms ease, filter 150ms ease;
+}
+
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-resizer::after { display: none; }
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-resizer:hover::before,
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-resizer:focus-visible::before,
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-resizer.is-active::before {
+  width: 4px;
+  opacity: 1;
+  filter: brightness(1.2);
+}
+
+.outbound-lead-generation .leadgen-detail {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.outbound-lead-generation .leadgen-detail > .leadgen-header {
+  display: grid;
+  align-items: stretch;
+  min-height: 0;
+  padding: 0;
+  gap: 0;
+}
+
+.leadgen-detail-title-row {
+  display: flex;
+  min-width: 0;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 14px 7px;
+}
+
+.leadgen-detail-title-row > div:first-child { min-width: 0; }
+.leadgen-detail-title-row .ctox-pane-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leadgen-detail-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 2px;
+  padding: 0 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-top: 1px solid var(--leadgen-hairline, var(--line));
+}
+.leadgen-detail-tabs::-webkit-scrollbar { display: none; }
+
+.leadgen-detail-tab {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.leadgen-detail-tab:hover { color: var(--text); }
+.leadgen-detail-tab.is-active { color: var(--text); }
+.leadgen-detail-tab.is-active::after {
+  content: '';
+  position: absolute;
+  right: 8px;
+  bottom: 0;
+  left: 8px;
+  height: 2px;
+  border-radius: 999px 999px 0 0;
+  background: var(--accent);
+}
+
+.outbound-lead-generation .leadgen-detail-body { padding: 0 16px 18px; }
+.outbound-lead-generation .leadgen-review-summary { padding-block: 16px 14px; gap: 10px; }
+.leadgen-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.leadgen-summary-heading h3 { margin: 0; }
+.leadgen-status-pill {
+  padding: 3px 7px;
+  border: 1px solid var(--leadgen-hairline, var(--line));
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+.leadgen-review-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--leadgen-hairline, var(--line));
+  border-radius: 10px;
+  background: var(--leadgen-subtle, var(--surface-2));
+}
+.leadgen-review-metrics > div { min-width: 0; padding: 10px; border-right: 1px solid var(--leadgen-hairline, var(--line)); }
+.leadgen-review-metrics > div:last-child { border-right: 0; }
+.leadgen-review-metrics strong { display: block; color: var(--text); font-size: 20px; line-height: 1.1; }
+.leadgen-review-metrics strong span { color: var(--muted); font-size: 12px; font-weight: 600; }
+.leadgen-review-metrics small { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.2; }
+.leadgen-review-notice { margin: 0; color: var(--warning); font-size: 11px; }
+
+.leadgen-overview-action { display: flex; padding: 14px 0; }
+.leadgen-validation-details {
+  border: 1px solid var(--leadgen-hairline, var(--line));
+  border-radius: 9px;
+  background: var(--leadgen-subtle, var(--surface-2));
+}
+.leadgen-validation-details summary { padding: 10px 12px; color: var(--muted); font-size: 11px; cursor: pointer; }
+.leadgen-validation-details ul { display: grid; gap: 5px; margin: 0; padding: 0 12px 12px 28px; color: var(--muted); font-size: 11px; }
+
+.outbound-lead-generation .leadgen-review-group { padding-top: 14px; }
+.outbound-lead-generation .leadgen-review-group > h3 { margin-bottom: 10px; }
+.outbound-lead-generation .leadgen-detail-actions {
+  position: static;
+  margin: 0 -16px;
+  padding: 10px 16px;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+@container business-app-window (max-width: 820px) {
+  .outbound-lead-generation .leadgen-review-metrics { grid-template-columns: 1fr; }
+  .outbound-lead-generation .leadgen-review-metrics > div { border-right: 0; border-bottom: 1px solid var(--leadgen-hairline, var(--line)); }
+  .outbound-lead-generation .leadgen-review-metrics > div:last-child { border-bottom: 0; }
+}
+
+.outbound-lead-generation-layout {
+  display: grid;
+  grid-template-columns: var(--leadgen-left) 6px minmax(320px, 1fr) 6px var(--leadgen-right);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.leadgen-sync-status {
+  position: absolute;
+  z-index: 20;
+  right: calc(var(--leadgen-right) + 18px);
+  bottom: 12px;
+  left: 50%;
+  display: flex;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 24%, transparent);
+  font-size: 11px;
+  transform: none;
+  pointer-events: none;
+}
+.leadgen-sync-status > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leadgen-sync-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--accent); animation: leadgen-pulse 1.2s ease-in-out infinite; }
+.leadgen-sync-delayed { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); color: var(--text); }
+.leadgen-sync-delayed .ctox-button { flex: 0 0 auto; min-height: 26px; padding: 3px 8px; pointer-events: auto; }
+@keyframes leadgen-pulse { 50% { opacity: .35; } }
+
+.leadgen-pane {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+.leadgen-scroll { min-width: 0; overflow: auto; }
+
+.leadgen-detail { grid-template-rows: auto minmax(0, 1fr); }
+.leadgen-leads { grid-template-rows: auto auto auto minmax(0, 1fr); }
+.leadgen-resizer { width: 6px; height: 100%; }
+/* Own the header row instead of inheriting it from the shell: inside the
+   sources dialog the shell's pane-header layout does not apply, so the title
+   and the actions stacked and the close button ended up under the heading
+   instead of at the top right where it belongs. */
+.leadgen-header {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.leadgen-header > :first-child { min-width: 0; }
+.leadgen-header-actions { flex: 0 0 auto; margin-left: auto; }
+.leadgen-header .ctox-button { display: inline-flex; align-items: center; gap: 6px; }
+.leadgen-header-actions { display: flex; align-items: center; gap: 6px; }
+.leadgen-header-actions .ctox-view-toggle { display: flex; align-items: center; gap: 2px; }
+.leadgen-header-actions .ctox-pane-icon[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+.leadgen-pane-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+.leadgen-pane-heading .ctox-pane-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leadgen-pane-heading > span { flex: 0 0 auto; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+
+.leadgen-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.leadgen-toolbar .ctox-pane-search { min-width: 0; flex: 1; }
+.leadgen-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.leadgen-campaign-research .leadgen-icon { width: 15px; height: 15px; }
+.leadgen-campaign-research .leadgen-icon path[d^="M20 12"] {
+  transform-origin: center;
+  animation: leadgen-spin 1s linear infinite;
+}
+
+.leadgen-campaign-progress {
+  display: grid;
+  grid-template-columns: minmax(150px, auto) minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.leadgen-progress-copy { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+.leadgen-progress-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.leadgen-progress-copy span { flex: 0 0 auto; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.leadgen-progress-track { height: 3px; overflow: hidden; background: var(--line); }
+.leadgen-progress-track i { display: block; height: 100%; background: var(--accent); transition: width 180ms ease; }
+.leadgen-progress-states { display: flex; align-items: center; gap: 8px; }
+.leadgen-progress-state { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.leadgen-progress-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.leadgen-progress-state strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.leadgen-progress-state.is-running i { background: var(--accent); }
+.leadgen-progress-state.is-completed i, .leadgen-progress-state.is-validated i { background: var(--success); }
+.leadgen-progress-state.is-failed i { background: var(--danger); }
+
+@keyframes leadgen-spin { to { transform: rotate(360deg); } }
+
+.leadgen-campaigns { grid-template-rows: auto minmax(0, 1fr); }
+.leadgen-campaign-list { padding: 6px; }
+.leadgen-campaign-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 42px;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+}
+.leadgen-campaign-select {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 41px;
+  padding: 7px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.leadgen-campaign-row:hover,
+.leadgen-campaign-row[data-selected="true"] { background: var(--accent-soft); }
+/* Kampagnennamen brachen bei 1440 px schon nach zehn Zeichen ab ("Abnahme
+   10.09...."): die unsichtbaren Bearbeiten/Loeschen-Knoepfe hielten ihren
+   Platz in jeder Zeile. Sie nehmen ihn jetzt nur in der gewaehlten, der
+   beruehrten oder fokussierten Zeile, und der Name darf zweizeilig sein. */
+.leadgen-campaign-select span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: break-word; }
+.leadgen-campaign-row:not([data-selected="true"]):not(:hover):not(:focus-within) .leadgen-campaign-actions { display: none; }
+.leadgen-campaign-select strong { color: var(--muted); font-size: 11px; }
+.leadgen-campaign-actions {
+  display: flex;
+  padding-right: 3px;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+.leadgen-campaign-row:hover .leadgen-campaign-actions,
+.leadgen-campaign-row:focus-within .leadgen-campaign-actions,
+.leadgen-campaign-row[data-selected="true"] .leadgen-campaign-actions { opacity: 1; }
+.leadgen-campaign-actions .ctox-pane-icon { width: 28px; height: 28px; }
+.leadgen-campaign-actions .is-danger:hover { color: var(--danger); }
+
+.leadgen-source-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+.leadgen-source-panel {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  width: min(760px, 100%);
+  max-height: min(760px, 92%);
+  overflow: hidden;
+  border: 1px solid var(--line-strong, var(--line));
+  background: var(--surface);
+  box-shadow: var(--shadow-lg, 0 18px 48px rgba(0, 0, 0, .28));
+}
+
+.leadgen-source-tabs {
+  display: flex;
+  min-height: 38px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.leadgen-source-tabs button {
+  min-width: 112px;
+  padding: 0 14px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 750;
+}
+
+.leadgen-source-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.leadgen-source-credential {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  min-height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.leadgen-source-credential.is-available {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  color: var(--accent);
+}
+
+.leadgen-source-credential.is-invalid,
+.leadgen-source-credential.is-missing {
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--line));
+  color: var(--danger);
+}
+
+.leadgen-source-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 74px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.leadgen-source-copy { display: grid; gap: 2px; min-width: 0; }
+.leadgen-source-copy > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leadgen-source-copy > span { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leadgen-source-actions { display: flex; gap: 3px; }
+.leadgen-source-actions .ctox-pane-icon { width: 28px; height: 28px; }
+
+.leadgen-source-toggle {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface-2);
+}
+
+.leadgen-toggle-dot { display: block; width: 8px; height: 8px; margin: auto; border-radius: 50%; background: var(--muted); }
+.leadgen-source-toggle[aria-pressed="true"] .leadgen-toggle-dot { background: var(--success); }
+
+.leadgen-adapter-state { display: inline-flex; align-items: center; gap: 4px; }
+.leadgen-source-copy > .leadgen-adapter-state { white-space: normal; }
+.leadgen-adapter-state i { width: 8px; height: 8px; border: 1px solid var(--muted); border-radius: 50%; }
+.leadgen-adapter-state.is-ready { color: var(--success); font-weight: 750; }
+.leadgen-icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; flex: 0 0 auto; }
+
+.leadgen-selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent-soft) 62%, var(--surface));
+}
+.leadgen-selection-bar strong { margin-right: auto; font-size: 11px; }
+.leadgen-selection-bar .ctox-button { display: inline-flex; align-items: center; gap: 5px; }
+
+.leadgen-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.leadgen-table th { position: sticky; top: 0; z-index: 1; height: 34px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--surface-2); color: var(--muted); font-size: 10px; text-align: left; text-transform: uppercase; }
+.leadgen-table th:nth-child(2) { width: 38%; }
+.leadgen-table th:nth-child(3) { width: 20%; }
+.leadgen-table th:nth-child(4) { width: 22%; }
+.leadgen-table td { height: 54px; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.leadgen-table tbody tr { cursor: pointer; }
+.leadgen-table tbody tr:hover, .leadgen-table tbody tr[aria-selected="true"] { background: var(--accent-soft); }
+.leadgen-table tbody tr[data-checked="true"] { box-shadow: inset 3px 0 0 var(--accent); }
+.leadgen-table td:nth-child(2) { display: grid; gap: 2px; }
+.leadgen-table td:nth-child(2) span { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leadgen-table .leadgen-select-column { width: 38px; padding-right: 2px; text-align: center; }
+.leadgen-table input[type="checkbox"],
+.leadgen-lead-shard > input[type="checkbox"] { accent-color: var(--accent); }
+
+.leadgen-lead-shards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+  padding: 10px;
+}
+.leadgen-lead-shard {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 28px;
+  align-items: start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 88px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+.leadgen-lead-shard:hover,
+.leadgen-lead-shard[data-checked="true"],
+.leadgen-lead-shard:has(.leadgen-shard-main[aria-pressed="true"]) { border-color: var(--accent); background: var(--accent-soft); }
+.leadgen-lead-shard > input { margin-top: 3px; }
+.leadgen-shard-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.leadgen-shard-main > strong,
+.leadgen-shard-main > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leadgen-shard-main > span { color: var(--muted); font-size: 11px; }
+.leadgen-lead-shard footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.leadgen-lead-shard footer > span:last-child { color: var(--success); font-size: 10px; }
+.leadgen-shard-research { width: 28px; height: 28px; }
+
+.leadgen-policy-editor {
+  display: grid;
+  grid-row: 3 / 5;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  padding: 12px;
+}
+.leadgen-policy-editor textarea {
+  width: 100%;
+  min-height: 300px;
+  resize: none;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.55;
+  padding: 12px;
+}
+.leadgen-policy-editor footer { display: flex; justify-content: flex-end; gap: 6px; padding-top: 10px; }
+
+.leadgen-detail-body { padding: 10px; }
+.leadgen-detail-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.leadgen-detail-actions button { display: inline-flex; align-items: center; gap: 5px; }
+.leadgen-detail-section { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.leadgen-detail-section h3 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; color: var(--muted); }
+.leadgen-evidence-list { display: grid; gap: 2px; }
+.leadgen-evidence-source { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; color: inherit; text-decoration: none; }
+.leadgen-evidence-source strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leadgen-evidence-source span { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.leadgen-evidence-source[href]:hover strong { color: var(--accent); text-decoration: underline; }
+.leadgen-contact { display: grid; gap: 1px; padding: 5px 0; }
+.leadgen-contact span, .leadgen-muted { color: var(--muted); font-size: 11px; }
+.leadgen-review-summary { display: grid; gap: 4px; }
+.leadgen-review-summary p { margin: 0; }
+.leadgen-review-open { color: var(--danger); font-size: 12px; }
+.leadgen-review-fields { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.leadgen-review-field { display: grid; gap: 2px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; }
+/* Ein Feld traegt genau EIN Statussignal: das Badge. Rahmen bleiben neutral,
+   damit 21 Felder eine ruhige Liste ergeben statt einer Warnwand. */
+.leadgen-review-field.is-insufficient { border-color: var(--line); }
+.leadgen-review-field.is-missing { border-style: dashed; opacity: 0.65; }
+.leadgen-approve-link { border: 0; background: none; color: var(--accent, #7ad0c1); font-size: 12px; cursor: pointer; padding: 0 2px; justify-self: end; }
+.leadgen-approve-link:hover { text-decoration: underline; }
+.leadgen-review-sources-line { font-size: 12px; color: var(--muted, #8b98a5); }
+.leadgen-review-sources-line a { color: inherit; }
+.leadgen-approved-chip { color: var(--success); }
+.leadgen-review-field-head { display: grid; grid-template-columns: minmax(90px, auto) minmax(0, 1fr); gap: 2px 8px; align-items: baseline; }
+.leadgen-review-label { color: var(--muted); font-size: 11px; }
+.leadgen-review-value { overflow-wrap: anywhere; font-weight: 600; }
+.leadgen-review-value.is-empty { color: var(--muted); font-weight: 400; font-style: italic; }
+.leadgen-review-badge { grid-column: 1 / -1; justify-self: start; font-size: 10px; color: var(--muted); }
+.leadgen-review-field.is-sufficient .leadgen-review-badge { color: var(--success); }
+.leadgen-review-field.is-insufficient .leadgen-review-badge { color: var(--warning, #e8a23b); }
+.leadgen-review-field.is-missing .leadgen-review-badge { color: var(--danger); }
+/* Belegampel: ein befuelltes Feld ohne jede Quelle ist rot wie ein fehlendes,
+   behaelt aber den normalen Rahmen — der Wert steht ja da, nur unbelegt. */
+.leadgen-review-field.is-unsourced { border-color: var(--danger); }
+.leadgen-review-field.is-unsourced .leadgen-review-badge { color: var(--danger); }
+.leadgen-review-field.is-conflict { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); }
+.leadgen-review-field.is-conflict .leadgen-review-badge { color: var(--danger); font-weight: 750; }
+/* Nie recherchiert ist kein Mangel: neutral, ohne Alarmfarbe. */
+.leadgen-review-field.is-untouched { border-style: dashed; border-color: var(--line); opacity: 0.55; }
+.leadgen-review-field.is-untouched .leadgen-review-badge { color: var(--muted, #8b95a5); font-style: italic; }
+/* Zwei Zeilen statt einer: Beschriftung | Wert | Aktion, darunter unter dem
+   Wert das Badge. In einer Zeile drueckte das lange Badge den Wert auf wenige
+   Zeichen, "info@aeroxon.de" brach als "info@aerox on.de" (10.09.2026). */
+.leadgen-review-field-head { grid-template-columns: 118px minmax(0, 1fr) auto; align-items: start; }
+.leadgen-review-field-head .leadgen-review-label { grid-column: 1; grid-row: 1 / span 2; padding-top: 2px; }
+.leadgen-review-field-head .leadgen-review-value { grid-column: 2; grid-row: 1; justify-self: start; text-align: left; overflow-wrap: break-word; word-break: normal; hyphens: auto; }
+.leadgen-review-field-head .leadgen-review-badge { grid-column: 2; grid-row: 2; }
+.leadgen-review-field-head .leadgen-approve-link { grid-column: 3; }
+.leadgen-review-sources-line { padding-left: 126px; overflow-wrap: break-word; }
+.leadgen-review-sources { display: grid; gap: 3px; margin: 0; padding: 0 0 0 12px; list-style: none; font-size: 11px; }
+.leadgen-review-sources li { display: grid; gap: 1px; }
+.leadgen-review-sources a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+.leadgen-review-sources a:hover { text-decoration: underline; }
+.leadgen-review-hint { color: var(--danger); }
+.leadgen-review-extra-contacts { margin-top: 8px; }
+.leadgen-empty { padding: 28px 12px; color: var(--muted); text-align: center; }
+
+.leadgen-lead-editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(680px, 100%);
+  max-height: min(720px, 92%);
+  overflow: hidden;
+  border: 1px solid var(--line-strong, var(--line));
+  background: var(--surface);
+  box-shadow: var(--shadow-lg, 0 18px 48px rgba(0, 0, 0, .28));
+}
+.leadgen-lead-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+.leadgen-form-field { display: grid; gap: 5px; min-width: 0; }
+.leadgen-form-field.is-wide { grid-column: 1 / -1; }
+.leadgen-form-section-title {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+.leadgen-form-field span { color: var(--muted); font-size: 10px; font-weight: 750; text-transform: uppercase; }
+.leadgen-form-field input {
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 0 9px;
+  font: inherit;
+}
+.leadgen-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.leadgen-adapter-inspector { width: min(760px, 94%); }
+.leadgen-adapter-script {
+  min-height: 220px;
+  max-height: min(560px, 70vh);
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border-block: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.55 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@container business-app-window (max-width: 980px) {
+  .outbound-lead-generation-layout {
+    grid-template-columns: minmax(230px, 32%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 3fr) minmax(220px, 2fr);
+  }
+  .leadgen-campaigns { grid-column: 1; grid-row: 1; }
+  .leadgen-leads { grid-column: 2; grid-row: 1; }
+  .outbound-lead-generation-layout > .leadgen-resizer { display: none; }
+  .leadgen-detail { display: grid; grid-column: 1 / -1; grid-row: 2; border-top: 1px solid var(--line); }
+}
+
+@container business-app-window (max-width: 760px) {
+  .leadgen-sync-status { top: auto; right: 6px; bottom: 6px; max-width: calc(100% - 12px); }
+  .outbound-lead-generation-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(118px, auto) minmax(300px, auto) minmax(360px, auto);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  .outbound-lead-generation-layout > .leadgen-resizer { display: none; }
+  .leadgen-campaigns, .leadgen-leads, .leadgen-detail { grid-column: 1; }
+  .leadgen-campaigns { grid-row: 1; }
+  .leadgen-leads { grid-row: 2; }
+  .leadgen-detail { display: grid; grid-row: 3; }
+  .leadgen-campaigns { border-bottom: 1px solid var(--line); }
+  .leadgen-campaigns, .leadgen-leads, .leadgen-detail { min-height: 0; overflow: visible; }
+  .leadgen-campaigns .leadgen-campaign-list {
+    display: flex;
+    gap: 6px;
+    min-height: 62px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .leadgen-campaign-row { flex: 0 0 min(280px, 78vw); border: 1px solid var(--line); }
+  .leadgen-leads > .leadgen-scroll { min-height: 220px; }
+  .leadgen-detail > .leadgen-scroll { min-height: 300px; }
+  .leadgen-source-row { min-height: 58px; }
+  .leadgen-toolbar > span { display: none; }
+  .leadgen-campaign-progress { grid-template-columns: minmax(0, 1fr) auto; }
+  .leadgen-progress-track { grid-column: 1 / -1; grid-row: 2; }
+  .leadgen-progress-states { grid-column: 1 / -1; overflow-x: auto; }
+  .leadgen-lead-form { grid-template-columns: minmax(0, 1fr); }
+  .leadgen-form-field.is-wide { grid-column: 1; }
+  .leadgen-selection-bar { overflow-x: auto; }
+  .leadgen-selection-bar strong,
+  .leadgen-selection-bar .ctox-button { white-space: nowrap; }
+}
+
+
+.leadgen-contact-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+}
+.leadgen-contact-tab {
+  display: grid;
+  gap: 1px;
+  min-width: 132px;
+  max-width: 220px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.leadgen-contact-tab:hover { border-color: var(--accent); }
+.leadgen-contact-tab.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.leadgen-contact-tab span,
+.leadgen-contact-tab small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leadgen-contact-tab span { font-weight: 650; }
+.leadgen-contact-tab small { color: var(--muted); font-size: 11px; }
+
+/* Empfaengerauswahl fuer Sellify: vertikale Liste, Name und Funktion getrennt. */
+.leadgen-recipient-selection { display: grid; gap: 6px; margin-top: 8px; }
+.leadgen-recipient-selection-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.leadgen-recipient-count { color: var(--muted); font-size: 11px; }
+.leadgen-recipient { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.leadgen-recipient:hover { border-color: var(--accent); background: var(--accent-soft); }
+.leadgen-recipient.is-blocked,
+.leadgen-recipient.is-review { cursor: not-allowed; background: color-mix(in srgb, var(--danger) 7%, transparent); }
+.leadgen-recipient.is-review { background: color-mix(in srgb, var(--warning, #e8a23b) 8%, transparent); }
+.leadgen-recipient.is-blocked:hover,
+.leadgen-recipient.is-review:hover { border-color: var(--line); }
+.leadgen-recipient > input { margin-top: 2px; accent-color: var(--accent); }
+.leadgen-recipient > input:disabled { cursor: not-allowed; }
+.leadgen-recipient-text { display: grid; gap: 1px; min-width: 0; }
+.leadgen-recipient-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leadgen-recipient-detail { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leadgen-recipient-protection { color: var(--danger); font-size: 11px; }
+.leadgen-recipient.is-review .leadgen-recipient-protection { color: var(--warning, #b46d00); }
+.leadgen-recipient-remark { margin: 2px 0 0; color: var(--muted); font-size: 11px; white-space: normal; overflow-wrap: anywhere; }
+.leadgen-recipient-exclusions { margin: 0 12px 8px; padding: 8px 10px; border: 1px solid var(--warning, #e8a23b); border-radius: 8px; background: color-mix(in srgb, var(--warning, #e8a23b) 7%, transparent); }
+.leadgen-recipient-exclusions summary { cursor: pointer; font-weight: 700; }
+.leadgen-recipient-exclusions p { margin: 6px 0 0; color: var(--danger); font-size: 12px; }
+.leadgen-recipient-exclusions ul { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.leadgen-recipient-exclusions li { display: grid; gap: 1px; font-size: 11px; }
+.leadgen-recipient-exclusions li > span,
+.leadgen-recipient-exclusions li > q { color: var(--muted); overflow-wrap: anywhere; }
+/* Jeder Wert ist anklickbar — auch ein bereits gefuellter. Vorher liess sich
+   ein einmal ermittelter Wert ueberhaupt nicht mehr korrigieren. */
+button.leadgen-review-value {
+  background: none; border: none; padding: 0; margin: 0; font: inherit;
+  color: inherit; text-align: left; cursor: pointer; border-bottom: 1px dashed transparent;
+}
+button.leadgen-review-value:hover,
+button.leadgen-review-value:focus-visible { border-bottom-color: currentColor; }
+
+/* -------------------------------------------------------------------------
+   2026 product UI refresh
+
+   The module deliberately keeps the shell's theme tokens. Local aliases add
+   hierarchy without changing the host contract or any interactive hook.
+   ---------------------------------------------------------------------- */
+.outbound-lead-generation {
+  --leadgen-left: 248px;
+  --leadgen-right: 410px;
+  --leadgen-canvas: color-mix(in srgb, var(--bg) 76%, var(--surface));
+  --leadgen-panel: color-mix(in srgb, var(--surface) 96%, var(--bg));
+  --leadgen-subtle: color-mix(in srgb, var(--surface-2) 72%, var(--surface));
+  --leadgen-hover: color-mix(in srgb, var(--accent-soft) 58%, transparent);
+  --leadgen-selected: color-mix(in srgb, var(--accent-soft) 82%, var(--surface));
+  --leadgen-hairline: color-mix(in srgb, var(--line) 74%, transparent);
+  --leadgen-radius-sm: 7px;
+  --leadgen-radius-md: 11px;
+  --leadgen-radius-lg: 16px;
+  background: var(--leadgen-canvas);
+  font-size: 13px;
+  line-height: 1.46;
+  letter-spacing: -.005em;
+}
+
+.outbound-lead-generation *,
+.outbound-lead-generation *::before,
+.outbound-lead-generation *::after { box-sizing: border-box; }
+
+.outbound-lead-generation-layout {
+  grid-template-columns: var(--leadgen-left) 8px minmax(410px, 1fr) 8px var(--leadgen-right);
+  gap: 0;
+  padding: 8px;
+}
+
+.leadgen-pane {
+  border: 1px solid var(--leadgen-hairline);
+  border-radius: var(--leadgen-radius-md);
+  background: var(--leadgen-panel);
+  box-shadow: 0 1px 1px color-mix(in srgb, #000 4%, transparent), 0 8px 28px color-mix(in srgb, #000 4%, transparent);
+  isolation: isolate;
+  animation: leadgen-pane-in 240ms cubic-bezier(.2, .75, .25, 1) both;
+}
+
+.leadgen-leads { animation-delay: 35ms; }
+.leadgen-detail { animation-delay: 70ms; }
+
+.leadgen-resizer {
+  position: relative;
+  width: 8px;
+  background: transparent;
+}
+
+.leadgen-resizer::after {
+  position: absolute;
+  inset: 12px 3px;
+  border-radius: 999px;
+  background: transparent;
+  content: '';
+  transition: background 140ms ease;
+}
+
+.leadgen-resizer:hover::after { background: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+.leadgen-header {
+  min-height: 60px;
+  padding: 10px 12px 10px 14px;
+  border-bottom: 1px solid var(--leadgen-hairline);
+  background: transparent;
+}
+
+.leadgen-pane-heading {
+  align-items: center;
+  gap: 9px;
+}
+
+.leadgen-pane-heading .ctox-pane-title,
+.leadgen-header > div > .ctox-pane-title {
+  font-size: 14px;
+  font-weight: 720;
+  letter-spacing: -.02em;
+}
+
+.leadgen-pane-heading > span,
+.leadgen-header .ctox-pane-kicker {
+  display: inline-flex;
+  min-width: 22px;
+  min-height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--leadgen-subtle);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.leadgen-header-actions { gap: 4px; }
+.leadgen-header-actions .ctox-view-toggle {
+  gap: 0;
+  padding: 2px;
+  border: 1px solid var(--leadgen-hairline);
+  border-radius: 8px;
+  background: var(--leadgen-subtle);
+}
+
+.leadgen-header .ctox-pane-icon,
+.leadgen-source-actions .ctox-pane-icon,
+.leadgen-shard-research {
+  border-radius: 7px;
+  transition: color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.leadgen-header .ctox-pane-icon:hover,
+.leadgen-source-actions .ctox-pane-icon:hover,
+.leadgen-shard-research:hover { transform: translateY(-1px); }
+
+.leadgen-toolbar {
+  min-height: 48px;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom-color: var(--leadgen-hairline);
+}
+
+.leadgen-toolbar .ctox-pane-search {
+  height: 32px;
+  padding-inline: 10px;
+  border: 1px solid var(--leadgen-hairline);
+  border-radius: 8px;
+  background: var(--leadgen-subtle);
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.leadgen-toolbar .ctox-pane-search:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  outline: 0;
+}
+
+.leadgen-campaign-list { padding: 7px; }
+.leadgen-campaign-row {
+  min-height: 44px;
+  margin-bottom: 2px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.leadgen-campaign-row:hover { background: var(--leadgen-hover); }
+.leadgen-campaign-row[data-selected="true"] {
+  background: var(--leadgen-selected);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.leadgen-campaign-select {
+  min-height: 44px;
+  padding: 8px 9px 8px 11px;
+  font-weight: 570;
+}
+
+.leadgen-campaign-select strong {
+  display: inline-flex;
+  min-width: 24px;
+  justify-content: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.leadgen-campaign-actions .ctox-pane-icon { width: 27px; height: 27px; }
+
+.leadgen-campaign-progress {
+  min-height: 54px;
+  grid-template-columns: minmax(170px, auto) minmax(90px, 1fr) auto;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom-color: var(--leadgen-hairline);
+  background: var(--leadgen-subtle);
+}
+
+.leadgen-progress-copy { display: grid; gap: 1px; }
+.leadgen-progress-copy strong { font-size: 11px; font-weight: 680; }
+.leadgen-progress-copy span { font-size: 10px; }
+.leadgen-progress-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 74%, transparent);
+}
+.leadgen-progress-track i {
+  border-radius: inherit;
+  transition: width 260ms cubic-bezier(.2, .75, .25, 1);
+}
+.leadgen-progress-states { gap: 10px; }
+.leadgen-progress-state { gap: 5px; }
+.leadgen-progress-state i { width: 7px; height: 7px; }
+
+.leadgen-selection-bar {
+  min-height: 50px;
+  padding: 7px 12px;
+  background: var(--leadgen-selected);
+  border-bottom-color: color-mix(in srgb, var(--accent) 28%, var(--leadgen-hairline));
+}
+
+.leadgen-table th {
+  height: 38px;
+  padding: 0 12px;
+  border-bottom-color: var(--leadgen-hairline);
+  /* Deckend: der fixierte Kopf lag halbtransparent ueber gescrollten Zeilen. */
+  background: var(--leadgen-subtle);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: .07em;
+}
+
+.leadgen-table td {
+  height: 62px;
+  padding: 9px 12px;
+  border-bottom-color: var(--leadgen-hairline);
+}
+
+.leadgen-table tbody tr {
+  outline: 0;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+.leadgen-table tbody tr:hover { background: var(--leadgen-hover); }
+.leadgen-table tbody tr[aria-selected="true"] {
+  background: var(--leadgen-selected);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.leadgen-table tbody tr[data-checked="true"] { box-shadow: inset 3px 0 0 var(--accent); }
+.leadgen-table tbody tr[aria-selected="true"][data-checked="true"] { box-shadow: inset 3px 0 0 var(--accent); }
+.leadgen-table td:nth-child(2) { gap: 3px; }
+.leadgen-table td:nth-child(2) strong { font-weight: 650; letter-spacing: -.01em; }
+.leadgen-table td:nth-child(2) span { font-size: 10px; }
+
+.leadgen-lead-shards {
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+  padding: 10px;
+}
+.leadgen-lead-shard {
+  min-height: 102px;
+  padding: 11px;
+  border-color: var(--leadgen-hairline);
+  border-radius: 10px;
+  box-shadow: 0 1px 0 color-mix(in srgb, #000 3%, transparent);
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+.leadgen-lead-shard:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  box-shadow: 0 8px 20px color-mix(in srgb, #000 7%, transparent);
+}
+.leadgen-lead-shard[data-checked="true"],
+.leadgen-lead-shard:has(.leadgen-shard-main[aria-pressed="true"]) {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--line));
+  background: var(--leadgen-selected);
+}
+
+.leadgen-detail-body { padding: 0 16px 24px; }
+.leadgen-detail-section {
+  padding: 18px 0;
+  border-bottom-color: var(--leadgen-hairline);
+}
+.leadgen-detail-section h3 {
+  margin: 0 0 11px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 780;
+  letter-spacing: .075em;
+}
+
+.leadgen-review-summary {
+  margin: 0 -16px;
+  padding: 16px;
+  background: var(--leadgen-subtle);
+}
+.leadgen-review-summary p { line-height: 1.55; }
+.leadgen-review-summary p strong { color: var(--text); font-weight: 680; }
+.leadgen-review-open {
+  padding-left: 10px;
+  border-left: 2px solid var(--warning, #e8a23b);
+  color: var(--text);
+}
+
+.leadgen-detail-actions {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  gap: 6px;
+  margin: 0 -16px;
+  padding: 10px 16px;
+  border-top: 0;
+  border-bottom-color: var(--leadgen-hairline);
+  background: color-mix(in srgb, var(--leadgen-panel) 92%, transparent);
+  box-shadow: 0 6px 14px color-mix(in srgb, #000 4%, transparent);
+  backdrop-filter: blur(12px);
+}
+.leadgen-detail-actions .ctox-button { border-radius: 7px; }
+.leadgen-detail-actions .ctox-button:first-child { order: -2; }
+.leadgen-detail-actions .ctox-button[data-action="validate-lead"] { order: -1; }
+
+.leadgen-contact-tabs {
+  gap: 0;
+  margin: 0 0 14px;
+  padding: 3px;
+  border: 1px solid var(--leadgen-hairline);
+  border-radius: 10px;
+  background: var(--leadgen-subtle);
+}
+.leadgen-contact-tab {
+  min-width: 142px;
+  padding: 8px 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+.leadgen-contact-tab:hover { border-color: transparent; background: var(--leadgen-hover); }
+.leadgen-contact-tab.is-active {
+  border-color: transparent;
+  background: var(--surface);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 9%, transparent);
+}
+.leadgen-contact-tab span { font-weight: 670; }
+.leadgen-contact-tab small { font-size: 10px; }
+
+.leadgen-review-fields { gap: 0; }
+.leadgen-review-field {
+  gap: 4px;
+  min-height: 52px;
+  padding: 9px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--leadgen-hairline);
+  border-radius: 0;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+.leadgen-review-field:last-child { border-bottom: 0; }
+.leadgen-review-field:hover { background: color-mix(in srgb, var(--leadgen-hover) 58%, transparent); }
+.leadgen-review-field.is-missing,
+.leadgen-review-field.is-untouched { border-style: solid; opacity: .7; }
+.leadgen-review-field.is-conflict {
+  margin-inline: -8px;
+  padding-inline: 8px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.leadgen-review-field-head {
+  grid-template-columns: minmax(104px, .68fr) minmax(0, 1.4fr) auto auto;
+  gap: 3px 9px;
+  align-items: start;
+}
+.leadgen-review-label { min-width: 0; padding-top: 1px; overflow-wrap: anywhere; font-size: 10px; font-weight: 650; }
+.leadgen-review-value { min-width: 0; line-height: 1.42; }
+.leadgen-review-badge {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--leadgen-subtle);
+  font-size: 9px;
+  font-weight: 720;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.leadgen-review-field.is-sufficient .leadgen-review-badge { background: color-mix(in srgb, var(--success) 12%, transparent); }
+.leadgen-review-field.is-insufficient .leadgen-review-badge { background: color-mix(in srgb, var(--warning, #e8a23b) 13%, transparent); }
+.leadgen-review-field.is-missing .leadgen-review-badge,
+.leadgen-review-field.is-unsourced .leadgen-review-badge,
+.leadgen-review-field.is-conflict .leadgen-review-badge { background: color-mix(in srgb, var(--danger) 11%, transparent); }
+.leadgen-review-sources-line {
+  padding-left: 80px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.leadgen-recipient-selection {
+  gap: 0;
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid var(--leadgen-hairline);
+  border-radius: 10px;
+}
+.leadgen-recipient-selection-head {
+  min-height: 40px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--leadgen-hairline);
+  background: var(--leadgen-subtle);
+}
+.leadgen-recipient-count {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface);
+  font-weight: 700;
+}
+.leadgen-recipient {
+  gap: 9px;
+  padding: 10px 11px;
+  border: 0;
+  border-bottom: 1px solid var(--leadgen-hairline);
+  border-radius: 0;
+  transition: background 120ms ease;
+}
+.leadgen-recipient:last-child { border-bottom: 0; }
+.leadgen-recipient:hover { border-color: var(--leadgen-hairline); background: var(--leadgen-hover); }
+.leadgen-recipient-name { font-weight: 650; }
+
+.leadgen-recipient-exclusions {
+  margin: 8px 12px;
+  border-color: color-mix(in srgb, var(--warning, #e8a23b) 42%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--warning, #e8a23b) 6%, var(--surface));
+}
+
+.leadgen-source-backdrop {
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  backdrop-filter: blur(8px);
+  animation: leadgen-backdrop-in 160ms ease-out both;
+}
+.leadgen-source-panel,
+.leadgen-lead-editor {
+  overflow: hidden;
+  border-color: var(--leadgen-hairline);
+  border-radius: var(--leadgen-radius-lg);
+  box-shadow: 0 30px 90px color-mix(in srgb, #000 34%, transparent), 0 2px 8px color-mix(in srgb, #000 12%, transparent);
+  animation: leadgen-dialog-in 220ms cubic-bezier(.2, .8, .2, 1) both;
+}
+.leadgen-source-tabs {
+  min-height: 44px;
+  padding-inline: 12px;
+  border-bottom-color: var(--leadgen-hairline);
+  background: var(--leadgen-subtle);
+}
+.leadgen-source-tabs button {
+  min-width: 150px;
+  border-right: 0;
+  font-size: 11px;
+  font-weight: 680;
+}
+.leadgen-source-tabs button[aria-selected="true"] { background: transparent; }
+.leadgen-source-row {
+  min-height: 82px;
+  padding: 10px 14px;
+  border-bottom-color: var(--leadgen-hairline);
+  transition: background 120ms ease;
+}
+.leadgen-source-row:hover { background: var(--leadgen-hover); }
+.leadgen-source-toggle {
+  border-color: var(--leadgen-hairline);
+  background: var(--leadgen-subtle);
+}
+.leadgen-source-copy { gap: 3px; }
+.leadgen-source-copy > strong { font-weight: 680; }
+.leadgen-source-copy > span { font-size: 10px; }
+.leadgen-source-credential { border-radius: 999px; }
+
+.leadgen-lead-form { gap: 12px; padding: 18px; }
+.leadgen-form-field { gap: 6px; }
+.leadgen-form-field span { font-size: 9px; letter-spacing: .06em; }
+.leadgen-form-field input,
+.leadgen-policy-editor textarea {
+  border-color: var(--leadgen-hairline);
+  border-radius: 8px;
+  background: var(--leadgen-subtle);
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+.leadgen-form-field input:focus,
+.leadgen-policy-editor textarea:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  outline: 0;
+}
+.leadgen-dialog-actions { padding: 12px 18px; border-top-color: var(--leadgen-hairline); }
+
+.leadgen-sync-status {
+  top: auto;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-color: var(--leadgen-hairline);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 12px 34px color-mix(in srgb, #000 20%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.outbound-lead-generation :where(button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 82%, white);
+  outline-offset: 2px;
+}
+
+@keyframes leadgen-pane-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes leadgen-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes leadgen-dialog-in {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@container business-app-window (max-width: 1120px) {
+  .outbound-lead-generation-layout {
+    grid-template-columns: minmax(220px, 28%) 8px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 3fr) minmax(250px, 2fr);
+  }
+  .leadgen-campaigns { grid-column: 1; grid-row: 1; }
+  .leadgen-leads { grid-column: 3; grid-row: 1; }
+  .outbound-lead-generation-layout > .leadgen-resizer { display: none; }
+  .leadgen-detail { display: grid; grid-column: 1 / -1; grid-row: 2; }
+  .leadgen-detail-body { padding-inline: 20px; }
+  .leadgen-review-summary,
+  .leadgen-detail-actions { margin-inline: -20px; padding-inline: 20px; }
+}
+
+@container business-app-window (max-width: 760px) {
+  .outbound-lead-generation-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(124px, auto) minmax(390px, auto) minmax(440px, auto);
+    gap: 8px;
+    padding: 6px;
+  }
+  .leadgen-pane { border-radius: 9px; }
+  .leadgen-campaigns, .leadgen-leads, .leadgen-detail { grid-column: 1; }
+  .leadgen-campaigns { grid-row: 1; }
+  .leadgen-leads { grid-row: 2; }
+  .leadgen-detail { grid-row: 3; }
+  .leadgen-header { min-height: 56px; padding-inline: 11px; }
+  .leadgen-campaigns .leadgen-campaign-list { gap: 6px; padding: 6px; }
+  .leadgen-campaign-row { flex-basis: min(260px, 76vw); margin: 0; }
+  .leadgen-campaign-progress { grid-template-columns: minmax(0, 1fr) auto; }
+  .leadgen-progress-track { grid-column: 1 / -1; grid-row: 2; }
+  .leadgen-progress-states { grid-column: 1 / -1; padding-bottom: 2px; }
+  .leadgen-toolbar > span { display: none; }
+  .leadgen-header-actions { max-width: 65%; overflow-x: auto; padding: 2px; }
+  .leadgen-detail-body { padding-inline: 14px; }
+  .leadgen-review-summary,
+  .leadgen-detail-actions { margin-inline: -14px; padding-inline: 14px; }
+  .leadgen-detail-actions { position: static; box-shadow: none; }
+  .leadgen-review-field-head { grid-template-columns: minmax(96px, .75fr) minmax(0, 1.25fr) auto; }
+  .leadgen-review-field-head .leadgen-approve-link { grid-column: 2 / -1; }
+  .leadgen-review-sources-line { padding-left: 0; }
+  .leadgen-source-backdrop { padding: 8px; }
+  .leadgen-source-panel,
+  .leadgen-lead-editor { max-height: 96%; border-radius: 12px; }
+  .leadgen-source-row { grid-template-columns: 26px minmax(0, 1fr); }
+  .leadgen-source-actions { grid-column: 2; flex-wrap: wrap; }
+}
+
+@container business-app-window (max-width: 520px) {
+  .outbound-lead-generation-layout {
+    grid-template-rows: minmax(124px, auto) minmax(430px, auto) minmax(440px, auto);
+  }
+
+  .leadgen-leads .leadgen-header {
+    min-height: 92px;
+    align-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .leadgen-leads .leadgen-pane-heading { flex: 1 1 100%; }
+  .leadgen-leads .leadgen-header-actions {
+    flex: 1 1 100%;
+    max-width: none;
+    justify-content: space-between;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .leadgen-table th { padding-inline: 6px; }
+  .leadgen-table td { padding-inline: 5px; }
+  .leadgen-table .leadgen-select-column { width: 32px; padding-inline: 6px 2px; }
+  .leadgen-table th:nth-child(2) { width: 31%; }
+  .leadgen-table th:nth-child(3) { width: 19%; }
+  .leadgen-table th:nth-child(4) { width: 24%; }
+  .leadgen-table th { font-size: 8px; letter-spacing: .045em; }
+  .leadgen-table td:nth-child(4) .ctox-badge { padding-inline: 5px; font-size: 9px; }
+  .leadgen-table td:nth-child(5) { font-size: 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .outbound-lead-generation *,
+  .outbound-lead-generation *::before,
+  .outbound-lead-generation *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* ===== Shell-V2-Konformitaet + Verdichtung (Umbau 30.08.2026, 1.0.51) =====
+   Jede Spalte ist ein Grid aus zwei Header-Zeilen in Shell-Hoehe, Scroll-
+   Koerper und Fusszeile - das Knowledge-Referenzmuster. Ein Header-System,
+   eine Zeilenhoehe, ueberall. */
+.outbound-lead-generation { display: flex; flex-direction: column; min-height: 100%; }
+.outbound-lead-generation-layout { flex: 1; min-height: 0; }
+.leadgen-pane { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; }
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-pane {
+  grid-template-rows: var(--shell-v2-header-row-size, 61px) var(--shell-v2-header-row-size, 61px) minmax(0, 1fr) auto;
+}
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-pane > .ctox-pane-header,
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-pane > .leadgen-band {
+  box-sizing: border-box;
+  height: var(--shell-v2-header-row-size, 61px);
+  min-height: var(--shell-v2-header-row-size, 61px);
+  display: flex;
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin: 0;
+  border-bottom: 1px solid var(--leadgen-hairline, var(--line));
+  overflow: hidden;
+}
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .ctox-pane-title-row {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; height: 100%; gap: 8px; min-width: 0;
+}
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .ctox-pane-titles {
+  display: flex; flex-direction: row; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden;
+}
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .ctox-pane-title {
+  margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .ctox-pane-actions {
+  display: flex; align-items: center; gap: 4px; flex: none;
+}
+/* Linke Spalte laesst dem 2-zeiligen Fenster-Icon Platz */
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-campaigns > .ctox-pane-header,
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-campaigns > .leadgen-band {
+  padding-left: calc(var(--shell-v2-icon-size, 64px) + 8px);
+}
+/* Rechte Spalte laesst den Fensterknoepfen Platz */
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-detail > .ctox-pane-header { padding-right: 70px; }
+.leadgen-count { color: var(--leadgen-muted, var(--muted)); font-size: 11px; white-space: nowrap; }
+.leadgen-band { gap: 6px; padding-inline: 10px; }
+.leadgen-band .ctox-pane-search { flex: 1; }
+.leadgen-detail-tabs-row { padding: 0 4px; }
+.leadgen-detail-tabs-row .leadgen-detail-tabs { display: flex; align-items: center; height: 100%; margin: 0; border-bottom: 0; }
+.leadgen-center-status { border-bottom: 1px solid var(--leadgen-hairline, var(--line)); }
+.leadgen-center-status:empty { display: none; }
+.leadgen-center-status .leadgen-campaign-progress { padding: 4px 10px; }
+.leadgen-center-status .leadgen-recipient-exclusions { position: static; margin: 0; padding: 2px 10px 6px; }
+.leadgen-pane-footer { min-height: 22px; display: flex; align-items: center; font-size: 10px; color: var(--leadgen-muted, var(--muted)); padding: 2px 10px; }
+[data-sync-line].is-error { color: var(--danger); }
+[data-sync-line].is-syncing::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--accent); }
+/* Kompakte Feldzeilen: Label | Wert | Badge | Aktion in EINER Zeile,
+   Quellen als schmale Folgezeile unter dem Wert. */
+.leadgen-review-field { min-height: 0; padding: 5px 2px; gap: 1px; }
+.leadgen-review-field-head { grid-template-columns: minmax(96px, .55fr) minmax(0, 1.6fr) auto auto; gap: 2px 8px; align-items: center; }
+.leadgen-review-value { text-align: left; line-height: 1.3; padding: 0; }
+.leadgen-review-sources-line { padding-left: calc(96px + 8px); margin: 0; font-size: 10px; line-height: 1.4; }
+/* Personen-Slots nach Prioritaet */
+.leadgen-person-slots { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+.leadgen-person-slot { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.leadgen-person-slot-label { min-width: 148px; font-size: 10px; font-weight: 650; color: var(--leadgen-muted, var(--muted)); text-transform: uppercase; letter-spacing: .04em; }
+.leadgen-person-slot-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.leadgen-person-slot-empty { font-size: 10px; color: var(--leadgen-muted, var(--muted)); font-style: italic; }
+/* Auswahl-Leiste bleibt einzeilig */
+.leadgen-selection-bar { flex-wrap: nowrap; overflow-x: auto; }
+.leadgen-selection-bar .ctox-button { white-space: nowrap; flex: none; }
+/* Buendig zur Shell-Titelzeile: die Altlast-Polsterung des Layouts hob alle
+   Pane-Header um 8-9px von der V2-Headerzeile ab (Knowledge liegt exakt). */
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .outbound-lead-generation-layout { padding: 0; gap: 0; }
+/* Badge zurueck in die Zeile: grid-column 1/-1 (Zeile 553) stapelte Badge und
+   Aktion auf eigene Grid-Zeilen - daher 87px pro Feld statt einer Zeile. */
+.leadgen-review-field-head .leadgen-review-badge { grid-column: auto; }
+.leadgen-review-field-head .leadgen-approve-link { white-space: nowrap; }
+/* Quellen-Einstellungsdialog */
+.leadgen-source-settings { max-width: 460px; display: grid; gap: 10px; }
+.leadgen-source-settings-cred { border: 1px solid var(--leadgen-hairline, var(--line)); border-radius: 7px; padding: 8px 10px; display: grid; gap: 6px; }
+.leadgen-source-settings-cred legend { font-size: 11px; padding: 0 4px; color: var(--leadgen-muted, var(--muted)); }
+.leadgen-source-settings textarea { resize: vertical; font: inherit; font-size: 12px; background: var(--surface-2); color: var(--text); border: 1px solid var(--leadgen-hairline, var(--line)); border-radius: 6px; padding: 6px 8px; }
+/* Zeilenraster je Spalte explizit: die Center-Spalte hat FUENF Kinder
+   (Header, Toolbar, Status, Body, Fusszeile). Ohne eigene Status-Zeile
+   kollabierte die 1fr-Zeile auf 0 und der Statusinhalt lief als Overlay
+   ueber die Tabelle. Altregeln (.leadgen-leads 4 Zeilen, .leadgen-detail 2)
+   werden hier fuer alle Kontexte ueberschrieben. */
+.outbound-lead-generation .leadgen-campaigns,
+.outbound-lead-generation .leadgen-detail {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+.outbound-lead-generation .leadgen-leads {
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-campaigns,
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-detail {
+  grid-template-rows: var(--shell-v2-header-row-size, 61px) var(--shell-v2-header-row-size, 61px) minmax(0, 1fr) auto;
+}
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-leads {
+  grid-template-rows: var(--shell-v2-header-row-size, 61px) var(--shell-v2-header-row-size, 61px) auto minmax(0, 1fr) auto;
+}
+.leadgen-center-status { min-height: 0; overflow: hidden; }
+/* Personen-Slots: feste Labelspalte, damit "offen" buendig steht; Chips
+   tragen Name UND Position. */
+.leadgen-person-slot { display: grid; grid-template-columns: 176px minmax(0, 1fr); align-items: center; gap: 8px; }
+.leadgen-person-slot-label { min-width: 0; }
+.leadgen-contact-tab { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0; padding: 3px 9px; }
+.leadgen-contact-tab small { font-size: 9px; color: var(--leadgen-muted, var(--muted)); }
+.leadgen-contact-tab.is-active small { color: inherit; opacity: .8; }
+/* Der Quellen/Ablauf-Dialog hat eine FESTE Groesse - Reiterwechsel darf das
+   Panel nicht springen lassen; die Liste bzw. der Editor scrollen innen. */
+.leadgen-source-panel {
+  /* Owner-Befund 03.09.2026: 94vw/82vh messen das BROWSERFENSTER, nicht das
+     App-Fenster. Im 899px breiten App-Fenster wurde das Panel 880px breit,
+     ragte 17px darueber hinaus und schnitt seine eigene Kopfzeile ab
+     ("en & Zugaenge"). Prozente beziehen sich auf den Container - der
+     Hintergrund liegt mit inset:0 exakt auf der App. */
+  width: min(880px, 100%);
+  height: min(100%, 860px);
+  max-height: none;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+.leadgen-source-panel .leadgen-source-list { overflow: auto; min-height: 0; }
+.leadgen-source-panel .leadgen-policy-editor { min-height: 0; display: flex; flex-direction: column; }
+/* Zwei Prompts teilen sich die Hoehe. 66px fast randlose Kaestchen in einem
+   700px-Dialog lasen sich als "die Prompts sind weg" — Felder muessen als
+   Felder erkennbar sein, auch leer. */
+.leadgen-source-panel .leadgen-policy-editor textarea {
+  flex: 1 1 40%;
+  min-height: 140px;
+  height: auto;
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.28));
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+}
+/* Filter-/Sortier-Leiste unter der Suche */
+.leadgen-center-tray { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--leadgen-hairline, var(--line)); }
+.leadgen-center-tray[hidden] { display: none; }
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-leads {
+  grid-template-rows: var(--shell-v2-header-row-size, 61px) var(--shell-v2-header-row-size, 61px) auto auto minmax(0, 1fr) auto;
+}
+/* Tray im Knowledge-Stil */
+.leadgen-center-tray { display: grid; gap: 6px; }
+.leadgen-filter-row { display: flex; align-items: center; gap: 6px; }
+.leadgen-filter-row .ctox-select { flex: 1; min-width: 0; }
+.leadgen-sort-dir { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 1px solid var(--leadgen-hairline, var(--line)); border-radius: 6px; background: var(--surface-2); color: var(--text); cursor: pointer; }
+.leadgen-sort-dir svg { width: 15px; height: 15px; }
+.leadgen-filter-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+/* Farbwelt der App = Frame-Palette des Fensters (Orange), nicht das globale
+   Shell-Blau. Alle 40 var(--accent)-Verwendungen der App erben hiermit den
+   Logo-Akzent; ausserhalb eines V2-Fensters greift der Palettenwert direkt. */
+.outbound-lead-generation {
+  --accent: var(--shell-v2-frame-middle, #de6b68);
+}
+/* ===== Responsive-Reparatur (31.08.): Die V2-Spaltenregel (Zeile 15) schlug
+   mit ihrer hoeheren Spezifitaet JEDES Container-Tier - in V2-Fenstern blieb
+   deshalb immer das 5-Spur-Raster stehen: leere rechte Spur, Detail breiter
+   als das Fenster, Quetsch-Spalte im Schmalfall. Die Tiers hier unten fuehren
+   dieselbe Spezifitaet und stehen zuletzt. ===== */
+@container business-app-window (max-width: 1120px) {
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation-layout,
+  .outbound-lead-generation-layout {
+    grid-template-columns: minmax(220px, 28%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 3fr) minmax(250px, 2fr);
+  }
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-campaigns,
+  .outbound-lead-generation .leadgen-campaigns { grid-column: 1; grid-row: 1; }
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-leads,
+  .outbound-lead-generation .leadgen-leads { grid-column: 2; grid-row: 1; }
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-detail,
+  .outbound-lead-generation .leadgen-detail { grid-column: 1 / -1; grid-row: 2; border-top: 1px solid var(--leadgen-hairline, var(--line)); }
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-resizer,
+  .outbound-lead-generation-layout > .leadgen-resizer { display: none; }
+}
+@container business-app-window (max-width: 760px) {
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation-layout,
+  .outbound-lead-generation-layout {
+    grid-template-columns: minmax(0, 1fr);
+    /* Die Kampagnenzeile schrumpfte in niedrigen Fenstern auf ihre Kopfzeile;
+       die Leiste mit Import, "Aus Sellify" und "Einstellungen" lag dann unter
+       der Leadliste und war nicht klickbar (27.09.2026). Mindesthoehe =
+       Kopfzeile + Leiste + Kampagnen-Chips; darueber scrollt das Layout. */
+    /* Leadliste: mindestens 440px. Mit 260px blieb bei offener Filterleiste
+       eine 44px-Spur; die Liste (min-height 220px) lief 172px ueber die
+       Fusszeile „Letzter Import“ (Rundgang 28.09.2026, gemessen). */
+    grid-template-rows: minmax(196px, auto) minmax(440px, 1fr) minmax(300px, 1.2fr);
+    overflow-y: auto;
+  }
+  .outbound-lead-generation .leadgen-campaigns { min-height: 196px; }
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-leads,
+  .outbound-lead-generation .leadgen-leads { overflow: hidden; }
+  .outbound-lead-generation .leadgen-leads > .leadgen-scroll { min-height: 0; }
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-campaigns,
+  .outbound-lead-generation .leadgen-campaigns { grid-column: 1; grid-row: 1; border-bottom: 1px solid var(--leadgen-hairline, var(--line)); }
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-leads,
+  .outbound-lead-generation .leadgen-leads { grid-column: 1; grid-row: 2; }
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-detail,
+  .outbound-lead-generation .leadgen-detail { grid-column: 1; grid-row: 3; }
+  /* Kampagnen als horizontale Chip-Leiste, damit Zeile 1 flach bleibt */
+  .shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-campaigns {
+    grid-template-rows: var(--shell-v2-header-row-size, 61px) var(--shell-v2-header-row-size, 61px) auto auto;
+  }
+  .outbound-lead-generation .leadgen-campaign-list { display: flex; gap: 6px; min-height: 56px; overflow-x: auto; overflow-y: hidden; padding: 6px; }
+  .outbound-lead-generation .leadgen-campaign-row { flex: 0 0 min(260px, 76cqw); border: 1px solid var(--leadgen-hairline, var(--line)); border-radius: 8px; }
+}
+
+/* Sellify-Kampagnen-Import + Zwei-Prompt-Editor (v24) */
+.outbound-lead-generation .leadgen-policy-label { font-size: 12px; font-weight: 600; color: var(--muted, #8a8f98); display: block; margin: 8px 0 4px; }
+.outbound-lead-generation .leadgen-policy-hint { font-weight: 400; }
+.outbound-lead-generation .leadgen-inline-form { display: flex; gap: 6px; margin: 8px 0; }
+.outbound-lead-generation .leadgen-inline-form input { flex: 1; min-width: 0; }
+.outbound-lead-generation .leadgen-dialog-body { padding: 10px 14px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.outbound-lead-generation .leadgen-sellify-campaign-list { display: flex; flex-direction: column; gap: 4px; max-height: 46vh; overflow: auto; }
+.outbound-lead-generation .leadgen-sellify-campaign-row { display: flex; justify-content: space-between; gap: 10px; text-align: left; }
+.outbound-lead-generation .leadgen-import-notice { font-size: 12px; color: var(--muted, #8a8f98); margin: 2px 0; }
+.outbound-lead-generation .leadgen-empty { font-size: 12px; color: var(--muted, #8a8f98); }
+
+/* Kompakter Personenwaehler (Owner-Vorgabe 03.09.): eine umbrechende Reihe
+   statt acht fast leerer Zeilen. */
+.leadgen-person-slots { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.leadgen-person-row { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+/* Eine Gruppe mit mehreren Personen lief ueber den Rand ("John Char...");
+   sie bricht jetzt um wie die Reihe selbst. */
+.leadgen-person-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; max-width: 100%; }
+.leadgen-person-slots { overflow-x: visible; }
+.leadgen-person-group-label { font-size: 9px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--leadgen-muted, var(--muted)); }
+.leadgen-person-open { font-size: 10px; color: var(--leadgen-muted, var(--muted)); }
+
+/* Technische Fehlermeldung: erreichbar, aber nicht im Weg (Owner-Befund 03.09.). */
+.leadgen-source-detail { margin-top: 2px; font-size: 10px; color: var(--leadgen-muted, var(--muted)); }
+.leadgen-source-detail summary { cursor: pointer; }
+.leadgen-source-detail code { display: block; margin-top: 3px; white-space: pre-wrap; word-break: break-word; opacity: .85; }
+
+/* Owner-Befund 04.09.2026 mit Bildschirmfoto: der Dialog "Quelle: ..." rutschte
+   in den Seitenfluss statt als Overlay zu erscheinen - er hing unten in der App
+   und drueckte das Layout auseinander. Ursache: `.business-dialog-layer` traegt
+   in dieser App KEIN eigenes CSS, die Positionierung kam aus der Shell. Nach dem
+   Shell-Wechsel am 04.09. traf die Shell-Regel diese in `ctx.host` eingehaengte
+   Ebene nicht mehr.
+   Die App macht sich hier unabhaengig: eigene Overlay-Regeln, hoehere
+   Spezifitaet als die Shell-Regel, gleiche Wirkung wie vorher. */
+.outbound-lead-generation { position: relative; }
+.outbound-lead-generation > .business-dialog-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg, #0a0a0a) 70%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease-out;
+}
+.outbound-lead-generation > .business-dialog-layer.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.outbound-lead-generation > .business-dialog-layer > .business-dialog {
+  width: min(680px, 100%);
+  max-height: min(100%, 820px);
+  overflow: auto;
+  background: var(--surface, #16181c);
+  border: 1px solid var(--line, #2c313a);
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+
+/* Sichtbare Rueckmeldung fuer Sammelaktionen (B1). */
+.outbound-lead-generation .leadgen-status-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ctox-accent, #3b82f6) 40%, transparent);
+  background: color-mix(in srgb, var(--ctox-accent, #3b82f6) 14%, transparent);
+  color: var(--ctox-text, inherit);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 46ch;
+}
+
+
+/* Sperrvermerk-Hinweis als eine Zeile statt rotem Kasten (Rundgang 11.09.2026). */
+.leadgen-recipient-exclusions.is-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--warning, #e8a23b) 45%, var(--line));
+  background: color-mix(in srgb, var(--warning, #e8a23b) 10%, transparent);
+  color: var(--text);
+  font-size: 12px;
+}
+.leadgen-recipient-exclusions.is-compact .ctox-button { min-height: 26px; padding: 2px 10px; font-size: 12px; }
+
+/* Sellify-Kampagnenimport: beschriftet statt eines generischen Pfeils
+   (Owner 11.09.2026: "es fehlt die Option, eine Kampagne aus Sellify zu importieren"). */
+.leadgen-sellify-import {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 11px 0 5px;
+  border: 1px solid var(--leadgen-hairline);
+  border-radius: 8px;
+  background: var(--leadgen-subtle);
+  color: var(--text, inherit);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.leadgen-sellify-import:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--leadgen-hairline)); }
+.leadgen-sellify-import:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.leadgen-sellify-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+/* Klicktest P1 IMP-13a/IMP-14 (11.09.2026): "Importmodus" und "On-the-fly
+   Filter" des gemeinsamen Importers wirken in dieser App nicht. Ausblenden
+   statt eine Wirkung vorzutaeuschen. */
+.outbound-lead-generation .universal-importer-drawer label:has(> [data-import-filter-prompt]),
+.outbound-lead-generation .universal-importer-drawer label:has(> [data-import-depth]),
+.outbound-lead-generation .universal-importer-drawer [data-source-panel="url"] .universal-importer-field-help {
+  display: none !important;
+}
+
+/* Update-Verteiler (Owner 22.09.2026): Formular im Einstellungsdialog. Eigene
+   Klassen statt .leadgen-policy-editor, dessen Textfelder die Hoehe teilen. */
+.leadgen-source-panel .leadgen-digest {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.leadgen-digest-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 14px 6px;
+}
+.leadgen-digest-intro { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; max-width: 62ch; }
+.leadgen-digest-switch { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.leadgen-digest-switch input { width: 16px; height: 16px; accent-color: var(--accent); }
+.leadgen-digest-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; border: 0; margin: 0; padding: 0; }
+.leadgen-digest-field > span,
+.leadgen-digest-field > legend {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 0;
+}
+.leadgen-digest-field small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.leadgen-digest-field small.leadgen-digest-warn,
+.leadgen-digest-warn { color: var(--danger); }
+.leadgen-digest-field textarea,
+.leadgen-digest-field input[type="email"],
+.leadgen-digest-field input[type="time"],
+.leadgen-digest-field select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--leadgen-hairline, var(--line));
+  border-radius: 8px;
+  background: var(--leadgen-subtle, var(--surface-2));
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+.leadgen-digest-field textarea { min-height: 76px; resize: vertical; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.leadgen-digest-field :is(textarea, input, select):focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  outline: 0;
+}
+.leadgen-digest-days > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.leadgen-digest-day { position: relative; }
+.leadgen-digest-day input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.leadgen-digest-day span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 30px;
+  border: 1px solid var(--leadgen-hairline, var(--line));
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.leadgen-digest-day input:checked + span {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--line));
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+.leadgen-digest-day input:focus-visible + span { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+.leadgen-digest-row { display: grid; grid-template-columns: minmax(0, 120px) minmax(0, 1fr); gap: 10px; }
+.leadgen-digest-state {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--leadgen-hairline, var(--line));
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.leadgen-digest-state strong { color: var(--text); font-weight: 600; }
+.leadgen-digest-preview {
+  border: 1px solid var(--leadgen-hairline, var(--line));
+  border-radius: 8px;
+  background: var(--surface-2, transparent);
+  overflow: hidden;
+}
+.leadgen-digest-preview header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--leadgen-hairline, var(--line));
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.leadgen-digest-preview dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; margin: 0; padding: 10px 12px 0; font-size: 12px; }
+.leadgen-digest-preview dt { color: var(--muted); }
+.leadgen-digest-preview dd { margin: 0; overflow-wrap: anywhere; }
+.leadgen-digest-preview pre {
+  margin: 0;
+  padding: 10px 12px 12px;
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.5 inherit;
+  font-family: inherit;
+  color: var(--text);
+}
+.leadgen-digest-preview p { margin: 0; padding: 10px 12px; font-size: 12px; }
+.leadgen-digest > footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--leadgen-hairline, var(--line));
+}
+@media (max-width: 420px) {
+  .leadgen-digest-row { grid-template-columns: 1fr; }
+}
+.leadgen-digest-frame { display: block; width: 100%; height: 620px; border: 0; border-top: 1px solid var(--leadgen-hairline, var(--line)); margin-top: 10px; background: #eef1f4; }
+/* Im scrollenden Flex-Container schrumpften Vorschau (overflow:hidden) und
+   Felder auf ihre Mindesthoehe; die Mail-Vorschau war abgeschnitten. */
+.leadgen-digest-scroll > * { flex-shrink: 0; }
+/* Belegampel ab 23.09.2026: eine Quelle ist akzeptiert, zwei und mehr sind
+   staerker belegt. Beide gruen, die staerkere Stufe satter. */
+.leadgen-review-field.is-sufficient.is-single .leadgen-review-badge { background: color-mix(in srgb, var(--success) 8%, transparent); }
+.leadgen-review-field.is-sufficient.is-strong .leadgen-review-badge { background: color-mix(in srgb, var(--success) 20%, transparent); font-weight: 600; }
+
+/* Pflichtfelder fuer die Sellify-Uebergabe (optionale Felder, 1.0.210) */
+.leadgen-optional-fields { display: grid; gap: 8px; padding: 10px 0; }
+.leadgen-optional-group { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px 8px; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 12px; }
+.leadgen-optional-group legend { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; opacity: .7; padding: 0 4px; }
+.leadgen-optional-field { display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; min-width: 0; }
+.leadgen-optional-field span { overflow-wrap: anywhere; }
+.leadgen-optional-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* Mit der Pflichtfeld-Auswahl ist der Rechercheablauf laenger als das Fenster. */
+.leadgen-policy-editor { overflow-y: auto; grid-template-rows: none; align-content: start; gap: 6px; }
+.leadgen-policy-editor textarea { min-height: 220px; }
+
+/* Auswahlleiste bricht um statt zu quetschen: der Hinweis ("1 Recherche
+   gestartet") wurde abgeschnitten und "1 ausgewählt" zweizeilig (25.09.2026). */
+.outbound-lead-generation .leadgen-selection-bar { flex-wrap: wrap; row-gap: 6px; }
+.outbound-lead-generation .leadgen-selection-bar strong,
+.outbound-lead-generation .leadgen-selection-bar .ctox-button { white-space: nowrap; flex: 0 0 auto; }
+.outbound-lead-generation .leadgen-selection-bar .leadgen-status-note { flex: 0 1 auto; max-width: 100%; min-width: 0; }
+
+/* Schliessen-Knoepfe in Dialogen sichtbar in hellem und dunklem Schema: das X
+   erbte eine Farbe ohne Kontrast, sichtbar war nur der Tooltip (25.09.2026). */
+.outbound-lead-generation .leadgen-lead-editor .ctox-pane-icon,
+.outbound-lead-generation .leadgen-source-backdrop .ctox-pane-icon {
+  color: var(--text, currentColor);
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+}
+.outbound-lead-generation .leadgen-lead-editor .ctox-pane-icon .leadgen-icon { stroke-width: 2.2; }
+
+.outbound-lead-generation .leadgen-settings-button {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  height: 30px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  background: transparent; color: var(--text, currentColor);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.outbound-lead-generation .leadgen-settings-button:hover { background: var(--accent-soft, rgba(127, 127, 127, 0.12)); }
+.outbound-lead-generation .leadgen-toolbar[data-shell-v2-header-row="2"] { flex-wrap: wrap; row-gap: 6px; }
+
+/* Fortschritts- und Statushinweise vollstaendig zeigen statt nach 46 Zeichen abzuschneiden. */
+.outbound-lead-generation .leadgen-status-note { white-space: normal; max-width: 100%; overflow: visible; }
+
+/* Shell-V2 legt Fensterglyphe (links) und Fenster-X (rechts) ueber die ersten
+   zwei Kopfzeilen des App-Inhalts. Der Dialog lag mit inset:0 genau darunter:
+   sein Schliessen-Knopf sass unter dem Fenster-X, und ein Klick darauf
+   schloss die ganze App statt des Dialogs (Klicktest 27.09.2026, 760px). */
+.shell-window[data-shell-contract="v2"] .outbound-lead-generation .leadgen-source-backdrop {
+  padding-top: calc(var(--shell-v2-header-row-size, 37px) * 2 + 8px);
+}
+
+/* Die vier Reiter (je 150px) gaben der einzigen Rasterspalte des Dialogs ihre
+   Mindestbreite: in schmalen Fenstern wurde jede Zeile breiter als das Panel
+   und abgeschnitten, auch die Kopfzeile mit dem Schliessen-Knopf. Die Spalte
+   darf jetzt schrumpfen; die Reiter werden schmaler und scrollen notfalls. */
+.outbound-lead-generation .leadgen-source-panel { grid-template-columns: minmax(0, 1fr); }
+.outbound-lead-generation .leadgen-source-tabs { overflow-x: auto; scrollbar-width: none; }
+.outbound-lead-generation .leadgen-source-tabs button { flex: 0 0 auto; }
+@container business-app-window (max-width: 760px) {
+  .outbound-lead-generation .leadgen-source-tabs { padding-inline: 4px; }
+  .outbound-lead-generation .leadgen-source-tabs button { min-width: 0; padding: 0 10px; }
+}
