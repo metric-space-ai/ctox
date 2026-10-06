@@ -52,6 +52,7 @@ const ACCOUNT_EPOCH: u64 = 34;
 struct ResponsePublicationGate {
     armed: AtomicBool,
     blocked: AtomicBool,
+    blocked_frame_kind: AtomicU8,
     entered: tokio::sync::Notify,
     writer_waker: futures_util::task::AtomicWaker,
 }
@@ -77,8 +78,22 @@ impl tokio::io::AsyncWrite for GatedNativeIpcStream {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<io::Result<usize>> {
-        if self.gate.armed.load(Ordering::SeqCst) && !self.gate.blocked.swap(true, Ordering::SeqCst)
-        {
+        if self.gate.armed.swap(false, Ordering::SeqCst) {
+            self.gate.blocked.store(true, Ordering::SeqCst);
+            let kind = match serde_json::from_slice::<Frame>(buf) {
+                Ok(Frame::Response { response })
+                    if matches!(response.result, NativeBusinessDataResult::Page { .. }) =>
+                {
+                    1
+                }
+                Ok(Frame::Event { event })
+                    if matches!(event.payload, NativeBusinessDataEventPayload::Upsert { .. }) =>
+                {
+                    2
+                }
+                _ => 0,
+            };
+            self.gate.blocked_frame_kind.store(kind, Ordering::SeqCst);
             self.gate.writer_waker.register(cx.waker());
             self.gate.entered.notify_one();
             return std::task::Poll::Pending;
@@ -793,6 +808,11 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         )
         .await;
         publication_gate.entered.notified().await;
+        assert_eq!(
+            publication_gate.blocked_frame_kind.load(Ordering::SeqCst),
+            1,
+            "the fence must hold a completed Query page, not a rejection"
+        );
         send_request(
             &mut publication_client,
             "close-before-first-byte",
@@ -845,26 +865,30 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         event_gate.entered.notified().await;
         event_gate.blocked.store(false, Ordering::SeqCst);
         event_gate.writer_waker.wake();
-        let _subscription_id =
+        let subscription_id =
             read_subscribed(&mut event_client, &session_e, "publication-watch").await;
-        // Drain the deterministic empty-snapshot marker before arming the
+        // Drain the complete real snapshot before arming the
         // targeted adversarial event, so Close fences that event, not setup.
-        event_gate.entered.notified().await;
-        event_gate.blocked.store(false, Ordering::SeqCst);
-        event_gate.writer_waker.wake();
-        let caught_up = read_event(&mut event_client, "publication snapshot").await;
-        assert!(matches!(
-            caught_up.payload,
-            NativeBusinessDataEventPayload::CaughtUp { .. }
-        ));
+        wait_for_caught_up(
+            &mut event_client,
+            &session_e,
+            &subscription_id,
+            "publication snapshot",
+        )
+        .await;
+        event_gate.armed.store(true, Ordering::SeqCst);
         server_db
             .collection("records")
             .unwrap()
             .insert(json!({"id": "native-publication-fence"}))
             .await
             .unwrap();
-        event_gate.armed.store(true, Ordering::SeqCst);
         event_gate.entered.notified().await;
+        assert_eq!(
+            event_gate.blocked_frame_kind.load(Ordering::SeqCst),
+            2,
+            "the fence must hold the live Upsert, not a snapshot marker"
+        );
         send_request(
             &mut event_client,
             "close-before-event-byte",
