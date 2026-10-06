@@ -8,8 +8,10 @@
 //! durable authorities — the enrolled binding row, the exact permission grant,
 //! the principal's current role/capability epoch and the provisioned instance
 //! signing identity — and denies on any missing or stale dependency. There is
-//! no cached affirmative: a revocation between two calls denies the next one,
-//! which is what makes phase and per-chunk revalidation meaningful.
+//! no cached affirmative or private signer: each decision holds the current
+//! encrypted issuer and one existing policy transaction through signing. A
+//! revocation between calls denies the next one. This is a decision boundary,
+//! not a retained fence for later asynchronous protected-byte publication.
 //!
 //! What this adapter deliberately does not do: it does not fabricate a
 //! binding (enrollment is a separate authorized act), it does not infer
@@ -19,7 +21,7 @@
 //! still absent; see `docs/ctox-sync-handoff-integration.md`.
 
 use super::policy::{BusinessOsActor, BusinessOsPermission, BusinessOsScope, BusinessOsScopeType};
-use super::store::{now_ms, open_store};
+use super::store::{business_os_store_path, now_ms};
 use super::store_policy::active_permission_grant_allows;
 use ctox_sync::authority::auth::SigningIdentity;
 use ctox_sync::authority::handoff::{
@@ -47,15 +49,16 @@ fn deny(reason_code: &'static str) -> SessionHandoffDenial {
 /// permits are signed by the same key the authority cluster enrolled.
 pub struct NativeSessionHandoffGate {
     root: PathBuf,
-    identity: Arc<SigningIdentity>,
+    issuer_identity: String,
     permit_ttl_ms: u64,
 }
 
 impl NativeSessionHandoffGate {
+    #[cfg(test)]
     fn with_identity(root: PathBuf, identity: Arc<SigningIdentity>) -> Self {
         Self {
             root,
-            identity,
+            issuer_identity: identity.public_identity(),
             permit_ttl_ms: PERMIT_TTL_MS,
         }
     }
@@ -64,6 +67,7 @@ impl NativeSessionHandoffGate {
         &self,
         conn: &Connection,
         request: &SessionHandoffGateRequest,
+        identity: &SigningIdentity,
     ) -> Result<SessionHandoffPermit, SessionHandoffDenial> {
         if request.nonce.trim().is_empty() || request.audience.trim().is_empty() {
             return Err(deny("invalid_request"));
@@ -123,7 +127,8 @@ impl NativeSessionHandoffGate {
             return Err(deny("binding_mismatch"));
         }
         // Only the responsible enrolled instance may mint for its side.
-        if self.identity.public_identity() != expected_identity
+        if identity.public_identity() != expected_identity
+            || self.issuer_identity != expected_identity
             || request.issuer_identity != expected_identity
         {
             return Err(deny("wrong_instance"));
@@ -176,9 +181,38 @@ impl NativeSessionHandoffGate {
             expires_at_ms: now + self.permit_ttl_ms,
             signature: String::new(),
         };
-        self.identity
+        identity
             .sign_session_handoff_permit(&permit)
             .map_err(|_| deny("permit_signing_failed"))
+    }
+}
+
+impl NativeSessionHandoffGate {
+    /// One synchronous decision under issuer -> policy mutation fences. The
+    /// callback cannot await or reenter either native authority/store API.
+    fn with_current_authority<T>(
+        &self,
+        apply: impl FnOnce(&Connection, &SigningIdentity) -> Result<T, SessionHandoffDenial>,
+    ) -> Result<T, SessionHandoffDenial> {
+        crate::sync_host::with_current_signing_identity(&self.root, |identity| {
+            let decision = (|| {
+                let conn = Connection::open_with_flags(
+                    business_os_store_path(&self.root),
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+                )
+                .map_err(|_| deny("store_unavailable"))?;
+                conn.busy_timeout(std::time::Duration::ZERO)
+                    .map_err(|_| deny("store_unavailable"))?;
+                let tx = rusqlite::Transaction::new_unchecked(
+                    &conn,
+                    rusqlite::TransactionBehavior::Immediate,
+                )
+                .map_err(|_| deny("store_unavailable"))?;
+                apply(&tx, identity)
+            })();
+            Ok(decision)
+        })
+        .map_err(|_| deny("identity_unavailable"))?
     }
 }
 
@@ -187,8 +221,11 @@ impl SessionHandoffGate for NativeSessionHandoffGate {
         &self,
         request: &SessionHandoffGateRequest,
     ) -> Result<SessionHandoffPermit, SessionHandoffDenial> {
-        let conn = open_store(&self.root).map_err(|_| deny("store_unavailable"))?;
-        self.authorize_with_conn(&conn, request)
+        // Do not initialize/migrate stores or let separate reads straddle
+        // revocation. The signature is made before either fence is released.
+        self.with_current_authority(|conn, identity| {
+            self.authorize_with_conn(conn, request, identity)
+        })
     }
 }
 
@@ -196,11 +233,13 @@ impl SessionHandoffGate for NativeSessionHandoffGate {
 /// provisioned native Sync identity is unavailable; a handoff decision can
 /// never fall back to an anonymous or generated key.
 pub fn native_session_handoff_gate(root: &Path) -> anyhow::Result<Arc<dyn SessionHandoffGate>> {
-    let identity = crate::sync_host::signing_identity(root)?;
-    Ok(Arc::new(NativeSessionHandoffGate::with_identity(
-        root.to_path_buf(),
-        identity,
-    )))
+    crate::sync_host::with_current_signing_identity(root, |identity| {
+        Ok(Arc::new(NativeSessionHandoffGate {
+            root: root.to_path_buf(),
+            issuer_identity: identity.public_identity(),
+            permit_ttl_ms: PERMIT_TTL_MS,
+        }) as Arc<dyn SessionHandoffGate>)
+    })
 }
 
 /// The enrolled binding fields the gate resolves against. Enrollment (who may
@@ -390,6 +429,334 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    struct ProductionFixture {
+        root: tempfile::TempDir,
+        gate: Arc<dyn SessionHandoffGate>,
+        identity: Arc<SigningIdentity>,
+        request: SessionHandoffGateRequest,
+        writer: Connection,
+    }
+
+    #[cfg(unix)]
+    fn production_fixture() -> ProductionFixture {
+        let root = tempfile::tempdir().unwrap();
+        crate::persistence::store_text_value(root.path(), "handoff_fixture", Some("present"))
+            .unwrap();
+        crate::sync_host::handle_command(root.path(), &["init".into()]).unwrap();
+        let identity = crate::sync_host::signing_identity(root.path()).unwrap();
+        let fixture = fixture();
+        fixture
+            .conn
+            .execute(
+                "UPDATE business_session_handoff_bindings SET source_identity=?1",
+                [identity.public_identity()],
+            )
+            .unwrap();
+        let mut request = request(&fixture, SessionHandoffPhase::Disclose);
+        request.issuer_identity = identity.public_identity();
+        let path = business_os_store_path(root.path());
+        fixture
+            .conn
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        let gate = native_session_handoff_gate(root.path()).unwrap();
+        let writer =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE).unwrap();
+        writer.busy_timeout(std::time::Duration::ZERO).unwrap();
+        ProductionFixture {
+            root,
+            gate,
+            identity,
+            request,
+            writer,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_handoff_gate_rereads_deleted_and_rotated_signer() {
+        use base64::Engine;
+        let fixture = production_fixture();
+        let permit = fixture.gate.authorize(&fixture.request).unwrap();
+        verify_session_handoff_permit(
+            &permit,
+            &fixture.identity.public_identity(),
+            "scope-1",
+            "nonce-1",
+        )
+        .unwrap();
+        let original = crate::secrets::read_secret_value(
+            fixture.root.path(),
+            "ctox-sync-host",
+            "identity-pkcs8",
+        )
+        .unwrap();
+        crate::secrets::delete_secret_record(
+            fixture.root.path(),
+            "ctox-sync-host",
+            "identity-pkcs8",
+        )
+        .unwrap();
+        assert_eq!(
+            fixture
+                .gate
+                .authorize(&fixture.request)
+                .unwrap_err()
+                .reason_code,
+            "identity_unavailable",
+        );
+        let store_key = |record: &str| {
+            crate::secrets::write_secret_record(
+                fixture.root.path(),
+                "ctox-sync-host",
+                "identity-pkcs8",
+                record,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap();
+        };
+        store_key(&original);
+        fixture.gate.authorize(&fixture.request).unwrap();
+
+        let bytes = SigningIdentity::generate_pkcs8().unwrap();
+        let rotated = SigningIdentity::from_pkcs8(&bytes).unwrap();
+        let encoded = serde_json::to_string(&serde_json::json!({
+            "identity": rotated.public_identity(),
+            "pkcs8": base64::engine::general_purpose::STANDARD.encode(&bytes),
+        }))
+        .unwrap();
+        store_key(&encoded);
+        // A still-live gate may neither sign with the old private key nor
+        // silently change its independently pinned issuer to the new key.
+        assert_eq!(
+            fixture
+                .gate
+                .authorize(&fixture.request)
+                .unwrap_err()
+                .reason_code,
+            "wrong_instance",
+        );
+        let next_gate = native_session_handoff_gate(fixture.root.path()).unwrap();
+        assert_eq!(
+            next_gate
+                .authorize(&fixture.request)
+                .unwrap_err()
+                .reason_code,
+            "wrong_instance",
+        );
+        // This is a fixture enrollment update, not a production enrollment
+        // path: the real independent enrollment owner remains required.
+        fixture
+            .writer
+            .execute(
+                "UPDATE business_session_handoff_bindings SET source_identity=?1, revision=4",
+                [rotated.public_identity()],
+            )
+            .unwrap();
+        let mut next_request = fixture.request.clone();
+        next_request.issuer_identity = rotated.public_identity();
+        let next = next_gate.authorize(&next_request).unwrap();
+        verify_session_handoff_permit(&next, &rotated.public_identity(), "scope-1", "nonce-1")
+            .unwrap();
+        assert_eq!(next.binding_revision, 4);
+        assert_eq!(
+            fixture
+                .gate
+                .authorize(&next_request)
+                .unwrap_err()
+                .reason_code,
+            "wrong_instance",
+        );
+        store_key("{}");
+        assert_eq!(
+            next_gate.authorize(&next_request).unwrap_err().reason_code,
+            "identity_unavailable",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_handoff_gate_fences_signer_and_policy_through_decision() {
+        let fixture = production_fixture();
+        let concrete = NativeSessionHandoffGate::with_identity(
+            fixture.root.path().to_path_buf(),
+            fixture.identity.clone(),
+        );
+        let secret_writer = Connection::open_with_flags(
+            crate::secrets::secret_store_path(fixture.root.path()),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .unwrap();
+        secret_writer
+            .busy_timeout(std::time::Duration::ZERO)
+            .unwrap();
+        let assert_busy = |error| {
+            assert!(matches!(
+                error, rusqlite::Error::SqliteFailure(code, _)
+                    if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy
+                        | rusqlite::ErrorCode::DatabaseLocked)
+            ));
+        };
+        concrete.with_current_authority(|conn, identity| {
+            // The exact production decision callback, not a permit detached
+            // from current authorities, retains both writer fences.
+            let permit = concrete.authorize_with_conn(conn, &fixture.request, identity)?;
+            for statement in [
+                "UPDATE business_session_handoff_bindings SET state='revoked'",
+                "UPDATE business_users SET active=0, capability_epoch=12",
+                "UPDATE business_permission_grants SET active=0",
+            ] {
+                assert_busy(fixture.writer.execute(statement, []).unwrap_err());
+            }
+            assert_busy(secret_writer.execute(
+                "DELETE FROM ctox_secret_records WHERE scope='ctox-sync-host' AND secret_name='identity-pkcs8'",
+                [],
+            ).unwrap_err());
+            Ok(permit)
+        }).unwrap();
+        // Returning from the decision releases the fences; subsequent
+        // decisions must reread the new durable state.
+        fixture
+            .writer
+            .execute("UPDATE business_users SET capability_epoch=12", [])
+            .unwrap();
+        assert_eq!(
+            fixture
+                .gate
+                .authorize(&fixture.request)
+                .unwrap()
+                .principal_epoch,
+            12
+        );
+        fixture
+            .writer
+            .execute("UPDATE business_permission_grants SET active=0", [])
+            .unwrap();
+        assert_eq!(
+            fixture
+                .gate
+                .authorize(&fixture.request)
+                .unwrap_err()
+                .reason_code,
+            "grant_missing",
+        );
+        fixture
+            .writer
+            .execute("UPDATE business_permission_grants SET active=1", [])
+            .unwrap();
+        fixture
+            .writer
+            .execute(
+                "UPDATE business_session_handoff_bindings SET state='revoked'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            fixture
+                .gate
+                .authorize(&fixture.request)
+                .unwrap_err()
+                .reason_code,
+            "binding_revoked",
+        );
+        secret_writer.execute(
+            "DELETE FROM ctox_secret_records WHERE scope='ctox-sync-host' AND secret_name='identity-pkcs8'",
+            [],
+        ).unwrap();
+        assert_eq!(
+            fixture
+                .gate
+                .authorize(&fixture.request)
+                .unwrap_err()
+                .reason_code,
+            "identity_unavailable",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_handoff_gate_denies_busy_missing_and_uninitialized_stores() {
+        let empty = tempfile::tempdir().unwrap();
+        assert!(native_session_handoff_gate(empty.path()).is_err());
+        assert!(!empty.path().join("runtime").exists());
+
+        let fixture = production_fixture();
+        {
+            let _tx = rusqlite::Transaction::new_unchecked(
+                &fixture.writer,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .unwrap();
+            assert_eq!(
+                fixture
+                    .gate
+                    .authorize(&fixture.request)
+                    .unwrap_err()
+                    .reason_code,
+                "store_unavailable",
+            );
+        }
+        fixture.gate.authorize(&fixture.request).unwrap();
+        let secret_writer = Connection::open_with_flags(
+            crate::secrets::secret_store_path(fixture.root.path()),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .unwrap();
+        secret_writer
+            .busy_timeout(std::time::Duration::ZERO)
+            .unwrap();
+        {
+            let _tx = rusqlite::Transaction::new_unchecked(
+                &secret_writer,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .unwrap();
+            assert_eq!(
+                fixture
+                    .gate
+                    .authorize(&fixture.request)
+                    .unwrap_err()
+                    .reason_code,
+                "identity_unavailable",
+            );
+        }
+        fixture.gate.authorize(&fixture.request).unwrap();
+        let policy_path = business_os_store_path(fixture.root.path());
+        drop(fixture.writer);
+        std::fs::remove_file(&policy_path).unwrap();
+        assert_eq!(
+            fixture
+                .gate
+                .authorize(&fixture.request)
+                .unwrap_err()
+                .reason_code,
+            "store_unavailable",
+        );
+        assert!(
+            !policy_path.exists(),
+            "authorization must not recreate policy"
+        );
+        let blank = Connection::open(&policy_path).unwrap();
+        assert_eq!(
+            fixture
+                .gate
+                .authorize(&fixture.request)
+                .unwrap_err()
+                .reason_code,
+            "store_unavailable",
+        );
+        assert_eq!(
+            blank
+                .query_row("SELECT count(*) FROM sqlite_master", [], |row| row
+                    .get::<_, i64>(0),)
+                .unwrap(),
+            0,
+            "authorization must not initialize an existing blank store"
+        );
+    }
+
     #[test]
     fn authorized_disclose_mints_a_verifiable_current_permit() {
         let fixture = fixture();
@@ -398,6 +765,7 @@ mod tests {
             .authorize_with_conn(
                 &fixture.conn,
                 &request(&fixture, SessionHandoffPhase::Disclose),
+                &fixture.identity,
             )
             .unwrap();
         verify_session_handoff_permit(
@@ -422,7 +790,7 @@ mod tests {
         assert_eq!(
             fixture
                 .gate
-                .authorize_with_conn(&fixture.conn, &unknown)
+                .authorize_with_conn(&fixture.conn, &unknown, &fixture.identity)
                 .unwrap_err()
                 .reason_code,
             "binding_unknown"
@@ -443,6 +811,7 @@ mod tests {
                 .authorize_with_conn(
                     &fixture.conn,
                     &request(&fixture, SessionHandoffPhase::Disclose),
+                    &fixture.identity,
                 )
                 .unwrap_err()
                 .reason_code,
@@ -458,7 +827,7 @@ mod tests {
         assert_eq!(
             fixture
                 .gate
-                .authorize_with_conn(&fixture.conn, &wrong_issuer)
+                .authorize_with_conn(&fixture.conn, &wrong_issuer, &fixture.identity)
                 .unwrap_err()
                 .reason_code,
             "wrong_instance"
@@ -470,6 +839,7 @@ mod tests {
                 .authorize_with_conn(
                     &fixture.conn,
                     &request(&fixture, SessionHandoffPhase::Disclose),
+                    &fixture.identity,
                 )
                 .unwrap_err()
                 .reason_code,
@@ -485,6 +855,7 @@ mod tests {
                 .authorize_with_conn(
                     &fixture.conn,
                     &request(&fixture, SessionHandoffPhase::Disclose),
+                    &fixture.identity,
                 )
                 .unwrap_err()
                 .reason_code,
@@ -500,7 +871,7 @@ mod tests {
         assert_eq!(
             fixture
                 .gate
-                .authorize_with_conn(&fixture.conn, &wrong_sequence)
+                .authorize_with_conn(&fixture.conn, &wrong_sequence, &fixture.identity)
                 .unwrap_err()
                 .reason_code,
             "binding_mismatch"
@@ -510,7 +881,7 @@ mod tests {
         assert_eq!(
             fixture
                 .gate
-                .authorize_with_conn(&fixture.conn, &wrong_account)
+                .authorize_with_conn(&fixture.conn, &wrong_account, &fixture.identity)
                 .unwrap_err()
                 .reason_code,
             "binding_mismatch"
@@ -522,6 +893,7 @@ mod tests {
                 .authorize_with_conn(
                     &fixture.conn,
                     &request(&fixture, SessionHandoffPhase::Resume),
+                    &fixture.identity,
                 )
                 .unwrap_err()
                 .reason_code,

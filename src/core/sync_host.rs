@@ -21,6 +21,24 @@ pub(crate) fn signing_identity(
     }
 }
 
+/// Executes one synchronous authority decision using the current provisioned
+/// native Sync identity. The encrypted issuer is held until the callback
+/// returns; no key/store initialization, await or secret API reentry is allowed.
+pub(crate) fn with_current_signing_identity<T>(
+    root: &std::path::Path,
+    apply: impl FnOnce(&ctox_sync::authority::auth::SigningIdentity) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    #[cfg(unix)]
+    {
+        unix::with_current_key(root, apply)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (root, apply);
+        anyhow::bail!("native Sync identity is unavailable on this platform")
+    }
+}
+
 #[cfg(not(unix))]
 pub fn handle_command(_: &std::path::Path, _: &[String]) -> anyhow::Result<()> {
     anyhow::bail!("native Sync hosting requires a certified local listener on this platform")
