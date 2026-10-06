@@ -82,6 +82,12 @@ impl CodexThread {
         self.codex.interrupt_turn(turn_id).await
     }
 
+    /// Obtain the journal from this actual Core Session, never from a path claim.
+    /// The returned reader remains sealed until successful recorder shutdown.
+    pub async fn retain_native_journal(&self) -> std::io::Result<crate::NativeJournalReader> {
+        self.codex.session.retain_native_journal().await
+    }
+
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
     }

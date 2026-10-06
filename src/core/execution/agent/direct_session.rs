@@ -900,6 +900,7 @@ pub(crate) struct PersistentSession {
     additional_readable_roots: Vec<PathBuf>,
     persistent_worker: bool,
     native_checkpoint_binding: Option<crate::channels::NativeProviderCheckpointBinding>,
+    native_capture_thread: Option<Arc<ctox_core::CodexThread>>,
     #[cfg(unix)]
     native_command_session_token: Option<String>,
     #[cfg(unix)]
@@ -929,6 +930,7 @@ pub(crate) struct PersistentSession {
 #[cfg(unix)]
 pub(crate) struct NativeSessionCapture {
     source: crate::channels::NativeProviderCaptureOwner,
+    journal: ctox_core::NativeJournalReader,
     execution: crate::business_os::NativeGuestExecution,
     thread_id: String,
     root: PathBuf,
@@ -957,6 +959,38 @@ impl NativeSessionCapture {
             })?;
         self.verify_command_authority()?;
         Ok(captured)
+    }
+
+    /// Exact native journal bytes, checked against the actual producer ID.
+    /// The result is private capture input; it must not bypass the separate
+    /// held publication guard or be labelled provider continuation evidence.
+    pub(crate) fn read_journal(
+        &self,
+        limits: ctox_protocol::portable_journal::PortableJournalLimits,
+    ) -> Result<(
+        Vec<u8>,
+        ctox_protocol::portable_journal::ValidatedPortableJournal,
+    )> {
+        use ctox_protocol::portable_journal::{
+            validate_portable_journal, PortableArtifactRef, PortableJournalExpectation,
+            PortableJournalFormat,
+        };
+        self.with_current(|_, _| {
+            let bytes = self.journal.read_bytes(limits.max_bytes)?;
+            let expected = PortableJournalExpectation {
+                format: PortableJournalFormat::current(),
+                session_id: self
+                    .thread_id
+                    .parse()
+                    .context("native capture producer identity is invalid")?,
+            };
+            let artifact = PortableArtifactRef {
+                sha256: format!("{:x}", Sha256::digest(&bytes)),
+                size_bytes: bytes.len() as u64,
+            };
+            let validated = validate_portable_journal(&bytes, &artifact, &expected, &limits)?;
+            Ok((bytes, validated))
+        })
     }
 
     fn verify_command_authority(&self) -> Result<()> {
@@ -1336,6 +1370,7 @@ impl PersistentSession {
             api_provider,
             reasoning_effort,
             native_checkpoint_binding,
+            native_capture_thread,
         ) = match start_result {
             Ok(started) => started,
             Err(err) => return Err(err),
@@ -1412,6 +1447,7 @@ impl PersistentSession {
             additional_readable_roots: Vec::new(),
             persistent_worker,
             native_checkpoint_binding,
+            native_capture_thread,
             #[cfg(unix)]
             native_command_session_token: None,
             #[cfg(unix)]
@@ -1626,7 +1662,42 @@ impl PersistentSession {
             self.runtime.is_some() && self.client.is_some(),
             "native capture requires both actual shutdown owners"
         );
+        anyhow::ensure!(
+            self.native_capture_owner.is_some(),
+            "native turn has not retired to capture authority"
+        );
+        // This API owns a synchronous runtime. A nested runtime cannot supply
+        // checked teardown; the existing shutdown path performs bounded cleanup.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let _ = self.shutdown_inner("rejecting asynchronous native capture");
+            anyhow::bail!("native capture requires a synchronous owner");
+        }
+        let actual_thread = self
+            .native_capture_thread
+            .take()
+            .context("native capture has no retained actual Core Session")?;
+        let journal = self
+            .runtime
+            .as_ref()
+            .expect("checked runtime owner")
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS),
+                    actual_thread.retain_native_journal(),
+                )
+                .await
+                .context("native journal retention timed out")?
+                .context("actual native journal could not be retained")
+            });
+        let journal = match journal {
+            Ok(journal) => journal,
+            Err(error) => {
+                let _ = self.shutdown_inner("failed native journal retention");
+                return Err(error);
+            }
+        };
         let capture = NativeSessionCapture {
+            journal,
             source: self
                 .native_capture_owner
                 .take()
@@ -1651,6 +1722,9 @@ impl PersistentSession {
         before?;
         shutdown?;
         capture.with_current(|_, _| Ok(()))?;
+        // Writer receipt alone cannot certify identity, syntax or bounded size.
+        // A malformed/missing/changed journal never returns a capture owner.
+        capture.read_journal(ctox_protocol::portable_journal::PortableJournalLimits::default())?;
         Ok(capture)
     }
 
@@ -1677,6 +1751,7 @@ impl PersistentSession {
         Option<String>,
         Option<ReasoningEffort>,
         Option<crate::channels::NativeProviderCheckpointBinding>,
+        Option<Arc<ctox_core::CodexThread>>,
     )> {
         let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
         let runtime_local_preset = resolved_runtime
@@ -1964,7 +2039,7 @@ impl PersistentSession {
             loader_overrides: Default::default(),
             cloud_requirements,
             auth_manager: Some(auth_manager),
-            thread_manager: Some(thread_manager),
+            thread_manager: Some(thread_manager.clone()),
             feedback: CodexFeedback::new(),
             config_warnings: vec![],
             session_source,
@@ -1999,6 +2074,19 @@ impl PersistentSession {
         };
         let timeouts = production_session_control_timeouts();
         let thread_id = bind_session_thread(&client, &mut seq, &spec, &timeouts).await?;
+        let native_capture_thread = if native_guest {
+            let actual_id = thread_id
+                .parse::<ctox_protocol::ThreadId>()
+                .context("native producer returned an invalid thread identity")?;
+            Some(
+                thread_manager
+                    .get_thread(actual_id)
+                    .await
+                    .context("native producer has no actual loaded Core Session")?,
+            )
+        } else {
+            None
+        };
 
         Ok((
             client,
@@ -2010,6 +2098,7 @@ impl PersistentSession {
             tracking_api_provider,
             reasoning_effort,
             native_checkpoint_binding,
+            native_capture_thread,
         ))
     }
 
