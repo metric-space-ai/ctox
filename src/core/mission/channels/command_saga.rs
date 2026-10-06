@@ -15,7 +15,7 @@ use super::{
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -2360,19 +2360,57 @@ const CORE_DIAGNOSTICS_TTL: Duration = Duration::from_secs(3);
 static CORE_DIAGNOSTICS_CACHE: OnceLock<Mutex<HashMap<PathBuf, (Instant, Value)>>> =
     OnceLock::new();
 
+/// Roots whose diagnostics are being recomputed right now (single flight).
+static CORE_DIAGNOSTICS_REFRESHING: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+struct CoreDiagnosticsRefresh(PathBuf);
+
+impl Drop for CoreDiagnosticsRefresh {
+    fn drop(&mut self) {
+        if let Some(refreshing) = CORE_DIAGNOSTICS_REFRESHING.get() {
+            refreshing
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&self.0);
+        }
+    }
+}
+
 pub(crate) fn business_command_core_diagnostics(root: &Path) -> Result<Value> {
     let cache = CORE_DIAGNOSTICS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let key = root.to_path_buf();
-    {
+    let stale = {
         let guard = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some((measured_at, value)) = guard.get(&key) {
-            if measured_at.elapsed() < CORE_DIAGNOSTICS_TTL {
+        match guard.get(&key) {
+            Some((measured_at, value)) if measured_at.elapsed() < CORE_DIAGNOSTICS_TTL => {
                 return Ok(value.clone());
             }
+            Some((_, value)) => Some(value.clone()),
+            None => None,
         }
-    }
+    };
+    // Single flight: when a previous value exists, exactly one caller
+    // recomputes and every concurrent caller gets that value immediately. A
+    // 3 s TTL alone still let all HTTP workers recompute at once whenever it
+    // expired; on a ~4x slower on-prem host (THESEN, 06.10.2026) a
+    // recomputation outlasted the TTL under that contention and port 8765
+    // stopped answering.
+    let _refresh = match stale {
+        Some(stale) => {
+            let refreshing = CORE_DIAGNOSTICS_REFRESHING.get_or_init(|| Mutex::new(HashSet::new()));
+            let claimed = refreshing
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(key.clone());
+            if !claimed {
+                return Ok(stale);
+            }
+            Some(CoreDiagnosticsRefresh(key.clone()))
+        }
+        None => None,
+    };
     let fresh = business_command_core_diagnostics_uncached(root)?;
     let mut guard = cache
         .lock()
@@ -3129,4 +3167,49 @@ pub(crate) fn audit_and_migrate_business_command_storage(
 /// New internal callers should use [`audit_and_migrate_business_command_storage`].
 pub(crate) fn reconcile_business_command_invariants(root: &Path, apply: bool) -> Result<Value> {
     audit_and_migrate_business_command_storage(root, apply)
+}
+
+#[cfg(test)]
+mod core_diagnostics_tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_callers_get_the_stale_value_while_one_refreshes() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-core-diagnostics-single-flight-{}",
+            std::process::id()
+        ));
+        let stale = json!({ "aggregate_count": 7 });
+        CORE_DIAGNOSTICS_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap()
+            .insert(
+                root.clone(),
+                (Instant::now() - CORE_DIAGNOSTICS_TTL * 2, stale.clone()),
+            );
+        // Another caller is already recomputing; this root has no database,
+        // so a second recomputation would fail instead of returning.
+        CORE_DIAGNOSTICS_REFRESHING
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .unwrap()
+            .insert(root.clone());
+
+        let value = business_command_core_diagnostics(&root).expect("stale value served");
+        assert_eq!(value, stale);
+
+        CORE_DIAGNOSTICS_REFRESHING
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .remove(&root);
+        CORE_DIAGNOSTICS_CACHE
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .remove(&root);
+    }
 }

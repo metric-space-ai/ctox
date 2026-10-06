@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20261005-shell-v2-transfer-composed-v452';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261005-shell-v2-transfer-composed-v452';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261005-shell-v2-transfer-composed-v452';
+} from './sync-contract.js?v=20261006-shell-v2-sync-perf-v452';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261006-shell-v2-sync-perf-v452';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261006-shell-v2-sync-perf-v452';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20261005-shell-v2-transfer-composed-v452';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261006-shell-v2-sync-perf-v452';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -3630,6 +3630,12 @@ function isDemandOnlyPullCollection(collection) {
     // delay a new command behind thousands of old records.
     || collection === 'business_commands'
     || collection === 'ctox_queue_tasks'
+    // The chat dock reads a bounded window (CHAT_QUERY_WINDOW_LIMIT) and
+    // writes by id. Eagerly mirroring every chat (1,257 docs / 18.6 MB on the
+    // THESEN tenant) ran on every cold profile and kept re-validating the
+    // window against the unfinished pull, which occupied the channel for tens
+    // of seconds of each start (06.10.2026). Hydrate through the bounded query.
+    || collection === 'business_chats'
     // The cockpit reads only the selected task (32 runs / 200 events).
     // Pulling every task's ledger can block initial readiness and foreground
     // queries on a mature tenant; retain the live native query bridge.
