@@ -36,7 +36,10 @@ export const CTOX_QUERY_RPC = Object.freeze({
   maxBytesPerChunk: 262144,
   maxInFlightStreams: 8,
   maxQueryRuntimeMs: 30000,
-  defaultWindowLimit: 200
+  defaultWindowLimit: 200,
+  projectedWindowMaxRows: 200,
+  projectedWindowMaxBytes: 1048576,
+  projectionResponseField: "appliedProjection"
 });
 export const CTOX_FILE_RPC = Object.freeze({
   fetch: "rxdb.file.fetch",

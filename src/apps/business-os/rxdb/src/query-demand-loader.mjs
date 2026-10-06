@@ -87,7 +87,7 @@ export function createQueryDemandLoader({
       const normalizedWindow = normalizeWindow(window, query);
       const projection = normalizeQueryProjection(query?.projection, storageCollection.primaryPath || 'id');
       const projected = Boolean(projection);
-      if (projected && normalizedWindow.limit > PROJECTED_QUERY_WINDOW_MAX_ROWS) {
+      if (projected && Number(window?.limit ?? query?.limit ?? DEFAULT_WINDOW_LIMIT) > PROJECTED_QUERY_WINDOW_MAX_ROWS) {
         throw Object.assign(new Error('PROJECTED_QUERY_WINDOW_TOO_LARGE: projected windows contain at most 200 rows'), {
           code: 'PROJECTED_QUERY_WINDOW_TOO_LARGE', retryable: false,
         });

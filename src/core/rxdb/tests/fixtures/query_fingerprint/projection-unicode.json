@@ -15,5 +15,7 @@
       "payload.",
       "payload.𐀀"
     ]
-  }
+  },
+  "canonicalJson": "{\"collection\":\"business_records\",\"limit\":200,\"projection\":[\"payload.\",\"payload.𐀀\",\"payload.😀\"],\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{},\"skip\":0,\"sort\":[],\"window\":{\"limit\":200,\"offset\":0}}",
+  "fingerprint": "16271e49f9999cabfd83ea6d659b5ab8190200a5b218418c2856e8c00fa8f11e"
 }

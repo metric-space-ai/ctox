@@ -36,7 +36,10 @@ var CTOX_QUERY_RPC = Object.freeze({
   maxBytesPerChunk: 262144,
   maxInFlightStreams: 8,
   maxQueryRuntimeMs: 3e4,
-  defaultWindowLimit: 200
+  defaultWindowLimit: 200,
+  projectedWindowMaxRows: 200,
+  projectedWindowMaxBytes: 1048576,
+  projectionResponseField: "appliedProjection"
 });
 var CTOX_FILE_RPC = Object.freeze({
   fetch: "rxdb.file.fetch",
@@ -1677,8 +1680,277 @@ var recoveryJournalTestInternals = Object.freeze({
   sweepExpiredPreviews
 });
 
+// src/apps/business-os/rxdb/src/query-projection.mjs
+function normalizeQueryProjection(projection, primaryPath = null) {
+  if (projection == null) return null;
+  if (!Array.isArray(projection)) throw new TypeError("projection must be an array of field paths");
+  const fields = /* @__PURE__ */ new Set();
+  for (const field of projection) {
+    if (typeof field !== "string" || !field || field.split(".").some((part) => !part || part === "__proto__" || part === "constructor" || part === "prototype")) throw new TypeError("projection requires safe non-empty field paths");
+    fields.add(field);
+  }
+  if (fields.size && primaryPath) {
+    fields.add(primaryPath);
+    fields.add("_rev");
+    fields.add("_deleted");
+  }
+  const ordered = [...fields].sort(compareCodePoints);
+  const normalized = [];
+  for (const field of ordered) {
+    if (!normalized.some((parent) => field.startsWith(`${parent}.`))) normalized.push(field);
+  }
+  return normalized.length ? normalized : null;
+}
+function compareCodePoints(left, right) {
+  const a = Array.from(left, (value) => value.codePointAt(0));
+  const b = Array.from(right, (value) => value.codePointAt(0));
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return a.length - b.length;
+}
+function projectQueryDocument(document2, projection) {
+  if (!projection?.length) return cloneQueryRow(document2);
+  const tree = /* @__PURE__ */ Object.create(null);
+  for (const field of projection) {
+    let node = tree;
+    for (const part of field.split(".")) node = node[part] ||= /* @__PURE__ */ Object.create(null);
+  }
+  return projectTree(document2, tree);
+}
+function projectTree(value, tree) {
+  if (Object.keys(tree).length === 0) return cloneQueryRow(value);
+  if (Array.isArray(value)) return value.map((entry) => projectTree(entry, tree));
+  if (value == null || typeof value !== "object") return null;
+  const out = {};
+  for (const [field, child] of Object.entries(tree)) {
+    if (!Object.hasOwn(value, field)) continue;
+    const nested = projectTree(value[field], child);
+    if (nested !== null || value[field] === null) out[field] = nested;
+  }
+  return out;
+}
+function cloneQueryRow(row) {
+  return row == null ? row : JSON.parse(JSON.stringify(row));
+}
+function projectedDocumentWriteError() {
+  return Object.assign(new Error("PROJECTED_DOCUMENT_READ_ONLY: hydrate the full document before mutation"), {
+    code: "PROJECTED_DOCUMENT_READ_ONLY",
+    retryable: false
+  });
+}
+
+// src/apps/business-os/rxdb/src/query-projection-cache.mjs
+var PROJECTED_QUERY_CACHE_BUDGET_BYTES = 16 * 1024 * 1024;
+var PROJECTED_QUERY_CACHE_MAX_WINDOWS = 64;
+var PROJECTED_QUERY_WINDOW_MAX_BYTES = CTOX_QUERY_RPC.projectedWindowMaxBytes;
+var PROJECTED_QUERY_WINDOW_MAX_ROWS = CTOX_QUERY_RPC.projectedWindowMaxRows;
+var ROWS = "rows";
+var META = "metadata";
+var BUDGET_KEY = "@budget";
+function cacheRecord(key, documents, now) {
+  if (typeof key !== "string" || !key || key === BUDGET_KEY) throw new TypeError("invalid projected window key");
+  if (!Array.isArray(documents) || documents.length > PROJECTED_QUERY_WINDOW_MAX_ROWS) throw new TypeError("projected windows contain at most 200 rows");
+  const json = JSON.stringify(documents);
+  const bytes = new TextEncoder().encode(json).byteLength;
+  if (bytes > PROJECTED_QUERY_WINDOW_MAX_BYTES) {
+    throw Object.assign(new Error("PROJECTED_QUERY_WINDOW_TOO_LARGE: narrow fields or the page size"), {
+      code: "PROJECTED_QUERY_WINDOW_TOO_LARGE",
+      retryable: false
+    });
+  }
+  return { key, documents: JSON.parse(json), bytes, lastAccessedAt: now };
+}
+function createMemoryProjectedQueryCache() {
+  const rows = /* @__PURE__ */ new Map();
+  let bytes = 0;
+  return {
+    name: "memory",
+    async put(key, documents, now = Date.now()) {
+      const record = cacheRecord(key, documents, now);
+      bytes += record.bytes - (rows.get(key)?.bytes || 0);
+      rows.set(key, record);
+      const oldest = [...rows.values()].sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
+      for (const candidate of oldest) {
+        if (bytes <= PROJECTED_QUERY_CACHE_BUDGET_BYTES && rows.size <= PROJECTED_QUERY_CACHE_MAX_WINDOWS) break;
+        if (candidate.key === key) continue;
+        rows.delete(candidate.key);
+        bytes -= candidate.bytes;
+      }
+    },
+    async get(key, now = Date.now()) {
+      const record = rows.get(key);
+      if (!record) return null;
+      record.lastAccessedAt = now;
+      return cloneQueryRow(record.documents);
+    },
+    async clear() {
+      rows.clear();
+      bytes = 0;
+    },
+    async close() {
+    }
+  };
+}
+function createIndexedDbProjectedQueryCache({ databaseName }) {
+  if (typeof databaseName !== "string" || !databaseName) throw new TypeError("projected cache requires databaseName");
+  let opening = null;
+  let fallback = null;
+  async function open() {
+    if (!opening) {
+      opening = new Promise((resolve, reject) => {
+        if (!globalThis.indexedDB) {
+          reject(new Error("IndexedDB unavailable"));
+          return;
+        }
+        let settled = false;
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          fn(value);
+        };
+        const timer = setTimeout(() => finish(reject, new Error("Projected cache open timed out")), 4e3);
+        const request = indexedDB.open(databaseName, 1);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          db.createObjectStore(ROWS, { keyPath: "key" });
+          const metadata = db.createObjectStore(META, { keyPath: "key" });
+          metadata.createIndex("lastAccessedAt", "lastAccessedAt");
+        };
+        request.onsuccess = () => {
+          if (settled) {
+            request.result.close();
+            return;
+          }
+          const db = request.result;
+          db.onversionchange = () => {
+            db.close();
+            opening = null;
+          };
+          finish(resolve, db);
+        };
+        request.onerror = () => finish(reject, request.error || new Error("Projected cache open failed"));
+        request.onblocked = () => finish(reject, new Error("Projected cache open blocked"));
+      }).catch((error) => {
+        opening = null;
+        throw error;
+      });
+    }
+    return opening;
+  }
+  async function backend() {
+    if (fallback) return null;
+    try {
+      return await open();
+    } catch {
+      fallback ||= createMemoryProjectedQueryCache();
+      return null;
+    }
+  }
+  return {
+    get name() {
+      return fallback ? "memory-fallback" : "indexeddb";
+    },
+    async put(key, documents, now = Date.now()) {
+      const record = cacheRecord(key, documents, now);
+      const db = await backend();
+      if (!db) return fallback.put(key, documents, now);
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction([ROWS, META], "readwrite");
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error("Projected cache write failed"));
+        tx.onabort = () => reject(tx.error || new Error("Projected cache write aborted"));
+        const rowStore = tx.objectStore(ROWS), metaStore = tx.objectStore(META);
+        const budgetRequest = metaStore.get(BUDGET_KEY);
+        budgetRequest.onsuccess = () => {
+          const previousRequest = metaStore.get(key);
+          previousRequest.onsuccess = () => {
+            const previous = previousRequest.result;
+            const budget = budgetRequest.result || { bytes: 0, count: 0 };
+            let bytes = budget.bytes + record.bytes - (previous?.bytes || 0);
+            let count = budget.count + (previous ? 0 : 1);
+            rowStore.put({ key, documents: record.documents });
+            metaStore.put({ key, bytes: record.bytes, lastAccessedAt: now });
+            const finishBudget = () => metaStore.put({ key: BUDGET_KEY, bytes, count });
+            if (bytes <= PROJECTED_QUERY_CACHE_BUDGET_BYTES && count <= PROJECTED_QUERY_CACHE_MAX_WINDOWS) {
+              finishBudget();
+              return;
+            }
+            const cursorRequest = metaStore.index("lastAccessedAt").openCursor();
+            cursorRequest.onsuccess = () => {
+              if (bytes <= PROJECTED_QUERY_CACHE_BUDGET_BYTES && count <= PROJECTED_QUERY_CACHE_MAX_WINDOWS) {
+                finishBudget();
+                return;
+              }
+              const cursor = cursorRequest.result;
+              if (!cursor) {
+                tx.abort();
+                return;
+              }
+              if (cursor.value.key !== key) {
+                bytes -= cursor.value.bytes;
+                count -= 1;
+                rowStore.delete(cursor.value.key);
+                cursor.delete();
+              }
+              cursor.continue();
+            };
+          };
+        };
+      });
+    },
+    async get(key, now = Date.now()) {
+      if (!key) return null;
+      const db = await backend();
+      if (!db) return fallback.get(key, now);
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction([ROWS, META], "readwrite");
+        let documents = null;
+        tx.oncomplete = () => resolve(documents);
+        tx.onerror = () => reject(tx.error || new Error("Projected cache read failed"));
+        tx.onabort = () => reject(tx.error || new Error("Projected cache read aborted"));
+        const rowRequest = tx.objectStore(ROWS).get(key);
+        rowRequest.onsuccess = () => {
+          documents = rowRequest.result?.documents || null;
+          if (!documents) return;
+          const metadata = tx.objectStore(META);
+          const metaRequest = metadata.get(key);
+          metaRequest.onsuccess = () => {
+            if (metaRequest.result) metadata.put({ ...metaRequest.result, lastAccessedAt: now });
+          };
+        };
+      });
+    },
+    async clear() {
+      const db = await backend();
+      if (!db) return fallback.clear();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction([ROWS, META], "readwrite");
+        tx.oncomplete = () => resolve();
+        tx.onerror = tx.onabort = () => reject(tx.error || new Error("Projected cache clear failed"));
+        tx.objectStore(ROWS).clear();
+        tx.objectStore(META).clear();
+      });
+    },
+    async close() {
+      const current = opening;
+      opening = null;
+      if (current) {
+        try {
+          (await current).close();
+        } catch {
+        }
+      }
+      await fallback?.close();
+      fallback = null;
+    }
+  };
+}
+
 // src/apps/business-os/rxdb/src/query-meta-backend-memory.mjs
 function createMemoryMetaBackend() {
+  const projectedCache = createMemoryProjectedQueryCache();
   const queryWindows = /* @__PURE__ */ new Map();
   const queryWindowRefsByDocument = /* @__PURE__ */ new Map();
   const queryWindowRefsByWindow = /* @__PURE__ */ new Map();
@@ -1686,6 +1958,15 @@ function createMemoryMetaBackend() {
   const cacheStats = /* @__PURE__ */ new Map();
   return {
     name: "memory",
+    get projectedCacheName() {
+      return projectedCache.name;
+    },
+    async putProjectedQueryRows(key, documents, now) {
+      return projectedCache.put(key, documents, now);
+    },
+    async getProjectedQueryRows(key, now) {
+      return projectedCache.get(key, now);
+    },
     async putQueryWindow(record) {
       const key = queryWindowKey(record);
       queryWindows.set(key, { ...record });
@@ -1745,6 +2026,7 @@ function createMemoryMetaBackend() {
       return entry ? { ...entry } : null;
     },
     async clear() {
+      await projectedCache.clear();
       queryWindows.clear();
       queryWindowRefsByDocument.clear();
       queryWindowRefsByWindow.clear();
@@ -1813,12 +2095,15 @@ var QueryMetaStorage = class {
     await this.backend.putQueryWindow(record);
     return record;
   }
-  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null, permissionDigest = void 0 }) {
+  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null, permissionDigest = void 0, projection = null, projectionKey = null }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint2, offset, limit].join("|")
     );
     const record = {
+      // Payloads live in the separate bounded projected-query cache. Ordinary
+      // metadata scans and document eviction never materialize partial rows.
+      ...projection?.length ? { projection: [...projection], projectionKey } : {},
       collection,
       queryFingerprint: queryFingerprint2,
       offset,
@@ -1861,6 +2146,13 @@ var QueryMetaStorage = class {
     existing.complete = false;
     existing.updatedAt = this.clock();
     await this.backend.putQueryWindow(existing);
+  }
+  async putProjectedQueryRows(key, documents) {
+    return this.backend.putProjectedQueryRows(key, documents, this.clock());
+  }
+  async getProjectedQueryRows(key) {
+    if (!key) return null;
+    return this.backend.getProjectedQueryRows(key, this.clock());
   }
   async touchDocuments(collection, ids, { estimatedBytes = 0, pinReason = PIN_RECENT_READ } = {}) {
     const normalizedIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
@@ -7281,11 +7573,21 @@ function createDemandLoadingTransport({
     const documents = [];
     let authoritativeRevision = null;
     for (const c of chunks) {
+      if (envelope?.projection?.length && JSON.stringify(c[CTOX_QUERY_RPC.projectionResponseField]) !== JSON.stringify(envelope.projection)) {
+        throw Object.assign(new Error("QUERY_PROJECTION_NOT_SUPPORTED: native peer did not confirm the requested fields"), {
+          code: "QUERY_PROJECTION_NOT_SUPPORTED",
+          retryable: false
+        });
+      }
       const decoded = await decodeChunk(c);
       for (const d of decoded) documents.push(d);
       if (c.authoritativeRevision) authoritativeRevision = c.authoritativeRevision;
     }
-    return { documents, authoritativeRevision };
+    return {
+      documents,
+      authoritativeRevision,
+      ...envelope?.projection?.length ? { appliedProjection: [...envelope.projection] } : {}
+    };
   }
   function isRetryableQueryStreamLimit(error) {
     const code = String(error?.code || "");
@@ -7878,6 +8180,7 @@ function canonicalizeQueryInput(input) {
   const collection = String(input.collection || "");
   if (!collection) throw new Error("collection is required");
   const schemaVersion = Number.isFinite(Number(input.schemaVersion)) ? Number(input.schemaVersion) : 0;
+  const projection = normalizeQueryProjection(input.projection);
   return {
     collection,
     schemaVersion,
@@ -7886,7 +8189,8 @@ function canonicalizeQueryInput(input) {
     sort: canonicalizeSort(input.sort),
     limit: normalizeOptionalNumber(input.limit),
     skip: normalizeOptionalNumber(input.skip),
-    window: canonicalizeWindow(input.window)
+    window: canonicalizeWindow(input.window),
+    ...projection ? { projection } : {}
   };
 }
 function canonicalQueryJson(input) {
@@ -8016,7 +8320,8 @@ function createQueryDemandLoader({
   // newly authorized fetch re-stamps their membership. An empty current
   // digest (identity unresolvable right now) cannot authorize a local
   // control-plane window; retained replication checkpoints are separate.
-  readPermissionDigest = null
+  readPermissionDigest = null,
+  onQueryWindowChanged = null
 }) {
   if (!storageCollection) throw new TypeError("demand loader requires storageCollection");
   if (!sidecar) throw new TypeError("demand loader requires sidecar");
@@ -8042,6 +8347,15 @@ function createQueryDemandLoader({
     currentReadPermissionDigest: resolveReadPermissionDigest,
     async resolveQuery(query, { window: window2, signal } = {}) {
       const normalizedWindow = normalizeWindow(window2, query);
+      const projection = normalizeQueryProjection(query?.projection, storageCollection.primaryPath || "id");
+      const projected = Boolean(projection);
+      if (projected && normalizedWindow.limit > PROJECTED_QUERY_WINDOW_MAX_ROWS) {
+        throw Object.assign(new Error("PROJECTED_QUERY_WINDOW_TOO_LARGE: projected windows contain at most 200 rows"), {
+          code: "PROJECTED_QUERY_WINDOW_TOO_LARGE",
+          retryable: false
+        });
+      }
+      const inputPermissionDigest = projected ? resolveReadPermissionDigest() : "";
       const strictRequireRevision = Boolean(query?.requireRevision);
       const generation = strictRequireRevision ? String(queryGeneration?.() || "") : "";
       if (strictRequireRevision && !generation) {
@@ -8060,13 +8374,15 @@ function createQueryDemandLoader({
         sort: normalizeSort(query?.sort),
         limit: query?.limit,
         skip: query?.skip,
-        window: normalizedWindow
+        window: normalizedWindow,
+        ...projected ? { projection } : {}
       };
       const inputKey = JSON.stringify({
         ...fingerprintInput,
         requireRevision: query?.requireRevision ?? null,
         requireGeneration: generation || null,
-        signalToken: signalToken || null
+        signalToken: signalToken || null,
+        ...projected ? { permissionDigest: inputPermissionDigest } : {}
       });
       const existingInvocation = resolvingByInput.get(inputKey);
       if (existingInvocation) {
@@ -8123,7 +8439,9 @@ function createQueryDemandLoader({
         assertFresh();
         const cachedDocumentsAvailable = await queryWindowDocumentsAvailable(
           storageCollection,
-          cached?.documentIds
+          cached?.documentIds,
+          sidecar,
+          cached
         );
         assertFresh();
         if (cached && (cached.complete || cached.everCompleted) && !cachedDocumentsAvailable) {
@@ -8136,11 +8454,11 @@ function createQueryDemandLoader({
         const emptyWindowStale = cached && (!Array.isArray(cached.documentIds) || cached.documentIds.length === 0) && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= EMPTY_QUERY_WINDOW_REVALIDATE_MS;
         const mutableMembershipWindowStale = isMutableMembershipCollection(collectionName) && cached && Array.isArray(cached.documentIds) && cached.documentIds.length > 0 && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= MUTABLE_QUERY_MEMBERSHIP_REVALIDATE_MS;
         const queryWindowStale = cached && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= boundedQueryWindowRevalidateMs;
-        const controlPlaneRead = isControlPlaneStatusCollection(collectionName);
+        const controlPlaneRead = projected || isControlPlaneStatusCollection(collectionName);
         const controlPlanePermissionMismatchNow = () => controlPlaneRead && cached && (cached.complete || cached.everCompleted) && !windowReadPermissionDigestMatches(cached.permissionDigest, resolveReadPermissionDigest());
         const controlPlaneFallbackMembership = () => controlPlanePermissionMismatchNow() || controlPlaneRead && !cached ? [] : cached?.documentIds;
         const serveWindowDocuments = async (windowRecord, membershipIds) => {
-          const documents = await readLocalDocuments(
+          const documents = projected ? await readProjectedWindowDocuments(sidecar, windowRecord, membershipIds, storageCollection.primaryPath) : await readLocalDocuments(
             storageCollection,
             query,
             normalizedWindow,
@@ -8157,15 +8475,15 @@ function createQueryDemandLoader({
         if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale && !controlPlanePermissionMismatchNow()) {
           if (strictRequireRevision) {
             if (cached.satisfiedRevision === query.requireRevision && cached.satisfiedGeneration === generation && !controlPlaneWindowStale) {
-              await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
+              if (!projected) await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
               return serveWindowDocuments(cached, cached.documentIds);
             }
           } else if (!controlPlaneWindowStale) {
-            await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
+            if (!projected) await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
             return serveWindowDocuments(cached, cached.documentIds);
           }
         }
-        const dedupKey = strictRequireRevision ? `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}|strict|${query.requireRevision}|${generation}` : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
+        const dedupKey = strictRequireRevision ? `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}|strict|${query.requireRevision}|${generation}` : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}${projected ? `|permission|${inputPermissionDigest}` : ""}`;
         const startFetchJob = () => {
           if (inflightByFingerprint.has(dedupKey)) {
             bumpStatus(status, "queryFetchDedupHitCount");
@@ -8186,6 +8504,7 @@ function createQueryDemandLoader({
                   collectionName,
                   schemaVersion: schemaVersion ?? 0,
                   queryFingerprint: fingerprint,
+                  ...projected ? { projection } : {},
                   query: {
                     selector: query?.selector ?? {},
                     sort: normalizeSort(query?.sort),
@@ -8200,9 +8519,23 @@ function createQueryDemandLoader({
               if (controlPlaneRead && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())) {
                 throw createQueryCancelledError("permission-identity-changed");
               }
-              await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
+              let documents = result.documents || [];
+              let projectionKey = null;
+              if (projected) {
+                if (JSON.stringify(result.appliedProjection) !== JSON.stringify(projection)) {
+                  throw Object.assign(new Error("QUERY_PROJECTION_NOT_SUPPORTED: native peer did not confirm the requested fields"), {
+                    code: "QUERY_PROJECTION_NOT_SUPPORTED",
+                    retryable: false
+                  });
+                }
+                documents = documents.map((document2) => projectQueryDocument(document2, projection));
+                projectionKey = `${requestId}|${fingerprint}|${fetchPermissionDigest}|${globalThis.crypto?.randomUUID?.() || Math.random()}`;
+                await sidecar.putProjectedQueryRows(projectionKey, documents);
+              } else {
+                await materializeChunks(storageCollection, documents, resolveReplicationOrigin());
+              }
               assertFresh();
-              const documentIds = (result.documents || []).map(extractId).filter(Boolean);
+              const documentIds = documents.map((document2) => extractQueryId(document2, storageCollection.primaryPath)).filter(Boolean);
               await sidecar.upsertQueryWindow({
                 collection: collectionName,
                 queryFingerprint: fingerprint,
@@ -8217,15 +8550,18 @@ function createQueryDemandLoader({
                 // fetch ran under; a later role/grant change (new digest) must
                 // not be served this membership.
                 permissionDigest: fetchPermissionDigest || null,
+                ...projected ? { projection, projectionKey } : {},
                 queryShape: {
                   selector: query?.selector ?? {},
                   sort: normalizeSort(query?.sort)
                 }
               });
               assertFresh();
-              await sidecar.touchDocuments(collectionName, documentIds, {
-                estimatedBytes: estimateBytesPerDocument(result.documents || [])
-              });
+              if (!projected) {
+                await sidecar.touchDocuments(collectionName, documentIds, {
+                  estimatedBytes: estimateBytesPerDocument(documents)
+                });
+              }
               assertFresh();
               if (controlPlaneRead && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())) {
                 throw createQueryCancelledError("permission-identity-changed");
@@ -8233,7 +8569,8 @@ function createQueryDemandLoader({
               bumpStatus(status, "queryFetchSuccessCount");
               if (status) status.lastQueryFetchMs = clock() - startedAt;
               v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
-              return authoritativeFetchedDocuments(result.documents || [], documentIds);
+              if (projected) onQueryWindowChanged?.({ fingerprint, documentIds });
+              return projected ? documents.filter((document2) => document2._deleted !== true) : authoritativeFetchedDocuments(documents, documentIds);
             } catch (error) {
               if (isQueryCancelledError(error)) {
                 bumpStatus(status, "queryFetchCancelCount");
@@ -8280,11 +8617,14 @@ function createQueryDemandLoader({
           }
           const materialized = await sidecar.getQueryWindow(sidecarKey);
           assertFresh();
-          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds) && (!controlPlaneRead || windowReadPermissionDigestMatches(
+          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds, sidecar, materialized) && (!controlPlaneRead || windowReadPermissionDigestMatches(
             materialized.permissionDigest,
             resolveReadPermissionDigest()
           )) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
             bumpStatus(status, "queryFetchDedupHitCount");
+            if (projected && materialized.projectionKey !== cached?.projectionKey) {
+              onQueryWindowChanged?.({ fingerprint, documentIds: materialized.documentIds });
+            }
             return serveWindowDocuments(materialized, materialized.documentIds);
           }
           const takeover = await multiTabBroker.claim(dedupKey);
@@ -8323,7 +8663,7 @@ function createQueryDemandLoader({
           });
           bumpStatus(status, "queryFetchStaleServedCount");
           v15Log("fetch:stale-served", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
-          await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
+          if (!projected) await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
           return serveWindowDocuments(cached, cached.documentIds || []);
         }
         return coordinatedFetchJob();
@@ -8349,18 +8689,22 @@ function createQueryDemandLoader({
     async invalidateDocumentChange(changedDocumentIds = []) {
       if (!changedDocumentIds.length) return 0;
       if (typeof sidecar.invalidateQueryWindowsForDocuments === "function") {
-        return sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
+        const count = await sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
+        if (count) onQueryWindowChanged?.();
+        return count;
       }
       return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
     },
     async invalidateDocuments(changedDocuments = []) {
       if (!changedDocuments.length) return 0;
       if (typeof sidecar.invalidateQueryWindowsForChanges === "function") {
-        return sidecar.invalidateQueryWindowsForChanges(
+        const count = await sidecar.invalidateQueryWindowsForChanges(
           collectionName,
           changedDocuments,
           storageCollection?.primaryPath || "id"
         );
+        if (count) onQueryWindowChanged?.();
+        return count;
       }
       return this.invalidateDocumentChange(changedDocuments.map(extractId).filter(Boolean));
     },
@@ -8412,7 +8756,7 @@ function createQueryDemandLoader({
             // Ever-complete windows hold replicated (validated) documents;
             // an aborted background revalidation must not tombstone them.
             // Only never-completed windows can reference partial orphans.
-            (w) => w.queryFingerprint === fingerprint && !w.complete && !w.everCompleted
+            (w) => w.queryFingerprint === fingerprint && !w.complete && !w.everCompleted && !w.projection
           );
           for (const window2 of partial) {
             const ids = window2.documentIds || [];
@@ -8563,11 +8907,28 @@ function authoritativeFetchedDocuments(documents, documentIds) {
   );
   return documentIds.map((id) => byId.get(String(id))).filter(Boolean);
 }
-async function queryWindowDocumentsAvailable(storageCollection, documentIds) {
+async function queryWindowDocumentsAvailable(storageCollection, documentIds, sidecar, windowRecord) {
+  if (windowRecord?.projection) {
+    const rows = await sidecar.getProjectedQueryRows(windowRecord.projectionKey);
+    if (!Array.isArray(rows)) return false;
+    const available = new Set(rows.map((row) => extractQueryId(row, storageCollection.primaryPath)));
+    return Array.isArray(documentIds) && documentIds.every((id) => available.has(String(id)));
+  }
   if (!Array.isArray(documentIds) || documentIds.length === 0) return true;
   if (typeof storageCollection.findDocumentsById !== "function") return true;
   const documents = await storageCollection.findDocumentsById(documentIds);
   return documentIds.every((id) => Boolean(documents?.[String(id)]));
+}
+async function readProjectedWindowDocuments(sidecar, windowRecord, documentIds, primaryPath) {
+  if (!windowRecord?.projection || !Array.isArray(documentIds)) return [];
+  const rows = await sidecar.getProjectedQueryRows(windowRecord.projectionKey);
+  if (!Array.isArray(rows)) return [];
+  const byId = new Map(rows.map((row) => [extractQueryId(row, primaryPath), row]));
+  return documentIds.map((id) => byId.get(String(id))).filter((row) => row && !row._deleted);
+}
+function extractQueryId(document2, primaryPath = "id") {
+  const value = String(primaryPath || "id").split(".").reduce((next, part) => next?.[part], document2);
+  return value == null ? extractId(document2) : String(value);
 }
 async function materializeChunks(storageCollection, documents, replicationOrigin = null) {
   if (!documents.length) return;
@@ -9164,6 +9525,7 @@ var STORE_CACHE_STATS = "cacheStats";
 var OPEN_TIMEOUT_MS = 4e3;
 function createIndexedDbMetaBackend({ databaseName }) {
   if (!databaseName) throw new TypeError("createIndexedDbMetaBackend requires databaseName");
+  const projectedCache = createIndexedDbProjectedQueryCache({ databaseName: `${databaseName}_query_projection_v1` });
   let dbPromise = null;
   let fallbackBackend = null;
   const fallback = () => {
@@ -9191,6 +9553,15 @@ function createIndexedDbMetaBackend({ databaseName }) {
   return {
     get name() {
       return fallbackBackend ? "memory-fallback" : "indexeddb";
+    },
+    get projectedCacheName() {
+      return projectedCache.name;
+    },
+    async putProjectedQueryRows(key, documents, now) {
+      return projectedCache.put(key, documents, now);
+    },
+    async getProjectedQueryRows(key, now) {
+      return projectedCache.get(key, now);
     },
     async putQueryWindow(record) {
       await withDb(
@@ -9327,6 +9698,7 @@ function createIndexedDbMetaBackend({ databaseName }) {
           }
         }
       );
+      await projectedCache.clear();
     },
     async close() {
       const currentDbPromise = dbPromise;
@@ -9339,6 +9711,7 @@ function createIndexedDbMetaBackend({ databaseName }) {
         }
       }
       await fallbackBackend?.close?.();
+      await projectedCache.close();
       fallbackBackend = null;
     }
   };
@@ -12090,7 +12463,8 @@ var CtoxWebRtcReplicationState = class {
       // SYNC-12: live provider — runPeerReady recomputes this digest at every
       // handshake, so a same-session role/grant change takes effect at the
       // next control-plane read without rebuilding the loader.
-      readPermissionDigest: () => this.readPermissionDigest || ""
+      readPermissionDigest: () => this.readPermissionDigest || "",
+      onQueryWindowChanged: () => this.collection.notifyQueryWindowChange?.()
     }) : null;
     if (typeof this.collection.setDemandLoader === "function") {
       this.collection.setDemandLoader(this.demandLoader);
@@ -13362,6 +13736,8 @@ function clearCollectionSyncProfiles() {
 }
 
 // src/apps/business-os/rxdb/src/rx-database.mjs
+var readOnlyProjectedDocuments = /* @__PURE__ */ new WeakSet();
+var readOnlyProjectedRows = /* @__PURE__ */ new WeakSet();
 function getCtoxIndexedDbStorage() {
   return { name: "ctox-indexeddb-native" };
 }
@@ -13518,6 +13894,8 @@ var CtoxRxCollection = class {
     this.storageCollection = storageCollection;
     this.demandLoader = null;
     this.demandLoaderListeners = /* @__PURE__ */ new Set();
+    this.projectedLoaderListeners = /* @__PURE__ */ new Set();
+    this.queryWindowListeners = /* @__PURE__ */ new Set();
     this.localReplicaComplete = false;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
@@ -13533,6 +13911,7 @@ var CtoxRxCollection = class {
     if (isControlPlaneStatusCollection(this.name)) {
       for (const listener of this.demandLoaderListeners) listener();
     }
+    for (const listener of this.projectedLoaderListeners) listener();
   }
   // Set by the replication state of an eagerly pulled collection once its
   // pull drained. Control-plane ledgers stay behind their authorized demand
@@ -13540,9 +13919,17 @@ var CtoxRxCollection = class {
   setLocalReplicaComplete(complete) {
     this.localReplicaComplete = Boolean(complete) && !isControlPlaneStatusCollection(this.name);
   }
-  subscribeDemandLoaderChange(listener) {
-    this.demandLoaderListeners.add(listener);
-    return () => this.demandLoaderListeners.delete(listener);
+  subscribeDemandLoaderChange(listener, projected = false) {
+    const listeners = projected ? this.projectedLoaderListeners : this.demandLoaderListeners;
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+  subscribeQueryWindowChange(listener) {
+    this.queryWindowListeners.add(listener);
+    return () => this.queryWindowListeners.delete(listener);
+  }
+  notifyQueryWindowChange() {
+    for (const listener of this.queryWindowListeners) listener();
   }
   async insert(doc) {
     const normalized = normalizeDoc(doc, this.schema.primaryPath);
@@ -13855,8 +14242,8 @@ var CtoxRxQuery = class _CtoxRxQuery {
         let pendingPrimaryDoc = void 0;
         const primaryId = this.single ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath) : "";
         const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
-        const canApplyPrimaryDelta = () => !controlPlaneRead && Boolean(primaryId) && !this.collection.demandLoader && !this.query.requireRevision;
-        const canApplyQueryDelta = () => !controlPlaneRead && !this.single && !this.collection.demandLoader && !this.query.requireRevision && canApplyUnboundedQueryDelta(this.query);
+        const canApplyPrimaryDelta = () => !controlPlaneRead && !this.query.projection && Boolean(primaryId) && !this.collection.demandLoader && !this.query.requireRevision;
+        const canApplyQueryDelta = () => !controlPlaneRead && !this.query.projection && !this.single && !this.collection.demandLoader && !this.query.requireRevision && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
         const queryDocumentsById = /* @__PURE__ */ new Map();
         const emitQueryDocuments = () => {
@@ -13989,7 +14376,9 @@ var CtoxRxQuery = class _CtoxRxQuery {
           initialized = false;
           listener(this.single ? null : []);
           flushEmit();
-        });
+        }, Boolean(this.query.projection));
+        const unsubscribeWindow = this.query.projection ? this.collection.subscribeQueryWindowChange(emit) : () => {
+        };
         flushEmit();
         const unsubscribe = this.collection.observe(emit);
         return {
@@ -14009,6 +14398,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
             unsubscribe();
             unsubscribeLoader();
             registry.subscriptionEnded(this.collection.name);
+            unsubscribeWindow();
           }
         };
       }
@@ -14052,7 +14442,13 @@ var CtoxRxQuery = class _CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
-    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
+    if (this.query.requireRevision && !demandLoader) {
+      throw Object.assign(new Error("QUERY_GENERATION_REQUIRED: strict demand read has no loader"), {
+        code: "QUERY_GENERATION_REQUIRED",
+        retryable: false
+      });
+    }
+    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision || this.query.projection)) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
       demandOptions.signal = signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
@@ -14093,7 +14489,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
         docs = docs.slice(0, this.query.limit);
       }
     }
-    if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
+    if ((isControlPlaneStatusCollection(this.collection.name) || this.query.requireRevision || this.query.projection) && demandLoader !== this.collection.demandLoader) {
       if (this.query.requireRevision) {
         throw Object.assign(new Error("QUERY_CANCELLED: generation-replaced"), {
           code: "QUERY_CANCELLED",
@@ -14109,7 +14505,11 @@ var CtoxRxQuery = class _CtoxRxQuery {
         retryable: false
       });
     }
-    const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
+    const wrapped = docs.map((doc) => new CtoxRxDocument(
+      this.collection,
+      this.query.projection ? projectQueryDocument(doc, this.query.projection) : doc,
+      { projected: Boolean(this.query.projection) }
+    ));
     return this.single ? wrapped[0] || null : wrapped;
   }
   _clone(patch = {}) {
@@ -14119,7 +14519,9 @@ var CtoxRxQuery = class _CtoxRxQuery {
       index: patch.index ?? this.query.index,
       limit: patch.limit ?? this.query.limit,
       skip: patch.skip ?? this.query.skip,
-      requireRevision: patch.requireRevision ?? this.query.requireRevision
+      requireRevision: patch.requireRevision ?? this.query.requireRevision,
+      projection: this.query.projection,
+      signal: this.signal
     }, this.single);
   }
   _withSelectorPatch(patch = {}) {
@@ -14132,13 +14534,17 @@ var CtoxRxQuery = class _CtoxRxQuery {
   }
 };
 var CtoxRxDocument = class {
-  constructor(collection, data) {
+  constructor(collection, data, { projected = false } = {}) {
     this.collection = collection;
-    this._data = { ...data };
+    this._data = projected ? cloneQueryRow(data) : { ...data };
     Object.assign(this, this._data);
+    if (projected) readOnlyProjectedDocuments.add(this);
   }
   toJSON() {
-    return { ...this._data };
+    if (!readOnlyProjectedDocuments.has(this)) return { ...this._data };
+    const row = cloneQueryRow(this._data);
+    readOnlyProjectedRows.add(row);
+    return row;
   }
   async patch(fields) {
     return this.incrementalPatch(fields);
@@ -14153,6 +14559,7 @@ var CtoxRxDocument = class {
     return this.incrementalPatch(operation || {});
   }
   async incrementalModify(modifier) {
+    if (readOnlyProjectedDocuments.has(this)) throw projectedDocumentWriteError();
     const current = this.toJSON();
     const next = await modifier({ ...current });
     return this.incrementalPatch(next || current);
@@ -14161,6 +14568,7 @@ var CtoxRxDocument = class {
     return this.incrementalModify(modifier);
   }
   async incrementalPatch(fields) {
+    if (readOnlyProjectedDocuments.has(this)) throw projectedDocumentWriteError();
     const updatedAtMs = Number(fields?.updated_at_ms || Date.now());
     const next = {
       ...this._data,
@@ -14186,16 +14594,18 @@ function normalizeQuery(query, primaryPath) {
   if (typeof query === "string") {
     return { selector: { [primaryPath]: query } };
   }
-  if (query && typeof query === "object" && !query.selector && Object.keys(query).length && !query.sort && !query.limit && !query.skip) {
+  if (query && typeof query === "object" && !query.selector && Object.keys(query).length && !query.sort && !query.limit && !query.skip && !Object.hasOwn(query, "projection")) {
     return { selector: query };
   }
+  const projection = normalizeQueryProjection(query?.projection, primaryPath);
   return {
     selector: query?.selector || {},
     sort: normalizeSort2(query?.sort),
     index: normalizeIndex(query?.index),
     limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : void 0,
     skip: Number.isFinite(Number(query?.skip)) ? Math.max(0, Number(query.skip)) : void 0,
-    requireRevision: typeof query?.requireRevision === "string" && query.requireRevision ? query.requireRevision : void 0
+    requireRevision: typeof query?.requireRevision === "string" && query.requireRevision ? query.requireRevision : void 0,
+    ...projection ? { projection } : {}
   };
 }
 function normalizeIndex(index) {
@@ -14468,6 +14878,9 @@ function primaryPathFromSchema2(schema) {
   return "id";
 }
 function normalizeDoc(doc, primaryPath) {
+  if (readOnlyProjectedRows.has(doc) || readOnlyProjectedDocuments.has(doc)) {
+    throw projectedDocumentWriteError();
+  }
   if (!doc || typeof doc !== "object") {
     throw new TypeError("document must be an object");
   }

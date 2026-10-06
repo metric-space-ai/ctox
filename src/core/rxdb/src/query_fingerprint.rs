@@ -68,7 +68,9 @@ pub fn canonicalize_query_input(input: &Value) -> Result<Value, FingerprintError
     out.insert("skip".into(), skip);
     out.insert("sort".into(), sort);
     out.insert("window".into(), window);
-    if let Some(projection) = normalize_query_projection(obj.get("projection").unwrap_or(&Value::Null))? {
+    if let Some(projection) =
+        normalize_query_projection(obj.get("projection").unwrap_or(&Value::Null))?
+    {
         out.insert("projection".into(), Value::from(projection));
     }
     Ok(Value::Object(out))
@@ -79,13 +81,17 @@ pub fn normalize_query_projection(value: &Value) -> Result<Option<Vec<String>>, 
     if value.is_null() {
         return Ok(None);
     }
-    let values = value.as_array().ok_or(FingerprintError::InvalidProjection)?;
+    let values = value
+        .as_array()
+        .ok_or(FingerprintError::InvalidProjection)?;
     let mut fields = Vec::with_capacity(values.len());
     for value in values {
         let field = value.as_str().ok_or(FingerprintError::InvalidProjection)?;
-        if field.is_empty() || field.split('.').any(|part| {
-            part.is_empty() || matches!(part, "__proto__" | "constructor" | "prototype")
-        }) {
+        if field.is_empty()
+            || field.split('.').any(|part| {
+                part.is_empty() || matches!(part, "__proto__" | "constructor" | "prototype")
+            })
+        {
             return Err(FingerprintError::InvalidProjection);
         }
         fields.push(field.to_owned());
@@ -95,7 +101,9 @@ pub fn normalize_query_projection(value: &Value) -> Result<Option<Vec<String>>, 
     let mut normalized: Vec<String> = Vec::with_capacity(fields.len());
     for field in fields {
         if !normalized.iter().any(|parent| {
-            field.strip_prefix(parent.as_str()).is_some_and(|suffix| suffix.starts_with('.'))
+            field
+                .strip_prefix(parent.as_str())
+                .is_some_and(|suffix| suffix.starts_with('.'))
         }) {
             normalized.push(field);
         }
