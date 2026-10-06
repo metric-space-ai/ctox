@@ -446,14 +446,33 @@ pub(crate) fn prepare_attempt(
 /// The unique event index also closes a race with the initial best-effort emit.
 pub(crate) fn repair_selection_events(root: &Path, conn: &Connection) -> Result<()> {
     ensure_selection_event_index(conn)?;
+    // The correlated NOT EXISTS was planned as a full scan of the partial
+    // index per attempt (SCAN, not SEARCH): 4.4 s per cockpit sweep for 711
+    // attempts on the THESEN on-prem host. NOT IN over the indexed id set is
+    // one pass (16 ms there); NULL ids are excluded so NOT IN keeps the
+    // NOT EXISTS semantics.
     let mut cursor = String::new();
     loop {
-        let rows=conn.prepare("SELECT a.attempt_id,a.task_id,a.member_id,a.selection_reason
+        let rows = conn
+            .prepare(
+                "SELECT a.attempt_id,a.task_id,a.member_id,a.selection_reason
             FROM crew_attempts a WHERE a.attempt_id>?1 AND a.selection_reason!=''
               AND (a.started_at IS NOT NULL OR a.finalized_at IS NOT NULL)
-              AND NOT EXISTS(SELECT 1 FROM ctox_harness_flow_events e
-                WHERE e.event_kind='crew_selected' AND json_extract(e.metadata_json,'$.attempt_id')=a.attempt_id)
-            ORDER BY a.attempt_id LIMIT 128")?.query_map([&cursor],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+              AND a.attempt_id NOT IN(SELECT json_extract(e.metadata_json,'$.attempt_id')
+                FROM ctox_harness_flow_events e
+                WHERE e.event_kind='crew_selected'
+                  AND json_extract(e.metadata_json,'$.attempt_id') IS NOT NULL)
+            ORDER BY a.attempt_id LIMIT 128",
+            )?
+            .query_map([&cursor], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         if rows.is_empty() {
             break;
         }

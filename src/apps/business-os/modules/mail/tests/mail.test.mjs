@@ -23,7 +23,15 @@ import {
 } from '../mail-group-model.mjs';
 
 const moduleRoot = new URL('../', import.meta.url);
-assert.equal(esbuild.version, '0.28.0', 'Mail regression requires pinned real esbuild 0.28.0; a re-export shim does not verify browser bundling');
+const [bootstrapPackage, bootstrapLock] = await Promise.all([
+  readFile(new URL('../../../package.json', import.meta.url), 'utf8').then(JSON.parse),
+  readFile(new URL('../../../package-lock.json', import.meta.url), 'utf8').then(JSON.parse),
+]);
+const declaredEsbuildVersion = bootstrapPackage.devDependencies.esbuild;
+assert.match(declaredEsbuildVersion, /^\d+\.\d+\.\d+$/, 'Business OS must declare an exact esbuild version');
+assert.equal(bootstrapLock.packages['node_modules/esbuild'].version, declaredEsbuildVersion, 'The locked esbuild version must match the Business OS declaration');
+assert.equal(esbuild.version, declaredEsbuildVersion, 'Mail regression requires the declared and locked real esbuild; a re-export shim does not verify browser bundling');
+
 const bundledModule = await esbuild.build({
   entryPoints: [fileURLToPath(new URL('../index.js', import.meta.url))],
   bundle: true,

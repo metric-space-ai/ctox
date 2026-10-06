@@ -5,6 +5,13 @@ and integrated per-model inference trees.
 
 Primary integrated source trees:
 
+- src/core/transfers (Git dependency aria2-rust)
+  https://github.com/mkh-welsch/aria2-rust at
+  85d4eda67ab43c22021910824aedbb9dfc8f2504 (based on 7bfacc2cf27e55d4755b06623c1b997880d0c697).
+  Dependency license: GPL-2.0-or-later, per its LICENSE and Cargo.toml.
+  Source is private and is not vendored or redistributed by this PR.
+  Source availability/distribution must be resolved before a public release.
+
 - src/harness
   Derived from https://github.com/openai/codex
   Upstream license: Apache-2.0

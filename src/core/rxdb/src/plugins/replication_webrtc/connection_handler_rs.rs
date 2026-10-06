@@ -51,6 +51,8 @@ use frame_contract_generated::{
 const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_RESUME_TIMEOUT: Duration = Duration::from_secs(1);
 const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
+/// ACK windows a framed transfer keeps in flight (each FRAME_ACK_WINDOW chunks).
+const FRAME_PIPELINE_WINDOWS: usize = 8;
 static AUXILIARY_TRANSFER_COUNTER: AtomicU64 = AtomicU64::new(1);
 // Phase 1 (constant real-time stream): native -> browser SCTP send-buffer
 // watermarks. webrtc-rs exposes no buffered-amount *getter*, only threshold
@@ -1543,10 +1545,21 @@ impl WebRTCRsConnectionHandler {
         let transfer = TransferStateKey::new(peer, transfer_id);
         let mut pending = self.pending_frame_acks.lock();
         match ack_seq {
-            Some(ack_seq) => pending
-                .remove(&PendingFrameAckKey { transfer, ack_seq })
-                .into_iter()
-                .collect(),
+            // ACKs are cumulative: the browser acknowledges its highest
+            // contiguous frame, so every outstanding window ending at or below
+            // it is complete. With one window in flight this is the exact
+            // match it used to be; with pipelined windows one ACK can close
+            // several.
+            Some(ack_seq) => {
+                let keys: Vec<PendingFrameAckKey> = pending
+                    .keys()
+                    .filter(|key| key.transfer == transfer && key.ack_seq <= ack_seq)
+                    .cloned()
+                    .collect();
+                keys.into_iter()
+                    .filter_map(|key| pending.remove(&key))
+                    .collect()
+            }
             None => {
                 let keys: Vec<PendingFrameAckKey> = pending
                     .keys()
@@ -3096,76 +3109,108 @@ impl WebRTCRsConnectionHandler {
         .await?;
         self.record_sent_transport_frame(&start);
 
-        for window_start in (0..chunks.len()).step_by(FRAME_ACK_WINDOW) {
-            self.drain_high_priority_inline_frames(peer, &data_channel, available)
+        let windows: Vec<(usize, usize)> = (0..chunks.len())
+            .step_by(FRAME_ACK_WINDOW)
+            .map(|window_start| {
+                (
+                    window_start,
+                    usize::min(window_start + FRAME_ACK_WINDOW, chunks.len()) - 1,
+                )
+            })
+            .collect();
+        'attempts: loop {
+            if transfer_attempt > 0 {
+                let restart =
+                    transport_start_frame(&transfer_id, transfer_attempt, chunks.len(), text.len());
+                send_json_text_owned(
+                    &data_channel,
+                    &restart,
+                    completion.as_deref_mut(),
+                    publication,
+                )
                 .await?;
-            let window_end = usize::min(window_start + FRAME_ACK_WINDOW, chunks.len()) - 1;
-            let ack_key = PendingFrameAckKey::new(peer, &transfer_id, window_end);
-            let mut attempt = transfer_attempt;
-            let mut restart_from_zero = false;
+                self.record_sent_transport_frame(&restart);
+            }
+            // Up to FRAME_PIPELINE_WINDOWS ACK windows are in flight. Waiting
+            // for every 4-chunk window before sending the next capped a relayed
+            // channel at ~40 KB per round trip (~1 MB/s measured on the THESEN
+            // on-prem tenant). The browser ACKs cumulatively, so the oldest
+            // outstanding window bounds what has to be resent.
+            let mut outstanding: VecDeque<(
+                usize,
+                PendingFrameAckKey,
+                tokio::sync::oneshot::Receiver<()>,
+            )> = VecDeque::new();
+            let mut windows_iter = windows.iter().copied();
             loop {
-                if restart_from_zero {
-                    let restart =
-                        transport_start_frame(&transfer_id, attempt, chunks.len(), text.len());
-                    send_json_text_owned(
-                        &data_channel,
-                        &restart,
-                        completion.as_deref_mut(),
-                        publication,
-                    )
-                    .await?;
-                    self.record_sent_transport_frame(&restart);
-                }
-                let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-                self.pending_frame_acks.lock().insert(
-                    ack_key.clone(),
-                    PendingFrameAck {
-                        sender: ack_tx,
-                        sent_at_ms: now_ms(),
-                    },
-                );
-                self.refresh_dynamic_transport_status();
-
-                for (seq, data) in chunks
-                    .iter()
-                    .enumerate()
-                    .take(window_end + 1)
-                    .skip(if restart_from_zero { 0 } else { window_start })
-                {
-                    // Phase 1: pace on the SCTP send buffer so a large transfer
-                    // never bursts past what the channel can deliver in real
-                    // time (which would overrun the buffer and get the channel
-                    // killed by the browser).
-                    let waiting = wait_under_publication(
-                        publication,
-                        self.wait_for_send_capacity(peer, available),
+                let next_window = if outstanding.len() < FRAME_PIPELINE_WINDOWS {
+                    windows_iter.next()
+                } else {
+                    None
+                };
+                if let Some((window_start, window_end)) = next_window {
+                    self.drain_high_priority_inline_frames(peer, &data_channel, available)
+                        .await?;
+                    let ack_key = PendingFrameAckKey::new(peer, &transfer_id, window_end);
+                    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                    self.pending_frame_acks.lock().insert(
+                        ack_key.clone(),
+                        PendingFrameAck {
+                            sender: ack_tx,
+                            sent_at_ms: now_ms(),
+                        },
                     );
-                    let capacity = match completion.as_deref_mut() {
-                        Some(owner) => send_while_owned(owner, waiting).await,
-                        None => waiting.await,
-                    };
-                    if let Err(error) = capacity {
-                        self.pending_frame_acks.lock().remove(&ack_key);
-                        self.refresh_dynamic_transport_status();
-                        return Err(error);
-                    }
-                    let chunk = transport_chunk_frame(&transfer_id, attempt, seq, data);
-                    if let Err(error) = send_json_text_owned(
-                        &data_channel,
-                        &chunk,
-                        completion.as_deref_mut(),
-                        publication,
-                    )
-                    .await
+                    self.refresh_dynamic_transport_status();
+                    for (seq, data) in chunks
+                        .iter()
+                        .enumerate()
+                        .take(window_end + 1)
+                        .skip(window_start)
                     {
-                        self.pending_frame_acks.lock().remove(&ack_key);
-                        self.refresh_dynamic_transport_status();
-                        return Err(error);
+                        // Preserve the pipelined ACK window, while each
+                        // capacity wait and physical chunk retains its own
+                        // completion owner and current native publication.
+                        let waiting = wait_under_publication(
+                            publication,
+                            self.wait_for_send_capacity(peer, available),
+                        );
+                        let capacity = match completion.as_deref_mut() {
+                            Some(owner) => send_while_owned(owner, waiting).await,
+                            None => waiting.await,
+                        };
+                        let sent = match capacity {
+                            Ok(()) => {
+                                let chunk = transport_chunk_frame(
+                                    &transfer_id,
+                                    transfer_attempt,
+                                    seq,
+                                    data,
+                                );
+                                send_json_text_owned(
+                                    &data_channel,
+                                    &chunk,
+                                    completion.as_deref_mut(),
+                                    publication,
+                                )
+                                .await
+                                .map(|()| self.record_sent_transport_frame(&chunk))
+                            }
+                            Err(error) => Err(error),
+                        };
+                        if let Err(error) = sent {
+                            self.remove_outstanding_frame_acks(
+                                outstanding.iter().map(|(_, key, _)| key).chain([&ack_key]),
+                            );
+                            return Err(error);
+                        }
+                        tokio::time::sleep(SEND_FRAME_PAUSE).await;
                     }
-                    self.record_sent_transport_frame(&chunk);
-                    tokio::time::sleep(SEND_FRAME_PAUSE).await;
+                    outstanding.push_back((window_end, ack_key, ack_rx));
+                    continue;
                 }
-
+                let Some((window_end, ack_key, ack_rx)) = outstanding.pop_front() else {
+                    break 'attempts;
+                };
                 // A chunked cold-start response can take many ACK windows. Do
                 // not let it head-of-line-block small control/masterWrite
                 // responses that arrive while we wait for the browser ACK.
@@ -3198,10 +3243,11 @@ impl WebRTCRsConnectionHandler {
                     }
                 };
                 match ack_result {
-                    Some(Ok(())) => break,
+                    Some(Ok(())) => continue,
                     Some(Err(_)) => {
-                        self.pending_frame_acks.lock().remove(&ack_key);
-                        self.refresh_dynamic_transport_status();
+                        self.remove_outstanding_frame_acks(
+                            outstanding.iter().map(|(_, key, _)| key).chain([&ack_key]),
+                        );
                         return Err(new_rx_error(
                             "RC_WEBRTC_PEER",
                             Some(serde_json::json!({
@@ -3215,45 +3261,63 @@ impl WebRTCRsConnectionHandler {
                     None => {
                         self.pending_frame_acks.lock().remove(&ack_key);
                         self.refresh_dynamic_transport_status();
-                        if self
-                            .request_frame_resume(
-                                peer,
-                                Arc::clone(&data_channel),
-                                &transfer_id,
-                                window_end,
-                                attempt,
-                            )
-                            .await?
-                        {
-                            break;
+                        let resuming = self.request_frame_resume(
+                            peer,
+                            Arc::clone(&data_channel),
+                            &transfer_id,
+                            window_end,
+                            transfer_attempt,
+                            publication,
+                        );
+                        let resumed = match completion.as_deref_mut() {
+                            Some(owner) => send_while_owned(owner, resuming).await?,
+                            None => resuming.await?,
+                        };
+                        if resumed {
+                            continue;
                         }
-                        if attempt >= MAX_FRAME_RETRIES {
+                        self.remove_outstanding_frame_acks(
+                            outstanding.iter().map(|(_, key, _)| key),
+                        );
+                        if transfer_attempt >= MAX_FRAME_RETRIES {
                             return Err(new_rx_error(
                                 "RC_WEBRTC_PEER",
                                 Some(serde_json::json!({
                                     "message": "timed out waiting for WebRTC frame ack",
                                     "transferId": transfer_id,
                                     "ackSeq": window_end,
-                                    "attempt": attempt,
+                                    "attempt": transfer_attempt,
                                     "peer": peer,
                                 })),
                             ));
                         }
-                        attempt += 1;
-                        transfer_attempt = attempt;
-                        restart_from_zero = true;
+                        transfer_attempt += 1;
                         self.record_status(|status| {
                             status.retry_count = status.retry_count.saturating_add(1);
                         });
                         tokio::time::sleep(Duration::from_millis(
-                            u64::try_from(usize::min(250 * attempt, 1000)).unwrap_or(1000),
+                            u64::try_from(usize::min(250 * transfer_attempt, 1000)).unwrap_or(1000),
                         ))
                         .await;
+                        continue 'attempts;
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    fn remove_outstanding_frame_acks<'a>(
+        &self,
+        keys: impl IntoIterator<Item = &'a PendingFrameAckKey>,
+    ) {
+        {
+            let mut pending = self.pending_frame_acks.lock();
+            for key in keys {
+                pending.remove(key);
+            }
+        }
+        self.refresh_dynamic_transport_status();
     }
 
     async fn drain_high_priority_inline_frames(
@@ -3332,6 +3396,7 @@ impl WebRTCRsConnectionHandler {
         transfer_id: &str,
         ack_seq: usize,
         attempt: usize,
+        publication: Option<&Arc<dyn WebRTCPublicationGuard>>,
     ) -> Result<bool, RxError> {
         let ack_key = PendingFrameAckKey::new(peer, transfer_id, ack_seq);
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
@@ -3344,7 +3409,7 @@ impl WebRTCRsConnectionHandler {
         );
         self.refresh_dynamic_transport_status();
         let resume = transport_resume_frame(transfer_id, attempt, ack_seq);
-        if let Err(error) = send_json_text(&data_channel, &resume).await {
+        if let Err(error) = send_json_text_owned(&data_channel, &resume, None, publication).await {
             self.pending_frame_acks.lock().remove(&ack_key);
             self.refresh_dynamic_transport_status();
             return Err(error);
@@ -5947,103 +6012,117 @@ mod tests {
         ));
     }
 
+    // Exercise real framing, priority interleave and the ACK parser.
+    // Only the SCTP link is replaced: text frames are recorded and ACKed.
+    struct AckChannel {
+        inner: Arc<dyn DataChannel>,
+        handler: Arc<WebRTCRsConnectionHandler>,
+        peer: String,
+        frames: Mutex<Vec<Value>>,
+        totals: Mutex<HashMap<String, usize>>,
+        publication: Option<Arc<TestPublicationGuard>>,
+        pending_chunk: Option<usize>,
+        pending: tokio::sync::Notify,
+    }
+    #[async_trait]
+    impl DataChannel for AckChannel {
+        async fn label(&self) -> webrtc::error::Result<String> {
+            self.inner.label().await
+        }
+        async fn ordered(&self) -> webrtc::error::Result<bool> {
+            self.inner.ordered().await
+        }
+        async fn max_packet_life_time(&self) -> webrtc::error::Result<Option<u16>> {
+            self.inner.max_packet_life_time().await
+        }
+        async fn max_retransmits(&self) -> webrtc::error::Result<Option<u16>> {
+            self.inner.max_retransmits().await
+        }
+        async fn protocol(&self) -> webrtc::error::Result<String> {
+            self.inner.protocol().await
+        }
+        async fn negotiated(&self) -> webrtc::error::Result<bool> {
+            self.inner.negotiated().await
+        }
+        fn id(&self) -> webrtc::data_channel::RTCDataChannelId {
+            self.inner.id()
+        }
+        async fn ready_state(
+            &self,
+        ) -> webrtc::error::Result<webrtc::data_channel::RTCDataChannelState> {
+            self.inner.ready_state().await
+        }
+        async fn buffered_amount_high_threshold(&self) -> webrtc::error::Result<u32> {
+            self.inner.buffered_amount_high_threshold().await
+        }
+        async fn set_buffered_amount_high_threshold(&self, n: u32) -> webrtc::error::Result<()> {
+            self.inner.set_buffered_amount_high_threshold(n).await
+        }
+        async fn buffered_amount_low_threshold(&self) -> webrtc::error::Result<u32> {
+            self.inner.buffered_amount_low_threshold().await
+        }
+        async fn set_buffered_amount_low_threshold(&self, n: u32) -> webrtc::error::Result<()> {
+            self.inner.set_buffered_amount_low_threshold(n).await
+        }
+        async fn send(&self, data: bytes::BytesMut) -> webrtc::error::Result<()> {
+            self.inner.send(data).await
+        }
+        async fn poll(&self) -> Option<DataChannelEvent> {
+            self.inner.poll().await
+        }
+        async fn close(&self) -> webrtc::error::Result<()> {
+            self.inner.close().await
+        }
+        async fn send_text(&self, text: &str) -> webrtc::error::Result<()> {
+            if let Some(publication) = &self.publication {
+                assert!(
+                    publication.allowed.try_lock().is_none(),
+                    "native authority must cover each physical framed poll"
+                );
+            }
+            let frame: Value = serde_json::from_str(text).unwrap();
+            if frame["kind"] == "chunk"
+                && self
+                    .pending_chunk
+                    .is_some_and(|seq| frame["seq"].as_u64() == Some(seq as u64))
+            {
+                self.pending.notify_one();
+                std::future::pending::<()>().await;
+            }
+            self.frames.lock().push(frame.clone());
+            let id = frame["transferId"].as_str().unwrap_or("");
+            match frame["kind"].as_str() {
+                Some("start") => {
+                    self.totals
+                        .lock()
+                        .insert(id.into(), frame["totalFrames"].as_u64().unwrap() as usize);
+                }
+                Some("chunk") => {
+                    let seq = frame["seq"].as_u64().unwrap() as usize;
+                    let total = self.totals.lock()[id];
+                    if (seq + 1).is_multiple_of(FRAME_ACK_WINDOW) || seq + 1 == total {
+                        self.handler
+                            .handle_transport_frame(
+                                &self.peer,
+                                self.inner.clone(),
+                                serde_json::json!({
+                                    "ctoxFrame": CTOX_FRAME_PROTOCOL, "kind": "ack",
+                                    "transferId": id, "ackSeq": seq,
+                                    "receivedFrames": seq + 1, "final": seq + 1 == total,
+                                }),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn interleaved_own_receipt_preserves_the_other_collections_transfer() {
-        // Exercise the real queue, framing, priority interleave and ACK parser.
-        // Only the SCTP link is replaced: each text frame is recorded and ACKed.
-        struct AckChannel {
-            inner: Arc<dyn DataChannel>,
-            handler: Arc<WebRTCRsConnectionHandler>,
-            peer: String,
-            frames: Mutex<Vec<Value>>,
-            totals: Mutex<HashMap<String, usize>>,
-        }
-        #[async_trait]
-        impl DataChannel for AckChannel {
-            async fn label(&self) -> webrtc::error::Result<String> {
-                self.inner.label().await
-            }
-            async fn ordered(&self) -> webrtc::error::Result<bool> {
-                self.inner.ordered().await
-            }
-            async fn max_packet_life_time(&self) -> webrtc::error::Result<Option<u16>> {
-                self.inner.max_packet_life_time().await
-            }
-            async fn max_retransmits(&self) -> webrtc::error::Result<Option<u16>> {
-                self.inner.max_retransmits().await
-            }
-            async fn protocol(&self) -> webrtc::error::Result<String> {
-                self.inner.protocol().await
-            }
-            async fn negotiated(&self) -> webrtc::error::Result<bool> {
-                self.inner.negotiated().await
-            }
-            fn id(&self) -> webrtc::data_channel::RTCDataChannelId {
-                self.inner.id()
-            }
-            async fn ready_state(
-                &self,
-            ) -> webrtc::error::Result<webrtc::data_channel::RTCDataChannelState> {
-                self.inner.ready_state().await
-            }
-            async fn buffered_amount_high_threshold(&self) -> webrtc::error::Result<u32> {
-                self.inner.buffered_amount_high_threshold().await
-            }
-            async fn set_buffered_amount_high_threshold(
-                &self,
-                n: u32,
-            ) -> webrtc::error::Result<()> {
-                self.inner.set_buffered_amount_high_threshold(n).await
-            }
-            async fn buffered_amount_low_threshold(&self) -> webrtc::error::Result<u32> {
-                self.inner.buffered_amount_low_threshold().await
-            }
-            async fn set_buffered_amount_low_threshold(&self, n: u32) -> webrtc::error::Result<()> {
-                self.inner.set_buffered_amount_low_threshold(n).await
-            }
-            async fn send(&self, data: bytes::BytesMut) -> webrtc::error::Result<()> {
-                self.inner.send(data).await
-            }
-            async fn poll(&self) -> Option<DataChannelEvent> {
-                self.inner.poll().await
-            }
-            async fn close(&self) -> webrtc::error::Result<()> {
-                self.inner.close().await
-            }
-            async fn send_text(&self, text: &str) -> webrtc::error::Result<()> {
-                let frame: Value = serde_json::from_str(text).unwrap();
-                self.frames.lock().push(frame.clone());
-                let id = frame["transferId"].as_str().unwrap_or("");
-                match frame["kind"].as_str() {
-                    Some("start") => {
-                        self.totals
-                            .lock()
-                            .insert(id.into(), frame["totalFrames"].as_u64().unwrap() as usize);
-                    }
-                    Some("chunk") => {
-                        let seq = frame["seq"].as_u64().unwrap() as usize;
-                        let total = self.totals.lock()[id];
-                        if (seq + 1).is_multiple_of(FRAME_ACK_WINDOW) || seq + 1 == total {
-                            self.handler
-                                .handle_transport_frame(
-                                    &self.peer,
-                                    self.inner.clone(),
-                                    serde_json::json!({
-                                        "ctoxFrame": CTOX_FRAME_PROTOCOL, "kind": "ack",
-                                        "transferId": id, "ackSeq": seq,
-                                        "receivedFrames": seq + 1, "final": seq + 1 == total,
-                                    }),
-                                )
-                                .await
-                                .unwrap();
-                        }
-                    }
-                    _ => {}
-                }
-                Ok(())
-            }
-        }
-
         let handler = WebRTCRsConnectionHandler::new();
         let peer = "cross-collection-receipt".to_owned();
         install_test_connection(&handler, &peer, 1).await;
@@ -6058,6 +6137,9 @@ mod tests {
             peer: peer.clone(),
             frames: Mutex::new(Vec::new()),
             totals: Mutex::new(HashMap::new()),
+            publication: None,
+            pending_chunk: None,
+            pending: tokio::sync::Notify::new(),
         });
         let large = serde_json::json!({
             "id": "large-pull", "collection": "user_thread_states",
@@ -6131,6 +6213,131 @@ mod tests {
             "small commands must still preempt large transfers"
         );
         assert_eq!(handler.transport_status.lock().retry_count, 0);
+    }
+
+    #[tokio::test]
+    async fn pipelined_framed_io_rechecks_revocation_and_owner_after_pending() {
+        for change in ["current", "revoked", "owner-retired"] {
+            let handler = WebRTCRsConnectionHandler::new();
+            let peer = "guarded-pipeline".to_owned();
+            install_test_connection(&handler, &peer, 1).await;
+            let pc = handler.peers.lock()[&peer].peer_connection.clone();
+            let inner = pc
+                .create_data_channel("pipeline-regression", None)
+                .await
+                .unwrap();
+            let state = Arc::new(TestPublicationGuard {
+                allowed: Mutex::new(true),
+                checks: AtomicU64::new(0),
+            });
+            let channel = Arc::new(AckChannel {
+                inner,
+                handler: handler.clone(),
+                peer: peer.clone(),
+                frames: Mutex::new(Vec::new()),
+                totals: Mutex::new(HashMap::new()),
+                publication: Some(state.clone()),
+                pending_chunk: (change != "current").then_some(FRAME_ACK_WINDOW),
+                pending: tokio::sync::Notify::new(),
+            });
+            let text = "guarded pipeline bytes".repeat(20_000);
+            let (mut owner, owner_rx) = tokio::sync::oneshot::channel();
+            let mut owner_rx = Some(owner_rx);
+            let sending_handler = handler.clone();
+            let sending_channel = channel.clone();
+            let sending_peer = peer.clone();
+            let sending_text = text.clone();
+            let guard: Arc<dyn WebRTCPublicationGuard> = state.clone();
+            let sending = tokio::spawn(async move {
+                sending_handler
+                    .send_framed_text_owned(
+                        &sending_peer,
+                        sending_channel,
+                        sending_text,
+                        &Arc::new(tokio::sync::Notify::new()),
+                        Some(&mut owner),
+                        Some(&guard),
+                    )
+                    .await
+            });
+            if change != "current" {
+                tokio::time::timeout(Duration::from_secs(5), channel.pending.notified())
+                    .await
+                    .expect("second ACK window must reach Pending");
+                if change == "revoked" {
+                    *state.allowed.lock() = false;
+                } else {
+                    drop(owner_rx.take());
+                }
+            }
+            let result = tokio::time::timeout(Duration::from_secs(5), sending)
+                .await
+                .expect("framed send deadline")
+                .expect("framed task");
+            let frames = channel.frames.lock().clone();
+            assert!(
+                handler.pending_frame_acks.lock().is_empty(),
+                "terminal delivery must clean every outstanding ACK window"
+            );
+            handler.close().await.unwrap();
+            let chunks: Vec<_> = frames
+                .iter()
+                .filter(|frame| frame["kind"] == "chunk")
+                .collect();
+            if change == "current" {
+                result.unwrap();
+                assert!(chunks.len() > FRAME_ACK_WINDOW);
+                assert_eq!(
+                    chunks
+                        .iter()
+                        .map(|frame| frame["data"].as_str().unwrap())
+                        .collect::<String>(),
+                    text
+                );
+            } else {
+                assert!(result.is_err());
+                assert_eq!(
+                    chunks.len(),
+                    FRAME_ACK_WINDOW,
+                    "no byte from the Pending second window may escape retirement"
+                );
+            }
+            assert!(state.checks.load(Ordering::SeqCst) > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn framed_resume_request_cannot_publish_after_revocation() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "guarded-resume".to_owned();
+        install_test_connection(&handler, &peer, 1).await;
+        let pc = handler.peers.lock()[&peer].peer_connection.clone();
+        let inner = pc
+            .create_data_channel("resume-regression", None)
+            .await
+            .unwrap();
+        let state = Arc::new(TestPublicationGuard {
+            allowed: Mutex::new(false),
+            checks: AtomicU64::new(0),
+        });
+        let channel = Arc::new(AckChannel {
+            inner,
+            handler: handler.clone(),
+            peer: peer.clone(),
+            frames: Mutex::new(Vec::new()),
+            totals: Mutex::new(HashMap::new()),
+            publication: Some(state.clone()),
+            pending_chunk: None,
+            pending: tokio::sync::Notify::new(),
+        });
+        let guard: Arc<dyn WebRTCPublicationGuard> = state.clone();
+        let result = handler
+            .request_frame_resume(&peer, channel.clone(), "resume-fixture", 3, 0, Some(&guard))
+            .await;
+        assert_eq!(result.unwrap_err().code(), "ctox_webrtc_publication_denied");
+        assert!(channel.frames.lock().is_empty());
+        assert!(handler.pending_frame_acks.lock().is_empty());
+        handler.close().await.unwrap();
     }
 
     #[tokio::test]

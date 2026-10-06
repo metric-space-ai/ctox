@@ -1,5 +1,21 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Recovery journal startup payload bounds
+
+Recovery status scans one IndexedDB record at a time and preserves the exact
+UTF-8 byte count of pending batches and conflicts, including JSON delimiters.
+Startup replay retains only batch IDs and sequence numbers, then re-reads each
+candidate before applying it; primary-committed or newly acknowledged batches
+are skipped. Schema and application failures retain their recoverable conflicts.
+Startup reconciliation collects outstanding document IDs through the compound
+state/collection index and reads primary documents in groups of at most200.
+Acknowledgement-triggered retention scans also retain only eligible IDs and
+timestamps; pending writes/conflicts and the24-hour retention window survive.
+These paths no longer hold the complete pending WAL payload in memory. Batch
+atomicity and the v4 schema are unchanged; individual batch payloads and the
+ID/order summaries still consume memory. This source repair does not establish
+the THESEN renderer-crash cause or actual Windows8GiB startup acceptance.
+
 ### Browser live-query single-flight
 
 Each `RxQuery.$` subscription keeps at most one executing snapshot and one
@@ -51,6 +67,14 @@ phase records bound retention; the existing Shell diagnostics expose them.
 Legacy/superseded replica inventory runs after initial module/restore handling,
 outside the critical startup wait. It still preserves all old primaries and
 recovery journals; slow metadata enumeration is not a deletion authorization.
+
+Recovery-journal opening has its own four-second deadline, matching the primary
+IndexedDB open bound. A blocked, failed or timed-out journal attempt closes a
+late successful journal handle; failure also closes the primary handle already
+opened for that attempt. Cleanup retains the original journal error and changes
+no persisted data, schema version or recovery payload. These lifecycle guards
+prove failed-startup handle retirement, not the cause of an observed browser
+renderer crash or installed startup/memory acceptance.
 
 Window placement hydrates from the scoped localStorage cache synchronously after
 core schema registration. Its optional IndexedDB refresh runs in the background,
@@ -246,6 +270,33 @@ disk-snapshot restart tests. Acceptance still requires the real native policy
 store and authenticated transport, pre-byte and mid-transfer revocation tests,
 restoration of populated stores, independent-host durability, and real provider
 continuation. No production-readiness or rollout claim follows from these edits.
+
+### Native transfer response publication
+
+The native grant and account-provisioning services register guarded auxiliary
+handlers. Their responses retain the exact accepted connection and its captured
+capability; a signaling-ID lookup cannot substitute a reconnected peer. Each
+physical send poll revalidates the original enrolled principal and current
+capability issuer under a single encrypted-secret transaction, then holds native
+policy through the callback. No store initialization, cached issuer or recursive
+secret-store acquisition is allowed inside that callback.
+
+Grant replies additionally retain the exact persisted grant, expiry and source
+identity. Active grants hold the current desktop-file projection through the
+poll and require the same generation, size and hash. Account replies revalidate
+the renewed signed capability, its expiry and principal, plus the persisted
+room/native signaling credential tuple and routing validity. This does not
+certify live TURN reachability or configuration changes outside that tuple.
+All fences release on Pending and are reacquired before another physical poll.
+
+The service regressions use real device verification, policy and encrypted
+stores through the actual auxiliary dispatcher, with a controlled byte sink
+held Pending at zero bytes. They cover current delivery, device/user/epoch and
+grant revocation, credential rotation, changed file generation and replacement
+connections with the same signaling ID. Native queue polling has separate
+transport regressions. These source tests are not two-host acceptance; final
+composed execution, dirty/untracked Git fidelity and reconnect/resume remain
+required before describing the worktree transfer as usable.
 
 ### Auth-assist command recovery
 
@@ -1222,8 +1273,8 @@ The three declarations must agree: `module.json` `collections`,
 ### 4.1 Crate layout (`src/core/rxdb/`)
 
 Standalone Cargo package `ctox-rxdb` (lib name `rxdb`), with its own
-`Cargo.toml` and `Cargo.lock`. The root `Cargo.toml` has **no `[workspace]`
-section**; the crate is consumed as a path dependency
+`Cargo.toml` and `Cargo.lock`. The root workspace excludes this crate;
+it is consumed as a path dependency
 (`rxdb = { package = "ctox-rxdb", path = "src/core/rxdb" }`), so its tests run
 only via `--manifest-path` (see §10).
 
@@ -1556,6 +1607,22 @@ frames are intrinsically high, oversized `masterWrite`s stay low, frames for
 active collections are high.
 
 ### 6.4 Demand-loading RPCs (V1.5)
+
+The native `NativeSyncSession::file_range` consumer uses the existing
+`rxdb.file.fetch` exchange on an already admitted connection. Each request
+requires an explicit range of at most 2 MiB and a fresh generated request ID.
+It shares the existing eight-reader budget with native query pages. Each
+Base64 frame is decoded independently and checked against its chunk SHA-256;
+sequence gaps, malformed bytes, wrong hashes, cancellation, disconnect,
+timeout, and a terminal frame before the requested byte count discard the
+entire range. Acceptance and an ordered empty terminal frame are both required.
+Dropping a read sends cancellation through the pool-owned task lifecycle for
+the same connection generation. This is a bounded transport consumer, not a
+durable checkpoint: the caller must verify the complete content identity and
+flush the destination before advancing durable transfer state or issuing a
+receipt. Native policy, destination admission and execution fencing remain
+with their existing owners. The new consumer regressions and full native/browser
+gates must execute before this interface is treated as verified.
 
 From `protocol_contract_generated.rs` (and the JS twin): `rxdb.query.fetch` /
 `rxdb.query.chunk` / `rxdb.query.error` / `rxdb.query.cancel`, and
@@ -2186,6 +2253,18 @@ private cockpit projections (`ctox_runs`, `ctox_crew_learnings`,
 Module starts skip those collections without recording a transport failure.
 The native actor, grant and scope decision remains authoritative.
 
+Cockpit run and harness-event histories use demand-only pull bridges instead of
+replicating every task's ledger during startup. The selected-task view requests
+at most 32 runs and 200 events through the native WebRTC query bridge. Both
+collections remain module-startable; initial readiness still requires the
+authenticated native session and an open data channel. Maintenance continues
+to wait for that readiness rather than skipping the collections. The cockpit
+holds scoped history leases and listens to native master-change hints for the
+selected task, coalescing them through its existing refresh path. Each hint
+requires an authoritative bounded re-read, including the sort fallback; bridge
+replacement and module close retire the old subscriptions and leases. A
+selection change while a read is pending cannot paint the previous task.
+
 ### Crew identity contracts (PR-2)
 
 The existing channel migration seeds four stable members in `crew_members` and
@@ -2377,6 +2456,39 @@ not password-login/logout acceptance. The earlier a6fd70c06 warm-command fixture
 across reload/restart; this does not establish critical-boot p95 below 5 s.
 
 ## 11. Test map
+
+### Hidden-tab frame progress
+
+The send queue wakes its high-priority inline drain directly when an ACK or
+control frame is enqueued during a bulk transfer. It arms that wake before
+draining to avoid losing an enqueue during an asynchronous buffer wait. The
+old 50 ms polling loop could leave both directions waiting for each other's
+ACKs when page timers were throttled. ACK receipt and `bufferedamountlow`
+remain event-driven; timeout/retry bounds, frame sizes, ACK windows, queue
+budgets and the wire protocol are unchanged. No MessageChannel polling loop
+or production environment toggle is needed.
+
+`hidden-transfer-smoke.mjs` holds all page timers, transfers a 20-document
+1.84 MB pull concurrently with a 19 KB push, and exercises `masterWrite`
+response correlation. The same test fails on main `365927a3c` in the concurrent
+case; the one-way pull succeeds there. This is a deterministic reproduction
+of a timer dependency, not a claim that the complete thesen incident has been
+reproduced on the tenant.
+
+`hidden-transfer-browser-smoke.mjs` additionally uses real local RTCDataChannels
+in a fresh Chrome context with page timers clamped to 1000 ms. A 19 KB command
+behind simultaneous 1.84 MB document transfers times out on `365927a3c`; with
+the direct wake it completes without retries. This checks actual SCTP delivery
+and RPC correlation, but deliberately simulates the timer clamp rather than
+relying on a particular Chrome version's visibility exemptions.
+
+Frame-transport diagnostics include `pageHidden`, `lastPageTimerDelayMs`,
+`lastPageTimerSampleAtMs` and `throttled`. The existing status-emission timer
+supplies the sample: `throttled` means the page is hidden and a timer was at
+least 750 ms late within the last 30 seconds. It is evidence of delayed
+scheduling, which can also result from host load, not proof of browser policy.
+No extra diagnostic polling is introduced. Readiness and acceptance decisions
+do not depend on this diagnostic flag.
 
 ### 10.1 Browser suite (`src/apps/business-os/rxdb/tests/`)
 

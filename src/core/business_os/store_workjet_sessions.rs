@@ -404,6 +404,16 @@ struct TransferPackCompleteGitPayload {
     untracked_file_id: String,
     untracked_sha256: String,
     dirty: bool,
+    #[serde(default)]
+    index: Option<TransferPackCompleteIndexPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransferPackCompleteIndexPayload {
+    tree: String,
+    patch_file_id: String,
+    patch_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1501,7 +1511,17 @@ fn handle_workjet_session_transfer_pack_complete_command(
                 bounded_required(&git.untracked_file_id, "git.untracked_file_id", 160)?;
             let untracked_sha256 =
                 exact_lower_hex(&git.untracked_sha256, "git.untracked_sha256", 64)?;
-            let git = serde_json::json!({
+            let index = git.index.map(|index| -> anyhow::Result<Value> {
+                let tree = exact_lower_hex(&index.tree, "git.index.tree", 40)?;
+                let patch_file_id = bounded_required(&index.patch_file_id, "git.index.patch_file_id", 160)?;
+                let patch_sha256 = exact_lower_hex(&index.patch_sha256, "git.index.patch_sha256", 64)?;
+                anyhow::ensure!(artifact_file_ids.contains(&patch_file_id)
+                    && patch_file_id != bundle_file_id && patch_file_id != git.patch_file_id
+                    && patch_file_id != untracked_file_id,
+                    "artifact_missing: index patch must be a distinct declared artifact");
+                Ok(serde_json::json!({ "tree": tree, "patch_file_id": patch_file_id, "patch_sha256": patch_sha256 }))
+            }).transpose()?;
+            let mut git = serde_json::json!({
                 "head": head,
                 "branch": branch,
                 "base_commit": base_commit,
@@ -1512,6 +1532,9 @@ fn handle_workjet_session_transfer_pack_complete_command(
                 "untracked_sha256": untracked_sha256,
                 "dirty": git.dirty,
             });
+            if let Some(index) = index {
+                git["index"] = index;
+            }
             (Some(git), None)
         }
         "copy" => {
@@ -3917,6 +3940,96 @@ pub(crate) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(audit_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn workjet_session_transfer_pack_complete_retains_and_validates_index_proof(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let created = transfer_fixture(root.path(), "owner-1", "pack-index", true)?;
+        let session_id = created["session"]["id"].as_str().context("session id")?;
+        let started = start_transfer(root.path(), "owner-1", session_id, "pack-index", "start")?;
+        let transfer_id = started["transfer_id"].as_str().context("transfer id")?;
+        pause_ack_transfer(
+            root.path(),
+            "owner-1",
+            transfer_id,
+            "computer-pack-index",
+            1,
+            "ack",
+        )?;
+        let mut pack = git_pack_command(transfer_id, "computer-pack-index", "generation-1", "pack");
+        let index = json!({ "tree": "5".repeat(40), "patch_file_id": "desktop-file-index", "patch_sha256": "6".repeat(64) });
+        pack.payload["git"]["index"] = index.clone();
+        let missing_artifact = handle_workjet_session_transfer_pack_complete_command(
+            root.path(),
+            &pack,
+            "owner-1",
+            false,
+        )
+        .unwrap_err();
+        assert!(missing_artifact
+            .to_string()
+            .contains("distinct declared artifact"));
+        pack.payload["artifact_file_ids"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("desktop-file-index"));
+        let before_rejection =
+            outbound_load_record(&open_store(root.path())?, TRANSFERS_COLLECTION, transfer_id)?
+                .context("transfer before malformed proof")?;
+        for (malformed, expected_error) in [
+            (json!({}), "missing field `tree`"),
+            (
+                json!({ "tree": "short", "patch_file_id": "desktop-file-index", "patch_sha256": "6".repeat(64) }),
+                "git.index.tree",
+            ),
+            (
+                json!({ "tree": "5".repeat(40), "patch_file_id": "desktop-file-index", "patch_sha256": "bad" }),
+                "git.index.patch_sha256",
+            ),
+        ] {
+            pack.payload["git"]["index"] = malformed;
+            let rejection = handle_workjet_session_transfer_pack_complete_command(
+                root.path(),
+                &pack,
+                "owner-1",
+                false,
+            );
+            let message = match rejection {
+                // Malformed payloads use the command's structured error contract.
+                Ok(response) => {
+                    assert_eq!(response["ok"], false);
+                    assert_eq!(response["error_code"], "idempotency_conflict");
+                    response["error"]
+                        .as_str()
+                        .context("rejection message")?
+                        .to_owned()
+                }
+                Err(error) => error.to_string(),
+            };
+            assert!(
+                message.contains(expected_error),
+                "unexpected rejection: {message}"
+            );
+            let after_rejection =
+                outbound_load_record(&open_store(root.path())?, TRANSFERS_COLLECTION, transfer_id)?
+                    .context("transfer after malformed proof")?;
+            assert_eq!(after_rejection, before_rejection);
+        }
+        pack.payload["git"]["index"] = index.clone();
+        let packed = handle_workjet_session_transfer_pack_complete_command(
+            root.path(),
+            &pack,
+            "owner-1",
+            false,
+        )?;
+        assert_eq!(packed["transfer"]["git"]["index"], index);
+        let persisted =
+            outbound_load_record(&open_store(root.path())?, TRANSFERS_COLLECTION, transfer_id)?
+                .context("transfer")?;
+        assert_eq!(persisted["git"]["index"], index);
         Ok(())
     }
 

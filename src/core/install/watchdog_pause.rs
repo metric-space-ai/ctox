@@ -1,20 +1,23 @@
 use std::io;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 const TIMER: &str = "ctox-watchdog.timer";
+#[cfg(test)]
 const SERVICE: &str = "ctox-watchdog.service";
-type Runner = fn(&[&str]) -> io::Result<String>;
-pub(super) type SystemWatchdogPause = WatchdogPause<Runner>;
 
-/// Pause both sources of watchdog restarts: stopping just the timer leaves
-/// an already dispatched oneshot free to start the daemon during cutover.
-/// Unit refresh must not start the timer until this guard has been dropped.
-pub(super) struct WatchdogPause<F: FnMut(&[&str]) -> io::Result<String>> {
+/// Retain the former pause protocol's regression model. Production now holds
+/// the release-switch flock; its systemctl calls use the bounded helper below.
+#[cfg(test)]
+struct WatchdogPause<F: FnMut(&[&str]) -> io::Result<String>> {
     run: F,
     resume_timer: bool,
 }
 
+#[cfg(test)]
 impl<F: FnMut(&[&str]) -> io::Result<String>> WatchdogPause<F> {
     fn acquire(mut run: F, installed: bool) -> io::Result<Self> {
         let mut resume_timer = false;
@@ -35,6 +38,7 @@ impl<F: FnMut(&[&str]) -> io::Result<String>> WatchdogPause<F> {
     }
 }
 
+#[cfg(test)]
 impl<F: FnMut(&[&str]) -> io::Result<String>> Drop for WatchdogPause<F> {
     fn drop(&mut self) {
         // Restore only the previously active timer, also on errors/unwind.
@@ -47,50 +51,283 @@ impl<F: FnMut(&[&str]) -> io::Result<String>> Drop for WatchdogPause<F> {
     }
 }
 
-pub(super) fn pause(installed: bool) -> io::Result<WatchdogPause<Runner>> {
-    WatchdogPause::acquire(systemctl as Runner, installed)
-}
-
-fn systemctl(args: &[&str]) -> io::Result<String> {
-    let mut command = Command::new("systemctl");
-    command.arg("--user").args(args);
-    let output = bounded_output(&mut command, Duration::from_secs(10))?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "systemctl --user {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
+#[cfg(unix)]
+fn control_exited_unreaped(pid: libc::pid_t) -> io::Result<bool> {
+    // WNOWAIT keeps the leader's PID/session identity pinned until all group
+    // signals are finished. Child::try_wait would release that identity.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    } == -1
+    {
+        return Err(io::Error::last_os_error());
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(unsafe { info.si_pid() } == pid)
 }
 
-fn bounded_output(command: &mut Command, timeout: Duration) -> io::Result<std::process::Output> {
+#[cfg(unix)]
+pub(super) fn bounded_output(
+    command: &mut Command,
+    timeout: Duration,
+) -> io::Result<std::process::Output> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+
+    // A private session cannot contain the daemon or unrelated callers.
+    // The control process and its inherited descendants are ours to reap.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    let group = child.id() as libc::pid_t;
+    let mut stdout = child.stdout.take().expect("piped control stdout");
+    let mut stderr = child.stderr.take().expect("piped control stderr");
     let deadline = Instant::now() + timeout;
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+    let mut parent_exited = false;
+    let mut group_stopped = false;
+    const OUTPUT_LIMIT: usize = 256 * 1024;
+
+    let result = (|| {
+        for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags == -1
+                || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+            {
+                return Err(io::Error::last_os_error());
+            }
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "watchdog systemctl did not finish within its control budget",
-            ));
+        loop {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "watchdog control process or output exceeded its deadline",
+                ));
+            }
+            for (reader, bytes, done) in [
+                (&mut stdout as &mut dyn Read, &mut out, &mut stdout_done),
+                (&mut stderr as &mut dyn Read, &mut err, &mut stderr_done),
+            ] {
+                if *done {
+                    continue;
+                }
+                let mut buffer = [0; 8192];
+                loop {
+                    if Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "watchdog control output exceeded its deadline",
+                        ));
+                    }
+                    match reader.read(&mut buffer) {
+                        Ok(0) => {
+                            *done = true;
+                            break;
+                        }
+                        Ok(n) => {
+                            if bytes.len() + n > OUTPUT_LIMIT {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "watchdog control output exceeded its byte budget",
+                                ));
+                            }
+                            bytes.extend_from_slice(&buffer[..n]);
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            if !parent_exited {
+                parent_exited = control_exited_unreaped(group)?;
+            }
+            if parent_exited && !group_stopped {
+                // A finished parent may leave a descendant holding a pipe.
+                // Stop only this new session's control group before draining.
+                if unsafe { libc::kill(-group, libc::SIGKILL) } == -1 {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::ESRCH) {
+                        return Err(error);
+                    }
+                }
+                group_stopped = true;
+            }
+            if parent_exited && stdout_done && stderr_done {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(5));
         }
-        std::thread::sleep(Duration::from_millis(20));
+    })();
+    // Close readers first, including on errors; no blocking EOF drain.
+    drop(stdout);
+    drop(stderr);
+    if !group_stopped {
+        // Revalidate ownership even on an I/O error. ECHILD means another
+        // waiter released the identity: fail closed without signaling an ID
+        // that may now belong to an unrelated process or group.
+        control_exited_unreaped(group)?;
+        if unsafe { libc::kill(-group, libc::SIGKILL) } == -1 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error);
+            }
+        }
     }
+    // All signaling is complete before try_wait can release the pinned leader.
+    // Never turn an uncertain cleanup into a successful cutover receipt.
+    let cleanup_deadline = Instant::now() + Duration::from_millis(200);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < cleanup_deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(None) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("watchdog control group {group} cleanup is unconfirmed"),
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    result?;
+    Ok(std::process::Output {
+        status,
+        stdout: out,
+        stderr: err,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[cfg(unix)]
+    #[test]
+    fn watchdog_control_exit_observation_keeps_leader_waitable() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 7"])
+            .spawn()
+            .unwrap();
+        let pid = child.id() as libc::pid_t;
+        let until = Instant::now() + Duration::from_secs(1);
+        while !control_exited_unreaped(pid).unwrap() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // A second observation still finds our waitable child; the first
+        // observation must not have released its identity via waitpid.
+        assert!(control_exited_unreaped(pid).unwrap());
+        assert_eq!(child.wait().unwrap().code(), Some(7));
+        assert_eq!(
+            control_exited_unreaped(pid).unwrap_err().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watchdog_control_output_preserves_exit_code_and_both_streams() {
+        let output = bounded_output(
+            Command::new("/bin/sh").args(["-c", "printf out; printf err >&2; exit 7"]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, b"out");
+        assert_eq!(output.stderr, b"err");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watchdog_control_timeout_reaps_its_owned_control_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_path = directory.path().join("control.pid");
+        let error = bounded_output(
+            Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "printf '%s' \"$$\" > \"$1\"; exec sleep 10",
+                    "control",
+                ])
+                .arg(&pid_path),
+            Duration::from_millis(500),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let pid = std::fs::read_to_string(pid_path)
+            .unwrap()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watchdog_control_parent_exit_does_not_wait_for_descendant_output() {
+        // The descendant has its own finite lifetime even on test failure.
+        // Do not use a PID-only Drop signal after the helper has reaped it.
+        let directory = tempfile::tempdir().unwrap();
+        let pid_path = directory.path().join("descendant.pid");
+        let started = Instant::now();
+        let output = bounded_output(
+            Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "sleep 10 & printf '%s' \"$!\" > \"$1\"; printf parent; exit 0",
+                    "control",
+                ])
+                .arg(&pid_path),
+            Duration::from_millis(500),
+        )
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"parent");
+        let pid = std::fs::read_to_string(&pid_path)
+            .unwrap()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(1);
+        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+        std::fs::remove_file(&pid_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watchdog_control_output_is_bounded_before_full_capture() {
+        let error = bounded_output(
+            Command::new("head").args(["-c", "300000", "/dev/zero"]),
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
 
     #[test]
     #[cfg(unix)]

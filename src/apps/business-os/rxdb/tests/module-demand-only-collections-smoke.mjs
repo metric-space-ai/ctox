@@ -121,6 +121,10 @@ assert.equal(isDemandOnlyPullCollection('user_notifications'), true, 'thread not
 assert.equal(isDemandOnlyPullCollection('ctox_task_approval_requests'), true, 'approval records hydrate through bounded demand queries');
 assert.equal(isDemandOnlyPullCollection('business_commands'), true, 'command history hydrates by command id while new commands still push');
 assert.equal(isDemandOnlyPullCollection('ctox_queue_tasks'), true, 'queue history hydrates by linked task id');
+assert.equal(isDemandOnlyPullCollection('ctox_runs'), true, 'run history hydrates through selected-task queries');
+assert.equal(isDemandOnlyPullCollection('ctox_harness_events'), true, 'event history hydrates through selected-task queries');
+assert.equal(isModuleDemandOnlyCollection('ctox_runs'), false, 'run query bridge stays module-startable');
+assert.equal(isModuleDemandOnlyCollection('ctox_harness_events'), false, 'event query bridge stays module-startable');
 assert.equal(isDemandOnlyPullCollection('knowledge_tables'), true, 'knowledge table rows hydrate through bounded domain and chunk queries');
 assert.equal(isDemandOnlyPullCollection('desktop_files'), false, 'desktop file metadata still pulls normally');
 
@@ -154,7 +158,7 @@ function inertObservable() {
   };
 }
 
-function createMockReplicationState(collection = 'desktop_file_chunks') {
+function createMockReplicationState(collection = 'desktop_file_chunks', peerChannelOpen = true) {
   const peerId = 'native-peer-1';
   const peerStates = new Map([
     [peerId, {
@@ -170,7 +174,7 @@ function createMockReplicationState(collection = 'desktop_file_chunks') {
     peer: {
       connections: new Map([
         [peerId, {
-          channel: { readyState: 'open' },
+          channel: { readyState: peerChannelOpen ? 'open' : 'closed' },
           peer: { connectionState: 'connected' },
         }],
       ]),
@@ -203,7 +207,7 @@ function createMockReplicationState(collection = 'desktop_file_chunks') {
   };
 }
 
-function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null, mayReadCollection } = {}) {
+function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null, mayReadCollection, peerChannelOpen = true } = {}) {
   const browserToken = 'browser-role-token';
   const starts = [];
   const cancels = [];
@@ -213,6 +217,8 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
       desktop_file_chunks: { name: 'desktop_file_chunks' },
       business_users: { name: 'business_users' },
       ctox_crew_members: { name: 'ctox_crew_members' },
+      ctox_runs: { name: 'ctox_runs' },
+      ctox_harness_events: { name: 'ctox_harness_events' },
     },
     rxdb: {
       ...(coordinator ? { getMultiTabSyncCoordinator: () => coordinator } : {}),
@@ -233,7 +239,7 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
             checkpoint: { state: 'advertised', epoch: 'epoch-1', collection: options.collection?.name },
           });
         }
-        const state = createMockReplicationState(options.collection?.name);
+        const state = createMockReplicationState(options.collection?.name, peerChannelOpen);
         const cancel = state.cancel;
         state.cancel = async () => {
           cancels.push(options.collection?.name || '');
@@ -424,6 +430,51 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
     await follower.close();
     await leader.close();
   }
+}
+
+{
+  const { runtime, starts } = createMockSyncRuntime();
+  try {
+    const result = await runtime.startModule({ id: 'ctox', collections: ['ctox_runs', 'ctox_harness_events'] });
+    assert(result.every((entry) => entry.status === 'fulfilled'));
+    assert.deepEqual(starts.map((entry) => entry.collection), ['ctox_runs', 'ctox_harness_events']);
+    assert(starts.every((entry) => entry.pull === null), 'task-history bridges must not eagerly pull the full ledger');
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && ['ctox_runs', 'ctox_harness_events'].some((name) =>
+      runtime.diagnostics.collections[name]?.initialReplicationState !== 'complete')) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    for (const name of ['ctox_runs', 'ctox_harness_events']) {
+      assert.equal(runtime.diagnostics.collections[name].initialReplicationState, 'complete',
+        'existing authenticated native bridge readiness must complete without a history dump');
+      assert.equal(runtime.diagnostics.collections[name].remotePeerSession.role, 'ctox_instance');
+    }
+  } finally { await runtime.stop(); }
+}
+
+{
+  const { runtime } = createMockSyncRuntime({ peerChannelOpen: false });
+  try {
+    const result = await runtime.startModule({ id: 'ctox', collections: ['ctox_runs', 'ctox_harness_events'] });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const name of ['ctox_runs', 'ctox_harness_events']) {
+      assert.notEqual(runtime.diagnostics.collections[name].initialReplicationState, 'complete',
+        'an advertised native session with a closed channel must not release readiness');
+      assert(!runtime.diagnostics.collections[name].initialReplicationAt);
+    }
+    for (const entry of result) {
+      const connection = [...entry.value.state.peer.connections.values()][0];
+      connection.channel.readyState = 'open';
+    }
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && ['ctox_runs', 'ctox_harness_events'].some((name) =>
+      runtime.diagnostics.collections[name]?.initialReplicationState !== 'complete')) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    for (const name of ['ctox_runs', 'ctox_harness_events']) {
+      assert.equal(runtime.diagnostics.collections[name].initialReplicationState, 'complete');
+    }
+  } finally { await runtime.stop(); }
 }
 
 console.log('ctox-rxdb module demand-only collections smoke OK');

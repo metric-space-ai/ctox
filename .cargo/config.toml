@@ -1,2 +1,15 @@
 [build]
 target-dir = "runtime/build/cargo-target"
+
+[env]
+# Bundled SQLite (libsqlite3-sys "bundled") is compiled with
+# SQLITE_ENABLE_MEMORY_MANAGEMENT, which forces one unified page cache with a
+# single global mutex for every connection in the process (pcache1
+# separateCache = 0), and with memory statistics on, which takes another
+# global mutex on every allocation. The CTOX daemon runs dozens of threads
+# with their own connections; on the THESEN on-prem host (8 vCPU, Hyper-V)
+# all of them queued on these two mutexes (gdb: pcache1Fetch/Unpin,
+# sqlite3Malloc) and 8 threads read slower than 1. CTOX uses none of the
+# memory-management APIs (release_memory, heap limits). Measured with the
+# vendored SQLite 3.46.0, 8 reader threads: 30k -> 79k queries/s.
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"

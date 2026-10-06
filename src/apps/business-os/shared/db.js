@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261004-shell-v2-native-lease-badges-v449';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261006-shell-v2-sync-perf-v452';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
