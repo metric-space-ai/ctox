@@ -9097,7 +9097,12 @@ mod tests {
         assert!(source.contains("https://www.xing.com/search/companies"));
         assert!(source.contains("https://www.xing.com/search/members"));
         assert!(!source.contains("https://www.xing.com/search/people"));
-        assert!(source.contains("XING canonical profile URL"));
+        assert!(source.contains("const canonicalProfile = (raw) =>"));
+        assert!(source.contains(r"url.pathname.match(/^\/profile\/([^/]+)\/?$/i)"));
+        assert!(
+            source.contains(r#"push("person_xing", profile.url, "high", employerNote, profile.url)"#),
+            "profile values and evidence must use the validated canonical URL"
+        );
         assert!(!source.contains("console."));
         assert!(!source.contains("credentialValue"));
 
@@ -9445,9 +9450,20 @@ mod tests {
         Ok(())
     }
 
+    fn app_command_fixture_root() -> anyhow::Result<tempfile::TempDir> {
+        let root = tempfile::tempdir()?;
+        let shell_root = root.path().join("src/apps/business-os");
+        fs::create_dir_all(&shell_root)?;
+        fs::write(
+            shell_root.join("index.html"),
+            "<!doctype html><title>Business OS test shell</title>",
+        )?;
+        Ok(root)
+    }
+
     #[test]
     fn app_bench_run_submits_real_tasks_without_writing_app_artifacts() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = app_command_fixture_root()?;
         let installed_root = root.path().join("runtime/business-os/installed-modules");
         fs::create_dir_all(installed_root.join("bench_old"))?;
         fs::create_dir_all(installed_root.join("real_inventory"))?;
@@ -9569,7 +9585,7 @@ mod tests {
 
     #[test]
     fn app_create_cli_enqueues_real_task_without_writing_app_artifacts() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = app_command_fixture_root()?;
         let module_id = "cli-inventory";
         let installed_root = root.path().join("runtime/business-os/installed-modules");
 
@@ -9609,7 +9625,7 @@ mod tests {
 
     #[test]
     fn app_modify_cli_enqueues_app_modify_skill_task() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = app_command_fixture_root()?;
 
         handle_business_os_app(
             root.path(),
@@ -9796,7 +9812,7 @@ mod tests {
 
     #[test]
     fn app_bench_status_records_partial_artifacts_without_marking_green() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = app_command_fixture_root()?;
         let args = vec![
             "--run-id".to_string(),
             "rstatus".to_string(),
