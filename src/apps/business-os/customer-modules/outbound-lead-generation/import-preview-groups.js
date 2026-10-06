@@ -146,3 +146,148 @@ export function selectImportGroups(rows, sheet, selectedGroups) {
     groupLimit,
   };
 }
+
+export async function extractImportRows(payload, helpers) {
+  const emptyMeta = () => ({
+    skippedOutsideTable: 0,
+    sheets: {},
+    hasWorkbookMeta: false,
+  });
+
+  if (!payload || !payload.source) {
+    return { rows: [], meta: emptyMeta() };
+  }
+
+  const source = payload.source;
+  const files = Array.isArray(source.files) ? source.files : [];
+
+  if (payload.source_type === 'text') {
+    if (!helpers || typeof helpers.extractCompanyRowsFromText !== 'function') {
+      throw new Error('Missing required helper: extractCompanyRowsFromText');
+    }
+    const text = typeof source.text === 'string' ? source.text : '';
+    const rows = helpers.extractCompanyRowsFromText(text);
+    if (!Array.isArray(rows)) {
+      throw new Error('extractCompanyRowsFromText did not return an Array');
+    }
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+      out.push(rows[i]);
+    }
+    return { rows: out, meta: emptyMeta() };
+  }
+
+  if (files.length === 0) {
+    return { rows: [], meta: emptyMeta() };
+  }
+
+  const ext = (name) => {
+    if (typeof name !== 'string') return '';
+    const i = name.lastIndexOf('.');
+    return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
+  };
+
+  const rowsOut = [];
+  let skippedOutsideTable = 0;
+  let hasWorkbookMeta = false;
+  const sheets = {};
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (!file) continue;
+    const e = ext(file && file.name);
+    if (e === 'xlsx') {
+      if (!helpers || typeof helpers.extractCompanyRowsFromWorkbookFile !== 'function') {
+        throw new Error('Missing required helper: extractCompanyRowsFromWorkbookFile');
+      }
+      let result = helpers.extractCompanyRowsFromWorkbookFile(file, {
+        withMeta: true,
+        includeSheets: ['WZ-Code'],
+      });
+      // Some callers may have already invoked; tolerate a Promise.
+      if (result && typeof result.then === 'function') {
+        result = await result;
+      }
+      if (Array.isArray(result)) {
+        for (let j = 0; j < result.length; j++) {
+          rowsOut.push(result[j]);
+        }
+        continue;
+      }
+      if (!result || typeof result !== 'object' || !Array.isArray(result.rows)) {
+        throw new Error('Malformed XLSX result: expected Array or { rows: Array }');
+      }
+      hasWorkbookMeta = true;
+      const fileRows = result.rows;
+      const metaSkipped = Number(result.meta && result.meta.skippedOutsideTable);
+      if (Number.isFinite(metaSkipped) && metaSkipped >= 0) {
+        skippedOutsideTable += metaSkipped;
+      }
+      const fileSheets = (result.meta && result.meta.sheets) || {};
+      const wzSheet = Array.isArray(fileSheets['WZ-Code']) ? fileSheets['WZ-Code'] : null;
+      if (wzSheet) {
+        const incoming = buildWzMapping(wzSheet);
+        for (const [code, label] of incoming.entries()) {
+          if (sheets[code] !== undefined && sheets[code] !== label) {
+            throw new Error(
+              'Konflikt im WZ-Code-Mapping: Code ' + code +
+              ' hat unterschiedliche Listenamen ("' + sheets[code] +
+              '" vs. "' + label + '"). Bitte WZ-Code-Tabelle vereinheitlichen.'
+            );
+          }
+          sheets[code] = label;
+        }
+      }
+      for (let j = 0; j < fileRows.length; j++) {
+        rowsOut.push(fileRows[j]);
+      }
+      continue;
+    }
+    if (e === 'csv' || e === 'tsv' || e === 'txt') {
+      if (!helpers) {
+        throw new Error('Missing helpers');
+      }
+      if (typeof helpers.parseDelimitedText !== 'function') {
+        throw new Error('Missing required helper: parseDelimitedText');
+      }
+      if (typeof helpers.importDateiText !== 'function') {
+        throw new Error('Missing required helper: importDateiText');
+      }
+      if (typeof helpers.normalizeCompanyRow !== 'function') {
+        throw new Error('Missing required helper: normalizeCompanyRow');
+      }
+      let text;
+      try {
+        text = helpers.importDateiText(file);
+      } catch (err) {
+        throw new Error('importDateiText failed: ' + (err && err.message ? err.message : String(err)));
+      }
+      if (text && typeof text.then === 'function') {
+        text = await text;
+      }
+      const delimRows = helpers.parseDelimitedText(typeof text === 'string' ? text : '');
+      if (!Array.isArray(delimRows)) {
+        throw new Error('parseDelimitedText did not return an Array');
+      }
+      for (let j = 0; j < delimRows.length; j++) {
+        rowsOut.push(helpers.normalizeCompanyRow(delimRows[j], j));
+      }
+    }
+  }
+
+  const wzMatrix = [['Code', 'Listenname THESEN']];
+  const codes = Object.keys(sheets);
+  for (let i = 0; i < codes.length; i++) {
+    const code = codes[i];
+    wzMatrix.push([code, sheets[code]]);
+  }
+
+  return {
+    rows: rowsOut,
+    meta: {
+      skippedOutsideTable,
+      sheets: { 'WZ-Code': wzMatrix },
+      hasWorkbookMeta,
+    },
+  };
+}
