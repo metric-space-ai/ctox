@@ -188,6 +188,13 @@ The recorder flushes writes preceding its shutdown request and terminates
 even while clones exist. A writer failure remains a failure for every shutdown
 waiter; the lifecycle `ShutdownComplete` notification does not override it.
 
+The outer CTOX `PersistentSession` owner returns the checked client shutdown
+result too. Forced cleanup from an async context or missing runtime/client
+ownership fails; cleanup still retires whichever owner remains. Explicit review
+callers require successful teardown before returning a successful report, while
+an earlier turn failure remains the primary error. Drop performs bounded cleanup
+but cannot issue a successful checkpoint or quiescence receipt.
+
 This is file-I/O completion, not filesystem power-loss durability or a portable
 checkpoint. An unmaterialized fresh recorder is not materialized by shutdown.
 Native handoff must retain its own execution authority, verify the exact
