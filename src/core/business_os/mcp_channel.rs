@@ -1704,7 +1704,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("objective"),
                 ("idempotency_key", serde_json::json!({
                     "type": "string",
-                    "description": "For ctox.delegate_task: reuse the key and intent after transport uncertainty; the original native task and status are returned. web_stack.person_research retains its own retry contract. Other actions reject this field."
+                    "description": "For ctox.delegate_task: reuse the key and intent after transport uncertainty; the original native task and status are returned. web_stack.person_research retains its own retry contract. ctox.app_store.install requires a stable key with identical pinned install arguments. Other actions reject this field."
                 }), false),
                 optional_action_payload("payload"),
             ]),
@@ -5238,7 +5238,7 @@ pub fn execute_action(
     if arguments.get("idempotency_key").is_some()
         && !matches!(
             action_id,
-            "ctox.delegate_task" | "web_stack.person_research"
+            "ctox.delegate_task" | "web_stack.person_research" | "ctox.app_store.install"
         )
     {
         return Err(anyhow::Error::new(BusinessOsMcpError::validation(
@@ -8861,9 +8861,9 @@ mod tests {
             proposal_context.confirmation_state,
             McpConfirmationState::Rejected
         );
-        // Confirmation from an untrusted argument envelope is never grafted
-        // onto the signed actor. Without a trusted state, proposals remain
-        // non-executing and neither forged approval nor rejection is inherited.
+        // Caller input cannot mint approval for the signed actor. An explicit
+        // rejection may only restrict a non-executing proposal; missing trusted
+        // approval never becomes an approval from caller input.
         let mut no_confirmation = trusted.clone();
         no_confirmation
             .as_object_mut()
@@ -8879,7 +8879,11 @@ mod tests {
             )?;
             assert_eq!(
                 proposal.confirmation_state,
-                McpConfirmationState::NotRequired
+                if claimed_state == "rejected" {
+                    McpConfirmationState::Rejected
+                } else {
+                    McpConfirmationState::NotRequired
+                }
             );
         }
 
@@ -8892,7 +8896,7 @@ mod tests {
         )?;
         assert_eq!(
             proposal_context.confirmation_state,
-            McpConfirmationState::NotRequired
+            McpConfirmationState::Rejected
         );
 
         let wrong_operation = serde_json::json!({
