@@ -1,28 +1,47 @@
 use super::*;
 
 #[test]
-fn collection_permission_distinguishes_issuer_contention_from_invalid_credentials() -> anyhow::Result<()> {
+fn collection_permission_distinguishes_issuer_contention_from_invalid_credentials(
+) -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let (token, _) = store::issue_business_os_capability_token_for_managed_user(
-        root.path(), "reader", "Reader", "admin", now_ms() as i64,
+        root.path(),
+        "reader",
+        "Reader",
+        "admin",
+        now_ms() as i64,
     )?;
-    let check = || store::check_webrtc_collection_permission(
-        root.path(), &token, "business_commands", policy::BusinessOsPermission::DataRead,
-    );
+    let check = || {
+        store::check_webrtc_collection_permission(
+            root.path(),
+            &token,
+            "business_commands",
+            crate::business_os::policy::BusinessOsPermission::DataRead,
+        )
+    };
     assert!(check()?);
     store::with_current_webrtc_capability_signer(root.path(), |_| {
         assert!(check().is_err());
         assert!(!store::webrtc_capability_allows_collection_permission(
-            root.path(), &token, "business_commands", policy::BusinessOsPermission::DataRead,
+            root.path(),
+            &token,
+            "business_commands",
+            crate::business_os::policy::BusinessOsPermission::DataRead,
         ));
         Ok(())
     })?;
     assert!(check()?);
     assert!(!store::check_webrtc_collection_permission(
-        root.path(), "invalid", "business_commands", policy::BusinessOsPermission::DataRead,
+        root.path(),
+        "invalid",
+        "business_commands",
+        crate::business_os::policy::BusinessOsPermission::DataRead,
     )?);
     assert!(!store::check_webrtc_collection_permission(
-        root.path(), "", "business_commands", policy::BusinessOsPermission::DataRead,
+        root.path(),
+        "",
+        "business_commands",
+        crate::business_os::policy::BusinessOsPermission::DataRead,
     )?);
     Ok(())
 }

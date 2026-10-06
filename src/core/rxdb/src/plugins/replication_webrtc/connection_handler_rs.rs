@@ -342,8 +342,7 @@ impl WebRTCRsConnectionHandler {
 }
 
 pub type CollectionAuthzHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
-pub type CollectionAuthzResultHook =
-    Arc<dyn Fn(&str, &str) -> RxResult<bool> + Send + Sync>;
+pub type CollectionAuthzResultHook = Arc<dyn Fn(&str, &str) -> RxResult<bool> + Send + Sync>;
 pub type CollectionEagerPullHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 pub type CollectionLiveChangeHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 pub type DocumentReadFilter = Arc<dyn Fn(&Value) -> bool + Send + Sync>;
@@ -5674,17 +5673,30 @@ mod tests {
                 Ok(false)
             }
         }));
-        assert_eq!(handler.collection_authorization_for_peer(&peer, "records")
-            .unwrap_err().code(), "COLLECTION_AUTHORITY_UNAVAILABLE");
+        assert_eq!(
+            handler
+                .collection_authorization_for_peer(&peer, "records")
+                .unwrap_err()
+                .code(),
+            "COLLECTION_AUTHORITY_UNAVAILABLE"
+        );
         assert!(!handler.is_collection_authorized_for_peer(&peer, "records"));
         handler.set_peer_capability_token(&peer, "invalid".into());
-        assert!(!handler.collection_authorization_for_peer(&peer, "records").unwrap());
+        assert!(!handler
+            .collection_authorization_for_peer(&peer, "records")
+            .unwrap());
         let replacement = install_test_connection(&handler, "auth-result", 2).await;
-        assert!(!handler.collection_authorization_for_peer(&peer, "records").unwrap());
+        assert!(!handler
+            .collection_authorization_for_peer(&peer, "records")
+            .unwrap());
         handler.set_peer_capability_token(&replacement, "valid".into());
         handler.set_collection_authz(None);
-        assert!(handler.collection_authorization_for_peer(&replacement, "records").unwrap());
-        assert!(!handler.collection_authorization_for_peer(&peer, "records").unwrap());
+        assert!(handler
+            .collection_authorization_for_peer(&replacement, "records")
+            .unwrap());
+        assert!(!handler
+            .collection_authorization_for_peer(&peer, "records")
+            .unwrap());
         handler.close().await.unwrap();
     }
 

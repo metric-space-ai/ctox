@@ -139,8 +139,9 @@ async fn authorize_demand_query<H: WebRTCConnectionHandler>(
 ) -> RxResult<bool> {
     for attempt in 0..COLLECTION_AUTHORITY_ATTEMPTS {
         match handler.collection_authorization_for_peer(peer, collection) {
-            Err(error) if error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE"
-                && attempt + 1 < COLLECTION_AUTHORITY_ATTEMPTS =>
+            Err(error)
+                if error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE"
+                    && attempt + 1 < COLLECTION_AUTHORITY_ATTEMPTS =>
             {
                 tokio::time::sleep(COLLECTION_AUTHORITY_RETRY_DELAY).await;
             }
@@ -629,11 +630,15 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
                     error_code = error.code(),
                     "rxdb.query.fetch collection authority unavailable");
                 send_error(
-                    handler.as_ref(), &peer, &message.id, &request.request_id,
+                    handler.as_ref(),
+                    &peer,
+                    &message.id,
+                    &request.request_id,
                     QUERY_FETCH_ERROR_REMOTE,
                     &format!("{reason} for {}", request.collection_name),
                     retryable,
-                ).await;
+                )
+                .await;
                 return Ok(());
             }
         }
@@ -649,7 +654,10 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
             &message.id,
             &request.request_id,
             QUERY_FETCH_ERROR_UNAUTHORIZED,
-            &format!("peer is not authorized for collection {}", request.collection_name),
+            &format!(
+                "peer is not authorized for collection {}",
+                request.collection_name
+            ),
             false,
         )
         .await;
@@ -1889,12 +1897,18 @@ mod tests {
             self.collection_authorized.load(Ordering::SeqCst)
         }
         fn collection_authorization_for_peer(
-            &self, peer: &Self::Peer, collection: &str,
+            &self,
+            peer: &Self::Peer,
+            collection: &str,
         ) -> RxResult<bool> {
             self.authority_checks.fetch_add(1, Ordering::SeqCst);
-            if self.authority_failures.fetch_update(
-                Ordering::SeqCst, Ordering::SeqCst, |remaining| remaining.checked_sub(1),
-            ).is_ok() {
+            if self
+                .authority_failures
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
                 return Err(new_rx_error(self.authority_error_code, None));
             }
             Ok(self.is_collection_authorized_for_peer(peer, collection))
@@ -2637,8 +2651,15 @@ mod tests {
         registry.register(collection);
         let handler = Arc::new(MockHandler::new());
         handler.authority_failures.store(2, Ordering::SeqCst);
-        run_query_fetch(registry, handler.clone(), MockPeer("p1"), "p1".into(),
-            make_request("authority-recovers", "business_records", 0)).await.unwrap();
+        run_query_fetch(
+            registry,
+            handler.clone(),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("authority-recovers", "business_records", 0),
+        )
+        .await
+        .unwrap();
         assert_eq!(handler.authority_checks.load(Ordering::SeqCst), 3);
         let frames = handler.sent.lock();
         assert!(!error_code_emitted(&frames, QUERY_FETCH_ERROR_UNAUTHORIZED));
@@ -2652,22 +2673,41 @@ mod tests {
         let registry = authorized_query_registry(4);
         registry.register(collection);
         let handler = Arc::new(MockHandler::new());
-        handler.authority_failures.store(usize::MAX, Ordering::SeqCst);
-        run_query_fetch(registry, handler.clone(), MockPeer("p1"), "p1".into(),
-            make_request("authority-busy", "business_records", 0)).await.unwrap();
-        assert_eq!(handler.authority_checks.load(Ordering::SeqCst), COLLECTION_AUTHORITY_ATTEMPTS);
+        handler
+            .authority_failures
+            .store(usize::MAX, Ordering::SeqCst);
+        run_query_fetch(
+            registry,
+            handler.clone(),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("authority-busy", "business_records", 0),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            handler.authority_checks.load(Ordering::SeqCst),
+            COLLECTION_AUTHORITY_ATTEMPTS
+        );
         let frames = handler.sent.lock();
         assert!(error_code_emitted(&frames, QUERY_FETCH_ERROR_REMOTE));
         assert!(!error_code_emitted(&frames, QUERY_FETCH_ERROR_UNAUTHORIZED));
         assert!(!frames.iter().any(|frame| matches!(frame,
             WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK)));
-        let error = frames.iter().find_map(|frame| match frame {
-            WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_ERROR =>
-                message.params.first(),
-            _ => None,
-        }).expect("terminal error frame");
+        let error = frames
+            .iter()
+            .find_map(|frame| match frame {
+                WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_ERROR => {
+                    message.params.first()
+                }
+                _ => None,
+            })
+            .expect("terminal error frame");
         assert_eq!(error["retryable"], json!(true));
-        assert!(error["message"].as_str().unwrap().contains("business_records"));
+        assert!(error["message"]
+            .as_str()
+            .unwrap()
+            .contains("business_records"));
     }
 
     #[tokio::test]
@@ -2680,14 +2720,26 @@ mod tests {
             ..MockHandler::new()
         });
         handler.authority_failures.store(2, Ordering::SeqCst);
-        run_query_fetch(registry, handler.clone(), MockPeer("p1"), "p1".into(),
-            make_request("authority-terminal", "business_records", 0)).await.unwrap();
+        run_query_fetch(
+            registry,
+            handler.clone(),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("authority-terminal", "business_records", 0),
+        )
+        .await
+        .unwrap();
         assert_eq!(handler.authority_checks.load(Ordering::SeqCst), 1);
         let frames = handler.sent.lock();
-        let error = frames.iter().find_map(|frame| match frame {
-            WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_ERROR => message.params.first(),
-            _ => None,
-        }).expect("terminal error");
+        let error = frames
+            .iter()
+            .find_map(|frame| match frame {
+                WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_ERROR => {
+                    message.params.first()
+                }
+                _ => None,
+            })
+            .expect("terminal error");
         assert_eq!(error["retryable"], json!(false));
     }
 
@@ -2698,8 +2750,15 @@ mod tests {
         registry.register(collection);
         let handler = Arc::new(MockHandler::new());
         handler.set_collection_authorized(false);
-        run_query_fetch(registry, handler.clone(), MockPeer("p1"), "p1".into(),
-            make_request("authority-deny", "business_records", 0)).await.unwrap();
+        run_query_fetch(
+            registry,
+            handler.clone(),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("authority-deny", "business_records", 0),
+        )
+        .await
+        .unwrap();
         assert_eq!(handler.authority_checks.load(Ordering::SeqCst), 1);
         let frames = handler.sent.lock();
         assert!(error_code_emitted(&frames, QUERY_FETCH_ERROR_UNAUTHORIZED));
