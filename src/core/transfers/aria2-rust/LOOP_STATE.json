@@ -1,0 +1,16 @@
+{
+  "turn": 212,
+  "max_turns": 500,
+  "status": "in_progress",
+  "percent": 99.2,
+  "checked": 248,
+  "total": 250,
+  "measure": "C++ prefs.h 214 options + RpcMethodFactory.cc 36 methods",
+  "github": "https://github.com/mkh-welsch/aria2-rust",
+  "next": "Remaining C++: event-poll / enable-mmap / max-mmap-limit [ ]. Extra: room copy is live (not a C++ box). RPC addTorrent/addMetalink vs C++ still secondary.",
+  "notes": "Turn 212: LAN room copy — same room password, UDP beacon, HTTP Range deep copy dest-match. Catalog 248/250. HTTP gold still beats C++ 1.37 on 256MiB split=4.",
+  "ticked_this_fire": [
+    "Room password LAN file copy dest-match",
+    "HTTP Range share + path/auth reject"
+  ]
+}
