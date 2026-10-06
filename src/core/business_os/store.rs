@@ -12393,15 +12393,40 @@ pub(super) fn load_current_native_field_status_witnesses(
     root: &Path,
     record_id: &str,
 ) -> anyhow::Result<super::outbound_field_review::NativeFieldStatusWitnesses> {
+    Ok(load_current_native_field_status_snapshot(root, record_id)?
+        .map(|(_, witnesses)| witnesses)
+        .unwrap_or_default())
+}
+
+pub(super) fn load_current_native_field_review_view(
+    root: &Path,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    Ok(
+        load_current_native_field_status_snapshot(root, record_id)?.map(|(lead, witnesses)| {
+            super::outbound_field_review::native_review_view_from_witnesses(&lead, &witnesses)
+        }),
+    )
+}
+
+fn load_current_native_field_status_snapshot(
+    root: &Path,
+    record_id: &str,
+) -> anyhow::Result<
+    Option<(
+        Value,
+        super::outbound_field_review::NativeFieldStatusWitnesses,
+    )>,
+> {
     let path = rxdb_store_path(root);
     if !path.is_file() {
-        return Ok(Default::default());
+        return Ok(None);
     }
     let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let tx = conn.unchecked_transaction()?;
     let Some(table) = rxdb_collection_table_name(&path, &tx, "outbound_lead_generation_leads")
     else {
-        return Ok(Default::default());
+        return Ok(None);
     };
     let columns = rxdb_table_columns_for_path(&tx, &path, &table)?;
     let deleted_expression = ["deleted", "_deleted"]
@@ -12416,17 +12441,17 @@ pub(super) fn load_current_native_field_status_witnesses(
         )
         .optional()?;
     let Some((raw, deleted)) = raw else {
-        return Ok(Default::default());
+        return Ok(None);
     };
     let lead: Value = serde_json::from_str(&raw)?;
     if deleted != 0 || is_rxdb_deleted_document(&lead) {
-        return Ok(Default::default());
+        return Ok(None);
     }
     let mut issued =
         super::outbound_field_review::NativeFieldStatusWitnesses::load(&tx, record_id)?;
     issued.retain_current(&lead);
     tx.commit()?;
-    Ok(issued)
+    Ok(Some((lead, issued)))
 }
 
 /// Native writeback issuance is committed with the actual persisted statuses.

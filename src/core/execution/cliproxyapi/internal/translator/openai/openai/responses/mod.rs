@@ -20,6 +20,6 @@ mod response_test;
 pub use init::register_openai_responses_chat_completions;
 pub use request::convert_openai_responses_request_to_openai_chat_completions;
 pub use response::{
-    convert_openai_chat_completions_response_to_openai_responses,
+    can_finalize_response_stream, convert_openai_chat_completions_response_to_openai_responses,
     convert_openai_chat_completions_response_to_openai_responses_non_stream,
 };

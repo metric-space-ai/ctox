@@ -2,6 +2,8 @@
 // License: AGPL-3.0-only
 
 mod antigravity_grounding_urls;
+mod apply_patch;
+mod apply_patch_responses;
 mod cache_helpers;
 mod claude_builtin_tools;
 mod claude_client_detection;
@@ -16,15 +18,29 @@ mod cloak_obfuscate;
 mod cloak_utils;
 mod codex_input_ids;
 mod codex_multi_agent_v2;
+mod codex_tool_schema;
 mod derived_session;
+pub mod devin_models;
+pub mod devin_proto;
+pub mod devin_request;
+pub mod devin_wire;
+mod gemini_content_turns;
 mod home_refresh;
+pub use gemini_content_turns::{
+    ensure_gemini_boundary_user_content, ensure_gemini_leading_user_content,
+    ensure_gemini_trailing_user_content,
+};
 mod json_retry_helpers;
+mod kimi_responses;
 mod logging_helpers;
+mod meta_tools;
 mod model_capabilities;
 mod openai_compat_tool_results;
 pub mod payload_helpers;
 mod payload_mutations;
 mod proxy_helpers;
+mod responses_usage_helpers;
+pub use responses_usage_helpers::ensure_responses_usage_details;
 mod session_id_cache;
 mod thinking;
 mod thinking_providers;
@@ -63,7 +79,21 @@ mod claude_upstream_test;
 #[cfg(test)]
 mod codex_input_ids_test;
 #[cfg(test)]
+mod codex_multi_agent_v2_compat_test;
+#[cfg(test)]
+mod codex_tool_schema_test;
+#[cfg(test)]
 mod derived_session_test;
+#[cfg(test)]
+mod devin_models_test;
+#[cfg(test)]
+mod devin_proto_test;
+#[cfg(test)]
+mod devin_request_test;
+#[cfg(test)]
+mod devin_wire_test;
+#[cfg(test)]
+mod gemini_content_turns_test;
 #[cfg(test)]
 mod home_refresh_test;
 #[cfg(test)]
@@ -99,13 +129,19 @@ pub use antigravity_grounding_urls::{
     is_antigravity_vertex_search_redirect, resolve_antigravity_grounding_urls,
     GroundingRedirectError, GroundingRedirectResponse, GroundingRedirectTransport,
 };
+pub use apply_patch::{
+    apply_patch_original_request, apply_patch_requested, is_apply_patch_upstream_tool,
+    APPLY_PATCH_UPSTREAM_ERROR_MESSAGE,
+};
+pub use apply_patch_responses::normalize_apply_patch_responses_request;
+pub(crate) use apply_patch_responses::ApplyPatchResponsesState;
 pub use cache_helpers::{codex_prompt_cache_key, CodexCache, CodexPromptCacheStore};
 pub use claude_builtin_tools::{augment_claude_builtin_tool_registry, is_claude_server_tool_type};
 pub use claude_client_detection::{detect_claude_code_request, ClaudeCodeRequestDetection};
 pub use claude_code_session::{
     claude_code_execution_scope, claude_code_prompt_cache, extract_claude_code_agent_id,
-    extract_claude_code_session_id, CLAUDE_CODE_AGENT_HEADER, CLAUDE_CODE_MAIN_AGENT_ID,
-    CLAUDE_CODE_SESSION_HEADER,
+    extract_claude_code_session_id, header_value_case_insensitive, header_values_case_insensitive,
+    CLAUDE_CODE_AGENT_HEADER, CLAUDE_CODE_MAIN_AGENT_ID, CLAUDE_CODE_SESSION_HEADER,
 };
 pub use claude_credential_identity::{
     apply_claude_credential_metadata, claude_agent_session_uuid,
@@ -119,7 +155,9 @@ pub use claude_device_profile::{
     default_claude_device_profile, default_claude_version, map_stainless_arch, map_stainless_os,
     ClaudeDeviceProfile, ClaudeDeviceProfileCache, ClaudeHeaderDefaults,
 };
-pub use claude_diagnostics::{begin_claude_diagnostics, commit_claude_diagnostics};
+pub use claude_diagnostics::{
+    begin_claude_diagnostics, commit_claude_diagnostics, pin_claude_session_date,
+};
 pub use claude_input_tokens::{
     count_claude_input_tokens, ClaudeInputTokenError, ClaudeInputTokenFailureSink,
     ClaudeInputTokenState,
@@ -137,7 +175,16 @@ pub use codex_input_ids::sanitize_codex_input_item_ids;
 pub use codex_multi_agent_v2::{
     optimize_codex_multi_agent_v2_request, restore_codex_multi_agent_v2_response,
     rewrite_codex_multi_agent_v2_input, rewrite_codex_spawn_agent_description,
-    translate_request_with_codex_multi_agent_v2, CodexMultiAgentV2Processor,
+    translate_request_pair_with_api_key_model_compatibility_and_update_intent,
+    translate_request_with_api_key_model_compatibility_and_update_intent_for_executor,
+    translate_request_with_api_key_model_compatibility_for_executor,
+    translate_request_with_codex_multi_agent_v2,
+    translate_request_with_codex_multi_agent_v2_for_executor, CodexMultiAgentV2Processor,
+    RegistryCodexMultiAgentV2Processor,
+};
+pub use codex_tool_schema::{
+    is_codex_target_executor, is_codex_user_agent, normalize_codex_tool_integer_types,
+    normalize_codex_tool_integer_types_for_executor, normalize_codex_tool_schemas,
 };
 pub use derived_session::{
     derived_antigravity_session_id, derived_session_id, derived_session_uuid, provider_session_uuid,
@@ -150,6 +197,7 @@ pub use home_refresh::{
 pub use json_retry_helpers::{
     delete_json_field, parse_retry_delay, RetryDelayError, MAX_RETRY_ERROR_BODY_BYTES,
 };
+pub use kimi_responses::normalize_kimi_responses_input;
 pub use logging_helpers::{
     append_api_response_chunk, append_api_websocket_response, credits_used, mark_credits_used,
     record_api_request, record_api_response_error, record_api_response_metadata,
@@ -158,8 +206,10 @@ pub use logging_helpers::{
     websocket_upgrade_request_url, ApiLogClock, ApiLogContext, DeferredApiRequest, LogHeaders,
     RequestLogPolicy, SystemApiLogClock, UpstreamRequestLog, MAX_DEFERRED_API_REQUEST_BODY_BYTES,
 };
+pub use meta_tools::sanitize_meta_web_search_tools;
 pub use model_capabilities::{
-    apply_request_thinking, RequestThinkingEngine, RequestThinkingInput, RequestThinkingRoute,
+    apply_request_thinking, apply_request_thinking_with_update_intent, RequestThinkingEngine,
+    RequestThinkingInput, RequestThinkingRoute,
 };
 pub use openai_compat_tool_results::{
     normalize_openai_tool_results_text_only, should_normalize_openai_tool_results_for_model,
@@ -192,12 +242,12 @@ pub use token_helpers::{
 };
 pub use usage_helpers::{
     has_nonzero_token_usage, json_payload, normalize_usage_detail_total,
-    parse_antigravity_stream_usage, parse_antigravity_usage, parse_claude_stream_usage,
-    parse_claude_usage, parse_codex_image_tool_usage, parse_codex_usage, parse_gemini_stream_usage,
-    parse_gemini_usage, parse_interactions_stream_usage, parse_interactions_usage,
-    parse_openai_stream_usage, parse_openai_usage, strip_usage_metadata_from_json,
-    SseUsageMetadataFilter, StreamUsageBuffer, DEFAULT_STOP_TRACE_CAPACITY, DEFAULT_STOP_TRACE_TTL,
-    MAX_USAGE_STREAM_CHUNK_BYTES,
+    observe_plugin_executor_stream, parse_antigravity_stream_usage, parse_antigravity_usage,
+    parse_claude_stream_usage, parse_claude_usage, parse_codex_image_tool_usage, parse_codex_usage,
+    parse_gemini_stream_usage, parse_gemini_usage, parse_interactions_stream_usage,
+    parse_interactions_usage, parse_openai_stream_usage, parse_openai_usage,
+    strip_usage_metadata_from_json, SseUsageMetadataFilter, StreamUsageBuffer,
+    DEFAULT_STOP_TRACE_CAPACITY, DEFAULT_STOP_TRACE_TTL, MAX_USAGE_STREAM_CHUNK_BYTES,
 };
 pub use user_id_cache::{ClaudeIdentityKvStore, ClaudeIdentityStoreError, UserIdCache};
 pub use utls_client::{
@@ -210,3 +260,5 @@ pub use utls_client::{
     UTLS_PROTECTED_HOSTS,
 };
 pub use vertex_payload_helpers::strip_vertex_openai_responses_tool_call_ids;
+
+pub use model_capabilities::RequestThinkingPipeline;

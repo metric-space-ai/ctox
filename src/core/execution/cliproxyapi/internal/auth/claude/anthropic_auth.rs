@@ -683,7 +683,11 @@ pub enum RefreshError {
 impl RefreshError {
     pub fn retryable(&self) -> bool {
         match self {
-            Self::Transport(kind) => *kind != RefreshTransportFailure::Cancelled,
+            // ref: anthropic_auth.go:120-129 @ 2044a01f (v8.0.12)
+            // The single-use refresh token may already have been consumed when
+            // a transport response is lost. Only explicit retryable HTTP
+            // responses may replay it.
+            Self::Transport(_) => false,
             Self::Http { retryable, .. } => *retryable,
             Self::RequestEncoding
             | Self::RateLimited { .. }
@@ -1486,6 +1490,35 @@ mod tests {
             *lock_recover(&transport.timeouts),
             vec![REFRESH_TIMEOUT, REFRESH_TIMEOUT]
         );
+    }
+
+    #[tokio::test]
+    async fn ambiguous_transport_failures_never_replay_single_use_refresh_tokens() {
+        for failure in [
+            RefreshTransportFailure::Timeout,
+            RefreshTransportFailure::Connect,
+            RefreshTransportFailure::Protocol,
+            RefreshTransportFailure::Cancelled,
+        ] {
+            let transport = SequenceTransport::new(vec![
+                Err(failure.clone()),
+                Ok(success("unused-rotated-refresh")),
+            ]);
+            let clock = TestClock::at(SystemTime::UNIX_EPOCH + Duration::from_secs(500));
+            let coordinator = ClaudeRefreshCoordinator::default();
+            let result = coordinator
+                .refresh(
+                    &transport,
+                    &clock,
+                    SecretString::new("original-refresh").unwrap(),
+                    3,
+                )
+                .await;
+            assert!(matches!(result, Err(RefreshError::Transport(kind)) if kind == failure));
+            assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+            assert!(lock_recover(&clock.sleeps).is_empty());
+            assert_eq!(*lock_recover(&transport.timeouts), vec![REFRESH_TIMEOUT]);
+        }
     }
 
     #[test]

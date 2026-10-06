@@ -9,6 +9,25 @@ pub fn convert_claude_request_to_interactions(
     input_raw_json: &[u8],
     stream: bool,
 ) -> Vec<u8> {
+    convert_claude_request_to_interactions_impl(model_name, input_raw_json, stream, false)
+}
+
+/// ref: internal/translator/interactions/claude/interactions_claude_request.go:15-21
+/// Candidate e2bff010: compatibility endpoints preserve empty thought steps.
+pub fn convert_claude_request_to_interactions_with_compat(
+    model_name: &str,
+    input_raw_json: &[u8],
+    stream: bool,
+) -> Vec<u8> {
+    convert_claude_request_to_interactions_impl(model_name, input_raw_json, stream, true)
+}
+
+fn convert_claude_request_to_interactions_impl(
+    model_name: &str,
+    input_raw_json: &[u8],
+    stream: bool,
+    preserve_empty_thinking_blocks: bool,
+) -> Vec<u8> {
     let root = serde_json::from_slice::<Value>(input_raw_json).unwrap_or(Value::Null);
     let mut out = Map::new();
     out.insert(
@@ -37,7 +56,12 @@ pub fn convert_claude_request_to_interactions(
     if let Some(messages) = root.get("messages").and_then(Value::as_array) {
         out.insert(
             "input".into(),
-            Value::Array(messages.iter().flat_map(convert_message).collect()),
+            Value::Array(
+                messages
+                    .iter()
+                    .flat_map(|message| convert_message(message, preserve_empty_thinking_blocks))
+                    .collect(),
+            ),
         );
     }
     copy_tools(&root, &mut out);
@@ -127,7 +151,7 @@ fn convert_tool_choice(choice: &Value) -> Option<Value> {
     }
 }
 
-fn convert_message(message: &Value) -> Vec<Value> {
+fn convert_message(message: &Value, preserve_empty_thinking_blocks: bool) -> Vec<Value> {
     let role = message
         .get("role")
         .and_then(Value::as_str)
@@ -178,11 +202,15 @@ fn convert_message(message: &Value) -> Vec<Value> {
             }
             "thinking" => {
                 flush(&mut items, &mut step_content);
-                if let Some(text) = part
+                let text = part
                     .get("thinking")
-                    .and_then(Value::as_str)
-                    .filter(|text| !text.is_empty())
-                {
+                    .map(|value| match value {
+                        Value::Null => String::new(),
+                        Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    })
+                    .unwrap_or_default();
+                if !text.is_empty() || preserve_empty_thinking_blocks {
                     items.push(json!({"type":"thought","content":[{"type":"text","text":text}]}));
                 }
             }

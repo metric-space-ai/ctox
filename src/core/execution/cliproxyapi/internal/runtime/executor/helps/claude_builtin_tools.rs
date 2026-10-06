@@ -27,6 +27,8 @@ fn gjson_string(value: &Value) -> String {
 pub fn is_claude_server_tool_type(tool_type: &str) -> bool {
     let tool_type = tool_type.trim().to_ascii_lowercase();
     [
+        "advisor_",
+        "agent_toolset_",
         "bash_",
         "code_execution_",
         "computer_",
