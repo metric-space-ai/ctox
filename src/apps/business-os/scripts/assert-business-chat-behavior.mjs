@@ -1762,7 +1762,22 @@ function harnessHtml() {
                 return { unsubscribe: () => chatCollectionSubscribers.delete(callback) };
               },
             },
-            find: () => ({ exec: async () => { readStats.started += 1; await chatReadGate; await maybeThrow(); readStats.completed += 1; return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
+            find: (query = {}) => ({
+              $: {
+                subscribe: (callback) => {
+                  chatCollectionSubscribers.add(callback);
+                  return { unsubscribe: () => chatCollectionSubscribers.delete(callback) };
+                },
+              },
+              exec: async () => {
+                readStats.started += 1;
+                await chatReadGate;
+                await maybeThrow();
+                readStats.completed += 1;
+                const docs = Array.from(store.keys()).map(docFor).filter(Boolean);
+                return Number.isInteger(query.limit) ? docs.slice(0, query.limit) : docs;
+              },
+            }),
             findOne: (id) => ({ exec: async () => { await maybeThrow(); return docFor(id); } }),
             insert: async (doc) => { await maybeThrow(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
           },
