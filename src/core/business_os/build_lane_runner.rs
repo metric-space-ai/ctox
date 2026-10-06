@@ -223,7 +223,7 @@ mod tests {
             "first",
             "source",
             &["sleep".into(), "30".into()],
-            1,
+            3,
         )
         .unwrap();
         fs::create_dir_all(&first.source_dir).unwrap();
