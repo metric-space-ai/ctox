@@ -29258,18 +29258,17 @@ Business OS command:
             let root = temp_root(&format!("priority-system-pressure-{priority}"));
             let app_metadata =
                 business_os_app_queue_metadata("quality", "ctox.business_os.app.create");
-            let active_app = priority_system_dispatch_test_task(
-                &root,
-                "active-app",
-                "high",
-                Some(app_metadata.clone()),
-            );
+            let active_app =
+                priority_system_dispatch_test_task(&root, "active-app", "high", Some(app_metadata));
             channels::lease_queue_task(&root, &active_app.message_key, "app-worker")?;
             let waiting_app = priority_system_dispatch_test_task(
                 &root,
                 "waiting-app",
                 "urgent",
-                Some(app_metadata),
+                Some(business_os_app_queue_metadata(
+                    "waiting-quality",
+                    "ctox.business_os.app.create",
+                )),
             );
             for index in 0..QUEUE_PRESSURE_GUARD_THRESHOLD + 1 {
                 let normal = priority_system_dispatch_test_task(
