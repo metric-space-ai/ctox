@@ -630,6 +630,124 @@ pub fn accept_rxdb_business_command_with_origin(
     )
 }
 
+/// Fail closed for the old unowned external-SQL admission. The incoming
+/// capability is only a current authentication check; it cannot authorize the
+/// historical effect or add authority to its immutable Core intent.
+fn reject_legacy_external_sql_replay(
+    root: &Path,
+    replay: &BusinessCommand,
+    authenticated_owner: &str,
+) -> anyhow::Result<Option<Value>> {
+    if !super::external_sql_sync::is_external_sql_command(&replay.command_type) {
+        return Ok(None);
+    }
+    let command_id = replay.id.as_deref().context("command id is required")?;
+    let mut conn = open_store(root)?;
+    // Hold the private command row stable until the Core rejection commits.
+    // There is no cross-WAL atomicity claim: a failed projection is repaired
+    // by repeating the same terminal native rejection without another effect.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let stored = tx
+        .query_row(
+            "SELECT module, command_type, record_id, status, payload_json, client_context_json
+         FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((module, command_type, record_id, status, payload_json, context_json)) = stored else {
+        return Ok(None);
+    };
+    if !matches!(status.as_str(), "accepted" | "failed") {
+        return Ok(None);
+    }
+    let canonical = channels::business_command_projection(root, command_id)?;
+    let object = canonical
+        .as_object()
+        .context("canonical command must be an object")?;
+    if object.contains_key("native_owner") || object.contains_key("native_authorization") {
+        return Ok(None);
+    }
+    let _legacy_execution_guard = match ActiveExternalSqlControlCommand::try_acquire(command_id) {
+        Some(guard) => guard,
+        None => {
+            tx.rollback()?;
+            return external_sql_command_in_flight_outcome(root, command_id).map(Some);
+        }
+    };
+    let original = BusinessCommand {
+        origin: CommandOrigin::ReplicatedPeer,
+        id: Some(command_id.to_owned()),
+        module,
+        command_type,
+        record_id: (!record_id.is_empty()).then_some(record_id),
+        payload: serde_json::from_str(&payload_json)?,
+        client_context: serde_json::from_str(&context_json)?,
+    };
+    // The private actor hint is an additional rejection fence, not proof of
+    // original authority. Never accept a different live actor as its owner.
+    let actor = super::store_policy_audit::policy_audit_actor_context_from_client_context(Some(
+        &original.client_context,
+    ));
+    anyhow::ensure!(
+        !authenticated_owner.trim().is_empty()
+            && actor.get("id").and_then(Value::as_str) == Some(authenticated_owner),
+        "legacy control rejection requires the same currently authenticated actor"
+    );
+    anyhow::ensure!(
+        !domain_effect::contains(&tx, command_id)?,
+        "applied domain effect cannot be terminalized as a failed mutation"
+    );
+    let original_claim = super::store::business_command_core_claim(command_id, &original)?;
+    let replay_claim = super::store::business_command_core_claim(command_id, replay)?;
+    let Some(mut denial) =
+        channels::reject_legacy_unowned_external_sql_command(root, &original_claim, &replay_claim)?
+    else {
+        return Ok(None);
+    };
+    if status == "accepted" {
+        let changed = tx.execute(
+            "UPDATE business_commands SET status = 'failed', observed_at_ms = ?2
+             WHERE command_id = ?1 AND status = 'accepted'",
+            params![command_id, now_ms() as i64],
+        )?;
+        anyhow::ensure!(
+            changed == 1,
+            "legacy private command changed during rejection"
+        );
+    }
+    tx.commit()?;
+    denial = persist_business_command_lifecycle_projection(root, &denial)?;
+    with_control_projection_writers(root, |writers| {
+        let at = denial
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .context("native rejection is missing its projection timestamp")?;
+        writers.upsert_control("business_commands", command_id, at, denial.clone())?;
+        Ok(())
+    })?;
+    let receipt = BusinessCommandReplayReceipt::terminal_control_claim(
+        command_id,
+        "failed",
+        denial.get("result").unwrap_or(&Value::Null),
+    );
+    let object = denial
+        .as_object_mut()
+        .context("native rejection must be an object")?;
+    object.insert("ok".to_owned(), Value::Bool(false));
+    object.insert("already_accepted".to_owned(), Value::Bool(true));
+    with_business_command_replay_receipt(denial, receipt).map(Some)
+}
+
 /// Same intake as [`accept_rxdb_business_command_with_origin`], with an explicit
 /// guest owner/driver injection. The public wrappers pass `Unregistered`; a
 /// registered owner is only supplied by this internal boundary. There is no
@@ -676,6 +794,9 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
     // the claim intent, business_commands, business_records, process events
     // and the RxDB projection all store this command.
     super::store::detach_secret_intake_value(&command_id, &mut command);
+    let legacy_replay = (matches!(command.origin, CommandOrigin::ReplicatedPeer)
+        && super::external_sql_sync::is_external_sql_command(&command.command_type))
+    .then(|| command.clone());
     let mut verified_command_owner = None;
     if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
         let intake_started = command_timing_probe_requested(&command).then(std::time::Instant::now);
@@ -702,6 +823,14 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
                         started.elapsed().as_secs_f64() * 1_000.0 - authentication_ms,
                 })
             );
+        }
+    }
+    if let Some((owner, replay)) = verified_command_owner
+        .as_deref()
+        .zip(legacy_replay.as_ref())
+    {
+        if let Some(outcome) = reject_legacy_external_sql_replay(root, replay, owner)? {
+            return Ok(outcome);
         }
     }
     let _command_timing_probe = install_command_timing_probe(&command);

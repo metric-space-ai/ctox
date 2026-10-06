@@ -45080,12 +45080,10 @@ pub(super) mod tests {
         Ok(())
     }
 
-    #[test]
-    fn accepted_external_sql_without_authorization_receipt_fails_terminally() -> anyhow::Result<()>
-    {
-        let temp = tempdir()?;
-        let root = temp.path();
-        let command_id = "cmd_external_sql_missing_authorization";
+    fn legacy_external_sql_test_command(
+        root: &Path,
+        command_id: &str,
+    ) -> anyhow::Result<(Value, BusinessCommand)> {
         seed_business_user(root, "operator", "admin")?;
         let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
         let document = serde_json::json!({
@@ -45114,6 +45112,14 @@ pub(super) mod tests {
             payload: document["payload"].clone(),
             client_context: document["client_context"].clone(),
         };
+        Ok((document, command))
+    }
+
+    fn seed_legacy_external_sql_test_command(
+        root: &Path,
+        command_id: &str,
+    ) -> anyhow::Result<(Value, BusinessCommand)> {
+        let (document, command) = legacy_external_sql_test_command(root, command_id)?;
         let claim_request = business_command_core_claim(command_id, &command)?;
         assert!(claim_request.intent.get("native_authorization").is_none());
         let claim = channels::claim_business_control_command(root, claim_request)?;
@@ -45133,10 +45139,21 @@ pub(super) mod tests {
             ],
         )?;
         drop(conn);
+        Ok((document, command))
+    }
+
+    #[test]
+    fn accepted_external_sql_without_authorization_receipt_fails_terminally() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "cmd_external_sql_missing_authorization";
+        let (document, command) = seed_legacy_external_sql_test_command(root, command_id)?;
+        let before = channels::business_command_projection(root, command_id)?;
 
         let outcome = accept_rxdb_business_command_with_origin(
             root,
-            document,
+            document.clone(),
             CommandOrigin::ReplicatedPeer,
         )?;
         assert_eq!(
@@ -45155,6 +45172,198 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(status, "failed");
+        let private: (String, String) = conn.query_row(
+            "SELECT payload_json, client_context_json FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(serde_json::from_str::<Value>(&private.0)?, command.payload);
+        assert_eq!(
+            serde_json::from_str::<Value>(&private.1)?,
+            command.client_context
+        );
+        drop(conn);
+        let terminal = channels::business_command_projection(root, command_id)?;
+        assert_eq!(terminal["payload_hash"], before["payload_hash"]);
+        assert_eq!(terminal["payload"], before["payload"]);
+        assert_eq!(terminal["client_context"], before["client_context"]);
+        assert!(terminal.get("native_owner").is_none());
+        assert!(terminal.get("native_authorization").is_none());
+        assert_eq!(terminal["terminal_status"], "failed");
+        assert_eq!(terminal["projection_version"], 2);
+        let repeated = accept_rxdb_business_command_with_origin(
+            root,
+            document,
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert_eq!(repeated["status"], "failed");
+        assert_eq!(
+            channels::business_command_projection(root, command_id)?,
+            terminal
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_external_sql_rejection_preserves_changed_replay() -> anyhow::Result<()> {
+        for change in [
+            "payload",
+            "module",
+            "record",
+            "type",
+            "actor",
+            "invalid_token",
+        ] {
+            let temp = tempdir()?;
+            let root = temp.path();
+            let id = format!("legacy-sql-{change}");
+            let (mut document, _) = seed_legacy_external_sql_test_command(root, &id)?;
+            let before = channels::business_command_projection(root, &id)?;
+            let private = || -> anyhow::Result<(String, String, String, i64)> {
+                let conn = open_store(root)?;
+                Ok(conn.query_row(
+                    "SELECT payload_json, client_context_json, status, observed_at_ms
+                     FROM business_commands WHERE command_id = ?1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?)
+            };
+            let original = private()?;
+            match change {
+                "payload" => document["payload"]["item_id"] = Value::from(99),
+                "module" => document["module"] = Value::from("another-module"),
+                "record" => document["record_id"] = Value::from("another-record"),
+                "type" => document["command_type"] = Value::from("external_sql.sync.refresh"),
+                "actor" => {
+                    seed_business_user(root, "another-operator", "admin")?;
+                    let (token, _) = issue_business_os_capability_token(
+                        root,
+                        "another-operator",
+                        now_ms() as i64,
+                    )?;
+                    document["client_context"]["capability_token"] = Value::from(token);
+                    document["client_context"]["actor"]["id"] = Value::from("another-operator");
+                }
+                "invalid_token" => {
+                    document["client_context"]["capability_token"] = Value::from("invalid")
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                accept_rxdb_business_command_with_origin(
+                    root,
+                    document,
+                    CommandOrigin::ReplicatedPeer
+                )
+                .is_err(),
+                "{change}"
+            );
+            assert_eq!(
+                channels::business_command_projection(root, &id)?,
+                before,
+                "{change}"
+            );
+            assert_eq!(private()?, original, "{change}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_external_sql_rejection_preserves_authority_and_advanced_core() -> anyhow::Result<()> {
+        for state in [
+            "native_owner",
+            "native_authorization",
+            "null_authorization",
+            "running",
+            "completed",
+            "effect_result",
+            "corrupt_hash",
+        ] {
+            let temp = tempdir()?;
+            let root = temp.path();
+            let id = format!("legacy-sql-protected-{state}");
+            let (_, command) = legacy_external_sql_test_command(root, &id)?;
+            let original = business_command_core_claim(&id, &command)?;
+            let mut claim = business_command_core_claim(&id, &command)?;
+            match state {
+                "native_owner" => bind_business_command_claim_owner(&mut claim, "operator")?,
+                "native_authorization" => {
+                    let authorization =
+                        recoverable_background_control_claim_authorization(root, &command)
+                            .context("real native authorization is required")?;
+                    claim = business_command_core_claim_with_authorization(
+                        &id,
+                        &command,
+                        Some(&authorization),
+                    )?;
+                }
+                "null_authorization" => {
+                    claim.intent["native_authorization"] = Value::Null;
+                    claim.payload_hash = format!(
+                        "sha256:{:x}",
+                        Sha256::digest(serde_json::to_vec(&claim.intent)?)
+                    );
+                }
+                _ => {}
+            }
+            assert_eq!(
+                channels::claim_business_control_command(root, claim)?.disposition,
+                "new"
+            );
+            match state {
+                "running" => channels::progress_business_control_command(
+                    root,
+                    &id,
+                    "running",
+                    &serde_json::json!({"started": true}),
+                )?,
+                "completed" => channels::complete_business_control_command(
+                    root,
+                    &id,
+                    "completed",
+                    &serde_json::json!({"ok": true}),
+                    None,
+                )?,
+                "effect_result" => {
+                    Connection::open(crate::paths::core_db(root))?.execute(
+                        "UPDATE business_command_effects SET result_json = '{\"applied\":true}' WHERE command_id = ?1", params![id],
+                    )?;
+                }
+                "corrupt_hash" => {
+                    Connection::open(crate::paths::core_db(root))?.execute(
+                        "UPDATE business_command_aggregates SET payload_hash = 'sha256:corrupt' WHERE command_id = ?1", params![id],
+                    )?;
+                }
+                _ => {}
+            }
+            let before = channels::business_command_projection(root, &id)?;
+            let effect = || -> anyhow::Result<(String, Option<String>, Option<String>, i64)> {
+                let conn = Connection::open(crate::paths::core_db(root))?;
+                Ok(conn.query_row(
+                    "SELECT status, result_json, error_message, updated_at_ms
+                     FROM business_command_effects WHERE command_id = ?1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?)
+            };
+            let original_effect = effect()?;
+            let result =
+                channels::reject_legacy_unowned_external_sql_command(root, &original, &original);
+            if matches!(
+                state,
+                "native_owner" | "native_authorization" | "null_authorization" | "completed"
+            ) {
+                assert!(result?.is_none(), "{state}");
+            } else {
+                assert!(result.is_err(), "{state}");
+            }
+            assert_eq!(
+                channels::business_command_projection(root, &id)?,
+                before,
+                "{state}"
+            );
+            assert_eq!(effect()?, original_effect, "{state}");
+        }
         Ok(())
     }
 

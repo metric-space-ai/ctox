@@ -891,6 +891,128 @@ pub(crate) fn claim_business_control_command(
     })
 }
 
+/// Reject only the historical, unowned external-SQL admission. This is a
+/// native invariant repair, never an authorization receipt or effect replay.
+/// Its identity and phase fences share the transaction that records failure.
+pub(crate) fn reject_legacy_unowned_external_sql_command(
+    root: &Path,
+    original: &BusinessCommandClaimRequest,
+    replay: &BusinessCommandClaimRequest,
+) -> Result<Option<Value>> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let stored = tx
+        .query_row(
+            "SELECT idempotency_key, payload_hash, intent_json
+             FROM business_command_aggregates WHERE command_id = ?1",
+            params![original.command_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((key, hash, intent_json)) = stored else {
+        return Ok(None);
+    };
+    let intent: Value = serde_json::from_str(&intent_json)?;
+    let object = intent
+        .as_object()
+        .context("canonical command intent must be an object")?;
+    // Presence, including malformed/null values, cannot be downgraded to an
+    // ownerless legacy admission by this repair.
+    if object.contains_key("native_owner") || object.contains_key("native_authorization") {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        matches!(
+            original.command_type.as_str(),
+            "external_sql.write" | "external_sql.sync.refresh"
+        ) && original.command_id == replay.command_id
+            && intent == original.intent
+            && original.intent == replay.intent
+            && same_business_command_intent(&key, &hash, &intent_json, original)
+            && same_business_command_intent(&key, &hash, &intent_json, replay)
+            && format!("sha256:{}", sha256_hex(intent_json.as_bytes())) == hash,
+        "idempotency_conflict: legacy control rejection requires the unchanged original intent"
+    );
+    let projection = business_command_projection_from_conn(&tx, &original.command_id)?;
+    anyhow::ensure!(
+        projection["execution_mode"] == "control"
+            && projection["module"] == original.module
+            && projection["command_type"] == original.command_type
+            && projection["record_id"] == original.record_id,
+        "legacy control rejection requires the original control identity"
+    );
+    const ERROR: &str = "accepted recoverable command has no native authorization receipt";
+    const OPERATION: &str = "legacy_unowned_external_sql_rejection";
+    if projection["execution_phase"] == "terminal" {
+        // A failed delivery may repeat this exact native rejection, but cannot
+        // replace a different terminal outcome or create another transition.
+        if projection["terminal_status"] == "failed"
+            && projection
+                .pointer("/result/operation")
+                .and_then(Value::as_str)
+                == Some(OPERATION)
+            && projection["error_message"] == ERROR
+        {
+            tx.commit()?;
+            return Ok(Some(projection));
+        }
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        projection["execution_phase"] == "accepted"
+            && projection["terminal_status"] == "none"
+            && projection["attempt"] == 0
+            && projection.get("result").is_none(),
+        "legacy control rejection cannot replace an advanced command"
+    );
+    let claimed: bool = tx.query_row(
+        "SELECT COUNT(*) = 1 AND
+                COALESCE(SUM(effect_key = ?2 AND status = 'claimed'
+                             AND result_json IS NULL AND error_message IS NULL), 0) = 1
+         FROM business_command_effects WHERE command_id = ?1",
+        params![
+            original.command_id,
+            format!("control:{}", original.command_type)
+        ],
+        |row| row.get(0),
+    )?;
+    let linked: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_command_task_links WHERE command_id = ?1)
+             OR EXISTS(SELECT 1 FROM business_command_sagas WHERE command_id = ?1)",
+        params![original.command_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        claimed && !linked,
+        "legacy control rejection cannot replace active effect ownership"
+    );
+    let result = json!({
+        "ok": false,
+        "operation": OPERATION,
+        "error_code": "original_native_authorization_missing",
+        "error": ERROR,
+        "check": "failed"
+    });
+    complete_business_control_command_tx(
+        root,
+        &tx,
+        &original.command_id,
+        "failed",
+        &result,
+        Some(ERROR),
+    )?;
+    let projection = business_command_projection_from_conn(&tx, &original.command_id)?;
+    tx.commit()?;
+    Ok(Some(projection))
+}
+
 pub(crate) fn complete_business_control_command(
     root: &Path,
     command_id: &str,
@@ -905,6 +1027,26 @@ pub(crate) fn complete_business_control_command(
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    complete_business_control_command_tx(
+        root,
+        &tx,
+        command_id,
+        terminal_status,
+        result,
+        error_message,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn complete_business_control_command_tx(
+    root: &Path,
+    tx: &Transaction<'_>,
+    command_id: &str,
+    terminal_status: &str,
+    result: &Value,
+    error_message: Option<&str>,
+) -> Result<()> {
     let (phase, version, command_type) = tx.query_row(
         "SELECT execution_phase, projection_version, command_type
          FROM business_command_aggregates WHERE command_id = ?1",
@@ -918,7 +1060,6 @@ pub(crate) fn complete_business_control_command(
         },
     )?;
     if phase == "terminal" {
-        tx.commit()?;
         return Ok(());
     }
     let saga_phase: Option<String> = tx
@@ -1058,7 +1199,6 @@ pub(crate) fn complete_business_control_command(
             refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;
         }
     }
-    tx.commit()?;
     Ok(())
 }
 
