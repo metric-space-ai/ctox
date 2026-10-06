@@ -2332,7 +2332,7 @@ async fn exercise_session(
                     assert_eq!(session, ready.clone().unwrap());
                     assert_eq!(resumed, subscription_id);
                 }
-                _ => panic!("expected resume response"),
+                other => panic!("expected resume response, received {}", frame_kind(&other)),
             }
             let caught_up = read_event(&mut client, "resume caught-up").await;
             assert_eq!(caught_up.session, ready.clone().unwrap());
