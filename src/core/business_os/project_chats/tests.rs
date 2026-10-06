@@ -728,6 +728,76 @@ fn held_visibility_readers_preserve_native_lineage_and_fence_owner_mutation() ->
     Ok(())
 }
 
+#[tokio::test]
+async fn native_business_data_document_view_reuses_private_core_lineage_and_owner_revocation(
+) -> anyhow::Result<()> {
+    use crate::business_os::rxdb_peer_business_data_source::NativeBusinessDataPolicy;
+    use crate::mission::channels;
+    use ctox_sync::business_data_remote::BusinessDataAccessPolicy;
+    let root = fixture()?;
+    let initial = add(root.path(), "native-read-add")?;
+    let chat = initial["first_chat_id"].as_str().unwrap();
+    let private = command(
+        "business_os.chat.task",
+        "native-read-private",
+        json!({"thread_id":chat, "instruction":"Private native read fixture"}),
+    );
+    let admitted = channels::claim_business_command_with_queue(
+        root.path(),
+        store::business_command_core_claim("native-read-private", &private)?,
+        channels::QueueTaskCreateRequest {
+            title: "Native read task".into(),
+            prompt: "Private native read fixture".into(),
+            thread_key: "native-read-private-thread".into(),
+            workspace_root: Some(root.path().display().to_string()),
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"business_os_command_id":"native-read-private"})),
+        },
+    )?;
+    let policy = NativeBusinessDataPolicy::new(root.path().to_path_buf());
+    let doc = json!({"id":"native-read-run","task_id":admitted.task.message_key});
+    let mut owner = None;
+    for user in ["owner", "foreign"] {
+        store::tests::seed_business_user(root.path(), user, "chef")?;
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            user,
+            user,
+            "chef",
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        let identity = policy
+            .identity(&token)
+            .await
+            .expect("current native fixture actor");
+        let legacy = threads::replication_document_filter(root.path(), &token, "ctox_runs");
+        assert_eq!(legacy(&doc), user == "owner");
+        assert_eq!(
+            policy.document_view(&identity, &token, "ctox_runs", &doc).await?,
+            (user == "owner").then(|| doc.clone()),
+            "native collection authority cannot bypass the canonical private task/command relationship"
+        );
+        if user == "owner" {
+            owner = Some((identity, token));
+        }
+    }
+    let writer = open_store(root.path())?;
+    let mut project = outbound_load_record(&writer, "workjet_projects", "project")?.unwrap();
+    project["owner_user_id"] = json!("foreign");
+    store::upsert_business_record(&writer, "workjet_projects", "project", 2, project)?;
+    let (identity, token) = owner.unwrap();
+    assert_eq!(
+        policy
+            .document_view(&identity, &token, "ctox_runs", &doc)
+            .await?,
+        None,
+        "the next real policy call must see ownership mutation through native Core lineage"
+    );
+    Ok(())
+}
+
 #[test]
 fn private_threads_reject_foreign_human_mentions_and_admin_mutation() -> anyhow::Result<()> {
     let root = fixture()?;
