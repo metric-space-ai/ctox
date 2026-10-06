@@ -73,6 +73,26 @@ test('repeated revision mismatch fails without publishing any partial result', a
   await assert.rejects(loadLeadRevisionChanges(collection, existing), { code: 'LEAD_HYDRATION_RACE', retryable: true });
   assert.equal(fullReads, 2); assert.deepEqual(existing, before);
 });
+test('bridge replacement aborts its cycle instead of retrying an old manifest as a document race', async () => {
+  const failure = Object.assign(new Error('bridge replaced'), { code: 'QUERY_GENERATION_REPLACED' });
+  const requests = [];
+  const collection = { find: (q) => ({ exec: async () => {
+    requests.push(q);
+    if (!q.projection) throw failure;
+    return q.selector.id?.$gt ? [] : [{ toJSON: () => ({ id: 'a', _rev: '1-a' }) }];
+  } }) };
+  await assert.rejects(loadLeadRevisionChanges(collection, []), (error) => error === failure);
+  assert.equal(requests.filter((q) => !q.projection).length, 1);
+});
+test('each hydration cycle uses fresh strict tokens, even for the same document revisions', async () => {
+  const w = world([lead('a')]);
+  await loadLeadRevisionChanges(w.collection, []);
+  const first = w.requests.filter((q) => !q.projection)[0].requireRevision;
+  w.requests.length = 0;
+  await loadLeadRevisionChanges(w.collection, []);
+  const second = w.requests.filter((q) => !q.projection)[0].requireRevision;
+  assert.notEqual(first, second);
+});
 test('unsupported projection never retries as a full query', async () => {
   const requests = [];
   const collection = { find: (q) => ({ exec: async () => {
