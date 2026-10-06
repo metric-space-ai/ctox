@@ -8699,6 +8699,7 @@ mod tests {
         let trusted = serde_json::json!({
             "auth_source": MCP_INTERNAL_SESSION_AUTH_SOURCE,
             "command_id": "parent-command-1",
+            "confirmation_state": "rejected",
             "channel": "ctox_internal_business_command",
             "surface": "business_os_command_session",
             "actor": "user:trusted",
@@ -8750,6 +8751,27 @@ mod tests {
             proposal_context.confirmation_state,
             McpConfirmationState::Rejected
         );
+        // Confirmation from an untrusted argument envelope is never grafted
+        // onto the signed actor. Without a trusted state, proposals remain
+        // non-executing and neither forged approval nor rejection is inherited.
+        let mut no_confirmation = trusted.clone();
+        no_confirmation
+            .as_object_mut()
+            .unwrap()
+            .remove("confirmation_state");
+        for claimed_state in ["approved", "rejected"] {
+            let mut claimed = arguments.clone();
+            claimed["_context"]["confirmation_state"] = serde_json::json!(claimed_state);
+            let proposal = context_from_arguments_with_trusted_gateway_context(
+                "business_os.propose_action",
+                &claimed,
+                Some(&no_confirmation),
+            )?;
+            assert_eq!(
+                proposal.confirmation_state,
+                McpConfirmationState::NotRequired
+            );
+        }
 
         let wrong_operation = serde_json::json!({
             "module_id": "crm",
