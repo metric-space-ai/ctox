@@ -26,7 +26,7 @@ feature into a privileged native transfer; introduce the native lifecycle with
 its own explicit authorization and retire superseded execution paths only after
 its acceptance evidence exists.
 
-## Native producer ownership at the current source revision
+## Native producer ownership before the capture transition
 
 Source inspection at CTOX `5f2d52c362c628b0eea673c7eda8fe60d6e9be70`
 (2026-10-06) identifies three separate lifetime boundaries:
@@ -68,6 +68,40 @@ These are source observations, not compiler, runtime or cross-host
 acceptance results. The daemon's embedded pi sidecar remains the owner of
 Business OS app coding turns; native session handoff must not redirect
 `ctox.coding.turn` into the Codex guest producer.
+
+## Capture-only source ownership
+
+The native producer now consumes its actual turn owner after a successful reply
+and an exact thread/turn-scoped TurnComplete witness. A prematurely closed stream
+with an existing reply cannot retire to capture authority. The persistent session
+retains a distinct NativeProviderCaptureOwner; old live-provider lookups, command
+emitters and previously admitted command witnesses reject the retired phase.
+The original worker transaction and pinned account are reread by each capture
+callback, and the registry requires the exact same retained producer record
+before checking current project/profile/policy/controller authority. The source
+also retains its original signed command token/context and revalidates them
+around each callback, outside the held native stores to avoid reentry. These
+checks do not replace the separate authority held through protected byte IO.
+
+PersistentSession::quiesce_native_capture consumes that native source, requires
+both real shutdown owners and a non-ambiguous turn, validates current authority,
+performs checked client/runtime teardown, then validates current authority again.
+No handle escapes failed or forced teardown. Dropping the capture owner revokes
+the original provider record. Ordinary producers do not gain this authority, and
+the subsequent-turn reconciliation refusal remains.
+
+This implements the native source ownership transition and its explicit
+quiescence boundary. It does not connect the native factory to service startup
+or invoke CheckpointStore::capture. The returned handle is not fresh Raft
+ownership, complete artifact/provider export, handoff enrollment, effects
+reconciliation, protected-byte publication or target-resume certification.
+Those production consumers and acceptance requirements remain open.
+
+Four new regression sources cover retained mutable consumers and actual worker
+transaction fencing; unbound/foreign/unpinned retirement; worker/account
+revocation after retirement; and ordinary/ambiguous capture refusal through a
+real embedded client/runtime. Their compiler and runtime validation remain
+pending in the existing composed verifier.
 
 ## Required implementation sequence
 

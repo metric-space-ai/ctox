@@ -900,6 +900,25 @@ impl NativeGuestExecution {
             })
     }
 
+    /// Read current capture authority on the exact retained producer record.
+    /// Ordinary guest effects continue to require the live turn phase.
+    pub(crate) fn with_capture_authority<T>(
+        &self,
+        source: &crate::channels::NativeProviderCaptureOwner,
+        capture: impl FnOnce(&ExecutionSpec, &Ownership) -> Result<T>,
+    ) -> Result<T> {
+        ensure!(
+            source.matches_provider(&self.provider),
+            "capture belongs to another native provider owner"
+        );
+        source.with_current_capture_transaction(|worker_tx, facts| {
+            self.with_held_worker(worker_tx, facts, |_, verify| {
+                verify()?;
+                capture(&self.binding.spec, &self.binding.ownership)
+            })
+        })
+    }
+
     /// The command witness already owns the real worker/provider transaction.
     /// This shared path acquires only current policy and controller guards.
     fn with_held_worker<T>(
