@@ -208,6 +208,17 @@ pub(crate) fn with_current_secret_values<T>(
     keys: &[(&str, &str)],
     apply: impl FnOnce(&[&[u8]]) -> Result<T>,
 ) -> Result<T> {
+    with_current_secret_values_and_fingerprint(root, keys, |values, _| apply(values))
+}
+
+/// Same bounded fence, with a non-secret identity of the encrypted records.
+/// Random AEAD nonces make rotations distinguishable without publishing a
+/// password/key hash. Metadata-only edits do not change credential authority.
+pub(crate) fn with_current_secret_values_and_fingerprint<T>(
+    root: &Path,
+    keys: &[(&str, &str)],
+    apply: impl FnOnce(&[&[u8]], &str) -> Result<T>,
+) -> Result<T> {
     anyhow::ensure!(
         !keys.is_empty() && keys.len() <= 8,
         "invalid publication secret tuple"
@@ -274,18 +285,21 @@ pub(crate) fn with_current_secret_values<T>(
             );
         }
     }
+    let mut revisions = Vec::with_capacity(keys.len());
     let values = keys.iter().map(|(scope, name)| {
         let (nonce, ciphertext): (String, String) = tx.query_row(
             "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
             params![scope, name], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?.context("current secret not found")?;
+        revisions.push(json!([scope, name, nonce, ciphertext]));
         decrypt_secret_value(&key, &nonce, &ciphertext)
     }).collect::<Result<Vec<_>>>()?;
+    let fingerprint = format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&revisions)?));
     let borrowed = values
         .iter()
         .map(|value| value.as_slice())
         .collect::<Vec<_>>();
-    apply(&borrowed)
+    apply(&borrowed, &fingerprint)
 }
 
 /// One encrypted secret mutation used by callers that must rotate a credential
