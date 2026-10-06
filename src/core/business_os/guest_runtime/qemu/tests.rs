@@ -62,31 +62,31 @@ async fn invalid_resources_and_aliasing_disks_are_rejected_before_spawn() -> Res
     let mut input = config(root.path())?;
     input.vcpus = 0;
     ensure!(
-        QemuProcess::spawn_paused(&input).is_err(),
+        QemuProcess::spawn_paused(&input, "isolated-ci-guest").is_err(),
         "zero vCPUs admitted"
     );
     input.vcpus = 3;
     ensure!(
-        QemuProcess::spawn_paused(&input).is_err(),
+        QemuProcess::spawn_paused(&input, "isolated-ci-guest").is_err(),
         "vCPU limit exceeded"
     );
     input.vcpus = 1;
     input.memory_mib = 4097;
     ensure!(
-        QemuProcess::spawn_paused(&input).is_err(),
+        QemuProcess::spawn_paused(&input, "isolated-ci-guest").is_err(),
         "memory limit exceeded"
     );
     input.memory_mib = 64;
     std::fs::remove_file(&input.overlay_qcow2)?;
     std::fs::hard_link(&input.base_raw, &input.overlay_qcow2)?;
     ensure!(
-        QemuProcess::spawn_paused(&input).is_err(),
+        QemuProcess::spawn_paused(&input, "isolated-ci-guest").is_err(),
         "base admitted as writable overlay"
     );
     std::fs::remove_file(&input.overlay_qcow2)?;
     std::os::unix::fs::symlink(&input.base_raw, &input.overlay_qcow2)?;
     ensure!(
-        QemuProcess::spawn_paused(&input).is_err(),
+        QemuProcess::spawn_paused(&input, "isolated-ci-guest").is_err(),
         "symlink overlay admitted"
     );
     ensure!(
@@ -102,7 +102,7 @@ async fn real_prepared_guest_starts_paused_and_owned_exit_preserves_disks() -> R
     let input = config(root.path())?;
     real_disk(&input).await?;
     let original_base = std::fs::read(&input.base_raw)?;
-    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let mut guest = QemuProcess::spawn_paused(&input, "isolated-ci-guest")?;
     let runtime = guest.runtime_directory().to_owned();
     eprintln!(
         "owned prepared QEMU test: pid={}, stop=explicit owned stop; no guest OS",
@@ -144,7 +144,7 @@ async fn real_prepared_guest_starts_paused_and_owned_exit_preserves_disks() -> R
 
         // The writable overlay must not admit another QEMU owner on this
         // host. This is a local file-lock check, not a distributed fence.
-        duplicate = Some(QemuProcess::spawn_paused(&input)?);
+        duplicate = Some(QemuProcess::spawn_paused(&input, "isolated-ci-guest")?);
         let duplicate_result = duplicate.as_mut().unwrap().wait_for_exit().await;
         ensure!(
             !duplicate_result?.success(),
@@ -188,7 +188,7 @@ async fn cancellation_retires_handshake_but_keeps_child_owned_until_stop() -> Re
     let root = tempfile::tempdir()?;
     let mut input = config(root.path())?;
     input.program = sleeping_program(root.path())?;
-    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let mut guest = QemuProcess::spawn_paused(&input, "isolated-ci-guest")?;
     let result = async {
         let mut connecting = Box::pin(guest.connect_monitor());
         ensure!(
@@ -222,7 +222,7 @@ async fn monitor_rejects_a_peer_other_than_the_spawned_child() -> Result<()> {
     let root = tempfile::tempdir()?;
     let mut input = config(root.path())?;
     input.program = sleeping_program(root.path())?;
-    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let mut guest = QemuProcess::spawn_paused(&input, "isolated-ci-guest")?;
     let result = async {
         let impostor = UnixStream::connect(guest.runtime_directory().join("qmp.sock")).await?;
         ensure!(
@@ -245,7 +245,7 @@ async fn startup_exit_is_observed_without_waiting_for_monitor_timeout() -> Resul
     let root = tempfile::tempdir()?;
     let mut input = config(root.path())?;
     input.program = PathBuf::from("/bin/false");
-    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let mut guest = QemuProcess::spawn_paused(&input, "isolated-ci-guest")?;
     let result = tokio::time::timeout(Duration::from_secs(2), guest.connect_monitor()).await;
     let stopped = guest.stop().await;
     ensure!(
@@ -263,11 +263,66 @@ async fn startup_exit_is_observed_without_waiting_for_monitor_timeout() -> Resul
 }
 
 #[tokio::test]
+async fn spawn_binds_exact_assignment_config_and_retires_it_with_owned_child() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let root = tempfile::tempdir()?;
+    let mut input = config(root.path())?;
+    input.program = sleeping_program(root.path())?;
+    ensure!(QemuProcess::spawn_paused(&input, "").is_err());
+    ensure!(QemuProcess::spawn_paused(&input, "guest\nother").is_err());
+    let guest_id = "enrolled-guest,\"quoted\"";
+    let mut guest = QemuProcess::spawn_paused(&input, guest_id)?;
+    let runtime = guest.runtime_directory().to_owned();
+    let path = runtime.join("guest-startup.json");
+    let result = (|| -> Result<()> {
+        let metadata = std::fs::symlink_metadata(&path)?;
+        ensure!(metadata.is_file() && metadata.mode() & 0o7777 == 0o600);
+        // SAFETY: geteuid only reads the test process's effective user ID.
+        let native_uid = unsafe { libc::geteuid() };
+        ensure!(metadata.uid() == native_uid && metadata.nlink() == 1);
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        ensure!(
+            value
+                == json!({
+                    "guest_id": guest_id,
+                    "display": ":0",
+                    "xauthority": "/run/ctox-desktop/Xauthority"
+                })
+        );
+        let command = prepare_command(
+            &input,
+            &runtime.join("qmp.sock"),
+            &runtime.join("guest.sock"),
+            &path,
+        )?;
+        let args: Vec<_> = command.as_std().get_args().collect();
+        ensure!(args.windows(2).any(|pair| pair[0] == "-fw_cfg"
+            && pair[1]
+                == std::ffi::OsStr::new(&format!(
+                    "name=opt/org.ctox/guest-startup,file={}",
+                    path.display()
+                ))));
+        Ok(())
+    })();
+    let stopped = guest.stop().await;
+    result?;
+    stopped?;
+    drop(guest);
+    ensure!(
+        !runtime.exists(),
+        "stopped guest startup config was retained"
+    );
+    ensure!(input.overlay_qcow2.is_file() && input.base_raw.is_file());
+    Ok(())
+}
+
+#[tokio::test]
 async fn spawn_binds_a_private_guest_channel_socket() -> Result<()> {
     let root = tempfile::tempdir()?;
     let mut input = config(root.path())?;
     input.program = sleeping_program(root.path())?;
-    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let mut guest = QemuProcess::spawn_paused(&input, "isolated-ci-guest")?;
     let result = async {
         let runtime = guest.runtime_directory();
         ensure!(
@@ -296,7 +351,7 @@ async fn guest_channel_rejects_a_peer_other_than_the_spawned_child() -> Result<(
     let root = tempfile::tempdir()?;
     let mut input = config(root.path())?;
     input.program = sleeping_program(root.path())?;
-    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let mut guest = QemuProcess::spawn_paused(&input, "isolated-ci-guest")?;
     let result = async {
         let impostor = UnixStream::connect(guest.runtime_directory().join("guest.sock")).await?;
         ensure!(
@@ -322,7 +377,7 @@ async fn cancellation_retires_guest_channel_handshake_but_keeps_child_owned() ->
     let root = tempfile::tempdir()?;
     let mut input = config(root.path())?;
     input.program = sleeping_program(root.path())?;
-    let mut guest = QemuProcess::spawn_paused(&input)?;
+    let mut guest = QemuProcess::spawn_paused(&input, "isolated-ci-guest")?;
     let result = async {
         let mut connecting = Box::pin(guest.connect_guest_channel());
         ensure!(
