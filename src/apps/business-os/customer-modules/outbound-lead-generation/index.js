@@ -27,6 +27,7 @@ function showBusinessPrompt(message, options = {}) { return shellPrompt(message,
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCollectionReloader } from './collection-reloader.mjs';
 import { loadLeadRevisionChanges } from './lead-revision-loader.mjs';
+import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -12437,46 +12438,17 @@ async function cancelResearch(id) {
 // der Sellify-Uebergabe. Der Exporter liegt in xlsx-export.js und laedt JSZip
 // aus dem Business-OS-Vendor-Ordner erst beim ersten Export.
 async function exportResearchXlsx(leads, label) {
+  if (state.exportXlsxBusy) return;
   const liste = (Array.isArray(leads) ? leads : []).filter(Boolean);
   if (!liste.length) {
     await showBusinessAlert('Keine Leads zum Exportieren.');
     return;
   }
+  state.exportXlsxBusy = true;
   zeigeHinweis(liste.length > 1 ? `Excel mit ${liste.length} Leads wird erstellt …` : 'Excel wird erstellt …');
   render();
   try {
-    const exporter = await import(new URL('./xlsx-export.js', import.meta.url).href);
-    // Empfaengerstatus gehoert ins Personenblatt: Sperrvermerk-Urteil vorher
-    // laden (Sellify antwortet in 1-2 s), hoechstens 20 s fuer alle Leads.
-    // Gespeicherte Sperrvermerk-Urteile gelten fuer den Export unabhaengig vom
-    // Alter; live geprueft wird nur, was noch nie geprueft wurde - mit
-    // sichtbarem Zaehler. Vorher wartete jeder Export bis zu 20 s auf eine
-    // Neupruefung aller Leads (Rundgang 25.09.2026: 20 s je Kampagne).
-    for (const lead of liste) {
-      if (!state.recipientEligibilityReady.has(lead.id)) {
-        restoreRecipientEligibility(lead, recipientEligibilitySignature(lead), { maxAgeMs: Number.POSITIVE_INFINITY });
-      }
-    }
-    const offen = liste.filter((lead) => !state.recipientEligibilityReady.has(lead.id) && (lead.contacts || []).length);
-    if (offen.length) {
-      let geprueft = 0;
-      const melde = () => zeigeHinweis(`Excel: Sperrvermerke geprüft ${geprueft} / ${offen.length} …`, 0);
-      melde();
-      await Promise.race([
-        Promise.allSettled(offen.map((lead) => refreshLeadRecipientEligibility(lead).finally(() => { geprueft += 1; melde(); }))),
-        new Promise((resolve) => { globalThis.setTimeout(resolve, 20_000); }),
-      ]);
-      zeigeHinweis(liste.length > 1 ? `Excel mit ${liste.length} Leads wird erstellt …` : 'Excel wird erstellt …', 0);
-    }
-    const blob = await exporter.buildResearchWorkbook(liste, {
-      title: String(label || 'Recherche'),
-      groups: RESEARCH_FIELD_GROUPS,
-      fieldLabel: researchFieldLabel,
-      sourceProvider: evidenceSourceProvider,
-      // Rohe Leads tragen keine Kontakt-IDs; ohne Normalisierung stand bei
-      // jedem Empfaenger "Sperrvermerk nicht geprueft", auch beim gesperrten
-      // Jacob (Carbosulf 23.09.2026).
-      recipientStatus: (lead, contact) => {
+    const snapshot = captureResearchExport(liste, (lead, contact) => {
         const normalized = normalizeLeadRecipientShape(lead || {});
         const identity = (entry) => [String(entry?.person_key || entry?.sellify_person_id || ''), personDisplayName(entry) || '', String(entry?.person_email || entry?.email || '').toLowerCase()];
         const [key, name, mail] = identity(contact);
@@ -12484,13 +12456,29 @@ async function exportResearchXlsx(leads, label) {
           || (key && identity(entry)[0] === key)
           || (name && identity(entry)[1] === name && identity(entry)[2] === mail));
         if (!match) return null;
-        const urteil = currentContactEligibility(normalized, match);
+        const current = currentContactEligibility(normalized, match);
+        const saved = lead?.recipient_eligibility;
+        const signature = recipientSignatureHash(recipientEligibilitySignature(normalized));
+        const stored = saved?.signature === signature && Array.isArray(saved?.decisions)
+          ? saved.decisions.find(pair => pair?.[0] === match.id)?.[1] : null;
+        const urteil = current?.pending ? (stored?.pending ? null : stored || null) : current;
         const identitaet = kontaktIdentitaet(match);
         if (identitaet.status === 'widerspruch' && urteil?.status === 'free') {
           return personEligibilityDecision('review', { label: `Name widerspricht Quelle („${identitaet.quelleName}“)` }, '', '', '');
         }
         return urteil;
-      },
+      });
+    const labels = new Map(snapshot.leads.map(lead => [lead, { research: researchLabel(lead), sellify: sellifyLabel(lead) }]));
+    const exporter = await import(new URL('./xlsx-export.js', import.meta.url).href);
+    const blob = await exporter.buildResearchWorkbook(snapshot.leads, {
+      title: String(label || 'Recherche'),
+      groups: RESEARCH_FIELD_GROUPS,
+      fieldLabel: researchFieldLabel,
+      sourceProvider: evidenceSourceProvider,
+      // Rohe Leads tragen keine Kontakt-IDs; ohne Normalisierung stand bei
+      // jedem Empfaenger "Sperrvermerk nicht geprueft", auch beim gesperrten
+      // Jacob (Carbosulf 23.09.2026).
+      recipientStatus: snapshot.recipientStatus,
       emailBelegt: (lead, contact) => kontaktEmailBelegt(lead, contact),
       identitaet: (lead, contact) => kontaktIdentitaet(contact),
       // Leeres Personenfeld: "nicht gefunden" nur, wenn fuer genau diese
@@ -12505,18 +12493,28 @@ async function exportResearchXlsx(leads, label) {
         if (!gebunden) return 'nicht recherchiert';
         return ['no_match', 'unsupported'].includes(eintrag?.status) ? 'nicht gefunden' : 'offen';
       },
-      researchLabel: (lead) => researchLabel(lead),
-      sellifyLabel: (lead) => sellifyLabel(lead),
+      researchLabel: (lead) => labels.get(lead)?.research || 'Offen',
+      sellifyLabel: (lead) => labels.get(lead)?.sellify || '—',
       jszipUrl: new URL('../../vendor/jszip/jszip.mjs', import.meta.url).href,
     });
-    exporter.downloadBlob(blob, exporter.exportFileName(label), eigenesDialogZiel() || document.body);
+    const fileName = exporter.exportFileName(label);
+    exporter.downloadBlob(blob, fileName, eigenesDialogZiel() || document.body);
     zeigeHinweis(liste.length > 1 ? `Excel mit ${liste.length} Leads heruntergeladen.` : 'Excel heruntergeladen.');
+    // The download has already happened; a failed receiver cannot discard it.
+    try {
+      await openResearchSnapshot(state.ctx?.actions, blob, fileName, snapshot);
+    } catch (error) {
+      console.warn('[outbound-lead-generation] Spreadsheet konnte nicht geöffnet werden', error);
+      zeigeHinweis(`Excel heruntergeladen. Spreadsheet nicht geöffnet: ${error?.message || error}`);
+    }
   } catch (error) {
     console.warn('[outbound-lead-generation] Excel-Export fehlgeschlagen', error);
     zeigeHinweis('');
     await showBusinessAlert(`Der Excel-Export ist fehlgeschlagen: ${error?.message || error}`);
+  } finally {
+    state.exportXlsxBusy = false;
+    render();
   }
-  render();
 }
 
 function researchLabel(lead, pendingIds = state.pendingResearchIds) {
@@ -13614,6 +13612,7 @@ function icon(name) {
 }
 
 export const __leadgenOutboundTestHooks = {
+  exportResearchXlsx,
   analyzeImportPayload,
   importPreview,
   importPayload,

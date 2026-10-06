@@ -19,7 +19,7 @@ export function buildWzMapping(sheet) {
   for (let i = 0; i < header.length; i++) {
     const h = normHeader(header[i]);
     if (codeIdx === -1 && h === 'code') codeIdx = i;
-    else if (labelIdx === -1 && h === 'listenname thesen') labelIdx = i;
+    else if (labelIdx === -1 && /^listenname(?:\s+.+)?$/.test(h)) labelIdx = i;
   }
   if (codeIdx === -1 || labelIdx === -1) return result;
 
@@ -275,7 +275,7 @@ export async function extractImportRows(payload, helpers) {
     }
   }
 
-  const wzMatrix = [['Code', 'Listenname THESEN']];
+  const wzMatrix = [['Code', 'Listenname']];
   const codes = Object.keys(sheets);
   for (let i = 0; i < codes.length; i++) {
     const code = codes[i];
@@ -337,5 +337,5 @@ export function buildImportPreviewExtras(analysis){
     if(count>shown) items.push({kind:'warning',text:'… und '+(count-shown)+' weitere '+label});
   }
   if(analysis.meta.skippedOutsideTable>0) items.push({kind:'info',text:analysis.meta.skippedOutsideTable+' Zeilen außerhalb der Excel-Tabelle ignoriert'});
-  return{items,groups:analysis.groups||undefined,groupsLabel:'Vorauswahl nach THESEN-Liste',groupLimit:5000,canProceed:analysis.canProceed,message:analysis.message||''};
+  return{items,groups:analysis.groups||undefined,groupsLabel:'Vorauswahl nach Liste',groupLimit:5000,canProceed:analysis.canProceed,message:analysis.message||''};
 }

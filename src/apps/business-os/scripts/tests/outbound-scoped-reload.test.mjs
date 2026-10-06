@@ -97,13 +97,18 @@ const source = fileURLToPath(new URL('../../customer-modules/outbound-lead-gener
 mkdirSync(join(fixture, 'modules', 'olg'), { recursive: true });
 mkdirSync(join(fixture, 'shared'), { recursive: true });
 writeFileSync(join(fixture, 'package.json'), '{"type":"module"}');
-for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'import-preview-groups.js']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
+for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'import-preview-groups.js', 'current-state-export.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
 writeFileSync(join(fixture, 'shared', 'universal-importer.js'), [
   'extractCompanyRowsFromWorkbookFile', 'extractCompanyRowsFromText', 'normalizeCompanyRow', 'openUniversalImporter', 'parseDelimitedText',
 ].map((name) => `export function ${name}() {}`).join('\n'));
 writeFileSync(join(fixture, 'shared', 'dialogs.js'),
   'export async function showBusinessAlert() {}\nexport async function showBusinessConfirm() { return false; }\nexport async function showBusinessPrompt() { return null; }');
 writeFileSync(join(fixture, 'shared', 'i18n.js'), 'export async function loadModuleMessages() { return {}; }');
+writeFileSync(join(fixture, 'modules', 'olg', 'xlsx-export.js'), `
+export async function buildResearchWorkbook(leads, options) { return globalThis.__outboundExportProbe.build(leads, options); }
+export function downloadBlob(blob, name) { return globalThis.__outboundExportProbe.download(blob, name); }
+export function exportFileName(label) { return String(label || 'Recherche') + '.xlsx'; }
+`);
 try {
   const hooks = (await import(pathToFileURL(join(fixture, 'modules', 'olg', 'index.js')).href)).__leadgenOutboundTestHooks;
   const state = hooks.testState();
@@ -122,6 +127,7 @@ try {
       } }),
     }]));
     Object.assign(state, {
+      ctx: { host: { querySelector: () => null } },
       collections: db, sources: [], adapters: [], imports: [], leads: [existingLead],
       collectionBindingGeneration: 1, leadHydrationBindingGeneration: 1, reloadAngewendetJeSammlung: new Map(),
       sourceToggleIntent: new Map(), pendingLeadPatches: new Map(),
@@ -204,6 +210,59 @@ try {
     const original = JSON.parse(readFileSync(new URL('./fixtures/outbound-lead-schema-v0.json', import.meta.url), 'utf8'));
     assert.deepEqual(leads.schema, original, 'demand-only must not migrate the installed lead schema');
     assert.equal(leads.schema.additionalProperties, true, 'field_status remains permitted as an additional property');
+  });
+  await test('actual 139-lead export does not dispatch checks, captures before await and downloads before Spreadsheet', async () => {
+    setup();
+    const oldDocument = globalThis.document, oldTimeout = globalThis.setTimeout;
+    const timeouts = [], downloaded = [], opened = [], blocked = deferred();
+    let workbook, probe;
+    globalThis.document = { body: {} };
+    globalThis.setTimeout = (fn, ms) => { timeouts.push(ms); return 0; };
+    const leads = Array.from({ length: 139 }, (_, index) => ({
+      id: 'lead_' + index, name: 'Firma ' + index, _rev: '1-' + index,
+      research_status: 'needs_review', data: { firma_name: 'Firma ' + index },
+      contacts: [{ id: 'contact_' + index, person_key: 'person-' + index,
+        person_vorname: 'A', person_nachname: 'B', person_email: 'a' + index + '@example.test' }],
+    }));
+    const first = leads[0].contacts[0];
+    state.recipientEligibility = new Map([['lead_0|contact_0', { status: 'free', reason: 'saved' }]]);
+    state.recipientEligibilityReady = new Set(['lead_0']);
+    state.ctx = { ...state.ctx, actions: { openApp: (app, args) => {
+      assert.equal(downloaded.length, 1, 'download precedes receiver handoff');
+      opened.push({ app, args });
+    } }, commands: { execute: () => { throw Error('Export must not dispatch'); } } };
+    globalThis.__outboundExportProbe = probe = {
+      build: async (rows, options) => { workbook = { rows, options }; await blocked.promise; return new Blob(['xlsx']); },
+      download: (blob, name) => downloaded.push({ blob, name }),
+    };
+    try {
+      const pending = hooks.exportResearchXlsx(leads, 'K');
+      leads[0].data.firma_name = 'Later edit';
+      state.recipientEligibility.get('lead_0|contact_0').status = 'blocked';
+      for (let turn = 0; !workbook && turn < 100; turn++) await new Promise(resolve => oldTimeout(resolve, 1));
+      assert.ok(workbook, 'export reaches workbook creation without a provider roundtrip');
+      assert.equal(workbook.rows.length, 139);
+      assert.equal(workbook.rows[0].data.firma_name, 'Firma 0');
+      assert.equal(workbook.options.recipientStatus(workbook.rows[0], first).status, 'free');
+      assert.equal(workbook.options.recipientStatus(workbook.rows[1], workbook.rows[1].contacts[0]), null);
+      assert.ok(!timeouts.includes(20_000), 'no remark-check timeout');
+      await hooks.exportResearchXlsx(leads, 'duplicate');
+      blocked.resolve(); await pending;
+      assert.equal(downloaded.length, 1); assert.equal(opened.length, 1);
+      assert.equal(state.exportXlsxBusy, false);
+      assert.equal(opened[0].args.openFile.report_snapshot.source_record_ids.length, 139);
+      probe.build = async () => { throw Error('zip failed'); };
+      await hooks.exportResearchXlsx(leads, 'failed');
+      assert.equal(state.exportXlsxBusy, false);
+      probe.build = async () => new Blob(['retry']);
+      state.ctx.actions.openApp = () => { throw Error('receiver missing'); };
+      await hooks.exportResearchXlsx(leads, 'retry');
+      assert.equal(downloaded.length, 2, 'receiver failure does not discard successful download');
+      assert.equal(state.exportXlsxBusy, false); assert.match(state.notice, /Excel heruntergeladen.*nicht geöffnet/);
+    } finally {
+      globalThis.document = oldDocument; globalThis.setTimeout = oldTimeout;
+      delete globalThis.__outboundExportProbe;
+    }
   });
 } finally {
   rmSync(fixture, { recursive: true, force: true });
