@@ -60,6 +60,12 @@ fn sleeping_program(root: &Path) -> Result<PathBuf> {
 async fn invalid_resources_and_aliasing_disks_are_rejected_before_spawn() -> Result<()> {
     let root = tempfile::tempdir()?;
     let mut input = config(root.path())?;
+    // Establish valid admission without requiring an installed QEMU binary.
+    // Otherwise missing program validation can mask disk-alias rejection.
+    input.program = sleeping_program(root.path())?;
+    let mut admitted = QemuProcess::spawn_paused(&input, "isolated-ci-guest")?;
+    admitted.stop().await?;
+    drop(admitted);
     input.vcpus = 0;
     ensure!(
         QemuProcess::spawn_paused(&input, "isolated-ci-guest").is_err(),
@@ -90,7 +96,7 @@ async fn invalid_resources_and_aliasing_disks_are_rejected_before_spawn() -> Res
         "symlink overlay admitted"
     );
     ensure!(
-        std::fs::read_dir(root.path())?.count() == 2,
+        std::fs::read_dir(root.path())?.count() == 3,
         "failed pre-spawn validation leaked a runtime directory"
     );
     Ok(())
