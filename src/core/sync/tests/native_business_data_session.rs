@@ -1366,6 +1366,8 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         ));
         assert_no_frame(&mut client_a, "B-targeted query on A").await;
 
+        // Independent IPC requests may complete out of order. Retire each
+        // subscription after its exact acknowledgement before sending the next.
         send_request(
             &mut client_a,
             "cleanup-command",
@@ -1375,45 +1377,51 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
             },
         )
         .await;
+        match read_frame(&mut client_a).await {
+            Frame::Response { response } if response.request_id == "cleanup-command" => {
+                let NativeBusinessDataResult::Unwatched { session, subscription_id } = response.result else {
+                    panic!("expected A command unwatch response: {response:?}");
+                };
+                assert_eq!(session, session_a);
+                assert_eq!(subscription_id, "command:overlap-command");
+            }
+            other => panic!("expected A command cleanup frame: {}", frame_kind(&other)),
+        }
         send_request(
             &mut client_b,
             "cleanup-b-query",
             NativeBusinessDataOperation::Unwatch {
                 session: session_b.clone(),
-                subscription_id: query_b,
+                subscription_id: query_b.clone(),
             },
         )
         .await;
+        match read_frame(&mut client_b).await {
+            Frame::Response { response } if response.request_id == "cleanup-b-query" => {
+                let NativeBusinessDataResult::Unwatched { session, subscription_id } = response.result else {
+                    panic!("expected B query unwatch response: {response:?}");
+                };
+                assert_eq!(session, session_b);
+                assert_eq!(subscription_id, query_b);
+            }
+            other => panic!("expected B query cleanup frame: {}", frame_kind(&other)),
+        }
         send_request(
             &mut client_a,
             "cleanup-a-query",
             NativeBusinessDataOperation::Unwatch {
                 session: session_a.clone(),
-                subscription_id: query_a,
+                subscription_id: query_a.clone(),
             },
         )
         .await;
         match read_frame(&mut client_a).await {
-            Frame::Response { response } if response.request_id == "cleanup-command" => {
-                let NativeBusinessDataResult::Unwatched { .. } = response.result else {
-                    panic!("expected A command unwatch response: {response:?}");
-                };
-            }
-            other => panic!("expected A command cleanup frame: {}", frame_kind(&other)),
-        }
-        match read_frame(&mut client_b).await {
-            Frame::Response { response } if response.request_id == "cleanup-b-query" => {
-                let NativeBusinessDataResult::Unwatched { .. } = response.result else {
-                    panic!("expected B query unwatch response: {response:?}");
-                };
-            }
-            other => panic!("expected B query cleanup frame: {}", frame_kind(&other)),
-        }
-        match read_frame(&mut client_a).await {
             Frame::Response { response } if response.request_id == "cleanup-a-query" => {
-                let NativeBusinessDataResult::Unwatched { .. } = response.result else {
+                let NativeBusinessDataResult::Unwatched { session, subscription_id } = response.result else {
                     panic!("expected A query unwatch response: {response:?}");
                 };
+                assert_eq!(session, session_a);
+                assert_eq!(subscription_id, query_a);
             }
             other => panic!("expected A query cleanup frame: {}", frame_kind(&other)),
         }
