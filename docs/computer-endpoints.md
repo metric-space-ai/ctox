@@ -90,10 +90,13 @@ updates, and is excluded from schema-v1 browser projection.
 
 Acquire endpoint authority before worker/Core/controller locks. Never await,
 reenter registry/secret APIs, retain credentials, or run a full transfer while
-inside the callback. A callback protects one bounded operation only: connect/auth,
-one read/write/flush of at most 1 MiB, or one metadata/rename operation, with the
-adapter's fixed deadline (currently 10 seconds). Reusing an authenticated transport
-is allowed; secret byte buffers must be dropped/zeroized before callback return,
+inside the callback. A callback protects one bounded logical operation only:
+connect/auth, one data range of at most 1 MiB (including its bounded parent/open/
+read/write/flush/close sequence), or one metadata/rename operation. Adapters bound
+call counts and paths. The libraries enforce 10-second timeouts per connection/IO
+call; compound operations can take longer and have no promised 10-second total
+deadline. Reusing an authenticated transport is allowed; secret byte buffers must
+be dropped/zeroized before callback return,
 and every next operation must revalidate the original fingerprint. Adapters must
 independently enforce paths against remote symlinks, destination permissions,
 quota/free space, host pin verification, stop/resume and atomic publication.
