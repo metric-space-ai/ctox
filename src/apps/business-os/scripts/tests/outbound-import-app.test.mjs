@@ -31,7 +31,7 @@ try {
   const state=hooks.testState(); state.leads=[];
   let writes=0;
   state.collections={imports:{insert:async()=>{writes++;throw new Error('unexpected write');}},leads:{insert:async()=>{writes++;throw new Error('unexpected write');}}};
-  const sheet=[['Kategorie1','Code','Listenname THESEN'],['','20','Chemie'],['','64','Finanzdienstleistungen']];
+  const sheet=[['Kategorie1','Code','Listenname MUSTER'],['','20','Chemie'],['','64','Finanzdienstleistungen']];
   const row=(name,wz,i)=>({name,website:'',domain:'',country:'DE',city:'',row_index:i,raw:{'branche(wz)':wz}});
   const file=(rows)=>({source_type:'file',title:'UITEST-Import',source:{files:[{name:'Chemie.xlsx',fixture:{rows,meta:{skippedOutsideTable:16876,sheets:{'WZ-Code':sheet}}}}]}});
   const rows=[...Array.from({length:506},(_,i)=>row('Chemie '+i,'20 Chemie',i)),...Array.from({length:5001},(_,i)=>row('Finance '+i,'64 Finance',i+506))];
