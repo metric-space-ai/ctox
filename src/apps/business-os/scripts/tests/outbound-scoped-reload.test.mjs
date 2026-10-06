@@ -97,7 +97,7 @@ const source = fileURLToPath(new URL('../../customer-modules/outbound-lead-gener
 mkdirSync(join(fixture, 'modules', 'olg'), { recursive: true });
 mkdirSync(join(fixture, 'shared'), { recursive: true });
 writeFileSync(join(fixture, 'package.json'), '{"type":"module"}');
-for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'import-preview-groups.js', 'current-state-export.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
+for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'import-preview-groups.js', 'current-state-export.mjs', 'required-field-selection.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
 writeFileSync(join(fixture, 'shared', 'universal-importer.js'), [
   'extractCompanyRowsFromWorkbookFile', 'extractCompanyRowsFromText', 'normalizeCompanyRow', 'openUniversalImporter', 'parseDelimitedText',
 ].map((name) => `export function ${name}() {}`).join('\n'));
@@ -209,6 +209,41 @@ try {
     const original = JSON.parse(readFileSync(new URL('./fixtures/outbound-lead-schema-v0.json', import.meta.url), 'utf8'));
     assert.deepEqual(leads.schema, original, 'demand-only must not migrate the installed lead schema');
     assert.equal(leads.schema.additionalProperties, true, 'field_status remains permitted as an additional property');
+  });
+  await test('actual required checkbox UI, click, denied save and reload retain persisted field semantics', async () => {
+    setup(); state.optionalFieldsDraft = null; state.optionalFieldsSaved = null;
+    state.researchPolicyRecord = { optional_field_keys: ['firma_fax', 'person_email', 'future_field'], updated_at_ms: 1 };
+    const checked = (html, key) => {
+      const match = html.match(new RegExp('<input[^>]*data-field="' + key + '"[^>]*>'));
+      assert.ok(match, key); return / checked/.test(match[0]);
+    };
+    let html = hooks.renderOptionalFieldSettings();
+    assert.equal(checked(html, 'firma_name'), true); assert.equal(checked(html, 'firma_fax'), false);
+    assert.match(html, /angehakt = Pflicht/); assert.match(html, /Pflichtfelder speichern/);
+    const click = async (key, value) => {
+      const trigger = { dataset: { action: 'toggle-optional-field', field: key }, checked: value, closest: () => null };
+      await hooks.handleClick({ target: { closest: () => trigger } });
+    };
+    await click('person_email', true); await click('firma_name', false);
+    html = hooks.renderOptionalFieldSettings();
+    assert.equal(checked(html, 'person_email'), true); assert.equal(checked(html, 'firma_name'), false);
+    assert.equal(state.optionalFieldsDraft.has('future_field'), true);
+    const previous = state.researchPolicyRecord, draft = state.optionalFieldsDraft;
+    let fail = true, saved;
+    state.collections.researchPolicies = { findOne: () => ({ exec: async () => ({
+      incrementalPatch: async patch => { if (fail) throw Error('permission denied'); saved = patch; },
+    }) }) };
+    await assert.rejects(hooks.saveOptionalFields(), /permission denied/);
+    assert.equal(state.researchPolicyRecord, previous); assert.equal(state.optionalFieldsDraft, draft);
+    fail = false; await hooks.saveOptionalFields();
+    assert.deepEqual(saved.optional_field_keys, ['firma_fax', 'firma_name', 'future_field']);
+    assert.deepEqual(Object.keys(saved).sort(), ['optional_field_keys', 'updated_at_ms']);
+    state.optionalFieldsSaved = null; state.optionalFieldsDraft = null;
+    state.researchPolicyRecord = saved;
+    html = hooks.renderOptionalFieldSettings();
+    assert.equal(checked(html, 'person_email'), true); assert.equal(checked(html, 'firma_name'), false);
+    const total = (html.match(/<input/g) || []).length;
+    assert.equal(hooks.requiredResearchFieldCount(), total - 2, 'unknown persisted key must not subtract from visible required count');
   });
   await test('actual 139-lead export does not dispatch checks, captures before await and downloads before Spreadsheet', async () => {
     setup();

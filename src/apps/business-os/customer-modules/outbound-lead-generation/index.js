@@ -28,6 +28,7 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCollectionReloader } from './collection-reloader.mjs';
 import { loadLeadRevisionChanges } from './lead-revision-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
+import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -2011,7 +2012,7 @@ function renderSourcePanel() {
   const showingPflicht = state.sourcePanelView === 'pflichtfelder';
   const panelCount = showingDigest
     ? updateDigestRecipients(state.digestDraft?.recipients).valid.length
-    : showingPflicht ? optionalResearchFields().size
+    : showingPflicht ? requiredResearchFieldCount()
     : showingPolicy ? '' : sources.length;
   const panelTitle = showingDigest
     ? 'Update-Verteiler'
@@ -2054,18 +2055,22 @@ function renderSourcePanel() {
     </div>`);
 }
 
+function requiredResearchFieldCount(optional = optionalFieldsDraft()) {
+  return RESEARCH_FIELD_GROUPS.flatMap(group => group.fields).filter(([key]) => !optional.has(key)).length;
+}
+
 function renderOptionalFieldSettings() {
   const draft = optionalFieldsDraft();
   const gespeichert = optionalResearchFields();
   const geaendert = draft.size !== gespeichert.size || [...draft].some((key) => !gespeichert.has(key));
-  return `<section class="leadgen-optional-fields" aria-label="Optionale Felder">
-    <label class="leadgen-policy-label">Optionale Felder<span class="leadgen-policy-hint"> — angehakt = optional: das Feld wird recherchiert und, wenn belegt, an Sellify übertragen, blockiert die Freigabe aber nie. Nicht angehakt = Pflicht. Einzelne leere Felder lassen sich zusätzlich am Lead mit „ohne Wert freigeben“ freigeben.</span></label>
+  return `<section class="leadgen-optional-fields" aria-label="Pflichtfelder">
+    <label class="leadgen-policy-label">Pflichtfelder<span class="leadgen-policy-hint"> — angehakt = Pflicht: diese Felder müssen für die Freigabe geprüft sein. Nicht angehakte Felder sind optional; sie werden weiterhin recherchiert und belegte Werte an Sellify übertragen.</span></label>
     ${RESEARCH_FIELD_GROUPS.map((group) => `<fieldset class="leadgen-optional-group"><legend>${escapeHtml(group.label)}</legend>
-      ${group.fields.map(([key, label]) => `<label class="leadgen-optional-field"><input type="checkbox" data-action="toggle-optional-field" data-field="${escapeHtml(key)}"${draft.has(key) ? ' checked' : ''}> <span>${escapeHtml(label)}</span></label>`).join('')}
+      ${group.fields.map(([key, label]) => `<label class="leadgen-optional-field"><input type="checkbox" data-action="toggle-optional-field" data-field="${escapeHtml(key)}"${!draft.has(key) ? ' checked' : ''}> <span>${escapeHtml(label)}</span></label>`).join('')}
     </fieldset>`).join('')}
     <div class="leadgen-optional-actions">
-      <span class="leadgen-muted">${draft.size} optional${geaendert ? ' · nicht gespeichert' : ''}</span>
-      <button class="ctox-button ctox-button--sm${geaendert ? ' is-primary' : ''}" data-action="save-optional-fields"${geaendert ? '' : ' disabled'}>Optionale Felder speichern</button>
+      <span class="leadgen-muted">${requiredResearchFieldCount(draft)} Pflichtfelder${geaendert ? ' · nicht gespeichert' : ''}</span>
+      <button class="ctox-button ctox-button--sm${geaendert ? ' is-primary' : ''}" data-action="save-optional-fields"${geaendert ? '' : ' disabled'}>Pflichtfelder speichern</button>
     </div>
   </section>`;
 }
@@ -2087,7 +2092,7 @@ async function saveOptionalFields() {
   state.optionalFieldsDraft = null;
   renderSourcePanel();
   render();
-  showBusinessAlert(`${keys.length} Felder sind jetzt optional. Die Freigabe prüft sie nicht mehr als Pflicht.`);
+  showBusinessAlert(`${requiredResearchFieldCount(new Set(keys))} Pflichtfelder gespeichert. Nicht angehakte Felder bleiben optional.`);
 }
 
 // Ein Feld ohne gefundene Information fuer DIESEN Lead freigeben: es bleibt
@@ -3582,9 +3587,7 @@ async function handleClick(event) {
   if (action === 'save-policy') await saveResearchPolicy();
   if (action === 'toggle-optional-field') {
     const key = String(trigger.dataset.field || '');
-    const draft = new Set(optionalFieldsDraft());
-    if (trigger.checked) draft.add(key); else draft.delete(key);
-    state.optionalFieldsDraft = draft;
+    state.optionalFieldsDraft = optionalKeysForRequiredCheckbox(optionalFieldsDraft(), key, trigger.checked);
     renderSourcePanel();
     return;
   }
@@ -13612,6 +13615,10 @@ function icon(name) {
 }
 
 export const __leadgenOutboundTestHooks = {
+  renderOptionalFieldSettings,
+  saveOptionalFields,
+  handleClick,
+  requiredResearchFieldCount,
   exportResearchXlsx,
   analyzeImportPayload,
   importPreview,
