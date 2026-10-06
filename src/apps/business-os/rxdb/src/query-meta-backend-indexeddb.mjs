@@ -3,6 +3,7 @@
 // database (ctox_business_os_js_v1) is NOT touched here.
 
 import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
+import { createIndexedDbProjectedQueryCache } from './query-projection-cache.mjs';
 
 const SIDECAR_DB_VERSION = 2;
 const STORE_QUERY_WINDOWS = 'queryWindows';
@@ -13,6 +14,7 @@ const OPEN_TIMEOUT_MS = 4000;
 
 export function createIndexedDbMetaBackend({ databaseName }) {
   if (!databaseName) throw new TypeError('createIndexedDbMetaBackend requires databaseName');
+  const projectedCache = createIndexedDbProjectedQueryCache({ databaseName: `${databaseName}_query_projection_v1` });
   let dbPromise = null;
   let fallbackBackend = null;
   const fallback = () => {
@@ -43,6 +45,13 @@ export function createIndexedDbMetaBackend({ databaseName }) {
   return {
     get name() {
       return fallbackBackend ? 'memory-fallback' : 'indexeddb';
+    },
+    get projectedCacheName() { return projectedCache.name; },
+    async putProjectedQueryRows(key, documents, now) {
+      return projectedCache.put(key, documents, now);
+    },
+    async getProjectedQueryRows(key, now) {
+      return projectedCache.get(key, now);
     },
     async putQueryWindow(record) {
       await withDb(
@@ -209,6 +218,7 @@ export function createIndexedDbMetaBackend({ databaseName }) {
           }
         },
       );
+      await projectedCache.clear();
     },
     async close() {
       const currentDbPromise = dbPromise;
@@ -222,6 +232,7 @@ export function createIndexedDbMetaBackend({ databaseName }) {
         }
       }
       await fallbackBackend?.close?.();
+      await projectedCache.close();
       fallbackBackend = null;
     },
   };

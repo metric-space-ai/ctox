@@ -40,7 +40,9 @@ const AUTOMATION_COUNT_MASK: usize = AUTOMATION_STOPPING - 1;
 /// every access happens inside `spawn_blocking`.
 pub struct LiveBrowserSession {
     handle: Mutex<PersistentBrowserHandle>,
+    request_lock: Arc<tokio::sync::Mutex<()>>,
     profile_key: String,
+    runtime_generation: String,
     pub viewport_w: u64,
     pub viewport_h: u64,
     pub downloads_dir: PathBuf,
@@ -53,6 +55,11 @@ pub struct LiveBrowserSession {
 }
 
 impl LiveBrowserSession {
+    /// Identity of this runner incarnation, independent of a reused session id.
+    pub fn runtime_generation(&self) -> &str {
+        &self.runtime_generation
+    }
+
     /// The automation script this session is actually running, plus its path.
     ///
     /// The pinned `ctox-web-stack` keeps `runner_path` private and exposes no
@@ -276,6 +283,64 @@ fn browser_profile_key(profile_owner: &str, session_id: &str, private_profile: b
     }
 }
 
+fn try_inspect_browser_liveness<T>(
+    handle: &Mutex<T>,
+    inspect: impl FnOnce(&mut T) -> Result<bool>,
+) -> Result<Option<bool>> {
+    match handle.try_lock() {
+        Ok(mut handle) => inspect(&mut handle).map(Some),
+        Err(std::sync::TryLockError::WouldBlock) => Ok(None),
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            anyhow::bail!("browser runtime handle poisoned")
+        }
+    }
+}
+
+async fn acquire_browser_request_permit(
+    request_lock: Arc<tokio::sync::Mutex<()>>,
+    budget: Duration,
+) -> Result<tokio::sync::OwnedMutexGuard<()>> {
+    tokio::time::timeout(budget, request_lock.lock_owned())
+        .await
+        .map_err(|_| anyhow::anyhow!("browser surface request expired before delivery"))
+}
+
+fn validate_browser_surface_queue_age(elapsed: Duration, budget: Duration) -> Result<()> {
+    anyhow::ensure!(
+        elapsed < budget,
+        "browser surface request expired before delivery"
+    );
+    Ok(())
+}
+
+fn validate_browser_session_owner(actual_owner: &str, requested_owner: &str) -> Result<()> {
+    anyhow::ensure!(
+        actual_owner == requested_owner,
+        "browser runtime belongs to another user"
+    );
+    Ok(())
+}
+
+fn validate_browser_surface_generation(
+    runtime_generation: &str,
+    expected_generation: Option<&str>,
+) -> Result<()> {
+    anyhow::ensure!(
+        expected_generation.is_none_or(|expected| expected == runtime_generation),
+        "browser runtime generation does not match displayed surface"
+    );
+    Ok(())
+}
+
+fn validate_browser_surface_tab(nav: &Value, expected_tab_id: &str) -> Result<()> {
+    anyhow::ensure!(
+        nav.get("ok").and_then(Value::as_bool) == Some(true)
+            && nav.pointer("/nav/active_tab_id").and_then(Value::as_str) == Some(expected_tab_id),
+        "browser active tab does not match displayed surface"
+    );
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct BrowserSessionAutomationRequest {
     pub session_id: String,
@@ -331,18 +396,18 @@ impl BrowserRuntimeManager {
         let mut exited = Vec::new();
         let mut idle = Vec::new();
         for (session_id, session) in session_snapshot {
-            let running = match session.handle.lock() {
-                Ok(mut handle) => match handle.is_running() {
-                    Ok(running) => running,
-                    Err(err) => {
-                        eprintln!(
-                            "[business-os] browser session liveness check failed \
-                             session_id={session_id}: {err:#}"
-                        );
-                        false
-                    }
-                },
-                Err(_) => false,
+            // A busy runner must not block lookup of every other session.
+            let running = match try_inspect_browser_liveness(&session.handle, |handle| {
+                handle.is_running()
+            }) {
+                Ok(None) => continue,
+                Ok(Some(running)) => running,
+                Err(err) => {
+                    eprintln!(
+                        "[business-os] browser session liveness check failed session_id={session_id}: {err:#}"
+                    );
+                    false
+                }
             };
             if !running {
                 exited.push((session_id, session));
@@ -503,6 +568,7 @@ impl BrowserRuntimeManager {
         user_requested_start: bool,
     ) -> Result<Arc<LiveBrowserSession>> {
         if let Some(session) = self.get(session_id) {
+            validate_browser_session_owner(&session.owner_user_id, profile_owner)?;
             return Ok(session);
         }
         // Chromium permits only one live process per persistent profile. Session
@@ -511,6 +577,7 @@ impl BrowserRuntimeManager {
         // the same tenant/user profile again.
         let _spawn_guard = self.spawn_lock.lock().await;
         if let Some(session) = self.get(session_id) {
+            validate_browser_session_owner(&session.owner_user_id, profile_owner)?;
             return Ok(session);
         }
         let profile_key = browser_profile_key(profile_owner, session_id, private_profile);
@@ -666,7 +733,9 @@ impl BrowserRuntimeManager {
         let runner_pid = handle.process_id();
         let session = Arc::new(LiveBrowserSession {
             handle: Mutex::new(handle),
+            request_lock: Arc::new(tokio::sync::Mutex::new(())),
             profile_key,
+            runtime_generation: uuid::Uuid::new_v4().to_string(),
             viewport_w,
             viewport_h,
             downloads_dir,
@@ -697,8 +766,11 @@ impl BrowserRuntimeManager {
     ) -> Result<Value> {
         let session = Arc::clone(session);
         let op = op.to_string();
+        let permit = Arc::clone(&session.request_lock).lock_owned().await;
         let activity = BrowserAutomationGuard::begin(Arc::clone(&session), op != "screenshot")?;
         tokio::task::spawn_blocking(move || {
+            // Keep serialization even if the async caller abandons this IO.
+            let _permit = permit;
             let _activity = activity;
             let mut handle = session
                 .handle
@@ -720,19 +792,74 @@ impl BrowserRuntimeManager {
         params: Value,
         timeout: Duration,
     ) -> Result<Value> {
+        let queued_at = Instant::now();
         let session = Arc::clone(session);
         let op = op.to_string();
+        let permit =
+            acquire_browser_request_permit(Arc::clone(&session.request_lock), timeout).await?;
         let activity = BrowserAutomationGuard::begin(Arc::clone(&session), true)?;
         tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let _activity = activity;
             let mut handle = session
                 .handle
                 .lock()
                 .map_err(|_| anyhow::anyhow!("browser runtime handle poisoned"))?;
-            handle.request_with_timeout(&op, params, timeout)
+            let remaining = timeout
+                .checked_sub(queued_at.elapsed())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("browser surface request expired before delivery")
+                })?;
+            handle.request_with_timeout(&op, params, remaining)
         })
         .await
         .context("browser runtime timed request worker panicked")?
+    }
+
+    /// Validate the displayed runner/tab and dispatch under the same handle lock.
+    /// Missing optional bindings retain compatibility with older clients.
+    pub async fn request_for_surface(
+        &self,
+        session: &Arc<LiveBrowserSession>,
+        op: &str,
+        params: Value,
+        expected_generation: Option<String>,
+        expected_tab_id: Option<String>,
+    ) -> Result<Value> {
+        let queued_at = Instant::now();
+        let budget = Duration::from_secs(match op {
+            "input" => 3,
+            "live" => 5,
+            _ => 30,
+        });
+        let session = Arc::clone(session);
+        let op = op.to_string();
+        let permit =
+            acquire_browser_request_permit(Arc::clone(&session.request_lock), budget).await?;
+        let activity = BrowserAutomationGuard::begin(Arc::clone(&session), op != "screenshot")?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _activity = activity;
+            let mut handle = session
+                .handle
+                .lock()
+                .map_err(|_| anyhow::anyhow!("browser runtime handle poisoned"))?;
+            validate_browser_surface_queue_age(queued_at.elapsed(), budget)?;
+            validate_browser_surface_generation(
+                session.runtime_generation(),
+                expected_generation.as_deref(),
+            )?;
+            if let Some(expected_tab_id) = expected_tab_id.as_deref() {
+                let nav = handle.request("nav_state", serde_json::json!({}))?;
+                validate_browser_surface_tab(&nav, expected_tab_id)?;
+            }
+            // The tab check itself performs blocking IO; recheck the queue budget.
+            validate_browser_surface_queue_age(queued_at.elapsed(), budget)?;
+            handle.request(&op, params)
+        })
+        .await
+        .context("browser surface request worker panicked")?
     }
 
     /// Drop a session from the registry and shut its process down gracefully.
@@ -860,6 +987,82 @@ fn runner_command_line(pid: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn busy_browser_handle_is_not_waited_on_or_reported_as_dead() {
+        let handle = Mutex::new(true);
+        let held = handle.lock().unwrap();
+        assert_eq!(
+            try_inspect_browser_liveness(&handle, |_| panic!("busy runner was probed")).unwrap(),
+            None
+        );
+        drop(held);
+        assert_eq!(
+            try_inspect_browser_liveness(&handle, |running| Ok(*running)).unwrap(),
+            Some(true)
+        );
+        *handle.lock().unwrap() = false;
+        assert_eq!(
+            try_inspect_browser_liveness(&handle, |running| Ok(*running)).unwrap(),
+            Some(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_request_wait_expires_without_taking_over_busy_operation() {
+        let request_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let held = Arc::clone(&request_lock).lock_owned().await;
+        let error =
+            acquire_browser_request_permit(Arc::clone(&request_lock), Duration::from_millis(5))
+                .await
+                .expect_err("busy request must expire while asynchronously queued");
+        assert_eq!(
+            error.to_string(),
+            "browser surface request expired before delivery"
+        );
+        assert!(
+            request_lock.try_lock().is_err(),
+            "timeout must not release the existing operation"
+        );
+        drop(held);
+        let admitted =
+            acquire_browser_request_permit(Arc::clone(&request_lock), Duration::from_secs(1))
+                .await
+                .expect("idle request can acquire actual serialization lock");
+        assert!(
+            request_lock.try_lock().is_err(),
+            "permit owns the lock until operation completion"
+        );
+        drop(admitted);
+        assert!(request_lock.try_lock().is_ok());
+    }
+
+    #[test]
+    fn expired_browser_input_is_refused_before_delivery() {
+        let budget = Duration::from_secs(3);
+        assert!(validate_browser_surface_queue_age(Duration::from_millis(2999), budget).is_ok());
+        assert!(validate_browser_surface_queue_age(budget, budget).is_err());
+        assert!(validate_browser_surface_queue_age(Duration::from_secs(30), budget).is_err());
+    }
+
+    #[test]
+    fn reused_browser_runtime_requires_its_actual_owner() {
+        assert!(validate_browser_session_owner("alice", "alice").is_ok());
+        assert!(validate_browser_session_owner("alice", "bob").is_err());
+        assert!(validate_browser_session_owner("alice", "ctox").is_err());
+    }
+
+    #[test]
+    fn browser_surface_refuses_a_restarted_runner_or_a_different_tab() {
+        assert!(validate_browser_surface_generation("runner-new", Some("runner-old")).is_err());
+        assert!(validate_browser_surface_generation("runner-new", Some("runner-new")).is_ok());
+        assert!(validate_browser_surface_generation("runner-new", None).is_ok());
+        let selected = serde_json::json!({"ok": true, "nav": {"active_tab_id": "xing"}});
+        assert!(validate_browser_surface_tab(&selected, "dnb").is_err());
+        assert!(validate_browser_surface_tab(&selected, "xing").is_ok());
+        assert!(validate_browser_surface_tab(&serde_json::json!({"ok": false}), "xing").is_err());
+        assert!(validate_browser_surface_tab(&serde_json::json!({"ok": true}), "xing").is_err());
+    }
 
     #[test]
     fn web_stack_auth_idle_ttl_requires_no_lease_or_automation() {

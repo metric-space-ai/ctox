@@ -18,7 +18,10 @@ use ctox_sync::{
         NativeBusinessDataSessionRef, NativeBusinessDataSessionState,
         CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
     },
-    business_data_ipc::BusinessDataIpc,
+    business_data_ipc::{
+        BusinessDataDispatchFuture, BusinessDataDispatcher, BusinessDataIpc,
+        BusinessDataShutdownFuture, WatchLifetime,
+    },
     business_data_session::{
         BusinessDataService, BusinessDataSessionHost, SavedBusinessDataTarget,
     },
@@ -52,8 +55,52 @@ const ACCOUNT_EPOCH: u64 = 34;
 struct ResponsePublicationGate {
     armed: AtomicBool,
     blocked: AtomicBool,
+    completed_query_page: AtomicBool,
+    blocked_at_header: AtomicBool,
     entered: tokio::sync::Notify,
     writer_waker: futures_util::task::AtomicWaker,
+}
+
+/// Observe the actual service response without replacing its authorization,
+/// response publication guard, event release, or connection cleanup.
+struct WitnessDispatcher {
+    inner: Arc<dyn BusinessDataDispatcher>,
+    gate: Arc<ResponsePublicationGate>,
+}
+
+impl BusinessDataDispatcher for WitnessDispatcher {
+    fn dispatch(&self, request: NativeBusinessDataRequest) -> BusinessDataDispatchFuture {
+        let pending = self.inner.dispatch(request);
+        let gate = self.gate.clone();
+        Box::pin(async move {
+            let response = pending.await?;
+            if response.request_id == "blocked-query" {
+                gate.completed_query_page.store(
+                    matches!(response.result, NativeBusinessDataResult::Page { .. }),
+                    Ordering::SeqCst,
+                );
+            }
+            Ok(response)
+        })
+    }
+
+    fn response_publication(
+        &self,
+        response: &NativeBusinessDataResponse,
+    ) -> Option<Arc<WatchLifetime>> {
+        self.inner.response_publication(response)
+    }
+
+    fn response_sent<'a>(
+        &'a self,
+        response: &'a NativeBusinessDataResponse,
+    ) -> BusinessDataShutdownFuture<'a> {
+        self.inner.response_sent(response)
+    }
+
+    fn shutdown(&self) -> BusinessDataShutdownFuture<'_> {
+        self.inner.shutdown()
+    }
 }
 
 struct GatedNativeIpcStream {
@@ -77,8 +124,12 @@ impl tokio::io::AsyncWrite for GatedNativeIpcStream {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<io::Result<usize>> {
-        if self.gate.armed.load(Ordering::SeqCst) && !self.gate.blocked.swap(true, Ordering::SeqCst)
-        {
+        if self.gate.armed.swap(false, Ordering::SeqCst) {
+            self.gate.blocked.store(true, Ordering::SeqCst);
+            // The actual IPC encoder writes its four-byte length prefix first.
+            self.gate
+                .blocked_at_header
+                .store(buf.len() == 4, Ordering::SeqCst);
             self.gate.writer_waker.register(cx.waker());
             self.gate.entered.notify_one();
             return std::task::Poll::Pending;
@@ -793,6 +844,11 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         )
         .await;
         publication_gate.entered.notified().await;
+        assert!(
+            publication_gate.completed_query_page.load(Ordering::SeqCst),
+            "the fence must hold a completed Query page, not a rejection"
+        );
+        assert!(publication_gate.blocked_at_header.load(Ordering::SeqCst));
         send_request(
             &mut publication_client,
             "close-before-first-byte",
@@ -845,26 +901,29 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         event_gate.entered.notified().await;
         event_gate.blocked.store(false, Ordering::SeqCst);
         event_gate.writer_waker.wake();
-        let _subscription_id =
+        let subscription_id =
             read_subscribed(&mut event_client, &session_e, "publication-watch").await;
-        // Drain the deterministic empty-snapshot marker before arming the
+        // Drain the complete real snapshot before arming the
         // targeted adversarial event, so Close fences that event, not setup.
-        event_gate.entered.notified().await;
-        event_gate.blocked.store(false, Ordering::SeqCst);
-        event_gate.writer_waker.wake();
-        let caught_up = read_event(&mut event_client, "publication snapshot").await;
-        assert!(matches!(
-            caught_up.payload,
-            NativeBusinessDataEventPayload::CaughtUp { .. }
-        ));
+        wait_for_caught_up(
+            &mut event_client,
+            &session_e,
+            &subscription_id,
+            "publication snapshot",
+        )
+        .await;
+        event_gate.armed.store(true, Ordering::SeqCst);
         server_db
             .collection("records")
             .unwrap()
             .insert(json!({"id": "native-publication-fence"}))
             .await
             .unwrap();
-        event_gate.armed.store(true, Ordering::SeqCst);
         event_gate.entered.notified().await;
+        assert!(
+            event_gate.blocked_at_header.load(Ordering::SeqCst),
+            "the targeted live event must be held before its length prefix"
+        );
         send_request(
             &mut event_client,
             "close-before-event-byte",
@@ -1290,8 +1349,17 @@ async fn open_ipc_client(
     });
     let service = Arc::new(BusinessDataService::new(host));
     let service_factory = service.clone();
+    let witness_gate = response_gate.clone();
     let ipc = BusinessDataIpc::new(Arc::new(move |credentials, events| {
-        Ok(Arc::new(service_factory.dispatcher(credentials, events)))
+        let inner: Arc<dyn BusinessDataDispatcher> =
+            Arc::new(service_factory.dispatcher(credentials, events));
+        match witness_gate.as_ref() {
+            Some(gate) => Ok(Arc::new(WitnessDispatcher {
+                inner,
+                gate: gate.clone(),
+            })),
+            None => Ok(inner),
+        }
     }));
     let (stream, native) = tokio::io::duplex(64 * 1024);
     let mut stream = BufReader::new(stream);

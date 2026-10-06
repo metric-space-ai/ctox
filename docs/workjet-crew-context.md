@@ -244,6 +244,16 @@ existing command plane. A retry for the same actor, project and key returns the
 same command/task references, while changed intent fails against the canonical
 fingerprint even if another caller wins admission concurrently.
 
+The native `workjet_project_native_` command identity also constrains reads to
+the current project owner. Command status and collection queries, plus their
+linked queue/run/event projections, use the existing Workjet ownership reader
+even though this task has no private chat. Native cancellation receipts resolve
+their typed target through Core and retain that same project restriction. A
+malformed missing project or cancellation-target reference fails closed. General chat commands retain their existing policy. Native privacy
+regressions cover other users including administrators, owner access, linked
+execution results and current project deletion; execution remains required before
+claiming installed privacy acceptance.
+
 This native ingress is distinct from external Crew execution and carries no
 `thread_id` or `external_executor`, so it follows the native queue worker path.
 Command-scoped sessions cannot start another project task. Workjet must still

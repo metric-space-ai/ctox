@@ -817,7 +817,6 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
                     request_id,
                 ),
             };
-        let takeover = takeover_for("takeover", &checkpoint_digest, 2);
         assert!(
             matches!(ipc_call(nodes[&3].clone(), "coordination-peer-cannot-takeover",
                 takeover_for("coordination-peer-cannot-takeover", &checkpoint_digest, 3)).await,
@@ -842,19 +841,49 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
         assert!(matches!(ipc_call(nodes[&2].clone(), "blocked-takeover",
                 takeover_for("blocked-takeover", &checkpoint_digest, 2)).await,
             SyncIpcResult::Rejected { ref reason } if reason == "ReconciliationRequired"));
+        let fresh_receipts: Vec<_> = [1, 2]
+            .into_iter()
+            .map(|id| {
+                checkpoint_fixture::copy_receipt(
+                    root.path(),
+                    id,
+                    &keys[&id],
+                    &job.spec,
+                    &job.ownership,
+                    2,
+                )
+            })
+            .collect();
         assert!(matches!(
             ipc_call(
                 nodes[&1].clone(),
                 "reconcile-effect",
-                SyncIpcOperation::CompleteEffect {
+                SyncIpcOperation::CommitEffectCheckpoint {
                     job_id: "job".into(),
                     ownership: job.ownership.clone(),
-                    effect_id: "external".into()
+                    effect_id: "external".into(),
+                    disclosure: disclosure_for("reconcile-effect", &fresh_receipts),
+                    receipts: fresh_receipts.clone(),
                 }
             )
             .await,
             SyncIpcResult::Applied { .. }
         ));
+        let fresh_digest = &fresh_receipts[0].checkpoint_digest;
+        let takeover = SyncIpcOperation::TakeOver {
+            job_id: "job".into(),
+            expected: job.ownership.clone(),
+            checkpoint_digest: fresh_digest.clone(),
+            resume: checkpoint_fixture::handoff_permit(
+                &keys[&2],
+                ctox_sync::authority::SessionHandoffPhase::Resume,
+                &job.spec,
+                fresh_digest,
+                fresh_receipts[0].sequence,
+                &job.ownership,
+                "takeover",
+            ),
+        };
         // Sever actual DataChannels, not a mock transport flag.
         let outage_started = std::time::Instant::now();
         let previous_leader = nodes[&2].leader().unwrap();
@@ -1208,7 +1237,11 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
             use std::process::Stdio;
             use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
             let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-            let workjet = source.join("../../../../workjet").canonicalize().unwrap();
+            let workjet = std::env::var_os("CTOX_TEST_WORKJET_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| source.join("../../../../workjet"))
+                .canonicalize()
+                .expect("the real Workjet checkout is required for the native group test");
             let mut client_spec = job.spec.clone();
             client_spec.job_id = "workjet-job".into();
             client_spec.session_id = "workjet-session".into();
@@ -1228,8 +1261,31 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
                     )
                 })
                 .collect();
+            let checkpoint = &receipts[0];
+            let disclosure = checkpoint_fixture::handoff_permit(
+                &keys[&1],
+                ctox_sync::authority::SessionHandoffPhase::Disclose,
+                &handoff_spec,
+                &checkpoint.checkpoint_digest,
+                checkpoint.sequence,
+                &job.ownership,
+                "handoff-protect",
+            );
+            let resume = checkpoint_fixture::handoff_permit(
+                &keys[&2],
+                ctox_sync::authority::SessionHandoffPhase::Resume,
+                &handoff_spec,
+                &checkpoint.checkpoint_digest,
+                checkpoint.sequence,
+                &ctox_sync::authority::Ownership {
+                    node_id: 2,
+                    generation: job.ownership.generation,
+                },
+                "handoff-takeover",
+            );
             let handoff = json!({
                 "target": endpoints[&2], "spec": handoff_spec, "receipts": receipts,
+                "disclosure": disclosure, "resume": resume,
             });
             let mut client = tokio::process::Command::new("node")
                 .arg(source.join("tests/support/workjet_ipc_client.mjs"))

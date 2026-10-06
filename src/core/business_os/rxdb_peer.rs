@@ -3067,7 +3067,9 @@ async fn run_native_peer(
                 // Retain before registration so partial setup failure also
                 // drains any source tasks before the database is released.
                 business_data_sources.push(Arc::clone(&business_data_source));
-                business_data_source.register(pool)?;
+                business_data_source
+                    .register(pool)
+                    .map_err(|error| *error)?;
                 let identity_transport = pool.connection_handler.clone();
                 pool.register_identity_request_handler(
                     ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,

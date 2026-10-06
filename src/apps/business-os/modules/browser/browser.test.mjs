@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { __browserTestHooks } from './index.js';
+import { __ctoxSyncTestHooks } from '../../shared/sync.js';
 
 assert.deepEqual(
   __browserTestHooks.SCRAPING_ADAPTER_COLLECTIONS,
@@ -390,8 +391,9 @@ assert.doesNotMatch(
   'credential fill must never place secret values on the RxDB command bus',
 );
 assert.match(syncJs, /isReadOnlyProjectionCollection[\s\S]{0,500}browser_sessions/);
-assert.match(syncJs, /isDemandOnlyPullCollection[\s\S]{0,1800}browser_sessions/);
-assert.match(syncJs, /isDemandOnlyPullCollection[\s\S]{0,1800}browser_tabs/);
+assert.equal(__ctoxSyncTestHooks.isDemandOnlyPullCollection('browser_sessions'), true);
+assert.equal(__ctoxSyncTestHooks.isDemandOnlyPullCollection('browser_tabs'), true);
+assert.equal(__ctoxSyncTestHooks.isDemandOnlyPullCollection('unknown-browser-collection'), false);
 assert.doesNotMatch(js, /upsertDoc\(browserCollection\(ctx, 'browser_sessions'\)/);
 assert.match(js, /selector:\s*\{ owner_user_id:\s*\{ \$in: actorIds \} \}/);
 assert.match(js, /op: 'session\.list'/);

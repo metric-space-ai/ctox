@@ -573,7 +573,7 @@ impl Cluster {
             )
             .await
         {
-            Receipt::Applied(job) => job,
+            Receipt::Applied(job) | Receipt::Replayed(job) => job,
             other => panic!("{other:?}"),
         }
     }
@@ -705,8 +705,28 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
                 )
             })
             .collect();
+        let checkpoint = &receipts[0];
+        let disclosure = checkpoint_fixture::handoff_permit(
+            &cluster.keys[&1],
+            SessionHandoffPhase::Disclose,
+            &handoff_spec,
+            &checkpoint.checkpoint_digest,
+            checkpoint.sequence,
+            &ownership(1, 1),
+            "handoff-protect",
+        );
+        let resume = checkpoint_fixture::handoff_permit(
+            &cluster.keys[&2],
+            SessionHandoffPhase::Resume,
+            &handoff_spec,
+            &checkpoint.checkpoint_digest,
+            checkpoint.sequence,
+            &ownership(1, 2),
+            "handoff-takeover",
+        );
         let handoff = serde_json::json!({
             "target": target_host.endpoint(), "spec": handoff_spec, "receipts": receipts,
+            "disclosure": disclosure, "resume": resume,
         });
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         // Build lanes can keep the pinned real consumer in an owned checkout.

@@ -7,6 +7,7 @@
 //! `computer_id` is an opaque Workjet identity. CTOX must not derive it from,
 //! or reinterpret it as, a hostname, environment, presentation, or path.
 
+use super::computer_capabilities::{validate_capabilities, ComputerCapability};
 use super::store::{
     open_store, outbound_load_record, outbound_load_records_by_string_field,
     upsert_business_record, upsert_rxdb_collection_record, BusinessCommand,
@@ -40,6 +41,11 @@ struct ComputerAssignPayload {
     hosting_mode: String,
     #[serde(default)]
     capabilities: Vec<String>,
+    /// Omitted by older Workjet clients: preserve native operational settings.
+    #[serde(default)]
+    capability_config: Option<Vec<ComputerCapability>>,
+    #[serde(default)]
+    agentless: Option<bool>,
     #[serde(default)]
     self_hosted_colocation: bool,
     #[serde(default)]
@@ -59,7 +65,14 @@ pub(super) fn handle_workjet_computer_store_command(
     command: &BusinessCommand,
     authorized_owner_user_id: &str,
     authorized_owner_email: Option<&str>,
+    authorized_owner_role: &str,
 ) -> anyhow::Result<Value> {
+    if requires_capability_management(command) {
+        anyhow::ensure!(
+            matches!(authorized_owner_role, "chef" | "admin"),
+            "computer capabilities require Owner/Admin authority"
+        );
+    }
     migrate_signed_owner_alias(root, authorized_owner_user_id, authorized_owner_email)?;
     match command.command_type.as_str() {
         "ctox.workjet.computer.list" => {
@@ -73,6 +86,12 @@ pub(super) fn handle_workjet_computer_store_command(
         }
         other => anyhow::bail!("unsupported Workjet computer command type: {other}"),
     }
+}
+
+pub(super) fn requires_capability_management(command: &BusinessCommand) -> bool {
+    command.command_type == "ctox.workjet.computer.assign"
+        && (command.payload.get("capability_config").is_some()
+            || command.payload.get("agentless").is_some())
 }
 
 fn migrate_signed_owner_alias(
@@ -202,17 +221,61 @@ fn handle_workjet_computer_assign_command(
         payload.capabilities.len() <= 32,
         "capabilities exceeds 32 entries"
     );
-    let capabilities = payload
+    let mut capabilities = payload
         .capabilities
         .iter()
         .map(|value| bounded_required(value, "capability", 80))
-        .collect::<anyhow::Result<BTreeSet<_>>>()?
-        .into_iter()
-        .collect::<Vec<_>>();
+        .collect::<anyhow::Result<BTreeSet<_>>>()?;
 
     let conn = open_store(root)?;
     let existing = outbound_load_record(&conn, COMPUTERS_COLLECTION, &computer_id)?;
     ensure_owned(existing.as_ref(), &owner_user_id)?;
+    let existing_config = existing
+        .as_ref()
+        .and_then(|record| record.get("capability_config"));
+    let configured = payload.capability_config.is_some() || existing_config.is_some();
+    let mut capability_config = match payload.capability_config {
+        Some(config) => config,
+        None => match existing_config {
+            Some(config) => serde_json::from_value(config.clone())
+                .context("invalid persisted computer capability configuration")?,
+            None => Vec::new(),
+        },
+    };
+    let agentless = payload.agentless.unwrap_or_else(|| {
+        existing
+            .as_ref()
+            .and_then(|record| record.get("agentless"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
+    validate_capabilities(&mut capability_config, agentless)?;
+    anyhow::ensure!(
+        !agentless || (hosting_mode == "self_hosted" && !payload.self_hosted_colocation),
+        "an agentless storage computer must be self_hosted without daemon co-location"
+    );
+    // Typed settings are authoritative for operational names. Legacy names
+    // cannot grant execution or erase the native configuration on refresh.
+    for kind in ["build", "storage", "gpu"] {
+        if configured {
+            capabilities.remove(kind);
+        } else {
+            anyhow::ensure!(
+                !capabilities.contains(kind),
+                "{kind} requires typed capability_config"
+            );
+        }
+    }
+    capabilities.extend(
+        capability_config
+            .iter()
+            .map(|capability| capability.kind().to_owned()),
+    );
+    anyhow::ensure!(capabilities.len() <= 32, "capabilities exceeds 32 entries");
+    anyhow::ensure!(
+        !agentless || capabilities.iter().all(|kind| kind == "storage"),
+        "an agentless computer cannot advertise agent toolchains"
+    );
     let now = super::store::now_ms() as i64;
     let created_at_ms = existing
         .as_ref()
@@ -239,7 +302,7 @@ fn handle_workjet_computer_assign_command(
         .and_then(|record| record.get("replication_up"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let computer = serde_json::json!({
+    let mut computer = serde_json::json!({
         "id": computer_id,
         "display_name": display_name,
         "hosting_mode": hosting_mode,
@@ -255,6 +318,16 @@ fn handle_workjet_computer_assign_command(
         "updated_at_ms": now,
         "is_deleted": false,
     });
+    if configured {
+        computer["capability_config"] = serde_json::to_value(&capability_config)?;
+    }
+    if payload.agentless.is_some()
+        || existing
+            .as_ref()
+            .is_some_and(|record| record.get("agentless").is_some())
+    {
+        computer["agentless"] = Value::Bool(agentless);
+    }
     let computer = persist_and_project_idempotently(
         root,
         &conn,
@@ -326,6 +399,14 @@ pub(super) fn require_assigned_workjet_computer(
         computer.get("hosting_mode").and_then(Value::as_str) != Some("managed_backend"),
         "managed backend hosts are backend-only and cannot run Workjet workers"
     );
+    anyhow::ensure!(
+        computer.get("agentless").and_then(Value::as_bool) != Some(true),
+        "agentless storage computers cannot run Workjet workers"
+    );
+    anyhow::ensure!(
+        computer.get("is_deleted").and_then(Value::as_bool) != Some(true),
+        "deleted Workjet computers cannot run workers"
+    );
     Ok(computer)
 }
 
@@ -359,7 +440,15 @@ fn persist_and_project_idempotently(
         .get("updated_at_ms")
         .and_then(Value::as_i64)
         .unwrap_or(now);
-    upsert_rxdb_collection_record(root, collection, record_id, updated_at_ms, record.clone())?;
+    // v1 has additionalProperties:false. Keep operational configuration in
+    // the native record until the coordinated Workjet schema upgrade; its
+    // stable capability names remain visible on the current WebRTC surface.
+    let mut projection = record.clone();
+    if let Some(object) = projection.as_object_mut() {
+        object.remove("capability_config");
+        object.remove("agentless");
+    }
+    upsert_rxdb_collection_record(root, collection, record_id, updated_at_ms, projection)?;
     Ok(record)
 }
 
@@ -396,6 +485,10 @@ fn bounded_required(value: &str, field: &str, max_chars: usize) -> anyhow::Resul
     );
     Ok(value.to_owned())
 }
+
+#[cfg(test)]
+#[path = "computer_capabilities_tests.rs"]
+mod capability_tests;
 
 #[cfg(test)]
 mod tests {

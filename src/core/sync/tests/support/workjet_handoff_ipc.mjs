@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 
 export async function exerciseHandoff(requestSyncAuthority, source, fixture) {
-  const { target, spec, receipts } = fixture;
+  const { target, spec, receipts, disclosure, resume } = fixture;
   const send = (endpoint, operation, requestId) => requestSyncAuthority(endpoint, {
     version: 1, requestId: `handoff-${requestId}`, operation,
   });
@@ -11,14 +11,14 @@ export async function exerciseHandoff(requestSyncAuthority, source, fixture) {
   assert.equal(created.result.type, 'applied');
   const ownership = created.result.ownership;
   assert.deepEqual(ownership, { nodeId: 1, generation: 1 });
-  const protect = { type: 'protectCheckpoint', jobId: spec.jobId, ownership, receipts };
+  const protect = { type: 'protectCheckpoint', jobId: spec.jobId, ownership, receipts, disclosure };
   const protectStart = performance.now();
   assert.equal((await send(source, protect, 'protect')).result.type, 'applied');
   const protectMs = performance.now() - protectStart;
   assert.equal((await send(source, protect, 'protect')).result.type, 'replayed');
   const takeover = {
     type: 'takeOver', jobId: spec.jobId, expected: ownership,
-    checkpointDigest: receipts[0].checkpointDigest,
+    checkpointDigest: receipts[0].checkpointDigest, resume,
   };
   const takeoverStart = performance.now();
   const taken = await send(target, takeover, 'takeover');

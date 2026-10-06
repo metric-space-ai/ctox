@@ -301,7 +301,7 @@ fn now_epoch_secs() -> i64 {
 mod sqlite_build_flags_tests {
     /// Guards `.cargo/config.toml` `LIBSQLITE3_FLAGS`: the bundled SQLite must
     /// not share one page cache and one allocation mutex across all daemon
-    /// connections (see the comment there; measured on-prem deployment, 06.10.2026).
+    /// connections (see the comment there; customer on-prem, 06.10.2026).
     #[test]
     fn bundled_sqlite_has_no_global_page_cache_or_memstatus_mutex() {
         let conn = rusqlite::Connection::open_in_memory().expect("sqlite");
