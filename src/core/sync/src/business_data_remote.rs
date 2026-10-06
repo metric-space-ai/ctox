@@ -7,15 +7,14 @@
 //! request response has been released to the private IPC stream.
 
 use crate::business_data_contract::{
-    NativeBusinessDataBinding as Binding, NativeBusinessDataCommand as Command,
-    NativeBusinessDataCommandState as CommandState, NativeBusinessDataCommandStatus,
-    NativeBusinessDataErrorCode as ErrorCode, NativeBusinessDataEvent as Event,
-    NativeBusinessDataEventPayload as EventPayload, NativeBusinessDataOperation as Operation,
-    NativeBusinessDataQuery as Query, NativeBusinessDataRecord as Record,
-    NativeBusinessDataRequest as Request, NativeBusinessDataResponse as Response,
-    NativeBusinessDataResult as WireResult, NativeBusinessDataScope as Scope,
-    NativeBusinessDataSessionRef as SessionRef, CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES,
-    CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
+    NativeBusinessDataCommand as Command, NativeBusinessDataCommandState as CommandState,
+    NativeBusinessDataCommandStatus, NativeBusinessDataErrorCode as ErrorCode,
+    NativeBusinessDataEvent as Event, NativeBusinessDataEventPayload as EventPayload,
+    NativeBusinessDataOperation as Operation, NativeBusinessDataQuery as Query,
+    NativeBusinessDataRecord as Record, NativeBusinessDataRequest as Request,
+    NativeBusinessDataResponse as Response, NativeBusinessDataResult as WireResult,
+    NativeBusinessDataScope as Scope, NativeBusinessDataSessionRef as SessionRef,
+    CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES, CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
 };
 use crate::native::NativePool;
 use async_trait::async_trait;
@@ -249,6 +248,7 @@ struct SnapshotSession {
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+#[derive(Clone)]
 struct HistoryEntry {
     sequence: u64,
     cursor: String,
@@ -886,8 +886,8 @@ impl BusinessDataSource {
             ));
         }
         mango.selector = Some(scope_selector(&query.scope, mango.selector.take()));
-        let normalized = normalize_mango_query(schema, mango);
-        let prepared = prepare_query(schema, normalized).map_err(|error| {
+        let normalized = normalize_mango_query(&schema.json_schema, mango);
+        let prepared = prepare_query(&schema.json_schema, normalized).map_err(|error| {
             RemoteError::new(ErrorCode::SchemaMismatch, error.to_string(), false)
         })?;
         Ok((collection, prepared, query_fingerprint(query)))
@@ -2063,8 +2063,8 @@ impl Subscription {
             "sort": [{ "id": "asc" }]
         }))
         .ok()?;
-        let normalized = normalize_mango_query(schema, mango);
-        let prepared = prepare_query(schema, normalized).ok()?;
+        let normalized = normalize_mango_query(&schema.json_schema, mango);
+        let prepared = prepare_query(&schema.json_schema, normalized).ok()?;
         let result = collection.storage_instance.query(&prepared).await.ok()?;
         Some(result.documents.iter().any(|value| value == document))
     }
@@ -2103,7 +2103,7 @@ impl Subscription {
             .cloned()
             .collect();
         for entry in entries {
-            if let Err(error) = self.send_history(entry, true).await {
+            if let Err(error) = self.send_history(entry).await {
                 let _ = self
                     .emit(
                         EventPayload::Reset {
@@ -2260,7 +2260,7 @@ impl Subscription {
         self.send(&event).await
     }
 
-    async fn send_history(&self, entry: HistoryEntry, recovery: bool) -> Result<(), String> {
+    async fn send_history(&self, entry: HistoryEntry) -> Result<(), String> {
         self.ensure_authorized().await?;
         let payload = match entry.payload {
             // Only this recovery attempt may declare itself caught up, after
@@ -2462,9 +2462,9 @@ pub async fn remote_request(
             "BusinessData peer is not ready",
         ));
     }
+    let params = vec![serde_json::to_value(request)
+        .map_err(|_| io::Error::other("BusinessData request encoding failed"))?];
     let exchange = async {
-        let params = vec![serde_json::to_value(request)
-            .map_err(|_| io::Error::other("BusinessData request encoding failed"))?];
         send_message_and_await_answer(
             pool.connection_handler.clone(),
             peer,
