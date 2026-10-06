@@ -618,6 +618,17 @@ way only for harness status and triggers its existing authoritative row read;
 it does not render the changed-document payload as a fully loaded collection.
 The shell's scoped collection facade preserves this subscription option.
 
+Consumers that only need a change hint use
+`collection.$.subscribe(listener, { invalidateOnly: true })`. This emits
+`{ collectionName, invalidated: true }` after subscription and debounces store,
+loader-generation and projected-window changes. It performs no initial query,
+snapshot read or document materialization. The listener runs its own bounded
+query; the hint alone confirms neither readiness nor read permission. The
+option also passes through scoped, maintenance and permission-guarded shell
+collection facades. Unsubscribing retires the timer, listeners and foreground
+lease. Ordinary snapshot and `emitPendingChanges` subscriptions retain their
+existing behavior; `invalidateOnly` takes precedence when both are requested.
+
 Crew app presence retains the last valid queue snapshot when a read fails.
 An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;
 other read failures retain their diagnostic. Collection readiness retries the

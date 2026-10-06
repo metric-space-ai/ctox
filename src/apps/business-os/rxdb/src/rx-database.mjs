@@ -411,9 +411,45 @@ class CtoxRxCollection {
     return this.storageCollection.observe(listener);
   }
 
+  // Notify consumers that re-run their own bounded query without first
+  // materializing a collection snapshot. Payload and permission authority
+  // remain with that query, including projected query-window refreshes.
+  subscribeInvalidations(listener) {
+    let active = true;
+    let pendingTimer = null;
+    const registry = getActiveCollectionRegistry();
+    registry.subscriptionStarted(this.name);
+    const schedule = () => {
+      if (!active || pendingTimer != null) return;
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        if (active) listener({ collectionName: this.name, invalidated: true });
+      }, OBSERVABLE_DEBOUNCE_MS);
+    };
+    const unsubscribe = this.observe(schedule);
+    const unsubscribeLoader = this.subscribeDemandLoaderChange(schedule, true);
+    const unsubscribeWindow = this.subscribeQueryWindowChange(schedule);
+    schedule();
+    return {
+      unsubscribe: () => {
+        if (!active) return;
+        active = false;
+        if (pendingTimer != null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        unsubscribe();
+        unsubscribeLoader();
+        unsubscribeWindow();
+        registry.subscriptionEnded(this.name);
+      },
+    };
+  }
+
   get $() {
     return {
-      subscribe: (listener, { emitPendingChanges = false } = {}) => {
+      subscribe: (listener, { emitPendingChanges = false, invalidateOnly = false } = {}) => {
+        if (invalidateOnly) return this.subscribeInvalidations(listener);
         let active = true;
         // Phase 2: a live collection subscription marks this collection as
         // foreground in the RxDB layer so replication prioritizes it on the
