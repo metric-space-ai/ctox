@@ -68,8 +68,12 @@ The smallest owner contract that closes step 3:
 1. An **authenticated checkpoint sender** (owner: the native session owner
    from step 1) constructs `SessionHandoffTransfer::begin(gate, request)`
    before the first protected manifest or blob byte and calls `revalidate()`
-   at every bounded chunk boundary; a denial stops the transfer and forbids
-   resume until a fresh `begin` succeeds.
+   at every bounded chunk boundary. The actual transport must also retain
+   current native authority and the exact accepted connection through each
+   synchronous byte-publication poll, including retries after an await.
+   A previously signed permit or a successful asynchronous revalidation is
+   not that publication fence. A denial stops the transfer and forbids resume
+   until a fresh `begin` succeeds.
 2. An **authenticated receiver** performs the same begin/revalidate fencing
    with `SessionHandoffPhase::Receive` before ingesting any protected byte.
 3. The **target executor** obtains a `Resume` decision through the same gate
@@ -81,6 +85,26 @@ The smallest owner contract that closes step 3:
 5. Binding rows are written only by a separately authorized enrollment path
    that resolves the fields listed in step 2; that writer is still
    unimplemented and remains part of this owner contract.
+
+## Current native admission authority
+
+The production gate retains only its independently pinned public issuer.
+Construction and every `authorize` call borrow the freshly decoded existing
+Sync identity through the encrypted secret store's mutation fence. Authorization
+then holds one nonblocking `BEGIN IMMEDIATE` transaction on the existing
+Business OS store through binding, current user/epoch, exact grant and signing.
+Missing, malformed, deleted, rotated or busy issuer authority denies; a rotated
+key cannot silently replace a live gate's pinned issuer. Missing or blank policy
+stores deny without schema initialization or migration.
+
+These fences end when the synchronous admission decision returns. They do not
+cover subsequent asynchronous checkpoint bytes, peer membership, current
+provider-account entitlement or filesystem replacement outside native runtime
+ownership. The production enrollment writer, quiescent capture owner and actual
+sender/receiver/resume consumer remain required. Three source regressions use
+the production constructor and decision path with fixture enrollment rows for
+key deletion/rotation, competing issuer/policy writers and absent/uninitialized
+stores; they are not real session-transfer acceptance.
 
 ## Atomic effect-checkpoint reconciliation
 
