@@ -284,6 +284,7 @@ struct Subscription {
     mode: WatchMode,
     command_id: Option<String>,
     visible_ids: Mutex<HashSet<String>>,
+    last_command_state: Mutex<Option<CommandState>>,
     authority: AuthorizedContext,
     policy: Arc<dyn BusinessDataAccessPolicy>,
     sequence: AtomicU64,
@@ -1418,6 +1419,7 @@ impl BusinessDataSource {
             mode,
             command_id: command_id.map(str::to_owned),
             visible_ids: Mutex::new(HashSet::new()),
+            last_command_state: Mutex::new(None),
             authority,
             policy: Arc::clone(&self.policy),
             sequence: AtomicU64::new(1),
@@ -2188,6 +2190,24 @@ impl Subscription {
                 }
                 _ => {}
             }
+        }
+        if let EventPayload::Command { state } = &payload {
+            // Local writes and the persistent change feed can report the same
+            // durable update. Recheck authority above even for duplicates, then
+            // publish only a changed public command state.
+            let mut previous = self
+                .last_command_state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if previous.as_ref().is_some_and(|previous| {
+                previous.command_id == state.command_id
+                    && previous.status == state.status
+                    && previous.result == state.result
+                    && previous.error == state.error
+            }) {
+                return Ok(());
+            }
+            *previous = Some(state.clone());
         }
         let sequence = self.next_sequence().await;
         let cursor = random_token("cursor").map_err(|_| "cursor generation failed".to_string())?;
