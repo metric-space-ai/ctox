@@ -541,6 +541,11 @@ mod owner_receipt_tests {
         let root = tempfile::tempdir()?;
         crate::mission::channels::open_channel_db(&crate::paths::core_db(root.path()))?;
         store::tests::seed_business_user(root.path(), "alice", role)?;
+        // Active grant changes revoke earlier capability epochs. Admit the
+        // fixture token only after its ordinary collection grant is installed.
+        if role == "user" {
+            grant_read(root.path(), "alice", "business_commands")?;
+        }
         let (token, _) = store::issue_business_os_capability_token_for_managed_user(
             root.path(),
             "alice",
@@ -592,7 +597,6 @@ mod owner_receipt_tests {
     async fn native_document_view_preserves_domain_parent_then_projection_fallback(
     ) -> anyhow::Result<()> {
         let fixture = read_fixture("user").await?;
-        grant_read(fixture.root.path(), "alice", "business_commands")?;
         let domain = store::open_store(fixture.root.path())?;
         store::upsert_business_record(
             &domain,
@@ -823,7 +827,6 @@ mod owner_receipt_tests {
     async fn native_response_publication_holds_stores_and_rechecks_parent_visibility(
     ) -> anyhow::Result<()> {
         let fixture = read_fixture("user").await?;
-        grant_read(fixture.root.path(), "alice", "business_commands")?;
         let domain = store::open_store(fixture.root.path())?;
         store::upsert_business_record(
             &domain,
