@@ -35,6 +35,7 @@ impl StorageResolver for Live {
                 username: text("username"),
                 root: text("root"),
                 host_key_sha256: text("host_key_sha256"),
+                host_key_algorithm: c["host_key_algorithm"].as_str().map(str::to_owned),
                 private_key: c["private_key"].as_str().unwrap(),
                 passphrase: None,
             }),

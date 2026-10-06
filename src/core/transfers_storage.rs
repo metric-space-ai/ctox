@@ -90,6 +90,7 @@ impl StorageResolver for NativeStorage {
                         port,
                         username,
                         host_key_sha256,
+                        host_key_algorithm,
                         passphrase,
                         ..
                     } => storage_ssh::connect(storage_ssh::SshStorageOptions {
@@ -98,6 +99,7 @@ impl StorageResolver for NativeStorage {
                         username: username.clone(),
                         root: grant.root.clone(),
                         host_key_sha256: host_key_sha256.clone(),
+                        host_key_algorithm: host_key_algorithm.map(|a| a.as_str().to_owned()),
                         private_key: credential(0)?,
                         passphrase: if passphrase.is_some() {
                             Some(credential(1)?)

@@ -4,7 +4,7 @@ use crate::{validate_relative_path, StorageConnection};
 use anyhow::{ensure, Context, Result};
 use russh::{
     client,
-    keys::{decode_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKey},
+    keys::{decode_secret_key, Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKey},
 };
 use russh_sftp::{
     client::{error::Error as SftpError, RawSftpSession},
@@ -22,6 +22,7 @@ pub struct SshStorageOptions<'a> {
     pub username: String,
     pub root: String,
     pub host_key_sha256: String,
+    pub host_key_algorithm: Option<String>,
     pub private_key: &'a str,
     pub passphrase: Option<&'a str>,
 }
@@ -54,8 +55,13 @@ pub fn connect(options: SshStorageOptions<'_>) -> Result<Box<dyn StorageConnecti
                         let key =
                             Arc::new(decode_secret_key(options.private_key, options.passphrase)?);
                         let key_lifetime = Arc::downgrade(&key);
+                        let mut config = client::Config::default();
+                        if let Some(algorithm) = options.host_key_algorithm.as_deref() {
+                            config.preferred.key =
+                                std::borrow::Cow::Owned(vec![Algorithm::new(algorithm)?]);
+                        }
                         let mut session = client::connect(
-                            Arc::new(client::Config::default()),
+                            Arc::new(config),
                             (options.host.as_str(), options.port),
                             PinnedKey(options.host_key_sha256),
                         )

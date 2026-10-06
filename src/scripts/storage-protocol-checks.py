@@ -27,6 +27,7 @@ try:
   run(['docker','build','--network','default','--tag',tag,str(fixture)],timeout=420)
  for key in ['client','host']:
   run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(fixture/key)])
+ run(['ssh-keygen','-q','-t','ecdsa','-b','256','-N','','-f',str(fixture/'host-ecdsa')])
  for directory in ['ssh-data','smb-data']:
   (fixture/directory).mkdir()
  password=secrets.token_urlsafe(32)
@@ -34,6 +35,7 @@ try:
  (fixture/'sshd_config').write_text('''Port 22
 ListenAddress 0.0.0.0
 HostKey /fixture/host
+HostKey /fixture/host-ecdsa
 AuthorizedKeysFile /fixture/client.pub
 StrictModes no
 PasswordAuthentication no
@@ -81,11 +83,13 @@ exec /usr/sbin/smbd --foreground --no-process-group --configfile=/fixture/smb.co
    except OSError:
     assert time.monotonic()<deadline,'fixture did not start'
     time.sleep(.25)
- public=(fixture/'host.pub').read_text().split()[1]
+ public=(fixture/'host-ecdsa.pub').read_text().split()[1]
  pin='SHA256:'+base64.b64encode(hashlib.sha256(base64.b64decode(public)).digest()).decode().rstrip('=')
  for protocol in ['ssh','smb']:
   config={'host_root':str(fixture/'ssh-data'),'protocol':protocol,'host':'127.0.0.1','port':mapped[protocol],'username':'storage','root':'/fixture/ssh-data' if protocol=='ssh' else '/','share':'artifacts','password':password,'private_key':(fixture/'client').read_text(),'host_key_sha256':pin}
-  config_path=fixture/(protocol+'.json');config_path.write_text(json.dumps(config))
+  config_path=fixture/(protocol+'.json')
+  config['host_key_algorithm']='ecdsa-sha2-nistp256'
+  config_path.write_text(json.dumps(config))
   env=os.environ.copy();env['STORAGE_LIVE_CONFIG']=str(config_path)
   print('PROTOCOL_PHASE: '+protocol,flush=True)
   with (fixture/(protocol+'-test.log')).open('w') as output:
