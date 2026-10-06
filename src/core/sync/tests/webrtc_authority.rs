@@ -1208,7 +1208,11 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
             use std::process::Stdio;
             use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
             let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-            let workjet = source.join("../../../../workjet").canonicalize().unwrap();
+            let workjet = std::env::var_os("CTOX_TEST_WORKJET_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| source.join("../../../../workjet"))
+                .canonicalize()
+                .expect("the real Workjet checkout is required for the native group test");
             let mut client_spec = job.spec.clone();
             client_spec.job_id = "workjet-job".into();
             client_spec.session_id = "workjet-session".into();
@@ -1228,8 +1232,31 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
                     )
                 })
                 .collect();
+            let checkpoint = &receipts[0];
+            let disclosure = checkpoint_fixture::handoff_permit(
+                &keys[&1],
+                ctox_sync::authority::SessionHandoffPhase::Disclose,
+                &handoff_spec,
+                &checkpoint.checkpoint_digest,
+                checkpoint.sequence,
+                &job.ownership,
+                "handoff-protect",
+            );
+            let resume = checkpoint_fixture::handoff_permit(
+                &keys[&2],
+                ctox_sync::authority::SessionHandoffPhase::Resume,
+                &handoff_spec,
+                &checkpoint.checkpoint_digest,
+                checkpoint.sequence,
+                &ctox_sync::authority::Ownership {
+                    node_id: 2,
+                    generation: job.ownership.generation,
+                },
+                "handoff-takeover",
+            );
             let handoff = json!({
                 "target": endpoints[&2], "spec": handoff_spec, "receipts": receipts,
+                "disclosure": disclosure, "resume": resume,
             });
             let mut client = tokio::process::Command::new("node")
                 .arg(source.join("tests/support/workjet_ipc_client.mjs"))
