@@ -665,6 +665,9 @@ test('report provenance assertions cannot authorize the evidence opening path', 
   await assert.rejects(hooks.openSpreadsheetFile(fixture.state, {
     ...input,
     open_purpose: 'evidence',
+    // An already-normalized-looking caller object is still untrusted input.
+    valid: true,
+    kind: 'research_generated',
     evidence_eligible: true,
     provenance_verified: true,
     knowledge_lineage: { evidence_eligible: true, report_snapshot: input.report_snapshot },

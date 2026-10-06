@@ -54,6 +54,11 @@ source; they do not attest the caller's code, source rows or report content.
 - Preserve ordinary CSV/TSV/XLSX import behavior, write permissions, save-before-
   navigation safeguards and authoritative native SaveACK. Do not schedule Research
   or remark-check work merely to open this saved-state report.
+- Preserve validated report classification and the original descriptor across
+  the openFile-to-import normalization boundary. The current import path
+  normalizes the ingestion object a second time; it must not silently change
+  a report into user_import or discard its origin. Caller fields such as
+  valid: true are never proof that descriptor/hash validation has happened.
 
 ## Verification
 
