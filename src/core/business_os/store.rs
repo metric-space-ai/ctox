@@ -43707,8 +43707,21 @@ pub(super) mod tests {
             pull_collection_record(root, "business_module_source_files", "probe:index.js")?
                 .unwrap();
         assert_eq!(canonical["content"], original["content"]);
+        // Main's framed transport admits lossless source records up to the
+        // master-response ceiling. Check that actual boundary, not an obsolete
+        // two-MiB fixture which is now a valid document.
+        let ceiling = rxdb::collection_policy::DEFAULT_MASTER_RESPONSE_CEILING_BYTES;
+        let mut at_limit = original.clone();
+        at_limit["content"] = serde_json::json!("");
+        let content_bytes = ceiling - serde_json::to_vec(&at_limit)?.len();
+        at_limit["content"] = serde_json::json!("x".repeat(content_bytes));
+        assert_eq!(serde_json::to_vec(&at_limit)?.len(), ceiling);
+        let boundary_original = at_limit.clone();
+        clamp_projected_document_to_wire_budget(table, "probe:index.js", &mut at_limit)?;
+        assert_eq!(at_limit, boundary_original);
         let mut too_large = original.clone();
-        too_large["content"] = serde_json::json!("x".repeat(2 * 1024 * 1024));
+        too_large["content"] = serde_json::json!("x".repeat(content_bytes + 1));
+        assert_eq!(serde_json::to_vec(&too_large)?.len(), ceiling + 1);
         let unchanged = too_large.clone();
         assert!(
             clamp_projected_document_to_wire_budget(table, "probe:index.js", &mut too_large)
