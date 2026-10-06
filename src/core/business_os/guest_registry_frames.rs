@@ -2,7 +2,10 @@
 //! WebRTC send, and a delivered observation is consumed before an input attempt.
 use super::super::guest_runtime::{GuestAction, GuestFrame, GuestInput};
 use super::*;
-use rxdb::plugins::replication_webrtc::file_fetch_handler::GuardedFileSource;
+use rxdb::plugins::replication_webrtc::file_fetch_handler::{
+    GuardedChunkLease, GuardedFileChunk, GuardedFileSource,
+};
+use rxdb::plugins::replication_webrtc::WebRTCPublicationGuard;
 use rxdb::rx_error::{new_rx_error, RxResult};
 use serde_json::{json, Value};
 use std::sync::{
@@ -76,6 +79,13 @@ impl Drop for FramePermit {
         self.budget.frames.fetch_sub(1, Ordering::AcqRel);
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingChunk {
+    nonce: String,
+    offset: usize,
+    end: usize,
+    terminal: bool,
+}
 pub(super) struct Observation {
     id: String,
     turn: String,
@@ -87,9 +97,12 @@ pub(super) struct Observation {
     delivered: bool,
     delivery_offset: usize,
     consumed: bool,
+    pending: Option<PendingChunk>,
+    transfer_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
     _permit: FramePermit,
 }
 impl Observation {
+    #[cfg(test)]
     fn send_chunk(
         &mut self,
         offset: u64,
@@ -97,25 +110,57 @@ impl Observation {
         terminal: bool,
         send: &mut dyn FnMut(&Value, &[u8]) -> RxResult<()>,
     ) -> Result<()> {
+        let pending = self.begin_chunk(offset, max, terminal)?;
+        send(&self.metadata, &self.frame.png[pending.offset..pending.end])
+            .map_err(anyhow::Error::from)?;
+        let bytes = self.frame.png[pending.offset..pending.end].to_vec();
+        self.finish_chunk(&pending, &bytes, &self.metadata.clone())
+    }
+    fn begin_chunk(&mut self, offset: u64, max: usize, terminal: bool) -> Result<PendingChunk> {
         let offset = usize::try_from(offset)?;
         let end = offset
             .checked_add(max)
             .context("native frame range overflow")?;
         ensure!(
             !self.consumed
-                && self.deadline > Instant::now()
+                && self.pending.is_none()
                 && !self.delivered
+                && self.deadline > Instant::now()
                 && offset == self.delivery_offset
                 && max <= 8 * 1024
                 && end <= self.frame.png.len()
-                && ((terminal && max == 0 && offset == self.frame.png.len())
+                && ((terminal && max == 0 && end == self.frame.png.len())
                     || (!terminal && max > 0)),
-            "native frame range invalid or delivery already attempted"
+            "native chunk already attempted, expired or noncontiguous"
         );
+        let pending = PendingChunk {
+            nonce: uuid::Uuid::new_v4().to_string(),
+            offset,
+            end,
+            terminal,
+        };
         self.consumed = true;
-        send(&self.metadata, &self.frame.png[offset..end]).map_err(anyhow::Error::from)?;
-        self.delivery_offset = end;
-        self.delivered = terminal;
+        self.pending = Some(pending.clone());
+        Ok(pending)
+    }
+    fn validate_chunk(&self, chunk: &PendingChunk, bytes: &[u8], metadata: &Value) -> Result<()> {
+        ensure!(
+            self.consumed
+                && !self.delivered
+                && self.deadline > Instant::now()
+                && self.pending.as_ref() == Some(chunk)
+                && self.delivery_offset == chunk.offset
+                && self.metadata == *metadata
+                && self.frame.png.get(chunk.offset..chunk.end) == Some(bytes),
+            "native chunk generation, bytes or metadata changed"
+        );
+        Ok(())
+    }
+    fn finish_chunk(&mut self, chunk: &PendingChunk, bytes: &[u8], metadata: &Value) -> Result<()> {
+        self.validate_chunk(chunk, bytes, metadata)?;
+        self.delivery_offset = chunk.end;
+        self.delivered = chunk.terminal;
+        self.pending = None;
         self.consumed = false;
         Ok(())
     }
@@ -130,7 +175,11 @@ impl Observation {
                 && self.turn == turn
                 && self.delivered
                 && !self.consumed
-                && self.deadline > Instant::now(),
+                && self.deadline > Instant::now()
+                && self
+                    .transfer_cancelled
+                    .as_ref()
+                    .is_none_or(|flag| !flag.load(Ordering::SeqCst)),
             "input requires the current completely delivered observation"
         );
         if let GuestInput::Click { x, y, .. } | GuestInput::Scroll { x, y, .. } = input {
@@ -297,7 +346,7 @@ impl NativeGuestRegistry {
     }
 }
 impl NativeGuestExecution {
-    fn current_job(&self, entry: &Registration) -> Result<()> {
+    fn current_process_effect(&self, entry: &Registration) -> Result<String> {
         let effect = entry
             .registered_process
             .as_ref()
@@ -321,6 +370,10 @@ impl NativeGuestExecution {
                 == effect.process_instance_id,
             "native child differs from its registered effect"
         );
+        Ok(effect.effect_id.clone())
+    }
+    fn current_job(&self, entry: &Registration) -> Result<()> {
+        let effect = self.current_process_effect(entry)?;
         let job = super::super::guest_commands::block_on_guest(async {
             Ok(self
                 .registry
@@ -332,8 +385,7 @@ impl NativeGuestExecution {
             job.spec == self.binding.spec
                 && job.ownership == self.binding.ownership
                 && !job.stopped
-                && job.pending_effects
-                    == std::collections::BTreeSet::from([effect.effect_id.clone()]),
+                && job.pending_effects == std::collections::BTreeSet::from([effect]),
             "native frame execution is not the exact live process effect"
         );
         Ok(())
@@ -341,16 +393,16 @@ impl NativeGuestExecution {
     fn with_frame<T>(
         &self,
         id: &str,
-        apply: impl FnOnce(&mut Observation, &mut dyn FnMut() -> Result<()>) -> Result<T>,
+        apply: impl FnOnce(&mut Observation, &mut dyn FnMut() -> Result<()>, &Connection) -> Result<T>,
     ) -> Result<T> {
         let transport = self.registry.current_transport()?;
         self.provider
             .with_live_provider_transaction(|tx, facts, turn| {
-                self.with_held_worker(tx, facts, |entry, verify| {
+                self.with_held_worker_policy(tx, facts, |entry, verify, policy| {
+                    self.current_process_effect(entry)?;
                     let frame = entry.frame.as_ref().context("native observation retired")?;
                     ensure!(
                         frame.id == id
-                            && !frame.consumed
                             && !transport.canceled.load(Ordering::SeqCst)
                             && frame
                                 .transport
@@ -369,9 +421,7 @@ impl NativeGuestExecution {
                     {
                         let endpoint = frame.endpoint.clone();
                         let desktop = entry.desktop.as_mut().context("native child missing")?;
-                        super::super::guest_commands::block_on_guest(
-                            desktop.validate_live_endpoint(&endpoint),
-                        )?;
+                        desktop.ensure_live_endpoint_current(&endpoint)?;
                         verify()?;
                         // Ownership cannot be handed over while the exact registered
                         // process effect is pending. Revoke/stop use this controller.
@@ -388,9 +438,9 @@ impl NativeGuestExecution {
                                         && deadline > Instant::now(),
                                     "native frame authority expired or pool closed"
                                 );
-                                desktop.ensure_live_process()
+                                desktop.ensure_live_endpoint_current(&endpoint)
                             };
-                            let result = apply(frame, &mut current);
+                            let result = apply(frame, &mut current, policy);
                             if let Err(error) = current() {
                                 frame.consumed = true;
                                 return Err(error);
@@ -469,6 +519,8 @@ impl NativeGuestExecution {
                         delivered: false,
                         delivery_offset: 0,
                         consumed: false,
+                        pending: None,
+                        transfer_cancelled: None,
                         _permit: permit,
                     });
                     json!({"ok":true, "outcome":"observation_published", "command_id":command.id,
@@ -506,66 +558,197 @@ impl NativeGuestExecution {
         }
     }
 }
+struct NativeChunkLease {
+    source: NativeFrameSource,
+    id: String,
+    turn: String,
+    pending: PendingChunk,
+    bytes: Arc<[u8]>,
+    metadata: Value,
+    capability: String,
+    active: std::sync::atomic::AtomicBool,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+impl NativeChunkLease {
+    fn with_chunk<T>(
+        &self,
+        apply: impl FnOnce(&mut Observation, &mut dyn FnMut() -> Result<()>) -> Result<T>,
+    ) -> Result<T> {
+        let registry = self.source.current_registry()?;
+        let execution = registry.frame_execution(&self.id)?;
+        execution.with_frame(&self.id, |frame, native_current, policy| {
+            ensure!(
+                !self.cancelled.load(Ordering::SeqCst)
+                    && self.active.load(Ordering::SeqCst)
+                    && frame.turn == self.turn,
+                "native chunk lease closed or turn changed"
+            );
+            frame.validate_chunk(&self.pending, &self.bytes, &self.metadata)?;
+            let mut current = || {
+                native_current()?;
+                ensure!(
+                    !self.cancelled.load(Ordering::SeqCst) && self.active.load(Ordering::SeqCst),
+                    "native chunk lease closed"
+                );
+                validate_frame_peer(
+                    policy,
+                    &registry.runtime_root,
+                    &self.capability,
+                    &self.metadata,
+                )
+            };
+            current()?;
+            let result = apply(frame, &mut current);
+            if let Err(error) = current() {
+                frame.consumed = true;
+                return Err(error);
+            }
+            result
+        })
+    }
+}
+impl WebRTCPublicationGuard for NativeChunkLease {
+    fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+        self.with_chunk(|_, current| {
+            current()?;
+            publish().map_err(anyhow::Error::from)?;
+            current()
+        })
+        .map_err(transport_error)
+    }
+}
+impl GuardedChunkLease for NativeChunkLease {
+    fn complete(&self, connection_current: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+        self.with_chunk(|frame, current| {
+            current()?;
+            connection_current().map_err(anyhow::Error::from)?;
+            frame.finish_chunk(&self.pending, &self.bytes, &self.metadata)?;
+            if let Err(error) = connection_current()
+                .map_err(anyhow::Error::from)
+                .and_then(|_| current())
+            {
+                frame.consumed = true;
+                return Err(error);
+            }
+            Ok(())
+        })
+        .map_err(transport_error)?;
+        self.active.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// Borrowed policy verifier supplied by the shared native store owner. This
+/// helper must never initialize/reopen the worker or policy store.
+fn validate_frame_peer(
+    policy: &Connection,
+    root: &Path,
+    capability: &str,
+    metadata: &Value,
+) -> Result<()> {
+    let _ = (policy, root, capability, metadata);
+    anyhow::bail!("native borrowed-connection peer verifier integration pending")
+}
 impl GuardedFileSource for NativeFrameSource {
     fn byte_len(&self, id: &str) -> RxResult<u64> {
         let registry = self.current_registry().map_err(transport_error)?;
         let execution = registry.frame_execution(id).map_err(transport_error)?;
-        // A fresh quorum read before a complete transfer; every actual send
-        // additionally holds worker/policy/controller and live-child guards.
+        // Quorum IO occurs before native worker/policy/controller fences. The
+        // retained exact process effect cannot authorize takeover while pending.
+        let effect = {
+            let registration = registry
+                .registration(&execution.guest_id)
+                .map_err(transport_error)?;
+            let entry = registration
+                .lock()
+                .map_err(|_| transport_error(anyhow::anyhow!("native controller poisoned")))?;
+            entry
+                .process_effect
+                .clone()
+                .context("native child effect missing")
+                .map_err(transport_error)?
+        };
+        let job = super::super::guest_commands::block_on_guest(async {
+            Ok(registry
+                .authority
+                .validate_ownership(&execution.binding.spec.job_id, &execution.binding.ownership)
+                .await?)
+        })
+        .map_err(transport_error)?;
+        ensure_current_job(&execution, &job, &effect).map_err(transport_error)?;
         execution
-            .with_current(|entry, _| execution.current_job(entry))
-            .map_err(transport_error)?;
-        execution
-            .with_frame(id, |frame, current| {
+            .with_frame(id, |frame, current, _| {
+                ensure!(
+                    !frame.consumed && !frame.delivered && frame.pending.is_none(),
+                    "native observation already attempted"
+                );
                 current()?;
                 Ok(frame.frame.png.len() as u64)
             })
             .map_err(transport_error)
     }
-    fn with_current_chunk(
+    fn prepare_chunk(
         &self,
         id: &str,
         offset: u64,
         max: usize,
         terminal: bool,
         capability_token: &str,
-        send: &mut dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
-    ) -> RxResult<()> {
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ) -> RxResult<GuardedFileChunk> {
         let registry = self.current_registry().map_err(transport_error)?;
         let execution = registry.frame_execution(id).map_err(transport_error)?;
-        // Initialize the verifier's native read cache before taking the policy
-        // transaction. Revalidate under that same transaction at the actual send.
-        super::super::store::verify_webrtc_capability_actor(
-            &registry.runtime_root,
-            capability_token,
-        )
-        .context("native frame peer is not authenticated by this instance")
-        .map_err(transport_error)?;
         execution
-            .with_frame(id, |frame, native_current| {
-                let owner = frame.metadata["owner_user_id"]
-                    .as_str()
-                    .context("native frame owner missing")?
-                    .to_owned();
-                let mut current = || {
-                    native_current()?;
-                    let (actor, _) = super::super::store::verify_webrtc_capability_actor(
-                        &registry.runtime_root,
-                        capability_token,
-                    )
-                    .context("native frame peer capability revoked")?;
-                    ensure!(
-                        actor == owner,
-                        "native frame belongs to another authenticated owner"
-                    );
-                    Ok(())
-                };
+            .with_frame(id, |frame, current, policy| {
                 current()?;
-                frame.send_chunk(offset, max, terminal, &mut |metadata, bytes| {
-                    let mut check = || current().map_err(transport_error);
-                    send(metadata, bytes, &mut check)
+                validate_frame_peer(
+                    policy,
+                    &registry.runtime_root,
+                    capability_token,
+                    &frame.metadata,
+                )?;
+                ensure!(
+                    !cancelled.load(Ordering::SeqCst),
+                    "native frame transfer cancelled"
+                );
+                let pending = frame.begin_chunk(offset, max, terminal)?;
+                frame.transfer_cancelled = Some(cancelled.clone());
+                let bytes: Arc<[u8]> = Arc::from(&frame.frame.png[pending.offset..pending.end]);
+                let metadata = frame.metadata.clone();
+                let lease = Arc::new(NativeChunkLease {
+                    source: NativeFrameSource {
+                        owner: self.owner.clone(),
+                        transport: self.transport.clone(),
+                    },
+                    id: id.to_owned(),
+                    turn: frame.turn.clone(),
+                    pending,
+                    bytes: bytes.clone(),
+                    metadata: metadata.clone(),
+                    capability: capability_token.to_owned(),
+                    active: std::sync::atomic::AtomicBool::new(true),
+                    cancelled: cancelled.clone(),
+                });
+                Ok(GuardedFileChunk {
+                    metadata,
+                    bytes,
+                    lease,
                 })
             })
             .map_err(transport_error)
     }
+}
+fn ensure_current_job(
+    execution: &NativeGuestExecution,
+    job: &ctox_sync::authority::Job,
+    effect: &str,
+) -> Result<()> {
+    ensure!(
+        job.spec == execution.binding.spec
+            && job.ownership == execution.binding.ownership
+            && !job.stopped
+            && job.pending_effects == std::collections::BTreeSet::from([effect.to_owned()]),
+        "native frame execution is not the exact live process effect"
+    );
+    Ok(())
 }
