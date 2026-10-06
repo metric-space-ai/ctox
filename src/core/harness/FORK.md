@@ -65,6 +65,24 @@ The core regressions exercise actual MCP handler dispatch and argument rejection
 plus registry scoping/teardown. Native queue regressions test emitter lifetime and
 default-consumer denial. Execution and installed VM acceptance are separate.
 
+## 2026-10 Checked embedding shutdown
+
+In-process shutdown carries checked background/thread-drain and task-join
+results to the embedding client. Forced timeouts, lost acknowledgements and
+panics return safe errors instead of success; an error response still awaits
+bounded owned cleanup. Runtime processor/router tasks and client shutdown
+futures retain abort ownership on cancellation, including before the facade
+future's first poll. The awaited public call shape remains
+`client.shutdown().await`.
+
+The new task/channel regressions exercise these actual shutdown methods and
+ownership paths. Existing real in-process event-pressure, persistent-resume
+and retained-shared-manager tests remain required. These are distinct from
+journal I/O and provider continuation: session-level recorder failure logging
+still cannot certify a transferable checkpoint. Production capture enrollment,
+protected-byte consumers and real cross-host continuation remain separate
+unfinished work.
+
 ## 2026-10 Rollout writer acknowledgement and publication
 
 Recorder `persist` and `flush` replies carry the writer's actual I/O result.

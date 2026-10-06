@@ -457,6 +457,12 @@ impl MessageProcessor {
         self.codex_message_processor.drain_background_tasks().await;
     }
 
+    pub(crate) async fn drain_background_tasks_checked(&self) -> std::io::Result<()> {
+        self.codex_message_processor
+            .drain_background_tasks_checked()
+            .await
+    }
+
     pub(crate) async fn clear_all_thread_listeners(&self) {
         self.codex_message_processor
             .clear_all_thread_listeners()
@@ -465,6 +471,12 @@ impl MessageProcessor {
 
     pub(crate) async fn shutdown_threads(&self) {
         self.codex_message_processor.shutdown_threads().await;
+    }
+
+    pub(crate) async fn shutdown_threads_checked(&self) -> std::io::Result<()> {
+        self.codex_message_processor
+            .shutdown_threads_checked()
+            .await
     }
 
     pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {

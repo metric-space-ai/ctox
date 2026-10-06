@@ -172,6 +172,21 @@ older harness-flow stream remains an audit and observability projection, not
 the persistence authority.
 
 
+## Checked embedded-runtime shutdown
+
+The in-process runtime and its client facade propagate failed shutdown
+requests/acknowledgements, task panics, bounded drain timeouts and incomplete
+native thread shutdown reports. An acknowledgement alone does not replace
+the runtime's checked termination result. Cleanup still runs after an error
+response; cancellation, including an unpolled client shutdown future, retains
+abort ownership of the facade/runtime and its processor/router tasks.
+
+A successful shutdown is not a recorder-I/O, portable-journal, reconciled-effect
+or provider-continuation receipt. Native handoff must retain its own execution
+authority, await the exact provider/session quiescence and verified journal
+publication, and reject unknown/forced teardown before checkpoint protection
+or takeover. The production capture/transfer owner is still required.
+
 ## Cockpit-Projektionen und Steuerbefehle
 
 The cockpit is an observer of the durable execution state. It does not close work,
