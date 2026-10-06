@@ -194,10 +194,30 @@ publication rather than dropping the guard into ordinary send. An inline
 authority rejection is delivered to its own caller without aborting a different
 framed owner; genuine transport errors retain the existing failure behavior.
 
+Guarded auxiliary registration now returns a native response value and a
+mandatory publication guard separately from wire JSON. The handler receives
+the exact accepted connection, not a later signaling-ID lookup. Guarded
+registration cannot opt into public identity admission or replace an existing
+method owner. Setup failures use a fixed public error, never arbitrary native
+error text. The pool retains its synchronous cancellation fence through each
+callback and invalidates it before its first asynchronous teardown step.
+Unsupported guarded transports reject without retrying ordinary send.
+
+For every native guarded queue item, admission captures the accepted connection
+generation and its capability token under peer lifecycle authority. Each IO
+poll enters native policy first, then holds that same lifecycle lock while
+checking the captured generation/token and polling the DataChannel. Token
+mutation, replacement and close use that lock. Capacity waits do not emit bytes:
+they probe authority on each bounded recheck, release the fences before polling
+the capacity method, and reacquire them for physical IO. Holding lifecycle while
+polling capacity would recursively acquire it and deadlock. Pending IO releases
+all fences; a token change retires it even without a transport wakeup.
+
 This transport implementation is a prerequisite, not native BusinessData
-policy wiring. The current source response/event publishers still use ordinary
-send. Their adapter must carry the same retained authority through both the
-auxiliary response and Watch/Observe queues. It must use the existing signed
+policy wiring. Its actual Query/Watch/Observe source publishers still use plain
+auxiliary registration and ordinary send. Their adapter must supply the real
+retained policy authority through the new guarded auxiliary registration and
+Watch/Observe queues. It must use the existing signed
 actor/device claims, native collection/query/field policy, exact command owner
 and authoritative document visibility. Those decisions read both the Business
 OS relationship store and Core execution state: holding one independently
