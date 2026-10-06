@@ -6144,7 +6144,10 @@ fn ack_messages(
     if let Some(root) = projection_root {
         attach_queue_projection_store(root, conn)?;
     }
-    let tx = conn.unchecked_transaction()?;
+    // Acknowledgement reads before updating Core and its attached projection
+    // store. Reserve both writers first so a concurrent WAL commit cannot
+    // invalidate the read snapshot during promotion (SQLITE_BUSY_SNAPSHOT).
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let updated = ack_messages_in_transaction(
         &tx,
         message_keys,

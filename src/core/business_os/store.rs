@@ -19715,6 +19715,12 @@ fn command_projection_with_native_identity(
         payload: presentation_payload,
         client_context: presentation_context,
     };
+    if matching_native_command.is_some() {
+        // Core's lifecycle shape omits routing presentation. Recover it only
+        // from the matching private command, without changing its intent.
+        projected["inbound_channel"] =
+            Value::String(command_inbound_channel(&presentation_command));
+    }
     if document["execution_mode"] == "queue" && is_business_chat_command(&presentation_command) {
         projected["chat_id"] = Value::String(business_chat_id(&presentation_command, command_id));
     }
@@ -42831,6 +42837,7 @@ pub(super) mod tests {
 
         let temp = tempdir()?;
         let root = temp.path();
+        drop(create_repair_rxdb_tables(root)?);
         let conn = open_store(root)?;
         let now = now_ms() as i64;
         let document_id = "doc_test_markdown";
