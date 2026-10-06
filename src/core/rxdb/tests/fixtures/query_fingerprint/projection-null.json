@@ -1,0 +1,15 @@
+{
+  "input": {
+    "collection": "business_records",
+    "schemaVersion": 1,
+    "selector": {},
+    "sort": [],
+    "limit": 200,
+    "skip": 0,
+    "window": {
+      "offset": 0,
+      "limit": 200
+    },
+    "projection": null
+  }
+}

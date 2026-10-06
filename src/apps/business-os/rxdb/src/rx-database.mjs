@@ -26,6 +26,7 @@ import { DEFAULT_WINDOW_LIMIT, isControlPlaneStatusCollection } from './query-de
 import { cloneQueryRow, normalizeQueryProjection, projectQueryDocument, projectedDocumentWriteError } from './query-projection.mjs';
 
 const readOnlyProjectedDocuments = new WeakSet();
+const readOnlyProjectedRows = new WeakSet();
 
 export function getCtoxIndexedDbStorage() {
   return { name: 'ctox-indexeddb-native' };
@@ -211,6 +212,8 @@ class CtoxRxCollection {
     this.storageCollection = storageCollection;
     this.demandLoader = null;
     this.demandLoaderListeners = new Set();
+    this.projectedLoaderListeners = new Set();
+    this.queryWindowListeners = new Set();
     this.localReplicaComplete = false;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
@@ -227,6 +230,7 @@ class CtoxRxCollection {
     if (isControlPlaneStatusCollection(this.name)) {
       for (const listener of this.demandLoaderListeners) listener();
     }
+    for (const listener of this.projectedLoaderListeners) listener();
   }
 
   // Set by the replication state of an eagerly pulled collection once its
@@ -236,9 +240,19 @@ class CtoxRxCollection {
     this.localReplicaComplete = Boolean(complete) && !isControlPlaneStatusCollection(this.name);
   }
 
-  subscribeDemandLoaderChange(listener) {
-    this.demandLoaderListeners.add(listener);
-    return () => this.demandLoaderListeners.delete(listener);
+  subscribeDemandLoaderChange(listener, projected = false) {
+    const listeners = projected ? this.projectedLoaderListeners : this.demandLoaderListeners;
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  subscribeQueryWindowChange(listener) {
+    this.queryWindowListeners.add(listener);
+    return () => this.queryWindowListeners.delete(listener);
+  }
+
+  notifyQueryWindowChange() {
+    for (const listener of this.queryWindowListeners) listener();
   }
 
   async insert(doc) {
@@ -738,7 +752,9 @@ class CtoxRxQuery {
           initialized = false;
           listener(this.single ? null : []);
           flushEmit();
-        });
+        }, Boolean(this.query.projection));
+        const unsubscribeWindow = this.query.projection
+          ? this.collection.subscribeQueryWindowChange(emit) : () => {};
         flushEmit();
         const unsubscribe = this.collection.observe(emit);
         return {
@@ -758,6 +774,7 @@ class CtoxRxQuery {
             unsubscribe();
             unsubscribeLoader();
             registry.subscriptionEnded(this.collection.name);
+            unsubscribeWindow();
           },
         };
       },
@@ -931,7 +948,10 @@ class CtoxRxDocument {
   }
 
   toJSON() {
-    return readOnlyProjectedDocuments.has(this) ? cloneQueryRow(this._data) : { ...this._data };
+    if (!readOnlyProjectedDocuments.has(this)) return { ...this._data };
+    const row = cloneQueryRow(this._data);
+    readOnlyProjectedRows.add(row);
+    return row;
   }
 
   async patch(fields) {
@@ -1319,6 +1339,9 @@ function primaryPathFromSchema(schema) {
 }
 
 function normalizeDoc(doc, primaryPath) {
+  if (readOnlyProjectedRows.has(doc) || readOnlyProjectedDocuments.has(doc)) {
+    throw projectedDocumentWriteError();
+  }
   if (!doc || typeof doc !== 'object') {
     throw new TypeError('document must be an object');
   }

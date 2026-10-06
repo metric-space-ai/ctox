@@ -39,6 +39,7 @@ use super::protocol_contract_generated::{
     CTOX_QUERY_DEFAULT_WINDOW_LIMIT, CTOX_QUERY_MAX_BYTES_PER_CHUNK,
     CTOX_QUERY_MAX_DOCUMENTS_PER_CHUNK, CTOX_QUERY_MAX_RUNTIME_MS, CTOX_QUERY_RPC_CANCEL,
     CTOX_QUERY_RPC_CHUNK, CTOX_QUERY_RPC_ERROR, CTOX_QUERY_RPC_FETCH,
+    CTOX_QUERY_PROJECTED_WINDOW_MAX_ROWS, CTOX_QUERY_PROJECTED_WINDOW_MAX_BYTES,
 };
 use super::webrtc_types::{
     WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse, WebRTCWireFrame,
@@ -62,7 +63,7 @@ pub struct QueryFetchRequest {
     #[serde(default)]
     pub window: Value,
     /// V1.5 production hardening: server-side projection. When provided,
-    /// each chunked document is reduced to only the listed top-level keys
+    /// each chunked document is reduced to the listed nested field paths
     /// before being sent. Cuts wire bytes 5-10x for UIs that only need a
     /// handful of fields out of fat business documents.
     #[serde(default)]
@@ -97,6 +98,10 @@ pub struct QueryFetchChunk {
         skip_serializing_if = "Option::is_none"
     )]
     pub compressed_base64: Option<String>,
+    /// Exact normalized fields applied before compression. Old peers omit this;
+    /// projected browser reads reject unconfirmed responses without full fallback.
+    #[serde(rename = "appliedProjection", default, skip_serializing_if = "Option::is_none")]
+    pub applied_projection: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -651,6 +656,16 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
     };
 
     let mut request = request;
+    request.projection = match crate::query_fingerprint::normalize_query_projection(&json!(request.projection)) {
+        Ok(projection) => projection,
+        Err(error) => {
+            registry.release(&connection_identity, &request.request_id);
+            send_error(handler.as_ref(), &peer, &message.id, &request.request_id,
+                QUERY_FETCH_ERROR_NOT_SUPPORTED, &error.to_string(), false).await;
+            return Ok(());
+        }
+    };
+    let caller_projected = request.projection.is_some();
     if let Some(mut fields) = handler.document_fields_for_peer(&peer, &request.collection_name) {
         if !super::webrtc_types::readable_query_fields(&request.query, &fields) {
             registry.release(&connection_identity, &request.request_id);
@@ -670,7 +685,12 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         // unprojected document. Server field policy overrides this optimization.
         // Keep the replication envelope just as master/live masking does.
         fields.extend(["_rev", "_meta", "_deleted", "_attachments"].map(String::from));
-        request.projection = Some(fields);
+        let requested = request.projection.as_ref().map(|requested| {
+            requested.iter().filter(|field| fields.iter().any(|allowed| {
+                *field == allowed || field.strip_prefix(allowed.as_str()).is_some_and(|suffix| suffix.starts_with('.'))
+            })).cloned().collect::<Vec<_>>()
+        }).filter(|fields| !fields.is_empty());
+        request.projection = requested.or(Some(fields));
     }
 
     // Immediate ack for the original request id so the JS-side request map
@@ -686,6 +706,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         request.clone(),
         Arc::clone(&cancel_flag),
         document_filter,
+        caller_projected,
     )
     .await;
     registry.release(&connection_identity, &request.request_id);
@@ -710,6 +731,7 @@ fn query_fetch_error_code_for_rx_error(err: &RxError) -> (&'static str, bool) {
     match err.code() {
         QUERY_FETCH_STREAM_UNSUPPORTED_STORAGE_CODE
         | QUERY_FETCH_STREAM_UNSUPPORTED_DISPATCH_CODE => (QUERY_FETCH_ERROR_NOT_SUPPORTED, false),
+        "PROJECTED_QUERY_WINDOW_TOO_LARGE" => ("PROJECTED_QUERY_WINDOW_TOO_LARGE", false),
         _ => (QUERY_FETCH_ERROR_REMOTE, true),
     }
 }
@@ -718,9 +740,10 @@ async fn stream_chunks<H: WebRTCConnectionHandler + 'static>(
     handler: Arc<H>,
     peer: H::Peer,
     collection: Arc<RxCollection>,
-    request: QueryFetchRequest,
+    mut request: QueryFetchRequest,
     cancel_flag: Arc<AtomicBool>,
     document_filter: Option<Arc<DocumentFilterFn>>,
+    caller_projected: bool,
 ) -> RxResult<()> {
     let schema = collection
         .schema
@@ -744,6 +767,8 @@ async fn stream_chunks<H: WebRTCConnectionHandler + 'static>(
         return Ok(());
     }
 
+    request.projection = crate::query_fingerprint::normalize_query_projection(&json!(request.projection))
+        .map_err(|error| new_rx_error("QUERY_PROJECTION_NOT_SUPPORTED", Some(json!({ "message": error.to_string() }))))?;
     let mut mango: MangoQuery = match serde_json::from_value(request.query.clone()) {
         Ok(q) => q,
         Err(err) => {
@@ -775,6 +800,11 @@ async fn stream_chunks<H: WebRTCConnectionHandler + 'static>(
             .await;
             return Ok(());
         }
+    }
+    if caller_projected && mango.limit.unwrap_or(0) > u64::from(CTOX_QUERY_PROJECTED_WINDOW_MAX_ROWS) {
+        send_error(handler.as_ref(), &peer, "", &request.request_id,
+            QUERY_FETCH_ERROR_STREAM_LIMIT, "projected query windows contain at most 200 rows", false).await;
+        return Ok(());
     }
     let normalized = normalize_mango_query(&schema.json_schema, mango);
     let prepared = prepare_query(&schema.json_schema, normalized)?;
@@ -829,6 +859,7 @@ async fn stream_chunks<H: WebRTCConnectionHandler + 'static>(
             max_byte_chunk,
             runtime_deadline,
             projection,
+            caller_projected,
             document_filter,
             cancel_flag: producer_cancel_flag,
             cancel_seen: producer_cancel_seen,
@@ -900,6 +931,7 @@ struct QueryFetchProducer {
     max_byte_chunk: usize,
     runtime_deadline: Instant,
     projection: Option<Vec<String>>,
+    caller_projected: bool,
     document_filter: Option<Arc<DocumentFilterFn>>,
     cancel_flag: Arc<AtomicBool>,
     cancel_seen: Arc<AtomicBool>,
@@ -915,6 +947,7 @@ fn produce_query_fetch_frames(producer: QueryFetchProducer) -> RxResult<()> {
         max_byte_chunk,
         runtime_deadline,
         projection,
+        caller_projected,
         document_filter,
         cancel_flag,
         cancel_seen,
@@ -924,6 +957,7 @@ fn produce_query_fetch_frames(producer: QueryFetchProducer) -> RxResult<()> {
     let mut sequence: u32 = 0;
     let mut pending: VecDeque<SerializedQueryDocument> = VecDeque::new();
     let mut any_emitted = false;
+    let mut projected_bytes = 2usize;
 
     let storage_result = collection
         .storage_instance
@@ -947,6 +981,14 @@ fn produce_query_fetch_frames(producer: QueryFetchProducer) -> RxResult<()> {
                 .map(|doc| apply_query_fetch_projection(doc, &projection))
                 .map(SerializedQueryDocument::new)
                 .collect::<RxResult<Vec<_>>>()?;
+            if caller_projected {
+                projected_bytes = projected_bytes.saturating_add(projected.iter().map(|doc| doc.json.len() + 1).sum::<usize>());
+                if projected_bytes > CTOX_QUERY_PROJECTED_WINDOW_MAX_BYTES as usize {
+                    return Err(new_rx_error("PROJECTED_QUERY_WINDOW_TOO_LARGE", Some(json!({
+                        "message": "projected query exceeds 1 MiB; narrow fields or page size"
+                    }))));
+                }
+            }
             pending.extend(projected);
             while pending.len() >= max_doc_chunk {
                 let Some(chunk_docs) =
@@ -1032,21 +1074,44 @@ fn produce_query_fetch_frames(producer: QueryFetchProducer) -> RxResult<()> {
     Ok(())
 }
 
+#[derive(Default)]
+struct QueryProjectionNode {
+    children: std::collections::BTreeMap<String, QueryProjectionNode>,
+}
+
 fn apply_query_fetch_projection(doc: Value, projection: &Option<Vec<String>>) -> Value {
-    match projection {
-        Some(fields) if !fields.is_empty() => match doc {
-            Value::Object(map) => {
-                let mut out = serde_json::Map::new();
-                for field in fields {
-                    if let Some(v) = map.get(field) {
-                        out.insert(field.clone(), v.clone());
+    let Some(fields) = projection.as_ref().filter(|fields| !fields.is_empty()) else {
+        return doc;
+    };
+    let mut tree = QueryProjectionNode::default();
+    for field in fields {
+        let mut node = &mut tree;
+        for part in field.split('.') {
+            node = node.children.entry(part.to_owned()).or_default();
+        }
+    }
+    project_query_value(&doc, &tree)
+}
+
+fn project_query_value(value: &Value, node: &QueryProjectionNode) -> Value {
+    if node.children.is_empty() {
+        return value.clone();
+    }
+    match value {
+        Value::Array(values) => Value::Array(values.iter().map(|value| project_query_value(value, node)).collect()),
+        Value::Object(values) => {
+            let mut out = serde_json::Map::new();
+            for (field, child) in &node.children {
+                if let Some(value) = values.get(field) {
+                    let projected = project_query_value(value, child);
+                    if !projected.is_null() || value.is_null() {
+                        out.insert(field.clone(), projected);
                     }
                 }
-                Value::Object(out)
             }
-            other => other,
-        },
-        _ => doc,
+            Value::Object(out)
+        }
+        _ => Value::Null,
     }
 }
 
@@ -1187,7 +1252,7 @@ async fn send_chunk<H: WebRTCConnectionHandler>(
     revision: &str,
     frame: QueryFetchFrame,
 ) {
-    let chunk = build_chunk_from_serialized(
+    let mut chunk = build_chunk_from_serialized(
         request.request_id.clone(),
         frame.sequence,
         frame.documents,
@@ -1195,6 +1260,7 @@ async fn send_chunk<H: WebRTCConnectionHandler>(
         Some(revision.to_string()),
         frame.cancelled,
     );
+    chunk.applied_projection = request.projection.clone();
     send_fetch_message(
         handler,
         peer,
@@ -1295,6 +1361,7 @@ fn build_chunk_from_serialized(
         cancelled: if cancelled { Some(true) } else { None },
         compressed: None,
         compressed_base64: None,
+        applied_projection: None,
     };
     if payload.len() >= COMPRESSION_THRESHOLD_BYTES {
         let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
@@ -2442,6 +2509,59 @@ mod tests {
         .unwrap();
         let frames = handler.sent.lock();
         assert!(error_code_emitted(&frames, QUERY_FETCH_ERROR_UNAUTHORIZED));
+    }
+
+
+    #[test]
+    fn nested_projection_keeps_campaign_membership_and_array_positions() {
+        let fields = crate::query_fingerprint::normalize_query_projection(&json!([
+            "id", "payload.tasks.status", "payload.weitere_kampagnen"
+        ])).unwrap();
+        let document = json!({"id":"lead","payload":{
+            "tasks":[{"status":"open","private":"hidden"},null,7],
+            "weitere_kampagnen":["campaign-a","campaign-b"],"full":"excluded"
+        }});
+        assert_eq!(apply_query_fetch_projection(document, &fields), json!({
+            "id":"lead","payload":{"tasks":[{"status":"open"},null,null],
+                "weitere_kampagnen":["campaign-a","campaign-b"]}
+        }));
+    }
+
+    #[tokio::test]
+    async fn projected_chunks_confirm_exact_fields_including_terminal_frames() {
+        let collection = seeded_collection(200).await;
+        let registry = authorized_query_registry(4);
+        registry.register(collection);
+        let handler = Arc::new(MockHandler::new());
+        let mut message = make_request("projection", "business_records", 0);
+        message.params[0]["projection"] = json!(["id", "_rev", "_deleted", "id"]);
+        run_query_fetch(registry, Arc::clone(&handler), MockPeer("p1"), "p1".into(), message).await.unwrap();
+        let frames = handler.sent.lock();
+        let chunks = frames.iter().filter_map(|frame| match frame {
+            WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK =>
+                Some(serde_json::from_value::<QueryFetchChunk>(message.params[0].clone()).unwrap()),
+            _ => None,
+        }).collect::<Vec<_>>();
+        assert!(chunks.last().unwrap().complete);
+        assert!(chunks.iter().all(|chunk| chunk.applied_projection == Some(vec!["_deleted".into(), "_rev".into(), "id".into()])));
+        let documents = chunks.iter().flat_map(|chunk| decode_chunk_documents(chunk).unwrap()).collect::<Vec<_>>();
+        assert_eq!(documents.len(), 200);
+        assert!(documents.iter().all(|document| document.as_object().unwrap().keys().all(|key| matches!(key.as_str(), "id" | "_rev" | "_deleted"))));
+    }
+
+    #[tokio::test]
+    async fn projected_window_rejects_over_limit_without_full_fallback() {
+        let collection = seeded_collection(2).await;
+        let registry = authorized_query_registry(4);
+        registry.register(collection);
+        let handler = Arc::new(MockHandler::new());
+        let mut message = make_request("projection-limit", "business_records", 0);
+        message.params[0]["projection"] = json!(["id"]);
+        message.params[0]["window"] = json!({"offset":0,"limit":201});
+        run_query_fetch(registry, Arc::clone(&handler), MockPeer("p1"), "p1".into(), message).await.unwrap();
+        let frames = handler.sent.lock();
+        assert!(error_code_emitted(&frames, QUERY_FETCH_ERROR_STREAM_LIMIT));
+        assert!(!frames.iter().any(|frame| matches!(frame, WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK)));
     }
 
     #[tokio::test]

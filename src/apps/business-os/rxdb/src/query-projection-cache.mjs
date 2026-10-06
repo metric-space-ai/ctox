@@ -1,15 +1,17 @@
 import { cloneQueryRow } from './query-projection.mjs';
+import { CTOX_QUERY_RPC } from './protocol-contract.generated.mjs';
 
 export const PROJECTED_QUERY_CACHE_BUDGET_BYTES = 16 * 1024 * 1024;
 export const PROJECTED_QUERY_CACHE_MAX_WINDOWS = 64;
-export const PROJECTED_QUERY_WINDOW_MAX_BYTES = 1024 * 1024;
+export const PROJECTED_QUERY_WINDOW_MAX_BYTES = CTOX_QUERY_RPC.projectedWindowMaxBytes;
+export const PROJECTED_QUERY_WINDOW_MAX_ROWS = CTOX_QUERY_RPC.projectedWindowMaxRows;
 const ROWS = 'rows';
 const META = 'metadata';
 const BUDGET_KEY = '@budget';
 
 function cacheRecord(key, documents, now) {
   if (typeof key !== 'string' || !key || key === BUDGET_KEY) throw new TypeError('invalid projected window key');
-  if (!Array.isArray(documents) || documents.length > 200) throw new TypeError('projected windows contain at most 200 rows');
+  if (!Array.isArray(documents) || documents.length > PROJECTED_QUERY_WINDOW_MAX_ROWS) throw new TypeError('projected windows contain at most 200 rows');
   const json = JSON.stringify(documents);
   const bytes = new TextEncoder().encode(json).byteLength;
   if (bytes > PROJECTED_QUERY_WINDOW_MAX_BYTES) {

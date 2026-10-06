@@ -6,6 +6,7 @@
 // Verified by the corpus under src/core/rxdb/tests/fixtures/query_fingerprint/.
 
 import { canonicalJson, sha256Hex } from './schema.mjs';
+import { normalizeQueryProjection } from './query-projection.mjs';
 
 const PROTOCOL_VERSION = '1.5';
 
@@ -18,6 +19,7 @@ export function canonicalizeQueryInput(input) {
   const schemaVersion = Number.isFinite(Number(input.schemaVersion))
     ? Number(input.schemaVersion)
     : 0;
+  const projection = normalizeQueryProjection(input.projection);
   return {
     collection,
     schemaVersion,
@@ -27,6 +29,7 @@ export function canonicalizeQueryInput(input) {
     limit: normalizeOptionalNumber(input.limit),
     skip: normalizeOptionalNumber(input.skip),
     window: canonicalizeWindow(input.window),
+    ...(projection ? { projection } : {}),
   };
 }
 

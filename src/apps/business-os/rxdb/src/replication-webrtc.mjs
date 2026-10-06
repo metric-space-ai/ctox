@@ -2487,6 +2487,7 @@ class CtoxWebRtcReplicationState {
       // handshake, so a same-session role/grant change takes effect at the
       // next control-plane read without rebuilding the loader.
       readPermissionDigest: () => this.readPermissionDigest || '',
+      onQueryWindowChanged: () => this.collection.notifyQueryWindowChange?.(),
     }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
       this.collection.setDemandLoader(this.demandLoader);

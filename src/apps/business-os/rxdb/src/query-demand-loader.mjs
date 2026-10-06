@@ -12,6 +12,8 @@
 // status callback for diagnostics.
 
 import { queryFingerprint } from './query-fingerprint.mjs';
+import { normalizeQueryProjection, projectQueryDocument } from './query-projection.mjs';
+import { PROJECTED_QUERY_WINDOW_MAX_ROWS } from './query-projection-cache.mjs';
 
 export const DEFAULT_WINDOW_LIMIT = 200;
 export const DEFAULT_QUERY_WINDOW_REVALIDATE_MS = 30_000;
@@ -49,6 +51,7 @@ export function createQueryDemandLoader({
   // digest (identity unresolvable right now) cannot authorize a local
   // control-plane window; retained replication checkpoints are separate.
   readPermissionDigest = null,
+  onQueryWindowChanged = null,
 }) {
   if (!storageCollection) throw new TypeError('demand loader requires storageCollection');
   if (!sidecar) throw new TypeError('demand loader requires sidecar');
@@ -82,6 +85,14 @@ export function createQueryDemandLoader({
     currentReadPermissionDigest: resolveReadPermissionDigest,
     async resolveQuery(query, { window, signal } = {}) {
       const normalizedWindow = normalizeWindow(window, query);
+      const projection = normalizeQueryProjection(query?.projection, storageCollection.primaryPath || 'id');
+      const projected = Boolean(projection);
+      if (projected && normalizedWindow.limit > PROJECTED_QUERY_WINDOW_MAX_ROWS) {
+        throw Object.assign(new Error('PROJECTED_QUERY_WINDOW_TOO_LARGE: projected windows contain at most 200 rows'), {
+          code: 'PROJECTED_QUERY_WINDOW_TOO_LARGE', retryable: false,
+        });
+      }
+      const inputPermissionDigest = projected ? resolveReadPermissionDigest() : '';
       const strictRequireRevision = Boolean(query?.requireRevision);
       const generation = strictRequireRevision ? String(queryGeneration?.() || '') : '';
       if (strictRequireRevision && !generation) {
@@ -102,12 +113,14 @@ export function createQueryDemandLoader({
         limit: query?.limit,
         skip: query?.skip,
         window: normalizedWindow,
+        ...(projected ? { projection } : {}),
       };
       const inputKey = JSON.stringify({
         ...fingerprintInput,
         requireRevision: query?.requireRevision ?? null,
         requireGeneration: generation || null,
         signalToken: signalToken || null,
+        ...(projected ? { permissionDigest: inputPermissionDigest } : {}),
       });
       const existingInvocation = resolvingByInput.get(inputKey);
       if (existingInvocation) {
@@ -164,6 +177,8 @@ export function createQueryDemandLoader({
       const cachedDocumentsAvailable = await queryWindowDocumentsAvailable(
         storageCollection,
         cached?.documentIds,
+        sidecar,
+        cached,
       );
       assertFresh();
       if (cached && (cached.complete || cached.everCompleted) && !cachedDocumentsAvailable) {
@@ -209,7 +224,7 @@ export function createQueryDemandLoader({
       // membership before a newly authorized fetch re-stamps the window.
       // Windows persisted before this stamp existed mismatch a known identity
       // exactly once — the safe direction.
-      const controlPlaneRead = isControlPlaneStatusCollection(collectionName);
+      const controlPlaneRead = projected || isControlPlaneStatusCollection(collectionName);
       // The digest is re-resolved at every serve/fallback decision: the
       // identity can change mid-wait (broker claim, deduped in-flight job,
       // mid-flight fetch), and each decision must be evaluated against the
@@ -231,7 +246,9 @@ export function createQueryDemandLoader({
       // decision was taken can be superseded before its rows materialize.
       // Re-check after the read for control-plane ledgers and fail closed.
       const serveWindowDocuments = async (windowRecord, membershipIds) => {
-        const documents = await readLocalDocuments(
+        const documents = projected
+          ? await readProjectedWindowDocuments(sidecar, windowRecord, membershipIds, storageCollection.primaryPath)
+          : await readLocalDocuments(
           storageCollection,
           query,
           normalizedWindow,
@@ -266,18 +283,18 @@ export function createQueryDemandLoader({
             && cached.satisfiedGeneration === generation
             && !controlPlaneWindowStale
           ) {
-            await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
+            if (!projected) await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
             return serveWindowDocuments(cached, cached.documentIds);
           }
         } else if (!controlPlaneWindowStale) {
-          await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
+          if (!projected) await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
           return serveWindowDocuments(cached, cached.documentIds);
         }
       }
 
       const dedupKey = strictRequireRevision
         ? `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}|strict|${query.requireRevision}|${generation}`
-        : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
+        : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}${projected ? `|permission|${inputPermissionDigest}` : ''}`;
       const startFetchJob = () => {
         if (inflightByFingerprint.has(dedupKey)) {
           bumpStatus(status, 'queryFetchDedupHitCount');
@@ -302,6 +319,7 @@ export function createQueryDemandLoader({
               collectionName,
               schemaVersion: schemaVersion ?? 0,
               queryFingerprint: fingerprint,
+              ...(projected ? { projection } : {}),
               query: {
                 selector: query?.selector ?? {},
                 sort: normalizeSort(query?.sort),
@@ -323,9 +341,22 @@ export function createQueryDemandLoader({
             // renders nothing until the next authorized fetch.
             throw createQueryCancelledError('permission-identity-changed');
           }
-          await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
+          let documents = result.documents || [];
+          let projectionKey = null;
+          if (projected) {
+            if (JSON.stringify(result.appliedProjection) !== JSON.stringify(projection)) {
+              throw Object.assign(new Error('QUERY_PROJECTION_NOT_SUPPORTED: native peer did not confirm the requested fields'), {
+                code: 'QUERY_PROJECTION_NOT_SUPPORTED', retryable: false,
+              });
+            }
+            documents = documents.map((document) => projectQueryDocument(document, projection));
+            projectionKey = `${requestId}|${fingerprint}|${fetchPermissionDigest}|${globalThis.crypto?.randomUUID?.() || Math.random()}`;
+            await sidecar.putProjectedQueryRows(projectionKey, documents);
+          } else {
+            await materializeChunks(storageCollection, documents, resolveReplicationOrigin());
+          }
           assertFresh();
-          const documentIds = (result.documents || []).map(extractId).filter(Boolean);
+          const documentIds = documents.map((document) => extractQueryId(document, storageCollection.primaryPath)).filter(Boolean);
           await sidecar.upsertQueryWindow({
             collection: collectionName,
             queryFingerprint: fingerprint,
@@ -340,15 +371,18 @@ export function createQueryDemandLoader({
             // fetch ran under; a later role/grant change (new digest) must
             // not be served this membership.
             permissionDigest: fetchPermissionDigest || null,
+            ...(projected ? { projection, projectionKey } : {}),
             queryShape: {
               selector: query?.selector ?? {},
               sort: normalizeSort(query?.sort),
             },
           });
           assertFresh();
-          await sidecar.touchDocuments(collectionName, documentIds, {
-            estimatedBytes: estimateBytesPerDocument(result.documents || []),
-          });
+          if (!projected) {
+            await sidecar.touchDocuments(collectionName, documentIds, {
+              estimatedBytes: estimateBytesPerDocument(documents),
+            });
+          }
           assertFresh();
           // Final guard: the identity can change during the local materialize/
           // upsert awaits. The persisted window is already self-correcting (it
@@ -365,7 +399,9 @@ export function createQueryDemandLoader({
           bumpStatus(status, 'queryFetchSuccessCount');
           if (status) status.lastQueryFetchMs = clock() - startedAt;
           v15Log('fetch:ok', { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
-          return authoritativeFetchedDocuments(result.documents || [], documentIds);
+          if (projected) onQueryWindowChanged?.({ fingerprint, documentIds });
+          return projected ? documents.filter((document) => document._deleted !== true)
+            : authoritativeFetchedDocuments(documents, documentIds);
         } catch (error) {
           if (isQueryCancelledError(error)) {
             bumpStatus(status, 'queryFetchCancelCount');
@@ -421,7 +457,7 @@ export function createQueryDemandLoader({
         assertFresh();
         if (
           materialized?.complete
-          && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds)
+          && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds, sidecar, materialized)
           && (!controlPlaneRead || windowReadPermissionDigestMatches(
             materialized.permissionDigest,
             resolveReadPermissionDigest(),
@@ -435,6 +471,9 @@ export function createQueryDemandLoader({
           )
         ) {
           bumpStatus(status, 'queryFetchDedupHitCount');
+          if (projected && materialized.projectionKey !== cached?.projectionKey) {
+            onQueryWindowChanged?.({ fingerprint, documentIds: materialized.documentIds });
+          }
           return serveWindowDocuments(materialized, materialized.documentIds);
         }
         // The owner may have crashed. Bounded wait plus TTL-aware re-claim
@@ -512,7 +551,7 @@ export function createQueryDemandLoader({
         });
         bumpStatus(status, 'queryFetchStaleServedCount');
         v15Log('fetch:stale-served', { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
-        await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
+        if (!projected) await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
         return serveWindowDocuments(cached, cached.documentIds || []);
       }
 
@@ -540,7 +579,9 @@ export function createQueryDemandLoader({
     async invalidateDocumentChange(changedDocumentIds = []) {
       if (!changedDocumentIds.length) return 0;
       if (typeof sidecar.invalidateQueryWindowsForDocuments === 'function') {
-        return sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
+        const count = await sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
+        if (count) onQueryWindowChanged?.();
+        return count;
       }
       return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
     },
@@ -548,11 +589,13 @@ export function createQueryDemandLoader({
     async invalidateDocuments(changedDocuments = []) {
       if (!changedDocuments.length) return 0;
       if (typeof sidecar.invalidateQueryWindowsForChanges === 'function') {
-        return sidecar.invalidateQueryWindowsForChanges(
+        const count = await sidecar.invalidateQueryWindowsForChanges(
           collectionName,
           changedDocuments,
           storageCollection?.primaryPath || 'id',
         );
+        if (count) onQueryWindowChanged?.();
+        return count;
       }
       return this.invalidateDocumentChange(changedDocuments.map(extractId).filter(Boolean));
     },
@@ -609,7 +652,7 @@ export function createQueryDemandLoader({
             // Ever-complete windows hold replicated (validated) documents;
             // an aborted background revalidation must not tombstone them.
             // Only never-completed windows can reference partial orphans.
-            (w) => w.queryFingerprint === fingerprint && !w.complete && !w.everCompleted,
+            (w) => w.queryFingerprint === fingerprint && !w.complete && !w.everCompleted && !w.projection,
           );
           for (const window of partial) {
             const ids = window.documentIds || [];
@@ -789,11 +832,30 @@ function authoritativeFetchedDocuments(documents, documentIds) {
   return documentIds.map((id) => byId.get(String(id))).filter(Boolean);
 }
 
-async function queryWindowDocumentsAvailable(storageCollection, documentIds) {
+async function queryWindowDocumentsAvailable(storageCollection, documentIds, sidecar, windowRecord) {
+  if (windowRecord?.projection) {
+    const rows = await sidecar.getProjectedQueryRows(windowRecord.projectionKey);
+    if (!Array.isArray(rows)) return false;
+    const available = new Set(rows.map((row) => extractQueryId(row, storageCollection.primaryPath)));
+    return Array.isArray(documentIds) && documentIds.every((id) => available.has(String(id)));
+  }
   if (!Array.isArray(documentIds) || documentIds.length === 0) return true;
   if (typeof storageCollection.findDocumentsById !== 'function') return true;
   const documents = await storageCollection.findDocumentsById(documentIds);
   return documentIds.every((id) => Boolean(documents?.[String(id)]));
+}
+
+async function readProjectedWindowDocuments(sidecar, windowRecord, documentIds, primaryPath) {
+  if (!windowRecord?.projection || !Array.isArray(documentIds)) return [];
+  const rows = await sidecar.getProjectedQueryRows(windowRecord.projectionKey);
+  if (!Array.isArray(rows)) return [];
+  const byId = new Map(rows.map((row) => [extractQueryId(row, primaryPath), row]));
+  return documentIds.map((id) => byId.get(String(id))).filter((row) => row && !row._deleted);
+}
+
+function extractQueryId(document, primaryPath = 'id') {
+  const value = String(primaryPath || 'id').split('.').reduce((next, part) => next?.[part], document);
+  return value == null ? extractId(document) : String(value);
 }
 
 async function materializeChunks(storageCollection, documents, replicationOrigin = null) {
