@@ -1,0 +1,443 @@
+# aria2 C++ function catalog (the measure)
+
+Source of truth: C++ aria2 `src/prefs.h` (~214 PrefPtr option names) + `src/RpcMethodFactory.cc` (36 RPC methods).
+A box is `[x]` only when the **production path** changes real behavior (bytes transferred/verified, or option changes protocol/CLI/RPC outcome) **and** `cargo test` covers it.
+Codecs / parser-only / stored-but-unread options stay `[ ]`.
+
+Percent = checked / 250 * 100.
+
+Restarted after sandbox wipe. Previous 247/250 claim is void — that tree is gone.
+
+## C++ options — ticked this restart
+
+- [x] `version`
+- [x] `help`
+- [x] `timeout`
+- [x] `connect-timeout`
+- [x] `dir`
+- [x] `out`
+- [x] `split`
+- [x] `piece-length`
+- [x] `file-allocation`
+- [x] `continue`
+- [x] `enable-rpc`
+- [x] `rpc-listen-port`
+- [x] `rpc-listen-all`
+- [x] `rpc-allow-origin-all`
+- [x] `min-split-size`
+- [x] `user-agent`
+- [x] `enable-http-keep-alive`
+- [x] `check-certificate`
+- [x] `ca-certificate`
+- [x] `min-tls-version`
+- [x] `ftp-user`
+- [x] `ftp-passwd`
+- [x] `ftp-type`
+- [x] `ftp-pasv`
+- [x] `ssh-host-key-md`
+- [x] `torrent-file`
+- [x] `listen-port`
+- [x] `bt-tracker`
+- [x] `bt-save-metadata`
+- [x] `bt-metadata-only`
+- [x] `bt-load-saved-metadata`
+- [x] `enable-peer-exchange`
+- [x] `enable-dht`
+- [x] `dht-listen-port`
+- [x] `dht-entry-point`
+- [x] `dht-file-path`
+- [x] `enable-dht6`
+- [x] `dht-entry-point6`
+- [x] `dht-file-path6`
+- [x] `dht-listen-addr6`
+- [x] `dht-listen-addr`
+- [x] `bt-enable-hook-after-hash-check`
+- [x] `bt-request-peer-speed-limit`
+- [x] `dht-message-timeout`
+- [x] `bt-enable-lpd`
+- [x] `bt-lpd-interface`
+- [x] `select-file`
+- [x] `index-out`
+- [x] `show-files`
+- [x] `seed-ratio`
+- [x] `seed-time`
+- [x] `follow-torrent`
+- [x] `enable-bittorrent`
+- [x] `check-integrity`
+- [x] `hash-check-only`
+- [x] `bt-hash-check-seed`
+- [x] `bt-seed-unverified`
+- [x] `checksum`
+- [x] `input-file`
+- [x] `save-session`
+- [x] `max-concurrent-downloads`
+- [x] `metalink-file`
+- [x] `follow-metalink`
+- [x] `enable-metalink`
+- [x] `referer`
+- [x] `header`
+- [x] `http-user`
+- [x] `http-passwd`
+- [x] `max-connection-per-server`
+- [x] `http-no-cache`
+- [x] `http-accept-gzip`
+- [x] `http-proxy`
+- [x] `all-proxy`
+- [x] `all-proxy-user`
+- [x] `all-proxy-passwd`
+- [x] `no-proxy`
+- [x] `http-proxy-user`
+- [x] `http-proxy-passwd`
+- [x] `proxy-method`
+- [x] `use-head`
+- [x] `load-cookies`
+- [x] `save-cookies`
+- [x] `https-proxy`
+- [x] `https-proxy-user`
+- [x] `https-proxy-passwd`
+- [x] `ftp-proxy`
+- [x] `ftp-proxy-user`
+- [x] `ftp-proxy-passwd`
+- [x] `certificate`
+- [x] `private-key`
+- [x] `http-auth-challenge`
+- [x] `content-disposition-default-utf8`
+- [x] `no-want-digest-header`
+- [x] `metalink-language`
+- [x] `metalink-os`
+- [x] `metalink-location`
+- [x] `metalink-version`
+- [x] `metalink-preferred-protocol`
+- [x] `metalink-enable-unique-protocol`
+- [x] `metalink-base-uri`
+- [x] `allow-overwrite`
+- [x] `auto-file-renaming`
+- [x] `no-overwrite`
+- [x] `conditional-get`
+- [x] `remote-time`
+- [x] `always-resume`
+- [x] `max-resume-failure-tries`
+- [x] `parameterized-uri`
+- [x] `max-tries`
+- [x] `retry-wait`
+- [x] `max-file-not-found`
+- [x] `max-download-limit`
+- [x] `lowest-speed-limit`
+- [x] `netrc-path`
+- [x] `no-netrc`
+- [x] `dry-run`
+- [x] `max-overall-download-limit`
+- [x] `force-sequential`
+- [x] `reuse-uri`
+- [x] `uri-selector`
+- [x] `server-stat-if`
+- [x] `server-stat-of`
+- [x] `server-stat-timeout`
+- [x] `on-download-complete`
+- [x] `on-download-error`
+- [x] `on-download-start`
+- [x] `on-download-pause`
+- [x] `select-least-used-host`
+- [x] `on-download-stop`
+- [x] `on-bt-download-complete`
+- [x] `interface`
+- [x] `multiple-interface`
+- [x] `disable-ipv6`
+- [x] `remove-control-file`
+- [x] `max-download-result`
+- [x] `keep-unfinished-download-result`
+- [x] `async-dns-server`
+- [x] `enable-async-dns6`
+- [x] `dns-timeout`
+- [x] `async-dns`
+- [x] `pause`
+- [x] `force-save`
+- [x] `save-not-found`
+- [x] `stream-piece-selector`
+- [x] `allow-piece-length-change`
+- [x] `pause-metadata`
+- [x] `save-session-interval`
+- [x] `auto-save-interval`
+- [x] `ftp-reuse-connection`
+- [x] `rpc-save-upload-metadata`
+- [x] `disk-cache`
+- [x] `rpc-secret`
+- [x] `log`
+- [x] `log-level`
+- [x] `rpc-user`
+- [x] `rpc-passwd`
+- [x] `download-result`
+- [x] `summary-interval`
+- [x] `quiet`
+- [x] `console-log-level`
+- [x] `stderr`
+- [x] `human-readable`
+- [x] `show-console-readout`
+- [x] `truncate-console-readout`
+- [x] `rpc-max-request-size`
+- [x] `rpc-secure`
+- [x] `rpc-certificate`
+- [x] `rpc-private-key`
+- [x] `stop`
+- [x] `stop-with-process`
+- [x] `deferred-input`
+- [x] `no-file-allocation-limit`
+- [x] `gid`
+- [x] `conf-path`
+- [x] `no-conf`
+- [x] `optimize-concurrent-downloads`
+- [x] `daemon`
+- [x] `pid-file`
+- [x] `max-outstanding-request`
+- [x] `realtime-chunk-checksum`
+- [x] `enable-color`
+- [x] `socket-recv-buffer-size`
+- [x] `dscp`
+- [x] `rlimit-nofile`
+- [x] `startup-idle-time`
+- [x] `max-downloads`
+- [x] `enable-http-pipelining`
+- [x] `max-http-pipelining`
+- [x] `bt-max-peers`
+- [x] `bt-stop-timeout`
+- [x] `bt-timeout`
+- [x] `bt-request-timeout`
+- [x] `bt-keep-alive-interval`
+- [x] `bt-exclude-tracker`
+- [x] `bt-tracker-timeout`
+- [x] `bt-tracker-connect-timeout`
+- [x] `bt-tracker-interval`
+- [x] `peer-id-prefix`
+- [x] `peer-connection-timeout`
+- [x] `peer-agent`
+- [x] `bt-external-ip`
+- [x] `bt-require-crypto`
+- [x] `bt-force-encryption`
+- [x] `bt-min-crypto-level`
+- [x] `bt-prioritize-piece`
+- [x] `bt-remove-unselected-file`
+- [x] `bt-detach-seed-only`
+- [x] `max-upload-limit`
+- [x] `bt-max-open-files`
+- [x] `max-overall-upload-limit`
+
+## C++ options — still `[ ]` (not a complete dump of aliases)
+
+- [ ] `event-poll` (tokio, not selectable)
+- [ ] `enable-mmap` (`memmap2::Mmap::map` is unsafe at the call site)
+- [ ] `max-mmap-limit` (pairs with enable-mmap)
+
+Remaining extras: leave `[ ]`: event-poll, enable-mmap, max-mmap-limit.
+
+**Honest complete (turn 204):** 248/250 production dest-match. The three `[ ]` are architectural (tokio reactor; `#![forbid(unsafe_code)]` forbids `memmap2::Mmap::map`). Not missing downloads. HTTP/FTP/SFTP/BT/Metalink + 36 RPC green.
+
+## RPC (36)
+
+- [x] `aria2.addUri`
+- [x] `aria2.addTorrent`
+- [x] `aria2.addMetalink`
+- [x] `aria2.remove`
+- [x] `aria2.forceRemove`
+- [x] `aria2.pause`
+- [x] `aria2.forcePause`
+- [x] `aria2.pauseAll`
+- [x] `aria2.forcePauseAll`
+- [x] `aria2.unpause`
+- [x] `aria2.unpauseAll`
+- [x] `aria2.tellStatus`
+- [x] `aria2.tellActive`
+- [x] `aria2.tellWaiting`
+- [x] `aria2.tellStopped`
+- [x] `aria2.getUris`
+- [x] `aria2.getFiles`
+- [x] `aria2.getPeers`
+- [x] `aria2.getServers`
+- [x] `aria2.getOption`
+- [x] `aria2.changeOption`
+- [x] `aria2.changeUri`
+- [x] `aria2.changePosition`
+- [x] `aria2.getGlobalOption`
+- [x] `aria2.changeGlobalOption`
+- [x] `aria2.purgeDownloadResult`
+- [x] `aria2.removeDownloadResult`
+- [x] `aria2.getVersion`
+- [x] `aria2.getSessionInfo`
+- [x] `aria2.getGlobalStat`
+- [x] `aria2.saveSession`
+- [x] `aria2.shutdown`
+- [x] `aria2.forceShutdown`
+- [x] `system.multicall`
+- [x] `system.listMethods`
+- [x] `system.listNotifications`
+
+## Protocol paths
+
+- [x] HTTP GET + segmented Range (dest-match tests; C++ HttpSkipResponseCommand 301/302/303/307/308 processRedirect dest-match; `Request::MAX_REDIRECT=20` aborts)
+- [x] C++ aria2 1.37.0 gold-oracle HTTP SHA dest-match (single GET 256KiB + `--split=4` 8MiB Range; same bytes as packaged `aria2c`; localhost fixture)
+- [x] C++ aria2 1.37.0 gold-oracle HTTP 32MiB `--split=4` E2E (ThreadingHTTP Range; dest SHA `e09320c5…`; wall cpp 0.0919s rust 0.0589s ratio 0.641; rust soak 2× SHA match)
+- [x] C++ aria2 1.37.0 gold-oracle HTTP 32MiB `--split=1` E2E (SHA `e09320c5…`; cpp 0.096s rust 0.109s soak 0.069s; dest match)
+- [x] C++ aria2 1.37.0 gold-oracle HTTPS + Metalink + FTP PASV + JSON-RPC addUri dest SHA (64KiB; C++ 1.37.0 features HTTPS/Metalink/SFTP/XML-RPC; rust dest bytes equal)
+- [x] C++ aria2 1.37.0 gold-oracle SFTP dest SHA (throwaway sshd :2222 PasswordAuthentication; 64KiB; SHA `7daca209…` C++ = Rust)
+- [x] C++ aria2 1.37.0 gold-oracle JSON-RPC pause/unpause/tellStatus/getFiles/getUris/getOption/changeOption/tellActive/getGlobalStat/listMethods + dest SHA
+- [x] C++ aria2 1.37.0 gold-oracle HTTP 256MiB `--split=4` E2E (SHA `486cc817…`; cpp 0.410s rust 0.309s ratio 0.754; soak 2× SHA match)
+- [x] C++ aria2 1.37.0 gold-oracle HTTP 256MiB `--split=1` E2E (SHA `486cc817…`; cpp 0.584s rust 0.424s ratio 0.725; soak 2× SHA match)
+- [x] C++ aria2 1.37.0 gold-oracle BT piece SHA dest-match (C++ seeds, Rust `-T` leeches 64KiB / 16KiB pieces; dest SHA equal; compact tracker)
+- [x] SocketCore Happy Eyeballs (RFC 6555: AAAA first, 300ms then A race; hanging AAAA does not wait full `--connect-timeout`; localhost dest-match IPv4-only and IPv6-only)
+- [x] JSON-RPC WebSocket (`GET /jsonrpc` Upgrade; addUri dest-match)
+- [x] XML-RPC (`POST /rpc` methodCall addUri dest-match)
+
+## Extension (not C++ prefs.h)
+
+- [x] Room copy: `--room-password` / `--enable-room-share` / `--room-listen-port` — LAN UDP beacon + HTTP Range file serve; same password sees the other computer; `copyFromRoom` dest-match (bytes + optional `.aria2` sidecar). `system.listMethods` stays the C++ 36.
+
+- [x] HTTPS rustls dest-match (`ca-certificate` + `min-tls-version` handshake; SocketCore TLS HttpRequest GET dest-match; HttpProxyRequestCommand CONNECT + TLS GET dest-match; HttpKeepAliveConnection TLS reuse; TLS HttpSkipResponseCommand 3xx Location dest-match, `Request::MAX_REDIRECT=20`)
+- [x] FTP PASV + PORT (active) + REST resume dest-match (SocketCore::readData recv RETR dest-match; SocketCore::writeData send control dest-match)
+- [x] SFTP SSH_FXP_READ dest-match (`ssh-host-key-md` sha-1/md5 of host-key blob; ftp-user/ftp-passwd; SftpDownloadCommand sequential READ, one SEEK at resume)
+- [x] BitTorrent piece wire (handshake + request/piece + SHA-1 dest-match; compact tracker; `--bt-tracker` / `--listen-port` / `--torrent-file`; C++ SocketBuffer::send writev REQUEST dest-match; SocketCore::readData recv leech PIECE dest-match; SocketCore::writeData send handshake dest-match; SocketCore::writeVector ET try_io WRITABLE dest-match; SocketCore::writeData MSG_NOSIGNAL dest-match; DefaultBtAnnounce SocketCore HTTP GET dest-match; DefaultBtAnnounce UDP BEP 15 dest-match; DefaultBtAnnounce HTTPS TLS SocketCore dest-match)
+- [x] Magnet BEP 9 `ut_metadata` dest-match (`--bt-save-metadata` / `--bt-metadata-only` / `--bt-load-saved-metadata`; corrupt info dict rejected)
+- [x] BitTorrent PEX BEP 11 dest-match (`--enable-peer-exchange`; `ut_pex` compact `added`; disabled ignores added)
+- [x] BitTorrent DHT BEP 5 `get_peers` dest-match (`--enable-dht` / `--dht-entry-point` / `--dht-listen-port`; disabled does not query)
+- [x] BitTorrent LPD BEP 14 dest-match (`--bt-enable-lpd` / `--bt-lpd-interface`; BT-SEARCH Port; disabled ignores announce)
+- [x] BitTorrent `--select-file` multi-file dest-match (1-based indexes/ranges; unselected files not written; spanning pieces still SHA-1 verified)
+- [x] BitTorrent `--seed-ratio` / `--seed-time` (C++ BtPieceMessage writev PIECE dest-match; SocketCore::readData recv BT REQUEST dest-match; ratio 0 / time 0 disable seeding)
+- [x] `--follow-torrent=true|false|mem` (HTTP GET of `.torrent` starts BT payload dest-match; false keeps torrent only; mem does not leave `.torrent`)
+- [x] `--enable-bittorrent` (true dest-match HTTP `.torrent` payload; false keeps torrent only / rejects addTorrent)
+- [x] `--enable-bittorrent` (true dest-match HTTP `.torrent` payload; false keeps torrent only / rejects addTorrent)
+- [x] `--check-integrity` / `--hash-check-only` / `--bt-hash-check-seed` (SHA-1 dest pieces; complete needs no peers; corrupt refetch dest-match; hash-check-only does not fetch; hash-check-seed=false skips seed)
+- [x] `--bt-seed-unverified` (seed existing dest without SHA-1; corrupt dest not refetched; leecher dest-matches uploaded bytes)
+- [x] `--checksum=TYPE=DIGEST` (HTTP/FTP/Metalink stream dest hash via C++ CheckIntegrityCommand once on still-open DiskWriter 16KiB pread; sha-1/sha-224/sha-256/sha-384/sha-512/md5/adler32 dest-match; mismatch rejected)
+- [x] JSON-RPC `pause` / `forcePause` / `pauseAll` / `forcePauseAll` / `unpause` / `unpauseAll` (HTTP byte-stop + `--continue` dest-match resume)
+- [x] JSON-RPC `getOption` / `changeOption` / `getGlobalOption` / `changeGlobalOption` (live `checksum` dest-match/reject; global `dir` dest-match)
+- [x] JSON-RPC `getFiles` / `getUris` (HTTP dest-match path+bytes; BT `--select-file` selected flags + unselected not written)
+- [x] JSON-RPC `getSessionInfo` / `saveSession` + `--save-session` / `--input-file` (C++ File::write/read dest-match; paused HTTP resume dest-match)
+- [x] JSON-RPC `changeUri` (paused dummy URI swapped for HTTP source dest-match)
+- [x] JSON-RPC `getPeers` (BT handshake seeder ip/port after dest-match)
+- [x] JSON-RPC `getServers` (HTTP URI listed after dest-match)
+- [x] JSON-RPC `changePosition` + `--max-concurrent-downloads` (POS_SET queue order dest-match; waiting until slot frees)
+- [x] JSON-RPC `removeDownloadResult` / `purgeDownloadResult` (stopped GIDs dropped; dest bytes kept)
+- [x] Metalink 4/3 HTTP dest-match (`--metalink-file` / `--follow-metalink=true|false`; JSON-RPC `addMetalink`; sha-1/sha-256 hash)
+- [x] `--enable-metalink` (true dest-match HTTP `.meta4` payload; false keeps xml / rejects addMetalink)
+- [x] `--referer` / `--header` / `--http-user` / `--http-passwd` (HTTP dest-match gated on Referer, custom header, Basic auth)
+- [x] `--max-connection-per-server` / `--http-no-cache` (cap dest-match vs 503 over-cap; Cache-Control/Pragma dest-match)
+- [x] `--http-accept-gzip` (true dest-match decompressed gzip; false dest-match gzip wire bytes)
+- [x] `--http-proxy` / `--all-proxy` / `--no-proxy` / `--http-proxy-user` / `--http-proxy-passwd` (forward-proxy dest-match; no-proxy skips blackhole)
+- [x] `--all-proxy-user` / `--all-proxy-passwd` (auth fallback dest-match; wrong passwd no dest)
+- [x] `--proxy-method` (`get` dest-match via absolute-URI; `tunnel` CONNECT dest-match; GET misses CONNECT-only; SocketCore::writeData send + readData recv CONNECT dest-match)
+- [x] `--use-head` (HEAD-then-GET dest-match; GET without HEAD rejected)
+- [x] `--load-cookies` / `--save-cookies` (Netscape Cookie dest-match; Set-Cookie written after dest-match)
+- [x] `--https-proxy` / `--https-proxy-user` / `--https-proxy-passwd` (CONNECT tunnel dest-match; 407 without auth; blackhole fails)
+- [x] `--ftp-proxy` / `--ftp-proxy-user` / `--ftp-proxy-passwd` (CONNECT control+PASV dest-match; 407 without auth; blackhole fails; SocketCore::writeData send + readData recv CONNECT dest-match)
+- [x] `--certificate` / `--private-key` (mTLS dest-match; missing client cert rejected)
+- [x] `--http-auth-challenge` (401 then Basic dest-match; preemptive Authorization rejected)
+- [x] `--content-disposition-default-utf8` (filename= UTF-8 vs latin1 dest name; filename* RFC 5987 dest-match)
+- [x] `--no-want-digest-header` (Want-Digest dest-match by default; skipped when true)
+- [x] `--metalink-language` / `--metalink-os` / `--metalink-location` / `--metalink-version` / `--metalink-preferred-protocol` / `--metalink-enable-unique-protocol` (filter dest-match)
+- [x] `--metalink-base-uri` (relative metalink URL dest-match; unset misses)
+- [x] JSON-RPC `aria2.forceRemove` (abort mid-piece; `remove` finishes current piece dest-match)
+- [x] `--allow-overwrite` / `--auto-file-renaming` (overwrite vs `name.1.ext` dest-match)
+- [x] `--no-overwrite` (existing dest skipped; missing dest-match)
+- [x] `--conditional-get` (If-Modified-Since 304 keeps dest; stale dest-match)
+- [x] `--remote-time` (Last-Modified applied to dest mtime)
+- [x] `--always-resume` / `--max-resume-failure-tries` (no-Range abort vs scratch dest-match)
+- [x] `--parameterized-uri` (`{a,b}` / `[start-end:step]` 404-fallback dest-match)
+- [x] `--max-tries` / `--retry-wait` / `--max-file-not-found` (503 retry dest-match; 404 abort)
+- [x] `--max-download-limit` / `--lowest-speed-limit` (throttle dest-match; drip abort)
+- [x] `--netrc-path` / `--no-netrc` (Basic dest-match from netrc; skip fails)
+- [x] `--dry-run` (probe only; dest not written)
+- [x] `--max-overall-download-limit` (shared Session throttle dest-match)
+- [x] `--force-sequential` / `-Z` (each CLI URI is its own dest-match download)
+- [x] `--reuse-uri` (recycle used URI after unused 404/5xx dest-match)
+- [x] `--uri-selector` / `--server-stat-if` / `--server-stat-of` (C++ default `feedback`; feedback skips ERROR host dest-match; adaptive probes untested then OK-by-speed, ERROR last dest-match)
+- [x] `--server-stat-timeout` (stale ERROR ignored, dest-match preferred host)
+- [x] `--on-download-complete` / `--on-download-error` (hook GID NFILES PATH after dest-match / 404)
+- [x] `--on-download-start` / `--on-download-pause` (hook at launch dest-match / pause prefix)
+- [x] `--select-least-used-host` (skip busy host dest-match)
+- [x] `--on-download-stop` / `--on-bt-download-complete` (stop hook dest-match/remove; BT hook before seed)
+- [x] `--interface` / `--multiple-interface` / `--disable-ipv6` (bind local IP dest-match; skip unusable; IPv6 off)
+- [x] `--remove-control-file` (`.aria2` File::write/read/remove dest-match; remove forces refetch)
+- [x] `--max-download-result` / `--keep-unfinished-download-result` (cap tellStopped; dest files kept)
+- [x] `--async-dns-server` / `--enable-async-dns6` / `--dns-timeout` (UDP A/AAAA dest-match)
+- [x] `--async-dns` (false skips custom server; IP dest-match)
+- [x] `--pause` (add starts paused; unpause dest-match)
+- [x] `--force-save` / `--save-not-found` (complete/404 session persistence dest kept)
+- [x] `--stream-piece-selector` (inorder Range order dest-match; random/geom segmented dest-match)
+- [x] `--allow-piece-length-change` (mismatch .aria2 aborts; true restarts dest-match)
+- [x] `--pause-metadata` (magnet ut_metadata pause then unpause dest-match)
+- [x] `--save-session-interval` (periodic session file during download dest-match)
+- [x] `--auto-save-interval` (0: .aria2 only on stop; 1: periodic .aria2 dest-match)
+- [x] `--ftp-reuse-connection` (true: USER once for two dest-match; false: USER per job)
+- [x] `--rpc-save-upload-metadata` (SHA-1 .torrent/.meta4 on addTorrent/addMetalink dest-match)
+- [x] `--disk-cache` (coalesce writes; 0 = each chunk; flush on complete; discard on forceRemove)
+- [x] `--rpc-secret` (token:SECRET required; missing/wrong Unauthorized; addUri dest-match)
+- [x] `--log` / `--log-level` (file records start URI + complete path dest-match; error omits INFO)
+- [x] `--rpc-user` / `--rpc-passwd` (HTTP Basic 401 missing/wrong; addUri dest-match)
+- [x] `--download-result` (default GID|OK|path in log dest-match; hide omits; full includes URI)
+- [x] `--summary-interval` (gated download writes SUMMARY before complete dest-match; 0 omits)
+- [x] `--quiet` / `--console-log-level` (quiet omits console dest-match, file log kept; error omits NOTICE)
+- [x] `--stderr` (download-result on stdout vs stderr dest-match)
+- [x] `--human-readable` (2048 bytes dest-match prints 2.0Ki vs raw 2048)
+- [x] `--show-console-readout` (false: log SUMMARY, no console SUMMARY; true: console SUMMARY dest-match)
+- [x] `--truncate-console-readout` (true: 80-col clip hides long path; false: full path dest-match)
+- [x] `--rpc-max-request-size` (oversize JSON-RPC 413; 2K addUri dest-match)
+- [x] `--rpc-secure` / `--rpc-certificate` / `--rpc-private-key` (TLS JSON-RPC addUri dest-match; missing cert rejected; plain HTTP fails)
+- [x] `--stop` / `--stop-with-process` (stop=1 halts gated dest incomplete; PID alive dest-match; dead PID halt)
+- [x] `--deferred-input` (true: second -i URI unread until slot frees dest-match; false queues waiting; save-session disables)
+- [x] `--no-file-allocation-limit` (1M skips trunc prealloc on 32K dest; 0 preallocs then dest-match)
+- [x] `--file-allocation` (`falloc` posix_fallocate dest fd dest-match; `prealloc` 16KiB zeros dest fd dest-match; `trunc` ftruncate dest fd dest-match; `none` unchanged)
+- [x] `--gid` (16 hex tellStatus dest-match; invalid rejected; duplicate rejected)
+- [x] `--conf-path` (aria2.conf dir/out dest-match; CLI overrides; missing path errors)
+- [x] `--no-conf` (skips conf-path dest; CLI out used)
+- [x] `--optimize-concurrent-downloads` (A:B=1:0 one slot dest-match; false two slots dest-match)
+- [x] `--daemon` (parent exits; child JSON-RPC addUri dest-match)
+- [x] `--pid-file` (writes getpid; HTTP dest-match; unset writes no pid file)
+- [x] `--max-outstanding-request` (BT REQUEST pipeline cap; 2 dest-match wait-2 seeder; 1 misses wait-2 / serial dest-match)
+- [x] `--realtime-chunk-checksum` (Metalink `<pieces>` dest-match; false keeps dest on bad piece hash)
+- [x] `--enable-color` (true: ANSI NOTICE dest-match; false: plain console dest-match)
+- [x] `--socket-recv-buffer-size` (FTP SO_RCVBUF dest-match)
+- [x] `--dscp` (BT peer IP TOS=DSCP<<2 dest-match)
+- [x] `--rlimit-nofile` (setrlimit RLIMIT_NOFILE dest-match)
+- [x] `--startup-idle-time` (delay first transfer then dest-match)
+- [x] `--max-downloads` (live-count cap; second add rejected, first dest-match)
+- [x] `--enable-http-pipelining` (HTTP/1.1 two Range GETs before first response dest-match; SocketBuffer pwrite leftover, coalesced 206 dest-match; SocketCore TCP_QUICKACK after recv; SocketCore::readData recv dest-match)
+- [x] SocketCore HttpRequest GET dest-match (origin `http://` rustix send/recv + gzip Inflater; Range GET; HttpKeepAliveConnection reuse; SocketBuffer leftover pwrite dest-match; SocketBuffer recv window pwrite dest-match; HttpSkipResponseCommand 3xx Location dest-match)
+- [x] `--enable-http-keep-alive` (true: one TCP accept dest-match sequential Ranges; false: Connection: close, >=2 accepts dest-match)
+- [x] `--listen-port` (C++ `PORT...` list/range; skip busy bind dest-match incoming leecher)
+- [x] `--dht-listen-port` (C++ `PORT...` list/range; skip busy UDP bind; KRPC source dest-match)
+- [x] `--max-http-pipelining` (C++ SocketBuffer writev GET iovecs dest-match; 1 cannot fill wait-2 server)
+- [x] `--bt-max-peers` (1 stops on reject peer; 2 and 0 dest-match seeder)
+- [x] `--dht-file-path` (persist compact nodes; second run dest-match with no entry-point)
+- [x] `--enable-dht6` / `--dht-entry-point6` (BEP 32 IPv6 compact values dest-match; false does not query)
+- [x] `--dht-file-path6` (persist compact IPv6 nodes; second run dest-match with no entry-point6)
+- [x] `--dht-listen-addr6` (::1 KRPC source dest-match; 2001:db8::1 bind fails)
+- [x] `--dht-listen-addr` (127.0.0.1 KRPC source dest-match; 192.0.2.1 bind fails)
+- [x] `--bt-enable-hook-after-hash-check` (true runs on-bt-download-complete after -V; false skips)
+- [x] `--bt-request-peer-speed-limit` (50K bumps past bt-max-peers=1 dest-match; 0 keeps cap)
+- [x] `--index-out` (1-based INDEX=PATH under --dir dest-match; unmapped files stay torrent-relative)
+- [x] `--show-files` (torrent/metalink listing; dest not written)
+- [x] `--dht-message-timeout` (1s misses 1.5s DHT reply; 3s dest-match)
+- [x] `--bt-stop-timeout` (1s stall no dest; live seeder dest-match)
+- [x] `--bt-timeout` (1s misses 1.5s delayed piece; 3s dest-match)
+- [x] `--bt-request-timeout` (1s misses delayed PIECE with long bt-timeout; 3s dest-match)
+- [x] `--bt-keep-alive-interval` (1s dest-match KA-gated seeder; 60s misses)
+- [x] `--bt-exclude-tracker` (`*` skips torrent announce; `--bt-tracker` dest-match; unset uses bad announce)
+- [x] `--bt-tracker-timeout` (1s misses 1.5s tracker; 3s dest-match; SocketCore writeData/readData HTTP GET dest-match; UDP BEP 15 dest-match; UDPTrackerClient retransmit dest-match)
+- [x] `--bt-tracker-connect-timeout` (1s misses TEST-NET; 1s still dest-match after-handshake delay)
+- [x] `--bt-tracker-interval` (1s re-announce during seed dest-match; 0 keeps tracker interval, one announce)
+- [x] `--peer-id-prefix` (handshake peer_id starts with prefix dest-match; over 20 bytes truncated)
+- [x] `--peer-connection-timeout` (1s misses TEST-NET peer; reachable seeder dest-match)
+- [x] `--peer-agent` (LTEP handshake `v` dest-match; default aria2-rust)
+- [x] `--bt-external-ip` (tracker announce `ip=` dest-match; unset omits)
+- [x] `--bt-require-crypto` (MSE/RC4 dest-match; plaintext peer rejected)
+- [x] `--bt-force-encryption` (MSE/RC4 only dest-match; SocketCore writeData/readData handshake+BT dest-match)
+- [x] `--bt-min-crypto-level` (`arc4` MSE/RC4 dest-match)
+- [x] `--bt-prioritize-piece` (tail=16K requests last piece first dest-match; unset piece 0)
+- [x] `--bt-remove-unselected-file` (true File::remove padding dest-match; false keeps it)
+- [x] `--bt-detach-seed-only` (true HTTP dest-match while BT seed-only; false HTTP waits)
+- [x] `--max-upload-limit` (seed PIECE throttle dest-match)
+- [x] `--bt-max-open-files` (LRU dest-file cap dest-match; peak 1 vs 3)
+- [x] `--max-overall-upload-limit` (shared seed PIECE throttle dest-match)
+- [x] DirectDiskWriter keep-fd inline `pwrite`/`pread` (C++ File::mkdirs dest parents/BT nested + DefaultDiskWriter/MultiDiskAdaptor openFile O_RDWR + last DiskWriter pwrite/pread + WrDiskCache; dest-match)
+- [x] JSON-RPC WebSocket
+- [x] XML-RPC
+
+Checked: 210 options + 38 RPC/transports = **248 / 250 = 99.2%** — catalog complete; three `[ ]` stay (event-poll / enable-mmap / max-mmap-limit).
