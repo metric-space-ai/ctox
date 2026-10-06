@@ -3774,6 +3774,26 @@ fn business_os_static_cache_control(is_index: bool, rel: &str, request_url: &str
         return "no-cache, must-revalidate";
     }
 
+    // A shell asset addressed by an explicit shell-v2 generation token is
+    // bound to that generation: business_os_shell_generation_mismatch rejects
+    // any other generation before bytes are served, and a changed file ships
+    // under a new APP_BUILD URL. Revalidating every such file on each load
+    // made a warm start issue ~78 sequential conditional requests through the
+    // ctox.dev tenant route (on-prem deployment: last shell script at 4.8 s,
+    // 06.10.2026). Serve them fresh for an hour and stale-while-revalidate
+    // afterwards so a load never blocks on them.
+    // The sync-engine bundle is addressed by the same APP_BUILD token (the
+    // sole `?v=` in shared/rxdb-runtime.js, bumped on every bundle change), so
+    // a URL never names two different bundles. At 600 KB it was the largest
+    // file revalidated through the tenant route on every start.
+    if (business_os_shell_generation_guarded_asset(rel) || rel == "rxdb/dist/ctox-rxdb-js.mjs")
+        && parse_query(request_url)
+            .get("v")
+            .is_some_and(|value| business_os_shell_generation_token(value))
+    {
+        return "public, max-age=3600, stale-while-revalidate=604800";
+    }
+
     // The generation gate above rejects a stale query before bytes from the
     // active release can be returned under an older URL. Revalidation remains
     // useful for non-shell assets and defense in depth.
@@ -4884,6 +4904,53 @@ mod tests {
                 "active-slot identity must not use a stale response: {url}"
             );
         }
+    }
+
+    #[test]
+    fn shell_generation_assets_are_cached_without_blocking_revalidation() {
+        for (rel, url) in [
+            (
+                "shared/sync.js",
+                "/business-os/shared/sync.js?v=20261006-shell-v2-sync-invalidate-v454",
+            ),
+            ("app.js", "/app.js?v=20261006-shell-v2-sync-invalidate-v454"),
+            (
+                "modules/ctox/index.js",
+                "/modules/ctox/index.js?v=20261006-shell-v2-sync-invalidate-v454_3",
+            ),
+        ] {
+            assert_eq!(
+                business_os_static_cache_control(false, rel, url),
+                "public, max-age=3600, stale-while-revalidate=604800",
+                "{url}"
+            );
+        }
+        // Asset-specific revisions and unguarded paths keep revalidating.
+        assert_eq!(
+            business_os_static_cache_control(
+                false,
+                "shared/workjet-theme.js",
+                "/shared/workjet-theme.js?v=20260903-entertainment-import-v336"
+            ),
+            "no-cache, must-revalidate"
+        );
+        assert_eq!(
+            business_os_static_cache_control(
+                false,
+                "rxdb/dist/ctox-rxdb-js.mjs",
+                "/rxdb/dist/ctox-rxdb-js.mjs?v=20261006-shell-v2-sync-invalidate-v454"
+            ),
+            "public, max-age=3600, stale-while-revalidate=604800"
+        );
+        assert_eq!(
+            business_os_static_cache_control(
+                false,
+                "rxdb/dist/ctox-rxdb-js.mjs",
+                "/rxdb/dist/ctox-rxdb-js.mjs"
+            ),
+            "public, max-age=300, stale-while-revalidate=86400",
+            "an unversioned bundle URL keeps the short default policy"
+        );
     }
 
     #[test]
