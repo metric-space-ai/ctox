@@ -33,7 +33,10 @@ apt-get --snapshot 20261001T000000Z -y --no-install-recommends install \
   xserver-xorg-core xserver-xorg-video-all xserver-xorg-input-libinput \
   xauth x11-utils x11-xserver-utils xfce4-session xfce4-panel xfwm4 \
   xfdesktop4 xfce4-settings xfce4-terminal thunar mousepad dbus-x11 \
-  fonts-dejavu-core maim xdotool kmod
+  fonts-dejavu-core maim xdotool kmod linux-modules-extra-6.8.0-142-generic
+# The fixed cloud image omits the fw_cfg module used for fresh assignments.
+# Validate against the GUEST kernel, never the build appliance's uname release.
+modinfo -k 6.8.0-142-generic qemu_fw_cfg >/dev/null
 # Refuse an existing UID/GID/name instead of reassigning another image user.
 if getent passwd ctox-desktop || getent passwd 1500 \
     || getent group ctox-desktop || getent group 1500; then
