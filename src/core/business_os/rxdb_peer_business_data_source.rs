@@ -610,6 +610,19 @@ mod owner_receipt_tests {
             [json!({"id":"parent", "client_context":{"actor":{"id":"foreign"}}}).to_string()],
         )?;
         let child = json!({"id":"child", "command_id":"child", "payload":{"workflow_id":"parent"}});
+        let parent =
+            store::pull_collection_record(fixture.root.path(), "business_commands", "parent")?
+                .expect("domain parent must exist before publication");
+        assert_eq!(parent["client_context"]["actor"]["id"], "alice");
+        assert!(
+            store::webrtc_capability_allows_collection_permission(
+                fixture.root.path(),
+                &fixture.token,
+                "business_commands",
+                BusinessOsPermission::DataRead,
+            ),
+            "fixture must grant current collection read access"
+        );
         let legacy = super::super::threads::replication_document_filter(
             fixture.root.path(),
             &fixture.token,
