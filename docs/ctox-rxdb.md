@@ -608,7 +608,7 @@ snapshots as `{ collectionName, documents }`, starting only after its initial
 query succeeds. Committed changes during that query are merged into the first
 snapshot; a pending or failed query is never presented as an empty ready list.
 
-An invalidation-only consumer may explicitly opt into
+A consumer may request committed deltas before its initial snapshot with
 `subscribe(listener, { emitPendingChanges: true })`. While initialization is
 pending, debounced committed changes additionally emit
 `{ collectionName, initialPending: true, changedDocuments }`. This event has
