@@ -1002,7 +1002,8 @@ impl BusinessDataService {
         let (_, _, owned, _, _) = self.resolve(session)?;
         let owned = owned.ok_or_else(|| unknown("BusinessData session is not ready"))?;
         self.revalidate(&owned).await?;
-        Self::stop_watches(owned.watches.clone()).await;
+        // A rejected command admission must preserve existing independent
+        // watches. The pending pump is retired alone on every setup failure.
         let pump = spawn_remote_event_pump(
             owned_session_pool(&owned),
             owned.connection.clone(),
