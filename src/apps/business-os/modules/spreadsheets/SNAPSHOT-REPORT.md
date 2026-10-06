@@ -1,7 +1,7 @@
 # Spreadsheet snapshot report opening contract
 
 Status: receiver implemented with regression coverage. Installed acceptance of
-this revision remains pending; this does not claim WELSCH or THESEN is repaired.
+this revision remains pending; this does not claim WELSCH or the second tenant is repaired.
 
 ## Caller
 
@@ -73,5 +73,5 @@ WebRTC durability or native commit.
 
 Implementation must additionally demonstrate the origin label and metadata on
 committed versions. Final acceptance remains the real installed CSV/Create/Edit/
-SaveACK/Reload/Reopen/XLSX journey after `ctox upgrade --dev` on WELSCH and THESEN,
+SaveACK/Reload/Reopen/XLSX journey after `ctox upgrade --dev` on WELSCH and the second tenant,
 using the coordinated production writer and existing browser lane.
