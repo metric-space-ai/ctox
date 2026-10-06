@@ -1,5 +1,13 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### CLI app command admission
+
+CLI app create/modify and app-bench requests persist and enqueue the real coding
+task. Admission leaves generated app files and execution completion to the
+bounded worker and its existing review/validation lifecycle, as the Business OS
+MCP path does. A modify request still requires its existing module manifest.
+Synchronous starter materialization remains available to its other callers.
+
 ### Recovery journal startup payload bounds
 
 Recovery status scans one IndexedDB record at a time and preserves the exact

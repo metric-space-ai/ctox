@@ -9618,6 +9618,7 @@ mod tests {
         assert!(task
             .prompt
             .contains("runtime/business-os/installed-modules/cli-inventory"));
+        assert_eq!(task.route_status, "pending");
         assert!(task.prompt.contains(
             "ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
         ));
@@ -9627,6 +9628,19 @@ mod tests {
     #[test]
     fn app_modify_cli_enqueues_app_modify_skill_task() -> anyhow::Result<()> {
         let root = app_command_fixture_root()?;
+        let module_dir = root
+            .path()
+            .join("runtime/business-os/installed-modules/cli-inventory");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_string(&serde_json::json!({
+                "id": "cli-inventory",
+                "title": "Inventory",
+                "entry": "index.html",
+                "collections": []
+            }))?,
+        )?;
 
         handle_business_os_app(
             root.path(),
@@ -9648,9 +9662,14 @@ mod tests {
             Some(BUSINESS_OS_APP_BENCH_SKILL)
         );
         assert!(task.prompt.contains("ctox.business_os.app.modify"));
+        assert!(
+            !module_dir.join("index.html").exists(),
+            "app modify admission must leave execution to the coding worker"
+        );
         assert!(task
             .prompt
             .contains("runtime/business-os/installed-modules/cli-inventory"));
+        assert_eq!(task.route_status, "pending");
         Ok(())
     }
 
