@@ -299,6 +299,23 @@ impl HomeAuthRuntime {
         if auth.provider.trim().is_empty() {
             auth.provider.clone_from(&provider);
         }
+        // Routing values belong to central dispatch, never caller metadata.
+        if !response.model.trim().is_empty() {
+            auth.attributes.insert(
+                "home_upstream_model".to_owned(),
+                response.model.trim().to_owned(),
+            );
+        }
+        if response.force_mapping {
+            auth.attributes
+                .insert("home_force_mapping".to_owned(), "true".to_owned());
+        }
+        if !response.original_alias.trim().is_empty() {
+            auth.attributes.insert(
+                "home_original_alias".to_owned(),
+                response.original_alias.trim().to_owned(),
+            );
+        }
         verify_home_concurrency_identity(tuple.as_ref(), &auth.id, &response.auth_index).map_err(
             |error| {
                 pending.end();
@@ -327,12 +344,13 @@ impl HomeAuthRuntime {
             },
         )
         .map_err(HomeDispatchError::Concurrency)?;
-        HomeDispatchSelection::new_with_auth_preparer(
+        HomeDispatchSelection::new_with_model_info(
             auth,
             executor,
             registration.auth_preparer(),
             &provider,
             scope,
+            response.model_info,
         )
         .map_err(HomeDispatchError::Registry)
     }
@@ -406,8 +424,12 @@ pub enum HomeTransportFailure {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct HomeDispatchResponse {
+    model: String,
     provider: String,
     auth_index: String,
+    force_mapping: bool,
+    original_alias: String,
+    model_info: Option<super::home_model_capabilities::HomeDispatchModelInfo>,
     auth: Auth,
     error: Option<serde_json::Value>,
 }

@@ -25,6 +25,7 @@ const FIELD_ORDER: &[&str] = &[
     "mode",
     "budget",
     "level",
+    "baseline_level",
     "original_mode",
     "original_value",
     "min",

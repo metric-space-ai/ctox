@@ -130,6 +130,29 @@ pub trait ProviderApplier: Send + Sync {
         config: &ThinkingConfig,
         model_info: Option<&ModelInfo>,
     ) -> Result<Vec<u8>, crate::internal::thinking::ThinkingError>;
+
+    /// Canonical application with either static or account-selected metadata.
+    /// Native appliers override this path. A legacy plugin cannot silently
+    /// discard a dynamic capability and pretend the model was unregistered.
+    fn apply_model_info(
+        &self,
+        body: &[u8],
+        config: &ThinkingConfig,
+        model_info: Option<&super::ModelInfoView<'_>>,
+    ) -> Result<Vec<u8>, crate::internal::thinking::ThinkingError> {
+        match model_info {
+            Some(info) if info.static_info().is_none() => Err(super::ThinkingError::with_model(
+                super::ErrorCode::ProviderMismatch,
+                "provider applier does not implement dynamic model capabilities",
+                info.id,
+            )),
+            info => self.apply(
+                body,
+                config,
+                info.and_then(super::ModelInfoView::static_info),
+            ),
+        }
+    }
 }
 
 /// Reports models whose thinking configuration is intentionally passed through

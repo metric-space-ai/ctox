@@ -8,33 +8,42 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::claude_executor::{
-    parse_claude_stream_usage_line, parse_claude_usage, ClaudeCredentialMode, ClaudeDeviceProfile,
-    ClaudeMessagesRequest, ClaudeMessagesResponse, ClaudeMessagesStreamResponse,
-    ClaudeMessagesStreamingTransport, ClaudeMessagesTransport, ClaudeMessagesTransportFailure,
-    ClaudeTargetError, ClaudeUpstreamTarget, ClaudeUsageSink,
+    ClaudeCredentialMode, ClaudeDeviceProfile, ClaudeMessagesRequest, ClaudeMessagesResponse,
+    ClaudeMessagesStreamResponse, ClaudeMessagesStreamingTransport, ClaudeMessagesTransport,
+    ClaudeMessagesTransportFailure, ClaudeTargetError, ClaudeUpstreamTarget, ClaudeUsageSink,
 };
 use super::claude_executor_auth::{
     ClaudePrepareAuthError, ClaudeRequestAuthPreparer, ClaudeSubscriptionAuth,
     ClaudeSubscriptionAuthError,
 };
+use super::claude_executor_buffered::{
+    claude_buffered_response_message_id, claude_usage_from_stream_buffer,
+    parse_claude_buffered_response_usage, prepare_claude_buffered_response,
+    restore_claude_stream_tool_names,
+};
 use super::claude_executor_cloaking::{
     try_apply_claude_cloaking, ClaudeCallerSystemBlockError, ClaudeCloakPolicy,
 };
 use super::claude_executor_diagnostics::{
-    claude_message_id_from_response, commit_claude_diagnostics, inject_claude_diagnostics,
-    observe_claude_stream_line, ClaudeDiagnosticsRequestState,
+    begin_claude_diagnostics_request, commit_claude_diagnostics,
+    inject_claude_diagnostics_with_state, observe_claude_stream_line,
+    ClaudeDiagnosticsRequestState,
 };
 use super::claude_executor_request::{
     claude_request_uses_fast_mode, claude_requested_betas, extract_and_remove_claude_betas,
-    prepare_claude_upstream_body_with_identity, restore_claude_oauth_tool_names_from_response,
-    restore_claude_oauth_tool_names_from_stream_line,
+    prepare_claude_upstream_body_with_identity,
 };
 use super::claude_executor_tokens::prepare_claude_first_party_token_count_body;
+use super::claude_executor_tool_state::{
+    thread_alias_keys, ClaudeOAuthToolAliasStore, THREAD_NOT_FOUND_BODY,
+};
 use super::helps::{
     apply_claude_credential_metadata, claude_agent_session_uuid_for_request,
-    detect_claude_code_request, ClaudeCodeRequestDetection, ClaudeCredentialIdentityError,
+    detect_claude_code_request, normalize_codex_tool_integer_types_for_executor,
+    observe_plugin_executor_stream, ClaudeCodeRequestDetection, ClaudeCredentialIdentityError,
     ClaudeDeviceProfileCache as ClaudeHelperDeviceProfileCache, ClaudeHeaderDefaults,
     ClaudeIdentityKvStore, ClaudeIdentityStoreError, SessionIdCache, SessionIdCacheError,
+    StreamUsageBuffer,
 };
 use crate::internal::registry::lookup_model_info;
 use crate::sdk::cliproxy::auth::{
@@ -305,6 +314,19 @@ pub(super) fn claude_header_defaults(
     }
 }
 
+/// Reserved Codex client fields become integers before OAuth tool-name remap.
+/// Remap changes the tool name and would hide `exec_command` from the matcher.
+/// A missing request context has no client headers, so the body stays unchanged.
+fn normalize_claude_codex_integer_schemas(
+    body: &[u8],
+    context: Option<&ClaudeExecutionRequestContext>,
+) -> Vec<u8> {
+    let Some(context) = context else {
+        return body.to_vec();
+    };
+    normalize_codex_tool_integer_types_for_executor(&body, &context.headers, "claude")
+}
+
 /// Bounded Claude subscription execution path with exactly one unauthorized
 /// refresh/replay.
 pub struct ClaudeSubscriptionMessagesExecutor {
@@ -321,6 +343,7 @@ pub struct ClaudeSubscriptionMessagesExecutor {
     cloak_user_id: String,
     usage_sink: Option<Arc<dyn ClaudeUsageSink>>,
     request_auth_preparation: Option<Arc<ClaudeRequestAuthPreparationBinding>>,
+    oauth_tool_aliases: Arc<ClaudeOAuthToolAliasStore>,
 }
 
 impl ClaudeSubscriptionMessagesExecutor {
@@ -343,6 +366,7 @@ impl ClaudeSubscriptionMessagesExecutor {
             cloak_user_id: super::helps::generate_fake_user_id(),
             usage_sink: None,
             request_auth_preparation: None,
+            oauth_tool_aliases: Arc::new(ClaudeOAuthToolAliasStore::default()),
         }
     }
 
@@ -594,6 +618,19 @@ impl ClaudeSubscriptionMessagesExecutor {
             }
         }
         let cloaked = cloak_policy.should_cloak_request();
+        let credential_identity = self
+            .account_state_auth_id()
+            .unwrap_or_else(|| credentials.access_token().expose_secret());
+        let diagnostics_state = if cloaked && target.is_anthropic_api() {
+            begin_claude_diagnostics_request(credential_identity, &session_id)
+        } else {
+            ClaudeDiagnosticsRequestState::default()
+        };
+        if cloaked && target.is_anthropic_api() {
+            // ref: internal/runtime/executor/claude_executor_cloaking.go:214-244 @ 2044a01f
+            cloak_policy.current_date =
+                Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
+        }
         let body = try_apply_claude_cloaking(
             &body,
             model.unwrap_or_default(),
@@ -601,26 +638,48 @@ impl ClaudeSubscriptionMessagesExecutor {
             Some(&self.cloak_user_id),
         )
         .map_err(ClaudeExecutionError::CallerSystemBlock)?;
-        let credential_identity = self
-            .account_state_auth_id()
-            .unwrap_or_else(|| credentials.access_token().expose_secret());
         let (body, diagnostics_state) = if cloaked && target.is_anthropic_api() {
-            inject_claude_diagnostics(&body, credential_identity, &session_id)
+            inject_claude_diagnostics_with_state(&body, diagnostics_state)
         } else {
-            (body, ClaudeDiagnosticsRequestState::default())
+            (body, diagnostics_state)
         };
+
         let body = self.apply_request_credential_identity(
             context,
             prepared_auth.as_ref(),
             &body,
             &session_id,
         )?;
+        let body = normalize_claude_codex_integer_schemas(&body, context);
+        // ref: claude_executor_tool_state.go:95-122 @ 16d98881
+        // Resolve before tool registry augmentation; empty declarations need
+        // the previous message's aliases, including a known empty mapping.
+        let alias_state_active = cloaked && target.is_anthropic_api();
+        let continuation_aliases = if alias_state_active {
+            match self.oauth_tool_aliases.resolve(&body) {
+                Ok(aliases) => aliases,
+                Err(()) => {
+                    return Ok(ClaudeExecutionOutcome::new(
+                        ClaudeMessagesResponse::new(404, THREAD_NOT_FOUND_BODY.to_vec()),
+                        UnauthorizedReplayState::default(),
+                        Some(true),
+                        true,
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        let thread_alias_keys = alias_state_active
+            .then(|| thread_alias_keys(&body))
+            .flatten();
         let (body, betas, reverse_map) = prepare_claude_upstream_body_with_identity(
             &body,
             model_info.as_ref(),
             credentials.access_token().expose_secret(),
             true,
         );
+        let reverse_map = continuation_aliases.unwrap_or(reverse_map);
         let mut request = ClaudeMessagesRequest::new_with_session(
             target,
             ClaudeCredentialMode::OAuth,
@@ -638,29 +697,33 @@ impl ClaudeSubscriptionMessagesExecutor {
                 .with_device_profile(profile)
                 .map_err(ClaudeExecutionError::Request)?;
         }
-        let first = self
-            .transport
-            .execute(&request, self.timeout)
-            .await
-            .map_err(ClaudeExecutionError::Transport)?
-            .map_body(|body| {
-                restore_claude_oauth_tool_names_from_response(
-                    body,
-                    "",
-                    false,
-                    request.tool_name_reverse_map(),
-                )
-            });
+        let first = prepare_claude_buffered_response(
+            self.transport
+                .execute(&request, self.timeout)
+                .await
+                .map_err(ClaudeExecutionError::Transport)?,
+            &request,
+        );
         let mut replay = UnauthorizedReplayState::default();
         if replay.observe(first.status(), true) != UnauthorizedReplayDecision::RefreshAndReplay {
-            self.publish_usage(model, &first);
+            self.publish_usage(model, &first, request.stream());
             if (200..300).contains(&first.status()) {
-                commit_claude_diagnostics(
-                    &diagnostics_state,
-                    &claude_message_id_from_response(first.body()),
-                );
+                let message_id =
+                    claude_buffered_response_message_id(first.body(), request.stream());
+                if !request.stream() || !message_id.is_empty() {
+                    commit_claude_diagnostics(&diagnostics_state, &message_id);
+                    self.oauth_tool_aliases.remember(
+                        thread_alias_keys.as_deref(),
+                        request.tool_name_reverse_map(),
+                        &message_id,
+                    );
+                }
             }
-            let request_scoped = fast_request && !(200..300).contains(&first.status());
+            let request_scoped = (fast_request && !(200..300).contains(&first.status()))
+                || crate::internal::clienterror::is_claude_thread_not_found(
+                    first.status(),
+                    first.body(),
+                );
             let state_persisted = if request_scoped {
                 Some(true)
             } else {
@@ -682,28 +745,31 @@ impl ClaudeSubscriptionMessagesExecutor {
         let retry = request
             .retry_with_credential(refreshed.credentials().access_token())
             .map_err(ClaudeExecutionError::Request)?;
-        let response = self
-            .transport
-            .execute(&retry, self.timeout)
-            .await
-            .map_err(ClaudeExecutionError::Transport)?
-            .map_body(|body| {
-                restore_claude_oauth_tool_names_from_response(
-                    body,
-                    "",
-                    false,
-                    retry.tool_name_reverse_map(),
-                )
-            });
+        let response = prepare_claude_buffered_response(
+            self.transport
+                .execute(&retry, self.timeout)
+                .await
+                .map_err(ClaudeExecutionError::Transport)?,
+            &retry,
+        );
         let _ = replay.observe(response.status(), true);
-        self.publish_usage(model, &response);
+        self.publish_usage(model, &response, retry.stream());
         if (200..300).contains(&response.status()) {
-            commit_claude_diagnostics(
-                &diagnostics_state,
-                &claude_message_id_from_response(response.body()),
-            );
+            let message_id = claude_buffered_response_message_id(response.body(), retry.stream());
+            if !retry.stream() || !message_id.is_empty() {
+                commit_claude_diagnostics(&diagnostics_state, &message_id);
+                self.oauth_tool_aliases.remember(
+                    thread_alias_keys.as_deref(),
+                    retry.tool_name_reverse_map(),
+                    &message_id,
+                );
+            }
         }
-        let request_scoped = fast_request && !(200..300).contains(&response.status());
+        let request_scoped = (fast_request && !(200..300).contains(&response.status()))
+            || crate::internal::clienterror::is_claude_thread_not_found(
+                response.status(),
+                response.body(),
+            );
         let state_persisted = if request_scoped {
             Some(true)
         } else {
@@ -759,6 +825,19 @@ impl ClaudeSubscriptionMessagesExecutor {
             }
         }
         let cloaked = cloak_policy.should_cloak_request();
+        let credential_identity = self
+            .account_state_auth_id()
+            .unwrap_or_else(|| credentials.access_token().expose_secret());
+        let diagnostics_state = if cloaked && target.is_anthropic_api() {
+            begin_claude_diagnostics_request(credential_identity, &session_id)
+        } else {
+            ClaudeDiagnosticsRequestState::default()
+        };
+        if cloaked && target.is_anthropic_api() {
+            // ref: internal/runtime/executor/claude_executor_cloaking.go:214-244 @ 2044a01f
+            cloak_policy.current_date =
+                Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
+        }
         let body = try_apply_claude_cloaking(
             &body,
             model.unwrap_or_default(),
@@ -766,26 +845,43 @@ impl ClaudeSubscriptionMessagesExecutor {
             Some(&self.cloak_user_id),
         )
         .map_err(ClaudeExecutionError::CallerSystemBlock)?;
-        let credential_identity = self
-            .account_state_auth_id()
-            .unwrap_or_else(|| credentials.access_token().expose_secret());
         let (body, diagnostics_state) = if cloaked && target.is_anthropic_api() {
-            inject_claude_diagnostics(&body, credential_identity, &session_id)
+            inject_claude_diagnostics_with_state(&body, diagnostics_state)
         } else {
-            (body, ClaudeDiagnosticsRequestState::default())
+            (body, diagnostics_state)
         };
+
         let body = self.apply_request_credential_identity(
             context,
             prepared_auth.as_ref(),
             &body,
             &session_id,
         )?;
+        let body = normalize_claude_codex_integer_schemas(&body, context);
+        // ref: claude_executor_tool_state.go:95-122 @ 16d98881
+        // Resolve before tool registry augmentation; empty declarations need
+        // the previous message's aliases, including a known empty mapping.
+        let alias_state_active = cloaked && target.is_anthropic_api();
+        let continuation_aliases = if alias_state_active {
+            match self.oauth_tool_aliases.resolve(&body) {
+                Ok(aliases) => aliases,
+                Err(()) => {
+                    return Ok(self.missing_thread_stream_outcome(model, diagnostics_state));
+                }
+            }
+        } else {
+            None
+        };
+        let thread_alias_keys = alias_state_active
+            .then(|| thread_alias_keys(&body))
+            .flatten();
         let (body, betas, reverse_map) = prepare_claude_upstream_body_with_identity(
             &body,
             model_info.as_ref(),
             credentials.access_token().expose_secret(),
             true,
         );
+        let reverse_map = continuation_aliases.unwrap_or(reverse_map);
         let mut request = ClaudeMessagesRequest::new_with_session(
             target,
             ClaudeCredentialMode::OAuth,
@@ -829,7 +925,11 @@ impl ClaudeSubscriptionMessagesExecutor {
         {
             response = ClaudeMessagesStreamResponse::synthetic(502);
         }
-        let request_scoped = fast_request && !(200..300).contains(&response.status());
+        let request_scoped = (fast_request && !(200..300).contains(&response.status()))
+            || crate::internal::clienterror::is_claude_thread_not_found(
+                response.status(),
+                response.error_body(),
+            );
         let state_persisted = if request_scoped {
             Some(true)
         } else {
@@ -847,7 +947,32 @@ impl ClaudeSubscriptionMessagesExecutor {
             usage_sink: self.usage_sink.clone(),
             diagnostics_state,
             request_scoped,
+            oauth_tool_aliases: self.oauth_tool_aliases.clone(),
+            thread_alias_keys,
         })
+    }
+
+    fn missing_thread_stream_outcome(
+        &self,
+        model: Option<&str>,
+        diagnostics_state: ClaudeDiagnosticsRequestState,
+    ) -> ClaudeStreamExecutionOutcome {
+        let replay = UnauthorizedReplayState::default();
+        ClaudeStreamExecutionOutcome {
+            response: ClaudeMessagesStreamResponse::synthetic(404)
+                .with_error_body(THREAD_NOT_FOUND_BODY.to_vec()),
+            attempts: replay.attempts(),
+            refreshed: replay.refreshed(),
+            state_persisted: Some(true),
+            failure_binding: None,
+            model: model.map(str::to_owned),
+            tool_name_reverse_map: HashMap::new(),
+            usage_sink: None,
+            diagnostics_state,
+            request_scoped: true,
+            oauth_tool_aliases: self.oauth_tool_aliases.clone(),
+            thread_alias_keys: None,
+        }
     }
 
     fn resolve_session_id(
@@ -948,11 +1073,14 @@ impl ClaudeSubscriptionMessagesExecutor {
             .await
     }
 
-    fn publish_usage(&self, model: Option<&str>, response: &ClaudeMessagesResponse) {
+    fn publish_usage(&self, model: Option<&str>, response: &ClaudeMessagesResponse, stream: bool) {
         if !(200..300).contains(&response.status()) {
             return;
         }
-        if let (Some(sink), Some(usage)) = (&self.usage_sink, parse_claude_usage(response.body())) {
+        if let (Some(sink), Some(usage)) = (
+            &self.usage_sink,
+            parse_claude_buffered_response_usage(response.body(), stream),
+        ) {
             sink.publish(model, usage);
         }
     }
@@ -1031,6 +1159,8 @@ pub struct ClaudeStreamExecutionOutcome {
     usage_sink: Option<Arc<dyn ClaudeUsageSink>>,
     diagnostics_state: ClaudeDiagnosticsRequestState,
     request_scoped: bool,
+    oauth_tool_aliases: Arc<ClaudeOAuthToolAliasStore>,
+    thread_alias_keys: Option<Vec<String>>,
 }
 
 impl ClaudeStreamExecutionOutcome {
@@ -1052,10 +1182,15 @@ impl ClaudeStreamExecutionOutcome {
             usage_sink: self.usage_sink,
             stream_line_buffer: Vec::new(),
             stream_eof: false,
+            pending_transport_failure: None,
+            usage_buffer: StreamUsageBuffer::default(),
+            usage_published: false,
             diagnostics_message_id: String::new(),
             diagnostics_completed: false,
             diagnostics_committed: false,
             diagnostics_state: self.diagnostics_state,
+            oauth_tool_aliases: self.oauth_tool_aliases,
+            thread_alias_keys: self.thread_alias_keys,
         }
     }
 
@@ -1100,11 +1235,16 @@ pub struct ClaudeTrackedMessagesStreamResponse {
     tool_name_reverse_map: HashMap<String, String>,
     stream_line_buffer: Vec<u8>,
     stream_eof: bool,
+    pending_transport_failure: Option<ClaudeMessagesTransportFailure>,
+    usage_buffer: StreamUsageBuffer,
+    usage_published: bool,
     usage_sink: Option<Arc<dyn ClaudeUsageSink>>,
     diagnostics_state: ClaudeDiagnosticsRequestState,
     diagnostics_message_id: String,
     diagnostics_completed: bool,
     diagnostics_committed: bool,
+    oauth_tool_aliases: Arc<ClaudeOAuthToolAliasStore>,
+    thread_alias_keys: Option<Vec<String>>,
 }
 
 impl ClaudeTrackedMessagesStreamResponse {
@@ -1114,47 +1254,61 @@ impl ClaudeTrackedMessagesStreamResponse {
 
     pub async fn next_chunk(&mut self) -> Option<Result<Vec<u8>, ClaudeMessagesTransportFailure>> {
         loop {
+            if self.diagnostics_completed {
+                self.stream_line_buffer.clear();
+                self.pending_transport_failure = None;
+                self.stream_eof = true;
+                self.finish_stream_usage();
+                return None;
+            }
             if let Some(boundary) = complete_sse_frame_len(&self.stream_line_buffer) {
                 let frame: Vec<u8> = self.stream_line_buffer.drain(..boundary).collect();
-                self.publish_stream_usage(&frame);
+                observe_plugin_executor_stream("claude", &frame, &mut self.usage_buffer);
                 self.observe_diagnostics(&frame);
-                return Some(Ok(restore_claude_oauth_tool_names_from_stream_line(
+                return Some(Ok(restore_claude_stream_tool_names(
                     &frame,
-                    "",
-                    false,
                     &self.tool_name_reverse_map,
                 )));
             }
             if self.stream_eof {
                 if self.stream_line_buffer.is_empty() {
+                    self.finish_stream_usage();
+                    if let Some(error) = self.pending_transport_failure.take() {
+                        if error != ClaudeMessagesTransportFailure::Cancelled {
+                            self.record_terminal_failure().await;
+                        }
+                        return Some(Err(error));
+                    }
                     return None;
                 }
                 let line = std::mem::take(&mut self.stream_line_buffer);
-                self.publish_stream_usage(&line);
+                observe_plugin_executor_stream("claude", &line, &mut self.usage_buffer);
                 self.observe_diagnostics(&line);
-                return Some(Ok(restore_claude_oauth_tool_names_from_stream_line(
+                return Some(Ok(restore_claude_stream_tool_names(
                     &line,
-                    "",
-                    false,
                     &self.tool_name_reverse_map,
                 )));
             }
             match self.response.next_chunk().await {
                 Some(Ok(chunk)) => self.stream_line_buffer.extend_from_slice(&chunk),
                 Some(Err(error)) => {
-                    if error != ClaudeMessagesTransportFailure::Cancelled {
-                        self.record_terminal_failure().await;
-                    }
-                    return Some(Err(error));
+                    self.stream_eof = true;
+                    self.pending_transport_failure = Some(error);
                 }
                 None => self.stream_eof = true,
             }
         }
     }
 
-    fn publish_stream_usage(&self, line: &[u8]) {
-        if let (Some(sink), Some(usage)) = (&self.usage_sink, parse_claude_stream_usage_line(line))
-        {
+    fn finish_stream_usage(&mut self) {
+        if self.usage_published {
+            return;
+        }
+        self.usage_published = true;
+        if let (Some(sink), Some(usage)) = (
+            &self.usage_sink,
+            claude_usage_from_stream_buffer(&self.usage_buffer),
+        ) {
             sink.publish(self.model.as_deref(), usage);
         }
     }
@@ -1169,12 +1323,20 @@ impl ClaudeTrackedMessagesStreamResponse {
         }
         if self.diagnostics_completed && !self.diagnostics_committed {
             commit_claude_diagnostics(&self.diagnostics_state, &self.diagnostics_message_id);
+            self.oauth_tool_aliases.remember(
+                self.thread_alias_keys.as_deref(),
+                &self.tool_name_reverse_map,
+                &self.diagnostics_message_id,
+            );
             self.diagnostics_committed = true;
+        }
+        if self.diagnostics_completed {
+            self.finish_stream_usage();
         }
     }
 
     pub async fn record_terminal_failure(&mut self) {
-        if self.failure_recorded {
+        if self.failure_recorded || self.diagnostics_completed {
             return;
         }
         self.failure_recorded = true;
@@ -1191,6 +1353,19 @@ impl ClaudeTrackedMessagesStreamResponse {
             observed_at_ms: binding.clock.now_ms(),
         };
         let _ = tokio::task::spawn_blocking(move || conductor.record(result)).await;
+    }
+}
+
+impl Drop for ClaudeTrackedMessagesStreamResponse {
+    fn drop(&mut self) {
+        if !self.usage_published {
+            observe_plugin_executor_stream(
+                "claude",
+                &self.stream_line_buffer,
+                &mut self.usage_buffer,
+            );
+        }
+        self.finish_stream_usage();
     }
 }
 
@@ -2122,6 +2297,750 @@ mod tests {
         ClaudeUpstreamTarget::new("https", "api.anthropic.com").unwrap()
     }
 
+    fn alias_create_body() -> Vec<u8> {
+        br#"{"model":"sonnet","thread":{"type":"create"},"messages":[{"role":"user","content":"read"}],"tools":[{"name":"Read","input_schema":{"type":"object"}}]}"#.to_vec()
+    }
+
+    fn alias_continuation_body() -> Vec<u8> {
+        br#"{"model":"sonnet","thread":{"type":"continue","previous_message_id":"msg-alias"},"messages":[{"role":"user","content":"continue"}]}"#.to_vec()
+    }
+
+    fn alias_response_body() -> Vec<u8> {
+        let alias = super::super::helps::claude_mcp_tool_alias("access-old", "Read", 0);
+        serde_json::to_vec(&serde_json::json!({"id":"msg-alias","type":"message","content":[{"type":"tool_use","id":"call","name":alias,"input":{}}]})).unwrap()
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_unary_restores_names_after_create() {
+        let transport = thread_fixture_transport(vec![200, 200], &alias_response_body());
+        let executor = executor(transport.clone());
+        for body in [alias_create_body(), alias_continuation_body()] {
+            let outcome = executor
+                .execute_for_model(target(), Some("sonnet"), body, false)
+                .await
+                .unwrap();
+            assert_eq!(outcome.response().status(), 200);
+            let response: Value = serde_json::from_slice(outcome.response().body()).unwrap();
+            assert_eq!(response["content"][0]["name"], "Read");
+            assert!(!outcome.refreshed());
+        }
+        assert_eq!(transport.authorizations.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_missing_is_local_and_request_scoped() {
+        let first = Arc::new(SequenceTransport::statuses(vec![200]));
+        let second = Arc::new(SequenceTransport::statuses(vec![200]));
+        let stream_a = thread_fixture_stream(200, b"");
+        let stream_b = thread_fixture_stream(200, b"");
+        let (pool, cooldowns) = thread_fixture_pool(
+            first.clone(),
+            second.clone(),
+            Some((stream_a.clone(), stream_b.clone())),
+        );
+        let unary = pool
+            .execute(target(), "sonnet", alias_continuation_body(), false)
+            .await
+            .unwrap();
+        assert_eq!(unary.selected_auth_id(), "account-a");
+        assert_eq!(unary.attempted_auth_ids(), ["account-a"]);
+        assert_eq!(unary.outcome().response().status(), 404);
+        assert!(unary.outcome().request_scoped());
+        assert!(crate::internal::clienterror::is_claude_thread_not_found(
+            404,
+            unary.outcome().response().body()
+        ));
+        let stream = pool
+            .execute_stream_configured("sonnet", alias_continuation_body())
+            .await
+            .unwrap();
+        assert_eq!(stream.selected_auth_id(), "account-a");
+        assert_eq!(stream.attempted_auth_ids(), ["account-a"]);
+        assert_eq!(stream.outcome().response().status(), 404);
+        assert!(stream.outcome().request_scoped());
+        assert!(crate::internal::clienterror::is_claude_thread_not_found(
+            404,
+            stream.outcome().response().error_body()
+        ));
+        assert!(first.authorizations.lock().unwrap().is_empty());
+        assert!(second.authorizations.lock().unwrap().is_empty());
+        assert_eq!(stream_a.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(stream_b.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(cooldowns.0.lock().unwrap().is_empty());
+    }
+
+    struct AliasCompletionTransport {
+        complete: bool,
+    }
+
+    impl ClaudeMessagesStreamingTransport for AliasCompletionTransport {
+        fn execute_stream<'a>(
+            &'a self,
+            _: &'a ClaudeMessagesRequest,
+            _: Duration,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            ClaudeMessagesStreamResponse,
+                            ClaudeMessagesTransportFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let (sender, receiver) = mpsc::channel(4);
+                sender.try_send(Ok(b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-alias\"}}\n\n".to_vec())).unwrap();
+                let alias = super::super::helps::claude_mcp_tool_alias("access-old", "Read", 0);
+                let tool = serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","name":alias}});
+                sender
+                    .try_send(Ok(format!("data: {tool}\n\n").into_bytes()))
+                    .unwrap();
+                if self.complete {
+                    sender
+                        .try_send(Ok(b"data: {\"type\":\"message_stop\"}\n\n".to_vec()))
+                        .unwrap();
+                }
+                drop(sender);
+                Ok(ClaudeMessagesStreamResponse::new(200, None, receiver))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_stream_publishes_only_completed_message() {
+        for complete in [false, true] {
+            let transport = thread_fixture_transport(vec![200], &alias_response_body());
+            let account = executor(transport.clone())
+                .with_stream_transport(Arc::new(AliasCompletionTransport { complete }));
+            let outcome = account
+                .execute_stream_for_model(target(), Some("sonnet"), alias_create_body())
+                .await
+                .unwrap();
+            let mut stream = outcome.into_response();
+            let mut saw_restored_tool = false;
+            while let Some(frame) = stream.next_chunk().await {
+                let frame = String::from_utf8(frame.unwrap()).unwrap();
+                saw_restored_tool |= frame.contains("\"name\":\"Read\"");
+            }
+            assert!(saw_restored_tool);
+            let continuation = account
+                .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), false)
+                .await
+                .unwrap();
+            if complete {
+                assert_eq!(continuation.response().status(), 200);
+                let response: Value =
+                    serde_json::from_slice(continuation.response().body()).unwrap();
+                assert_eq!(response["content"][0]["name"], "Read");
+                assert_eq!(transport.authorizations.lock().unwrap().len(), 1);
+            } else {
+                assert_eq!(continuation.response().status(), 404);
+                assert!(continuation.request_scoped());
+                assert!(transport.authorizations.lock().unwrap().is_empty());
+            }
+            let other_account =
+                executor(thread_fixture_transport(vec![200], &alias_response_body()));
+            assert_eq!(
+                other_account
+                    .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), false)
+                    .await
+                    .unwrap()
+                    .response()
+                    .status(),
+                404
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct BufferedAliasUsageSink(Mutex<Vec<super::super::claude_executor::ClaudeUsage>>);
+
+    impl ClaudeUsageSink for BufferedAliasUsageSink {
+        fn publish(&self, _: Option<&str>, usage: super::super::claude_executor::ClaudeUsage) {
+            self.0.lock().unwrap().push(usage);
+        }
+    }
+
+    fn alias_buffered_sse_body(stopped: bool) -> Vec<u8> {
+        let alias = super::super::helps::claude_mcp_tool_alias("access-old", "Read", 0);
+        let start = serde_json::json!({"type":"message_start","message":{
+            "id":"msg-alias","model":"claude-sonnet","usage":{
+                "input_tokens":7,"output_tokens":0,
+                "cache_read_input_tokens":11,"cache_creation_input_tokens":13
+            }
+        }});
+        let tool = serde_json::json!({"type":"content_block_start","index":0,
+            "content_block":{"type":"tool_use","id":"call","name":alias,"input":{}}});
+        let delta = serde_json::json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},
+            "usage":{"output_tokens":5}});
+        let mut body = format!(
+            ": keepalive\r\n\nevent: message_start\ndata: {start}\n\nevent: content_block_start\ndata: {tool}\n\ndata: {delta}\n\n"
+        );
+        if stopped {
+            body.push_str("data: {\"type\":\"message_stop\"}\n\ndata: [DONE]\n\n");
+        }
+        body.into_bytes()
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_buffered_sse_continuation_and_usage() {
+        let transport = thread_fixture_transport(vec![200, 200], &alias_buffered_sse_body(true));
+        let usage = Arc::new(BufferedAliasUsageSink::default());
+        let account = executor(transport.clone()).with_usage_sink(usage.clone());
+        for body in [alias_create_body(), alias_continuation_body()] {
+            let outcome = account
+                .execute_for_model(target(), Some("sonnet"), body, true)
+                .await
+                .unwrap();
+            assert_eq!(outcome.response().status(), 200);
+            let output = std::str::from_utf8(outcome.response().body()).unwrap();
+            assert!(output.starts_with(": keepalive\r\n\nevent: message_start\n"));
+            assert!(output.contains("\"name\":\"Read\""));
+            assert!(output.ends_with("data: [DONE]\n\n"));
+            assert!(!outcome.refreshed());
+        }
+        let measurements = usage.0.lock().unwrap();
+        assert_eq!(measurements.len(), 2, "publish once per buffered response");
+        for measured in measurements.iter() {
+            assert_eq!(measured.input_tokens, 7);
+            assert_eq!(measured.output_tokens, 5);
+            assert_eq!(measured.cache_read_tokens, 11);
+            assert_eq!(measured.cache_creation_tokens, 13);
+            assert_eq!(measured.total_tokens, 36);
+        }
+        assert_eq!(transport.authorizations.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_buffered_sse_retry_and_partial_state() {
+        for stopped in [false, true] {
+            let transport =
+                thread_fixture_transport(vec![401, 200, 200], &alias_buffered_sse_body(stopped));
+            let account = executor(transport.clone());
+            let first = account
+                .execute_for_model(target(), Some("sonnet"), alias_create_body(), true)
+                .await
+                .unwrap();
+            assert_eq!(first.response().status(), 200);
+            assert!(first.refreshed());
+            assert!(std::str::from_utf8(first.response().body())
+                .unwrap()
+                .contains("\"name\":\"Read\""));
+            let continuation = account
+                .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), true)
+                .await
+                .unwrap();
+            assert_eq!(
+                continuation.response().status(),
+                if stopped { 200 } else { 404 }
+            );
+            if stopped {
+                assert!(std::str::from_utf8(continuation.response().body())
+                    .unwrap()
+                    .contains("\"name\":\"Read\""));
+            } else {
+                assert!(continuation.request_scoped());
+            }
+            let authorizations = transport.authorizations.lock().unwrap();
+            assert_eq!(authorizations.len(), if stopped { 3 } else { 2 });
+            assert_eq!(authorizations[0], "Bearer access-old");
+            assert_eq!(authorizations[1], "Bearer access-new");
+            let sessions = transport.session_ids.lock().unwrap();
+            assert_eq!(sessions[0], sessions[1], "401 replay keeps its cache lane");
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_buffered_sse_invalid_response_is_not_success() {
+        let valid = alias_buffered_sse_body(true);
+        let invalid = [
+            (b": keepalive\n\ndata: [DONE]\n\n".to_vec(), "empty stream response"),
+            (b"data: invalid\n\n".to_vec(), "malformed stream data"),
+            (b"data: {\"type\":\"message_delta\"}\n\n".to_vec(), "missing message_start"),
+            (b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-alias\"}}\n\n".to_vec(), "missing id or model"),
+            (b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-alias\",\"model\":\"sonnet\"}}\n\n".to_vec(), "ended before message completion"),
+            ([valid.clone(), b"data: {\"type\":\"error\",\"error\":{\"message\":\"upstream failed\"}}\n\n".to_vec()].concat(), "error event: upstream failed"),
+            ([valid, b"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}\n\n".to_vec()].concat(), "error event: overloaded_error"),
+        ];
+        for (body, expected_message) in invalid {
+            let transport = thread_fixture_transport(vec![200], &body);
+            let usage = Arc::new(BufferedAliasUsageSink::default());
+            let account = executor(transport.clone()).with_usage_sink(usage.clone());
+            let outcome = account
+                .execute_for_model(target(), Some("sonnet"), alias_create_body(), true)
+                .await
+                .unwrap();
+            assert_eq!(outcome.response().status(), 502);
+            let error: Value = serde_json::from_slice(outcome.response().body()).unwrap();
+            assert_eq!(error["error"]["type"], "api_error");
+            assert!(error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected_message));
+            assert_eq!(
+                outcome.response().headers()["content-type"],
+                ["application/json"]
+            );
+            assert!(!outcome.refreshed());
+            assert!(usage.0.lock().unwrap().is_empty());
+            let continuation = account
+                .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), true)
+                .await
+                .unwrap();
+            assert_eq!(continuation.response().status(), 404);
+            assert!(continuation.request_scoped());
+            assert_eq!(transport.authorizations.lock().unwrap().len(), 1);
+        }
+    }
+
+    struct AliasUsageStreamTransport {
+        stopped: bool,
+        terminal_delimited: bool,
+        failure: Option<ClaudeMessagesTransportFailure>,
+    }
+
+    impl ClaudeMessagesStreamingTransport for AliasUsageStreamTransport {
+        fn execute_stream<'a>(
+            &'a self,
+            _: &'a ClaudeMessagesRequest,
+            _: Duration,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            ClaudeMessagesStreamResponse,
+                            ClaudeMessagesTransportFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let (sender, receiver) = mpsc::channel(2);
+                let mut body = alias_buffered_sse_body(self.stopped);
+                if self.stopped && !self.terminal_delimited {
+                    let suffix = b"\n\ndata: [DONE]\n\n";
+                    assert!(body.ends_with(suffix));
+                    body.truncate(body.len() - suffix.len());
+                }
+                sender.try_send(Ok(body)).unwrap();
+                if let Some(error) = self.failure {
+                    sender.try_send(Err(error)).unwrap();
+                }
+                drop(sender);
+                Ok(ClaudeMessagesStreamResponse::new(200, None, receiver))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_stream_terminal_usage_and_cache_lane() {
+        for (failure, terminal_delimited) in [
+            (ClaudeMessagesTransportFailure::Timeout, true),
+            (ClaudeMessagesTransportFailure::Cancelled, true),
+            (ClaudeMessagesTransportFailure::Protocol, false),
+        ] {
+            let transport = thread_fixture_transport(vec![200], &alias_response_body());
+            let usage = Arc::new(BufferedAliasUsageSink::default());
+            let cooldowns = Arc::new(MemoryCooldownStore::default());
+            let account = executor(transport.clone())
+                .with_usage_sink(usage.clone())
+                .with_account_state_clock(
+                    "account-a",
+                    Arc::new(CooldownConductor::new(cooldowns.clone())),
+                    Arc::new(FixedAccountClock),
+                )
+                .unwrap()
+                .with_stream_transport(Arc::new(AliasUsageStreamTransport {
+                    stopped: true,
+                    terminal_delimited,
+                    failure: Some(failure),
+                }));
+            let outcome = account
+                .execute_stream_for_model(target(), Some("sonnet"), alias_create_body())
+                .await
+                .unwrap();
+            let previous_cooldowns = cooldowns.0.lock().unwrap().clone();
+            let mut stream = outcome.into_response();
+            let mut restored_name = false;
+            while let Some(frame) = stream.next_chunk().await {
+                let frame = std::str::from_utf8(frame.as_ref().unwrap()).unwrap();
+                restored_name |= frame.contains("\"name\":\"Read\"");
+            }
+            assert!(
+                restored_name,
+                "event-prefixed tool frames restore client names"
+            );
+            stream.record_terminal_failure().await;
+            assert!(
+                *cooldowns.0.lock().unwrap() == previous_cooldowns,
+                "transport failure after message_stop cannot cool a completed account"
+            );
+            drop(stream);
+            let measurements = usage.0.lock().unwrap();
+            assert_eq!(measurements.len(), 1);
+            assert_eq!(measurements[0].input_tokens, 7);
+            assert_eq!(measurements[0].output_tokens, 5);
+            assert_eq!(measurements[0].cache_read_tokens, 11);
+            assert_eq!(measurements[0].cache_creation_tokens, 13);
+            assert_eq!(measurements[0].total_tokens, 36);
+            drop(measurements);
+            let next = account
+                .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), false)
+                .await
+                .unwrap();
+            assert_eq!(next.response().status(), 200);
+            assert_eq!(transport.authorizations.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_alias_partial_stream_usage_is_measured_once() {
+        for mode in 0..3 {
+            let usage = Arc::new(BufferedAliasUsageSink::default());
+            let account = executor(thread_fixture_transport(vec![200], &alias_response_body()))
+                .with_usage_sink(usage.clone())
+                .with_stream_transport(Arc::new(AliasUsageStreamTransport {
+                    stopped: false,
+                    terminal_delimited: true,
+                    failure: (mode == 1).then_some(ClaudeMessagesTransportFailure::Cancelled),
+                }));
+            let outcome = account
+                .execute_stream_for_model(target(), Some("sonnet"), alias_create_body())
+                .await
+                .unwrap();
+            let mut stream = outcome.into_response();
+            while let Some(frame) = stream.next_chunk().await {
+                match frame {
+                    Ok(frame) => {
+                        if mode == 2
+                            && std::str::from_utf8(&frame)
+                                .unwrap()
+                                .contains("message_delta")
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        assert_eq!(mode, 1);
+                        assert_eq!(error, ClaudeMessagesTransportFailure::Cancelled);
+                    }
+                }
+            }
+            drop(stream);
+            let measurements = usage.0.lock().unwrap();
+            assert_eq!(
+                measurements.len(),
+                1,
+                "EOF, cancellation and drop publish once"
+            );
+            assert_eq!(measurements[0].input_tokens, 7);
+            assert_eq!(measurements[0].output_tokens, 5);
+            assert_eq!(measurements[0].cache_read_tokens, 11);
+            assert_eq!(measurements[0].cache_creation_tokens, 13);
+            assert_eq!(measurements[0].total_tokens, 36);
+            drop(measurements);
+            let next = account
+                .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), false)
+                .await
+                .unwrap();
+            assert_eq!(
+                next.response().status(),
+                404,
+                "partial usage does not publish continuity"
+            );
+        }
+    }
+
+    const THREAD_MISSING_BODY: &[u8] = br#"{"type":"error","error":{"type":"not_found_error","message":"No thread state was found for the requested previous_message_id."}}"#;
+
+    struct ThreadBootstrapTransport {
+        status: u16,
+        body: Vec<u8>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ClaudeMessagesStreamingTransport for ThreadBootstrapTransport {
+        fn execute_stream<'a>(
+            &'a self,
+            _: &'a ClaudeMessagesRequest,
+            _: Duration,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            ClaudeMessagesStreamResponse,
+                            ClaudeMessagesTransportFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (sender, receiver) = mpsc::channel(1);
+                if self.status == 200 {
+                    sender.try_send(Ok(b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"thread-fixture\"}}\n\n".to_vec())).unwrap();
+                }
+                drop(sender);
+                Ok(
+                    ClaudeMessagesStreamResponse::new(self.status, None, receiver)
+                        .with_error_body(self.body.clone()),
+                )
+            })
+        }
+    }
+
+    fn thread_fixture_pool(
+        first: Arc<SequenceTransport>,
+        second: Arc<SequenceTransport>,
+        streams: Option<(
+            Arc<dyn ClaudeMessagesStreamingTransport>,
+            Arc<dyn ClaudeMessagesStreamingTransport>,
+        )>,
+    ) -> (ClaudeSubscriptionAccountPool, Arc<MemoryCooldownStore>) {
+        let cooldowns = Arc::new(MemoryCooldownStore::default());
+        let conductor = Arc::new(CooldownConductor::new(cooldowns.clone()));
+        let mut account_a = executor(first);
+        let mut account_b = executor(second);
+        if let Some((stream_a, stream_b)) = streams {
+            account_a = account_a.with_stream_transport(stream_a);
+            account_b = account_b.with_stream_transport(stream_b);
+        }
+        let account_a = Arc::new(
+            account_a
+                .with_account_state_clock(
+                    "account-a",
+                    conductor.clone(),
+                    Arc::new(FixedAccountClock),
+                )
+                .unwrap(),
+        );
+        let account_b = Arc::new(
+            account_b
+                .with_account_state_clock("account-b", conductor, Arc::new(FixedAccountClock))
+                .unwrap(),
+        );
+        let candidates = ["account-a", "account-b"]
+            .into_iter()
+            .map(|auth_id| AccountCandidate {
+                auth_id: auth_id.to_owned(),
+                provider: "claude".to_owned(),
+                priority: 0,
+                weight: 1,
+                websocket_enabled: false,
+                supported_models: Vec::new(),
+                disabled: false,
+            })
+            .collect();
+        let pool = ClaudeSubscriptionAccountPool::with_clock(
+            Arc::new(AccountRouter::with_strategy(
+                cooldowns.clone(),
+                crate::sdk::cliproxy::auth::SchedulerStrategy::FillFirst,
+            )),
+            candidates,
+            HashMap::from([
+                ("account-a".to_owned(), account_a),
+                ("account-b".to_owned(), account_b),
+            ]),
+            Arc::new(FixedAccountClock),
+        )
+        .unwrap()
+        .with_targets(HashMap::from([
+            ("account-a".to_owned(), target()),
+            ("account-b".to_owned(), target()),
+        ]))
+        .unwrap();
+        (pool, cooldowns)
+    }
+
+    fn thread_fixture_transport(statuses: Vec<u16>, body: &[u8]) -> Arc<SequenceTransport> {
+        let mut transport = SequenceTransport::statuses(statuses);
+        transport.response_body = body.to_vec();
+        Arc::new(transport)
+    }
+
+    fn thread_fixture_stream(status: u16, body: &[u8]) -> Arc<ThreadBootstrapTransport> {
+        Arc::new(ThreadBootstrapTransport {
+            status,
+            body: body.to_vec(),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_pool_unary_preserves_account_only_for_missing_thread() {
+        for (status, body, neutral) in [
+            (404, THREAD_MISSING_BODY, true),
+            (
+                404,
+                br#"{"error":{"type":"not_found_error","message":"model not found"}}"#.as_slice(),
+                false,
+            ),
+            (500, THREAD_MISSING_BODY, false),
+        ] {
+            let first = thread_fixture_transport(vec![status], body);
+            let second = Arc::new(SequenceTransport::statuses(vec![200]));
+            let (pool, cooldowns) = thread_fixture_pool(first.clone(), second.clone(), None);
+            let outcome = pool
+                .execute(target(), "sonnet", b"{}".to_vec(), false)
+                .await
+                .unwrap();
+            if neutral {
+                assert_eq!(outcome.selected_auth_id(), "account-a");
+                assert_eq!(outcome.attempted_auth_ids(), ["account-a"]);
+                assert_eq!(outcome.outcome().response().body(), body);
+                assert!(outcome.outcome().request_scoped());
+                assert!(second.authorizations.lock().unwrap().is_empty());
+                assert!(cooldowns.0.lock().unwrap().is_empty());
+            } else {
+                assert_eq!(outcome.selected_auth_id(), "account-b");
+                assert_eq!(outcome.attempted_auth_ids(), ["account-a", "account-b"]);
+                assert_eq!(cooldowns.0.lock().unwrap().len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_pool_after_401_keeps_refreshed_credential_and_cache_lane() {
+        let first = thread_fixture_transport(vec![401, 404], THREAD_MISSING_BODY);
+        let second = Arc::new(SequenceTransport::statuses(vec![200]));
+        let (pool, cooldowns) = thread_fixture_pool(first.clone(), second.clone(), None);
+        let outcome = pool
+            .execute(target(), "sonnet", b"{}".to_vec(), false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.selected_auth_id(), "account-a");
+        assert_eq!(outcome.attempted_auth_ids(), ["account-a"]);
+        assert!(outcome.outcome().request_scoped());
+        assert!(second.authorizations.lock().unwrap().is_empty());
+        let headers = first.authorizations.lock().unwrap();
+        assert_eq!(headers.len(), 2);
+        assert!(headers[0].contains("access-old"));
+        assert!(headers[1].contains("access-new"));
+        assert!(cooldowns.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_pool_stream_bootstrap_preserves_account_and_real_failover() {
+        for (body, neutral) in [
+            (THREAD_MISSING_BODY, true),
+            (
+                br#"{"error":{"type":"not_found_error","message":"model not found"}}"#.as_slice(),
+                false,
+            ),
+        ] {
+            let first = thread_fixture_stream(404, body);
+            let second = thread_fixture_stream(200, b"");
+            let (pool, cooldowns) = thread_fixture_pool(
+                Arc::new(SequenceTransport::statuses(vec![200])),
+                Arc::new(SequenceTransport::statuses(vec![200])),
+                Some((first.clone(), second.clone())),
+            );
+            let outcome = pool
+                .execute_stream_configured("sonnet", b"{}".to_vec())
+                .await
+                .unwrap();
+            assert_eq!(first.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            if neutral {
+                assert_eq!(outcome.selected_auth_id(), "account-a");
+                assert_eq!(outcome.attempted_auth_ids(), ["account-a"]);
+                assert!(outcome.outcome().request_scoped());
+                assert_eq!(outcome.outcome().response().error_body(), body);
+                assert_eq!(second.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+                assert!(cooldowns.0.lock().unwrap().is_empty());
+            } else {
+                assert_eq!(outcome.selected_auth_id(), "account-b");
+                assert_eq!(second.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+                assert_eq!(cooldowns.0.lock().unwrap().len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_claude_thread_pool_adapter_returns_replay_body_for_unary_and_bootstrap() {
+        use crate::sdk::cliproxy::executor::RequestTerminatedError;
+        use crate::sdk::pluginapi::{ExecutorRequest, ProviderExecutor};
+        for stream in [false, true] {
+            let first = thread_fixture_transport(vec![404], THREAD_MISSING_BODY);
+            let second = Arc::new(SequenceTransport::statuses(vec![200]));
+            let stream_a = thread_fixture_stream(404, THREAD_MISSING_BODY);
+            let stream_b = thread_fixture_stream(200, b"");
+            let (pool, cooldowns) = thread_fixture_pool(
+                first,
+                second.clone(),
+                Some((stream_a.clone(), stream_b.clone())),
+            );
+            let adapter =
+                crate::internal::runtime::executor::ClaudeProviderExecutor::new(Arc::new(pool));
+            let request = ExecutorRequest {
+                auth_id: "account-a".to_owned(),
+                auth_provider: "claude".to_owned(),
+                model: "sonnet".to_owned(),
+                payload: b"{}".to_vec(),
+                stream,
+                ..ExecutorRequest::default()
+            };
+            let error = if stream {
+                match adapter.execute_stream(request).await {
+                    Err(error) => error,
+                    Ok(_) => panic!("Missing thread must fail before SSE begins"),
+                }
+            } else {
+                adapter.execute(request).await.unwrap_err()
+            };
+            let direct = error.downcast_ref::<RequestTerminatedError>().unwrap();
+            assert_eq!(direct.http_status, 404);
+            let value: Value = serde_json::from_slice(&direct.body).unwrap();
+            assert_eq!(value["error"]["details"]["error_code"], "thread_not_found");
+            assert!(
+                crate::sdk::cliproxy::auth::conductor_execution::is_request_scoped_plugin_error(
+                    &error
+                )
+            );
+            assert!(second.authorizations.lock().unwrap().is_empty());
+            assert_eq!(stream_b.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert!(cooldowns.0.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn candidate_claude_thread_wrapped_auth_error_remains_request_scoped() {
+        #[derive(Debug)]
+        struct Wrapped(crate::sdk::cliproxy::auth::AuthError);
+        impl std::fmt::Display for Wrapped {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("wrapped upstream failure")
+            }
+        }
+        impl std::error::Error for Wrapped {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        for (status, expected) in [(404, true), (500, false)] {
+            let error: crate::sdk::pluginapi::PluginExecutionError =
+                Arc::new(Wrapped(crate::sdk::cliproxy::auth::AuthError {
+                    code: "upstream".to_owned(),
+                    message: String::from_utf8(THREAD_MISSING_BODY.to_vec()).unwrap(),
+                    http_status: status,
+                    ..Default::default()
+                }));
+            assert_eq!(
+                crate::sdk::cliproxy::auth::conductor_execution::is_request_scoped_plugin_error(
+                    &error
+                ),
+                expected
+            );
+            assert_eq!(
+                crate::sdk::cliproxy::auth::conductor_execution::plugin_error_status(&error),
+                status
+            );
+        }
+    }
+
     #[tokio::test]
     async fn oauth_tool_names_are_request_local_and_round_trip() {
         let glob_alias = super::super::helps::claude_mcp_tool_alias("access-old", "glob", 0);
@@ -2169,10 +3088,15 @@ mod tests {
             stream_line_buffer: Vec::new(),
             stream_eof: false,
             usage_sink: None,
+            pending_transport_failure: None,
+            usage_buffer: StreamUsageBuffer::default(),
+            usage_published: false,
             diagnostics_state: ClaudeDiagnosticsRequestState::default(),
             diagnostics_message_id: String::new(),
             diagnostics_completed: false,
             diagnostics_committed: false,
+            oauth_tool_aliases: Arc::new(ClaudeOAuthToolAliasStore::default()),
+            thread_alias_keys: None,
         };
         let line = stream.next_chunk().await.unwrap().unwrap();
         assert!(String::from_utf8(line)

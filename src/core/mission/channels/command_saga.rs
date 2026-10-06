@@ -2264,7 +2264,7 @@ pub(crate) fn business_command_core_diagnostics(root: &Path) -> Result<Value> {
     // Single flight: when a previous value exists, exactly one caller
     // recomputes and every concurrent caller gets that value immediately. A
     // 3 s TTL alone still let all HTTP workers recompute at once whenever it
-    // expired; on a ~4x slower on-prem host (measured 06.10.2026) a
+    // expired; on a ~4x slower on-prem host (customer, 06.10.2026) a
     // recomputation outlasted the TTL under that contention and port 8765
     // stopped answering.
     let _refresh = match stale {

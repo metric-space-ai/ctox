@@ -338,7 +338,7 @@ fn pump() -> Option<&'static Pump> {
 /// file, but callers name it differently: the service passes the install root,
 /// `refresh_after_finalization` derives `db_path.parent().parent()` (the
 /// parent of the state directory). The pump then projected the same 3.4 GB
-/// core database twice per sweep with two writers; on the measured on-prem host
+/// core database twice per sweep with two writers; on the customer on-prem host
 /// each pass took 40-100 s (06.10.2026). The first root seen for a database
 /// stays its representative.
 fn pump_root(root: &Path) -> PathBuf {
@@ -569,7 +569,7 @@ impl Drop for ProjectionTiming<'_> {
 
 // Opening the core database parses its multi-MB process-mining trigger
 // schema; every cockpit pass did that again (core_open 1.9 s per pass on the
-// Measured on-prem host, 06.10.2026). The projection thread keeps its read
+// customer on-prem host, 06.10.2026). The projection thread keeps its read
 // connection per root and reopens only when the database file was replaced or
 // a pass failed.
 type CoreIdentity = Option<(u64, u64)>;

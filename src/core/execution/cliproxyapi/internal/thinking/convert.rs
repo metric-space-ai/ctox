@@ -2,6 +2,8 @@
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+use super::ModelInfoView;
+#[cfg(test)]
 use crate::internal::registry::ModelInfo;
 
 use super::{
@@ -113,7 +115,15 @@ impl From<i32> for ModelCapability {
     }
 }
 
+#[cfg(test)]
 pub(super) fn detect_model_capability(model_info: Option<&ModelInfo>) -> ModelCapability {
+    let view = model_info.map(ModelInfoView::from);
+    detect_model_capability_view(view.as_ref())
+}
+
+pub(super) fn detect_model_capability_view(
+    model_info: Option<&ModelInfoView<'_>>,
+) -> ModelCapability {
     let Some(model_info) = model_info else {
         return ModelCapability::Unknown;
     };

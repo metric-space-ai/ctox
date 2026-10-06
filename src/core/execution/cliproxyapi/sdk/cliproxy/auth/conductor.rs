@@ -51,6 +51,23 @@ pub trait AuthPreparer: Send + Sync {
 
 pub type AuthPreparationError = Arc<dyn Error + Send + Sync + 'static>;
 
+/// Request-time credential refresh over the selected asynchronous transport.
+/// The returned snapshot is a candidate: only the manager may publish it.
+pub trait AsyncAuthRefresher: Send + Sync {
+    fn should_refresh(&self, auth: &Auth) -> bool {
+        auth.auth_kind() == Some(super::AuthKind::OAuth)
+    }
+
+    fn credential_changed(&self, current: &Auth, failed: &Auth) -> bool {
+        super::access_token(current) != super::access_token(failed)
+    }
+
+    fn refresh<'a>(
+        &'a self,
+        auth: &'a Auth,
+    ) -> Pin<Box<dyn Future<Output = Result<Auth, AuthPreparationError>> + Send + 'a>>;
+}
+
 /// Type-safe Rust replacement for Go's runtime interface assertion from
 /// `ProviderExecutor` to `ExecutionSessionCloser`.
 ///
@@ -63,6 +80,7 @@ pub struct ProviderExecutorRegistration {
     refresher: Arc<dyn AuthRefresher>,
     execution: Option<Arc<dyn AsyncProviderExecutor>>,
     auth_preparer: Option<Arc<dyn AuthPreparer>>,
+    async_auth_refresher: Option<Arc<dyn AsyncAuthRefresher>>,
     session_closer: Option<Arc<dyn ExecutionSessionCloser>>,
 }
 
@@ -75,6 +93,7 @@ impl ProviderExecutorRegistration {
             refresher,
             execution: None,
             auth_preparer: None,
+            async_auth_refresher: None,
             session_closer: None,
         })
     }
@@ -93,6 +112,12 @@ impl ProviderExecutorRegistration {
     #[must_use]
     pub fn with_auth_preparer(mut self, preparer: Arc<dyn AuthPreparer>) -> Self {
         self.auth_preparer = Some(preparer);
+        self
+    }
+
+    #[must_use]
+    pub fn with_async_auth_refresher(mut self, refresher: Arc<dyn AsyncAuthRefresher>) -> Self {
+        self.async_auth_refresher = Some(refresher);
         self
     }
 
@@ -123,6 +148,11 @@ impl ProviderExecutorRegistration {
     }
 
     #[must_use]
+    pub fn async_auth_refresher(&self) -> Option<Arc<dyn AsyncAuthRefresher>> {
+        self.async_auth_refresher.clone()
+    }
+
+    #[must_use]
     pub fn session_closer(&self) -> Option<Arc<dyn ExecutionSessionCloser>> {
         self.session_closer.clone()
     }
@@ -135,6 +165,11 @@ impl ProviderExecutorRegistration {
                 _ => false,
             }
             && match (&self.auth_preparer, &other.auth_preparer) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+            && match (&self.async_auth_refresher, &other.async_auth_refresher) {
                 (None, None) => true,
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
                 _ => false,
@@ -154,6 +189,10 @@ impl fmt::Debug for ProviderExecutorRegistration {
             .field("provider", &self.provider)
             .field("has_execution", &self.execution.is_some())
             .field("has_auth_preparer", &self.auth_preparer.is_some())
+            .field(
+                "has_async_auth_refresher",
+                &self.async_auth_refresher.is_some(),
+            )
             .field("has_session_closer", &self.session_closer.is_some())
             .finish_non_exhaustive()
     }
@@ -444,8 +483,35 @@ impl AuthManager {
         options: AuthMutationOptions,
         now: DateTime<Utc>,
     ) -> Result<Option<Auth>, AuthManagerError> {
+        self.publish_auth_update(|| self.lifecycle.update(auth, options, now))
+    }
+
+    pub fn update_prepared_auth(
+        &self,
+        base: &Auth,
+        auth: Auth,
+        options: AuthMutationOptions,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Auth>, AuthManagerError> {
+        self.publish_auth_update(|| self.lifecycle.update_prepared(base, auth, options, now))
+    }
+
+    pub fn update_refreshed_auth(
+        &self,
+        base: &Auth,
+        auth: Auth,
+        options: AuthMutationOptions,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Auth>, AuthManagerError> {
+        self.publish_auth_update(|| self.lifecycle.update_refreshed(base, auth, options, now))
+    }
+
+    fn publish_auth_update(
+        &self,
+        operation: impl FnOnce() -> Result<Option<Auth>, super::AuthLifecycleError>,
+    ) -> Result<Option<Auth>, AuthManagerError> {
         let _guard = self.lock_mutation();
-        let updated = self.lifecycle.update(auth, options, now)?;
+        let updated = operation()?;
         if let Some(updated) = &updated {
             if let Err(error) = self.scheduler.refresh_entry(&updated.id) {
                 self.scheduler.remove(&updated.id);

@@ -116,8 +116,8 @@ impl ClaudeDeviceProfile {
 impl Default for ClaudeDeviceProfile {
     fn default() -> Self {
         Self {
-            user_agent: "claude-cli/2.1.220 (external, cli)".to_owned(),
-            package_version: "0.94.0".to_owned(),
+            user_agent: "claude-cli/2.1.280 (external, cli)".to_owned(),
+            package_version: "0.112.1".to_owned(),
             runtime_version: "v26.3.0".to_owned(),
             os: "MacOS".to_owned(),
             arch: "arm64".to_owned(),
@@ -1102,8 +1102,8 @@ mod tests {
     #[test]
     fn device_profile_default_matches_candidate_capture() {
         let profile = ClaudeDeviceProfile::default();
-        assert_eq!(profile.user_agent(), "claude-cli/2.1.220 (external, cli)");
-        assert_eq!(profile.package_version(), "0.94.0");
+        assert_eq!(profile.user_agent(), "claude-cli/2.1.280 (external, cli)");
+        assert_eq!(profile.package_version(), "0.112.1");
         assert_eq!(profile.runtime_version(), "v26.3.0");
         assert_eq!(profile.os(), "MacOS");
         assert_eq!(profile.arch(), "arm64");

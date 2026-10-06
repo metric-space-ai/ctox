@@ -2,20 +2,32 @@
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use crate::internal::registry::{ModelInfo, ThinkingSupport};
+use super::{ModelInfoView, ThinkingSupportView};
+use crate::internal::registry::ModelInfo;
 
 use super::{
-    convert::detect_model_capability, convert_budget_to_level, convert_level_to_budget, ErrorCode,
-    ModelCapability, ThinkingConfig, ThinkingError, ThinkingLevel, ThinkingMode, LEVEL_AUTO,
-    LEVEL_NONE,
+    convert::detect_model_capability_view as detect_model_capability, convert_budget_to_level,
+    convert_level_to_budget, ErrorCode, ModelCapability, ThinkingConfig, ThinkingError,
+    ThinkingLevel, ThinkingMode, LEVEL_AUTO, LEVEL_NONE,
 };
 
 const STANDARD_LEVEL_ORDER: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Validates and normalizes a thinking configuration against model capability.
 pub fn validate_config(
-    mut config: ThinkingConfig,
+    config: ThinkingConfig,
     model_info: Option<&ModelInfo>,
+    from_format: &str,
+    to_format: &str,
+    from_suffix: bool,
+) -> Result<ThinkingConfig, ThinkingError> {
+    let view = model_info.map(ModelInfoView::from);
+    validate_config_view(config, view.as_ref(), from_format, to_format, from_suffix)
+}
+
+pub(super) fn validate_config_view(
+    mut config: ThinkingConfig,
+    model_info: Option<&ModelInfoView<'_>>,
     from_format: &str,
     to_format: &str,
     from_suffix: bool,
@@ -107,13 +119,13 @@ pub fn validate_config(
 
     if !support.levels.is_empty()
         && config.mode == ThinkingMode::Level
-        && !is_level_supported(config.level.as_str(), support.levels)
+        && !is_level_supported(config.level.as_str(), support.levels.as_ref())
     {
         if allow_clamp_unsupported {
             config.level = clamp_level(config.level, model_info);
         }
-        if !is_level_supported(config.level.as_str(), support.levels) {
-            let valid_levels = normalize_levels(support.levels).join(", ");
+        if !is_level_supported(config.level.as_str(), support.levels.as_ref()) {
+            let valid_levels = normalize_levels(support.levels.as_ref()).join(", ");
             let normalized_level = config.level.as_str().to_ascii_lowercase();
             return Err(ThinkingError::new(
                 ErrorCode::LevelNotSupported,
@@ -144,7 +156,7 @@ pub fn validate_config(
         config = convert_auto_to_mid_range(config, support);
         if config.mode == ThinkingMode::Level
             && !support.levels.is_empty()
-            && !is_level_supported(config.level.as_str(), support.levels)
+            && !is_level_supported(config.level.as_str(), support.levels.as_ref())
         {
             config.level = clamp_level(config.level, model_info);
         }
@@ -162,7 +174,7 @@ pub fn validate_config(
         }
 
         let cannot_disable_level_model =
-            !support.zero_allowed && !is_level_supported(LEVEL_NONE, support.levels);
+            !support.zero_allowed && !is_level_supported(LEVEL_NONE, support.levels.as_ref());
         if config.mode == ThinkingMode::None
             && !support.levels.is_empty()
             && (config.budget > 0 || cannot_disable_level_model)
@@ -176,7 +188,7 @@ pub fn validate_config(
 
 fn convert_auto_to_mid_range(
     mut config: ThinkingConfig,
-    support: &ThinkingSupport,
+    support: &ThinkingSupportView<'_>,
 ) -> ThinkingConfig {
     let (min, max) = support_bounds(support);
     if !support.levels.is_empty() && min == 0 && max == 0 {
@@ -200,10 +212,10 @@ fn convert_auto_to_mid_range(
     config
 }
 
-fn clamp_level(level: ThinkingLevel, model_info: Option<&ModelInfo>) -> ThinkingLevel {
+fn clamp_level(level: ThinkingLevel, model_info: Option<&ModelInfoView<'_>>) -> ThinkingLevel {
     let supported = model_info
         .and_then(|info| info.thinking.as_ref())
-        .map(|support| support.levels)
+        .map(|support| support.levels.as_ref())
         .unwrap_or_default();
     if supported.is_empty() || is_level_supported(level.as_str(), supported) {
         return level;
@@ -228,7 +240,7 @@ fn clamp_level(level: ThinkingLevel, model_info: Option<&ModelInfo>) -> Thinking
         .unwrap_or(level)
 }
 
-fn clamp_budget(value: isize, model_info: Option<&ModelInfo>) -> isize {
+fn clamp_budget(value: isize, model_info: Option<&ModelInfoView<'_>>) -> isize {
     let Some(support) = model_info.and_then(|info| info.thinking.as_ref()) else {
         return value;
     };
@@ -255,15 +267,15 @@ fn clamp_budget(value: isize, model_info: Option<&ModelInfo>) -> isize {
     }
 }
 
-fn support_bounds(support: &ThinkingSupport) -> (isize, isize) {
+fn support_bounds(support: &ThinkingSupportView<'_>) -> (isize, isize) {
     (
         support
             .min
-            .map(|value| isize::try_from(value).unwrap_or(isize::MAX))
+            .map(|value| value.clamp(isize::MIN as i128, isize::MAX as i128) as isize)
             .unwrap_or_default(),
         support
             .max
-            .map(|value| isize::try_from(value).unwrap_or(isize::MAX))
+            .map(|value| value.clamp(isize::MIN as i128, isize::MAX as i128) as isize)
             .unwrap_or_default(),
     )
 }

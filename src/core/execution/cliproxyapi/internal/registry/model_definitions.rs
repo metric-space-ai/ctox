@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub(super) const STATIC_MODELS_JSON: &str = include_str!("models/models.json");
+/// Internal tri-state native metadata; public model lists omit this field.
+/// ref: internal/registry/model_registry.go @ d7914afd
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NativeCapabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<bool>,
+}
+
 /// Lightweight capability view retained for the translated thinking pipeline.
 /// The full dynamically owned wire model is [`RegistryModelInfo`].
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +99,12 @@ pub struct RegistryModelInfo {
     pub supported_output_modalities: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub supports_web_search: bool,
+    /// Decode internal catalog fields, but never expose them in public JSON.
+    /// ref: internal/registry/model_registry.go:107-121 @ d7914afd
+    #[serde(default, skip_serializing)]
+    pub support_configuration_update: bool,
+    #[serde(default, skip_serializing)]
+    pub native_capabilities: Option<NativeCapabilities>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<RegistryThinkingSupport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,6 +158,10 @@ pub struct StaticModelsCatalog {
     pub antigravity: Vec<RegistryModelInfo>,
     #[serde(default)]
     pub xai: Vec<RegistryModelInfo>,
+    #[serde(default)]
+    pub meta: Vec<RegistryModelInfo>,
+    #[serde(default)]
+    pub devin: Vec<RegistryModelInfo>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -191,6 +209,8 @@ pub fn validate_models_catalog(
         ("kimi", &catalog.kimi),
         ("antigravity", &catalog.antigravity),
         ("xai", &catalog.xai),
+        ("meta", &catalog.meta),
+        ("devin", &catalog.devin),
     ] {
         let mut seen = HashSet::with_capacity(models.len());
         for (index, model) in models.iter().enumerate() {
@@ -227,6 +247,13 @@ pub fn models_for_channel(
         "kimi" => catalog.kimi.clone(),
         "antigravity" => catalog.antigravity.clone(),
         "xai" | "x-ai" | "grok" => with_xai_builtins(catalog.xai.clone()),
+        "meta" | "muse" => catalog.meta.clone(),
+        "devin" => with_devin_builtins(if catalog.devin.is_empty() {
+            super::devin_builtin::static_devin_models()
+        } else {
+            catalog.devin.clone()
+        }),
+        "gemini-interactions" => catalog.gemini.clone(),
         _ => return None,
     };
     Some(models)
@@ -239,7 +266,12 @@ pub fn lookup_static_registry_model_info(
     if model_id.is_empty() {
         return None;
     }
-    [
+    let devin_static = if catalog.devin.is_empty() {
+        super::devin_builtin::static_devin_models()
+    } else {
+        Vec::new()
+    };
+    let found = [
         &catalog.claude,
         &catalog.gemini,
         &catalog.vertex,
@@ -248,11 +280,15 @@ pub fn lookup_static_registry_model_info(
         &catalog.kimi,
         &catalog.antigravity,
         &catalog.xai,
+        &catalog.devin,
+        &devin_static,
+        &catalog.meta,
     ]
     .into_iter()
     .flatten()
     .find(|model| model.id == model_id)
-    .cloned()
+    .cloned();
+    found
 }
 
 pub fn model_override_headers(
@@ -277,6 +313,13 @@ pub fn with_codex_builtins(models: Vec<RegistryModelInfo>) -> Vec<RegistryModelI
 
 pub fn with_xai_builtins(models: Vec<RegistryModelInfo>) -> Vec<RegistryModelInfo> {
     upsert_model_infos(models, xai_builtins())
+}
+
+pub fn with_devin_builtins(models: Vec<RegistryModelInfo>) -> Vec<RegistryModelInfo> {
+    upsert_model_infos(
+        models,
+        vec![super::devin_builtin::devin_builtin_swe16_slow()],
+    )
 }
 
 fn upsert_model_infos(
@@ -310,6 +353,9 @@ fn codex_builtins() -> Vec<RegistryModelInfo> {
     [
         ("gpt-image-1.5", "GPT Image 1.5"),
         ("gpt-image-2", "GPT Image 2"),
+        ("gpt-image-2.5-flare", "GPT Image 2.5 Flare"),
+        ("gpt-image-2.5-sunburst", "GPT Image 2.5 Sunburst"),
+        ("gpt-image-2.5", "GPT Image 2.5"),
     ]
     .into_iter()
     .map(|(id, display_name)| RegistryModelInfo {
@@ -338,21 +384,35 @@ fn xai_builtins() -> Vec<RegistryModelInfo> {
             "xAI Grok higher-fidelity image generation model.",
         ),
         (
+            "grok-imagine-image-2.0",
+            "Grok Imagine Image 2.0",
+            "xAI Grok image generation model.",
+        ),
+        (
             "grok-imagine-video",
             "Grok Imagine Video",
             "xAI Grok video generation model.",
         ),
         (
+            "grok-imagine-video-1.5",
+            "Grok Imagine Video 1.5",
+            "xAI Grok video generation model.",
+        ),
+        (
             "grok-imagine-video-1.5-preview",
             "Grok Imagine Video 1.5 Preview",
-            "xAI Grok preview video generation model.",
+            "Compatibility alias for the xAI Grok video generation model.",
         ),
     ]
     .into_iter()
     .map(|(id, display_name, description)| RegistryModelInfo {
         id: id.to_owned(),
         object: "model".to_owned(),
-        created: 1_735_689_600,
+        created: if id == "grok-imagine-image-2.0" {
+            1_786_060_800
+        } else {
+            1_735_689_600
+        },
         owned_by: "xai".to_owned(),
         provider_type: "xai".to_owned(),
         display_name: display_name.to_owned(),

@@ -323,7 +323,7 @@ fn application_helpers_preserve_pinned_and_legacy_semantics() {
         legacy.get("User-Agent").unwrap(),
         &vec![DEFAULT_CLAUDE_FINGERPRINT_USER_AGENT.to_owned()]
     );
-    assert_eq!(default_claude_version(&defaults), "2.1.220");
+    assert_eq!(default_claude_version(&defaults), "2.1.280");
 
     let prefix_match = ClaudeHeaderDefaults {
         user_agent: "claude-cli/2.8.4suffix".to_owned(),
@@ -348,6 +348,22 @@ fn local_resolution_rejects_invalid_software_signals() {
         .resolve_required(
             None,
             Some("auth-invalid"),
+            "api-key",
+            Some(&headers),
+            &defaults,
+        )
+        .unwrap();
+    assert_eq!(profile, default_claude_device_profile(&defaults));
+}
+
+#[test]
+fn local_resolution_keeps_exact_measured_software_baseline() {
+    let headers = device_headers("claude-cli/2.1.281 (external, cli)");
+    let defaults = ClaudeHeaderDefaults::default();
+    let profile = ClaudeDeviceProfileCache::new()
+        .resolve_required(
+            None,
+            Some("auth-newer-patch-signals"),
             "api-key",
             Some(&headers),
             &defaults,
@@ -404,7 +420,7 @@ fn local_cache_separates_vscode_agent_sdk_from_cli() {
             &defaults,
         )
         .unwrap();
-    let vscode_user_agent = "claude-cli/2.1.220 (external, claude-vscode, agent-sdk/0.3.220)";
+    let vscode_user_agent = "claude-cli/2.1.280 (external, claude-vscode, agent-sdk/0.3.220)";
     let vscode = cache
         .resolve_required(
             None,

@@ -70,6 +70,13 @@ impl TestHomeTransport {
             .unwrap()));
     }
 
+    pub(super) fn push_dispatch(&self, response: serde_json::Value) {
+        self.responses
+            .lock()
+            .unwrap()
+            .push_back(Ok(serde_json::to_vec(&response).unwrap()));
+    }
+
     pub(super) fn requests(&self) -> Vec<Vec<u8>> {
         self.requests.lock().unwrap().clone()
     }

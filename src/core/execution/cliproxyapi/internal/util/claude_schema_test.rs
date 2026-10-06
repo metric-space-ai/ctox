@@ -2,7 +2,10 @@
 // Port-Status: ported
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use super::normalize_claude_tool_input_schema;
+use super::{
+    has_unsupported_unicode_property_escape, normalize_claude_tool_input_schema,
+    strip_unsupported_schema_patterns,
+};
 
 #[test]
 fn pinned_schema_cases_match_upstream() {
@@ -117,4 +120,68 @@ fn empty_non_object_and_lossy_utf8_boundaries_fall_back_like_go() {
         normalize_claude_tool_input_schema(b"{\"description\":\"\xff\"}"),
         "{\"description\":\"�\",\"properties\":{},\"type\":\"object\"}".as_bytes()
     );
+}
+
+#[test]
+fn unsupported_unicode_property_escapes_match_upstream() {
+    let cases = [
+        (
+            r#"^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\./[\]]{1,200}$"#,
+            true,
+        ),
+        (r#"^\P{L}+$"#, true),
+        (r#"^\\p{Cc}$"#, false),
+        (r#"^\\\p{Cc}$"#, true),
+        (r#"^\\\\p{Cc}$"#, false),
+        (r#"^[0-9a-f]{32}$"#, false),
+        (r#"^(?!__.*__$).{1,200}$"#, false),
+        (r#"^(a)\1$"#, false),
+        (r#"^[^\0]*$"#, true),
+        (r#"^[^\x00]*$"#, false),
+        (r#"^\\0$"#, false),
+        (r#"abc\"#, false),
+        (r#"\p"#, false),
+        (r#"\p{"#, true),
+        ("", false),
+    ];
+    for (pattern, want) in cases {
+        assert_eq!(
+            has_unsupported_unicode_property_escape(pattern),
+            want,
+            "{pattern:?}"
+        );
+    }
+}
+
+#[test]
+fn pattern_strip_is_schema_aware() {
+    let mut value = serde_json::json!({
+        "properties": {
+            "real_schema": {"type": "string", "pattern": r"\p{L}+"},
+            "regex_config": {
+                "type": "object",
+                "default": {"pattern": r"\p{L}+"},
+                "enum": [{"pattern": r"\p{N}+"}]
+            }
+        },
+        "patternProperties": {
+            r"^\p{L}+$": {"type": "string"},
+            "^[a-z]+$": {"type": "number", "pattern": r"^[^\0]*$"}
+        }
+    });
+    assert!(strip_unsupported_schema_patterns(&mut value));
+    assert!(value["properties"]["real_schema"].get("pattern").is_none());
+    assert_eq!(
+        value["properties"]["regex_config"]["default"]["pattern"],
+        r"\p{L}+"
+    );
+    assert_eq!(
+        value["properties"]["regex_config"]["enum"][0]["pattern"],
+        r"\p{N}+"
+    );
+    assert!(value["patternProperties"].get(r"^\p{L}+$").is_none());
+    assert!(value["patternProperties"]["^[a-z]+$"]
+        .get("pattern")
+        .is_none());
+    assert_eq!(value["patternProperties"]["^[a-z]+$"]["type"], "number");
 }

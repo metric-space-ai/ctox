@@ -13,6 +13,8 @@ fn forwarded_terminal_error_uses_responses_stream_chunk_not_http_error_body() {
     assert!(event.ends_with(b"\n\n"));
     let payload: Value = serde_json::from_slice(&event[6..event.len() - 2]).unwrap();
     assert_eq!(payload["type"], "error");
-    assert_eq!(payload["code"], "internal_server_error");
-    assert!(payload.get("error").is_none());
+    assert!(payload.get("code").is_none());
+    assert_eq!(payload["error"]["code"], "internal_server_error");
+    assert_eq!(payload["error"]["type"], "server_error");
+    assert_eq!(payload["error"]["message"], "unexpected EOF");
 }

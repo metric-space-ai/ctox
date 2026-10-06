@@ -160,3 +160,45 @@ fn negative_and_overflow_inputs_fail_closed() {
     assert_eq!(overflow.quality, TokenAccountingQuality::Inconsistent);
     assert!(overflow.valid());
 }
+
+#[test]
+fn valid_rejects_component_sums_that_overflow_int64() {
+    let input = TokenBreakdown {
+        schema_version: TOKEN_ACCOUNTING_SCHEMA_VERSION,
+        quality: TokenAccountingQuality::Complete,
+        total_tokens: 0,
+        input: TokenInputBreakdown {
+            total_tokens: 0,
+            uncached_tokens: i64::MAX,
+            cache_read_tokens: i64::MAX,
+            cache_write_tokens: 2,
+        },
+        ..TokenBreakdown::default()
+    };
+    assert!(!input.valid());
+
+    let output = TokenBreakdown {
+        schema_version: TOKEN_ACCOUNTING_SCHEMA_VERSION,
+        quality: TokenAccountingQuality::Complete,
+        total_tokens: 0,
+        output: TokenOutputBreakdown {
+            total_tokens: -2,
+            non_reasoning_tokens: i64::MAX,
+            reasoning_tokens: i64::MAX,
+        },
+        ..TokenBreakdown::default()
+    };
+    assert!(!output.valid());
+}
+
+#[test]
+fn subset_and_separate_reasoning_reject_cache_sum_overflow() {
+    let subset = new_subset_token_breakdown(i64::MAX, i64::MAX, i64::MAX, 0, 0, i64::MAX);
+    assert_ne!(subset.quality, TokenAccountingQuality::Complete);
+    assert!(subset.input.uncached_tokens >= 0);
+
+    let separate =
+        new_separate_reasoning_token_breakdown(i64::MAX, i64::MAX, i64::MAX, 0, 0, i64::MAX);
+    assert_ne!(separate.quality, TokenAccountingQuality::Complete);
+    assert!(separate.input.uncached_tokens >= 0);
+}

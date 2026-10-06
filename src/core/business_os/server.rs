@@ -49,7 +49,7 @@ const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 // Two lanes: dynamic requests (API, the index document that embeds the
 // launch context) and static shell assets. With one shared queue, four slow
-// API handlers made every JS/CSS file wait behind them: on the measured on-prem
+// API handlers made every JS/CSS file wait behind them: on the customer on-prem
 // host the index took 58 s and `shared/sync.js` 17 s (06.10.2026).
 const BUSINESS_OS_HTTP_WORKERS: usize = 8;
 const BUSINESS_OS_STATIC_HTTP_WORKERS: usize = 4;

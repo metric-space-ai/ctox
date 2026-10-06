@@ -9,6 +9,7 @@ pub mod browser;
 pub mod buildinfo;
 pub mod cache;
 pub mod client;
+pub mod clienterror;
 pub mod cmd;
 pub mod config;
 #[path = "constant/constant.rs"]
