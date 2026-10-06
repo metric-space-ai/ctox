@@ -70,6 +70,14 @@ a concurrent domain commit changed the source. Missing source/collection,
 corrupt receipt or continued source churn fails delivery and retains the proof.
 No cross-WAL atomicity is claimed.
 
+Accepted background controls without a domain application receipt still require
+their original native authorization receipt. Recovery with a redacted token
+reconstructs context in memory, rechecks the same actor's current module policy,
+and only then persists the private context. A denial leaves the original context,
+payload, admission hash and Core lifecycle unchanged. This ordering does not
+claim a cross-store authorization transaction or permit ownerless legacy effects
+to execute.
+
 The original command result is preserved even when subsequent domain edits
 changed the referenced records. Core completion is idempotent. A receipt that
 conflicts with an existing failed/cancelled terminal outcome is stopped for

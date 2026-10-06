@@ -19308,6 +19308,15 @@ pub(super) fn authorize_recoverable_background_control_command(
         Value::String("ctox-business-command-authorization-v1".to_string()),
     );
     recovered.client_context = Value::Object(recovered_context);
+    // Rebuilding context is preparation, not authority to persist it. A
+    // revoked current policy must leave the accepted private context intact.
+    let session = rxdb_authenticated_session(root, &recovered)?;
+    let decision = module_policy_decision(root, &session, permission, &recovered.module)?;
+    anyhow::ensure!(
+        decision.allowed,
+        "accepted recoverable command authorization is no longer valid: {}",
+        decision.display_reason
+    );
     let conn = open_store(root)?;
     conn.execute(
         "UPDATE business_commands
@@ -19320,13 +19329,6 @@ pub(super) fn authorize_recoverable_background_control_command(
         ],
     )?;
     drop(conn);
-    let session = rxdb_authenticated_session(root, &recovered)?;
-    let decision = module_policy_decision(root, &session, permission, &recovered.module)?;
-    anyhow::ensure!(
-        decision.allowed,
-        "accepted recoverable command authorization is no longer valid: {}",
-        decision.display_reason
-    );
     Ok(recovered)
 }
 
@@ -44982,6 +44984,99 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(commands, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn recoverable_control_denied_policy_preserves_private_context() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "recovery-redacted-token-revoked-policy";
+        seed_business_user(root, "operator", "chef")?;
+        let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+        let mut command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.into()),
+            module: "inventory".into(),
+            command_type: "external_sql.write".into(),
+            record_id: Some("inventory-item-42".into()),
+            payload: serde_json::json!({"source_id": "primary", "item_id": 42}),
+            client_context: serde_json::json!({
+                "capability_token": token, "actor": {"id": "operator"}
+            }),
+        };
+        let authorization = recoverable_background_control_authorization(root, &command)
+            .context("original native actor requires a receipt")?;
+        assert_eq!(authorization["allowed"], true);
+        channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&authorization),
+            )?,
+        )?;
+        command.client_context = redact_client_context_secrets(&command.client_context);
+        let conn = open_store(root)?;
+        conn.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status, payload_json,
+                 client_context_json, observed_at_ms)
+             VALUES (?1, ?2, ?3, ?4, 'accepted', ?5, ?6, 1)",
+            params![
+                command_id,
+                command.module,
+                command.command_type,
+                command.record_id,
+                serde_json::to_string(&command.payload)?,
+                serde_json::to_string(&command.client_context)?
+            ],
+        )?;
+        conn.execute(
+            "UPDATE business_users SET role = 'user' WHERE user_id = 'operator'",
+            [],
+        )?;
+        drop(conn);
+        let private_state = || -> anyhow::Result<(String, String, String, i64)> {
+            Ok(open_store(root)?.query_row(
+                "SELECT payload_json, client_context_json, status, observed_at_ms
+                 FROM business_commands WHERE command_id = ?1",
+                [command_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?)
+        };
+        let before = private_state()?;
+        let before_core = channels::business_command_projection(root, command_id)?;
+        let mut probe = command.clone();
+        probe.origin = CommandOrigin::TrustedLocal;
+        probe.client_context = serde_json::json!({
+            "owner_user_id": "operator", "actor": authorization["actor"].clone()
+        });
+        let current_session = rxdb_authenticated_session(root, &probe)?;
+        assert!(
+            !module_policy_decision(
+                root,
+                &current_session,
+                BusinessOsPermission::DataWrite,
+                "inventory"
+            )?
+            .allowed
+        );
+        let error = authorize_recoverable_background_control_command(root, &command)
+            .expect_err("current policy denial must precede context publication");
+        assert!(error
+            .to_string()
+            .contains("authorization is no longer valid"));
+        assert_eq!(
+            private_state()?,
+            before,
+            "denial cannot mutate accepted private state"
+        );
+        assert_eq!(
+            channels::business_command_projection(root, command_id)?,
+            before_core,
+            "denial cannot rewrite original intent, authority or lifecycle"
+        );
         Ok(())
     }
 
