@@ -4,7 +4,7 @@
 
 - Upstream: `a88197f845c979132c8978ea223c6af05cc81536`
 - Track A, accepted v7.2.116 standalone Rust-port release: **COMPLETE**
-- Current v8.0.15 update and promotion: **INCOMPLETE**
+- Current v8.0.16 update and promotion: **INCOMPLETE**
 - Current v8.0.15 Chat/Completions candidate now dispatches through the actual
   provider HTTP listener to the existing Responses-shaped account owner.
   Request-local translation preserves provider/header selection, session/cache
@@ -24,7 +24,7 @@
   terminal envelope instead of using the ordinary-client envelope. A prepared
   root-binary regression exercises the real instance router and account pool
   with both client identities and explicit/default provider selection. The
-  regression has not yet executed; it is separate from the 346 SDK cases.
+  regression has not yet executed; it is separate from the targeted SDK suite.
 
 - Accepted pin: **617/617 production + 442/442 tests strict**, complete
 - Upstream candidate `a88197f`: **111/111 reviews**, **10/10 gates**,
@@ -39,8 +39,8 @@
 - Historical accepted-pin capability ledger: **1,000 / 1,000 points**; this is
   explicitly not a project-completion percentage
 - Current gate: frozen candidate `d7914afdedca7af95ee974a42453dc49fc1388ce`
-  (tag `v8.0.13`, historical release floor). Current release target v8.0.15
-  is `a4acc9f752bd46571f737a10c04bf413656ab06b`. The accepted
+  (tag `v8.0.13`, historical release floor). Current release target v8.0.16
+  is `a2976eb8a303f11b4ea5177bce9f9ff752634dfc`. The accepted
 
   production pin remains `a88197f845c979132c8978ea223c6af05cc81536`.
   The earlier v8.0.11 and v8.0.12 reviews remain historical prerequisites;
@@ -89,7 +89,30 @@
   the accepted pin is unchanged.
 
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.13.
-- Latest observed upstream release: v8.0.15, published 2026-10-04 22:29:27 UTC,
+- Latest observed upstream release: v8.0.16, published 2026-10-05 21:46:28 UTC,
+  commit a2976eb8a303f11b4ea5177bce9f9ff752634dfc. The exact comparison adds
+  21 commits and 38 paths above v8.0.15. Direct Gemini translation now preserves
+  Claude base64 document blocks and omits filtered-empty turns, while Antigravity
+  keeps its existing media scope. Schema nodes with object-valued properties
+  force the object type; structural array/object union members take precedence
+  without rewriting author-owned name maps. Codex-to-Claude web search now reads
+  action.sources after legacy item/root results, chooses the first array and
+  preserves an explicitly empty array. Public unary and streaming regression
+  guards are prepared. These source changes are not executed native/Go checks,
+  complete semantic parity, production registration or promotion. The actual
+  OpenAI-compatible compact executor now selects reasoning compatibility from
+  the same typed Home/model capability as request translation. Unknown nonempty
+  encrypted formats and cleartext replay remain intact only in that mode;
+  whitespace, null/non-string and recognized foreign signatures are stripped.
+  Native strict requests promote cleartext when summary is missing, null or
+  empty before clearing content, and remove orphan IDs only when store is disabled. Actual injected
+  HTTP guards cover selected-model and Home precedence and reject untrusted
+  metadata/auth flags. These guards are prepared, not executed. Explicit Claude
+  cache options, Responses EOF completion, catalog policy, reasoning accounting,
+  shared observations/replay and OAuth alias ownership still require complete
+  review and verification.
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.16.
+- Previous observed upstream release: v8.0.15, published 2026-10-04 22:29:27 UTC,
   commit a4acc9f752bd46571f737a10c04bf413656ab06b. The exact primary
   release/commit comparison adds two commits and four paths above v8.0.14.
   The Antigravity stream owner now records terminal delivery independently

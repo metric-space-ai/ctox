@@ -28,7 +28,7 @@ use crate::sdk::pluginapi::{
 };
 use crate::sdk::translator::{Format, Registry, TranslationContext, TranslationState};
 
-use super::openai_responses_signature::sanitize_openai_responses_reasoning_encrypted_content;
+use super::openai_responses_signature::sanitize_openai_responses_reasoning_encrypted_content_with_compat;
 
 #[cfg(test)]
 #[path = "openai_compat_resolved_compat_test.rs"]
@@ -182,6 +182,19 @@ impl OpenAiCompatExecutor {
         attributes.clone()
     }
 
+    fn selected_model_compatibility(request: &ExecutorRequest) -> bool {
+        request
+            .resolved_home_model_options
+            .as_ref()
+            .map(|options| options.is_compat)
+            .unwrap_or_else(|| {
+                request
+                    .resolved_model_info
+                    .as_ref()
+                    .is_some_and(|info| info.is_compat)
+            })
+    }
+
     pub(crate) fn translate_request(
         &self,
         request: &ExecutorRequest,
@@ -211,16 +224,7 @@ impl OpenAiCompatExecutor {
                 &base_model,
                 &request.payload,
                 stream,
-                request
-                    .resolved_home_model_options
-                    .as_ref()
-                    .map(|options| options.is_compat)
-                    .unwrap_or_else(|| {
-                        request
-                            .resolved_model_info
-                            .as_ref()
-                            .is_some_and(|info| info.is_compat)
-                    }),
+                Self::selected_model_compatibility(request),
             );
         translated = apply_model_suffix_effort(&translated, &request.model);
         translated =
@@ -357,9 +361,10 @@ impl OpenAiCompatExecutor {
             let mut translated = self.translate_request(&request, &to, request.stream);
             if request.alt == "responses/compact" {
                 translated = remove_json_field(&translated, "stream");
-                translated = sanitize_openai_responses_reasoning_encrypted_content(
+                translated = sanitize_openai_responses_reasoning_encrypted_content_with_compat(
                     "openai compat executor",
                     &translated,
+                    Self::selected_model_compatibility(&request),
                 )
                 .into_owned();
             } else {

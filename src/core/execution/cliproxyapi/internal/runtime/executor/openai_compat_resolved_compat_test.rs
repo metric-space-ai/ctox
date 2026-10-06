@@ -143,3 +143,96 @@ fn candidate_openai_executor_rewrites_portable_agent_input_before_normal_transla
     let body = executor.translate_request(&request, &Format::from("openai"), false);
     assert!(serde_json::from_slice::<Value>(&body).unwrap()["messages"].is_array());
 }
+
+#[derive(Default)]
+struct V16CompactCapture(std::sync::Mutex<Option<HttpRequest>>);
+impl HostHttpClient for V16CompactCapture {
+    fn execute<'a>(
+        &'a self,
+        request: HttpRequest,
+    ) -> PluginFuture<'a, crate::sdk::pluginapi::HttpResponse> {
+        *self.0.lock().unwrap() = Some(request);
+        Box::pin(async {
+            Ok(crate::sdk::pluginapi::HttpResponse {
+                status_code: 200,
+                body: br#"{"object":"response.compaction","output":[]}"#.to_vec(),
+                ..Default::default()
+            })
+        })
+    }
+
+    fn execute_stream<'a>(
+        &'a self,
+        _: HttpRequest,
+    ) -> PluginFuture<'a, crate::sdk::pluginapi::HttpStreamResponse> {
+        Box::pin(async { panic!("compact requests must use unary HTTP") })
+    }
+}
+
+async fn v16_compact_wire_request(model_compat: Option<bool>, home_compat: Option<bool>) -> Value {
+    let registry = Arc::new(Registry::new());
+    let executor =
+        OpenAiCompatExecutor::new("test", Arc::new(OpenAiCompatConfig::default()), registry);
+    let client = Arc::new(V16CompactCapture::default());
+    let request = ExecutorRequest {
+        model:"shared".into(), source_format:"openai-response".into(),
+        alt:"responses/compact".into(),
+        payload:br#"{"store":false,"stream":false,"input":[{"type":"reasoning","id":"rs_compact","summary":[],"content":[{"type":"reasoning_text","text":"retained thought"}],"encrypted_content":"opaque-encrypted-reasoning-token-xyz"}]}"#.to_vec(),
+        resolved_model_info:model_compat.map(snapshot),
+        resolved_home_model_options:home_compat.map(|is_compat| {
+            crate::internal::modelconfig::HomeModelOptions {
+                is_compat, ..Default::default()
+            }
+        }),
+        metadata:BTreeMap::from([("is_compat".into(), Value::Bool(true))]),
+        auth_attributes:BTreeMap::from([
+            ("base_url".into(), "https://fixture.invalid/v1".into()),
+            ("is_compat".into(), "true".into())
+        ]),
+        http_client:Some(client.clone()),
+        ..ExecutorRequest::default()
+    };
+    executor.execute_non_stream(request).await.unwrap();
+    let captured = client.0.lock().unwrap().take().unwrap();
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.url, "https://fixture.invalid/v1/responses/compact");
+    let body: Value = serde_json::from_slice(&captured.body).unwrap();
+    assert!(body.get("stream").is_none());
+    body
+}
+
+#[tokio::test]
+async fn candidate_v16_openai_reasoning_live_compact_uses_selected_model_authority() {
+    for is_compat in [false, true] {
+        let body = v16_compact_wire_request(Some(is_compat), None).await;
+        if is_compat {
+            assert_eq!(
+                body["input"][0]["encrypted_content"],
+                "opaque-encrypted-reasoning-token-xyz"
+            );
+            assert_eq!(body["input"][0]["id"], "rs_compact");
+            assert_eq!(body["input"][0]["content"][0]["text"], "retained thought");
+        } else {
+            assert!(body["input"][0].get("encrypted_content").is_none());
+            assert!(body["input"][0].get("id").is_none());
+            assert_eq!(body["input"][0]["content"], serde_json::json!([]));
+            assert_eq!(body["input"][0]["summary"][0]["text"], "retained thought");
+        }
+    }
+}
+
+#[tokio::test]
+async fn candidate_v16_openai_reasoning_live_home_precedence_and_untrusted_flags() {
+    for (model, home, expected_compat) in [
+        (Some(true), Some(false), false),
+        (Some(false), Some(true), true),
+        (None, None, false),
+    ] {
+        let body = v16_compact_wire_request(model, home).await;
+        assert_eq!(
+            body["input"][0].get("encrypted_content").is_some(),
+            expected_compat
+        );
+        assert_eq!(body["input"][0].get("id").is_some(), expected_compat);
+    }
+}
