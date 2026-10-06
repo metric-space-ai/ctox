@@ -132,6 +132,81 @@ class DailyTests(unittest.TestCase):
         self.assertEqual(data["summary"]["unified_assessed_prs"], 0)
         self.assertEqual(historical["parent_completion"]["weighted_total"], 8)
 
+    def test_same_head_reclosure_does_not_reuse_late_saved_old_grade(self):
+        first = self.change(9, closed="2026-10-06T01:00:00Z")
+        second = self.change(9, closed="2026-10-06T02:00:00Z")
+        before = dict(prs=[self.pr(first)], collected_at="historic")
+        with patch.object(daily, "detail", return_value=self.pr(second)):
+            after, _ = daily.reconcile(self.base, before, self.changes(second),
+                                       self.since, "2026-10-06T03:00:00Z")
+        current = after["prs"][0]
+        self.assertEqual(current["previous_terminal_events"],
+                         [report.terminal_event(self.pr(first))])
+        old = dict(pr_url=current["url"], role="parent", actor_id="old-parent",
+                   pr_head=first["head"]["sha"], disposition="MERGED",
+                   recorded_at="2026-10-06T04:00:00Z", first=None, corrected=None,
+                   parent_completion=dict(weighted_total=8))
+        # A retrospective review saved after the new closure still belongs to T1.
+        self.assertFalse(report.current_assessment(old, current))
+        self.assertFalse(report.current_assessment(
+            dict(old, terminal_event=report.terminal_event(self.pr(first))), current))
+        self.assertTrue(report.current_assessment(
+            dict(old, terminal_event=report.terminal_event(current)), current))
+        report.save(self.base / "terminal-evidence/current.json", after)
+        legacy = dict(pr_url=current["url"], thread_id="old-worker",
+                      first_rating=dict(score=8, pr_head=first["head"]["sha"]))
+        with patch.object(report, "assessments", return_value=[old]), \
+             patch.object(report, "jobs", return_value=[legacy]), \
+             patch.object(report, "read", side_effect=lambda p: "__REPORT_DATA__" if Path(p).name == "terminal_report.html" else Path(p).read_text()):
+            result = report.build(self.base)
+        self.assertEqual(result["assessments"], [])
+        self.assertEqual(result["legacy"], [])
+        self.assertEqual(result["historical_assessments"], [old])
+        self.assertEqual(len(result["historical_legacy"]), 1)
+        self.assertEqual(result["summary"]["unified_assessed_prs"], 0)
+        self.assertEqual(old["parent_completion"]["weighted_total"], 8)
+
+    def test_reopen_history_survives_until_later_reclosure(self):
+        first = self.change(9, closed="2026-10-06T01:00:00Z")
+        before = dict(prs=[self.pr(first)], collected_at="historic")
+        opened, _ = daily.reconcile(self.base, before,
+            self.changes(self.change(9, state="open")), self.since, "open-run")
+        self.assertEqual(opened["prs"], [])
+        second = self.change(9, closed="2026-10-06T02:00:00Z", head="b" * 40)
+        with patch.object(daily, "detail", return_value=self.pr(second)):
+            reclosed, _ = daily.reconcile(self.base, opened, self.changes(second),
+                                         self.since, "close-run")
+        self.assertEqual(reclosed["prs"][0]["previous_terminal_events"],
+                         [report.terminal_event(self.pr(first))])
+
+    def test_record_rejects_changed_live_event_and_unbound_reclosure(self):
+        old = self.pr(self.change(9, closed="2026-10-06T01:00:00Z"))
+        current = self.pr(self.change(9, closed="2026-10-06T02:00:00Z"))
+        current["previous_terminal_events"] = [report.terminal_event(old)]
+        report.save(self.base / "terminal-evidence/current.json", dict(prs=[current]))
+        entry = dict(pr_url=current["url"])
+        with patch.object(report, "command", return_value=json.dumps(report.terminal_event(old))):
+            with self.assertRaisesRegex(ValueError, "terminal event changed"):
+                report.record(self.base, dict(entry))
+        with patch.object(report, "command", return_value=json.dumps(report.terminal_event(current))):
+            with self.assertRaisesRegex(ValueError, "explicit current terminal-event binding"):
+                report.record(self.base, dict(entry))
+            with self.assertRaisesRegex(ValueError, "different terminal event"):
+                report.record(self.base, dict(entry, terminal_event=report.terminal_event(old)))
+
+    def test_bootstrap_includes_all_five_repository_inputs(self):
+        names = ["ctox", "workjet", "ctox-dev", "greppy", "miltonticket-app"]
+        self.assertEqual(len(report.REPOS), 5)
+        for number, name in enumerate(names, 1):
+            report.save(self.base / (name + "-terminal-prs.json"),
+                        [self.pr(self.change(number))])
+        with patch.object(report, "build", side_effect=lambda b: report.load(b / "terminal-evidence/current.json")):
+            result = report.bootstrap(self.base)
+        self.assertEqual({p["repository"] for p in result["prs"]}, set(report.REPOS))
+        self.assertEqual(len(result["prs"]), 5)
+        self.assertEqual({p["project"] for p in result["prs"]},
+                         {"CTOX", "Workjet", "ctox-dev", "Greppy", "miltonticket-app"})
+
     def test_naive_time_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "UTC offset"):
             daily.instant("2026-10-06T00:00:00")
