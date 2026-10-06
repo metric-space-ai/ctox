@@ -101,7 +101,7 @@ def main():
                                           xauthority="/run/ctox-desktop/Xauthority")))
         qmp_listener, guest_listener = listener("qmp.sock"), listener("guest.sock")
         command = ["/usr/bin/qemu-system-x86_64", "-machine", "pc", "-accel",
-                   "kvm" if args.accel == "kvm" else "tcg,thread=multi",
+                   "kvm" if args.accel == "kvm" else "tcg,thread=single",
                    "-m", "4096", "-smp", "2", "-fw_cfg",
                    "name=opt/org.ctox/guest-startup,file=" + str(startup),
                    "-nodefaults", "-no-user-config", "-display", "none",
