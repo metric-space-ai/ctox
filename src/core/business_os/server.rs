@@ -47,7 +47,12 @@ const CHATGPT_AUTH_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
-const BUSINESS_OS_HTTP_WORKERS: usize = 4;
+// Two lanes: dynamic requests (API, the index document that embeds the
+// launch context) and static shell assets. With one shared queue, four slow
+// API handlers made every JS/CSS file wait behind them: on the THESEN on-prem
+// host the index took 58 s and `shared/sync.js` 17 s (06.10.2026).
+const BUSINESS_OS_HTTP_WORKERS: usize = 8;
+const BUSINESS_OS_STATIC_HTTP_WORKERS: usize = 4;
 const BUSINESS_OS_HTTP_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Clone)]
@@ -198,12 +203,22 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
     println!("Serving {}", app_root.display());
     let (request_tx, request_rx) = sync_channel(BUSINESS_OS_HTTP_QUEUE_CAPACITY);
     let request_rx = Arc::new(Mutex::new(request_rx));
-    for worker_index in 0..BUSINESS_OS_HTTP_WORKERS {
+    let (static_tx, static_rx) = sync_channel(BUSINESS_OS_HTTP_QUEUE_CAPACITY);
+    let static_rx = Arc::new(Mutex::new(static_rx));
+    let lanes = (0..BUSINESS_OS_HTTP_WORKERS)
+        .map(|index| (format!("business-os-http-{index}"), Arc::clone(&request_rx)))
+        .chain((0..BUSINESS_OS_STATIC_HTTP_WORKERS).map(|index| {
+            (
+                format!("business-os-static-{index}"),
+                Arc::clone(&static_rx),
+            )
+        }))
+        .collect::<Vec<_>>();
+    for (worker_name, request_rx) in lanes {
         let root = root.to_path_buf();
         let app_root = app_root.clone();
-        let request_rx = Arc::clone(&request_rx);
         thread::Builder::new()
-            .name(format!("business-os-http-{worker_index}"))
+            .name(worker_name)
             .spawn(move || loop {
                 let request = {
                     let receiver = request_rx
@@ -221,11 +236,40 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
             .context("failed to start Business OS HTTP worker")?;
     }
     for request in server.incoming_requests() {
-        if request_tx.send(request).is_err() {
+        let lane = if is_static_asset_request(request.method(), request.url()) {
+            &static_tx
+        } else {
+            &request_tx
+        };
+        if lane.send(request).is_err() {
             anyhow::bail!("Business OS HTTP workers stopped");
         }
     }
     Ok(())
+}
+
+/// GET/HEAD of a shell file with an extension, other than the index document.
+/// These never touch the store, secrets or the native peer.
+fn is_static_asset_request(method: &Method, url: &str) -> bool {
+    if !matches!(method, Method::Get | Method::Head) {
+        return false;
+    }
+    let path = url.split(['?', '#']).next().unwrap_or("/");
+    if path.starts_with("/api/") || path.contains("/api/") {
+        return false;
+    }
+    let file = path.rsplit('/').next().unwrap_or("");
+    if file.is_empty() || file.eq_ignore_ascii_case("index.html") {
+        return false;
+    }
+    matches!(
+        file.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()),
+        Some(ext) if matches!(
+            ext.as_str(),
+            "js" | "mjs" | "css" | "map" | "svg" | "png" | "jpg" | "jpeg" | "gif" | "webp"
+                | "ico" | "woff" | "woff2" | "ttf" | "otf" | "wasm" | "txt" | "webmanifest"
+        )
+    )
 }
 
 fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
@@ -5136,5 +5180,35 @@ mod tests {
         assert!(!is_business_os_control_plane_path(
             "/api/business-os/channels/accounts"
         ));
+    }
+}
+
+#[cfg(test)]
+mod http_lane_tests {
+    use super::is_static_asset_request;
+    use tiny_http::Method;
+
+    #[test]
+    fn shell_assets_take_the_static_lane_and_everything_dynamic_does_not() {
+        for url in [
+            "/business-os/shared/sync.js?v=20261005",
+            "/shared/universal-importer.css?v=1",
+            "/business-os/rxdb/dist/ctox-rxdb-js.mjs?v=x",
+            "/assets/icon.svg",
+            "/fonts/inter.woff2",
+        ] {
+            assert!(is_static_asset_request(&Method::Get, url), "{url}");
+        }
+        for (method, url) in [
+            (Method::Get, "/"),
+            (Method::Get, "/index.html"),
+            (Method::Get, "/business-os/index.html?x=1"),
+            (Method::Get, "/api/business-os/sync/config"),
+            (Method::Get, "/api/business-os/files/report.js"),
+            (Method::Post, "/shared/sync.js"),
+            (Method::Get, "/business-os/"),
+        ] {
+            assert!(!is_static_asset_request(&method, url), "{method:?} {url}");
+        }
     }
 }

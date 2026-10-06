@@ -296,3 +296,23 @@ fn now_epoch_secs() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
+
+#[cfg(test)]
+mod sqlite_build_flags_tests {
+    /// Guards `.cargo/config.toml` `LIBSQLITE3_FLAGS`: the bundled SQLite must
+    /// not share one page cache and one allocation mutex across all daemon
+    /// connections (see the comment there; THESEN on-prem, 06.10.2026).
+    #[test]
+    fn bundled_sqlite_has_no_global_page_cache_or_memstatus_mutex() {
+        let conn = rusqlite::Connection::open_in_memory().expect("sqlite");
+        let used = |option: &str| -> i64 {
+            conn.query_row("SELECT sqlite_compileoption_used(?1)", [option], |row| {
+                row.get(0)
+            })
+            .expect("compileoption")
+        };
+        assert_eq!(used("ENABLE_MEMORY_MANAGEMENT"), 0);
+        assert_eq!(used("DEFAULT_MEMSTATUS=0"), 1);
+        assert_eq!(used("THREADSAFE=1"), 1);
+    }
+}
