@@ -110,7 +110,7 @@ fn request(bytes: &[u8], direction: StorageDirection) -> DownloadRequest {
             owner_user_id: "owner".into(),
             computer_id: "computer".into(),
             endpoint_ref: "nas".into(),
-            endpoint_revision: "a".repeat(64),
+            endpoint_fingerprint: "a".repeat(64),
             purpose: "artifacts".into(),
             relative_path: "result.bin".into(),
             direction,
@@ -246,7 +246,7 @@ fn rejects_traversal_mixed_sources_and_retargeted_resume() {
     }
     let mut req = request(&bytes, StorageDirection::Download);
     store.enqueue(req.clone()).unwrap();
-    req.storage.as_mut().unwrap().endpoint_revision = "b".repeat(64);
+    req.storage.as_mut().unwrap().endpoint_fingerprint = "b".repeat(64);
     assert!(store.enqueue(req.clone()).is_err());
     req.id = "mixed".into();
     req.sources.push("https://example.org/file".into());

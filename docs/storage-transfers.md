@@ -13,8 +13,11 @@ on top of `ctox.computer-capabilities.v1`. SSH storage uses SFTP with a pinned
 SHA-256 server key and an in-memory private key. SMB storage requires encrypted
 SMB3, disables DFS referrals and rejects reparse points. NFS is not supported by
 this increment. Neither adapter reads ambient credentials or executes shell text.
-Connection and I/O timeouts are ten seconds; cancellation settles the current
-bounded operation before the worker lease is released.
+Socket connection attempts and individual library I/O calls use ten-second
+timeouts. One storage operation can contain several such calls (for example,
+parent checks, open, range write, flush and close); ten seconds is not a total
+operation deadline. Cancellation is checked between operations, after the current
+operation settles and before the worker lease is released.
 
 Uploads first import the pinned local content into the private object store.
 They write a request-specific temporary remote file, flush each range before

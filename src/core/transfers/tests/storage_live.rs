@@ -16,7 +16,7 @@ struct Live {
 impl StorageResolver for Live {
     fn authorize(&self, request: &DownloadRequest) -> Result<()> {
         ensure!(
-            request.storage.as_ref().unwrap().endpoint_revision == "a".repeat(64),
+            request.storage.as_ref().unwrap().endpoint_fingerprint == "a".repeat(64),
             "fixture endpoint changed"
         );
         if self.pause.load(Ordering::Acquire) && self.store.get(&request.id)?.completed_bytes > 0 {
@@ -61,7 +61,7 @@ fn request(id: &str, body: &[u8], direction: StorageDirection) -> DownloadReques
             owner_user_id: "fixture-owner".into(),
             computer_id: "fixture-computer".into(),
             endpoint_ref: "fixture-storage".into(),
-            endpoint_revision: "a".repeat(64),
+            endpoint_fingerprint: "a".repeat(64),
             purpose: "artifacts".into(),
             relative_path: "verified-artifact.bin".into(),
             direction,

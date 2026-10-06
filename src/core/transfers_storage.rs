@@ -29,7 +29,7 @@ fn endpoint_request(storage: &StorageTransfer) -> Result<ComputerEndpointRequest
     })
 }
 fn fingerprint(storage: &StorageTransfer) -> String {
-    format!("sha256:{}", storage.endpoint_revision)
+    format!("sha256:{}", storage.endpoint_fingerprint)
 }
 
 pub(crate) fn resolver(root: &Path) -> Arc<dyn StorageResolver> {
@@ -189,10 +189,10 @@ pub(crate) fn enqueue(
         purpose: args[5].clone(),
         relative_path: args[8].clone(),
         direction,
-        endpoint_revision: "0".repeat(64),
+        endpoint_fingerprint: "0".repeat(64),
     };
     let resolved = endpoints::resolve_computer_endpoint(root, &endpoint_request(&storage)?)?;
-    storage.endpoint_revision = resolved
+    storage.endpoint_fingerprint = resolved
         .fingerprint
         .strip_prefix("sha256:")
         .context("invalid endpoint fingerprint")?

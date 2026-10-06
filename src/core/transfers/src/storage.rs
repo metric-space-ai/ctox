@@ -19,7 +19,7 @@ pub struct StorageTransfer {
     pub owner_user_id: String,
     pub computer_id: String,
     pub endpoint_ref: String,
-    pub endpoint_revision: String,
+    pub endpoint_fingerprint: String,
     pub purpose: String,
     pub relative_path: String,
     pub direction: StorageDirection,
@@ -33,12 +33,12 @@ impl StorageTransfer {
             );
         }
         ensure!(
-            self.endpoint_revision.len() == 64
+            self.endpoint_fingerprint.len() == 64
                 && self
-                    .endpoint_revision
+                    .endpoint_fingerprint
                     .bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-            "invalid endpoint revision"
+            "invalid endpoint fingerprint"
         );
         ensure!(
             matches!(self.purpose.as_str(), "artifacts" | "backups" | "exchange"),

@@ -1,9 +1,10 @@
 //! SMB3 storage: encrypted authenticated sessions, no DFS redirects or ambient credentials.
 use crate::{validate_relative_path, StorageConnection};
 use anyhow::{bail, ensure, Result};
+use smb::resource::SetLen;
 use smb::{
     Client, ClientConfig, CreateOptions, File, FileAccessMask, FileAttributes, FileCreateArgs,
-    GetLen, ReadAt, Resource, SetLen, UncPath, WriteAt,
+    GetLen, ReadAt, Resource, UncPath, WriteAt,
 };
 use std::{str::FromStr, time::Duration};
 
@@ -49,6 +50,10 @@ pub fn connect(options: SmbStorageOptions<'_>) -> Result<Box<dyn StorageConnecti
         let _ = client.close();
         return Err(error.into());
     }
+    if client.get_tree(&share)?.is_dfs_root()? {
+        client.close()?;
+        bail!("DFS storage roots are forbidden");
+    }
     Ok(Box::new(SmbStorage {
         client,
         share,
@@ -87,9 +92,10 @@ impl SmbStorage {
             let mut args =
                 FileCreateArgs::make_open_existing(FileAccessMask::new().with_generic_read(true));
             args.options = args.options.with_open_reparse_point(true);
-            let resource = self
-                .client
-                .create_file(&self.share.with_path(pieces[..end].join("\\")), &args)?;
+            let resource = self.client.create_file(
+                &self.share.clone().with_path(&pieces[..end].join("\\")),
+                &args,
+            )?;
             let Resource::Directory(directory) = resource else {
                 bail!("SMB parent is not a directory");
             };
@@ -114,7 +120,7 @@ impl SmbStorage {
             .with_non_directory_file(true);
         let resource = self
             .client
-            .create_file(&self.share.with_path(path), &args)?;
+            .create_file(&self.share.clone().with_path(&path), &args)?;
         let Resource::File(file) = resource else {
             bail!("SMB resource is not a file");
         };
