@@ -166,6 +166,16 @@ whole list rather than delivering a partial result.
 Missing authority, a replaced generation or a changed actor/database rejects
 the list; an authorized empty native result is valid.
 
+The correlated native receipt must confirm an integer project `count` within
+the 100-project limit and `truncated:false`. Missing/malformed completeness
+metadata rejects with `WORKJET_PROJECT_LIST_UNCONFIRMED`; truncation or a
+projected result whose length differs from that count rejects with
+`WORKJET_PROJECT_LIST_INCOMPLETE`. A projected zero is valid only when the
+native count is also zero. Successful responses include `count` and
+`truncated:false` alongside `action` and `projects`, so consumers can reject
+legacy unconfirmed responses and retain their cached gallery on failure. This
+confirmation describes projects; working copies keep their separate 500-row cap.
+
 Collection acquisition, command completion and both queries share a 29-second
 deadline inside Workjet's existing 30-second desktop call. Timeout does not
 extend that call or introduce an HTTP data bridge. Query streams are aborted

@@ -21,6 +21,7 @@ const MAX_PENDING_WRITES: usize = MAX_IN_FLIGHT;
 /// cancellable. Acceptance of the first byte is the linearization point: the
 /// authority valid at queueing wins, and the frame then finishes uninterrupted
 /// so the private stream never mixes a partial frame with another frame.
+/// Opaque publication lifetime; construction and invalidation remain host-owned.
 pub struct WatchLifetime {
     // All watches and responses in one generation serialize first-byte IO
     // with Close/revoke through this same fence.
