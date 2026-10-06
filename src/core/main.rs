@@ -306,6 +306,13 @@ fn raise_open_file_limit() {}
 /// (30.09.2026, 6 cores) ctox-real reached 6.86 GB after 43 minutes, and
 /// `malloc_trim(0)` returned 4.36 GB of it (2.50 GB left). Bounding the arena
 /// count must happen before the first threads start.
+/// Rust allocations on the Linux service go through mimalloc (per-thread
+/// heaps, no global arena locks, freed pages returned to the OS). See the
+/// Cargo.toml target dependency for the measurement behind it.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn limit_glibc_malloc_arenas() {
     // SAFETY: mallopt only adjusts allocator tuning; called before threads spawn.
