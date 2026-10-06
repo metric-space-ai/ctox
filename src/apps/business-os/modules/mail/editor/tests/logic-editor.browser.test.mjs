@@ -47,8 +47,11 @@ try {
     waitUntil: 'domcontentloaded',
     timeout: 30_000,
   });
-  await page.waitForFunction(() => document.body.dataset.testStatus !== 'running', {
-  }, { timeout: 6000 });
+  await page.waitForFunction(
+    () => document.body.dataset.testStatus !== 'running',
+    undefined,
+    { timeout: 6000 },
+  );
   const stdout = await page.content();
   assert.match(stdout, /data-test-status="passed"/);
   assert.match(stdout, /Mail logic editor browser DOM test passed/);
