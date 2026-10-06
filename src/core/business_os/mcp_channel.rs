@@ -9119,7 +9119,8 @@ mod tests {
                 "id": id,
                 "title": title,
                 "description": "Test module",
-                "install_scope": "core",
+                // Non-system fixtures cannot self-promote to canonical core.
+                "install_scope": "internal",
                 "entry": format!("modules/{id}/index.html"),
                 "collections": collections,
                 "lifecycle": {
@@ -12605,7 +12606,7 @@ mod tests {
                 assert_eq!(
                     business_os_mcp_collection_read_decision(root.path(), &context, collection)?
                         .allowed,
-                    role != "user"
+                    role != "user" || collection == "ctox_harness_status"
                 );
                 assert_eq!(
                     business_os_mcp_record_read_decision(
@@ -12615,7 +12616,7 @@ mod tests {
                         "fixture"
                     )?
                     .allowed,
-                    role != "user"
+                    role != "user" || collection == "ctox_harness_status"
                 );
                 assert!(
                     !business_os_mcp_collection_write_decision(root.path(), &context, collection)?
@@ -12948,6 +12949,25 @@ mod tests {
             &["team_records"],
             None,
         )?;
+        write_installed_module(
+            root,
+            "unreleased-one",
+            "Unreleased One",
+            "1.0.0",
+            &["unreleased_records"],
+            None,
+        )?;
+        // Team visibility comes from a released lifecycle, never the version number.
+        let conn = store::open_store(root)?;
+        conn.execute(
+            r#"INSERT INTO business_module_releases
+             (version_id, module_id, version, status, manifest_json, snapshot_json,
+              created_by, created_at_ms, notes)
+             VALUES ('modrel_team_one_1', 'team-one', 1, 'released', '{}',
+                     '{"release_channel":"team"}', 'release-owner', 1, 'fixture release')"#,
+            [],
+        )?;
+        drop(conn);
         seed_business_user(root, "chatgpt:reader", "team")?;
         seed_business_permission_grant(
             root,
@@ -12993,7 +13013,11 @@ mod tests {
         );
         assert!(
             ids.contains(&"team-one".to_string()),
-            "1.0.0 app should be team-visible by default"
+            "a released team app should be visible"
+        );
+        assert!(
+            !ids.contains(&"unreleased-one".to_string()),
+            "version 1.0.0 alone must not publish a private app"
         );
         assert!(
             !ids.contains(&"private-zero".to_string()),
@@ -14243,8 +14267,8 @@ mod tests {
                     "country": "DE",
                     "mode": "new_record",
                     "fields": { "item": ["firma_name"] },
-                    "include_private": "",
-                    "auto_browser_capture": "true"
+                    "include_private": [],
+                    "auto_browser_capture": true
                 }
             }),
         )
@@ -14254,6 +14278,29 @@ mod tests {
             .context("typed payload validation error")?;
         assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
         assert_eq!(typed.field.as_deref(), Some("payload.fields"));
+        // Test each malformed transport field separately. Validation order
+        // is not a contract; no other malformed field may mask this one.
+        for (field, bad_value) in [
+            ("include_private", serde_json::json!("")),
+            ("auto_browser_capture", serde_json::json!("true")),
+        ] {
+            let mut invalid_payload = payload.clone();
+            invalid_payload[field] = bad_value;
+            let error = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({"record_id": "lead_1", "payload": invalid_payload}),
+            )
+            .expect_err("malformed field must fail before enqueue");
+            let typed = error
+                .downcast_ref::<BusinessOsMcpError>()
+                .context("typed transport field error")?;
+            assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
+            let expected_field = format!("payload.{field}");
+            assert_eq!(typed.field.as_deref(), Some(expected_field.as_str()));
+        }
 
         let execute_tool = tool_descriptors()
             .into_iter()
