@@ -344,7 +344,7 @@ pub struct Codex {
     pub(crate) session_loop_termination: SessionLoopTermination,
 }
 
-pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
+pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, Result<(), ()>>>;
 
 // Remove receipts when a caller is cancelled, including while enqueueing.
 struct PendingTurnInterrupt {
@@ -694,7 +694,9 @@ impl Codex {
             Err(CodexErr::InternalAgentDied) => {}
             Err(err) => return Err(err),
         }
-        session_loop_termination.await;
+        session_loop_termination
+            .await
+            .map_err(|()| CodexErr::InternalAgentDied)?;
         match self.session.shutdown_journal_result.get() {
             Some(Ok(())) => Ok(()),
             Some(Err(kind)) => Err(std::io::Error::new(
@@ -737,7 +739,7 @@ impl Codex {
         let result = tokio::select! {
             biased;
             result = rx => result.map_err(|_| CodexErr::InternalAgentDied),
-            () = self.session_loop_termination.clone() => Err(CodexErr::InternalAgentDied),
+            _ = self.session_loop_termination.clone() => Err(CodexErr::InternalAgentDied),
         };
         drop(receipt);
         result
@@ -787,17 +789,13 @@ impl Codex {
 
 #[cfg(test)]
 pub(crate) fn completed_session_loop_termination() -> SessionLoopTermination {
-    futures::future::ready(()).boxed().shared()
+    futures::future::ready(Ok(())).boxed().shared()
 }
 
 pub(crate) fn session_loop_termination_from_handle(
     handle: JoinHandle<()>,
 ) -> SessionLoopTermination {
-    async move {
-        let _ = handle.await;
-    }
-    .boxed()
-    .shared()
+    async move { handle.await.map_err(|_| ()) }.boxed().shared()
 }
 
 /// Context for an initialized model agent

@@ -80,8 +80,10 @@ the public call boundary too. Its unpolled-future regression uses the actual
 enum wrapper and a raw owned fixture worker, not a preconstructed cleanup guard.
 
 Tracked sessions retain a one-time result from the real shutdown handler's
-recorder I/O. Shutdown waiters reject a failed recorder or loop termination
-without that result, including an unexpected panic. Recorder shutdown flushes
+recorder I/O. The shared session-loop future also retains the checked task-join
+result. Shutdown waiters reject a failed recorder, a missing receipt or a failed
+task join, even if the real handler already acknowledged journal I/O. Panic
+and cancellation remain sanitized failures for repeated waiters. Recorder shutdown flushes
 preceding writes, propagates the real file error and closes its writer despite
 retained clones. Existing multiple-waiter fixtures now invoke the actual shutdown
 handler rather than treating a sleeping loop's exit as successful shutdown.

@@ -181,9 +181,10 @@ the runtime's checked termination result. Cleanup still runs after an error
 response; cancellation, including an unpolled client shutdown future, retains
 abort ownership of the facade/runtime and its processor/router tasks.
 
-Tracked session shutdown additionally requires the real shutdown handler's
-journal-I/O result; a stopped or panicked session loop without that receipt
-fails. The recorder flushes writes preceding its shutdown request and terminates
+Tracked session shutdown requires both the real shutdown handler's journal-I/O
+result and checked session-task termination. Panic or cancellation of that task
+remains a failure for every waiter, even after a successful journal receipt.
+The recorder flushes writes preceding its shutdown request and terminates
 even while clones exist. A writer failure remains a failure for every shutdown
 waiter; the lifecycle `ShutdownComplete` notification does not override it.
 

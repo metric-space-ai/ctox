@@ -3110,6 +3110,64 @@ async fn shutdown_and_wait_rejects_termination_without_journal_receipt() {
 }
 
 #[tokio::test]
+async fn shutdown_and_wait_rejects_failed_loop_after_real_journal_receipt() {
+    for cancel_after_receipt in [false, true] {
+        let (session, _turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let (tx_sub, rx_sub) = async_channel::bounded(1);
+        let (_tx_event, rx_event) = async_channel::unbounded();
+        let (_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+        let (receipt_tx, receipt_rx) = tokio::sync::oneshot::channel();
+        let shutdown_session = Arc::clone(&session);
+        let session_loop_handle = tokio::spawn(async move {
+            let shutdown: Submission = rx_sub.recv().await.expect("shutdown request");
+            assert_eq!(shutdown.op, Op::Shutdown);
+            assert!(handlers::shutdown(&shutdown_session, shutdown.id).await);
+            receipt_tx.send(()).expect("real handler finished");
+            if cancel_after_receipt {
+                std::future::pending::<()>().await;
+            } else {
+                panic!("private-session-loop-panic-after-receipt");
+            }
+        });
+        let abort = session_loop_handle.abort_handle();
+        let codex = Arc::new(Codex {
+            tx_sub,
+            rx_event,
+            agent_status,
+            session,
+            session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+        });
+        let caller = Arc::clone(&codex);
+        let waiter = tokio::spawn(async move { caller.shutdown_and_wait().await });
+        tokio::time::timeout(StdDuration::from_secs(5), receipt_rx)
+            .await
+            .expect("real handler must finish")
+            .expect("real receipt signal");
+        assert!(matches!(
+            codex.session.shutdown_journal_result.get(),
+            Some(Ok(()))
+        ));
+        if cancel_after_receipt {
+            abort.abort();
+        }
+
+        let error = tokio::time::timeout(StdDuration::from_secs(5), waiter)
+            .await
+            .expect("failed loop must release initial shutdown waiter")
+            .expect("shutdown waiter join")
+            .expect_err("successful journal receipt cannot mask task failure");
+        assert!(matches!(error, CodexErr::InternalAgentDied));
+        assert!(!error.to_string().contains("private-session-loop-panic"));
+        let repeated = codex
+            .shutdown_and_wait()
+            .await
+            .expect_err("every waiter must retain the same failed termination");
+        assert!(matches!(repeated, CodexErr::InternalAgentDied));
+    }
+}
+
+#[tokio::test]
 async fn shutdown_and_wait_propagates_failed_recorder_through_real_session_loop() {
     let home = tempfile::TempDir::new().expect("recorder fixture home");
     let config = ConfigBuilder::default()
