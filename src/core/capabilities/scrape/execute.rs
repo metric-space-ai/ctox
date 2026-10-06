@@ -672,7 +672,29 @@ pub(crate) fn execute_scrape_with_probe_grant(
     // request for human authorization, not an automated heal, so it is not
     // gated on --allow-heal (the adapter scripts emit the same request
     // ungated when they detect the auth wall themselves).
-    let auth_assist_handoff = if classification.status == ScrapeRunStatus::AuthorizationRequired {
+    // CTOX first signs in itself with the stored credential; only when that
+    // is impossible or fails does the run hand the login wall to a human.
+    let auto_reauthorization = if classification.status == ScrapeRunStatus::AuthorizationRequired {
+        reauthorization.as_ref().and_then(|action| {
+            super::reauth::attempt_automatic_reauthorization(
+                root,
+                &run_id,
+                find_flag_value(args, "--thread-key"),
+                owner_user_id,
+                action,
+            )
+        })
+    } else {
+        None
+    };
+    let signed_in_automatically = auto_reauthorization
+        .as_ref()
+        .and_then(|state| state.get("ok"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let auth_assist_handoff = if classification.status == ScrapeRunStatus::AuthorizationRequired
+        && !signed_in_automatically
+    {
         reauthorization.as_ref().and_then(|action| {
             emit_reauthorization_handoff(
                 root,
@@ -753,6 +775,9 @@ pub(crate) fn execute_scrape_with_probe_grant(
                 "detail": payload.get("detail").cloned().unwrap_or(Value::Null),
                 "browser_assist_requested": browser_assist_requested,
                 "reauthorization": reauthorization.clone().unwrap_or(Value::Null),
+                // Outcome of CTOX's own stored-credential sign-in. `ok: true`
+                // means the session is fresh again: rerun the same target.
+                "auto_reauthorization": auto_reauthorization.clone().unwrap_or(Value::Null),
                 "stdout_excerpt": tail_excerpt(&execution.stdout_text, 4000),
                 "stderr_excerpt": tail_excerpt(&execution.stderr_text, 4000),
                 "timed_out": execution.timed_out,
