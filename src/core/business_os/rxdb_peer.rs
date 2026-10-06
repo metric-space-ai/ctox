@@ -2999,6 +2999,24 @@ async fn run_native_peer(
                         })
                     }),
                 )?;
+                let field_review_root = root.clone();
+                pool.register_auxiliary_request_handler(
+                    super::outbound_field_review::NATIVE_FIELD_REVIEW_VIEW_METHOD,
+                    Arc::new(move |_peer_identity, capability_token, params| {
+                        let root = field_review_root.clone();
+                        Box::pin(async move {
+                            tokio::task::spawn_blocking(move || {
+                                super::outbound_field_review::native_field_review_view_response(
+                                    &root,
+                                    &capability_token,
+                                    params,
+                                )
+                            })
+                            .await
+                            .map_err(|_| "native field review view task failed".to_string())?
+                        })
+                    }),
+                )?;
                 let workjet_device_root = root.clone();
                 let business_data_root = root.clone();
                 let identity_transport = pool.connection_handler.clone();
