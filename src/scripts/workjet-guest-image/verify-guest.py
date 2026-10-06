@@ -51,6 +51,8 @@ def main():
     p.add_argument("--sha256", required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--input-json", type=Path)
+    p.add_argument("--accel", choices=("kvm", "tcg"), default="kvm",
+                   help="Explicit accelerator; never falls back from KVM to TCG")
     args = p.parse_args()
     base = args.base
     meta = base.lstat()
@@ -65,10 +67,11 @@ def main():
     out = args.out.resolve()
     if any(c in str(out) for c in ",\n\r"):
         raise ValueError("private QEMU socket paths cannot contain keyval delimiters")
-    guest_id = "o04-kvm-" + str(uuid.uuid4())
+    guest_id = "o04-" + args.accel + "-" + str(uuid.uuid4())
     receipt = dict(schema="ctox.guest_image_component_probe.v1", scope="isolated image/endpoint only",
                    owner_thread="01a0879f-fa04-7a72-a9be-f471c2df5471",
-                   guest_id=guest_id, base_sha256=args.sha256, started=time.time(),
+                   guest_id=guest_id, acceleration=args.accel,
+                   base_sha256=args.sha256, started=time.time(),
                    product_enrollment_p2p_restore_accepted=False, assertions=[])
     def interrupted(number, _frame):
         raise TimeoutError("component probe interrupted or deadline reached: " + str(number))
@@ -97,7 +100,8 @@ def main():
         startup.write_text(json.dumps(dict(guest_id=guest_id, display=":0",
                                           xauthority="/run/ctox-desktop/Xauthority")))
         qmp_listener, guest_listener = listener("qmp.sock"), listener("guest.sock")
-        command = ["/usr/bin/qemu-system-x86_64", "-machine", "pc", "-accel", "kvm",
+        command = ["/usr/bin/qemu-system-x86_64", "-machine", "pc", "-accel",
+                   "kvm" if args.accel == "kvm" else "tcg,thread=multi",
                    "-m", "4096", "-smp", "2", "-fw_cfg",
                    "name=opt/org.ctox/guest-startup,file=" + str(startup),
                    "-nodefaults", "-no-user-config", "-display", "none",
