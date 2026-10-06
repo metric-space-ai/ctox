@@ -63,12 +63,16 @@ pub type SharedSqliteConnection = Arc<Mutex<Connection>>;
 pub(crate) type SqliteReaderCache = Arc<Mutex<Option<SharedSqliteConnection>>>;
 pub(crate) const SQLITE_POINT_READER_COUNT: usize = 4;
 
+type SqliteFileWatcher = (RecommendedWatcher, Receiver<notify::Result<notify::Event>>);
+type SqliteFileWatcherFactory = fn(&Path) -> Option<SqliteFileWatcher>;
+
 /// Storage factory holding a shared SQLite connection.
 pub struct RxStorageSqlite {
     pub name: String,
     pub settings: RxStorageSqliteSettings,
     pub connection: Mutex<Option<SharedSqliteConnection>>,
     external_poll_key: Mutex<Option<String>>,
+    file_watcher_factory: SqliteFileWatcherFactory,
     // A collection is a table, not a separate SQLite database. Share a bounded
     // set of schema caches across its short reads instead of opening one per
     // collection. Change-feed drains have their own reader; long query streams
@@ -85,10 +89,20 @@ impl RxStorageSqlite {
             settings,
             connection: Mutex::new(None),
             external_poll_key: Mutex::new(None),
+            file_watcher_factory: sqlite_file_watcher,
             point_readers: std::array::from_fn(|_| Arc::new(Mutex::new(None))),
             change_feed_reader: Arc::new(Mutex::new(None)),
             next_point_reader: AtomicUsize::new(0),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_without_file_watcher_for_test(
+        settings: RxStorageSqliteSettings,
+    ) -> Arc<Self> {
+        let mut storage = Self::new(settings);
+        Arc::get_mut(&mut storage).unwrap().file_watcher_factory = |_| None;
+        storage
     }
 
     pub(crate) fn collection_readers(&self) -> (SqliteReaderCache, SqliteReaderCache) {
@@ -133,9 +147,11 @@ impl RxStorageSqlite {
         }
 
         let database_key = crate::storage::sqlite::instance::database_key_for_path(path);
-        if let Some(external_poll_key) =
-            acquire_external_database_poll(path.clone(), database_key.clone())
-        {
+        if let Some(external_poll_key) = acquire_external_database_poll(
+            path.clone(),
+            database_key.clone(),
+            self.file_watcher_factory,
+        ) {
             *self.external_poll_key.lock() = Some(external_poll_key);
         }
 
@@ -169,7 +185,11 @@ struct ExternalDatabasePollRegistration {
 static EXTERNAL_DATABASE_POLLS: OnceLock<Mutex<HashMap<String, ExternalDatabasePollRegistration>>> =
     OnceLock::new();
 
-fn acquire_external_database_poll(path: PathBuf, database_key: String) -> Option<String> {
+fn acquire_external_database_poll(
+    path: PathBuf,
+    database_key: String,
+    file_watcher_factory: SqliteFileWatcherFactory,
+) -> Option<String> {
     if sqlite_path_is_in_memory(&path) {
         return None;
     }
@@ -181,7 +201,12 @@ fn acquire_external_database_poll(path: PathBuf, database_key: String) -> Option
         return Some(database_key);
     }
     let stop = Arc::new(AtomicBool::new(false));
-    start_external_database_poll(path, database_key.clone(), Arc::clone(&stop));
+    start_external_database_poll(
+        path,
+        database_key.clone(),
+        Arc::clone(&stop),
+        file_watcher_factory,
+    );
     polls.insert(
         database_key.clone(),
         ExternalDatabasePollRegistration {
@@ -219,14 +244,19 @@ fn external_database_poll_reference_count(database_key: &str) -> Option<usize> {
     })
 }
 
-fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<AtomicBool>) {
+fn start_external_database_poll(
+    path: PathBuf,
+    database_key: String,
+    stop: Arc<AtomicBool>,
+    file_watcher_factory: SqliteFileWatcherFactory,
+) {
     if sqlite_path_is_in_memory(&path) {
         return;
     }
     let _ = thread::Builder::new()
         .name("rxdb-sqlite-external-poll".to_string())
         .spawn(move || {
-            let file_watcher = sqlite_file_watcher(&path);
+            let file_watcher = file_watcher_factory(&path);
             let mut last_version: Option<i64> = None;
             let mut changed_tables: HashMap<String, i64>;
             let mut local_hook_generations: HashMap<String, u64>;
@@ -240,20 +270,29 @@ fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<A
                         local_hook_generations =
                             current_local_hook_generations(&database_key, changed_tables.keys());
                         while !stop.load(Ordering::SeqCst) {
+                            // Standby relies on filesystem events for prompt
+                            // external writes. If watcher setup failed (for
+                            // example, exhausted inotify instances), retain
+                            // the bounded database-wide rescue poll.
+                            let wait_interval = if file_watcher.is_some() {
+                                poll_interval
+                            } else {
+                                SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL
+                            };
                             if poll_interval == SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL {
                                 if let Some((_, file_events)) = &file_watcher {
                                     wait_for_sqlite_file_change(&stop, poll_interval, file_events);
                                 } else {
-                                    sleep_external_poll(&stop, poll_interval);
+                                    sleep_external_poll(&stop, wait_interval);
                                 }
                             } else {
-                                sleep_external_poll(&stop, poll_interval);
+                                sleep_external_poll(&stop, wait_interval);
                             }
                             if stop.load(Ordering::SeqCst) {
                                 break;
                             }
                             metrics::record_sqlite_external_poll_wakeup(
-                                poll_interval >= SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL,
+                                wait_interval >= SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL,
                                 &database_key,
                             );
                             let Ok(version) = read_data_version(&conn) else {
@@ -352,9 +391,7 @@ fn sleep_external_poll(stop: &AtomicBool, duration: Duration) {
     }
 }
 
-fn sqlite_file_watcher(
-    database_path: &Path,
-) -> Option<(RecommendedWatcher, Receiver<notify::Result<notify::Event>>)> {
+fn sqlite_file_watcher(database_path: &Path) -> Option<SqliteFileWatcher> {
     let (sender, receiver) = mpsc::channel();
     let watched_database = database_path.to_path_buf();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {

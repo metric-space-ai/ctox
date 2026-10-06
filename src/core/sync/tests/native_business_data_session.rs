@@ -39,7 +39,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -447,7 +447,7 @@ impl ctox_sync::business_data_remote::BusinessDataAccessPolicy for FixtureSource
     async fn command_event(
         &self,
         identity: &ctox_sync::business_data_remote::RemoteIdentity,
-        capability_token: &str,
+        _capability_token: &str,
         expected_command_id: &str,
         document: &Value,
     ) -> std::io::Result<Option<ctox_sync::business_data_contract::NativeBusinessDataCommandState>>
@@ -816,7 +816,10 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                 };
                 assert_eq!(session, session_p);
             }
-            other => panic!("old query published instead of Close response: {other:?}"),
+            other => panic!(
+                "old query published instead of Close response: {}",
+                frame_kind(&other)
+            ),
         }
         drop(publication_client);
         assert!(serve_p.await.unwrap().is_err());
@@ -882,7 +885,10 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                     panic!("expected disconnected session: {response:?}");
                 };
             }
-            other => panic!("stale event published instead of Close response: {other:?}"),
+            other => panic!(
+                "stale event published instead of Close response: {}",
+                frame_kind(&other)
+            ),
         }
         drop(event_client);
         assert!(serve_e.await.unwrap().is_err());
@@ -914,7 +920,7 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                 assert_eq!(session, session_a);
                 assert_eq!(state.command_id, "overlap-command");
             }
-            other => panic!("expected A observation response: {other:?}"),
+            other => panic!("expected A observation response: {}", frame_kind(&other)),
         }
         wait_for_caught_up(
             &mut client_a,
@@ -967,7 +973,7 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                 };
                 assert_eq!(session, session_a);
             }
-            other => panic!("expected A unwatch frame: {other:?}"),
+            other => panic!("expected A unwatch frame: {}", frame_kind(&other)),
         }
 
         // The same subscription ID is reusable only after explicit teardown. B
@@ -989,7 +995,7 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                 assert_eq!(session, session_b);
                 assert_eq!(state.command_id, "overlap-command");
             }
-            other => panic!("expected B replacement response: {other:?}"),
+            other => panic!("expected B replacement response: {}", frame_kind(&other)),
         }
         let replacement_cursor = wait_for_caught_up(
             &mut client_b,
@@ -1072,7 +1078,7 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                         "resume must not deliver a stale command event: {event:?}"
                     );
                 }
-                other => panic!("expected in-flight resume response: {other:?}"),
+                other => panic!("expected in-flight resume response: {}", frame_kind(&other)),
             }
         }
 
@@ -1211,7 +1217,7 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                     panic!("expected A command unwatch response: {response:?}");
                 };
             }
-            other => panic!("expected A command cleanup frame: {other:?}"),
+            other => panic!("expected A command cleanup frame: {}", frame_kind(&other)),
         }
         match read_frame(&mut client_b).await {
             Frame::Response { response } if response.request_id == "cleanup-b-query" => {
@@ -1219,7 +1225,7 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                     panic!("expected B query unwatch response: {response:?}");
                 };
             }
-            other => panic!("expected B query cleanup frame: {other:?}"),
+            other => panic!("expected B query cleanup frame: {}", frame_kind(&other)),
         }
         match read_frame(&mut client_a).await {
             Frame::Response { response } if response.request_id == "cleanup-a-query" => {
@@ -1227,7 +1233,7 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
                     panic!("expected A query unwatch response: {response:?}");
                 };
             }
-            other => panic!("expected A query cleanup frame: {other:?}"),
+            other => panic!("expected A query cleanup frame: {}", frame_kind(&other)),
         }
 
         drop(client_a);
@@ -1328,7 +1334,7 @@ async fn read_subscribed(
             assert_eq!(bound_session, *session);
             subscription_id
         }
-        other => panic!("expected {request_id} response: {other:?}"),
+        other => panic!("expected {request_id} response: {}", frame_kind(&other)),
     }
 }
 
@@ -1339,7 +1345,6 @@ async fn wait_for_caught_up(
     context: &str,
 ) -> String {
     let mut last_sequence = 0;
-    let mut latest_cursor = String::new();
     loop {
         let event = read_event(stream, context).await;
         assert_eq!(event.session, *session);
@@ -1361,21 +1366,13 @@ async fn wait_for_caught_up(
                     "{context} unexpectedly received records"
                 );
             }
-            NativeBusinessDataEventPayload::SnapshotEnd {
-                snapshot_id,
-                cursor,
-            } => {
+            NativeBusinessDataEventPayload::SnapshotEnd { snapshot_id, .. } => {
                 assert_eq!(snapshot_id, subscription_id);
-                latest_cursor = cursor;
             }
-            NativeBusinessDataEventPayload::CaughtUp { cursor } => {
-                latest_cursor = cursor;
-                break;
-            }
+            NativeBusinessDataEventPayload::CaughtUp { cursor } => return cursor,
             other => panic!("{context} received unexpected event: {other:?}"),
         }
     }
-    latest_cursor
 }
 
 async fn assert_no_frame(stream: &mut FixtureIpcStream, context: &str) {
@@ -2523,7 +2520,7 @@ fn watch_request(
 }
 
 async fn read_event(
-    stream: &mut (impl tokio::io::AsyncRead + Unpin),
+    stream: &mut (impl tokio::io::AsyncRead + Unpin + Send),
     context: &str,
 ) -> ctox_sync::business_data_contract::NativeBusinessDataEvent {
     // The test-level deadline owns cancellation. Reading through the
@@ -2531,7 +2528,7 @@ async fn read_event(
     let frame = read_frame(stream).await;
     match frame {
         Frame::Event { event } => event,
-        other => panic!("expected event for {context}: {other:?}"),
+        other => panic!("expected event for {context}: {}", frame_kind(&other)),
     }
 }
 
@@ -2543,6 +2540,17 @@ async fn write_frame(stream: &mut (impl tokio::io::AsyncWrite + Unpin + Send), f
         .unwrap();
     stream.write_all(&bytes).await.unwrap();
     stream.flush().await.unwrap();
+}
+
+fn frame_kind(frame: &Frame) -> &'static str {
+    // Host frames may carry credentials; diagnostics expose only their kind.
+    match frame {
+        Frame::Request { .. } => "request",
+        Frame::Response { .. } => "response",
+        Frame::Event { .. } => "event",
+        Frame::CredentialChallenge { .. } => "credentialChallenge",
+        Frame::CredentialReply { .. } => "credentialReply",
+    }
 }
 
 async fn read_frame(stream: &mut (impl tokio::io::AsyncRead + Unpin + Send)) -> Frame {

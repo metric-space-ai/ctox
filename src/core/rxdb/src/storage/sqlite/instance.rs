@@ -4970,6 +4970,15 @@ mod tests {
 
     #[tokio::test]
     async fn change_stream_emits_other_connection_sqlite_writes() {
+        assert_change_stream_emits_other_connection_sqlite_writes(false).await;
+    }
+
+    #[tokio::test]
+    async fn change_stream_emits_other_connection_without_file_watcher() {
+        assert_change_stream_emits_other_connection_sqlite_writes(true).await;
+    }
+
+    async fn assert_change_stream_emits_other_connection_sqlite_writes(without_file_watcher: bool) {
         use tokio::time::{timeout, Instant};
         use tokio_stream::StreamExt;
 
@@ -4977,9 +4986,14 @@ mod tests {
         let database_path = dir.path().join("ctox.sqlite3");
         let poll_connection_opens_before = runtime_counter("external_poll_connection_opens");
         let changed_table_reads_before = runtime_counter("external_poll_changed_table_reads");
-        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+        let settings = RxStorageSqliteSettings {
             database_path: database_path.clone(),
-        });
+        };
+        let storage = if without_file_watcher {
+            super::super::types::RxStorageSqlite::new_without_file_watcher_for_test(settings)
+        } else {
+            get_rx_storage_sqlite(settings)
+        };
         let schema = test_schema();
         let instance = create_storage_instance(&storage, params(schema))
             .await
