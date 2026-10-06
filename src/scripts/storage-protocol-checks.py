@@ -60,7 +60,7 @@ wide links = no
 ''')
  (fixture/'start.sh').write_text('''set -eu
 mkdir -p /run/sshd
-useradd -u 1000 -M -s /bin/sh storage
+useradd -o -u 1000 -M -s /bin/sh storage
 printf 'storage:%s\\n' "$(head -n 1 /fixture/password)" | chpasswd
 smbpasswd -s -a storage < /fixture/password
 chown storage /fixture/ssh-data /fixture/smb-data
