@@ -242,37 +242,41 @@ impl CheckpointStore {
         let worktree_path = isolation.patches.join("worktree.patch");
         fs::write(&index_path, &index_patch)?;
         fs::write(&worktree_path, &worktree_patch)?;
-        git(
-            isolation,
-            &target,
-            None,
-            &[
-                "apply",
-                "--index",
-                "--allow-empty",
-                "--whitespace=nowarn",
-                "--",
-                path_to_utf8(&index_path)?,
-            ],
-            4096,
-        )
-        .await?;
+        // Support Git versions without apply --allow-empty. Only a verified
+        // zero-byte patch is a no-op; nonempty input still goes through Git validation.
+        if !index_patch.is_empty() {
+            git(
+                isolation,
+                &target,
+                None,
+                &[
+                    "apply",
+                    "--index",
+                    "--whitespace=nowarn",
+                    "--",
+                    path_to_utf8(&index_path)?,
+                ],
+                4096,
+            )
+            .await?;
+        }
         reject_escaping_symlinks(&target)?;
         reject_index_bound_symlinks(isolation, &target, &index_symlink_changes.added).await?;
-        git(
-            isolation,
-            &target,
-            None,
-            &[
-                "apply",
-                "--allow-empty",
-                "--whitespace=nowarn",
-                "--",
-                path_to_utf8(&worktree_path)?,
-            ],
-            4096,
-        )
-        .await?;
+        if !worktree_patch.is_empty() {
+            git(
+                isolation,
+                &target,
+                None,
+                &[
+                    "apply",
+                    "--whitespace=nowarn",
+                    "--",
+                    path_to_utf8(&worktree_path)?,
+                ],
+                4096,
+            )
+            .await?;
+        }
         reject_escaping_symlinks(&target)?;
         reject_worktree_symlinks(isolation, &target, &worktree_symlink_changes).await?;
         install_untracked(self, &manifest.workspace_state.required_untracked, &target)?;

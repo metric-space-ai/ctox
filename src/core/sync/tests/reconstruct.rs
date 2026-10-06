@@ -209,6 +209,31 @@ fn blob(bytes: &[u8]) -> ArtifactRef {
 }
 
 #[tokio::test]
+async fn reconstruct_roundtrips_a_clean_workspace_with_empty_patches() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("clean-workspace");
+    fs::create_dir(&workspace).unwrap();
+    init_identity(&workspace);
+    fs::write(workspace.join("tracked.txt"), "unchanged\n").unwrap();
+    git(&workspace, &["add", "tracked.txt"]);
+    git(&workspace, &["commit", "-qm", "base"]);
+    let before = snapshot(&workspace);
+    let store = CheckpointStore::open(root.path().join("store"), 1024 * 1024).unwrap();
+    let captured = store.capture(request(&workspace)).await.unwrap();
+    assert_eq!(captured.manifest.workspace_state.index_patch, blob(b""));
+    assert_eq!(captured.manifest.workspace_state.worktree_patch, blob(b""));
+
+    let target = root.path().join("reconstructed");
+    store
+        .reconstruct_workspace(&captured.digest, &workspace, &target)
+        .await
+        .unwrap();
+    assert_eq!(snapshot(&target), before);
+    assert_eq!(snapshot(&workspace), before);
+    assert_eq!(fs::read(target.join("tracked.txt")).unwrap(), b"unchanged\n");
+}
+
+#[tokio::test]
 async fn reconstruct_roundtrips_staged_unstaged_binary_deletion_and_untracked() {
     let root = tempfile::tempdir().unwrap();
     let workspace = prepared_workspace(root.path());
