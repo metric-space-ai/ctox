@@ -1729,13 +1729,21 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) async fn drain_background_tasks(&self) {
-        self.background_tasks.close();
-        if tokio::time::timeout(Duration::from_secs(10), self.background_tasks.wait())
-            .await
-            .is_err()
-        {
+        if self.drain_background_tasks_checked().await.is_err() {
             warn!("timed out waiting for background tasks to shut down; proceeding");
         }
+    }
+
+    pub(crate) async fn drain_background_tasks_checked(&self) -> std::io::Result<()> {
+        self.background_tasks.close();
+        tokio::time::timeout(Duration::from_secs(10), self.background_tasks.wait())
+            .await
+            .map_err(|_| {
+                IoError::new(
+                    std::io::ErrorKind::TimedOut,
+                    "app-server background tasks did not finish shutdown",
+                )
+            })
     }
 
     pub(crate) async fn clear_all_thread_listeners(&self) {
@@ -1743,16 +1751,32 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) async fn shutdown_threads(&self) {
+        let _ = self.shutdown_threads_checked().await;
+    }
+
+    pub(crate) async fn shutdown_threads_checked(&self) -> std::io::Result<()> {
         let report = self
             .thread_manager
             .shutdown_all_threads_bounded(Duration::from_secs(10))
             .await;
-        for thread_id in report.submit_failed {
+        for thread_id in &report.submit_failed {
             warn!("failed to submit Shutdown to thread {thread_id}");
         }
-        for thread_id in report.timed_out {
+        for thread_id in &report.timed_out {
             warn!("timed out waiting for thread {thread_id} to shut down");
         }
+        if !report.timed_out.is_empty() {
+            return Err(IoError::new(
+                std::io::ErrorKind::TimedOut,
+                "app-server threads did not finish shutdown",
+            ));
+        }
+        if !report.submit_failed.is_empty() {
+            return Err(IoError::other(
+                "app-server thread shutdown submission failed",
+            ));
+        }
+        Ok(())
     }
 
     async fn request_trace_context(
