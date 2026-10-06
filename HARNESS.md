@@ -181,11 +181,18 @@ the runtime's checked termination result. Cleanup still runs after an error
 response; cancellation, including an unpolled client shutdown future, retains
 abort ownership of the facade/runtime and its processor/router tasks.
 
-A successful shutdown is not a recorder-I/O, portable-journal, reconciled-effect
-or provider-continuation receipt. Native handoff must retain its own execution
-authority, await the exact provider/session quiescence and verified journal
-publication, and reject unknown/forced teardown before checkpoint protection
-or takeover. The production capture/transfer owner is still required.
+Tracked session shutdown additionally requires the real shutdown handler's
+journal-I/O result; a stopped or panicked session loop without that receipt
+fails. The recorder flushes writes preceding its shutdown request and terminates
+even while clones exist. A writer failure remains a failure for every shutdown
+waiter; the lifecycle `ShutdownComplete` notification does not override it.
+
+This is file-I/O completion, not filesystem power-loss durability or a portable
+checkpoint. An unmaterialized fresh recorder is not materialized by shutdown.
+Native handoff must retain its own execution authority, verify the exact
+materialized provider journal and reconciled effects, and reject unknown/forced
+teardown before checkpoint protection or takeover. Production capture enrollment,
+protected-byte transfer and actual provider continuation remain required.
 
 ## Cockpit-Projektionen und Steuerbefehle
 

@@ -1000,10 +1000,12 @@ impl AppServerClient {
         }
     }
 
-    pub async fn shutdown(self) -> IoResult<()> {
+    pub fn shutdown(self) -> impl std::future::Future<Output = IoResult<()>> {
+        // Construct the embedded ownership guard at the public call boundary,
+        // before the returned future can be dropped without ever being polled.
         match self {
-            Self::InProcess(client) => client.shutdown().await,
-            Self::Remote(client) => client.shutdown().await,
+            Self::InProcess(client) => futures::future::Either::Left(client.shutdown()),
+            Self::Remote(client) => futures::future::Either::Right(client.shutdown()),
         }
     }
 
@@ -1785,6 +1787,49 @@ mod tests {
         );
 
         client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn public_shutdown_unpolled_future_aborts_embedded_worker() {
+        let fixture = start_test_client(SessionSource::Cli).await;
+        let auth_manager = fixture.auth_manager();
+        let thread_manager = fixture.thread_manager();
+        fixture.shutdown().await.expect("fixture shutdown");
+
+        struct WorkerDropped(Option<oneshot::Sender<()>>);
+        impl Drop for WorkerDropped {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+
+        let (drop_tx, drop_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let worker_handle = tokio::spawn(async move {
+            let _dropped = WorkerDropped(Some(drop_tx));
+            let _ = ready_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::channel(1);
+        let client = AppServerClient::InProcess(InProcessAppServerClient {
+            command_tx,
+            event_rx,
+            worker_handle,
+            auth_manager,
+            thread_manager,
+        });
+        ready_rx.await.expect("owned worker started");
+
+        // No helper or ShutdownWorker is constructed by this test. The public
+        // enum facade itself must retain ownership before its future is polled.
+        drop(client.shutdown());
+        timeout(Duration::from_secs(1), drop_rx)
+            .await
+            .expect("public unpolled shutdown must abort its owned worker")
+            .expect("owned worker dropped");
     }
 
     #[tokio::test]

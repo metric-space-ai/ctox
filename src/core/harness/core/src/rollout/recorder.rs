@@ -117,7 +117,7 @@ enum RolloutCmd {
         ack: oneshot::Sender<std::io::Result<()>>,
     },
     Shutdown {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
 }
 
@@ -678,12 +678,14 @@ impl RolloutRecorder {
         }))
     }
 
+    /// Flush preceding writes and close the writer even while recorder clones exist.
+    /// This acknowledges file I/O, not filesystem power-loss durability.
     pub async fn shutdown(&self) -> std::io::Result<()> {
         let (tx_done, rx_done) = oneshot::channel();
         match self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
-            Ok(_) => rx_done
-                .await
-                .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}")))?,
+            Ok(_) => rx_done.await.map_err(|e| {
+                IoError::other(format!("failed waiting for rollout shutdown: {e}"))
+            })??,
             Err(e) => {
                 warn!("failed to send rollout shutdown command: {e}");
                 return Err(IoError::other(format!(
@@ -1020,7 +1022,17 @@ async fn rollout_writer(
                 let _ = ack.send(Ok(()));
             }
             RolloutCmd::Shutdown { ack } => {
-                let _ = ack.send(());
+                if let Some(writer) = writer.as_mut()
+                    && let Err(err) = writer.file.flush().await
+                {
+                    let _ = ack.send(Err(IoError::new(err.kind(), err.to_string())));
+                    return Err(err);
+                }
+                // Retained clones and cancellation of the acknowledgement waiter
+                // must not keep the writer alive or admit post-shutdown writes.
+                rx.close();
+                let _ = ack.send(Ok(()));
+                return Ok(());
             }
         }
     }
