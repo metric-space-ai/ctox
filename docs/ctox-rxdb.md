@@ -633,7 +633,7 @@ snapshots as `{ collectionName, documents }`, starting only after its initial
 query succeeds. Committed changes during that query are merged into the first
 snapshot; a pending or failed query is never presented as an empty ready list.
 
-An invalidation-only consumer may explicitly opt into
+A consumer may request committed deltas before its initial snapshot with
 `subscribe(listener, { emitPendingChanges: true })`. While initialization is
 pending, debounced committed changes additionally emit
 `{ collectionName, initialPending: true, changedDocuments }`. This event has
@@ -643,18 +643,20 @@ way only for harness status and triggers its existing authoritative row read;
 it does not render the changed-document payload as a fully loaded collection.
 The shell's scoped collection facade preserves this subscription option.
 
-A consumer that only needs to know *that* something changed — because it
-re-runs its own bounded query — subscribes with
-`subscribe(listener, { invalidateOnly: true })`. It never reads the collection:
-the listener receives `{ collectionName, invalidated: true }` once right after
-subscribing and then, debounced, whenever the local store or the demand loader
-reports a change. A plain `$` subscription materializes the 200-document demand
-window first and, for the control-plane ledgers (`business_commands`,
-`ctox_queue_tasks`), refetches it after each change; crew presence, chat
-tracking and the desktop command stream used it purely as a change trigger and
-downloaded ~1.5 MB of ledger documents per shell start that way (on-prem deployment,
-06.10.2026). They now use `invalidateOnly`. Chat tracking additionally looks up
-only messages that still need a sync (`trackedMessageNeedsSync`).
+Consumers that only need a change hint use
+`collection.$.subscribe(listener, { invalidateOnly: true })`. This emits
+`{ collectionName, invalidated: true }` after subscription and debounces store,
+loader-generation and projected-window changes. It performs no initial query,
+snapshot read or document materialization. The listener runs its own bounded
+query; the hint alone confirms neither readiness nor read permission. The
+option also passes through scoped, maintenance and permission-guarded shell
+collection facades. Unsubscribing retires the timer, listeners and foreground
+lease. Ordinary snapshot and `emitPendingChanges` subscriptions retain their
+existing behavior; `invalidateOnly` takes precedence when both are requested.
+
+Crew presence, chat tracking and the desktop command stream also use this
+option for bounded query refreshes. Chat tracking looks up only messages
+that still need sync (`trackedMessageNeedsSync`).
 
 Crew app presence retains the last valid queue snapshot when a read fails.
 An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;

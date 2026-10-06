@@ -14102,14 +14102,9 @@ var CtoxRxCollection = class {
   observe(listener) {
     return this.storageCollection.observe(listener);
   }
-  // Change notification without a snapshot: the listener receives
-  // `{collectionName, invalidated: true}` once right after subscribing and
-  // then (debounced) whenever the local store or the demand loader reports a
-  // change. A plain `$` subscription materializes the collection's whole
-  // 200-document demand window first and, for control-plane collections,
-  // refetches it after every change; callers that only re-run their own
-  // bounded query on change (crew presence, chat tracking) downloaded ~1.5 MB
-  // of commands and tasks per start that way (on-prem deployment, 06.10.2026).
+  // Notify consumers that re-run their own bounded query without first
+  // materializing a collection snapshot. Payload and permission authority
+  // remain with that query, including projected query-window refreshes.
   subscribeInvalidations(listener) {
     let active = true;
     let pendingTimer = null;
@@ -14123,10 +14118,12 @@ var CtoxRxCollection = class {
       }, OBSERVABLE_DEBOUNCE_MS);
     };
     const unsubscribe = this.observe(schedule);
-    const unsubscribeLoader = this.subscribeDemandLoaderChange(schedule);
+    const unsubscribeLoader = this.subscribeDemandLoaderChange(schedule, true);
+    const unsubscribeWindow = this.subscribeQueryWindowChange(schedule);
     schedule();
     return {
       unsubscribe: () => {
+        if (!active) return;
         active = false;
         if (pendingTimer != null) {
           clearTimeout(pendingTimer);
@@ -14134,6 +14131,7 @@ var CtoxRxCollection = class {
         }
         unsubscribe();
         unsubscribeLoader();
+        unsubscribeWindow();
         registry.subscriptionEnded(this.name);
       }
     };
