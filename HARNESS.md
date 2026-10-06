@@ -132,6 +132,13 @@ persistence requires a durable plan, but incomplete plans may enter review so
 blocked work can retain honest pending steps. Only validated completion with
 all model-owned steps completed may reach terminal success and 100 percent.
 
+Business OS chat workers prepare their final response and complete that model-owned
+plan step through `update_plan` before returning it. Chat publication, completion
+review and queue acknowledgement remain service effects after the turn, not
+model-owned plan steps. A saved writeback receipt cannot complete a different
+open step, and unfinished research or a failed writeback remains incomplete.
+
+
 `task_execution_plan_revisions` is the authoritative plan history. Status-only
 updates rewrite the current revision, while changed labels, count, or order
 create a new revision and retain the old one as execution evidence.
