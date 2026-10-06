@@ -332,9 +332,31 @@ fn pump() -> Option<&'static Pump> {
     .as_ref()
 }
 
+/// One pump entry per core database, not per spelling of the root.
+///
+/// With CTOX_STATE_ROOT set, `paths::core_db` resolves every root to the same
+/// file, but callers name it differently: the service passes the install root,
+/// `refresh_after_finalization` derives `db_path.parent().parent()` (the
+/// parent of the state directory). The pump then projected the same 3.4 GB
+/// core database twice per sweep with two writers; on the THESEN on-prem host
+/// each pass took 40-100 s (06.10.2026). The first root seen for a database
+/// stays its representative.
+fn pump_root(root: &Path) -> PathBuf {
+    static ALIASES: OnceLock<Mutex<BTreeMap<PathBuf, PathBuf>>> = OnceLock::new();
+    let db = crate::paths::core_db(root);
+    let key = std::fs::canonicalize(&db).unwrap_or(db);
+    ALIASES
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(key)
+        .or_insert_with(|| root.to_path_buf())
+        .clone()
+}
+
 fn wake(root: &Path, flags: u8) {
     if let Some(pump) = pump() {
-        if pump.wake.try_send((root.to_path_buf(), flags)).is_err() {
+        if pump.wake.try_send((pump_root(root), flags)).is_err() {
             static DROPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let dropped = DROPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             if dropped.is_power_of_two() {
@@ -407,7 +429,7 @@ pub(crate) fn publish_worker_snapshot(root: &Path, snapshot: WorkerSnapshot) {
     if let Some(pump) = pump() {
         let changed = record_snapshot(
             &mut pump.latest.lock().unwrap_or_else(|e| e.into_inner()),
-            root,
+            &pump_root(root),
             snapshot,
         );
         if changed {
@@ -545,6 +567,54 @@ impl Drop for ProjectionTiming<'_> {
     }
 }
 
+// Opening the core database parses its multi-MB process-mining trigger
+// schema; every cockpit pass did that again (core_open 1.9 s per pass on the
+// THESEN on-prem host, 06.10.2026). The projection thread keeps its read
+// connection per root and reopens only when the database file was replaced or
+// a pass failed.
+type CoreIdentity = Option<(u64, u64)>;
+
+thread_local! {
+    static CORE_CONNECTIONS: std::cell::RefCell<BTreeMap<PathBuf, (CoreIdentity, Connection)>> =
+        std::cell::RefCell::new(BTreeMap::new());
+}
+
+fn core_identity(root: &Path) -> CoreIdentity {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata(crate::paths::core_db(root))
+            .ok()
+            .map(|meta| (meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        None
+    }
+}
+
+fn checkout_core(root: &Path) -> Result<(CoreIdentity, Connection)> {
+    let identity = core_identity(root);
+    let cached = CORE_CONNECTIONS.with(|cache| cache.borrow_mut().remove(root));
+    if let Some((cached_identity, conn)) = cached {
+        if identity.is_some() && cached_identity == identity {
+            return Ok((identity, conn));
+        }
+    }
+    Ok((identity, core(root)?))
+}
+
+fn checkin_core(root: &Path, identity: CoreIdentity, conn: Connection) {
+    if identity.is_some() {
+        CORE_CONNECTIONS.with(|cache| {
+            cache
+                .borrow_mut()
+                .insert(root.to_path_buf(), (identity, conn));
+        });
+    }
+}
+
 fn refresh_measured(
     root: &Path,
     snapshot: &WorkerSnapshot,
@@ -552,40 +622,55 @@ fn refresh_measured(
     flags: u8,
     timing: &mut ProjectionTiming<'_>,
 ) -> Result<()> {
-    let conn = timing.phase("core_open", || core(root))?;
-    if !has_table(&conn, "communication_routing_state")? {
+    let (identity, conn) = timing.phase("core_open", || checkout_core(root))?;
+    let result = refresh_measured_with(root, &conn, snapshot, writer, flags, timing);
+    if result.is_ok() {
+        checkin_core(root, identity, conn);
+    }
+    result
+}
+
+fn refresh_measured_with(
+    root: &Path,
+    conn: &Connection,
+    snapshot: &WorkerSnapshot,
+    writer: &mut BusinessProjectionWriter,
+    flags: u8,
+    timing: &mut ProjectionTiming<'_>,
+) -> Result<()> {
+    if !has_table(conn, "communication_routing_state")? {
         return Ok(());
     }
     if flags & MAINTENANCE != 0 {
         // Maintenance must never suppress unrelated cockpit projections. Older
         // databases have attempts but no tombstone outbox until their migration.
-        let maintenance =
-            timing.phase("retain_attempts", || -> Result<()> {
-                if !has_table(&conn, "crew_attempts")?
-                    || !has_table(&conn, "crew_projection_tombstones")?
-                {
-                    return Ok(());
-                }
-                crate::crew::retain_attempts(&conn, Utc::now().timestamp_millis())?;
-                let ids = conn
-            .prepare("SELECT event_id FROM crew_projection_tombstones ORDER BY event_id LIMIT 128")?
-            .query_map([], |r| r.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-                for id in ids {
-                    writer.tombstone_source_projection(
-                        "ctox_harness_events",
-                        &id,
-                        Utc::now().timestamp_millis(),
+        let maintenance = timing.phase("retain_attempts", || -> Result<()> {
+            if !has_table(conn, "crew_attempts")? || !has_table(conn, "crew_projection_tombstones")?
+            {
+                return Ok(());
+            }
+            crate::crew::retain_attempts(conn, Utc::now().timestamp_millis())?;
+            let ids = conn
+                .prepare(
+                    "SELECT event_id FROM crew_projection_tombstones ORDER BY event_id LIMIT 128",
+                )?
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for id in ids {
+                writer.tombstone_source_projection(
+                    "ctox_harness_events",
+                    &id,
+                    Utc::now().timestamp_millis(),
+                )?;
+                if writer.inner.delivered_to_rxdb("ctox_harness_events") {
+                    conn.execute(
+                        "DELETE FROM crew_projection_tombstones WHERE event_id=?1",
+                        [&id],
                     )?;
-                    if writer.inner.delivered_to_rxdb("ctox_harness_events") {
-                        conn.execute(
-                            "DELETE FROM crew_projection_tombstones WHERE event_id=?1",
-                            [&id],
-                        )?;
-                    }
                 }
-                Ok(())
-            });
+            }
+            Ok(())
+        });
         match maintenance {
             Ok(()) => writer.crew_maintenance_warned = false,
             Err(_) if !writer.crew_maintenance_warned => {
@@ -597,33 +682,33 @@ fn refresh_measured(
     }
     if flags & STATUS != 0 {
         timing.phase("project_status", || {
-            project_status(root, &conn, writer, snapshot)
+            project_status(root, conn, writer, snapshot)
         })?;
     }
     if flags & EVENTS != 0 {
         // The outbox also marks the lifecycle migration: PR-59 attempts do not
         // yet have started_at. Their existing events can still be projected.
         if flags & MAINTENANCE != 0
-            && has_table(&conn, "crew_attempts")?
-            && has_table(&conn, "crew_projection_tombstones")?
-            && has_table(&conn, "ctox_harness_flow_events")?
+            && has_table(conn, "crew_attempts")?
+            && has_table(conn, "crew_projection_tombstones")?
+            && has_table(conn, "ctox_harness_flow_events")?
         {
             timing.phase("repair_selection_events", || {
-                crate::crew::repair_selection_events(root, &conn)
+                crate::crew::repair_selection_events(root, conn)
             })?;
         }
         timing.phase("project_events", || {
-            project_events_since(root, &conn, writer, flags & MAINTENANCE != 0)
+            project_events_since(root, conn, writer, flags & MAINTENANCE != 0)
         })?;
     }
     if flags & RUNS != 0 {
-        timing.phase("project_runs", || project_runs(root, &conn, writer))?;
+        timing.phase("project_runs", || project_runs(root, conn, writer))?;
     }
-    if flags & (STATUS | QUEUE) != 0 && has_table(&conn, "crew_members")? {
-        timing.phase("project_crew", || project_crew(root, &conn, writer))?;
+    if flags & (STATUS | QUEUE) != 0 && has_table(conn, "crew_members")? {
+        timing.phase("project_crew", || project_crew(root, conn, writer))?;
     }
-    if flags & CHAT != 0 && has_table(&conn, "ctox_harness_flow_events")? {
-        timing.phase("project_chat", || super::chat::project(root, &conn))?;
+    if flags & CHAT != 0 && has_table(conn, "ctox_harness_flow_events")? {
+        timing.phase("project_chat", || super::chat::project(root, conn))?;
     }
     let mut collections = Vec::new();
     if flags & QUEUE != 0 {
@@ -638,7 +723,7 @@ fn refresh_measured(
     timing.phase("retain_selected", || {
         retain_selected(
             root,
-            &conn,
+            conn,
             writer,
             Utc::now().timestamp_millis(),
             &collections,
@@ -1548,4 +1633,62 @@ fn retain_selected(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod pump_root_and_core_cache_tests {
+    use super::*;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-cockpit-{name}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(root.join("runtime")).expect("runtime dir");
+        Connection::open(crate::paths::core_db(&root)).expect("core db");
+        root
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn roots_naming_the_same_core_database_share_one_pump_entry() {
+        let root = temp_root("alias");
+        let alias = root.with_extension("alias");
+        std::os::unix::fs::symlink(&root, &alias).expect("symlink");
+        assert_eq!(pump_root(&root), root);
+        assert_eq!(pump_root(&alias), root);
+        let _ = std::fs::remove_file(&alias);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cockpit_core_connection_is_reused_until_the_file_is_replaced() {
+        let root = temp_root("reuse");
+        let (identity, conn) = checkout_core(&root).expect("first checkout");
+        conn.execute_batch("CREATE TEMP TABLE reuse_marker(x INTEGER);")
+            .expect("marker");
+        checkin_core(&root, identity, conn);
+
+        let (identity, conn) = checkout_core(&root).expect("second checkout");
+        assert!(
+            conn.prepare("SELECT x FROM temp.reuse_marker").is_ok(),
+            "same connection must be reused"
+        );
+        checkin_core(&root, identity, conn);
+
+        // Create the replacement while the old file still exists so it can
+        // never reuse the old inode, then swap it in like a restore would.
+        let db = crate::paths::core_db(&root);
+        let replacement = db.with_extension("replacement");
+        Connection::open(&replacement).expect("replacement db");
+        std::fs::rename(&replacement, &db).expect("swap db");
+        let (_, conn) = checkout_core(&root).expect("checkout after replacement");
+        assert!(
+            conn.prepare("SELECT x FROM temp.reuse_marker").is_err(),
+            "replaced file must get a fresh connection"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
