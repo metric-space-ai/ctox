@@ -92,6 +92,12 @@ impl SshStorage {
         } else {
             validate_relative_path(relative)?;
         }
+        // Recheck the admitted root on every operation: a reconnect is not
+        // required for another server-side writer to replace the directory.
+        ensure!(
+            self.sftp.realpath(&self.root)? == self.root && self.sftp.lstat(&self.root)?.is_dir(),
+            "storage root is no longer a canonical directory"
+        );
         let path = self.root.join(relative);
         let mut parent = self.root.clone();
         for component in Path::new(relative)

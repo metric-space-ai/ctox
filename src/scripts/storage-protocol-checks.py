@@ -84,7 +84,7 @@ exec /usr/sbin/smbd --foreground --no-process-group --configfile=/fixture/smb.co
  public=(fixture/'host.pub').read_text().split()[1]
  pin='SHA256:'+base64.b64encode(hashlib.sha256(base64.b64decode(public)).digest()).decode().rstrip('=')
  for protocol in ['ssh','smb']:
-  config={'protocol':protocol,'host':'127.0.0.1','port':mapped[protocol],'username':'storage','root':'/fixture/ssh-data' if protocol=='ssh' else '/','share':'artifacts','password':password,'private_key':(fixture/'client').read_text(),'host_key_sha256':pin}
+  config={'host_root':str(fixture/'ssh-data'),'protocol':protocol,'host':'127.0.0.1','port':mapped[protocol],'username':'storage','root':'/fixture/ssh-data' if protocol=='ssh' else '/','share':'artifacts','password':password,'private_key':(fixture/'client').read_text(),'host_key_sha256':pin}
   config_path=fixture/(protocol+'.json');config_path.write_text(json.dumps(config))
   env=os.environ.copy();env['STORAGE_LIVE_CONFIG']=str(config_path)
   print('PROTOCOL_PHASE: '+protocol,flush=True)

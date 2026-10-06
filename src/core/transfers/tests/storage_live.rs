@@ -146,6 +146,24 @@ async fn real_storage_pause_restart_upload_download_and_no_replace() {
         remote.length("verified-artifact.bin").unwrap(),
         Some(upload.size)
     );
+    #[cfg(unix)]
+    if live.config["protocol"] == "ssh" {
+        let root = std::path::PathBuf::from(live.config["host_root"].as_str().unwrap());
+        assert!(root.starts_with("/mnt/nvme1/build-lane/artifacts/ctox-storage"));
+        assert_eq!(root.file_name().unwrap(), "ssh-data");
+        let saved = root.with_extension("original");
+        std::fs::rename(&root, &saved).unwrap();
+        // The container sees this as another directory outside the admitted root.
+        std::os::unix::fs::symlink("/fixture/smb-data", &root).unwrap();
+        let replaced = remote.length("verified-artifact.bin");
+        std::fs::remove_file(&root).unwrap();
+        std::fs::rename(&saved, &root).unwrap();
+        assert!(
+            replaced.is_err(),
+            "an existing connection followed a replaced root"
+        );
+        println!("PROTOCOL_AUTHORITY: SSH root replacement rejected");
+    }
     remote.close().unwrap();
     println!(
         "PROTOCOL_ACCEPTANCE: {} pause/reopen upload/download integrity and no-replace passed",
