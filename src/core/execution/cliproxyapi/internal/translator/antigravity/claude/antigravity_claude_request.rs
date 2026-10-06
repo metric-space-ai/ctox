@@ -298,8 +298,8 @@ fn convert_messages(
                 if !converted.is_empty() {
                     output.push(content(role, reorder_model_parts(role, converted)));
                 }
-            } else {
-                // ref: gemini/claude/gemini_claude_request.go:202-215 @ e2bff010
+            } else if !converted.is_empty() {
+                // ref: gemini/claude/gemini_claude_request.go:211-216 @ a2976eb8
                 output.push(content(role, converted));
             }
         } else if let Some(text) = message_content.as_str() {
@@ -568,6 +568,12 @@ fn convert_message_parts(
                     parts.push(json!({"inlineData":inline}));
                 }
             }
+            // ref: gemini/claude/gemini_claude_request.go:191-207 @ a2976eb8
+            "document" if thinking_policy != ClaudeThinkingPolicy::Antigravity => {
+                if let Some(inline) = inline_media(item, true) {
+                    parts.push(json!({"inlineData":inline}));
+                }
+            }
             _ => {}
         }
     }
@@ -726,7 +732,12 @@ fn tool_result_part(
 }
 
 fn inline_image(item: &Value) -> Option<Value> {
-    if item.get("type").and_then(Value::as_str) != Some("image")
+    inline_media(item, false)
+}
+
+fn inline_media(item: &Value, allow_document: bool) -> Option<Value> {
+    let kind = item.get("type").and_then(Value::as_str);
+    if !(kind == Some("image") || (allow_document && kind == Some("document")))
         || item.pointer("/source/type").and_then(Value::as_str) != Some("base64")
     {
         return None;

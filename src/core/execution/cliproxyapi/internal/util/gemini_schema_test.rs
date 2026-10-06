@@ -4,6 +4,91 @@
 
 use serde_json::{json, Value};
 
+#[test]
+fn candidate_v16_google_schema_properties_force_object_recursively() {
+    let schema = json!({
+        "properties":{
+            "nested":{"type":"string","properties":{"value":{"type":"integer"}}}
+        },
+        "required":["nested"]
+    });
+    for clean in [
+        clean_json_schema_for_gemini,
+        clean_json_schema_for_antigravity,
+        clean_json_schema_for_antigravity_response,
+    ] {
+        let result = clean(&schema);
+        assert_eq!(result["type"], "object");
+        assert_eq!(result["properties"]["nested"]["type"], "object");
+        assert_eq!(
+            result["properties"]["nested"]["properties"]["value"]["type"],
+            "integer"
+        );
+        assert_eq!(result["required"], json!(["nested"]));
+        assert_eq!(schema["properties"]["nested"]["type"], "string");
+    }
+}
+
+#[test]
+fn candidate_v16_google_schema_properties_name_map_stays_author_owned() {
+    let schema = json!({
+        "properties":{
+            "properties":{"properties":{"type":{"type":"string"}}},
+            "type":{"type":"integer"}
+        }
+    });
+    for clean in [
+        clean_json_schema_for_gemini,
+        clean_json_schema_for_antigravity,
+        clean_json_schema_for_antigravity_response,
+    ] {
+        let result = clean(&schema);
+        assert_eq!(result["type"], "object");
+        assert_eq!(result["properties"]["properties"]["type"], "object");
+        assert_eq!(result["properties"]["type"]["type"], "integer");
+        assert!(result["properties"]["properties"]["properties"]
+            .get("type")
+            .unwrap()
+            .is_object());
+    }
+}
+
+#[test]
+fn candidate_v16_google_schema_type_union_prefers_structural_kind() {
+    let schema = json!({
+        "properties":{
+            "record":{"type":["string","object","null"],"properties":{"value":{"type":"string"}}},
+            "list":{"type":["string","array"],"items":{"type":"integer"}}
+        }
+    });
+    for clean in [
+        clean_json_schema_for_gemini,
+        clean_json_schema_for_antigravity,
+        clean_json_schema_for_antigravity_response,
+    ] {
+        let result = clean(&schema);
+        assert_eq!(result["properties"]["record"]["type"], "object");
+        assert_eq!(result["properties"]["list"]["type"], "array");
+        assert_eq!(result["properties"]["list"]["items"]["type"], "integer");
+    }
+}
+
+#[test]
+fn candidate_v16_google_schema_non_object_properties_do_not_force_object() {
+    for properties in [Value::Null, json!("invalid"), json!([])] {
+        let schema = json!({"type":"string","properties":properties});
+        for clean in [
+            clean_json_schema_for_gemini,
+            clean_json_schema_for_antigravity,
+            clean_json_schema_for_antigravity_response,
+        ] {
+            let result = clean(&schema);
+            assert_eq!(result["type"], "string");
+            assert_eq!(result["properties"], schema["properties"]);
+        }
+    }
+}
+
 use super::gemini_schema::{
     clean_json_schema_for_antigravity, clean_json_schema_for_antigravity_response,
     clean_json_schema_for_gemini,
