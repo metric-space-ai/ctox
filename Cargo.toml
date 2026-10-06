@@ -115,6 +115,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+async-trait = "0.1"
 ctox-core = { path = "src/core/harness/core", features = ["integration-test-support"] }
 tempfile = "3"
 

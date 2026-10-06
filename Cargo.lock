@@ -2213,6 +2213,7 @@ name = "ctox"
 version = "0.3.22"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "chrono-tz",
