@@ -95,6 +95,10 @@ impl WebRTCConnectionHandler for Transport {
     fn peer_capability_token(&self, peer: &Peer) -> Option<String> {
         self.capabilities.lock().unwrap().get(peer).cloned()
     }
+    fn document_fields_for_peer(&self, _: &Peer, _: &str) -> Option<Vec<String>> {
+        // This service-only fixture grants no collection document fields.
+        Some(Vec::new())
+    }
     async fn send(&self, _: &Peer, frame: WebRTCWireFrame) -> RxResult<()> {
         if let WebRTCWireFrame::Response(response) = frame {
             if response.id == "transfer-reply" {

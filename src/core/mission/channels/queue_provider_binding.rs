@@ -1282,7 +1282,7 @@ pub(super) mod tests {
             )
             .is_err());
         assert!(witness
-            .with_current_command_transaction(&command, |_, _, _| {
+            .with_current_command_transaction(&command, |_, _, _| -> Result<()> {
                 panic!("pre-retirement command performed an effect")
             })
             .is_err());
