@@ -1,0 +1,13 @@
+{
+  "provenance": {
+    "evidence": "outbound-dnb-persisted-20261003.json",
+    "run_id": "scrape_run-5d9b0efc3b2ec234",
+    "script_revision_no": 31,
+    "observed_at": "2026-10-02T23:49:44.104Z",
+    "scope": "saved exact-company observation; no new provider request"
+  },
+  "company": "Carbosulf Chemische Werke GmbH",
+  "url": "https://app.dnbhoovers.com/company/3e55b38a-8873-3e26-974a-2c844ff40a62/report/company_summary",
+  "text": "Basic Chemical Manufacturing | US 8-DIGIT SIC | 28699905 - Carbon disulfide | ISIC REV 4 | 2011 - Manufacture of basic chemicals | NACE REV 2 | 2014 - Manufacture of other organic basic chemicals | NAICS 2022 | 325180 - Other Basic Inorganic Chemical Manufacturing | D&B HOOVERS INDUSTRIES | 17 - Basic Chemical Manufacturing | US SIC 1987 | 2869 - Industrial Organic Chemicals, Not Elsewhere Classified | WZ 2008 (DE) | 20140 - Manufacture of other organic basic chemicals | Alles anzeigen | Firmen-Identifikatoren | D-U-N-S® NUMMER | 315307116 | LEI NUMMER | DERIVED UNIQUE REGISTER NUMBER (DE) | 50670B1797 | REGISTER NUMBER (DE) | HRB1797 | VALUE ADDED TAX NUMBER (DE) | DE811124891 | Unt",
+  "previous_wrong_wz": "2014"
+}

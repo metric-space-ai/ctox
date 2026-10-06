@@ -2,7 +2,10 @@
 // IndexedDB is not available, and as a fallback for tab environments where
 // IndexedDB is unavailable. Persistence semantics are session-only.
 
+import { createMemoryProjectedQueryCache } from './query-projection-cache.mjs';
+
 export function createMemoryMetaBackend() {
+  const projectedCache = createMemoryProjectedQueryCache();
   const queryWindows = new Map();
   const queryWindowRefsByDocument = new Map();
   const queryWindowRefsByWindow = new Map();
@@ -11,6 +14,13 @@ export function createMemoryMetaBackend() {
 
   return {
     name: 'memory',
+    get projectedCacheName() { return projectedCache.name; },
+    async putProjectedQueryRows(key, documents, now) {
+      return projectedCache.put(key, documents, now);
+    },
+    async getProjectedQueryRows(key, now) {
+      return projectedCache.get(key, now);
+    },
     async putQueryWindow(record) {
       const key = queryWindowKey(record);
       queryWindows.set(key, { ...record });
@@ -72,6 +82,7 @@ export function createMemoryMetaBackend() {
       return entry ? { ...entry } : null;
     },
     async clear() {
+      await projectedCache.clear();
       queryWindows.clear();
       queryWindowRefsByDocument.clear();
       queryWindowRefsByWindow.clear();

@@ -1859,6 +1859,48 @@ pub fn native_peer_status(root: &Path) -> Value {
     })
 }
 
+/// How long a pending-sync scan result is served before one caller rescans.
+const COMMAND_PLANE_SCAN_TTL: Duration = Duration::from_secs(5);
+
+type CommandPlaneScan = Result<(u64, u64), String>;
+
+/// The pending-sync scan reads every business_commands document with
+/// json_extract (7,941 documents / 131 MB on a customer tenant) and ran on
+/// every index document load through sync_config_for_browser. It is a status
+/// figure: serve the last scan to concurrent callers while exactly one caller
+/// refreshes it (06.10.2026).
+fn cached_command_plane_scan(path: &Path) -> CommandPlaneScan {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Instant, CommandPlaneScan)>>> = OnceLock::new();
+    static REFRESHING: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let refreshing = REFRESHING.get_or_init(|| Mutex::new(HashSet::new()));
+    let key = path.to_path_buf();
+    let stale = match cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        Some((at, value)) if at.elapsed() < COMMAND_PLANE_SCAN_TTL => return value.clone(),
+        Some((_, value)) => Some(value.clone()),
+        None => None,
+    };
+    if let Some(stale) = stale {
+        if !refreshing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone())
+        {
+            return stale;
+        }
+    }
+    let fresh = scan_command_plane(path).map_err(|error| error.to_string());
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key.clone(), (Instant::now(), fresh.clone()));
+    refreshing
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&key);
+    fresh
+}
+
 fn command_plane_status(root: &Path) -> Value {
     let runtime = COMMAND_PLANE_METRICS.snapshot();
     let path = store::rxdb_store_path(root);
@@ -1869,9 +1911,38 @@ fn command_plane_status(root: &Path) -> Value {
             "oldest_pending_age_ms": 0,
         });
     }
+    match cached_command_plane_scan(&path) {
+        Ok((pending_sync_count, oldest_pending_age_ms)) => json!({
+            "runtime": runtime,
+            "pending_sync_count": pending_sync_count,
+            "oldest_pending_age_ms": oldest_pending_age_ms,
+        }),
+        Err(error) => json!({
+            "runtime": runtime,
+            "pending_sync_count": Value::Null,
+            "oldest_pending_age_ms": Value::Null,
+            "diagnostic_error": error,
+        }),
+    }
+}
+
+/// `deleted IN (0, 1)` matches every row (the column is 0/1) but lets SQLite
+/// use the `(deleted, json_extract(data,'$.status'), ...)` index. Without it the
+/// planner scanned and JSON-parsed every command document: 350-460 ms on 7.9k
+/// commands / 124 MB (on-prem deployment, 06.10.2026) on each sync-config and index
+/// request; with it ~0.02 ms.
+fn command_plane_pending_query(quoted_table: &str) -> String {
+    format!(
+        "SELECT COUNT(*), MIN(CAST(COALESCE(json_extract(data, '$.created_at_ms'), json_extract(data, '$.updated_at_ms'), 0) AS INTEGER))
+         FROM {quoted_table}
+         WHERE deleted IN (0, 1) AND json_extract(data, '$.status') = 'pending_sync'"
+    )
+}
+
+fn scan_command_plane(path: &Path) -> anyhow::Result<(u64, u64)> {
     let result = (|| -> anyhow::Result<(u64, u64)> {
         let conn = Connection::open_with_flags(
-            &path,
+            path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
@@ -1879,11 +1950,7 @@ fn command_plane_status(root: &Path) -> Value {
             return Ok((0, 0));
         };
         let quoted = sqlite_quote_identifier(&table);
-        let query = format!(
-            "SELECT COUNT(*), MIN(CAST(COALESCE(json_extract(data, '$.created_at_ms'), json_extract(data, '$.updated_at_ms'), 0) AS INTEGER))
-             FROM {quoted}
-             WHERE json_extract(data, '$.status') = 'pending_sync'"
-        );
+        let query = command_plane_pending_query(&quoted);
         let (count, oldest_at_ms): (u64, Option<u64>) =
             conn.query_row(&query, [], |row| Ok((row.get(0)?, row.get(1)?)))?;
         Ok((
@@ -1894,19 +1961,7 @@ fn command_plane_status(root: &Path) -> Value {
                 .unwrap_or_default(),
         ))
     })();
-    match result {
-        Ok((pending_sync_count, oldest_pending_age_ms)) => json!({
-            "runtime": runtime,
-            "pending_sync_count": pending_sync_count,
-            "oldest_pending_age_ms": oldest_pending_age_ms,
-        }),
-        Err(error) => json!({
-            "runtime": runtime,
-            "pending_sync_count": Value::Null,
-            "oldest_pending_age_ms": Value::Null,
-            "diagnostic_error": error.to_string(),
-        }),
-    }
+    result
 }
 
 fn native_peer_health_error(
@@ -21851,5 +21906,50 @@ pub(in crate::business_os) mod tests {
                 Some("rolled_back")
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod command_plane_query_tests {
+    use super::*;
+
+    #[test]
+    fn pending_sync_count_uses_the_status_index() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE "ctox_business_os__business_commands__v2" (
+                id TEXT PRIMARY KEY, data TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0
+            );
+            CREATE INDEX "ctox_business_os__business_commands__v2_json__deleted__status__updated_at_ms__id_idx"
+              ON "ctox_business_os__business_commands__v2"("deleted", json_extract(data, '$.status'), json_extract(data, '$.updated_at_ms'), "id");
+            INSERT INTO "ctox_business_os__business_commands__v2"(id, data, deleted) VALUES
+              ('a', '{"status":"pending_sync","created_at_ms":5}', 0),
+              ('b', '{"status":"completed","created_at_ms":1}', 0),
+              ('c', '{"status":"pending_sync","created_at_ms":3}', 1);
+            "#,
+        )
+        .unwrap();
+        let query = command_plane_pending_query("\"ctox_business_os__business_commands__v2\"");
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step.contains("USING INDEX")),
+            "command-plane scan must not scan the table: {plan:?}"
+        );
+        let (count, oldest): (u64, Option<u64>) = conn
+            .query_row(&query, [], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+        assert_eq!(
+            (count, oldest),
+            (2, Some(3)),
+            "deleted rows still count, as before"
+        );
     }
 }

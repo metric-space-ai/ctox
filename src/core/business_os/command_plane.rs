@@ -1186,7 +1186,11 @@ enum CentralCommandPolicyRequirement {
 impl CentralCommandPolicyRequirement {
     fn for_command(command: &BusinessCommand) -> Option<Self> {
         let command_type = command.command_type.as_str();
-        let fixed = if command_type.starts_with("ctox.crew.") {
+        let fixed = if super::store_workjet_computers::requires_capability_management(command) {
+            Some(CommandPolicyRequirement::workspace(
+                BusinessOsPermission::IntegrationsManage,
+            ))
+        } else if command_type.starts_with("ctox.crew.") {
             Some(CommandPolicyRequirement::scoped(
                 BusinessOsPermission::CrewManage,
                 super::policy::BusinessOsScope::record(command_type),
@@ -1753,6 +1757,7 @@ fn dispatch_business_command(
                 command,
                 owner_user_id,
                 owner_email.as_deref(),
+                super::session::session_role(session),
             ) {
                 Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(

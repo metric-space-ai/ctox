@@ -256,6 +256,10 @@ pub trait WebRTCConnectionHandler: Send + Sync {
         true
     }
 
+    /// The remote peer advertised `CTOX_FRAME_DEFLATE_CAPABILITY`: framed
+    /// transfers to it may be deflate-compressed. Generic handlers ignore it.
+    fn enable_frame_compression_for_peer(&self, _peer: &Self::Peer) {}
+
     /// Optional server-authoritative gate for ordinary full-collection pulls.
     /// Demand-query methods use their own bounded dispatcher and are not
     /// affected. Generic handlers remain fail-open.

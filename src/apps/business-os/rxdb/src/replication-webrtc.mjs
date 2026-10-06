@@ -20,7 +20,11 @@
 // native session fallback for v1 peers) are pinned by
 // tests/replication-recovery-smoke.mjs.
 import { CtoxSubject } from './observable.mjs';
-import { createCtoxWebRtcNativePeer } from './webrtc-native.mjs';
+import {
+  CTOX_FRAME_DEFLATE_CAPABILITY,
+  createCtoxWebRtcNativePeer,
+  frameDeflateSupported,
+} from './webrtc-native.mjs';
 import {
   CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
   assertCompatibleProtocol,
@@ -111,6 +115,9 @@ const BROWSER_CAPABILITIES = [
   CTOX_COMMAND_LIFECYCLE_CAPABILITY,
   CTOX_BROWSER_LIVE_CAPABILITY,
   CTOX_WORKJET_DEVICE_CONTROL_CAPABILITY,
+  // Only advertised where the browser can inflate; the native peer otherwise
+  // keeps sending plain frames.
+  ...(frameDeflateSupported() ? [CTOX_FRAME_DEFLATE_CAPABILITY] : []),
 ];
 
 // Presence is optional on the wire: a native peer that predates
@@ -2487,6 +2494,7 @@ class CtoxWebRtcReplicationState {
       // handshake, so a same-session role/grant change takes effect at the
       // next control-plane read without rebuilding the loader.
       readPermissionDigest: () => this.readPermissionDigest || '',
+      onQueryWindowChanged: () => this.collection.notifyQueryWindowChange?.(),
     }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
       this.collection.setDemandLoader(this.demandLoader);

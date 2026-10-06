@@ -1674,6 +1674,23 @@ where
                     let result = match item.message.method.as_str() {
                         "token" => Value::String(storage_token),
                         "ctoxProtocol" => {
+                            if item
+                                .message
+                                .params
+                                .first()
+                                .and_then(|payload| payload.get("capabilities"))
+                                .and_then(Value::as_array)
+                                .is_some_and(|capabilities| {
+                                    capabilities.iter().any(|capability| {
+                                        capability.as_str()
+                                            == Some(
+                                                super::connection_handler_rs::CTOX_FRAME_DEFLATE_CAPABILITY,
+                                            )
+                                    })
+                                })
+                            {
+                                handler_task.enable_frame_compression_for_peer(&item.peer);
+                            }
                             let flag = pool_task.query_fetch_registry.is_feature_enabled();
                             let rows_fetch_registered =
                                 pool_task.rows_fetch_registry.has_any_source();

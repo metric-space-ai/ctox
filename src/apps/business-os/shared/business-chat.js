@@ -524,7 +524,7 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
       desktopObserver.observe(container, { childList: true });
     }
   };
-  try { subscriptions.push(db?.raw?.ctox_queue_tasks?.$?.subscribe?.(scheduleReload) || null); } catch {}
+  try { subscriptions.push(db?.raw?.ctox_queue_tasks?.$?.subscribe?.(scheduleReload, { invalidateOnly: true }) || null); } catch {}
   try { subscriptions.push(db?.raw?.ctox_harness_status?.$?.subscribe?.(onHarnessChange) || null); } catch {}
   const onPublishedWorkload = () => { if (!disposed) applyCrewWorkload(state); };
   window.addEventListener?.('ctox-crew-workload', onPublishedWorkload);
@@ -1281,8 +1281,8 @@ function createTrackedMessageWatch({
   };
   const startActiveWatch = () => {
     if (businessCommandsSub || queueTasksSub || timer) return;
-    businessCommandsSub = db?.raw?.business_commands?.$?.subscribe?.(notify) || null;
-    queueTasksSub = db?.raw?.ctox_queue_tasks?.$?.subscribe?.(notify) || null;
+    businessCommandsSub = db?.raw?.business_commands?.$?.subscribe?.(notify, { invalidateOnly: true }) || null;
+    queueTasksSub = db?.raw?.ctox_queue_tasks?.$?.subscribe?.(notify, { invalidateOnly: true }) || null;
     if (typeof timerWindow?.setInterval === 'function') {
       timer = timerWindow.setInterval(notify, ACTIVE_TRACKING_SYNC_INTERVAL_MS);
     }
@@ -4481,8 +4481,14 @@ async function syncTrackedMessages({ state, db, sync = null }) {
   const queue = db?.raw?.ctox_queue_tasks;
   if (!commands && !queue) return false;
 
-  const tracked = collectTrackedMessages(state);
+  // Only unresolved messages are looked up: a message with a terminal status
+  // and its reply already in the chat needs nothing from the ledgers (the same
+  // predicate stops the active watch). Querying every tracked message of up to
+  // 200 chats pulled hundreds of command and task documents on each start.
+  const tracked = collectTrackedMessages(state)
+    .filter(({ chat, message }) => trackedMessageNeedsSync(chat, message));
   if (!tracked.length) return false;
+  const pendingMessages = new Set(tracked.map(({ message }) => message));
   await flushChatTrackingCollections({ sync, db });
 
   const commandIds = new Set();
@@ -4514,6 +4520,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
     let shouldFocusChat = false;
     for (const message of chat.messages) {
       if (!message.commandId && !message.taskId) continue;
+      if (!pendingMessages.has(message)) continue;
       const commandId = trackingIdFromMessage(message, 'command');
       const taskId = trackingIdFromMessage(message, 'task');
       const commandDoc = commandId ? commandDocs.get(commandId) || null : null;

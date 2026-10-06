@@ -21,7 +21,34 @@ const PROCESS_CONTEXT_TABLE: &str = "ctox_process_context";
 const PROCESS_EVENTS_TABLE: &str = "ctox_process_events";
 const PROCESS_TRIGGER_REGISTRY_TABLE: &str = "ctox_process_trigger_registry";
 const PROCESS_MODEL_TABLE_PREFIX: &str = "ctox_pm_";
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
+// Row-change capture is limited to the tables the core state-machine rules
+// read (same patterns as the non-telemetry rules in
+// `upsert_default_core_transition_rules`, `=` meaning exact) plus the LCM
+// continuity tables used by `diagnose_lcm`. Capturing every table put ~440
+// triggers and 3 MB of trigger SQL into the core schema: SQLite parses all of
+// it on every connection open (~150 ms on an on-prem deployment's VM) and compiles
+// the trigger bodies into every write statement, while no runtime decision
+// reads the captured rows. The guard test
+// `captured_table_patterns_cover_every_core_transition_rule` keeps this list in
+// step with the rules.
+const CAPTURED_TABLE_PATTERNS: &[&str] = &[
+    "communication_founder",
+    "mail",
+    "communication_routing_state",
+    "=communication_messages",
+    "queue",
+    "ticket",
+    "work_item",
+    "commitment",
+    "deadline",
+    "schedule",
+    "cron",
+    "repair",
+    "knowledge",
+    "=continuity_documents",
+    "=continuity_commits",
+];
 const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining ensure
   ctox process-mining schema
@@ -325,7 +352,9 @@ pub fn ensure_process_mining_schema(conn: &Connection, db_path: &Path) -> Result
     upsert_default_core_transition_rules(conn)?;
 
     let db_path_text = db_path.to_string_lossy().to_string();
-    for table in list_instrumentable_tables(conn)? {
+    let tables = list_instrumentable_tables(conn)?;
+    drop_uncaptured_table_triggers(conn, &tables)?;
+    for table in tables {
         if table_triggers_current(conn, &table.name)? {
             continue;
         }
@@ -1716,7 +1745,59 @@ fn is_instrumentable_table(table: &TableInfo) -> bool {
     if name.contains("_fts") || name.ends_with("_data") || name.ends_with("_idx") {
         return false;
     }
+    if !is_captured_table(name) {
+        return false;
+    }
     !table.sql.to_ascii_uppercase().contains("VIRTUAL TABLE")
+}
+
+fn is_captured_table(table_name: &str) -> bool {
+    CAPTURED_TABLE_PATTERNS
+        .iter()
+        .any(|pattern| pattern_matches(Some(pattern), table_name))
+}
+
+/// Removes capture triggers (and their registry rows) from tables that are no
+/// longer captured. Only issues DDL when such triggers exist, so a steady-state
+/// ensure does not bump schema_version.
+fn drop_uncaptured_table_triggers(conn: &Connection, captured: &[TableInfo]) -> Result<()> {
+    let captured = captured
+        .iter()
+        .map(|table| table.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let stale = {
+        let mut stmt = conn.prepare(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'ctox_pm_%'",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
+            .filter(|(_, table)| !captured.contains(table.as_str()))
+            .collect::<Vec<_>>()
+    };
+    if stale.is_empty() {
+        return Ok(());
+    }
+    let mut sql = String::from("BEGIN IMMEDIATE;");
+    for (trigger, _) in &stale {
+        sql.push_str(&format!("DROP TRIGGER IF EXISTS {};", quote_ident(trigger)));
+    }
+    sql.push_str("COMMIT;");
+    conn.execute_batch(&sql)?;
+    let tables = stale
+        .iter()
+        .map(|(_, table)| table.as_str())
+        .collect::<BTreeSet<_>>();
+    for table in tables {
+        conn.execute(
+            "DELETE FROM ctox_process_trigger_registry WHERE table_name = ?1",
+            params![table],
+        )?;
+    }
+    Ok(())
 }
 
 fn is_process_mining_internal_table(table_name: &str) -> bool {
@@ -1732,7 +1813,7 @@ fn is_process_mining_internal_table(table_name: &str) -> bool {
 // ensure_process_mining_schema running at the start and end of every CLI
 // command, every open connection in the daemon had to re-parse the multi-MB
 // trigger schema after each `ctox ...` invocation, which stalled the Business
-// OS HTTP workers on slower hosts (measured on-prem deployment, 06.10.2026).
+// OS HTTP workers on slower hosts (customer on-prem, 06.10.2026).
 const PROCESS_MINING_VIEWS_SQL: &str = r#"
         DROP VIEW IF EXISTS ctox_pm_case_events;
         CREATE VIEW ctox_pm_case_events AS
@@ -2050,6 +2131,11 @@ fn build_trigger_sql(
     let from_state = state_expr(columns, before_alias);
     let to_state = state_expr(columns, after_alias);
 
+    // Trigger bodies are parsed on every connection open and compiled into
+    // every write statement on the table, so they are kept small: one
+    // context lookup joined once instead of five scalar subqueries, and row
+    // images built from a VALUES list with the sanitizer written once (see
+    // `row_values_json_expr`).
     format!(
         r#"
         CREATE TRIGGER {trigger_name}
@@ -2062,7 +2148,7 @@ fn build_trigger_sql(
                 row_after_json, changed_columns_json, turn_id, command_id,
                 actor_key, source, command_name, db_path, metadata_json
             )
-            VALUES (
+            SELECT
                 lower(hex(randomblob(16))),
                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                 {case_id},
@@ -2078,14 +2164,15 @@ fn build_trigger_sql(
                 {before_json},
                 {after_json},
                 {changed_columns},
-                (SELECT turn_id FROM ctox_process_context WHERE status = 'active' ORDER BY started_at DESC LIMIT 1),
-                (SELECT command_id FROM ctox_process_context WHERE status = 'active' ORDER BY started_at DESC LIMIT 1),
-                (SELECT actor_key FROM ctox_process_context WHERE status = 'active' ORDER BY started_at DESC LIMIT 1),
-                (SELECT source FROM ctox_process_context WHERE status = 'active' ORDER BY started_at DESC LIMIT 1),
-                (SELECT command_name FROM ctox_process_context WHERE status = 'active' ORDER BY started_at DESC LIMIT 1),
+                ctx.turn_id, ctx.command_id, ctx.actor_key, ctx.source, ctx.command_name,
                 {db_path_literal},
                 json_object('schema_version', {SCHEMA_VERSION})
-            );
+            FROM (SELECT 1)
+            LEFT JOIN (
+                SELECT turn_id, command_id, actor_key, source, command_name
+                FROM ctox_process_context WHERE status = 'active'
+                ORDER BY started_at DESC LIMIT 1
+            ) AS ctx;
         END;
         "#,
         trigger_name = quote_ident(trigger_name),
@@ -2149,7 +2236,7 @@ fn changed_columns_expr(
                 .iter()
                 .map(|column| {
                     format!(
-                        "CASE WHEN {before}.{col} IS NOT {after}.{col} THEN {name} END",
+                        "iif({before}.{col} IS NOT {after}.{col}, {name}, NULL)",
                         before = before,
                         after = after,
                         col = quote_ident(&column.name),
@@ -2189,39 +2276,50 @@ fn state_expr(columns: &[ColumnInfo], alias: Option<&str>) -> String {
     "'row_present'".to_string()
 }
 
+/// JSON object of the given columns with per-value sanitising: BLOB values
+/// become `[blob:N bytes]`, texts longer than the full limit are cut to the
+/// preview plus a `...[truncated:N chars]` marker. Equivalent to wrapping every
+/// column in its own CASE expression, but the sanitizer appears once per
+/// object instead of once per column, which keeps trigger bodies (parsed on
+/// every connection open) small.
 fn json_object_expr<'a>(
     columns: impl Iterator<Item = &'a ColumnInfo>,
     alias: Option<&str>,
 ) -> String {
-    let parts = columns
-        .flat_map(|column| {
+    // Explicit `AS k`/`AS v` on the first arm: SQLite folds a one-row VALUES
+    // list into a plain SELECT whose columns are no longer named column1/2.
+    let rows = columns
+        .enumerate()
+        .map(|(index, column)| {
             let value = if let Some(alias) = alias {
-                json_safe_column_expr(alias, column)
+                let column_ref = format!("{alias}.{}", quote_ident(&column.name));
+                if column.decl_type.to_ascii_uppercase().contains("BLOB") {
+                    format!(
+                        "iif({column_ref} IS NULL, NULL, '[blob:' || length({column_ref}) || ' bytes]')"
+                    )
+                } else {
+                    column_ref
+                }
             } else {
                 "NULL".to_string()
             };
-            [sql_string(&column.name), value]
+            if index == 0 {
+                format!("SELECT {} AS k, {value} AS v", sql_string(&column.name))
+            } else {
+                format!("SELECT {}, {value}", sql_string(&column.name))
+            }
         })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("json_object({parts})")
-}
-
-fn json_safe_column_expr(alias: &str, column: &ColumnInfo) -> String {
-    let column_ref = format!("{alias}.{}", quote_ident(&column.name));
-    if column.decl_type.to_ascii_uppercase().contains("BLOB") {
-        return format!(
-            "CASE WHEN {column_ref} IS NULL THEN NULL ELSE '[blob:' || length({column_ref}) || ' bytes]' END"
-        );
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return "json_object()".to_string();
     }
     format!(
-        "CASE \
-            WHEN typeof({column_ref}) = 'blob' \
-                THEN '[blob:' || length({column_ref}) || ' bytes]' \
-            WHEN typeof({column_ref}) = 'text' AND length({column_ref}) > {full_limit} \
-                THEN substr({column_ref}, 1, {preview}) || '...[truncated:' || length({column_ref}) || ' chars]' \
-            ELSE {column_ref} \
-        END",
+        "(SELECT json_group_object(k, \
+            iif(typeof(v) = 'blob', '[blob:' || length(v) || ' bytes]', \
+            iif(typeof(v) = 'text' AND length(v) > {full_limit}, \
+                substr(v, 1, {preview}) || '...[truncated:' || length(v) || ' chars]', v))) \
+          FROM ({rows}))",
+        rows = rows.join(" UNION ALL "),
         full_limit = PROCESS_EVENT_TEXT_FULL_LIMIT_CHARS,
         preview = PROCESS_EVENT_TEXT_PREVIEW_CHARS,
     )
@@ -6310,6 +6408,11 @@ mod tests {
                 secret_value TEXT NOT NULL,
                 status TEXT NOT NULL
             );
+            CREATE TABLE communication_mail_credentials (
+                key TEXT PRIMARY KEY,
+                secret_value TEXT NOT NULL,
+                status TEXT NOT NULL
+            );
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
@@ -6317,9 +6420,21 @@ mod tests {
             "INSERT INTO ctox_secret_records (key, secret_value, status) VALUES ('openai', 'secret', 'active')",
             [],
         )?;
+        conn.execute(
+            "INSERT INTO communication_mail_credentials (key, secret_value, status) VALUES ('smtp', 'secret', 'active')",
+            [],
+        )?;
 
+        // Secret stores are not captured at all.
+        let secret_events: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM ctox_process_events WHERE table_name = 'ctox_secret_records'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(secret_events, 0);
+        // Captured tables with credential-like names keep only the redacted key.
         let row_after: String = conn.query_row(
-            "SELECT row_after_json FROM ctox_process_events WHERE table_name = 'ctox_secret_records'",
+            "SELECT row_after_json FROM ctox_process_events WHERE table_name = 'communication_mail_credentials'",
             [],
             |row| row.get(0),
         )?;
@@ -6336,23 +6451,27 @@ mod tests {
         let conn = Connection::open(&db_path)?;
         conn.execute_batch(
             r#"
-            CREATE TABLE ctox_skill_files (
+            CREATE TABLE knowledge_skill_files (
                 skill_id TEXT NOT NULL,
                 relative_path TEXT NOT NULL,
                 content_blob BLOB NOT NULL,
+                note BLOB,
                 PRIMARY KEY (skill_id, relative_path)
             );
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
         let payload = vec![b'x'; 20_000];
+        // `note` is untyped-by-value: a blob in a column without BLOB affinity
+        // must be summarised too, never handed to json_object raw (which
+        // raises "JSON cannot hold BLOB values" and would fail the write).
         conn.execute(
-            "INSERT INTO ctox_skill_files (skill_id, relative_path, content_blob) VALUES ('skill-a', 'README.md', ?1)",
+            "INSERT INTO knowledge_skill_files (skill_id, relative_path, content_blob, note) VALUES ('skill-a', 'README.md', ?1, x'00ff')",
             params![payload],
         )?;
 
         let row_after: String = conn.query_row(
-            "SELECT row_after_json FROM ctox_process_events WHERE table_name = 'ctox_skill_files'",
+            "SELECT row_after_json FROM ctox_process_events WHERE table_name = 'knowledge_skill_files'",
             [],
             |row| row.get(0),
         )?;
@@ -6362,7 +6481,87 @@ mod tests {
             row_after.len()
         );
         assert!(row_after.contains("[blob:20000 bytes]"));
+        assert!(row_after.contains("\"note\":\"[blob:2 bytes]\""));
         assert!(!row_after.contains("7878787878"));
+        Ok(())
+    }
+
+    #[test]
+    fn process_mining_captures_only_state_machine_tables() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE governance_mechanisms (id TEXT PRIMARY KEY, status TEXT);
+            CREATE TABLE communication_messages (message_key TEXT PRIMARY KEY, body TEXT);
+            "#,
+        )?;
+        // A trigger left behind by an older capture-everything install.
+        conn.execute_batch(
+            r#"
+            CREATE TRIGGER ctox_pm_legacy_ai AFTER INSERT ON governance_mechanisms
+            BEGIN SELECT 1; END;
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        let legacy: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'governance_mechanisms'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(legacy, 0, "uncaptured tables lose their capture triggers");
+
+        conn.execute(
+            "INSERT INTO governance_mechanisms VALUES ('g1', 'active')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO communication_messages VALUES ('m1', 'hello')",
+            [],
+        )?;
+        let tables = conn
+            .prepare("SELECT DISTINCT table_name FROM ctox_process_events ORDER BY 1")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(tables, vec!["communication_messages".to_string()]);
+        let row_after: String = conn.query_row(
+            "SELECT row_after_json FROM ctox_process_events",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(row_after, r#"{"message_key":"m1","body":"hello"}"#);
+
+        // Steady state: a second ensure issues no DDL.
+        let before: i64 = conn.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        let after: i64 = conn.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
+        assert_eq!(before, after);
+        Ok(())
+    }
+
+    #[test]
+    fn captured_table_patterns_cover_every_core_transition_rule() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        let patterns = conn
+            .prepare(
+                "SELECT rule_id, table_pattern FROM ctox_pm_core_transition_rules WHERE inference_kind <> 'telemetry'",
+            )?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert!(!patterns.is_empty());
+        for (rule_id, pattern) in patterns {
+            let pattern = pattern.unwrap_or_default();
+            assert!(
+                CAPTURED_TABLE_PATTERNS.contains(&pattern.as_str()),
+                "core transition rule {rule_id} reads table pattern {pattern:?}, which is not captured"
+            );
+        }
         Ok(())
     }
 
@@ -6835,6 +7034,42 @@ mod tests {
         Ok(())
     }
 
+    /// Installs capture triggers on every table, as before the capture scope
+    /// was limited to the state-machine tables. Scanner tests use it to
+    /// classify events from tables outside the live scope: such rows remain
+    /// in existing event logs and the classification rules still apply to
+    /// them. The live scope itself is covered by
+    /// `process_mining_captures_only_state_machine_tables`.
+    fn capture_every_table_for_test(conn: &Connection, db_path: &Path) -> Result<()> {
+        let tables = conn
+            .prepare(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL",
+            )?
+            .query_map([], |row| {
+                Ok(TableInfo {
+                    name: row.get(0)?,
+                    sql: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let db_path_text = db_path.to_string_lossy().to_string();
+        for table in tables {
+            let name = table.name.as_str();
+            if name.starts_with("sqlite_")
+                || is_process_mining_internal_table(name)
+                || name.contains("_fts")
+                || name.ends_with("_data")
+                || name.ends_with("_idx")
+                || table.sql.to_ascii_uppercase().contains("VIRTUAL TABLE")
+                || is_captured_table(name)
+            {
+                continue;
+            }
+            install_table_triggers(conn, &table, &db_path_text)?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn state_scan_records_explicit_mapping_coverage() -> Result<()> {
         let dir = tempdir()?;
@@ -6854,6 +7089,7 @@ mod tests {
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
+        capture_every_table_for_test(&conn, &db_path)?;
         conn.execute(
             "INSERT INTO misc_runtime_notes (note_id, status) VALUES ('n1', 'created')",
             [],
@@ -6913,6 +7149,7 @@ mod tests {
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
+        capture_every_table_for_test(&conn, &db_path)?;
         conn.execute(
             "INSERT INTO communication_accounts (account_id, address) VALUES ('a1', 'cto1@example.com')",
             [],
@@ -7169,6 +7406,7 @@ mod tests {
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
+        capture_every_table_for_test(&conn, &db_path)?;
         conn.execute(
             r#"
             INSERT INTO strategic_directives (
@@ -7225,6 +7463,7 @@ mod tests {
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
+        capture_every_table_for_test(&conn, &db_path)?;
         conn.execute(
             r#"
             INSERT INTO api_model_cost_events (
@@ -7345,6 +7584,7 @@ mod tests {
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
+        capture_every_table_for_test(&conn, &db_path)?;
         conn.execute(
             r#"
             INSERT INTO communication_messages (
@@ -7562,6 +7802,7 @@ mod tests {
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
+        capture_every_table_for_test(&conn, &db_path)?;
         conn.execute(
             "INSERT INTO ctox_payload_store (payload_key, payload, updated_at) VALUES ('p1', x'01', 'now')",
             [],
@@ -8190,6 +8431,7 @@ mod tests {
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
+        capture_every_table_for_test(&conn, &db_path)?;
         conn.execute(
             r#"
             INSERT INTO communication_founder_outbox (

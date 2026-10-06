@@ -1,0 +1,21 @@
+{
+  "input": {
+    "collection": "business_records",
+    "schemaVersion": 1,
+    "selector": {},
+    "sort": [],
+    "limit": 200,
+    "skip": 0,
+    "window": {
+      "offset": 0,
+      "limit": 200
+    },
+    "projection": [
+      "payload.tasks.status",
+      "payload.weitere_kampagnen",
+      "id"
+    ]
+  },
+  "canonicalJson": "{\"collection\":\"business_records\",\"limit\":200,\"projection\":[\"id\",\"payload.tasks.status\",\"payload.weitere_kampagnen\"],\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{},\"skip\":0,\"sort\":[],\"window\":{\"limit\":200,\"offset\":0}}",
+  "fingerprint": "2d298aad3a285c08d3380224e84db28de6364a57cac23f40f3e32771480832c2"
+}

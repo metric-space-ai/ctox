@@ -1,0 +1,17 @@
+{
+  "input": {
+    "collection": "business_records",
+    "schemaVersion": 1,
+    "selector": {},
+    "sort": [],
+    "limit": 200,
+    "skip": 0,
+    "window": {
+      "offset": 0,
+      "limit": 200
+    },
+    "projection": null
+  },
+  "canonicalJson": "{\"collection\":\"business_records\",\"limit\":200,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{},\"skip\":0,\"sort\":[],\"window\":{\"limit\":200,\"offset\":0}}",
+  "fingerprint": "a8812fa3158a1118a41082cc64b44eb05be9b53d0d254fae7a39a8860fa03c30"
+}
