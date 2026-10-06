@@ -709,8 +709,11 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
             "target": target_host.endpoint(), "spec": handoff_spec, "receipts": receipts,
         });
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let workjet = source
-            .join("../../../../workjet")
+        // Build lanes can keep the pinned real consumer in an owned checkout.
+        // CI retains its existing sibling-checkout layout by default.
+        let workjet = std::env::var_os("CTOX_TEST_WORKJET_ROOT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| source.join("../../../../workjet"))
             .canonicalize()
             .expect("the Workjet checkout is required for the actual IPC consumer test");
         let mut child = tokio::process::Command::new("node")
