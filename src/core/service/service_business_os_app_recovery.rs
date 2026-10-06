@@ -74,6 +74,9 @@ fn maybe_lease_next_durable_queue_prompt(
     let Some(lease_attempt) = begin_durable_queue_lease_attempt(root, state, guard) else {
         return Ok(None);
     };
+    if let Some(prompt) = lease_priority_system_queue_prompt(root, state, &lease_attempt)? {
+        return Ok(Some(prompt));
+    }
     let mut app_queue_lease_active = leased_business_os_app_queue_task_exists(root)?;
     if !lease_attempt.is_current() {
         return Ok(None);
@@ -321,6 +324,67 @@ fn block_synthetic_e2e_queued_prompt_before_dispatch(
         blocked = blocked.saturating_add(1);
     }
     Ok(blocked)
+}
+
+fn priority_system_queue_task_is_eligible(task: &channels::QueueTaskView) -> bool {
+    matches!(task.priority.as_str(), "urgent" | "high")
+        && !business_os_queue_task_is_app_module(task)
+        && !queue_task_is_synthetic_e2e_bench_leftover(task)
+}
+
+fn maybe_lease_priority_system_queue_prompt_for_idle_dispatch(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) -> Result<Option<QueuedPrompt>> {
+    if crate::service::working_hours::hold_reason(root).is_some()
+        || runtime_blocker_backoff_remaining_secs(&lock_shared_state(state)).is_some()
+    {
+        return Ok(None);
+    }
+    let Some(attempt) =
+        begin_durable_queue_lease_attempt(root, state, DurableQueueDispatchGuard::StrictIdle)
+    else {
+        return Ok(None);
+    };
+    lease_priority_system_queue_prompt(root, state, &attempt)
+}
+
+fn lease_priority_system_queue_prompt(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    attempt: &DurableQueueLeaseAttemptGuard,
+) -> Result<Option<QueuedPrompt>> {
+    if crate::service::working_hours::hold_reason(root).is_some()
+        || runtime_blocker_backoff_remaining_secs(&lock_shared_state(state)).is_some()
+    {
+        return Ok(None);
+    }
+    // A leased app is not ownership of the free serial slot. Never lease a
+    // second app here; validation/recovery remains with its existing owner.
+    for task in channels::list_pending_priority_system_queue_tasks(root, 64)? {
+        if !priority_system_queue_task_is_eligible(&task)
+            || channels::queue_task_deferred_until(root, &task.message_key)?.is_some()
+            || appsec_pipeline_queue_task_state_dir(root, &task)?.is_some()
+            || durable_queue_task_already_enqueued_in_memory_or_clear_stale(
+                state,
+                &task.message_key,
+            )
+        {
+            continue;
+        }
+        if !attempt.is_current() {
+            return Ok(None);
+        }
+        let leased = channels::lease_queue_task_if(
+            root,
+            &task.message_key,
+            CHANNEL_ROUTER_LEASE_OWNER,
+            priority_system_queue_task_is_eligible,
+        )?;
+        clear_idle_durable_queue_empty_gate(root);
+        return Ok(Some(queued_prompt_from_queue_task(leased)));
+    }
+    Ok(None)
 }
 
 fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(

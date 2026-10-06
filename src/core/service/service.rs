@@ -16942,6 +16942,21 @@ fn system_time_to_unix_nanos(time: SystemTime) -> u128 {
 }
 
 fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+    route_external_messages_with_priority_dispatch(root, state, |prompt| {
+        enqueue_prompt(
+            root,
+            state,
+            prompt,
+            "Queued priority system task for active handling".to_string(),
+        );
+    })
+}
+
+fn route_external_messages_with_priority_dispatch(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    dispatch_priority: impl FnOnce(QueuedPrompt),
+) -> Result<()> {
     // The channel router runs on its own timer. It may not repair, lease, or
     // reprioritize external work while a worker is still inside a full
     // reasoning/tool/review loop; arbitration belongs after that loop ends.
@@ -16989,6 +17004,15 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 clip_text(&err.to_string(), 180)
             ),
         ),
+    }
+    // Preserve founder precedence; admit one priority system task before containment.
+    if highest_leasable_inbound_rank(root, &settings) < FOUNDER_INBOUND_DISPATCH_RANK {
+        if let Some(prompt) =
+            maybe_lease_priority_system_queue_prompt_for_idle_dispatch(root, state)?
+        {
+            dispatch_priority(prompt);
+            return Ok(());
+        }
     }
     if queue_pressure_active(root, state) {
         match repair_stalled_founder_communications(root, state, &settings) {
@@ -17657,7 +17681,10 @@ fn durable_queue_dispatch_blocked_locked(
     shared: &SharedState,
     guard: DurableQueueDispatchGuard,
 ) -> bool {
-    if shared.busy || shared.app_recovery_active || shared.durable_queue_lease_in_progress {
+    if serial_prompt_admission_is_busy(shared)
+        || shared.app_recovery_active
+        || shared.durable_queue_lease_in_progress
+    {
         return true;
     }
     match guard {
@@ -29200,6 +29227,211 @@ Business OS command:
             suggested_skill_from_message(&message).as_deref(),
             Some("owner-communication")
         );
+    }
+
+    fn priority_system_dispatch_test_task(
+        root: &Path,
+        title: &str,
+        priority: &str,
+        metadata: Option<Value>,
+    ) -> channels::QueueTaskView {
+        channels::create_queue_task(
+            root,
+            channels::QueueTaskCreateRequest {
+                title: title.to_string(),
+                prompt: format!("Handle {title}."),
+                thread_key: format!("system/priority/{title}"),
+                workspace_root: Some(root.display().to_string()),
+                priority: priority.to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: metadata,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn priority_system_router_uses_one_free_slot_under_pressure_and_app_lease() -> anyhow::Result<()>
+    {
+        for priority in ["urgent", "high"] {
+            let root = temp_root(&format!("priority-system-pressure-{priority}"));
+            let app_metadata =
+                business_os_app_queue_metadata("quality", "ctox.business_os.app.create");
+            let active_app = priority_system_dispatch_test_task(
+                &root,
+                "active-app",
+                "high",
+                Some(app_metadata.clone()),
+            );
+            channels::lease_queue_task(&root, &active_app.message_key, "app-worker")?;
+            let waiting_app = priority_system_dispatch_test_task(
+                &root,
+                "waiting-app",
+                "urgent",
+                Some(app_metadata),
+            );
+            for index in 0..QUEUE_PRESSURE_GUARD_THRESHOLD + 1 {
+                let normal = priority_system_dispatch_test_task(
+                    &root,
+                    &format!("normal-{index}"),
+                    "normal",
+                    None,
+                );
+                Connection::open(crate::paths::core_db(&root))?.execute(
+                    "UPDATE communication_messages SET external_created_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+                    [&normal.message_key],
+                )?;
+            }
+            let deferred = priority_system_dispatch_test_task(
+                &root,
+                "deferred",
+                "urgent",
+                Some(json!({"not_before": "2999-01-01T00:00:00Z"})),
+            );
+            let chosen =
+                priority_system_dispatch_test_task(&root, "runnable-system", priority, None);
+            let state = Arc::new(Mutex::new(SharedState::default()));
+            assert!(queue_pressure_active(&root, &state));
+            assert!(
+                channels::list_queue_tasks(&root, &["pending".to_string()], 16)?
+                    .iter()
+                    .all(|task| task.message_key != chosen.message_key)
+            );
+            let mut dispatched = Vec::new();
+            // Exercise the actual router body, replacing only its worker launch:
+            // no provider/model call, while real selection, lease and admission run.
+            route_external_messages_with_priority_dispatch(&root, &state, |prompt| {
+                activate_prompt_dispatch_locked(
+                    &mut lock_shared_state(&state),
+                    &prompt,
+                    "test dispatch".to_string(),
+                );
+                dispatched.push(prompt);
+            })?;
+            assert_eq!(dispatched.len(), 1, "priority task was hidden by pressure");
+            assert_eq!(
+                dispatched[0].leased_message_keys,
+                vec![chosen.message_key.clone()]
+            );
+            assert_eq!(route_status_for(&root, &chosen.message_key), "leased");
+            assert_eq!(route_status_for(&root, &active_app.message_key), "leased");
+            assert_eq!(route_status_for(&root, &waiting_app.message_key), "pending");
+            assert_eq!(route_status_for(&root, &deferred.message_key), "pending");
+            route_external_messages_with_priority_dispatch(&root, &state, |_| {
+                panic!("a second serial task must not dispatch");
+            })?;
+            assert_eq!(
+                channels::count_queue_tasks(&root, &["leased".to_string()])?,
+                2
+            );
+            std::fs::remove_dir_all(root)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn priority_system_idle_dispatch_precedes_old_normal_batch_with_app_lease() -> anyhow::Result<()>
+    {
+        let root = temp_root("priority-system-idle-app-lease");
+        let app = priority_system_dispatch_test_task(
+            &root,
+            "leased-app",
+            "urgent",
+            Some(business_os_app_queue_metadata(
+                "quality",
+                "ctox.business_os.app.create",
+            )),
+        );
+        channels::lease_queue_task(&root, &app.message_key, "app-worker")?;
+        for index in 0..17 {
+            let normal = priority_system_dispatch_test_task(
+                &root,
+                &format!("old-normal-{index}"),
+                "normal",
+                None,
+            );
+            Connection::open(crate::paths::core_db(&root))?.execute(
+                "UPDATE communication_messages SET external_created_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+                [&normal.message_key],
+            )?;
+        }
+        let priority = priority_system_dispatch_test_task(&root, "priority", "high", None);
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let prompt = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)?
+            .expect("priority system work must use the free main slot");
+        assert_eq!(
+            prompt.leased_message_keys,
+            vec![priority.message_key.clone()]
+        );
+        assert_eq!(route_status_for(&root, &app.message_key), "leased");
+        assert_eq!(route_status_for(&root, &priority.message_key), "leased");
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn priority_system_dispatch_retains_busy_and_lease_guards() -> anyhow::Result<()> {
+        let root = temp_root("priority-system-guards");
+        let task = priority_system_dispatch_test_task(&root, "system", "urgent", None);
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        for guard in 0..4 {
+            {
+                let mut shared = lock_shared_state(&state);
+                shared.busy = guard == 0;
+                shared.worker_active_count = usize::from(guard == 1);
+                shared.serial_prompt_starting = guard == 2;
+                shared.durable_queue_lease_in_progress = guard == 3;
+            }
+            assert!(
+                maybe_lease_priority_system_queue_prompt_for_idle_dispatch(&root, &state)?
+                    .is_none()
+            );
+            assert_eq!(route_status_for(&root, &task.message_key), "pending");
+        }
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.durable_queue_lease_in_progress = false;
+        }
+        let first =
+            begin_durable_queue_lease_attempt(&root, &state, DurableQueueDispatchGuard::StrictIdle)
+                .unwrap();
+        assert!(
+            maybe_lease_priority_system_queue_prompt_for_idle_dispatch(&root, &state)?.is_none()
+        );
+        drop(first);
+        let selected = channels::list_pending_priority_system_queue_tasks(&root, 64)?;
+        assert_eq!(selected.len(), 1);
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                priority: Some("normal".to_string()),
+                ..Default::default()
+            },
+        )?;
+        let error = channels::lease_queue_task_if(
+            &root,
+            &selected[0].message_key,
+            CHANNEL_ROUTER_LEASE_OWNER,
+            priority_system_queue_task_is_eligible,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("no longer matches dispatch selection"));
+        assert_eq!(route_status_for(&root, &task.message_key), "pending");
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)?
+                .unwrap()
+                .attempt,
+            0
+        );
+        assert!(
+            maybe_lease_priority_system_queue_prompt_for_idle_dispatch(&root, &state)?.is_none()
+        );
+        std::fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]

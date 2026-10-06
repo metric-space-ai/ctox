@@ -3487,6 +3487,49 @@ pub fn list_queue_tasks(
     Ok(tasks)
 }
 
+/// Filter priorities before LIMIT so older normal work cannot hide system work.
+pub(crate) fn list_pending_priority_system_queue_tasks(
+    root: &Path,
+    limit: usize,
+) -> Result<Vec<QueueTaskView>> {
+    let conn = open_channel_db(&resolve_db_path(root, None))?;
+    let mut statement = conn.prepare(
+        r#"
+        WITH pending AS (
+            SELECT m.message_key, m.external_created_at, m.observed_at,
+                   CASE WHEN json_valid(m.metadata_json) THEN m.metadata_json ELSE '{}' END AS metadata,
+                   r.retry_not_before
+            FROM communication_messages m
+            LEFT JOIN communication_routing_state r ON r.message_key=m.message_key
+            WHERE m.channel=?1 AND m.account_key=?2 AND m.direction='inbound'
+              AND lower(COALESCE(r.route_status, 'pending'))='pending'
+        )
+        SELECT message_key FROM pending
+        WHERE lower(trim(COALESCE(json_extract(metadata, '$.priority'), 'normal'))) IN ('urgent', 'high')
+          AND trim(COALESCE(json_extract(metadata, '$.business_os_command_type'), ''))
+              NOT IN ('ctox.business_os.app.create', 'ctox.business_os.app.modify')
+          AND COALESCE(datetime(json_extract(metadata, '$.not_before')), datetime('now')) <= datetime('now')
+          AND COALESCE(datetime(retry_not_before), datetime('now')) <= datetime('now')
+        ORDER BY CASE lower(trim(json_extract(metadata, '$.priority'))) WHEN 'urgent' THEN 0 ELSE 1 END,
+                 external_created_at, observed_at, message_key
+        LIMIT ?3
+        "#,
+    )?;
+    let keys = statement
+        .query_map(
+            params![QUEUE_CHANNEL_NAME, QUEUE_ACCOUNT_KEY, limit.min(64) as i64],
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut tasks = Vec::with_capacity(keys.len());
+    for key in keys {
+        if let Some(task) = load_queue_task_from_conn(&conn, &key)? {
+            tasks.push(task);
+        }
+    }
+    Ok(tasks)
+}
+
 pub fn load_queue_task_for_business_os_command(
     root: &Path,
     command_id: &str,
@@ -4012,6 +4055,25 @@ pub fn lease_queue_task(
     message_key: &str,
     lease_owner: &str,
 ) -> Result<QueueTaskView> {
+    lease_queue_task_with_filter(root, message_key, lease_owner, None)
+}
+
+/// Recheck canonical metadata under the write lock used by the lease CAS.
+pub(crate) fn lease_queue_task_if(
+    root: &Path,
+    message_key: &str,
+    lease_owner: &str,
+    eligible: fn(&QueueTaskView) -> bool,
+) -> Result<QueueTaskView> {
+    lease_queue_task_with_filter(root, message_key, lease_owner, Some(eligible))
+}
+
+fn lease_queue_task_with_filter(
+    root: &Path,
+    message_key: &str,
+    lease_owner: &str,
+    eligible: Option<fn(&QueueTaskView) -> bool>,
+) -> Result<QueueTaskView> {
     anyhow::ensure!(
         !crate::business_os::harness_cockpit::queue_is_paused(root),
         "queue admission is paused"
@@ -4039,6 +4101,14 @@ pub fn lease_queue_task(
     let leased = {
         let tx =
             rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(eligible) = eligible {
+            let candidate =
+                load_queue_task_from_conn(&tx, message_key)?.context("queue task not found")?;
+            anyhow::ensure!(
+                eligible(&candidate),
+                "queue task no longer matches dispatch selection"
+            );
+        }
         if let Some(not_before) = queue_task_deferred_until_from_conn(&tx, message_key)? {
             anyhow::bail!("queue task {message_key} is deferred until {not_before}");
         }
