@@ -75,12 +75,23 @@ futures retain abort ownership on cancellation, including before the facade
 future's first poll. The awaited public call shape remains
 `client.shutdown().await`.
 
-The new task/channel regressions exercise these actual shutdown methods and
-ownership paths. Existing real in-process event-pressure, persistent-resume
-and retained-shared-manager tests remain required. These are distinct from
-journal I/O and provider continuation: session-level recorder failure logging
-still cannot certify a transferable checkpoint. Production capture enrollment,
-protected-byte consumers and real cross-host continuation remain separate
+The outer `AppServerClient` enum constructs the embedded shutdown future at
+the public call boundary too. Its unpolled-future regression uses the actual
+enum wrapper and a raw owned fixture worker, not a preconstructed cleanup guard.
+
+Tracked sessions retain a one-time result from the real shutdown handler's
+recorder I/O. Shutdown waiters reject a failed recorder or loop termination
+without that result, including an unexpected panic. Recorder shutdown flushes
+preceding writes, propagates the real file error and closes its writer despite
+retained clones. Existing multiple-waiter fixtures now invoke the actual shutdown
+handler rather than treating a sleeping loop's exit as successful shutdown.
+The unchanged lifecycle completion event is not a success receipt.
+
+Real in-process event-pressure, persistent-resume, guardian and retained-manager
+checks remain required. A file-I/O receipt adds no fsync/power-loss guarantee;
+empty deferred threads are not materialized. It also does not prove reconciled
+effects, independently enrolled capture authority or a transferable provider
+checkpoint. Production capture/transfer and cross-host continuation remain
 unfinished work.
 
 ## 2026-10 Rollout writer acknowledgement and publication

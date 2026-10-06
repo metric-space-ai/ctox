@@ -100,6 +100,85 @@ async fn recorder_flush_propagates_writer_failure() -> std::io::Result<()> {
     );
     Ok(())
 }
+async fn exercise_recorder_shutdown(writable: bool) -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    let path = home.path().join("shutdown-rollout.jsonl");
+    fs::write(&path, b"original\n")?;
+    let file = if writable {
+        File::options().append(true).open(&path)?
+    } else {
+        File::open(&path)?
+    };
+    let mut file = tokio::fs::File::from_std(file);
+    tokio::io::AsyncWriteExt::write_all(&mut file, b"queued\n").await?;
+    let (tx, rx) = mpsc::channel(1);
+    let recorder = RolloutRecorder {
+        tx,
+        rollout_path: path.clone(),
+        materialization_pending: Arc::new(AtomicBool::new(false)),
+        materialization_staging_path: None,
+        state_db: None,
+        event_persistence_mode: EventPersistenceMode::Limited,
+    };
+    let retained = recorder.clone();
+    let writer = rollout_writer(
+        Some(file),
+        None,
+        rx,
+        None,
+        home.path().to_path_buf(),
+        path.clone(),
+        None,
+        None,
+        "test-provider".to_string(),
+        false,
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (shutdown, write) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(recorder.shutdown(), writer)
+    })
+    .await
+    .expect("shutdown must finish the writer while a recorder clone remains");
+    if writable {
+        shutdown?;
+        write?;
+        assert_eq!(fs::read(&path)?, b"original\nqueued\n");
+    } else {
+        let shutdown_error = shutdown.expect_err("failed journal I/O cannot acknowledge shutdown");
+        let write_error = write.expect_err("read-only writer must fail");
+        assert_eq!(shutdown_error.kind(), write_error.kind());
+        assert_eq!(shutdown_error.to_string(), write_error.to_string());
+        assert_eq!(fs::read(&path)?, b"original\n");
+    }
+    assert!(
+        retained.flush().await.is_err(),
+        "retained clones cannot keep a terminated writer alive"
+    );
+    assert!(
+        retained
+            .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
+                AgentMessageEvent {
+                    message: "after-shutdown".to_string(),
+                    phase: None,
+                },
+            ))])
+            .await
+            .is_err(),
+        "terminated writer cannot admit another persisted event"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_shutdown_flushes_and_terminates_with_retained_clone() -> std::io::Result<()> {
+    exercise_recorder_shutdown(true).await
+}
+
+#[tokio::test]
+async fn recorder_shutdown_propagates_writer_failure() -> std::io::Result<()> {
+    exercise_recorder_shutdown(false).await
+}
+
 fn staging_paths(path: &Path) -> Vec<PathBuf> {
     let Some(parent) = path.parent() else {
         return Vec::new();
