@@ -450,9 +450,13 @@ fn resolve_total(total: i64, expected: i64) -> Option<i64> {
     }
 }
 
+/// Matches upstream `nonNegativeSum`: any negative operand or int64 overflow
+/// rejects the sum. A wrapped positive total must not validate.
 fn checked_sum(values: &[i64]) -> Option<i64> {
-    values
-        .iter()
-        .try_fold(0_i64, |total, value| total.checked_add(*value))
-        .filter(|total| *total >= 0)
+    values.iter().try_fold(0_i64, |total, value| {
+        if *value < 0 {
+            return None;
+        }
+        total.checked_add(*value)
+    })
 }

@@ -669,6 +669,7 @@ mod tests {
             payload_hash: trusted["payload_hash"].as_str().unwrap().to_owned(),
             allowed_actions: vec![],
             allowed_collections: vec![],
+            metadata_read_contract: None,
             crew_binding: Some(serde_json::from_value(trusted["crew_binding"].clone())?),
             crew_work_key: Some("crew-context-plan".to_owned()),
             crew_only: false,

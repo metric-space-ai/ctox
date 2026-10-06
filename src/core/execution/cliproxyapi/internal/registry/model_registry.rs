@@ -431,7 +431,10 @@ impl ModelRegistry {
         }
         let provider = provider.trim().to_ascii_lowercase();
         self.model_info(model_id, &provider).or_else(|| {
-            lookup_static_registry_model_info(&self.static_catalog.snapshot(), model_id)
+            let catalog = self.static_catalog.snapshot();
+            super::models_for_channel(&catalog, &provider)
+                .and_then(|models| models.into_iter().find(|model| model.id == model_id))
+                .or_else(|| lookup_static_registry_model_info(&catalog, model_id))
         })
     }
 

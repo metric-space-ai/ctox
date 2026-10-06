@@ -28,6 +28,14 @@ pub struct VertexCompatKey {
     pub models: Vec<VertexCompatModel>,
     #[serde(default)]
     pub excluded_models: Vec<String>,
+    /// `Some(true)` disables auth/model cooldowns for this credential.
+    /// `Some(false)` explicitly enables them. `None` keeps the global policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_cooling: Option<bool>,
+    /// `None` or a negative value uses the global request retry.
+    /// `Some(0)` disables additional retry rounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_retry: Option<i32>,
 }
 
 impl VertexCompatKey {
@@ -189,5 +197,21 @@ mod tests {
         assert_eq!(keys[0].models[0].name(), "model");
         assert_eq!(keys[0].models[0].alias(), "alias");
         assert_eq!(keys[0].excluded_models, ["model-*"]);
+    }
+
+    #[test]
+    fn cooling_and_retry_overrides_stay_distinct_from_unset() {
+        let parsed: VertexCompatKey =
+            serde_yaml::from_str("api-key: k\ndisable-cooling: false\nrequest-retry: 0\n").unwrap();
+        assert_eq!(parsed.disable_cooling, Some(false));
+        assert_eq!(parsed.request_retry, Some(0));
+
+        let unset: VertexCompatKey = serde_yaml::from_str("api-key: k\n").unwrap();
+        assert_eq!(unset.disable_cooling, None);
+        assert_eq!(unset.request_retry, None);
+
+        let negative: VertexCompatKey =
+            serde_yaml::from_str("api-key: k\nrequest-retry: -1\n").unwrap();
+        assert_eq!(negative.request_retry, Some(-1));
     }
 }

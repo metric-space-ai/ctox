@@ -19,6 +19,38 @@ use super::{
     RefreshTransactionError,
 };
 
+#[cfg(test)]
+#[path = "conductor_meta_error_test.rs"]
+mod meta_error_tests;
+
+/// Only selected Meta accounts may consume Meta's typed credential-wide quota.
+/// Arbitrary error text and caller metadata cannot broaden another provider's scope.
+fn provider_error_retry_policy(
+    auth: &Auth,
+    model: &str,
+    error: &PluginExecutionError,
+) -> (Option<String>, Option<u64>) {
+    let model = (!model.trim().is_empty()).then(|| model.trim().to_owned());
+    if !auth.provider.trim().eq_ignore_ascii_case("meta") {
+        return (model, None);
+    }
+    let mut current: &(dyn std::error::Error + 'static) = error.as_ref();
+    loop {
+        if let Some(error) = current.downcast_ref::<
+            crate::internal::runtime::executor::meta_executor_response::MetaHttpStatusError,
+        >() {
+            let delay = error.retry_after.map(|value| {
+                value.as_millis().min(u128::from(u64::MAX)) as u64
+            });
+            return (if error.credential_scoped { None } else { model }, delay);
+        }
+        let Some(source) = current.source() else {
+            return (model, None);
+        };
+        current = source;
+    }
+}
+
 #[must_use]
 pub(crate) fn plugin_error_status(error: &PluginExecutionError) -> u16 {
     let mut current: &(dyn std::error::Error + 'static) = error.as_ref();
@@ -227,13 +259,22 @@ impl GenericConductorClock for SystemGenericConductorClock {
 /// and is deliberately separate from `HomeAuthRuntime`, whose ephemeral auth
 /// selections remain authoritative in Home mode.
 pub struct GenericAuthRuntime {
-    manager: Arc<AuthManager>,
+    pub(super) manager: Arc<AuthManager>,
     router: Arc<AccountRouter>,
     cooldown: Arc<CooldownConductor>,
     clock: Arc<dyn GenericConductorClock>,
     publication: Arc<dyn ModelResumeSink>,
     prepare_locks: Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>,
     max_credentials: usize,
+}
+
+fn disabled_preparation_error() -> AuthPreparationError {
+    Arc::new(AuthError {
+        code: "account_disabled".into(),
+        message: "Selected account is disabled".into(),
+        retryable: false,
+        http_status: 403,
+    })
 }
 
 impl GenericAuthRuntime {
@@ -324,7 +365,12 @@ impl GenericAuthRuntime {
                 .execution()
                 .ok_or(GenericExecutionError::ExecutionUnavailable)?;
             let execute = |auth: &Auth| {
-                let execution = selected_executor_request(&request, auth, registration.provider());
+                let execution = selected_executor_request(
+                    &self.manager,
+                    &request,
+                    auth,
+                    registration.provider(),
+                );
                 let executor = executor.clone();
                 async move {
                     match operation {
@@ -339,7 +385,10 @@ impl GenericAuthRuntime {
                 .err()
                 .is_some_and(is_unauthorized_plugin_error)
             {
-                if let Some(refreshed) = self.refresh_after_unauthorized(&auth, &registration)? {
+                if let Some(refreshed) = self
+                    .refresh_after_unauthorized(&auth, &registration)
+                    .await?
+                {
                     auth = refreshed;
                     self.prepare(&registration, &mut auth)
                         .await
@@ -363,7 +412,7 @@ impl GenericAuthRuntime {
                     {
                         self.record_availability_neutral_outcome(&auth.id, false);
                     } else {
-                        self.record_outcome(&auth, &route_model, status, false)?;
+                        self.record_plugin_error_outcome(&auth, &route_model, &error)?;
                     }
                     if matches!(status, 400 | 422) {
                         return Err(GenericExecutionError::Provider(error));
@@ -417,23 +466,35 @@ impl GenericAuthRuntime {
             return Ok(());
         };
         let _guard = self.prepare_lock(&auth.id).lock_owned().await;
-        if let Some(current) = self.manager.lifecycle().get_cached(&auth.id) {
-            *auth = current;
+        *auth = self
+            .manager
+            .lifecycle()
+            .get_cached(&auth.id)
+            .ok_or_else(|| {
+                Arc::new(super::AuthLifecycleError::AuthNotRegistered) as AuthPreparationError
+            })?;
+        if auth.disabled {
+            return Err(disabled_preparation_error());
         }
         if !preparer.should_prepare(auth) {
             return Ok(());
         }
+        let base = auth.clone();
         preparer.prepare(auth).await?;
         let published = self
             .manager
-            .update(
+            .update_prepared_auth(
+                &base,
                 auth.clone(),
                 AuthMutationOptions::default(),
                 self.clock.now(),
             )
             .map_err(|error| Arc::new(error) as AuthPreparationError)?;
-        if let Some(published) = published {
-            *auth = published;
+        *auth = published.ok_or_else(|| {
+            Arc::new(super::AuthLifecycleError::AuthNotRegistered) as AuthPreparationError
+        })?;
+        if auth.disabled {
+            return Err(disabled_preparation_error());
         }
         Ok(())
     }
@@ -449,11 +510,50 @@ impl GenericAuthRuntime {
             .clone()
     }
 
-    pub(crate) fn refresh_after_unauthorized(
+    pub(crate) async fn refresh_after_unauthorized(
         &self,
         auth: &Auth,
         registration: &ProviderExecutorRegistration,
     ) -> Result<Option<Auth>, GenericExecutionError> {
+        if let Some(refresher) = registration.async_auth_refresher() {
+            if !refresher.should_refresh(auth) {
+                return Ok(None);
+            }
+            // Preparation and a 401 mint share one credential-scoped owner.
+            // No synchronous runtime bridge or detached refresh is needed.
+            let _guard = self.prepare_lock(&auth.id).lock_owned().await;
+            let current = self
+                .manager
+                .lifecycle()
+                .get_cached(&auth.id)
+                .ok_or(GenericExecutionError::AuthUnavailable)?;
+            if current.disabled || current.registration_epoch != auth.registration_epoch {
+                return Err(GenericExecutionError::AuthUnavailable);
+            }
+            // Another request already replaced the failed credential while
+            // this attempt waited. Reuse it without minting the old key again.
+            if refresher.credential_changed(&current, auth) {
+                return Ok(Some(current));
+            }
+            let candidate = refresher
+                .refresh(&current)
+                .await
+                .map_err(GenericExecutionError::Preparation)?;
+            let published = self
+                .manager
+                .update_refreshed_auth(
+                    &current,
+                    candidate,
+                    AuthMutationOptions::default(),
+                    self.clock.now(),
+                )
+                .map_err(|error| GenericExecutionError::Preparation(Arc::new(error)))?
+                .ok_or(GenericExecutionError::AuthUnavailable)?;
+            if published.disabled {
+                return Err(GenericExecutionError::AuthUnavailable);
+            }
+            return Ok(Some(published));
+        }
         if auth.auth_kind() != Some(AuthKind::OAuth) {
             return Ok(None);
         }
@@ -480,14 +580,47 @@ impl GenericAuthRuntime {
         status: u16,
         success: bool,
     ) -> Result<(), GenericExecutionError> {
+        self.record_outcome_with_policy(
+            auth,
+            (!model.trim().is_empty()).then(|| model.trim().to_owned()),
+            status,
+            success,
+            None,
+        )
+    }
+
+    pub(crate) fn record_plugin_error_outcome(
+        &self,
+        auth: &Auth,
+        model: &str,
+        error: &PluginExecutionError,
+    ) -> Result<(), GenericExecutionError> {
+        let (model, retry_delay_ms) = provider_error_retry_policy(auth, model, error);
+        self.record_outcome_with_policy(
+            auth,
+            model,
+            plugin_error_status(error),
+            false,
+            retry_delay_ms,
+        )
+    }
+
+    fn record_outcome_with_policy(
+        &self,
+        auth: &Auth,
+        model: Option<String>,
+        status: u16,
+        success: bool,
+        retry_delay_ms: Option<u64>,
+    ) -> Result<(), GenericExecutionError> {
         let observed_at = self.clock.now();
         self.cooldown
             .record(AccountExecutionResult {
                 provider: auth.provider.clone(),
                 auth_id: auth.id.clone(),
-                model: (!model.trim().is_empty()).then(|| model.trim().to_owned()),
+                model,
                 status,
-                retry_delay_ms: None,
+                retry_delay_ms,
                 observed_at_ms: observed_at.timestamp_millis(),
             })
             .map_err(GenericExecutionError::Cooldown)?;
@@ -570,6 +703,7 @@ pub(crate) fn scheduler_options(request: &ExecutorRequest) -> SchedulerPickOptio
 }
 
 pub(crate) fn selected_executor_request(
+    manager: &AuthManager,
     request: &ExecutorRequest,
     auth: &Auth,
     provider: &str,
@@ -577,6 +711,26 @@ pub(crate) fn selected_executor_request(
     let mut auth = auth.clone();
     let index = auth.ensure_index();
     let mut execution = prepare_executor_request(request, &auth, provider);
+    let route_model = auth_selection_model(request);
+    let (_, alias, snapshot) =
+        manager.execution_model_candidates_with_alias(&auth, &execution.model);
+    if !alias.upstream_model.trim().is_empty() {
+        execution.model = alias.upstream_model;
+    }
+    // Both ordinary and refreshed retries enter here after credential
+    // preparation. Rebind from this selected auth/model, never JSON metadata.
+    let selected = super::api_key_model_capabilities::attach_resolved_api_key_model_info(
+        &snapshot,
+        crate::sdk::cliproxy::executor::Request {
+            model: execution.model.clone(),
+            ..crate::sdk::cliproxy::executor::Request::default()
+        },
+        &auth,
+        &route_model,
+        &execution.model,
+    );
+    execution.resolved_model_info =
+        super::api_key_model_capabilities::resolved_model_info(&selected);
     execution
         .metadata
         .insert("selected_auth_id".into(), serde_json::json!(auth.id));

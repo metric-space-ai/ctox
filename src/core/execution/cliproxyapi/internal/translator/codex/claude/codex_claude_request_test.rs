@@ -76,6 +76,41 @@ fn non_string_tool_name_is_normalized_without_panicking() {
     assert_eq!(output["tools"][0]["parameters"]["properties"], json!({}));
 }
 
+#[test]
+fn tool_parameters_drop_dialect_markers_and_unsupported_patterns() {
+    let output: Value = serde_json::from_slice(&convert_claude_request_to_codex(
+        "gpt-5.4",
+        br#"{
+            "messages":[{"role":"user","content":"go"}],
+            "tools":[{"name":"lookup","input_schema":{
+                "type":"object",
+                "$schema":"draft",
+                "$id":"schema",
+                "properties":{
+                    "field":{"type":"string","pattern":"\\p{L}+"},
+                    "asset_id":{"type":"string","pattern":"^[0-9a-f]{32}$"},
+                    "regex_config":{"default":{"pattern":"\\p{L}+"}}
+                }
+            }}]
+        }"#,
+        false,
+    ))
+    .unwrap();
+    let parameters = &output["tools"][0]["parameters"];
+    assert!(parameters.get("$schema").is_none());
+    assert!(parameters.get("$id").is_none());
+    assert!(parameters["properties"]["field"].get("pattern").is_none());
+    assert_eq!(
+        parameters["properties"]["asset_id"]["pattern"],
+        "^[0-9a-f]{32}$"
+    );
+    assert_eq!(
+        parameters["properties"]["regex_config"]["default"]["pattern"],
+        r"\p{L}+"
+    );
+    assert!(parameters["properties"].is_object());
+}
+
 fn gpt_signature() -> String {
     let mut payload = vec![0_u8; 1 + 8 + 16 + 16 + 32];
     payload[0] = 0x80;

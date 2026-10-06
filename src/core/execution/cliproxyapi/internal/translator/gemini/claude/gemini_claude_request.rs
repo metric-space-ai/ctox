@@ -4,14 +4,36 @@
 
 use serde_json::{Map, Value};
 
-use crate::internal::translator::antigravity::claude::convert_claude_request_to_antigravity;
+use crate::internal::translator::antigravity::claude::convert_claude_request_for_direct_gemini;
 
-/// Direct-Gemini and Antigravity share the same native request body. Reusing
-/// that maintained converter keeps the semantic port single-sourced; this
-/// facade removes only the Antigravity transport envelope and restores the
-/// direct Gemini `model` field.
+/// Direct Gemini shares media/tool conversion with Antigravity while retaining
+/// its own upstream thinking replay policy.
 pub fn convert_claude_request_to_gemini(model_name: &str, input: &[u8], stream: bool) -> Vec<u8> {
-    let wrapped = convert_claude_request_to_antigravity(model_name, input, stream);
+    convert_claude_request_to_gemini_impl(model_name, input, stream, false)
+}
+
+/// ref: gemini/claude/gemini_claude_request.go:39-137 @ e2bff010
+/// Compatibility endpoints preserve thinking blocks with a replayable Gemini
+/// signature or its explicit bypass sentinel.
+pub fn convert_claude_request_to_gemini_with_compat(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+) -> Vec<u8> {
+    convert_claude_request_to_gemini_impl(model_name, input, stream, true)
+}
+
+fn convert_claude_request_to_gemini_impl(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+    preserve_thinking: bool,
+) -> Vec<u8> {
+    if !matches!(serde_json::from_slice::<Value>(input), Ok(Value::Object(_))) {
+        return input.to_vec();
+    }
+    let wrapped =
+        convert_claude_request_for_direct_gemini(model_name, input, stream, preserve_thinking);
     let root = serde_json::from_slice::<Value>(&wrapped).unwrap_or(Value::Null);
     let Some(mut request) = root.get("request").and_then(Value::as_object).cloned() else {
         return input.to_vec();

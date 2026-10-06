@@ -23,6 +23,7 @@ fn native_prepared_overlay_accepts_private_helper_layout_and_rejects_foreign_ali
         .unwrap();
     let overlay = disk.path().join("root.qcow2");
     std::fs::write(&overlay, b"native disk").unwrap();
+    std::fs::set_permissions(&overlay, std::fs::Permissions::from_mode(0o600)).unwrap();
     validate_prepared_guest_overlay(&runtime, &overlay).unwrap();
     assert!(validate_prepared_guest_overlay(state.path(), &overlay).is_err());
 
@@ -45,6 +46,7 @@ fn native_prepared_overlay_accepts_private_helper_layout_and_rejects_foreign_ali
     // Existing native reconstruction may place its disk directly in the assignment.
     let restored = runtime.join("restored.qcow2");
     std::fs::write(&restored, b"restored disk").unwrap();
+    std::fs::set_permissions(&restored, std::fs::Permissions::from_mode(0o600)).unwrap();
     validate_prepared_guest_overlay(&runtime, &restored).unwrap();
 }
 

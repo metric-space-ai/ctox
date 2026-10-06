@@ -25,9 +25,11 @@ pub mod error_events;
 pub mod errors;
 pub mod home_concurrency;
 pub mod home_in_flight_publisher;
+mod home_model_capabilities;
 pub mod home_result;
 pub mod home_selection;
 pub mod home_session_alias;
+pub mod metadata_merge;
 pub mod oauth_model_alias;
 pub mod persist_policy;
 pub mod response_model_rewriter;
@@ -44,17 +46,19 @@ pub use antigravity_credits::{
     AntigravityCreditsClock, AntigravityCreditsHint, AntigravityCreditsHints,
     AntigravityCreditsRequest, AntigravityCreditsStore, AntigravityCreditsStoreError,
 };
-pub use api_key_model_capabilities::{resolved_api_key_model_info, ApiKeyModelRoutingSnapshot};
+pub use api_key_model_capabilities::{
+    resolved_api_key_model_info, resolved_model_info, ApiKeyModelRoutingSnapshot,
+};
 pub use auto_refresh_loop::{
     next_refresh_check_at, AuthRefresherResolver, AutoRefreshClock, AutoRefreshConfig,
     AutoRefreshWorker, RefreshSchedule, SystemAutoRefreshClock,
 };
 pub use classification::{AuthKind, AuthSourceKind};
 pub use conductor::{
-    AuthManager, AuthManagerError, AuthPreparationError, AuthPreparer, ExecutionSessionCloser,
-    ManagerRefreshPublicationSink, ProviderDispatchError, ProviderExecutorRegistration,
-    ProviderExecutorRegistrationError, ProviderExecutorRegistry, UnauthorizedReplayDecision,
-    UnauthorizedReplayState, CLOSE_ALL_EXECUTION_SESSIONS_ID,
+    AsyncAuthRefresher, AuthManager, AuthManagerError, AuthPreparationError, AuthPreparer,
+    ExecutionSessionCloser, ManagerRefreshPublicationSink, ProviderDispatchError,
+    ProviderExecutorRegistration, ProviderExecutorRegistrationError, ProviderExecutorRegistry,
+    UnauthorizedReplayDecision, UnauthorizedReplayState, CLOSE_ALL_EXECUTION_SESSIONS_ID,
 };
 pub use conductor_cooldown::{AccountExecutionResult, CooldownConductor};
 #[cfg(test)]
@@ -121,6 +125,10 @@ pub use home_in_flight_publisher::{
 };
 pub use home_selection::{HomeAttemptLease, HomeDispatchSelection};
 pub use home_session_alias::{HomeSessionAliasCache, DEFAULT_HOME_SESSION_ALIAS_TTL};
+pub use metadata_merge::{
+    canonical_credential_metadata_key, is_auth_token_payload_key, merge_existing_auth_metadata,
+    merge_prepared_auth, merge_refreshed_auth, normalize_credential_metadata,
+};
 pub use oauth_model_alias::{
     model_alias_channel, model_alias_lookup_candidates, oauth_model_alias_channel,
     oauth_model_aliases_from_attributes, preserve_resolved_model_suffix,
@@ -172,6 +180,8 @@ mod candidate_token_fingerprint_test;
 mod classification_test;
 #[cfg(test)]
 mod codex_forcemap_ws_forward_test;
+#[cfg(test)]
+mod codex_oauth_model_capabilities_test;
 #[cfg(test)]
 mod conductor_availability_test;
 #[cfg(test)]
@@ -266,5 +276,7 @@ mod selected_auth_metadata_test;
 mod selector_test;
 #[cfg(test)]
 mod types_test;
+#[cfg(test)]
+mod unlisted_codex_api_key_model_test;
 #[cfg(test)]
 mod weight_test;

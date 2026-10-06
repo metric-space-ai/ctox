@@ -6,9 +6,10 @@ use serde_json::Value;
 
 use crate::internal::{
     registry::ModelInfo,
+    thinking::ModelInfoView,
     thinking::{
-        is_user_defined_model,
         json::{get_path, remove_path, serialize_if_changed, set_path},
+        model_view::is_user_defined_model_view as is_user_defined_model,
         ProviderApplier, ThinkingConfig, ThinkingError, ThinkingMode,
     },
 };
@@ -36,7 +37,7 @@ impl Applier {
         &self,
         body: &[u8],
         config: &ThinkingConfig,
-        model_info: Option<&ModelInfo>,
+        model_info: Option<&ModelInfoView<'_>>,
     ) -> Result<Vec<u8>, ThinkingError> {
         if !supported_mode(config.mode) {
             return Ok(body.to_vec());
@@ -96,7 +97,7 @@ impl Applier {
         &self,
         body: &[u8],
         config: &ThinkingConfig,
-        model_info: Option<&ModelInfo>,
+        model_info: Option<&ModelInfoView<'_>>,
         is_claude: bool,
     ) -> Vec<u8> {
         let Ok(mut document) = serde_json::from_slice::<Value>(body) else {
@@ -131,6 +132,16 @@ impl ProviderApplier for Applier {
         body: &[u8],
         config: &ThinkingConfig,
         model_info: Option<&ModelInfo>,
+    ) -> Result<Vec<u8>, ThinkingError> {
+        let view = model_info.map(ModelInfoView::from);
+        self.apply_model_info(body, config, view.as_ref())
+    }
+
+    fn apply_model_info(
+        &self,
+        body: &[u8],
+        config: &ThinkingConfig,
+        model_info: Option<&ModelInfoView<'_>>,
     ) -> Result<Vec<u8>, ThinkingError> {
         if is_user_defined_model(model_info) {
             return self.apply_compatible(body, config, model_info);
@@ -171,14 +182,14 @@ fn normalize_body(body: &[u8]) -> Vec<u8> {
     }
 }
 
-fn is_claude_model(model_info: &ModelInfo) -> bool {
+fn is_claude_model(model_info: &ModelInfoView<'_>) -> bool {
     model_info.id.to_ascii_lowercase().contains("claude")
 }
 
 fn normalize_claude_budget(
     document: &mut Value,
     budget: &mut isize,
-    model_info: &ModelInfo,
+    model_info: &ModelInfoView<'_>,
 ) -> bool {
     let (effective_max, set_default_max) =
         effective_max_tokens(document, model_info, MAX_OUTPUT_TOKENS);
@@ -189,7 +200,7 @@ fn normalize_claude_budget(
         .thinking
         .as_ref()
         .and_then(|support| support.min)
-        .map(|value| value.min(isize::MAX as u64) as isize)
+        .map(|value| value.clamp(isize::MIN as i128, isize::MAX as i128) as isize)
         .unwrap_or(0);
     if min_budget > 0 && *budget >= 0 && *budget < min_budget {
         remove_path(document, THINKING_CONFIG);

@@ -18,3 +18,19 @@ pub fn get_gjson_bytes_no_copy<'a>(data: &'a [u8], path: &'a str) -> gjson::Valu
     };
     gjson::get(document, path)
 }
+
+/// Parses `data` into a GJSON value that borrows `data` directly.
+///
+/// `gjson::parse` on an owned copy is too expensive for multi-megabyte
+/// payloads. Callers must not retain the result beyond `data`. Invalid UTF-8
+/// returns the same missing value as empty input.
+#[must_use]
+pub fn parse_gjson_bytes_no_copy(data: &[u8]) -> gjson::Value<'_> {
+    if data.is_empty() {
+        return gjson::Value::default();
+    }
+    let Ok(document) = std::str::from_utf8(data) else {
+        return gjson::Value::default();
+    };
+    gjson::parse(document)
+}

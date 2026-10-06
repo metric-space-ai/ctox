@@ -5,12 +5,12 @@
 use serde_json::Value;
 
 use crate::internal::registry::{
-    lookup_model_info, static_model_definitions_by_channel, ModelInfo, ThinkingSupport,
+    lookup_model_info, static_model_definitions_by_channel, ModelInfo,
 };
 
 use super::{
     json::{get_path, remove_empty_object, remove_path, serialize_if_changed, set_path},
-    parse_suffix,
+    parse_suffix, ModelInfoView, ThinkingSupportView,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -176,6 +176,22 @@ pub fn extract_explicit_summary_config(body: &[u8], format: &str) -> SummaryConf
     extract_openai_explicit_summary_config(&document).unwrap_or_default()
 }
 
+/// ref: internal/thinking/summary.go:133-144 @ e2bff010
+/// Chat reasoning effort controls depth, not Claude display visibility.
+pub fn extract_translated_summary_config(
+    body: &[u8],
+    source_format: &str,
+    target_format: &str,
+) -> SummaryConfig {
+    if source_format.trim().eq_ignore_ascii_case("openai")
+        && target_format.trim().eq_ignore_ascii_case("claude")
+    {
+        extract_explicit_summary_config(body, source_format)
+    } else {
+        extract_summary_config(body, source_format)
+    }
+}
+
 pub fn apply_summary_config(body: &[u8], format: &str, config: &SummaryConfig) -> Vec<u8> {
     apply_summary_config_for_model(body, format, "", config)
 }
@@ -205,6 +221,18 @@ pub(crate) fn apply_summary_config_for_provider(
     model: &str,
     provider: &str,
     model_info: Option<&ModelInfo>,
+    config: &SummaryConfig,
+) -> Vec<u8> {
+    let view = model_info.map(ModelInfoView::from);
+    apply_summary_config_for_provider_view(body, format, model, provider, view.as_ref(), config)
+}
+
+pub(super) fn apply_summary_config_for_provider_view(
+    body: &[u8],
+    format: &str,
+    model: &str,
+    provider: &str,
+    model_info: Option<&ModelInfoView<'_>>,
     config: &SummaryConfig,
 ) -> Vec<u8> {
     let normalized = format.trim().to_ascii_lowercase();
@@ -455,6 +483,14 @@ pub fn strip_inferred_claude_summary_activation(
     body: &[u8],
     model_info: Option<&ModelInfo>,
 ) -> Vec<u8> {
+    let view = model_info.map(ModelInfoView::from);
+    strip_inferred_claude_summary_activation_view(body, view.as_ref())
+}
+
+pub(super) fn strip_inferred_claude_summary_activation_view(
+    body: &[u8],
+    model_info: Option<&ModelInfoView<'_>>,
+) -> Vec<u8> {
     let Some(support) = model_info.and_then(|model| model.thinking.as_ref()) else {
         return body.to_vec();
     };
@@ -486,7 +522,7 @@ pub fn strip_inferred_claude_summary_activation(
 fn enable_claude_thinking_for_summary(
     document: &mut Value,
     model: &str,
-    resolved_model_info: Option<&ModelInfo>,
+    resolved_model_info: Option<&ModelInfoView<'_>>,
 ) {
     let body_model = get_path(document, "model")
         .and_then(Value::as_str)
@@ -505,8 +541,11 @@ fn enable_claude_thinking_for_summary(
     } else {
         None
     };
-    if let Some(support) = resolved_model_info
-        .or(owned_model_info.as_ref())
+    let owned_model_view = owned_model_info.as_ref().map(ModelInfoView::from);
+    let selected_model_view = resolved_model_info.as_ref().map(|info| info.reborrow());
+    if let Some(support) = selected_model_view
+        .as_ref()
+        .or(owned_model_view.as_ref())
         .and_then(|info| info.thinking.as_ref())
     {
         enable_claude_with_support(document, support);
@@ -548,7 +587,7 @@ fn enable_claude_thinking_for_summary(
     enable_claude_with_budget(document, budget);
 }
 
-fn enable_claude_with_support(document: &mut Value, support: &ThinkingSupport) {
+fn enable_claude_with_support(document: &mut Value, support: &ThinkingSupportView<'_>) {
     if !support.levels.is_empty() {
         set_path(document, "thinking.type", Value::String("adaptive".into()));
         remove_path(document, "thinking.budget_tokens");
@@ -557,7 +596,7 @@ fn enable_claude_with_support(document: &mut Value, support: &ThinkingSupport) {
     let Some(budget) = support.min.filter(|budget| *budget > 0) else {
         return;
     };
-    enable_claude_with_budget(document, budget);
+    enable_claude_with_budget(document, budget as u64);
 }
 
 fn enable_claude_with_budget(document: &mut Value, budget: u64) {

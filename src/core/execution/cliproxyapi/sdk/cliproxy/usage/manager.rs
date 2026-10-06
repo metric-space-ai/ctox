@@ -190,8 +190,14 @@ impl Manager {
         if self.stopped.load(Ordering::Acquire) {
             return;
         }
+        self.start_worker();
+    }
+
+    fn start_worker(&self) {
         let mut worker = lock_unpoisoned(&self.worker);
-        if worker.is_some() {
+        // stop() may close publication while start() waits for this lock.
+        // Recheck under the lock so every spawned worker is joined by stop().
+        if self.stopped.load(Ordering::Acquire) || worker.is_some() {
             return;
         }
         let shared = Arc::clone(&self.shared);
@@ -227,7 +233,7 @@ impl Manager {
     pub fn publish(&self, context: UsageContext, record: Record) -> bool {
         self.start();
         let mut state = lock_unpoisoned(&self.shared.queue);
-        if state.closed {
+        if state.closed || self.stopped.load(Ordering::Acquire) {
             return false;
         }
         state.queue.push_back(QueueItem { context, record });
@@ -305,4 +311,36 @@ fn read_unpoisoned<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
 fn write_unpoisoned<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
     lock.write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod candidate_lifecycle_tests {
+    use super::{lock_unpoisoned, Manager, Record, UsageContext};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn candidate_usage_dispatcher_stale_start_cannot_reopen_after_stop() {
+        let manager = Manager::new(1);
+        // Replay a start that observed open publication before stop(),
+        // but only acquired the worker lock after stop() returned.
+        assert!(!manager.stopped.load(Ordering::Acquire));
+        manager.stop();
+        manager.start_worker();
+        assert!(!manager.publish(UsageContext::default(), Record::default()));
+        assert!(lock_unpoisoned(&manager.worker).is_none());
+    }
+
+    #[test]
+    fn candidate_usage_dispatcher_stop_before_queue_close_rejects_publication() {
+        let manager = Manager::new(1);
+        // stop() signals closure before it acquires the queue lock. A first
+        // lazy publish in that interval must not accept work without a worker.
+        manager.stopped.store(true, Ordering::Release);
+        assert!(!manager.publish(UsageContext::default(), Record::default()));
+        let state = lock_unpoisoned(&manager.shared.queue);
+        assert!(!state.closed);
+        assert!(state.queue.is_empty());
+        drop(state);
+        assert!(lock_unpoisoned(&manager.worker).is_none());
+    }
 }

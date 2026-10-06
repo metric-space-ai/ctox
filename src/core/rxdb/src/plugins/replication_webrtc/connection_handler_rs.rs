@@ -3057,18 +3057,6 @@ impl WebRTCRsConnectionHandler {
         self.refresh_send_queue_status();
     }
 
-    #[cfg(test)]
-    async fn send_framed_text(
-        &self,
-        peer: &WebRTCRsPeer,
-        data_channel: Arc<dyn DataChannel>,
-        text: String,
-        available: &Arc<tokio::sync::Notify>,
-    ) -> Result<(), RxError> {
-        self.send_framed_text_owned(peer, data_channel, text, available, None, None)
-            .await
-    }
-
     async fn send_framed_text_owned(
         &self,
         peer: &WebRTCRsPeer,
@@ -5310,11 +5298,12 @@ mod tests {
             handler.drain_send_queue(&peer, channel, guard).await;
             assert_eq!(handler.frame_transport_status().sent_scheduled_frames, 0);
             assert_eq!(handler.frame_transport_status().active_transfers, 0);
-            let queues = handler.send_queues.lock();
-            let queue = &queues[&peer];
-            assert!(queue.high.is_empty() && queue.normal.is_empty() && queue.low.is_empty());
-            assert!(!queue.draining);
-            drop(queues);
+            {
+                let queues = handler.send_queues.lock();
+                let queue = &queues[&peer];
+                assert!(queue.high.is_empty() && queue.normal.is_empty() && queue.low.is_empty());
+                assert!(!queue.draining);
+            }
             handler.close().await.unwrap();
         }
     }
@@ -7411,11 +7400,12 @@ mod tests {
         handler
             .commit_prepared_offer("early-channel".to_string(), generation, pc, None, 43)
             .unwrap();
-        let peers = handler.peers.lock();
-        let replacement = peers.get("early-channel").unwrap();
-        assert_ne!(replacement.generation, old.generation());
-        assert!(replacement.data_channel.is_some());
-        drop(peers);
+        {
+            let peers = handler.peers.lock();
+            let replacement = peers.get("early-channel").unwrap();
+            assert_ne!(replacement.generation, old.generation());
+            assert!(replacement.data_channel.is_some());
+        }
         handler.close().await.unwrap();
     }
 
