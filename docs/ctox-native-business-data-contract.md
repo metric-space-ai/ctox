@@ -99,9 +99,40 @@ poll rereads the issuer and protected master key. Missing, busy, malformed or
 conflicting issuer authority denies publication without generating a key.
 Legacy Core key rows remain migration-conflict diagnostics and do not acquire
 a second Core writer lock; protected filesystem replacement belongs to native
-runtime ownership. No guard is retained across an await. These source helpers
+runtime ownership. Native issuer/SQL fences release at each Pending. These source helpers
 and their adversarial regressions still require composed compiler/runtime
-validation and wiring into the actual BusinessData response/event publishers.
+validation. The actual BusinessData source now registers the guarded auxiliary
+handler with the exact accepted connection and sends Watch/Observe events through
+send_guarded. Native response/event guards retain the prepared payload separately
+from wire JSON and reacquire current issuer, Core, policy and projection authority
+inside every physical IO poll. Query rows require current source visibility/scope,
+their prepared field projection and the original scoped Mango selector. Even an
+empty page rechecks query-field permission. Command responses/events require
+current canonical Core ownership and the exact prepared command state; Submit
+publication checks DataWrite, observation checks DataRead.
+
+The source's synchronous lifetime fence retires queued output before shutdown's
+first await and prevents installing later snapshot/watch tasks. Subscription
+publication shares its session/terminal/binding-epoch fence with resume and
+Unwatch. A reconnect retaining the same wire session still changes that local
+epoch. Data-free Watch acknowledgements can release already-buffered Error/Reset
+after a producer failure; resume, Unwatch, source shutdown and exact peer/token
+retirement still fence them. Fixed Error/Reset/Revoked controls and exact Unwatched
+acknowledgements carry no data authority. Arbitrary native error text is sanitized;
+unsupported policies/transports cannot fall back to an ordinary data send.
+
+The auxiliary request is the direct generated Request used by remote_request;
+the WebRTC response envelope carries its WireResult directly. Source decoding
+uses the existing bounded decoder. These source changes have not passed compiler,
+real queue/service adversarial execution or performance validation. Immediate
+SQLite fences fail closed on contention; availability under concurrent writers
+and arbitrary filesystem replacement remain unproved.
+
+Standalone Sync verification must enable `--features webrtc`: this crate has no
+default WebRTC feature, so featureless success does not compile or exercise the
+BusinessData source. The isolated native CLI acceptance example uses two runtime
+workers and a freshly built binary from the same composed source. Browser,
+installed Linux and two-host acceptance remain separate obligations.
 
 ## Command ownership and existing records
 

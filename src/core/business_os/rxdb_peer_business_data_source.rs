@@ -5,7 +5,11 @@
 use super::store;
 use ctox_sync::business_data_contract::{
     NativeBusinessDataCommand as Command, NativeBusinessDataCommandState as CommandState,
-    NativeBusinessDataCommandStatus, NativeBusinessDataScope as Scope,
+    NativeBusinessDataCommandStatus, NativeBusinessDataEvent as Event,
+    NativeBusinessDataEventPayload as EventPayload, NativeBusinessDataOperation as Operation,
+    NativeBusinessDataQuery as Query, NativeBusinessDataRecord as Record,
+    NativeBusinessDataRequest as Request, NativeBusinessDataResponse as Response,
+    NativeBusinessDataResult as WireResult, NativeBusinessDataScope as Scope,
 };
 use ctox_sync::business_data_remote::{Access, BusinessDataAccessPolicy, RemoteIdentity};
 
@@ -72,14 +76,75 @@ struct NativeReadAuthority<'a> {
     policy: &'a rusqlite::Connection,
     projection: &'a rusqlite::Connection,
     collection: &'a str,
+    access: Access,
     claims: super::capability::CapabilityClaims,
 }
 
 impl NativeReadAuthority<'_> {
+    fn authorize_query(&self, query: &Query) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.access == Access::Read && query.collection == self.collection,
+            "query read authority changed"
+        );
+        if self.collection == "ctox_crew_members" {
+            if let Some(fields) = super::policy::crew_fields_for_role(&self.claims.role) {
+                anyhow::ensure!(
+                    rxdb::plugins::replication_webrtc::webrtc_types::readable_query_fields(
+                        &query.query,
+                        &fields,
+                    ),
+                    "query references unreadable fields"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn prepared_record(
+        &self,
+        query: &Query,
+        selector: &rxdb::util::mango::Query,
+        record: &Record,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !record.document_id.is_empty()
+                && record.document.get("id").and_then(Value::as_str)
+                    == Some(record.document_id.as_str()),
+            "prepared record identity changed"
+        );
+        // Re-read current ownership/scope; values still come from the snapshot.
+        let current = store::load_rxdb_collection_record_from_connection(
+            self.projection,
+            self.collection,
+            &record.document_id,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("prepared row is no longer available"))?;
+        anyhow::ensure!(
+            self.document_view(self.collection, &current)?.is_some()
+                && scope_contains(&query.scope, &current)
+                && scope_contains(&query.scope, &record.document)
+                && selector.test(&record.document)
+                && self.document_view(self.collection, &record.document)?
+                    == Some(record.document.clone()),
+            "prepared record visibility or projection changed"
+        );
+        Ok(())
+    }
+
+    fn command_state(&self, command_id: &str) -> anyhow::Result<CommandState> {
+        let stored =
+            crate::mission::channels::business_command_projection_from_conn(self.core, command_id)?;
+        Ok(owned_command_projection(
+            &stored,
+            command_id,
+            &self.claims.user_id,
+        )?)
+    }
+
     fn document_view(&self, collection: &str, document: &Value) -> anyhow::Result<Option<Value>> {
         anyhow::ensure!(
-            collection == self.collection,
-            "read authority belongs to another collection"
+            self.access == Access::Read && collection == self.collection,
+            "read authority belongs to another collection or access"
         );
         if !super::threads::native_business_data_document_visible_from_connections(
             self.core,
@@ -114,6 +179,25 @@ impl NativeBusinessDataPolicy {
         identity: &RemoteIdentity,
         capability_token: &str,
         collection: &str,
+        scope: &Scope,
+        apply: impl FnOnce(&NativeReadAuthority<'_>) -> anyhow::Result<T>,
+    ) -> io::Result<T> {
+        self.with_current_authority(
+            identity,
+            capability_token,
+            collection,
+            Access::Read,
+            scope,
+            apply,
+        )
+    }
+
+    fn with_current_authority<T>(
+        &self,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        collection: &str,
+        access: Access,
         scope: &Scope,
         apply: impl FnOnce(&NativeReadAuthority<'_>) -> anyhow::Result<T>,
     ) -> io::Result<T> {
@@ -158,7 +242,11 @@ impl NativeBusinessDataPolicy {
                     capability_token,
                     signer,
                     collection,
-                    store::BusinessOsPermission::DataRead,
+                    if access == Access::Read {
+                        store::BusinessOsPermission::DataRead
+                    } else {
+                        store::BusinessOsPermission::DataWrite
+                    },
                     at_ms,
                 ),
                 "current native collection access denied"
@@ -168,6 +256,7 @@ impl NativeBusinessDataPolicy {
                 policy: &policy,
                 projection: &projection,
                 collection,
+                access,
                 claims,
             })?;
             anyhow::ensure!(
@@ -184,6 +273,196 @@ impl NativeBusinessDataPolicy {
                 "native read authority unavailable",
             )
         })
+    }
+}
+
+fn scope_contains(scope: &Scope, document: &Value) -> bool {
+    if document.get("_deleted").and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    match scope {
+        Scope::Instance {} => true,
+        Scope::Project { project_id } => {
+            document.get("project_id").and_then(Value::as_str) == Some(project_id.as_str())
+        }
+        Scope::Thread {
+            project_id,
+            thread_id,
+        } => {
+            document.get("project_id").and_then(Value::as_str) == Some(project_id.as_str())
+                && document.get("thread_id").and_then(Value::as_str) == Some(thread_id.as_str())
+        }
+    }
+}
+
+/// Created only by the local policy factory, never from a wire guard flag.
+struct NativeResponsePublication {
+    policy: NativeBusinessDataPolicy,
+    identity: RemoteIdentity,
+    capability_token: String,
+    request: Request,
+    response: Response,
+    selector: Option<rxdb::util::mango::Query>,
+}
+
+impl rxdb::plugins::replication_webrtc::WebRTCPublicationGuard for NativeResponsePublication {
+    fn with_current(
+        &self,
+        publish: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
+    ) -> rxdb::rx_error::RxResult<()> {
+        let denied = || rxdb::rx_error::new_rx_error("BUSINESS_DATA_CURRENT_POLICY_DENIED", None);
+        let (collection, access, scope) = match &self.request.operation {
+            Operation::Query { query, .. } | Operation::Watch { query, .. } => {
+                (query.collection.as_str(), Access::Read, query.scope.clone())
+            }
+            Operation::ObserveCommand { .. } => {
+                ("business_commands", Access::Read, Scope::Instance {})
+            }
+            Operation::SubmitCommand { .. } => {
+                ("business_commands", Access::Write, Scope::Instance {})
+            }
+            _ => return Err(denied()),
+        };
+        self.policy
+            .with_current_authority(
+                &self.identity,
+                &self.capability_token,
+                collection,
+                access,
+                &scope,
+                |authority| {
+                    match (&self.request.operation, &self.response.result) {
+                        (
+                            Operation::Query { session, query, .. },
+                            WireResult::Page {
+                                session: actual,
+                                records,
+                                ..
+                            },
+                        ) if actual == session => {
+                            authority.authorize_query(query)?;
+                            let selector = self
+                                .selector
+                                .as_ref()
+                                .ok_or_else(|| anyhow::anyhow!("prepared selector unavailable"))?;
+                            for record in records {
+                                authority.prepared_record(query, selector, record)?;
+                            }
+                        }
+                        (
+                            Operation::Watch { session, query, .. },
+                            WireResult::Subscribed {
+                                session: actual,
+                                subscription_id,
+                            },
+                        ) if actual == session && !subscription_id.is_empty() => {
+                            authority.authorize_query(query)?;
+                        }
+                        (
+                            Operation::ObserveCommand {
+                                session,
+                                command_id,
+                            },
+                            WireResult::Command {
+                                session: actual,
+                                state,
+                            },
+                        ) if actual == session => {
+                            anyhow::ensure!(
+                                state.command_id == *command_id
+                                    && authority.command_state(command_id)? == *state,
+                                "prepared command authority or state changed"
+                            );
+                        }
+                        (
+                            Operation::SubmitCommand { session, command },
+                            WireResult::Command {
+                                session: actual,
+                                state,
+                            },
+                        ) if actual == session => {
+                            anyhow::ensure!(
+                                state.command_id == command.command_id
+                                    && authority.command_state(&command.command_id)? == *state,
+                                "prepared admitted command authority or state changed"
+                            );
+                        }
+                        _ => anyhow::bail!("response does not belong to this request"),
+                    }
+                    // The current issuer/Core/policy/projection fences are still
+                    // held while the transport performs this single bounded poll.
+                    Ok(publish())
+                },
+            )
+            .map_err(|_| denied())?
+    }
+}
+
+struct NativeEventPublication {
+    policy: NativeBusinessDataPolicy,
+    identity: RemoteIdentity,
+    capability_token: String,
+    query: Query,
+    command_id: Option<String>,
+    event: Event,
+    selector: rxdb::util::mango::Query,
+}
+
+impl rxdb::plugins::replication_webrtc::WebRTCPublicationGuard for NativeEventPublication {
+    fn with_current(
+        &self,
+        publish: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
+    ) -> rxdb::rx_error::RxResult<()> {
+        let denied = || rxdb::rx_error::new_rx_error("BUSINESS_DATA_CURRENT_POLICY_DENIED", None);
+        self.policy
+            .with_current_read_authority(
+                &self.identity,
+                &self.capability_token,
+                &self.query.collection,
+                &self.query.scope,
+                |authority| {
+                    authority.authorize_query(&self.query)?;
+                    let owned_command = if let Some(command_id) = &self.command_id {
+                        anyhow::ensure!(
+                            self.query.collection == "business_commands",
+                            "command collection changed"
+                        );
+                        Some(authority.command_state(command_id)?)
+                    } else {
+                        None
+                    };
+                    match &self.event.payload {
+                        EventPayload::SnapshotPage { records, .. } if self.command_id.is_none() => {
+                            for record in records {
+                                authority.prepared_record(&self.query, &self.selector, record)?;
+                            }
+                        }
+                        EventPayload::Upsert { record, .. } if self.command_id.is_none() => {
+                            authority.prepared_record(&self.query, &self.selector, record)?
+                        }
+                        EventPayload::Remove { document_id, .. }
+                            if self.command_id.is_none() && !document_id.is_empty() =>
+                        {
+                            // Only the source's visible-ID set can create this removal.
+                            // The queued event also retains that exact subscription.
+                        }
+                        EventPayload::Command { state } => {
+                            anyhow::ensure!(
+                                owned_command.as_ref() == Some(state),
+                                "command owner or state changed"
+                            );
+                        }
+                        EventPayload::SnapshotStart { .. }
+                        | EventPayload::SnapshotEnd { .. }
+                        | EventPayload::CaughtUp { .. } => {}
+                        // Control-only publication is separately classified and
+                        // sanitized by the source; it cannot mint a data guard.
+                        _ => anyhow::bail!("event is not authorized data"),
+                    }
+                    Ok(publish())
+                },
+            )
+            .map_err(|_| denied())?
     }
 }
 
@@ -493,6 +772,405 @@ mod owner_receipt_tests {
         Ok(())
     }
 
+    fn prepared_page(query: Query, document: Option<Value>) -> (Request, Response) {
+        let session = ctox_sync::business_data_contract::NativeBusinessDataSessionRef {
+            handle: "native-publication-fixture".into(),
+            generation: 1,
+        };
+        let request = Request {
+            version: ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
+            request_id: "publication-fixture".into(),
+            operation: Operation::Query {
+                session: session.clone(),
+                query,
+                page_cursor: None,
+            },
+        };
+        let response = Response {
+            version: request.version,
+            request_id: request.request_id.clone(),
+            result: WireResult::Page {
+                session,
+                snapshot_id: "native-snapshot".into(),
+                records: document
+                    .into_iter()
+                    .map(|document| Record {
+                        document_id: document["id"].as_str().unwrap().into(),
+                        document,
+                    })
+                    .collect(),
+                next_page_cursor: None,
+                snapshot_complete: true,
+            },
+        };
+        (request, response)
+    }
+
+    #[tokio::test]
+    async fn native_response_publication_holds_stores_and_rechecks_parent_visibility(
+    ) -> anyhow::Result<()> {
+        let fixture = read_fixture("user").await?;
+        grant_read(fixture.root.path(), "alice", "business_commands")?;
+        let domain = store::open_store(fixture.root.path())?;
+        store::upsert_business_record(
+            &domain,
+            "business_commands",
+            "parent",
+            1,
+            json!({"id":"parent", "client_context":{"actor":{"id":"alice"}}}),
+        )?;
+        let projection = rusqlite::Connection::open(store::rxdb_store_path(fixture.root.path()))?;
+        let child = json!({"id":"child", "_deleted":false, "payload":{"workflow_id":"parent"}});
+        projection.execute(
+            &format!(
+                "INSERT INTO {} (id,data) VALUES ('child',?1)",
+                fixture.table
+            ),
+            [child.to_string()],
+        )?;
+        let (request, response) = prepared_page(
+            Query {
+                collection: "business_commands".into(),
+                scope: Scope::Instance {},
+                query: json!({"selector":{"id":"child"}, "sort":[{"id":"asc"}]}),
+                page_size: 1,
+            },
+            Some(child),
+        );
+        let guard = fixture.policy.response_publication(
+            &fixture.identity,
+            &fixture.token,
+            &request,
+            &response,
+        )?;
+        let paths = [
+            crate::paths::core_db(fixture.root.path()),
+            store::business_os_store_path(fixture.root.path()),
+            store::rxdb_store_path(fixture.root.path()),
+        ];
+        let writers = paths
+            .iter()
+            .map(rusqlite::Connection::open)
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for writer in &writers {
+            writer.busy_timeout(std::time::Duration::ZERO)?;
+        }
+        let mut calls = 0;
+        guard.with_current(&mut || {
+            calls += 1;
+            for writer in &writers {
+                let error = writer.execute_batch("BEGIN IMMEDIATE").expect_err("publication holds this store");
+                assert!(matches!(error, rusqlite::Error::SqliteFailure(code, _)
+                    if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)));
+            }
+            Ok(())
+        }).expect("current native page must publish");
+        assert_eq!(calls, 1);
+        for writer in &writers {
+            writer.execute_batch("BEGIN IMMEDIATE; ROLLBACK")?;
+        }
+        store::upsert_business_record(
+            &domain,
+            "business_commands",
+            "parent",
+            2,
+            json!({"id":"parent", "client_context":{"actor":{"id":"foreign"}}}),
+        )?;
+        assert!(guard
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(
+            calls, 1,
+            "retained guard must re-read current parent visibility"
+        );
+
+        let mut wrong = response.clone();
+        wrong.request_id = "other-request".into();
+        assert!(fixture
+            .policy
+            .response_publication(&fixture.identity, &fixture.token, &request, &wrong)
+            .is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_response_and_event_publication_recheck_fields_and_empty_query(
+    ) -> anyhow::Result<()> {
+        let fixture = read_fixture("chef").await?;
+        let projection = rusqlite::Connection::open(store::rxdb_store_path(fixture.root.path()))?;
+        let schemas: Value =
+            serde_json::from_str(include_str!("business_os_schema_contract.json"))?;
+        let version = schemas["ctox_crew_members"]["version"].as_u64().unwrap();
+        let table = format!("ctox_business_os__ctox_crew_members__v{version}");
+        projection.execute_batch(&format!(
+            "CREATE TABLE {table} (id TEXT PRIMARY KEY, data TEXT NOT NULL)"
+        ))?;
+        let crew =
+            json!({"id":"crew", "_deleted":false, "name":"Crew", "soul":{"private":"fixture"}});
+        projection.execute(
+            &format!("INSERT INTO {table} (id,data) VALUES ('crew',?1)"),
+            [crew.to_string()],
+        )?;
+        let query = Query {
+            collection: "ctox_crew_members".into(),
+            scope: Scope::Instance {},
+            query: json!({"selector":{"id":"crew"}, "sort":[{"id":"asc"}]}),
+            page_size: 1,
+        };
+        let (request, response) = prepared_page(query.clone(), Some(crew.clone()));
+        let before = fixture.policy.response_publication(
+            &fixture.identity,
+            &fixture.token,
+            &request,
+            &response,
+        )?;
+        before
+            .with_current(&mut || Ok(()))
+            .expect("current chef view");
+        let session = match &request.operation {
+            Operation::Query { session, .. } => session.clone(),
+            _ => unreachable!(),
+        };
+        let event = Event {
+            version: request.version,
+            session,
+            subscription_id: "crew-watch".into(),
+            sequence: 1,
+            payload: EventPayload::Upsert {
+                cursor: "native-cursor".into(),
+                record: Record {
+                    document_id: "crew".into(),
+                    document: crew.clone(),
+                },
+                recovery: false,
+            },
+        };
+        let old_event = fixture.policy.event_publication(
+            &fixture.identity,
+            &fixture.token,
+            &query,
+            None,
+            &event,
+        )?;
+        old_event
+            .with_current(&mut || Ok(()))
+            .expect("current chef event");
+        store::open_store(fixture.root.path())?.execute(
+            "UPDATE business_users SET role='user' WHERE user_id='alice'",
+            [],
+        )?;
+        let mut calls = 0;
+        assert!(before
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        assert!(old_event
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            fixture.root.path(),
+            "alice",
+            "Alice",
+            "user",
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        let identity = fixture.policy.identity(&token).await.unwrap();
+        let changed = fixture
+            .policy
+            .response_publication(&identity, &token, &request, &response)?;
+        let changed_event = fixture
+            .policy
+            .event_publication(&identity, &token, &query, None, &event)?;
+        assert!(changed
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        assert!(changed_event
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(
+            calls, 0,
+            "current projection must reject already-prepared private fields"
+        );
+        let public = fixture
+            .policy
+            .document_view(&identity, &token, "ctox_crew_members", &crew)
+            .await?
+            .unwrap();
+        let (public_request, public_response) = prepared_page(query.clone(), Some(public));
+        fixture
+            .policy
+            .response_publication(&identity, &token, &public_request, &public_response)?
+            .with_current(&mut || Ok(()))
+            .expect("current public field view");
+
+        let (empty_request, empty_response) = prepared_page(
+            Query {
+                query: json!({"selector":{"soul.private":"fixture"}, "sort":[{"id":"asc"}]}),
+                ..query
+            },
+            None,
+        );
+        assert!(fixture
+            .policy
+            .response_publication(&identity, &token, &empty_request, &empty_response)?
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(
+            calls, 0,
+            "an empty result cannot bypass current query-field policy"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_command_publication_uses_current_core_owner_and_exact_state(
+    ) -> anyhow::Result<()> {
+        let fixture = read_fixture("chef").await?;
+        store::tests::seed_business_user(fixture.root.path(), "bob", "chef")?;
+        let (bob_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            fixture.root.path(),
+            "bob",
+            "Bob",
+            "chef",
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        let bob = fixture.policy.identity(&bob_token).await.unwrap();
+        let command = Command {
+            command_id: "native-publication-command".into(),
+            command_type: "business_os.command".into(),
+            payload: json!({"instruction":"Record a bounded publication fixture task"}),
+        };
+        let state = fixture
+            .policy
+            .submit_command(&fixture.identity, &fixture.token, &command)
+            .await?;
+        let session = ctox_sync::business_data_contract::NativeBusinessDataSessionRef {
+            handle: "owned-native-command".into(),
+            generation: 1,
+        };
+        let request = Request {
+            version: ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
+            request_id: "owned-command-response".into(),
+            operation: Operation::ObserveCommand {
+                session: session.clone(),
+                command_id: command.command_id.clone(),
+            },
+        };
+        let response = Response {
+            version: request.version,
+            request_id: request.request_id.clone(),
+            result: WireResult::Command {
+                session: session.clone(),
+                state: state.clone(),
+            },
+        };
+        let owner = fixture.policy.response_publication(
+            &fixture.identity,
+            &fixture.token,
+            &request,
+            &response,
+        )?;
+        owner
+            .with_current(&mut || Ok(()))
+            .expect("current canonical owner");
+        let foreign = fixture
+            .policy
+            .response_publication(&bob, &bob_token, &request, &response)?;
+        let mut calls = 0;
+        assert!(foreign
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        let mut forged_response = response.clone();
+        if let WireResult::Command { state, .. } = &mut forged_response.result {
+            state.result = Some(json!({"forged":true}));
+        }
+        assert!(fixture
+            .policy
+            .response_publication(
+                &fixture.identity,
+                &fixture.token,
+                &request,
+                &forged_response
+            )?
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        let query = Query {
+            collection: "business_commands".into(),
+            scope: Scope::Instance {},
+            query: json!({"selector":{"id":command.command_id}, "sort":[{"id":"asc"}]}),
+            page_size: 1,
+        };
+        let event = Event {
+            version: request.version,
+            session,
+            subscription_id: format!("command:{}", command.command_id),
+            sequence: 1,
+            payload: EventPayload::Command { state },
+        };
+        let event_guard = fixture.policy.event_publication(
+            &fixture.identity,
+            &fixture.token,
+            &query,
+            Some(&command.command_id),
+            &event,
+        )?;
+        event_guard
+            .with_current(&mut || Ok(()))
+            .expect("current owned command event");
+        let core = rusqlite::Connection::open(crate::paths::core_db(fixture.root.path()))?;
+        let mut intent: Value = serde_json::from_str(&core.query_row(
+            "SELECT intent_json FROM business_command_aggregates WHERE command_id=?1",
+            [&command.command_id],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        intent["native_owner"] =
+            json!({"contract":"ctox-business-command-owner-v1", "user_id":"bob"});
+        core.execute(
+            "UPDATE business_command_aggregates SET intent_json=?2 WHERE command_id=?1",
+            rusqlite::params![command.command_id, intent.to_string()],
+        )?;
+        assert!(owner
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        assert!(event_guard
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(
+            calls, 0,
+            "neither prepared response nor event survives canonical owner change"
+        );
+        Ok(())
+    }
+
     #[test]
     fn native_instance_read_never_initializes_missing_authority() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
@@ -623,6 +1301,102 @@ mod owner_receipt_tests {
 
 #[async_trait::async_trait]
 impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
+    fn response_publication(
+        &self,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        request: &Request,
+        response: &Response,
+    ) -> io::Result<Arc<dyn rxdb::plugins::replication_webrtc::WebRTCPublicationGuard>> {
+        if request.version != ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_PROTOCOL_VERSION
+            || response.version != request.version
+            || response.request_id != request.request_id
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "response binding changed",
+            ));
+        }
+        let selector = match &request.operation {
+            Operation::Query { query, .. } => {
+                // Source preparation already validated the supported Mango
+                // query; this matcher reuses its native predicates.
+                let selector = query
+                    .query
+                    .get("selector")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                if !selector.is_object() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid selector",
+                    ));
+                }
+                let selector =
+                    ctox_sync::business_data_remote::scope_selector(&query.scope, Some(selector));
+                Some(rxdb::util::mango::Query::new(&selector))
+            }
+            Operation::Watch { .. }
+            | Operation::ObserveCommand { .. }
+            | Operation::SubmitCommand { .. } => None,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "unsupported data publication",
+                ))
+            }
+        };
+        Ok(Arc::new(NativeResponsePublication {
+            policy: self.clone(),
+            identity: identity.clone(),
+            capability_token: capability_token.to_owned(),
+            request: request.clone(),
+            response: response.clone(),
+            selector,
+        }))
+    }
+
+    fn event_publication(
+        &self,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        query: &Query,
+        command_id: Option<&str>,
+        event: &Event,
+    ) -> io::Result<Arc<dyn rxdb::plugins::replication_webrtc::WebRTCPublicationGuard>> {
+        if event.version != ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_PROTOCOL_VERSION
+            || event.subscription_id.is_empty()
+            || event.sequence == 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "event binding changed",
+            ));
+        }
+        let selector = query
+            .query
+            .get("selector")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        if !selector.is_object() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid selector",
+            ));
+        }
+        let selector =
+            ctox_sync::business_data_remote::scope_selector(&query.scope, Some(selector));
+        Ok(Arc::new(NativeEventPublication {
+            policy: self.clone(),
+            identity: identity.clone(),
+            capability_token: capability_token.to_owned(),
+            query: query.clone(),
+            command_id: command_id.map(str::to_owned),
+            event: event.clone(),
+            selector: rxdb::util::mango::Query::new(&selector),
+        }))
+    }
+
     async fn identity(&self, capability_token: &str) -> Option<RemoteIdentity> {
         let root = self.root.clone();
         let token = capability_token.to_owned();

@@ -22,8 +22,8 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use ring::rand::{SecureRandom, SystemRandom};
 use rxdb::plugins::replication_webrtc::{
-    send_message_and_await_answer, WebRTCMessage, WebRTCRsConnection, WebRTCRsConnectionHandler,
-    WebRTCWireFrame,
+    send_message_and_await_answer, WebRTCConnectionHandler, WebRTCMessage, WebRTCPublicationGuard,
+    WebRTCRsConnection, WebRTCRsConnectionHandler, WebRTCWireFrame,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_database::RxDatabase;
@@ -75,6 +75,36 @@ pub enum Access {
 
 #[async_trait]
 pub trait BusinessDataAccessPolicy: Send + Sync {
+    /// Host-owned authority for this exact prepared response. It is retained
+    /// by the transport and revalidated inside every physical IO poll.
+    /// Unsupported policies must fail closed; async preparation is no lease.
+    fn response_publication(
+        &self,
+        _identity: &RemoteIdentity,
+        _capability_token: &str,
+        _request: &Request,
+        _response: &Response,
+    ) -> io::Result<Arc<dyn WebRTCPublicationGuard>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "BusinessData publication authority is unavailable",
+        ))
+    }
+
+    fn event_publication(
+        &self,
+        _identity: &RemoteIdentity,
+        _capability_token: &str,
+        _query: &Query,
+        _command_id: Option<&str>,
+        _event: &Event,
+    ) -> io::Result<Arc<dyn WebRTCPublicationGuard>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "BusinessData event authority is unavailable",
+        ))
+    }
+
     async fn identity(&self, capability_token: &str) -> Option<RemoteIdentity>;
     async fn authorize(
         &self,
@@ -233,7 +263,7 @@ enum WatchMode {
 
 struct Subscription {
     subscription_id: String,
-    session: Mutex<SessionRef>,
+    session: Arc<Mutex<SessionRef>>,
     identity_key: String,
     fingerprint: String,
     selector: Value,
@@ -248,7 +278,9 @@ struct Subscription {
     sequence: AtomicU64,
     history: Mutex<VecDeque<HistoryEntry>>,
     history_complete: AtomicBool,
-    terminal: AtomicBool,
+    terminal: Arc<AtomicBool>,
+    publication_epoch: Arc<Mutex<u64>>,
+    source_alive: Arc<Mutex<bool>>,
     peer: tokio::sync::Mutex<Option<WebRTCRsConnection>>,
     resume: tokio::sync::Mutex<Option<u64>>,
     lifecycle: tokio::sync::Mutex<()>,
@@ -278,22 +310,28 @@ struct WebRtcEventSender {
 }
 
 impl WebRtcEventSender {
-    async fn send(&self, peer: &WebRTCRsConnection, event: &Event) -> Result<(), String> {
+    async fn send(
+        &self,
+        peer: &WebRTCRsConnection,
+        event: &Event,
+        publication: Arc<dyn WebRTCPublicationGuard>,
+    ) -> Result<(), String> {
         let value = serde_json::to_value(event).map_err(|_| "event encoding failed".to_string())?;
         let id =
             random_token("business-data-event").map_err(|_| "id generation failed".to_string())?;
-        self.handler
-            .send(
-                peer,
-                WebRTCWireFrame::Message(WebRTCMessage {
-                    id,
-                    method: BUSINESS_DATA_EVENT_METHOD.into(),
-                    params: vec![value],
-                    collection: None,
-                }),
-            )
-            .await
-            .map_err(|error| error.to_string())
+        rxdb::plugins::replication_webrtc::WebRTCConnectionHandler::send_guarded(
+            self.handler.as_ref(),
+            peer,
+            WebRTCWireFrame::Message(WebRTCMessage {
+                id,
+                method: BUSINESS_DATA_EVENT_METHOD.into(),
+                params: vec![value],
+                collection: None,
+            }),
+            publication,
+        )
+        .await
+        .map_err(|error| error.to_string())
     }
 }
 
@@ -306,6 +344,83 @@ pub struct BusinessDataSource {
     subscriptions: Mutex<HashMap<String, HashMap<String, Arc<Subscription>>>>,
     cursors: Arc<Mutex<HashMap<String, CursorRecord>>>,
     sender: Arc<WebRtcEventSender>,
+    publication_alive: Arc<Mutex<bool>>,
+}
+
+/// The native guard enters first. Local shutdown and subscription transitions
+/// share these synchronous fences with the physical IO callback.
+struct SubscriptionPublication {
+    epoch: Arc<Mutex<u64>>,
+    session: Arc<Mutex<SessionRef>>,
+    terminal: Arc<AtomicBool>,
+    expected_session: SessionRef,
+    expected_epoch: u64,
+    terminal_control: bool,
+}
+
+impl SubscriptionPublication {
+    fn with_current(
+        &self,
+        publish: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
+    ) -> rxdb::rx_error::RxResult<()> {
+        let denied = || rxdb::rx_error::new_rx_error("BUSINESS_DATA_PUBLICATION_RETIRED", None);
+        let epoch = self.epoch.lock().map_err(|_| denied())?;
+        let session = self.session.lock().map_err(|_| denied())?;
+        if *epoch != self.expected_epoch
+            || *session != self.expected_session
+            || (self.terminal.load(Ordering::SeqCst) && !self.terminal_control)
+        {
+            return Err(denied());
+        }
+        publish()
+    }
+}
+
+struct SourcePublicationGuard {
+    native: Option<Arc<dyn WebRTCPublicationGuard>>,
+    source_alive: Arc<Mutex<bool>>,
+    subscription: Option<SubscriptionPublication>,
+    peer: WebRTCRsConnection,
+    capability_token: String,
+    handler: Arc<WebRTCRsConnectionHandler>,
+}
+
+impl WebRTCPublicationGuard for SourcePublicationGuard {
+    fn with_current(
+        &self,
+        publish: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
+    ) -> rxdb::rx_error::RxResult<()> {
+        let denied = || rxdb::rx_error::new_rx_error("BUSINESS_DATA_PUBLICATION_RETIRED", None);
+        let mut invoked = false;
+        let mut local = || {
+            let alive = self.source_alive.lock().map_err(|_| denied())?;
+            if !*alive
+                || invoked
+                || !self.handler.is_peer_current(&self.peer)
+                || rxdb::plugins::replication_webrtc::WebRTCConnectionHandler::peer_capability_token(
+                    self.handler.as_ref(), &self.peer,
+                ).as_deref() != Some(self.capability_token.as_str())
+            {
+                return Err(denied());
+            }
+            invoked = true;
+            if let Some(subscription) = &self.subscription {
+                return subscription.with_current(publish);
+            }
+            publish()
+        };
+        let result = match &self.native {
+            Some(native) => native.with_current(&mut local),
+            // Only fixed rejection and exact Unwatched acknowledgements take
+            // this non-data path. The pool still fences the accepted peer/token.
+            None => local(),
+        };
+        result?;
+        if !invoked {
+            return Err(denied());
+        }
+        Ok(())
+    }
 }
 
 impl BusinessDataSource {
@@ -321,45 +436,40 @@ impl BusinessDataSource {
             subscriptions: Mutex::default(),
             cursors: Arc::default(),
             sender: Arc::new(WebRtcEventSender { handler }),
+            publication_alive: Arc::new(Mutex::new(true)),
         })
     }
 
     /// Register the typed private WebRTC request handler.
     pub fn register(self: &Arc<Self>, pool: &NativePool) -> Result<(), rxdb::rx_error::RxError> {
         let source = self.clone();
-        pool.register_auxiliary_request_handler(
+        pool.register_guarded_auxiliary_request_handler(
             BUSINESS_DATA_RPC_METHOD,
-            Arc::new(move |peer_identity, capability_token, params| {
+            Arc::new(move |peer, capability_token, params| {
                 let source = source.clone();
-                let handler = source.sender.handler.clone();
                 Box::pin(async move {
                     if params.len() != 1 {
                         return Err("invalid BusinessData request envelope".into());
                     }
-                    #[derive(serde::Deserialize)]
-                    struct Envelope {
-                        request: Request,
-                    }
-                    let envelope: Envelope =
-                        serde_json::from_value(params.into_iter().next().unwrap())
-                            .map_err(|_| "invalid BusinessData request envelope".to_string())?;
-                    let peer = handler
-                        .connection_for_peer(&peer_identity)
-                        .ok_or_else(|| "BusinessData connection retired".to_string())?;
+                    let encoded = serde_json::to_vec(&params.into_iter().next().unwrap())
+                        .map_err(|_| "invalid BusinessData request envelope".to_string())?;
+                    let request = crate::business_data::decode_request(&encoded)
+                        .map_err(|_| "invalid BusinessData request envelope".to_string())?;
                     source
-                        .handle(&peer, &capability_token, envelope.request)
+                        .handle_guarded(&peer, &capability_token, request)
                         .await
-                        .map_err(|error| error.to_string())
-                        .and_then(|response| {
-                            serde_json::to_value(response)
-                                .map_err(|_| "response encoding failed".into())
-                        })
+                        .map_err(|_| "BusinessData response authority unavailable".to_string())
                 })
             }),
         )
     }
 
     pub async fn shutdown(&self) -> io::Result<()> {
+        // Retire queued responses before the first task/transport await.
+        *self
+            .publication_alive
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = false;
         let mut failure = None;
         let snapshots: Vec<_> = self
             .snapshots
@@ -410,18 +520,12 @@ impl BusinessDataSource {
         failure.map_or(Ok(()), Err)
     }
 
-    async fn handle(
+    async fn handle_guarded(
         self: &Arc<Self>,
         peer: &WebRTCRsConnection,
         capability_token: &str,
         request: Request,
-    ) -> io::Result<Response> {
-        if request.version != CTOX_BUSINESS_DATA_PROTOCOL_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "unsupported source version",
-            ));
-        }
+    ) -> io::Result<rxdb::plugins::replication_webrtc::index_mod::GuardedAuxiliaryResponse> {
         let identity = self
             .policy
             .identity(capability_token)
@@ -429,8 +533,137 @@ impl BusinessDataSource {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::PermissionDenied, "capability is not current")
             })?;
+        let mut response = self
+            .handle(peer, &identity, capability_token, request.clone())
+            .await?;
+        let subscription_id = match (&request.operation, &response.result) {
+            (
+                Operation::Watch { .. },
+                WireResult::Subscribed {
+                    subscription_id, ..
+                },
+            ) => Some(subscription_id.clone()),
+            (Operation::ObserveCommand { command_id, .. }, WireResult::Command { .. }) => {
+                Some(format!("command:{command_id}"))
+            }
+            _ => None,
+        };
+        // A data-free Watch acknowledgement must still release already-buffered
+        // Error/Reset events when the producer fails before this response drains.
+        // Unwatch and resume always change the epoch, fencing this acknowledgement.
+        let watch_acknowledgement = matches!(&response.result, WireResult::Subscribed { .. });
+        let subscription = if let Some(id) = subscription_id.as_ref() {
+            let subscription = self
+                .subscriptions
+                .lock()
+                .map_err(|_| io::Error::other("subscription state unavailable"))?
+                .get(&identity.key())
+                .and_then(|values| values.get(id))
+                .cloned()
+                .ok_or_else(|| io::Error::other("subscription retired before response"))?;
+            let (session, epoch) = {
+                let epoch = subscription
+                    .publication_epoch
+                    .lock()
+                    .map_err(|_| io::Error::other("subscription fence unavailable"))?;
+                let session = subscription
+                    .session
+                    .lock()
+                    .map_err(|_| io::Error::other("subscription session unavailable"))?;
+                let expected_session = match &response.result {
+                    WireResult::Subscribed { session, .. }
+                    | WireResult::Command { session, .. } => session,
+                    _ => return Err(io::Error::other("subscription response changed")),
+                };
+                if *session != *expected_session
+                    || (subscription.terminal.load(Ordering::SeqCst) && !watch_acknowledgement)
+                {
+                    return Err(io::Error::other("subscription changed before response"));
+                }
+                (expected_session.clone(), *epoch)
+            };
+            Some((subscription, session, epoch))
+        } else {
+            None
+        };
+        let native = if let WireResult::Rejected { message, .. } = &mut response.result {
+            // Never publish storage/policy errors through a control-only guard.
+            *message = "BusinessData request rejected".into();
+            None
+        } else if matches!(&response.result, WireResult::Unwatched { .. }) {
+            None
+        } else {
+            match self
+                .policy
+                .response_publication(&identity, capability_token, &request, &response)
+            {
+                Ok(guard) => Some(guard),
+                Err(error) => {
+                    // Failed setup must not leave the installed watch pumping.
+                    if let Some((_, session, _)) = &subscription {
+                        if let Some(id) = subscription_id.as_ref() {
+                            let _ = self
+                                .unwatch(&identity.key(), &request.request_id, session, id)
+                                .await;
+                        }
+                    }
+                    return Err(error);
+                }
+            }
+        };
+        // WebRTCResponse already provides the RPC envelope. The consumer
+        // decodes its result as WireResult, not as a nested Response.
+        let result = serde_json::to_value(&response.result)
+            .map_err(|_| io::Error::other("BusinessData response encoding failed"))?;
+        Ok(
+            rxdb::plugins::replication_webrtc::index_mod::GuardedAuxiliaryResponse {
+                result,
+                publication: Arc::new(SourcePublicationGuard {
+                    native,
+                    source_alive: self.publication_alive.clone(),
+                    subscription: subscription.map(|(subscription, session, epoch)| {
+                        SubscriptionPublication {
+                            epoch: subscription.publication_epoch.clone(),
+                            session: subscription.session.clone(),
+                            terminal: subscription.terminal.clone(),
+                            expected_session: session,
+                            expected_epoch: epoch,
+                            terminal_control: watch_acknowledgement,
+                        }
+                    }),
+                    peer: peer.clone(),
+                    capability_token: capability_token.to_owned(),
+                    handler: self.sender.handler.clone(),
+                }),
+            },
+        )
+    }
+
+    async fn handle(
+        self: &Arc<Self>,
+        peer: &WebRTCRsConnection,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        request: Request,
+    ) -> io::Result<Response> {
+        if !*self
+            .publication_alive
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "BusinessData source retired",
+            ));
+        }
+        if request.version != CTOX_BUSINESS_DATA_PROTOCOL_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported source version",
+            ));
+        }
         let response = self
-            .process(peer, &identity, capability_token, &request)
+            .process(peer, identity, capability_token, &request)
             .await
             .unwrap_or_else(|error| error.response(&request.request_id));
         Ok(response)
@@ -887,6 +1120,13 @@ impl BusinessDataSource {
         fingerprint: String,
         query: &Query,
     ) -> Result<Arc<SnapshotSession>, RemoteError> {
+        let alive = self
+            .publication_alive
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !*alive {
+            return Err(RemoteError::unauthorized());
+        }
         let (sender, receiver) = mpsc::channel(2);
         let snapshot_id = random_token("snapshot")
             .map_err(|_| RemoteError::new(ErrorCode::Internal, "snapshot ID failed", true))?;
@@ -1057,11 +1297,21 @@ impl BusinessDataSource {
                 return Err(RemoteError::reset());
             }
             let mut bound_peer = subscription.peer.lock().await;
-            *subscription
-                .session
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = session.clone();
-            *bound_peer = Some(peer.clone());
+            {
+                let mut epoch = subscription
+                    .publication_epoch
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if subscription.terminal.load(Ordering::SeqCst) {
+                    return Err(RemoteError::reset());
+                }
+                *epoch = epoch.checked_add(1).ok_or_else(RemoteError::reset)?;
+                *subscription
+                    .session
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = session.clone();
+                *bound_peer = Some(peer.clone());
+            }
             drop(bound_peer);
             *subscription.resume.lock().await = Some(record.sequence);
             subscription.notify.notify_one();
@@ -1135,7 +1385,7 @@ impl BusinessDataSource {
         };
         let subscription = Arc::new(Subscription {
             subscription_id: subscription_id.clone(),
-            session: Mutex::new(session.clone()),
+            session: Arc::new(Mutex::new(session.clone())),
             identity_key: identity_key.clone(),
             fingerprint,
             selector,
@@ -1150,7 +1400,9 @@ impl BusinessDataSource {
             sequence: AtomicU64::new(1),
             history: Mutex::default(),
             history_complete: AtomicBool::new(true),
-            terminal: AtomicBool::new(false),
+            terminal: Arc::new(AtomicBool::new(false)),
+            publication_epoch: Arc::new(Mutex::new(0)),
+            source_alive: self.publication_alive.clone(),
             peer: tokio::sync::Mutex::new(Some(peer.clone())),
             resume: tokio::sync::Mutex::new(None),
             lifecycle: tokio::sync::Mutex::new(()),
@@ -1161,10 +1413,26 @@ impl BusinessDataSource {
         });
 
         {
+            let alive = self
+                .publication_alive
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if !*alive {
+                return Err(RemoteError::unauthorized());
+            }
             let mut subscriptions = self
                 .subscriptions
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
+            if subscriptions
+                .get(&identity_key)
+                .map_or(0, |values| values.len())
+                >= MAX_SUBSCRIPTIONS_PER_IDENTITY
+            {
+                return Err(RemoteError::limit(
+                    "BusinessData subscription limit exceeded",
+                ));
+            }
             if subscriptions
                 .get(&identity_key)
                 .is_some_and(|values| values.contains_key(&subscription_id))
@@ -1249,7 +1517,7 @@ impl BusinessDataSource {
                 .await
                 .is_err()
             {
-                subscription.terminal.store(true, Ordering::SeqCst);
+                subscription.retire();
                 receiver.close();
                 let _ = snapshot_task.await;
                 return;
@@ -1273,7 +1541,7 @@ impl BusinessDataSource {
                                             .await
                                             .is_err()
                                         {
-                                            subscription.terminal.store(true, Ordering::SeqCst);
+                                            subscription.retire();
                                             receiver.close();
                                             let _ = snapshot_task.await;
                                             return;
@@ -1337,7 +1605,7 @@ impl BusinessDataSource {
                                 .await
                                 .is_err()
                             {
-                                subscription.terminal.store(true, Ordering::SeqCst);
+                                subscription.retire();
                                 receiver.close();
                                 let _ = snapshot_task.await;
                                 return;
@@ -1375,7 +1643,7 @@ impl BusinessDataSource {
                         false,
                     )
                     .await;
-                subscription.terminal.store(true, Ordering::SeqCst);
+                subscription.retire();
                 return;
             }
 
@@ -1397,7 +1665,7 @@ impl BusinessDataSource {
                                 false,
                             )
                             .await;
-                        subscription.terminal.store(true, Ordering::SeqCst);
+                        subscription.retire();
                         return;
                     }
                 };
@@ -1420,7 +1688,7 @@ impl BusinessDataSource {
                                 false,
                             )
                             .await;
-                        subscription.terminal.store(true, Ordering::SeqCst);
+                        subscription.retire();
                         return;
                     }
                 }
@@ -1446,7 +1714,7 @@ impl BusinessDataSource {
                     .await
                     .is_err()
             {
-                subscription.terminal.store(true, Ordering::SeqCst);
+                subscription.retire();
                 return;
             }
 
@@ -1454,13 +1722,13 @@ impl BusinessDataSource {
                 tokio::select! {
                     _ = subscription.notify.notified() => {
                         if subscription.deliver_resume().await.is_err() {
-                            subscription.terminal.store(true, Ordering::SeqCst);
+                            subscription.retire();
                             return;
                         }
                     }
                     item = changes.next() => {
                         if subscription.deliver_resume().await.is_err() {
-                            subscription.terminal.store(true, Ordering::SeqCst);
+                            subscription.retire();
                             return;
                         }
                         let Some(bulk) = item else {
@@ -1469,7 +1737,7 @@ impl BusinessDataSource {
                                 message: "BusinessData change stream closed".into(),
                                 retryable: true,
                             }, false).await;
-                            subscription.terminal.store(true, Ordering::SeqCst);
+                            subscription.retire();
                             return;
                         };
                         if bulk.is_rxsubject_lagged() {
@@ -1477,7 +1745,7 @@ impl BusinessDataSource {
                                 EventPayload::Reset { code: ErrorCode::ResetRequired },
                                 false,
                             ).await;
-                            subscription.terminal.store(true, Ordering::SeqCst);
+                            subscription.retire();
                             return;
                         }
                         let ids: HashSet<String> = bulk.events.iter()
@@ -1488,7 +1756,7 @@ impl BusinessDataSource {
                                 let _ = subscription.emit(
                                     EventPayload::Reset { code: ErrorCode::ResetRequired }, false,
                                 ).await;
-                                subscription.terminal.store(true, Ordering::SeqCst);
+                                subscription.retire();
                                 return;
                             }
                         }
@@ -1505,12 +1773,37 @@ impl BusinessDataSource {
         session: &SessionRef,
         subscription_id: &str,
     ) -> Result<Response, RemoteError> {
-        let subscription = self
-            .subscriptions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get_mut(identity_key)
-            .and_then(|values| values.remove(subscription_id));
+        let subscription = {
+            let mut subscriptions = self
+                .subscriptions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let values = subscriptions.get_mut(identity_key);
+            if let Some(subscription) = values
+                .as_ref()
+                .and_then(|values| values.get(subscription_id))
+            {
+                let mut fence = subscription
+                    .publication_epoch
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if *subscription
+                    .session
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    != *session
+                {
+                    return Err(RemoteError::new(
+                        ErrorCode::StaleGeneration,
+                        "subscription session changed",
+                        false,
+                    ));
+                }
+                *fence = fence.checked_add(1).ok_or_else(RemoteError::reset)?;
+                subscription.terminal.store(true, Ordering::SeqCst);
+            }
+            values.and_then(|values| values.remove(subscription_id))
+        };
         let Some(subscription) = subscription else {
             return Err(RemoteError::new(
                 ErrorCode::UnknownSession,
@@ -1518,7 +1811,7 @@ impl BusinessDataSource {
                 false,
             ));
         };
-        subscription.terminal.store(true, Ordering::SeqCst);
+        subscription.retire();
         subscription.notify.notify_one();
         if let Some(task) = subscription.task.lock().await.take() {
             task.abort();
@@ -1593,7 +1886,8 @@ fn document_record(document: Value) -> Record {
     }
 }
 
-fn scope_selector(scope: &Scope, selector: Option<Value>) -> Value {
+/// The same scope narrowing is used by source preparation and held publication.
+pub fn scope_selector(scope: &Scope, selector: Option<Value>) -> Value {
     let mut selector = selector
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
@@ -1615,6 +1909,14 @@ fn scope_selector(scope: &Scope, selector: Option<Value>) -> Value {
 }
 
 impl Subscription {
+    fn retire(&self) {
+        let _fence = self
+            .publication_epoch
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.terminal.store(true, Ordering::SeqCst);
+    }
+
     async fn ensure_authorized(&self) -> Result<(), String> {
         self.policy
             .authorize_query(
@@ -1842,7 +2144,7 @@ impl Subscription {
     async fn emit(&self, payload: EventPayload, recovery: bool) -> Result<(), String> {
         if matches!(
             &payload,
-            EventPayload::Error { .. } | EventPayload::Reset { .. }
+            EventPayload::Error { .. } | EventPayload::Reset { .. } | EventPayload::Revoked { .. }
         ) {
             // Recovery signals carry no resumable cursor and must remain
             // deliverable even when the cursor budget is exhausted.
@@ -1850,7 +2152,7 @@ impl Subscription {
         }
         if !matches!(
             payload,
-            EventPayload::Error { .. } | EventPayload::Reset { .. }
+            EventPayload::Error { .. } | EventPayload::Reset { .. } | EventPayload::Revoked { .. }
         ) {
             self.ensure_authorized().await?;
         }
@@ -1916,7 +2218,7 @@ impl Subscription {
             }
         };
         if !inserted {
-            self.terminal.store(true, Ordering::SeqCst);
+            self.retire();
             let _ = self
                 .send_control(EventPayload::Reset {
                     code: ErrorCode::ResetRequired,
@@ -2029,7 +2331,7 @@ impl Subscription {
         };
         if !matches!(
             &event.payload,
-            EventPayload::Error { .. } | EventPayload::Reset { .. }
+            EventPayload::Error { .. } | EventPayload::Reset { .. } | EventPayload::Revoked { .. }
         ) {
             self.ensure_authorized().await?;
             if self.terminal.load(Ordering::SeqCst) {
@@ -2048,7 +2350,76 @@ impl Subscription {
             *bound_peer = None;
             return Err("BusinessData subscription peer retired".into());
         }
-        self.sender.send(&peer, event).await
+        let mut event = event.clone();
+        let terminal_control = match &mut event.payload {
+            EventPayload::Error { message, .. } => {
+                *message = "BusinessData subscription failed".into();
+                true
+            }
+            EventPayload::Reset { .. } => true,
+            EventPayload::Revoked { message } => {
+                *message = "BusinessData subscription revoked".into();
+                true
+            }
+            _ => false,
+        };
+        let native = if terminal_control {
+            None
+        } else {
+            Some(
+                self.policy
+                    .event_publication(
+                        &self.authority.identity,
+                        &self.authority.capability_token,
+                        &Query {
+                            collection: self.collection.clone(),
+                            scope: self.scope.clone(),
+                            query: self.query.clone(),
+                            page_size: 1,
+                        },
+                        self.command_id.as_deref(),
+                        &event,
+                    )
+                    .map_err(|_| "BusinessData event authority unavailable".to_string())?,
+            )
+        };
+        let epoch = {
+            let epoch = self
+                .publication_epoch
+                .lock()
+                .map_err(|_| "BusinessData subscription fence unavailable".to_string())?;
+            let session = self
+                .session
+                .lock()
+                .map_err(|_| "BusinessData subscription session unavailable".to_string())?;
+            if *session != event.session
+                || (self.terminal.load(Ordering::SeqCst) && !terminal_control)
+            {
+                return Err("BusinessData subscription changed".into());
+            }
+            *epoch
+        };
+        self.sender
+            .send(
+                &peer,
+                &event,
+                Arc::new(SourcePublicationGuard {
+                    native,
+                    source_alive: self.source_alive.clone(),
+                    subscription: Some(SubscriptionPublication {
+                        epoch: self.publication_epoch.clone(),
+                        session: self.session.clone(),
+                        terminal: self.terminal.clone(),
+                        expected_session: event.session.clone(),
+                        expected_epoch: epoch,
+                        terminal_control,
+                    }),
+                    peer: peer.clone(),
+                    capability_token: self.authority.capability_token.clone(),
+                    handler: self.sender.handler.clone(),
+                }),
+            )
+            .await
     }
 }
 
@@ -2403,5 +2774,97 @@ pub fn spawn_remote_event_pump(
         release,
         notify,
         accepted_subscription,
+    }
+}
+
+#[cfg(test)]
+mod source_publication_tests {
+    use super::*;
+
+    fn subscription_publication(terminal_control: bool) -> SubscriptionPublication {
+        SubscriptionPublication {
+            epoch: Arc::new(Mutex::new(7)),
+            session: Arc::new(Mutex::new(SessionRef {
+                handle: "held-subscription".into(),
+                generation: 3,
+            })),
+            terminal: Arc::new(AtomicBool::new(false)),
+            expected_session: SessionRef {
+                handle: "held-subscription".into(),
+                generation: 3,
+            },
+            expected_epoch: 7,
+            terminal_control,
+        }
+    }
+
+    #[test]
+    fn subscription_publication_holds_transition_fences_and_rejects_same_session_resume() {
+        let publication = subscription_publication(false);
+        let mut calls = 0;
+        publication
+            .with_current(&mut || {
+                calls += 1;
+                assert!(
+                    publication.epoch.try_lock().is_err(),
+                    "resume/unwatch cannot cross an IO poll"
+                );
+                assert!(
+                    publication.session.try_lock().is_err(),
+                    "session cannot change inside an IO poll"
+                );
+                Ok(())
+            })
+            .expect("current subscription");
+        // Resuming onto another connection can retain the same wire session.
+        // The local binding epoch must still invalidate the prepared item.
+        *publication.epoch.lock().unwrap() += 1;
+        assert!(publication
+            .with_current(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn subscription_terminal_controls_are_fenced_by_unwatch_epoch() {
+        let data = subscription_publication(false);
+        let control = SubscriptionPublication {
+            epoch: data.epoch.clone(),
+            session: data.session.clone(),
+            terminal: data.terminal.clone(),
+            expected_epoch: data.expected_epoch,
+            expected_session: data.expected_session.clone(),
+            terminal_control: true,
+        };
+        {
+            let _fence = data.epoch.lock().unwrap();
+            data.terminal.store(true, Ordering::SeqCst);
+        }
+        let mut data_calls = 0;
+        assert!(data
+            .with_current(&mut || {
+                data_calls += 1;
+                Ok(())
+            })
+            .is_err());
+        let mut control_calls = 0;
+        control
+            .with_current(&mut || {
+                control_calls += 1;
+                Ok(())
+            })
+            .expect("fixed failure control can report terminal producer failure");
+        *data.epoch.lock().unwrap() += 1; // production Unwatch retirement
+        assert!(control
+            .with_current(&mut || {
+                control_calls += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(data_calls, 0);
+        assert_eq!(control_calls, 1);
     }
 }
