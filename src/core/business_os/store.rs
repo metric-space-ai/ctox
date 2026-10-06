@@ -10569,7 +10569,10 @@ pub fn complete_business_command_from_app_validation_success(
         &module_id,
         &install_target,
         completed_at_ms,
-    )?;
+    )
+    .with_context(|| {
+        format!("module catalog projection does not contain validated module `{module_id}`")
+    })?;
     write_module_catalog_projection_to_rxdb_for_module(root, &module_id)?;
     let (asset_revision, catalog_revision, catalog_fingerprint) =
         runtime_app_delivery_evidence(root, &module_id)?;
