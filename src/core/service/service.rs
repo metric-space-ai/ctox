@@ -11821,7 +11821,8 @@ fn configure_business_os_mcp_session_for_queue_job(
         return Ok(false);
     };
     let command = channels::business_command_projection(root, &command_id)?;
-    // Only business chat tasks get a bound MCP command session here. Person-
+    // Business chat tasks and explicitly scoped delegated metadata reads get
+    // a bound MCP command session here. Person-
     // research gap-closure tasks also carry `business_os_command_id`, but that
     // command is a `web_stack.person_research` control command: its native
     // authorization receipt is not a queue-command receipt, so the revalidation
@@ -11829,13 +11830,27 @@ fn configure_business_os_mcp_session_for_queue_job(
     // before the first turn (observed on thesen, B5). They run without a bound
     // session; owner resolution for their auth sessions follows the task
     // metadata instead.
-    if command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task") {
+    let metadata_contract =
+        if command.get("command_type").and_then(Value::as_str) == Some("ctox.delegate_task") {
+            command
+                .pointer("/payload/input/metadata_read_contract")
+                .map(|contract| serde_json::json!({"metadata_read_contract": contract}))
+        } else {
+            None
+        };
+    if command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task")
+        && metadata_contract.is_none()
+    {
         return Ok(false);
     }
     let empty_contract = serde_json::json!({});
-    let writeback_contract = command.pointer("/payload/writeback_contract");
-    if let Some(contract) = writeback_contract {
-        validate_command_writeback_contract(&command, contract)?;
+    let writeback_contract = metadata_contract
+        .as_ref()
+        .or_else(|| command.pointer("/payload/writeback_contract"));
+    if metadata_contract.is_none() {
+        if let Some(contract) = writeback_contract {
+            validate_command_writeback_contract(&command, contract)?;
+        }
     }
     let writeback_contract = writeback_contract.unwrap_or(&empty_contract);
     let has_writeback =
@@ -11844,10 +11859,11 @@ fn configure_business_os_mcp_session_for_queue_job(
                 .get("allowed_actions")
                 .and_then(Value::as_array)
                 .is_some_and(|actions| !actions.is_empty());
-    let crew_only = !has_writeback
+    let crew_only = metadata_contract.is_none()
+        && !has_writeback
         && command.pointer("/payload/external_executor").is_some()
         && options.crew_persona.is_some();
-    if !has_writeback && !crew_only {
+    if metadata_contract.is_none() && !has_writeback && !crew_only {
         return Ok(false);
     }
     let payload_hash = command

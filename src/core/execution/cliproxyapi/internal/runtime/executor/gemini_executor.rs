@@ -28,7 +28,9 @@ use crate::sdk::pluginapi::{
 };
 use crate::sdk::translator::{Format, Registry, TranslationContext, TranslationState};
 
-use super::helps::UsageReporter;
+use super::helps::{
+    RequestThinkingEngine, RequestThinkingInput, RequestThinkingPipeline, UsageReporter,
+};
 
 pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 pub const GEMINI_API_VERSION: &str = "v1beta";
@@ -91,8 +93,11 @@ pub struct GeminiExecutor {
     protocol: GeminiProtocol,
     config: Arc<GeminiExecutorConfig>,
     registry: Arc<Registry>,
+    request_thinking: RequestThinkingPipeline,
     cancellation: TranslationContext,
     usage_manager: Option<Arc<Manager>>,
+    payload_config: Arc<super::helps::PayloadApplyConfig>,
+    request_processor: Option<Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>>,
 }
 
 impl GeminiExecutor {
@@ -110,10 +115,16 @@ impl GeminiExecutor {
         Self {
             identifier: "gemini".into(),
             protocol: GeminiProtocol::GenerateContent,
+            payload_config: Arc::new(payload_config_from_legacy(&config)),
             config,
+            request_thinking: RequestThinkingPipeline::new(
+                Arc::new(crate::internal::thinking::ThinkingEngine::default()),
+                registry.clone(),
+            ),
             registry,
             cancellation,
             usage_manager: None,
+            request_processor: None,
         }
     }
 
@@ -122,16 +133,48 @@ impl GeminiExecutor {
         Self {
             identifier: "gemini-interactions".into(),
             protocol: GeminiProtocol::Interactions,
+            payload_config: Arc::new(payload_config_from_legacy(&config)),
             config,
+            request_thinking: RequestThinkingPipeline::new(
+                Arc::new(crate::internal::thinking::ThinkingEngine::default()),
+                registry.clone(),
+            ),
             registry,
             cancellation: TranslationContext::default(),
             usage_manager: None,
+            request_processor: None,
         }
     }
 
     #[must_use]
     pub fn with_usage_manager(mut self, manager: Arc<Manager>) -> Self {
         self.usage_manager = Some(manager);
+        self
+    }
+
+    /// Bind the host's existing client configuration and model catalog owner.
+    #[must_use]
+    pub fn with_request_processor(
+        mut self,
+        processor: Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>,
+    ) -> Self {
+        self.request_processor = Some(processor);
+        self
+    }
+
+    #[must_use]
+    pub fn with_payload_config(mut self, config: Arc<super::helps::PayloadApplyConfig>) -> Self {
+        self.payload_config = config;
+        self
+    }
+
+    /// Bind the owning gateway engine to the same instance translator registry.
+    #[must_use]
+    pub fn with_canonical_thinking(
+        mut self,
+        engine: Arc<crate::internal::thinking::ThinkingEngine>,
+    ) -> Self {
+        self.request_thinking = RequestThinkingPipeline::new(engine, self.registry.clone());
         self
     }
 
@@ -151,7 +194,8 @@ impl GeminiExecutor {
                 .auth_provider
                 .trim()
                 .eq_ignore_ascii_case("gemini-interactions")
-            && native_interactions_source_format(&Format::from(request.source_format.clone()))
+            && (request.source_format.is_empty()
+                || native_interactions_source_format(&Format::from(request.source_format.clone())))
     }
 
     pub fn prepare_request(&self, request: &mut HttpRequest, execution: &ExecutorRequest) {
@@ -167,20 +211,53 @@ impl GeminiExecutor {
         &self,
         request: &ExecutorRequest,
         stream: bool,
-        action: &str,
+        count: bool,
     ) -> Result<(Vec<u8>, Format), PluginExecutionError> {
         self.ensure_active()?;
         let model = base_model(&request.model);
         let from = source_format(request);
-        let to = self.request_to_format(request);
-        let mut body = self.registry.translate_request(
-            &self.cancellation,
-            &from,
-            &to,
-            &model,
-            &request.payload,
-            stream,
-        );
+        // Dedicated CountTokens always uses GenerateContent's counting contract.
+        let to = if count {
+            Format::from("gemini")
+        } else {
+            self.request_to_format(request)
+        };
+        let (original, mut body) = if count {
+            (
+                Vec::new(),
+                self.translate_body(request, &from, &to, &model, stream, &request.payload),
+            )
+        } else {
+            self.translate_pair(request, &from, &to, &model, stream)
+        };
+        // ref: gemini_executor.go:156,282,435,520,686,939-944 @ d7914afd
+        // Frozen Google callers use the default update intent. Source precedence,
+        // selected capabilities and summary are resolved by the canonical bridge.
+        body = self
+            .request_thinking
+            .apply_request_thinking(RequestThinkingInput {
+                body: &body,
+                current_source_payload: &request.payload,
+                original_source_payload: original_request(request),
+                model: &request.model,
+                from_format: if to.as_str() == "interactions" && request.source_format.is_empty() {
+                    "interactions"
+                } else {
+                    from.as_str()
+                },
+                to_format: to.as_str(),
+                provider: "gemini",
+                normalized_updates_changed: false,
+                resolved_model_info: None,
+                resolved_config_model_info: request.resolved_model_info.as_deref(),
+            })
+            .map_err(|error| Arc::new(error) as PluginExecutionError)?;
+        if to.as_str() != "interactions" {
+            body = fix_gemini_image_aspect_ratio(&model, &body);
+            if !count {
+                body = self.apply_request_payload(request, &from, &to, &model, &body, &original);
+            }
+        }
         let mut json = parse_object(&body)?;
         json.remove("session_id");
         if to.as_str() == "interactions" {
@@ -190,14 +267,12 @@ impl GeminiExecutor {
             } else {
                 json.insert("model".into(), Value::String(model.clone()));
             }
-            apply_payload_rules(&mut json, &self.config.payload_rules, &model, &from, &to);
-            apply_interactions_thinking_suffix(&mut json, &request.model);
             if stream {
                 json.insert("stream".into(), Value::Bool(true));
             }
         } else {
             json.insert("model".into(), Value::String(model.clone()));
-            if action == "countTokens" {
+            if count {
                 json.remove("tools");
                 json.remove("generationConfig");
                 json.remove("safetySettings");
@@ -208,11 +283,150 @@ impl GeminiExecutor {
                     self.config.output_token_limits.get(&model).copied(),
                 );
             }
-            fix_gemini_image_aspect_ratio_value(&mut json, &model);
         }
         body = serde_json::to_vec(&json)
             .map_err(|error| plugin_error(GeminiExecutorError::InvalidJson(error.to_string())))?;
+        if to.as_str() == "interactions" && !count {
+            body = self.apply_request_payload(request, &from, &to, &model, &body, &original);
+        }
+        // ref: gemini_executor.go:167-177,293-294,697-698 @ d7914afd
+        if to.as_str() != "interactions" {
+            body = crate::internal::signature::sanitize_gemini_request_thought_signatures(&body);
+            let count_action = count || (!stream && request_action(request) == "countTokens");
+            body = if count_action {
+                super::helps::ensure_gemini_leading_user_content(&body, "contents").into_owned()
+            } else {
+                super::helps::ensure_gemini_boundary_user_content(&body, "contents").into_owned()
+            };
+        }
         Ok((body, to))
+    }
+
+    // ref: gemini_executor.go:153-154,895-918 @ d7914afd
+    fn translate_pair(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        stream: bool,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let original = original_request(request);
+        let same = original.len() == request.payload.len()
+            && std::ptr::eq(original.as_ptr(), request.payload.as_ptr());
+        let translate =
+            |payload: &[u8]| self.translate_body(request, from, to, model, stream, payload);
+        if to.as_str() == "interactions" {
+            let working = translate(&request.payload);
+            let baseline = if same {
+                working.clone()
+            } else {
+                translate(original)
+            };
+            (baseline, working)
+        } else {
+            let baseline = translate(original);
+            let working = if same {
+                baseline.clone()
+            } else {
+                translate(&request.payload)
+            };
+            (baseline, working)
+        }
+    }
+
+    fn apply_request_payload(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        body: &[u8],
+        original: &[u8],
+    ) -> Vec<u8> {
+        let requested = request
+            .metadata
+            .get("requested_model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&request.model);
+        let path = request
+            .metadata
+            .get("request_path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let source = if request.source_format.is_empty() && to.as_str() == "interactions" {
+            ""
+        } else {
+            from.as_str()
+        };
+        super::helps::apply_payload_config_with_request(
+            &self.payload_config,
+            model,
+            to.as_str(),
+            source,
+            "",
+            body,
+            Some(original),
+            requested,
+            path,
+            &request.headers,
+        )
+    }
+
+    // ref: gemini_executor.go:153-154,279-280,684,888-892 @ d7914afd
+    fn translate_body(
+        &self,
+        request: &ExecutorRequest,
+        from: &Format,
+        to: &Format,
+        model: &str,
+        stream: bool,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        // Native Interactions input bypasses translators and plugin hooks.
+        if to.as_str() == "interactions"
+            && (request.source_format.is_empty() || from.as_str() == "interactions")
+        {
+            return payload.to_vec();
+        }
+        let translate = |processor: &dyn super::helps::CodexMultiAgentV2Processor| {
+            super::helps::translate_request_with_api_key_model_compatibility_for_executor(
+                processor,
+                &request.headers,
+                "gemini",
+                from,
+                to,
+                model,
+                payload,
+                stream,
+                request
+                    .resolved_home_model_options
+                    .as_ref()
+                    .map(|options| options.is_compat)
+                    .unwrap_or_else(|| {
+                        request
+                            .resolved_model_info
+                            .as_ref()
+                            .is_some_and(|info| info.is_compat)
+                    }),
+            )
+        };
+        if let Some(processor) = &self.request_processor {
+            return translate(processor.as_ref());
+        }
+        let client =
+            crate::internal::client::codex::optimize_multi_agent_v2::MultiAgentV2Context::default();
+        let metadata = |_: &str| None;
+        translate(&super::helps::RegistryCodexMultiAgentV2Processor {
+            registry: &self.registry,
+            context: &self.cancellation,
+            client: &client,
+            model_metadata: &metadata,
+            orphan_delegation_compatibility: false,
+        })
     }
 
     fn build_request(
@@ -266,41 +480,75 @@ impl GeminiExecutor {
         request: ExecutorRequest,
     ) -> Result<ExecutorResponse, PluginExecutionError> {
         reject_compact(&request)?;
-        let client = require_client(&request)?;
-        let (body, to) = self.prepare_body(&request, false, request_action(&request))?;
-        let upstream =
-            self.build_request(&request, body.clone(), &to, request_action(&request), false);
-        let response = client.execute(upstream).await?;
-        self.ensure_active()?;
-        ensure_success(response.status_code, &response.body)?;
-        if let Some(manager) = &self.usage_manager {
-            let reporter = UsageReporter::new(
+        // ref: gemini_executor.go:141-142,185 @ a4acc9f7
+        // Bind timing before preparation/transport and settle every failed attempt.
+        let reporter = self.usage_manager.as_ref().map(|manager| {
+            let alias = request
+                .metadata
+                .get("requested_model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|alias| !alias.is_empty())
+                .unwrap_or(&request.model);
+            Arc::new(UsageReporter::new(
                 Arc::clone(manager),
-                UsageContext::default(),
+                UsageContext::from_request(request.request_context.clone())
+                    .with_requested_model_alias(alias)
+                    .with_generate(request_action(&request) != "countTokens"),
                 "gemini",
                 self.identifier.clone(),
                 base_model(&request.model),
                 None,
                 "",
+            ))
+        });
+        let _publication = GeminiUsagePublication(reporter.clone());
+        let result: Result<ExecutorResponse, PluginExecutionError> = async {
+            let client = require_client(&request)?;
+            let (body, to) = self.prepare_body(&request, false, false)?;
+            if let Some(reporter) = &reporter {
+                reporter.set_translated_reasoning_effort(&body, to.as_str());
+            }
+            let upstream =
+                self.build_request(&request, body.clone(), &to, request_action(&request), false);
+            let response = client.execute(upstream).await?;
+            self.ensure_active()?;
+            ensure_success(response.status_code, &response.body)?;
+            if let Some(reporter) = &reporter {
+                let detail = if to.as_str() == "interactions" {
+                    super::helps::parse_interactions_usage(&response.body)
+                } else {
+                    gemini_usage_detail(&response.body)
+                };
+                reporter.publish(detail);
+            }
+            let mut state: TranslationState = None;
+            let payload = self.registry.translate_non_stream(
+                &self.cancellation,
+                &to,
+                &response_format(&request),
+                &request.model,
+                original_request(&request),
+                &body,
+                &response.body,
+                &mut state,
             );
-            reporter.publish(gemini_usage_detail(&response.body));
+            Ok(ExecutorResponse {
+                payload,
+                headers: response.headers,
+                ..ExecutorResponse::default()
+            })
         }
-        let mut state: TranslationState = None;
-        let payload = self.registry.translate_non_stream(
-            &self.cancellation,
-            &to,
-            &response_format(&request),
-            &request.model,
-            original_request(&request),
-            &body,
-            &response.body,
-            &mut state,
-        );
-        Ok(ExecutorResponse {
-            payload,
-            headers: response.headers,
-            ..ExecutorResponse::default()
-        })
+        .await;
+        if let (Some(reporter), Err(error)) = (&reporter, &result) {
+            let status = match error.downcast_ref::<GeminiExecutorError>() {
+                Some(GeminiExecutorError::Upstream { status, .. }) => Some(i32::from(*status)),
+                Some(GeminiExecutorError::Cancelled) => Some(499),
+                _ => None,
+            };
+            reporter.publish_failure(status, error.as_ref());
+        }
+        result
     }
 
     async fn execute_stream_inner(
@@ -309,9 +557,8 @@ impl GeminiExecutor {
     ) -> Result<ExecutorStreamResponse, PluginExecutionError> {
         reject_compact(&request)?;
         let client = require_client(&request)?;
-        let (body, to) = self.prepare_body(&request, true, request_action(&request))?;
-        let upstream =
-            self.build_request(&request, body.clone(), &to, request_action(&request), true);
+        let (body, to) = self.prepare_body(&request, true, false)?;
+        let upstream = self.build_request(&request, body.clone(), &to, "generateContent", true);
         let response = client.execute_stream(upstream).await?;
         ensure_success(response.status_code, &[])?;
         let headers = response.headers;
@@ -424,7 +671,7 @@ impl GeminiExecutor {
         request: ExecutorRequest,
     ) -> Result<ExecutorResponse, PluginExecutionError> {
         let client = require_client(&request)?;
-        let (body, to) = self.prepare_body(&request, false, "countTokens")?;
+        let (body, to) = self.prepare_body(&request, false, true)?;
         let upstream = self.build_request(&request, body, &to, "countTokens", false);
         let response = client.execute(upstream).await?;
         ensure_success(response.status_code, &response.body)?;
@@ -458,26 +705,20 @@ impl GeminiExecutor {
     }
 }
 
-fn gemini_usage_detail(body: &[u8]) -> Detail {
-    let usage = serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|body| body.get("usageMetadata").cloned())
-        .unwrap_or(Value::Null);
-    Detail {
-        input_tokens: usage
-            .get("promptTokenCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        output_tokens: usage
-            .get("candidatesTokenCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        total_tokens: usage
-            .get("totalTokenCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        ..Detail::default()
+struct GeminiUsagePublication(Option<Arc<UsageReporter>>);
+
+impl Drop for GeminiUsagePublication {
+    fn drop(&mut self) {
+        if let Some(reporter) = &self.0 {
+            // The reporter's terminal-once guard preserves an already settled
+            // success or explicit failure when this request future is dropped.
+            reporter.publish_failure(Some(499), &"Gemini request cancelled before completion");
+        }
     }
+}
+
+fn gemini_usage_detail(body: &[u8]) -> Detail {
+    super::helps::parse_gemini_usage(body)
 }
 
 impl ProviderExecutor for GeminiExecutor {
@@ -528,6 +769,10 @@ impl ProviderExecutor for GeminiExecutor {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "gemini_executor_candidate_test.rs"]
+mod candidate_google_requests;
 
 #[must_use]
 pub fn native_interactions_source_format(format: &Format) -> bool {
@@ -719,60 +964,48 @@ fn embedded_output_limit(model: &str) -> Option<u64> {
     }
 }
 
-fn apply_payload_rules(
-    body: &mut Map<String, Value>,
-    rules: &[GeminiPayloadRule],
-    model: &str,
-    from: &Format,
-    to: &Format,
-) {
-    for rule in rules {
-        if !rule.models.is_empty()
-            && !rule
-                .models
-                .iter()
-                .any(|item| item.eq_ignore_ascii_case(model))
-        {
-            continue;
+fn payload_config_from_legacy(config: &GeminiExecutorConfig) -> super::helps::PayloadApplyConfig {
+    let mut output = super::helps::PayloadApplyConfig::default();
+    for rule in &config.payload_rules {
+        let names = if rule.models.is_empty() {
+            vec!["*".to_owned()]
+        } else {
+            rule.models.clone()
+        };
+        let models: Vec<_> = names
+            .into_iter()
+            .map(|name| super::helps::PayloadModelRule {
+                name,
+                protocol: rule.protocol.clone(),
+                from_protocol: rule.from_protocol.clone(),
+                ..Default::default()
+            })
+            .collect();
+        if !rule.defaults.is_empty() {
+            output.rules.default.push(super::helps::PayloadRule {
+                models: models.clone(),
+                params: rule
+                    .defaults
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            });
         }
-        if !rule.protocol.is_empty() && !rule.protocol.eq_ignore_ascii_case(to.as_str()) {
-            continue;
-        }
-        if !rule.from_protocol.is_empty() && !rule.from_protocol.eq_ignore_ascii_case(from.as_str())
-        {
-            continue;
-        }
-        for (path, value) in &rule.defaults {
-            set_json_path(body, path, value.clone(), false);
-        }
-        for (path, value) in &rule.overrides {
-            set_json_path(body, path, value.clone(), true);
+        if !rule.overrides.is_empty() {
+            output
+                .rules
+                .override_values
+                .push(super::helps::PayloadRule {
+                    models,
+                    params: rule
+                        .overrides
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect(),
+                });
         }
     }
-}
-
-fn apply_interactions_thinking_suffix(body: &mut Map<String, Value>, model: &str) {
-    let suffix = parse_suffix(model);
-    if !suffix.has_suffix {
-        return;
-    }
-    let generation = body
-        .entry("generation_config")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(generation) = generation.as_object_mut() else {
-        return;
-    };
-    let normalized = suffix.raw_suffix.to_ascii_lowercase();
-    if matches!(
-        normalized.as_str(),
-        "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
-    ) {
-        generation.insert("thinking_level".into(), Value::String(normalized));
-    } else if let Ok(budget) = suffix.raw_suffix.parse::<u64>() {
-        generation.insert("thinking_budget".into(), Value::from(budget));
-    } else if normalized == "none" {
-        generation.insert("thinking_budget".into(), Value::from(0));
-    }
+    output
 }
 
 fn normalize_interactions_input(body: &mut Map<String, Value>) {
@@ -789,24 +1022,6 @@ fn normalize_interactions_input(body: &mut Map<String, Value>) {
             item.insert("type".into(), Value::String("user_input".into()));
             item.remove("role");
         }
-    }
-}
-
-fn set_json_path(root: &mut Map<String, Value>, path: &str, value: Value, overwrite: bool) {
-    let mut segments = path.split('.').filter(|part| !part.is_empty()).peekable();
-    let mut current = root;
-    while let Some(segment) = segments.next() {
-        if segments.peek().is_none() {
-            if overwrite || !current.contains_key(segment) {
-                current.insert(segment.into(), value);
-            }
-            return;
-        }
-        current = current
-            .entry(segment)
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .unwrap_or_else(|| unreachable!("payload rule path collides with scalar"));
     }
 }
 

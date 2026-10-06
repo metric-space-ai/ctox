@@ -9,7 +9,10 @@ pub use model_hash::{
     compute_openai_compat_models_hash, compute_vertex_compat_models_hash, ClaudeModel, CodexModel,
     GeminiModel, ModelAlias, OpenAiCompatibilityModel, VertexCompatModel,
 };
-pub use model_info::{normalize_thinking_support, resolve_model_info, ModelInfo, ThinkingSupport};
+pub use model_info::{
+    normalize_thinking_support, resolve_model_info, HomeModelOptions, ModelInfo,
+    NativeCapabilities, ThinkingSupport,
+};
 
 #[cfg(test)]
 mod model_info_test;

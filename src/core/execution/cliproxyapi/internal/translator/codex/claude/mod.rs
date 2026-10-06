@@ -8,6 +8,8 @@ mod codex_claude_response_web_search;
 mod init;
 
 #[cfg(test)]
+mod codex_claude_compat_test;
+#[cfg(test)]
 mod codex_claude_parallel_function_calls_test;
 #[cfg(test)]
 mod codex_claude_request_benchmark_test;
@@ -18,7 +20,9 @@ mod codex_claude_response_test;
 #[cfg(test)]
 mod noop_optimization_test;
 
-pub use codex_claude_request::convert_claude_request_to_codex;
+pub use codex_claude_request::{
+    convert_claude_request_to_codex, convert_claude_request_to_codex_with_compat,
+};
 pub use codex_claude_response::{
     claude_token_count, convert_codex_response_to_claude_non_stream,
     convert_codex_response_to_claude_stream, deterministic_claude_message_id,

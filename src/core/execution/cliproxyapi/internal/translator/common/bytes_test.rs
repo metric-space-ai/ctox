@@ -2,7 +2,10 @@
 // Port-Status: ported
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use super::{join_raw_array, new_raw_array_items, set_raw_array_items};
+use super::{
+    join_raw_array, new_raw_array_items, set_raw_array_items, set_string_without_html_escape,
+    sse_event_data,
+};
 
 #[test]
 fn join_raw_array_matches_empty_single_and_multiple_contracts() {
@@ -49,5 +52,79 @@ fn set_raw_array_items_preserves_surrounding_bytes_and_dotted_paths() {
     ];
     for (data, path, items, expected) in cases {
         assert_eq!(set_raw_array_items(data, path, items), *expected);
+    }
+}
+
+#[test]
+fn sse_event_data_is_a_self_terminating_frame() {
+    let frame = sse_event_data("response.completed", br#"{"id":"resp_1"}"#);
+    assert_eq!(
+        frame,
+        b"event: response.completed\ndata: {\"id\":\"resp_1\"}\n\n"
+    );
+    let concatenated = [
+        sse_event_data("event1", br#"{"a":1}"#),
+        sse_event_data("event2", br#"{"b":2}"#),
+    ]
+    .concat();
+    let lines: Vec<_> = concatenated.split(|byte| *byte == b'\n').collect();
+    let frames: Vec<_> = lines
+        .split(|line| line.is_empty())
+        .filter(|frame| !frame.is_empty())
+        .collect();
+    assert_eq!(frames.len(), 2);
+}
+
+#[test]
+fn set_string_without_html_escape_keeps_markup_and_round_trips() {
+    let cases = [
+        (
+            br#"{"arguments":""}"#.as_slice(),
+            "arguments",
+            r#"gh issue view 5802 --json number,title,body,url,state,labels,assignees 2>&1 | head -100"#,
+            br#"{"arguments":"gh issue view 5802 --json number,title,body,url,state,labels,assignees 2>&1 | head -100"}"#.as_slice(),
+        ),
+        (
+            br#"{"arguments":""}"#,
+            "arguments",
+            r#"{"command": "gh issue view 5802 2>&1 | head -100", "timeout": 60}"#,
+            br#"{"arguments":"{\"command\": \"gh issue view 5802 2>&1 | head -100\", \"timeout\": 60}"}"#,
+        ),
+        (
+            br#"{"type":"function_call","name":"bash","arguments":""}"#,
+            "arguments",
+            r#"{"html": "<tag>&value</tag>"}"#,
+            br#"{"type":"function_call","name":"bash","arguments":"{\"html\": \"<tag>&value</tag>\"}"}"#,
+        ),
+        (
+            br#"{"item":{"arguments":""}}"#,
+            "item.arguments",
+            "2>&1",
+            br#"{"item":{"arguments":"2>&1"}}"#,
+        ),
+        (
+            br#"{"arguments":"old"}"#,
+            "arguments",
+            "",
+            br#"{"arguments":""}"#,
+        ),
+        (
+            br#"{"arguments":""}"#,
+            "arguments",
+            "line1\nline2\t\\path\\to\\file",
+            br#"{"arguments":"line1\nline2\t\\path\\to\\file"}"#,
+        ),
+        (
+            br#"{"arguments":""}"#,
+            "arguments",
+            "你好，世界！🚀 <&>",
+            r#"{"arguments":"你好，世界！🚀 <&>"}"#.as_bytes(),
+        ),
+    ];
+    for (data, path, value, expected) in cases {
+        let got = set_string_without_html_escape(data, path, value);
+        assert_eq!(got, expected);
+        let document = std::str::from_utf8(&got).unwrap();
+        assert_eq!(gjson::get(document, path).str(), value);
     }
 }

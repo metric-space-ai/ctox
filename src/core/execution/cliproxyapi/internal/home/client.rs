@@ -509,8 +509,13 @@ pub fn new_auth_dispatch_request(
         count: count.max(1),
         concurrency_protocol: 1,
         session_id: session_id.trim().into(),
+        parent_session_id: String::new(),
+        node_kind: String::new(),
         headers: normalize_map(headers),
         credential_policy: credential_policy.trim().into(),
+        retry_round: None,
+        excluded_auth_ids: None,
+        pinned_auth_id: String::new(),
     }
 }
 pub fn normalize_map(values: BTreeMap<String, String>) -> BTreeMap<String, String> {

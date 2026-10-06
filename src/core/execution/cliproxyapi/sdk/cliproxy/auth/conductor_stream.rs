@@ -91,12 +91,18 @@ impl GenericAuthRuntime {
             let mut refreshed = false;
 
             loop {
-                let execution = selected_executor_request(&request, &auth, registration.provider());
+                let execution = selected_executor_request(
+                    &self.manager,
+                    &request,
+                    &auth,
+                    registration.provider(),
+                );
                 let stream = match executor.execute_stream(execution).await {
                     Ok(stream) => stream,
                     Err(error) if is_unauthorized_plugin_error(&error) && !refreshed => {
-                        let Some(updated) =
-                            self.refresh_after_unauthorized(&auth, &registration)?
+                        let Some(updated) = self
+                            .refresh_after_unauthorized(&auth, &registration)
+                            .await?
                         else {
                             self.record_outcome(&auth, &route_model, 401, false)?;
                             last_failure = Some(StreamStartFailure::Direct(
@@ -116,7 +122,7 @@ impl GenericAuthRuntime {
                     }
                     Err(error) => {
                         let status = plugin_error_status(&error);
-                        self.record_outcome(&auth, &route_model, status, false)?;
+                        self.record_plugin_error_outcome(&auth, &route_model, &error)?;
                         if matches!(status, 400 | 422) {
                             return Err(GenericExecutionError::Provider(error));
                         }
@@ -140,8 +146,9 @@ impl GenericAuthRuntime {
                             if is_unauthorized_plugin_error(&error) && !refreshed =>
                         {
                             drain_stream(failure.remaining);
-                            let Some(updated) =
-                                self.refresh_after_unauthorized(&auth, &registration)?
+                            let Some(updated) = self
+                                .refresh_after_unauthorized(&auth, &registration)
+                                .await?
                             else {
                                 self.record_outcome(&auth, &route_model, 401, false)?;
                                 last_failure =
@@ -165,7 +172,7 @@ impl GenericAuthRuntime {
                         BootstrapFailureKind::Provider(error) => {
                             drain_stream(failure.remaining);
                             let status = plugin_error_status(&error);
-                            self.record_outcome(&auth, &route_model, status, false)?;
+                            self.record_plugin_error_outcome(&auth, &route_model, &error)?;
                             if matches!(status, 400 | 422) {
                                 return Ok(stream_error_response(failure.headers, error));
                             }
@@ -213,12 +220,7 @@ impl GenericAuthRuntime {
                     if stream_tail_is_availability_neutral(error) {
                         self.record_availability_neutral_outcome(&auth.id, false);
                     } else {
-                        let _ = self.record_outcome(
-                            &auth,
-                            &route_model,
-                            plugin_error_status(error),
-                            false,
-                        );
+                        let _ = self.record_plugin_error_outcome(&auth, &route_model, error);
                     }
                     let _ = sender.send(chunk).await;
                     drain_stream(remaining);

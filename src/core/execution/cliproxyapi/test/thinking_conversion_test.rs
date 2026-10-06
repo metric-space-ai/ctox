@@ -38,8 +38,8 @@ fn thinking_suffixes_use_embedded_model_capabilities() {
     )
     .unwrap();
     assert_eq!(
-        gemini.pointer("/generationConfig/thinkingConfig/thinkingBudget"),
-        Some(&json!(8192))
+        gemini.pointer("/generationConfig/thinkingConfig/thinkingLevel"),
+        Some(&json!("medium"))
     );
 
     let claude = apply(

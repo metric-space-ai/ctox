@@ -2,6 +2,7 @@
 // License: AGPL-3.0-only
 
 mod codex_client_models;
+pub(crate) mod openai_chat_handlers;
 mod openai_handlers;
 mod openai_images_handlers;
 pub mod openai_responses_handlers;

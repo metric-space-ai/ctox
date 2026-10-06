@@ -52,6 +52,21 @@ where
     }
 }
 
+/// True only when every actual routing candidate supports freeform patches.
+/// An injected resolver must return false for unknown support.
+pub trait ApplyPatchCapabilityForModel {
+    fn supports_apply_patch(&self, model_id: &str) -> bool;
+}
+
+impl<F> ApplyPatchCapabilityForModel for F
+where
+    F: Fn(&str) -> bool,
+{
+    fn supports_apply_patch(&self, model_id: &str) -> bool {
+        self(model_id)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogError(String);
 
@@ -136,6 +151,24 @@ impl CodexModelCatalog {
         providers: Option<&dyn ProvidersForModel>,
         optimize_multi_agent_v2: bool,
     ) -> Vec<ModelMap> {
+        self.build_models_with_apply_patch_capability(
+            available_models,
+            metadata,
+            providers,
+            optimize_multi_agent_v2,
+            None,
+        )
+    }
+
+    #[must_use]
+    pub fn build_models_with_apply_patch_capability(
+        &self,
+        available_models: &[ModelMap],
+        metadata: &dyn ModelMetadataSource,
+        providers: Option<&dyn ProvidersForModel>,
+        optimize_multi_agent_v2: bool,
+        apply_patch_capability: Option<&dyn ApplyPatchCapabilityForModel>,
+    ) -> Vec<ModelMap> {
         let mut result = Vec::with_capacity(available_models.len());
         for model in available_models {
             let id = string_value(model, "id");
@@ -160,9 +193,10 @@ impl CodexModelCatalog {
                     optimize_multi_agent_v2,
                 );
             }
-            apply_search_tool_support(&mut entry, &id, template_model, providers);
+            apply_provider_capabilities(&mut entry, &id, template_model, providers);
             sanitize_reasoning_metadata(&mut entry);
             apply_visibility_override(&mut entry, &id);
+            apply_patch_tool_capability(&mut entry, &id, apply_patch_capability);
             result.push(entry);
         }
         apply_non_template_priorities(&mut result, &self.templates);
@@ -183,6 +217,33 @@ fn apply_max_context_length_override(entry: &mut ModelMap, model: &ModelMap) {
         entry.insert("context_window".to_owned(), maximum.into());
         entry.insert("max_context_window".to_owned(), maximum.into());
     }
+}
+
+// ref: internal/client/codex/models/models.go:545-566 @ e2bff010
+fn apply_provider_capabilities(
+    entry: &mut ModelMap,
+    id: &str,
+    template_model: bool,
+    providers: Option<&dyn ProvidersForModel>,
+) {
+    if template_model
+        && providers.is_some_and(|source| {
+            let routes = source.providers(id);
+            routes.is_empty()
+                || routes
+                    .iter()
+                    .any(|provider| !provider.trim().eq_ignore_ascii_case("codex"))
+        })
+    {
+        entry.insert("supports_search_tool".to_owned(), Value::Bool(false));
+        entry.insert("prefer_websockets".to_owned(), Value::Bool(false));
+        entry.insert("service_tiers".to_owned(), Value::Array(Vec::new()));
+        for key in ["apply_patch_tool_type", "upgrade", "availability_nux"] {
+            entry.insert(key.to_owned(), Value::Null);
+        }
+        return;
+    }
+    apply_search_tool_support(entry, id, template_model, providers);
 }
 
 fn apply_search_tool_support(
@@ -259,7 +320,7 @@ fn apply_model_metadata(
     }
     entry.insert("service_tiers".to_owned(), Value::Array(Vec::new()));
     for key in ["apply_patch_tool_type", "upgrade", "availability_nux"] {
-        entry.remove(key);
+        entry.insert(key.to_owned(), Value::Null);
     }
     if context_window > 0 {
         entry.insert("context_window".to_owned(), context_window.into());
@@ -278,16 +339,59 @@ fn apply_model_metadata(
 }
 
 fn apply_visibility_override(entry: &mut ModelMap, id: &str) {
-    if matches!(
+    let target = id
+        .trim()
+        .split_once('/')
+        .map_or(id.trim(), |(_, suffix)| suffix.trim());
+    if is_image_or_video_model(target) {
+        entry.insert("visibility".to_owned(), Value::String("hide".to_owned()));
+    }
+}
+
+fn is_image_or_video_model(id: &str) -> bool {
+    matches!(
         id,
         "grok-imagine-image-quality"
             | "gpt-image-1.5"
             | "gpt-image-2"
+            | "gpt-image-2.5-flare"
+            | "gpt-image-2.5-sunburst"
+            | "gpt-image-2.5"
             | "grok-imagine-image"
+            | "grok-imagine-image-2.0"
             | "grok-imagine-video"
+            | "grok-imagine-video-1.5"
             | "grok-imagine-video-1.5-preview"
-    ) {
-        entry.insert("visibility".to_owned(), Value::String("hide".to_owned()));
+    )
+}
+
+// ref: internal/client/codex/models/apply_patch.go:8-55 @ 2044a01f
+fn apply_patch_tool_capability(
+    entry: &mut ModelMap,
+    id: &str,
+    capability: Option<&dyn ApplyPatchCapabilityForModel>,
+) {
+    let template_supported = string_value(entry, "apply_patch_tool_type") == "freeform";
+    entry.insert("apply_patch_tool_type".to_owned(), Value::Null);
+    let base_id = id.trim().to_ascii_lowercase();
+    let base_id = base_id.rsplit('/').next().unwrap_or(&base_id).trim();
+    if is_image_or_video_model(base_id) {
+        return;
+    }
+    let modalities = entry.get("input_modalities").and_then(Value::as_array);
+    let has_modalities = modalities.is_some_and(|values| !values.is_empty());
+    let supports_text = modalities.is_some_and(|values| values.iter().any(|value| value == "text"));
+    if !supports_text && (has_modalities || string_value(entry, "visibility") == "hide") {
+        return;
+    }
+    let supported = capability.map_or(template_supported, |resolver| {
+        resolver.supports_apply_patch(id.trim())
+    });
+    if supported {
+        entry.insert(
+            "apply_patch_tool_type".to_owned(),
+            Value::String("freeform".to_owned()),
+        );
     }
 }
 

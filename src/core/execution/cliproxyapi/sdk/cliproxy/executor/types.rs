@@ -59,6 +59,8 @@ pub struct ExecutionMetadata {
     /// Private, immutable capability selected for one configured credential.
     /// It is typed so it can never be serialized into extension metadata.
     pub resolved_api_key_model_info: Option<Arc<crate::internal::modelconfig::ModelInfo>>,
+    /// Selected Codex OAuth plan capability, separate from API-key authority.
+    pub resolved_codex_oauth_model_info: Option<Arc<crate::internal::modelconfig::ModelInfo>>,
     pub extensions: JsonMetadata,
 }
 
@@ -108,6 +110,10 @@ impl fmt::Debug for ExecutionMetadata {
             .field(
                 "has_resolved_api_key_model_info",
                 &self.resolved_api_key_model_info.is_some(),
+            )
+            .field(
+                "has_resolved_codex_oauth_model_info",
+                &self.resolved_codex_oauth_model_info.is_some(),
             )
             .field(
                 "extension_keys",

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use crate::sdk::translator::{openai, Registry, ResponseTransform};
 
 use super::{
-    convert_openai_request_to_openai, convert_openai_response_to_openai,
-    convert_openai_response_to_openai_non_stream,
+    convert_openai_request_to_openai, convert_openai_response_to_openai_non_stream,
+    convert_openai_response_to_openai_with_state,
 };
 
 pub fn register_openai_chat_passthrough(registry: &Registry) {
@@ -17,8 +17,8 @@ pub fn register_openai_chat_passthrough(registry: &Registry) {
         openai(),
         Arc::new(convert_openai_request_to_openai),
         ResponseTransform {
-            stream: Some(Arc::new(|_, _, _, _, raw, _| {
-                convert_openai_response_to_openai(raw)
+            stream: Some(Arc::new(|_, _, _, _, raw, state| {
+                convert_openai_response_to_openai_with_state(raw, state)
             })),
             non_stream: Some(Arc::new(|_, _, _, _, raw, _| {
                 convert_openai_response_to_openai_non_stream(raw)

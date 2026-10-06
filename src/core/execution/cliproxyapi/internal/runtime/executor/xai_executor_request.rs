@@ -10,8 +10,9 @@ use crate::sdk::cliproxy::auth::Auth;
 use crate::sdk::cliproxy::executor::Headers;
 
 use super::xai_executor::{
-    header_set, XAI_CLIENT_VERSION_HEADER, XAI_CLIENT_VERSION_VALUE, XAI_TOKEN_AUTH_HEADER,
-    XAI_TOKEN_AUTH_VALUE,
+    header_set, XAI_AUTHENTICATE_RESPONSE_HEADER, XAI_AUTHENTICATE_RESPONSE_VALUE,
+    XAI_CLIENT_IDENTIFIER_HEADER, XAI_CLIENT_IDENTIFIER_VALUE, XAI_CLIENT_VERSION_HEADER,
+    XAI_CLIENT_VERSION_VALUE, XAI_TOKEN_AUTH_HEADER, XAI_TOKEN_AUTH_VALUE,
 };
 
 pub const XAI_IMAGES_GENERATIONS_PATH: &str = "/images/generations";
@@ -63,8 +64,12 @@ pub struct XaiRequestPolicy<'a> {
 pub fn xai_credentials(auth: Option<&Auth>) -> XaiCredentials {
     let token = auth
         .and_then(|a| {
-            metadata_string(&a.metadata, "access_token")
-                .or_else(|| a.attributes.get("api_key").map(String::as_str))
+            a.attributes
+                .get("api_key")
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or_else(|| metadata_string(&a.metadata, "access_token"))
         })
         .unwrap_or_default()
         .trim()
@@ -74,14 +79,16 @@ pub fn xai_credentials(auth: Option<&Auth>) -> XaiCredentials {
             a.attributes
                 .get("base_url")
                 .map(String::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
                 .or_else(|| metadata_string(&a.metadata, "base_url"))
         })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .unwrap_or(super::xai_executor::DEFAULT_XAI_API_BASE_URL)
         .trim_end_matches('/')
         .to_owned();
-    let using_api = auth
-        .and_then(|a| a.attributes.get("using_api"))
-        .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+    let using_api = xai_using_api(auth);
     XaiCredentials {
         token,
         base_url,
@@ -89,22 +96,65 @@ pub fn xai_credentials(auth: Option<&Auth>) -> XaiCredentials {
     }
 }
 
+// ref: internal/runtime/executor/xai_executor_request.go:216-253 @ e2bff010
+fn xai_using_api(auth: Option<&Auth>) -> bool {
+    let Some(auth) = auth else {
+        return true;
+    };
+    if let Some(value) = auth
+        .attributes
+        .get("using_api")
+        .and_then(|value| xai_parse_bool(value))
+    {
+        return value;
+    }
+    if let Some(value) = auth.metadata.get("using_api").and_then(|value| {
+        value
+            .as_bool()
+            .or_else(|| value.as_str().and_then(xai_parse_bool))
+    }) {
+        return value;
+    }
+    let kind = auth
+        .attributes
+        .get("auth_kind")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| metadata_string(&auth.metadata, "auth_kind"))
+        .map(str::trim);
+    !kind.is_some_and(|kind| kind.eq_ignore_ascii_case("oauth"))
+}
+
+fn xai_parse_bool(value: &str) -> Option<bool> {
+    match value.trim() {
+        "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
+        "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),
+        _ => None,
+    }
+}
+
+// ref: internal/runtime/executor/xai_executor_request.go:263-296 @ e2bff010
 #[must_use]
 pub fn xai_chat_base_url(auth: Option<&Auth>) -> String {
     let credentials = xai_credentials(auth);
-    if credentials.using_api {
+    if credentials.using_api
+        || credentials.base_url != super::xai_executor::DEFAULT_XAI_API_BASE_URL
+    {
         credentials.base_url
     } else {
-        auth.and_then(|a| metadata_string(&a.metadata, "chat_base_url"))
-            .unwrap_or(&credentials.base_url)
-            .trim_end_matches('/')
-            .to_owned()
+        super::xai_executor::DEFAULT_XAI_CHAT_BASE_URL.to_owned()
     }
 }
 
 #[must_use]
 pub fn xai_compact_base_url(auth: Option<&Auth>) -> String {
-    xai_credentials(auth).base_url
+    let base_url = xai_credentials(auth).base_url;
+    if base_url == super::xai_executor::DEFAULT_XAI_CHAT_BASE_URL {
+        super::xai_executor::DEFAULT_XAI_API_BASE_URL.to_owned()
+    } else {
+        base_url
+    }
 }
 
 #[must_use]
@@ -125,7 +175,17 @@ pub fn apply_xai_headers(
     stream: bool,
     session_id: &str,
 ) {
-    header_set(headers, "Authorization", format!("Bearer {}", token.trim()));
+    apply_xai_default_headers(headers, token, stream, session_id);
+    apply_xai_custom_headers(headers, auth);
+}
+
+// ref: internal/runtime/executor/xai_executor_request.go:321-351 @ e2bff010
+fn apply_xai_default_headers(headers: &mut Headers, token: &str, stream: bool, session_id: &str) {
+    if token.trim().is_empty() {
+        headers.retain(|name, _| !name.eq_ignore_ascii_case("Authorization"));
+    } else {
+        header_set(headers, "Authorization", format!("Bearer {}", token.trim()));
+    }
     header_set(headers, "Content-Type", "application/json");
     header_set(
         headers,
@@ -136,9 +196,13 @@ pub fn apply_xai_headers(
             "application/json"
         },
     );
+    header_set(headers, "Connection", "Keep-Alive");
     if !session_id.trim().is_empty() {
-        header_set(headers, "X-Session-Id", session_id.trim());
+        header_set(headers, "x-grok-conv-id", session_id.trim());
     }
+}
+
+fn apply_xai_custom_headers(headers: &mut Headers, auth: Option<&Auth>) {
     if let Some(auth) = auth {
         for (key, value) in &auth.attributes {
             if let Some(name) = key
@@ -158,11 +222,30 @@ pub fn apply_xai_chat_headers(
     stream: bool,
     session_id: &str,
 ) {
-    apply_xai_headers(headers, auth, token, stream, session_id);
-    if !xai_credentials(auth).using_api {
+    apply_xai_default_headers(headers, token, stream, session_id);
+    // ref: internal/runtime/executor/xai_executor_request.go:356-365 @ e2bff010
+    if !xai_credentials(auth).using_api
+        && xai_chat_base_url(auth) == super::xai_executor::DEFAULT_XAI_CHAT_BASE_URL
+    {
         header_set(headers, XAI_TOKEN_AUTH_HEADER, XAI_TOKEN_AUTH_VALUE);
         header_set(headers, XAI_CLIENT_VERSION_HEADER, XAI_CLIENT_VERSION_VALUE);
+        header_set(
+            headers,
+            "User-Agent",
+            format!("xai-grok-workspace/{XAI_CLIENT_VERSION_VALUE}"),
+        );
+        header_set(
+            headers,
+            XAI_CLIENT_IDENTIFIER_HEADER,
+            XAI_CLIENT_IDENTIFIER_VALUE,
+        );
+        header_set(
+            headers,
+            XAI_AUTHENTICATE_RESPONSE_HEADER,
+            XAI_AUTHENTICATE_RESPONSE_VALUE,
+        );
     }
+    apply_xai_custom_headers(headers, auth);
 }
 
 pub fn prepare_xai_responses_body(

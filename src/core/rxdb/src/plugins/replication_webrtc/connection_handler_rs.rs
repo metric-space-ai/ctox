@@ -2884,7 +2884,7 @@ impl WebRTCRsConnectionHandler {
             }
             // Up to FRAME_PIPELINE_WINDOWS ACK windows are in flight. Waiting
             // for every 4-chunk window before sending the next capped a relayed
-            // channel at ~40 KB per round trip (~1 MB/s measured on the measured
+            // channel at ~40 KB per round trip (~1 MB/s measured on the customer
             // on-prem tenant). The browser ACKs cumulatively, so the oldest
             // outstanding window bounds what has to be resent.
             let mut outstanding: VecDeque<(

@@ -22,6 +22,9 @@ use crate::internal::api::server_routes::{
 use crate::sdk::api::handlers::claude::code_handlers::{
     ClaudeMessagesHttpResponse, ClaudeMessagesRouteHandler, ClaudeMessagesRouteResponse,
 };
+use crate::sdk::api::handlers::openai::openai_chat_handlers::{
+    handle_openai_chat_route, OpenAiChatRouteResponse,
+};
 use crate::sdk::api::handlers::openai::openai_responses_handlers::{
     OpenAiResponsesHttpResponse, OpenAiResponsesRouteHandler, OpenAiResponsesRouteResponse,
 };
@@ -187,6 +190,33 @@ where
         });
         prepare_messages_response_writer(response_writer.as_mut(), &response);
         write_messages_route_response(stream, &mut response, response_writer.as_mut()).await
+    } else if matches!(
+        route,
+        ServerRoute::ChatCompletions | ServerRoute::Completions
+    ) {
+        let mut response = if request.method != "POST" {
+            OpenAiChatRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
+                405,
+                "method not allowed",
+            ))
+        } else {
+            handle_openai_chat_route(
+                responses_handler,
+                request.provider.as_deref(),
+                &request.headers,
+                &request.body,
+                route == ServerRoute::Completions,
+            )
+            .await
+        };
+        if let Some(writer) = response_writer.as_mut() {
+            let (status, content_type) = response.status_and_content_type();
+            writer.write_header(
+                status,
+                BTreeMap::from([("Content-Type".to_owned(), vec![content_type.to_owned()])]),
+            );
+        }
+        write_chat_route_response(stream, &mut response, response_writer.as_mut()).await
     } else if route == ServerRoute::Messages {
         let mut response = match messages_handler {
             Some(handler) => dispatch_messages_request(request, handler).await,
@@ -317,7 +347,11 @@ where
         ));
     }
     handler
-        .handle_provider_route(request.provider.as_deref(), &request.body)
+        .handle_provider_route_with_headers(
+            request.provider.as_deref(),
+            &request.headers,
+            &request.body,
+        )
         .await
 }
 
@@ -342,7 +376,11 @@ where
         ));
     }
     handler
-        .handle_provider_route(request.provider.as_deref(), &request.body)
+        .handle_provider_route_with_headers(
+            request.provider.as_deref(),
+            &request.headers,
+            &request.body,
+        )
         .await
 }
 
@@ -639,6 +677,36 @@ where
     stream.shutdown().await
 }
 
+async fn write_chat_route_response<S>(
+    stream: &mut S,
+    response: &mut OpenAiChatRouteResponse,
+    mut capture: Option<&mut ResponseWriterWrapper>,
+) -> io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    match response {
+        OpenAiChatRouteResponse::Buffered(response) => {
+            write_response_with_capture(stream, response, capture).await
+        }
+        OpenAiChatRouteResponse::Stream(response) => {
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+            ).await?;
+            while let Some(chunk) = response.next_chunk().await {
+                let result = stream.write_all(&chunk).await;
+                if let Some(capture) = capture.as_deref_mut() {
+                    capture.write(&chunk);
+                }
+                // Returning drops the same provider-owned stream on disconnect;
+                // no producer task survives the HTTP request owner.
+                result?;
+            }
+            stream.shutdown().await
+        }
+    }
+}
+
 async fn write_route_response<S>(
     stream: &mut S,
     response: &mut OpenAiResponsesRouteResponse,
@@ -828,6 +896,8 @@ fn reason_phrase(status: u16) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    include!("server_openai_chat_candidate_test.rs");
+
     use std::collections::HashMap;
     use std::fs;
     use std::future::Future;
@@ -1383,7 +1453,7 @@ mod tests {
     }
 
     fn claude_sse() -> Vec<u8> {
-        b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_http\",\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n\
+        b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_http\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5-20250929\",\"content\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n\
           data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
           data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello from Claude\"}}\n\n\
           data: {\"type\":\"content_block_stop\",\"index\":0}\n\n\
@@ -1636,7 +1706,10 @@ mod tests {
             .unwrap();
         let head = std::str::from_utf8(&response[..split]).unwrap();
         let response_body: Value = serde_json::from_slice(&response[split + 4..]).unwrap();
-        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(
+            head.starts_with("HTTP/1.1 200 OK\r\n"),
+            "head={head}, body={response_body}"
+        );
         assert_eq!(response_body["object"], "response");
         assert_eq!(response_body["status"], "completed");
         assert_eq!(
@@ -2302,7 +2375,40 @@ mod tests {
             chunks.push(String::from_utf8(chunk).unwrap());
         }
         let joined = chunks.join("\n\n");
+        assert!(joined.contains("event: error\n"));
+        assert!(!joined.contains("event: response.failed"));
+        assert!(joined.contains("overloaded_error"));
+        assert!(joined.contains("Claude upstream stream failed"));
+        assert!(!joined.contains("access-secret"));
+        assert!(!joined.contains("response.completed"));
+    }
+
+    #[tokio::test]
+    async fn post_commit_codex_client_error_stays_response_failed() {
+        let error_sse = b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_failed\"}}\n\n\
+            data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"token access-secret\"}}\n\n"
+            .to_vec();
+        let (handler, _) = handler_with_response(200, error_sse);
+        let headers = std::collections::BTreeMap::from([(
+            "User-Agent".to_owned(),
+            vec!["Codex Desktop/1.0".to_owned()],
+        )]);
+        let response = handler
+            .handle_route_with_headers(
+                br#"{"model":"claude-sonnet-4-5","stream":true,"input":[]}"#,
+                &headers,
+            )
+            .await;
+        let OpenAiResponsesRouteResponse::Stream(mut stream) = response else {
+            panic!("expected committed stream bootstrap");
+        };
+        let mut chunks = Vec::new();
+        while let Some(chunk) = stream.next_chunk().await {
+            chunks.push(String::from_utf8(chunk).unwrap());
+        }
+        let joined = chunks.join("\n\n");
         assert!(joined.contains("event: response.failed"));
+        assert!(!joined.contains("event: error\n"));
         assert!(joined.contains("overloaded_error"));
         assert!(joined.contains("Claude upstream stream failed"));
         assert!(!joined.contains("access-secret"));
@@ -2455,7 +2561,7 @@ mod tests {
         let requests = count_transport.count_requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         assert!(!requests[0].1.is_empty());
-        assert_eq!(requests[0].2, "claude-cli/2.1.220 (external, cli)");
+        assert_eq!(requests[0].2, "claude-cli/2.1.280 (external, cli)");
         assert!(requests[0]
             .3
             .iter()

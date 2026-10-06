@@ -28,7 +28,15 @@ use crate::sdk::pluginapi::{
 };
 use crate::sdk::translator::{Format, Registry, TranslationContext, TranslationState};
 
-use super::openai_responses_signature::sanitize_openai_responses_reasoning_encrypted_content;
+use super::openai_responses_signature::sanitize_openai_responses_reasoning_encrypted_content_with_compat;
+
+#[cfg(test)]
+#[path = "openai_compat_resolved_compat_test.rs"]
+mod candidate_resolved_model_capability_tests;
+
+#[cfg(test)]
+#[path = "candidate_v16_openai_eof_test.rs"]
+mod candidate_v16_openai_eof_tests;
 
 pub const OPENAI_COMPAT_IMAGE_HANDLER_TYPE: &str = "openai-image";
 pub const OPENAI_COMPAT_IMAGES_GENERATIONS_PATH: &str = "/images/generations";
@@ -178,6 +186,19 @@ impl OpenAiCompatExecutor {
         attributes.clone()
     }
 
+    fn selected_model_compatibility(request: &ExecutorRequest) -> bool {
+        request
+            .resolved_home_model_options
+            .as_ref()
+            .map(|options| options.is_compat)
+            .unwrap_or_else(|| {
+                request
+                    .resolved_model_info
+                    .as_ref()
+                    .is_some_and(|info| info.is_compat)
+            })
+    }
+
     pub(crate) fn translate_request(
         &self,
         request: &ExecutorRequest,
@@ -187,14 +208,28 @@ impl OpenAiCompatExecutor {
         let from = Format::from(request.source_format.as_str());
         let base_model = parse_suffix(&request.model).model_name;
         let context = TranslationContext::default();
-        let mut translated = self.registry.translate_request(
-            &context,
-            &from,
-            to,
-            &base_model,
-            &request.payload,
-            stream,
-        );
+        let client =
+            crate::internal::client::codex::optimize_multi_agent_v2::MultiAgentV2Context::default();
+        let metadata = |_: &str| None;
+        let processor = super::helps::RegistryCodexMultiAgentV2Processor {
+            registry: &self.registry,
+            context: &context,
+            client: &client,
+            model_metadata: &metadata,
+            orphan_delegation_compatibility: false,
+        };
+        let mut translated =
+            super::helps::translate_request_with_api_key_model_compatibility_for_executor(
+                &processor,
+                &request.headers,
+                "openai-compat",
+                &from,
+                to,
+                &base_model,
+                &request.payload,
+                stream,
+                Self::selected_model_compatibility(request),
+            );
         translated = apply_model_suffix_effort(&translated, &request.model);
         translated =
             self.apply_payload_overrides(&translated, requested_model(request), to.as_str());
@@ -330,9 +365,10 @@ impl OpenAiCompatExecutor {
             let mut translated = self.translate_request(&request, &to, request.stream);
             if request.alt == "responses/compact" {
                 translated = remove_json_field(&translated, "stream");
-                translated = sanitize_openai_responses_reasoning_encrypted_content(
+                translated = sanitize_openai_responses_reasoning_encrypted_content_with_compat(
                     "openai compat executor",
                     &translated,
+                    Self::selected_model_compatibility(&request),
                 )
                 .into_owned();
             } else {
@@ -535,6 +571,17 @@ impl OpenAiCompatExecutor {
                 )
                 .await
             {
+                return;
+            }
+            if sender.is_closed() {
+                return;
+            }
+            if response_format.as_str() == "openai-response"
+                && !crate::internal::translator::openai::passthrough::responses::can_finalize_response_stream(&state)
+            {
+                let _ = sender.send(stream_error(
+                    502, "upstream stream closed before [DONE]",
+                )).await;
                 return;
             }
             let _ = process_stream_line(
@@ -958,7 +1005,9 @@ async fn process_stream_line(
             return false;
         }
     }
-    true
+    // Once the source terminator was delivered, later bytes/errors cannot
+    // replace a successfully completed response or produce another terminator.
+    trim_ascii(line.strip_prefix(b"data:").unwrap_or(line)) != b"[DONE]"
 }
 
 fn bridge_raw_stream(

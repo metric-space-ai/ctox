@@ -12,6 +12,7 @@ pub mod antigravity_executor_tokens;
 pub mod antigravity_reasoning_replay;
 pub mod claude_executor;
 pub mod claude_executor_auth;
+mod claude_executor_buffered;
 pub mod claude_executor_cloaking;
 pub mod claude_executor_diagnostics;
 pub mod claude_executor_execute;
@@ -19,6 +20,7 @@ pub mod claude_executor_fast_error;
 pub mod claude_executor_request;
 pub mod claude_executor_stream;
 pub mod claude_executor_tokens;
+mod claude_executor_tool_state;
 pub mod claude_signing;
 pub mod codex_executor;
 pub mod codex_executor_auth;
@@ -36,11 +38,24 @@ pub mod codex_websockets_executor;
 pub mod codex_websockets_request;
 pub mod codex_websockets_session;
 pub mod codex_websockets_stream;
+pub mod devin_executor;
+pub mod devin_executor_history;
+
+pub mod devin_executor_request;
+pub mod devin_executor_response;
+pub mod devin_executor_stream;
 pub mod gemini_executor;
 pub mod gemini_vertex_executor;
+#[cfg(test)]
+mod google_executor_candidate_test;
 pub mod helps;
 pub mod kimi_executor;
 pub mod kimi_thinking_replay;
+pub mod meta_executor;
+pub mod meta_executor_auth;
+pub mod meta_executor_request;
+pub mod meta_executor_response;
+pub mod meta_executor_scheduled;
 pub mod openai_compat_executor;
 pub mod openai_responses_signature;
 pub mod xai_executor;
@@ -128,6 +143,10 @@ mod codex_websockets_executor_store_test;
 mod codex_websockets_executor_test;
 #[cfg(test)]
 mod codex_websockets_spawn_agent_test;
+#[cfg(test)]
+mod devin_executor_history_test;
+#[cfg(test)]
+mod devin_executor_response_test;
 #[cfg(test)]
 mod executor_payload_optimization_test;
 #[cfg(test)]
@@ -313,6 +332,7 @@ pub use gemini_executor::{GeminiExecutor, GeminiExecutorConfig, GeminiExecutorEr
 pub use gemini_vertex_executor::{
     GeminiVertexExecutor, VertexAccessTokenProvider, VertexExecutorError,
 };
+pub use helps::normalize_codex_tool_integer_types_for_executor;
 pub use openai_compat_executor::{
     normalize_openai_tool_results_text_only, openai_compat_image_endpoint_path,
     prepare_openai_compat_images_payload, rewrite_openai_compat_images_multipart_payload,

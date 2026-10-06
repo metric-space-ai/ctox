@@ -29,4 +29,12 @@ fn config_api_key_classification_matches_upstream() {
         ("source".into(), "config:codex[abc]".into()),
     ]);
     assert!(is_config_api_key_auth(Some(&api_key)));
+
+    let mut secret_held_elsewhere = Auth::default();
+    secret_held_elsewhere.provider = "codex".into();
+    secret_held_elsewhere.attributes.extend([
+        ("auth_kind".into(), "apikey".into()),
+        ("source".into(), "config:codex[abc]".into()),
+    ]);
+    assert!(is_config_api_key_auth(Some(&secret_held_elsewhere)));
 }

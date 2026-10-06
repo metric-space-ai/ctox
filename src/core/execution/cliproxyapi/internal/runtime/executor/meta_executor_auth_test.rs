@@ -1,0 +1,819 @@
+// Origin: CTOX selected Meta mint/preparation integration guards.
+// ref: internal/runtime/executor/meta_executor_test.go @ d7914afdedca7af95ee974a42453dc49fc1388ce
+// License: MIT (upstream); modifications AGPL-3.0-only
+use super::*;
+use crate::sdk::pluginapi::{
+    Headers, HostHttpClient, HttpRequest, HttpResponse, HttpStreamChunk, HttpStreamResponse,
+    PluginFuture,
+};
+use chrono::{DateTime, Utc};
+use serde_json::json;
+use std::sync::Mutex;
+use tokio::sync::{mpsc, Semaphore};
+
+#[tokio::test]
+async fn candidate_meta_scheduled_refresh_returns_owned_candidate_without_mutating_input() {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::AuthRefresher;
+    let client = Transport::new(200, minted());
+    let scheduled = MetaScheduledRefresher::new(
+        Arc::new(capability(client.clone())),
+        tokio::runtime::Handle::current(),
+    );
+    let original = auth();
+    let before = (original.metadata.clone(), original.attributes.clone());
+    let (unchanged, result) = tokio::task::spawn_blocking(move || {
+        let mut selected = original;
+        let result = scheduled.refresh(&mut selected);
+        (selected, result)
+    })
+    .await
+    .unwrap();
+    let candidate = result.unwrap().unwrap();
+    assert_eq!((unchanged.metadata, unchanged.attributes), before);
+    assert_eq!(candidate.registration_epoch, 7);
+    assert_eq!(candidate.attributes["api_key"], "LLM|test-only-minted");
+    assert_eq!(
+        candidate.attributes["base_url"],
+        "https://regional.fixture.invalid/v1"
+    );
+    assert_eq!(candidate.metadata["subs_tier_name"], json!("Muse Pro"));
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_refresh_skips_cancelled_and_disabled_accounts() {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::{AuthRefresher, RefreshCancellation, RefreshExecutorError};
+    for disabled in [false, true] {
+        let client = Transport::new(200, minted());
+        let scheduled = MetaScheduledRefresher::new(
+            Arc::new(capability(client.clone())),
+            tokio::runtime::Handle::current(),
+        );
+        let cancellation = RefreshCancellation::default();
+        if !disabled {
+            cancellation.cancel();
+        }
+        let result = tokio::task::spawn_blocking(move || {
+            let mut selected = auth();
+            selected.disabled = disabled;
+            scheduled.refresh_with_cancellation(&mut selected, &cancellation)
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(RefreshExecutorError::Cancelled)));
+        assert!(client.requests.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_refresh_cancellation_closes_the_owned_mint_receiver() {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::{AuthRefresher, RefreshCancellation, RefreshExecutorError};
+    let client = Transport::held();
+    let scheduled = MetaScheduledRefresher::new(
+        Arc::new(capability(client.clone())),
+        tokio::runtime::Handle::current(),
+    );
+    let cancellation = RefreshCancellation::default();
+    let cancel = cancellation.clone();
+    let worker = tokio::task::spawn_blocking(move || {
+        scheduled.refresh_with_cancellation(&mut auth(), &cancellation)
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), client.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    cancel.cancel();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(result, Err(RefreshExecutorError::Cancelled)));
+    assert!(client.sender.lock().unwrap().as_ref().unwrap().is_closed());
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_refresh_preserves_typed_failure_and_original_credentials() {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::{AuthRefresher, RefreshExecutorError};
+    let client = Transport::new(401, json!({"error":"unauthorized"}));
+    let scheduled = MetaScheduledRefresher::new(
+        Arc::new(capability(client.clone())),
+        tokio::runtime::Handle::current(),
+    );
+    let (selected, result) = tokio::task::spawn_blocking(move || {
+        let mut selected = auth();
+        let result = scheduled.refresh(&mut selected);
+        (selected, result)
+    })
+    .await
+    .unwrap();
+    let Err(RefreshExecutorError::Failed(error)) = result else {
+        panic!("expected the typed mint failure");
+    };
+    assert_eq!(error.http_status, 401);
+    assert!(!error.retryable);
+    assert!(!error.message.contains("test-only-device"));
+    assert_eq!(
+        selected.metadata["access_token"],
+        json!("dca:test-only-device")
+    );
+    assert!(!selected.attributes.contains_key("api_key"));
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn candidate_meta_scheduled_cancellation_wakes_all_waiters_and_remembers_earlier_stop() {
+    use crate::sdk::cliproxy::auth::RefreshCancellation;
+    use futures_util::task::{waker, ArcWake};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::Context;
+    struct Wake(AtomicUsize);
+    impl ArcWake for Wake {
+        fn wake_by_ref(wake: &Arc<Self>) {
+            wake.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let cancellation = RefreshCancellation::default();
+    let signal = Arc::new(Wake(AtomicUsize::new(0)));
+    let waker = waker(signal.clone());
+    let mut context = Context::from_waker(&waker);
+    let mut waiting = (0..4)
+        .map(|_| Box::pin(cancellation.cancelled()))
+        .collect::<Vec<_>>();
+    for waiter in &mut waiting {
+        assert!(waiter.as_mut().poll(&mut context).is_pending());
+    }
+    cancellation.clone().cancel();
+    assert!(signal.0.load(Ordering::SeqCst) > 0);
+    for waiter in &mut waiting {
+        assert!(waiter.as_mut().poll(&mut context).is_ready());
+    }
+    assert!(Box::pin(cancellation.cancelled())
+        .as_mut()
+        .poll(&mut context)
+        .is_ready());
+}
+
+#[derive(Default)]
+struct ScheduledStore(Mutex<BTreeMap<String, Auth>>);
+impl crate::sdk::cliproxy::auth::AuthStore for ScheduledStore {
+    fn list(&self) -> Result<Vec<Auth>, crate::sdk::cliproxy::auth::AuthStoreError> {
+        Ok(self.0.lock().unwrap().values().cloned().collect())
+    }
+    fn save(&self, account: &Auth) -> Result<String, crate::sdk::cliproxy::auth::AuthStoreError> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(account.id.clone(), account.clone());
+        Ok(account.id.clone())
+    }
+    fn delete(&self, id: &str) -> Result<(), crate::sdk::cliproxy::auth::AuthStoreError> {
+        self.0.lock().unwrap().remove(id);
+        Ok(())
+    }
+}
+struct ScheduledClock;
+impl crate::sdk::cliproxy::auth::AutoRefreshClock for ScheduledClock {
+    fn now(&self) -> DateTime<Utc> {
+        Clock.now()
+    }
+}
+struct ScheduledSink;
+impl crate::sdk::cliproxy::auth::ModelResumeSink for ScheduledSink {
+    fn resume_model(&self, _: &str, _: &str) {}
+}
+fn scheduled_worker(
+    client: Arc<Transport>,
+) -> (
+    crate::sdk::cliproxy::auth::AutoRefreshWorker,
+    Arc<crate::sdk::cliproxy::auth::AuthLifecycle>,
+    Arc<ScheduledStore>,
+    Arc<crate::sdk::cliproxy::auth::RefreshSchedule>,
+    u64,
+) {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::{
+        AuthLifecycle, AuthMutationOptions, AutoRefreshConfig, AutoRefreshWorker,
+        ProviderExecutorRegistration, ProviderExecutorRegistry, RefreshSchedule,
+    };
+    let store = Arc::new(ScheduledStore::default());
+    let schedule = Arc::new(RefreshSchedule::default());
+    let lifecycle = Arc::new(AuthLifecycle::new(
+        store.clone(),
+        schedule.clone(),
+        std::time::Duration::from_secs(5),
+    ));
+    let registry = Arc::new(ProviderExecutorRegistry::default());
+    registry.register(Arc::new(
+        ProviderExecutorRegistration::new(
+            "meta",
+            Arc::new(MetaScheduledRefresher::new(
+                Arc::new(capability(client)),
+                tokio::runtime::Handle::current(),
+            )),
+        )
+        .unwrap(),
+    ));
+    let mut account = auth();
+    account
+        .metadata
+        .insert("refresh_interval_seconds".into(), json!(60));
+    let registered = lifecycle
+        .register(account, AuthMutationOptions::default(), Clock.now())
+        .unwrap();
+    let worker = AutoRefreshWorker::spawn(
+        lifecycle.clone(),
+        schedule.clone(),
+        registry,
+        Arc::new(ScheduledSink),
+        Arc::new(ScheduledClock),
+        AutoRefreshConfig {
+            interval: std::time::Duration::from_secs(5),
+            concurrency: 1,
+            job_buffer: 1,
+        },
+    );
+    (
+        worker,
+        lifecycle,
+        store,
+        schedule,
+        registered.registration_epoch,
+    )
+}
+async fn await_scheduled(predicate: impl Fn() -> bool) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !predicate() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("owned scheduled worker must finish the observed transition");
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_worker_publishes_success_and_next_due_from_real_bridge() {
+    let client = Transport::new(200, minted());
+    let (worker, lifecycle, store, schedule, registered_epoch) = scheduled_worker(client.clone());
+    await_scheduled(|| {
+        lifecycle.get_cached("fixture-meta").is_some_and(|record| {
+            record.metadata.get("api_key") == Some(&json!("LLM|test-only-minted"))
+        })
+    })
+    .await;
+    worker.stop().await;
+    let cached = lifecycle.get_cached("fixture-meta").unwrap();
+    let persisted = store.0.lock().unwrap().get("fixture-meta").unwrap().clone();
+    assert_eq!(cached.metadata, persisted.metadata);
+    assert_eq!(cached.attributes["api_key"], "LLM|test-only-minted");
+    assert!(registered_epoch > 0);
+    assert_eq!(cached.registration_epoch, registered_epoch);
+    assert_eq!(persisted.registration_epoch, registered_epoch);
+    assert_eq!(cached.metadata["subs_tier_name"], json!("Muse Pro"));
+    assert_eq!(
+        schedule.peek(),
+        Some(Clock.now() + chrono::Duration::seconds(60))
+    );
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_worker_records_real_auth_rejection_without_replacing_key() {
+    let client = Transport::new(401, json!({"error":"unauthorized"}));
+    let (worker, lifecycle, store, schedule, _) = scheduled_worker(client.clone());
+    await_scheduled(|| {
+        lifecycle.get_cached("fixture-meta").is_some_and(|record| {
+            record
+                .last_error
+                .as_ref()
+                .is_some_and(|error| error.http_status == 401)
+        })
+    })
+    .await;
+    worker.stop().await;
+    let cached = lifecycle.get_cached("fixture-meta").unwrap();
+    let persisted = store.0.lock().unwrap().get("fixture-meta").unwrap().clone();
+    assert_eq!(cached.metadata, persisted.metadata);
+    assert_eq!(cached.last_error, persisted.last_error);
+    assert_eq!(
+        cached.metadata["access_token"],
+        json!("dca:test-only-device")
+    );
+    assert!(!cached.attributes.contains_key("api_key"));
+    assert!(schedule.is_empty());
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_worker_stop_during_loading_keeps_cached_and_durable_auth() {
+    let client = Transport::held();
+    let (worker, lifecycle, store, _, _) = scheduled_worker(client.clone());
+    let before = lifecycle.get_cached("fixture-meta").unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), client.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    tokio::time::timeout(std::time::Duration::from_secs(2), worker.stop())
+        .await
+        .expect("stopping the actual worker cancels its active mint");
+    let cached = lifecycle.get_cached("fixture-meta").unwrap();
+    let persisted = store.0.lock().unwrap().get("fixture-meta").unwrap().clone();
+    for record in [cached, persisted] {
+        assert_eq!(record.metadata, before.metadata);
+        assert_eq!(record.attributes, before.attributes);
+        assert_eq!(record.last_error, before.last_error);
+        assert_eq!(record.status, before.status);
+        assert_eq!(record.last_refreshed_at, before.last_refreshed_at);
+    }
+    assert!(client.sender.lock().unwrap().as_ref().unwrap().is_closed());
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn candidate_meta_request_auth_file_key_with_dca_retains_oauth_refresh_capability() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    record.attributes.remove("auth_kind");
+    record
+        .attributes
+        .insert("api_key".into(), "LLM|file-key".into());
+    record.attributes.insert("source".into(), "file".into());
+    assert_eq!(
+        record.auth_kind(),
+        Some(crate::sdk::cliproxy::auth::AuthKind::ApiKey)
+    );
+    assert!(AsyncAuthRefresher::should_refresh(&preparer, &record));
+    record
+        .attributes
+        .insert("source".into(), "config:meta-api-key".into());
+    assert!(!AsyncAuthRefresher::should_refresh(&preparer, &record));
+    assert!(client.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn candidate_meta_request_auth_changed_api_key_is_detected_without_access_token_edit() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client);
+    let mut failed = auth();
+    failed
+        .attributes
+        .insert("api_key".into(), "LLM|failed".into());
+    let mut current = failed.clone();
+    current
+        .attributes
+        .insert("api_key".into(), "LLM|user-edit".into());
+    assert_eq!(
+        current.metadata["access_token"],
+        failed.metadata["access_token"]
+    );
+    assert!(AsyncAuthRefresher::credential_changed(
+        &preparer, &current, &failed
+    ));
+    assert!(!AsyncAuthRefresher::credential_changed(
+        &preparer, &failed, &failed
+    ));
+}
+
+struct Clock;
+
+impl MetaClock for Clock {
+    fn now(&self) -> DateTime<Utc> {
+        DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    }
+}
+struct Transport {
+    status: u16,
+    body: Vec<u8>,
+    hold: bool,
+    requests: Mutex<Vec<HttpRequest>>,
+    sender: Mutex<Option<mpsc::Sender<HttpStreamChunk>>>,
+    entered: Semaphore,
+}
+impl Transport {
+    fn new(status: u16, body: Value) -> Arc<Self> {
+        Arc::new(Self {
+            status,
+            body: serde_json::to_vec(&body).unwrap(),
+            hold: false,
+            requests: Mutex::new(Vec::new()),
+            sender: Mutex::new(None),
+            entered: Semaphore::new(0),
+        })
+    }
+    fn held() -> Arc<Self> {
+        Arc::new(Self {
+            status: 200,
+            body: Vec::new(),
+            hold: true,
+            requests: Mutex::new(Vec::new()),
+            sender: Mutex::new(None),
+            entered: Semaphore::new(0),
+        })
+    }
+}
+impl HostHttpClient for Transport {
+    fn execute<'a>(&'a self, _: HttpRequest) -> PluginFuture<'a, HttpResponse> {
+        Box::pin(async { panic!("mint must own the bounded selected stream") })
+    }
+    fn execute_stream<'a>(&'a self, request: HttpRequest) -> PluginFuture<'a, HttpStreamResponse> {
+        Box::pin(async move {
+            self.requests.lock().unwrap().push(request);
+            let (sender, chunks) = mpsc::channel(1);
+            if self.hold {
+                *self.sender.lock().unwrap() = Some(sender);
+            } else {
+                sender
+                    .try_send(HttpStreamChunk {
+                        payload: self.body.clone(),
+                        error: None,
+                    })
+                    .unwrap();
+            }
+            self.entered.add_permits(1);
+            Ok(HttpStreamResponse {
+                status_code: self.status,
+                headers: Headers::new(),
+                chunks,
+            })
+        })
+    }
+}
+fn capability(transport: Arc<Transport>) -> MetaRequestAuthPreparer {
+    MetaRequestAuthPreparer::new(Arc::new(
+        MetaAuth::new(transport)
+            .with_clock(Arc::new(Clock))
+            .with_mint_endpoint("https://fixture.invalid/key"),
+    ))
+    .with_clock(Arc::new(Clock))
+}
+fn auth() -> Auth {
+    let mut auth = Auth::default();
+    auth.id = "fixture-meta".into();
+    auth.provider = "meta".into();
+    auth.registration_epoch = 7;
+    auth.attributes.insert("auth_kind".into(), "oauth".into());
+    auth.metadata
+        .insert("access_token".into(), json!("dca:test-only-device"));
+    auth.metadata
+        .insert("dca_expired".into(), json!("2023-11-14T23:13:20Z"));
+    auth.metadata
+        .insert("dca_expires_at".into(), json!(1_700_003_600_i64));
+    auth.metadata
+        .insert("expired".into(), json!("2023-11-14T23:13:20Z"));
+    auth
+}
+fn minted() -> Value {
+    json!({"api_key":"LLM|test-only-minted","base_url":" https://regional.fixture.invalid/v1 ",
+        "user_email":"fixture@example.invalid","user_full_name":"Fixture",
+        "subs_tier_name":"Muse Pro","subs_tier_id":"pro","is_subs_active":true,"has_payment_method":true})
+}
+
+#[test]
+fn candidate_meta_request_auth_credential_precedence_never_uses_dca_as_api_key() {
+    let mut record = auth();
+    assert!(meta_credentials(&record).api_key().is_empty());
+    record
+        .attributes
+        .insert("api_key".into(), "dca:wrong-field".into());
+    record
+        .attributes
+        .insert("access_token".into(), " attr-access ".into());
+    record
+        .metadata
+        .insert("api_key".into(), json!("metadata-key"));
+    assert_eq!(meta_credentials(&record).api_key(), "attr-access");
+    record
+        .attributes
+        .insert("api_key".into(), " attr-key ".into());
+    assert_eq!(meta_credentials(&record).api_key(), "attr-key");
+    record.attributes.remove("api_key");
+    record.attributes.remove("access_token");
+    assert_eq!(meta_credentials(&record).api_key(), "metadata-key");
+    record
+        .metadata
+        .insert("api_key".into(), json!("dca:also-not-key"));
+    record
+        .metadata
+        .insert("access_token".into(), json!(" metadata-access "));
+    assert_eq!(meta_credentials(&record).api_key(), "metadata-access");
+}
+#[test]
+fn candidate_meta_request_auth_base_url_matches_default_metadata_fallback() {
+    let mut record = auth();
+    record.metadata.insert(
+        "api_base_url".into(),
+        json!(" https://metadata.fixture.invalid/v1 "),
+    );
+    assert_eq!(
+        meta_credentials(&record).base_url(),
+        "https://metadata.fixture.invalid/v1"
+    );
+    record
+        .attributes
+        .insert("base_url".into(), DEFAULT_API_BASE_URL.into());
+    assert_eq!(
+        meta_credentials(&record).base_url(),
+        "https://metadata.fixture.invalid/v1"
+    );
+    record.attributes.insert(
+        "base_url".into(),
+        " https://attribute.fixture.invalid/v1 ".into(),
+    );
+    assert_eq!(
+        meta_credentials(&record).base_url(),
+        "https://attribute.fixture.invalid/v1"
+    );
+}
+#[test]
+fn candidate_meta_request_auth_dca_precedence_and_config_key_exclusion() {
+    let mut record = auth();
+    assert_eq!(meta_dca_token(&record).as_str(), "dca:test-only-device");
+    record
+        .metadata
+        .insert("dca_token".into(), json!("dca:metadata"));
+    record
+        .attributes
+        .insert("access_token".into(), "dca:attribute-access".into());
+    assert_eq!(meta_dca_token(&record).as_str(), "dca:attribute-access");
+    record
+        .attributes
+        .insert("dca_token".into(), " dca:attribute ".into());
+    assert_eq!(meta_dca_token(&record).as_str(), "dca:attribute");
+    record
+        .attributes
+        .insert("auth_kind".into(), "apikey".into());
+    record
+        .attributes
+        .insert("source".into(), "config:meta-api-key".into());
+    assert!(meta_dca_token(&record).is_empty());
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_prepares_owned_selected_mint_snapshot() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    record.label = "User label".into();
+    record
+        .metadata
+        .insert("notes".into(), json!("user setting"));
+    assert!(preparer.should_prepare(&record));
+    preparer.prepare(&mut record).await.unwrap();
+    assert!(!preparer.should_prepare(&record));
+    assert_eq!(record.registration_epoch, 7);
+    assert_eq!(record.label, "User label");
+    assert_eq!(record.metadata["notes"], "user setting");
+    assert_eq!(record.metadata["api_key"], "LLM|test-only-minted");
+    assert_eq!(record.metadata["access_token"], "LLM|test-only-minted");
+    assert_eq!(record.attributes["api_key"], "LLM|test-only-minted");
+    assert_eq!(
+        record.attributes["base_url"],
+        "https://regional.fixture.invalid/v1"
+    );
+    assert!(!record.metadata.contains_key("expired"));
+    assert_eq!(record.metadata["dca_expires_at"], 1_700_003_600_i64);
+    assert_eq!(record.metadata["last_refresh"], "2023-11-14T22:13:20Z");
+    assert_eq!(record.metadata["subs_tier_name"], "Muse Pro");
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url, "https://fixture.invalid/key");
+    assert_eq!(
+        requests[0].headers["Authorization"],
+        ["Bearer dca:test-only-device"]
+    );
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["dca_token"], "dca:test-only-device");
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_valid_api_key_skips_preparation_http() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    record
+        .metadata
+        .insert("api_key".into(), json!("LLM|existing"));
+    let before = serde_json::to_value(&record).unwrap();
+    assert!(!preparer.should_prepare(&record));
+    preparer.prepare(&mut record).await.unwrap();
+    assert_eq!(serde_json::to_value(&record).unwrap(), before);
+    assert!(client.requests.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_401_refresh_mints_even_with_existing_api_key() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    record
+        .metadata
+        .insert("api_key".into(), json!("LLM|failed-key"));
+    record
+        .metadata
+        .insert("dca_token".into(), json!("dca:retained"));
+    let candidate = AsyncAuthRefresher::refresh(&preparer, &record)
+        .await
+        .unwrap();
+    assert_eq!(record.metadata["api_key"], "LLM|failed-key");
+    assert_eq!(candidate.metadata["api_key"], "LLM|test-only-minted");
+    assert_eq!(candidate.registration_epoch, record.registration_epoch);
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_config_dca_never_mints_or_becomes_inference_key() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    record
+        .attributes
+        .insert("auth_kind".into(), "apikey".into());
+    record
+        .attributes
+        .insert("source".into(), "config:meta-api-key".into());
+    assert!(!preparer.should_prepare(&record));
+    let error = preparer.refresh_candidate(&record).await.unwrap_err();
+    assert_eq!(error.downcast_ref::<AuthError>().unwrap().http_status, 401);
+    assert!(client.requests.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_api_only_refresh_retains_snapshot_without_http() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    record.metadata.clear();
+    record
+        .attributes
+        .insert("api_key".into(), "LLM|static".into());
+    let candidate = preparer.refresh_candidate(&record).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&candidate).unwrap(),
+        serde_json::to_value(&record).unwrap()
+    );
+    assert!(client.requests.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_mint_failure_cannot_partially_update_auth() {
+    for status in [401, 403, 429, 500] {
+        let client = Transport::new(status, json!({"error":"private-provider-body"}));
+        let preparer = capability(client);
+        let mut record = auth();
+        let before = serde_json::to_value(&record).unwrap();
+        let error = preparer.prepare(&mut record).await.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<AuthError>().unwrap().http_status,
+            status
+        );
+        assert_eq!(serde_json::to_value(&record).unwrap(), before);
+        assert!(!error.to_string().contains("private-provider-body"));
+        assert!(!error.to_string().contains("dca:test-only-device"));
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn candidate_meta_request_auth_mint_deadline_drops_receiver_and_retains_record() {
+    let client = Transport::held();
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    let before = serde_json::to_value(&record).unwrap();
+    let error = preparer.prepare(&mut record).await.unwrap_err();
+    assert_eq!(error.downcast_ref::<AuthError>().unwrap().http_status, 408);
+    assert_eq!(serde_json::to_value(&record).unwrap(), before);
+    assert!(client.sender.lock().unwrap().as_ref().unwrap().is_closed());
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_cancelled_mint_drops_receiver_without_mutation() {
+    let client = Transport::held();
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    let before = serde_json::to_value(&record).unwrap();
+    let mut operation = Box::pin(preparer.prepare(&mut record));
+    tokio::select! {
+        result = &mut operation => panic!("held mint completed: {result:?}"),
+        permit = client.entered.acquire() => permit.unwrap().forget(),
+    }
+    drop(operation);
+    assert_eq!(serde_json::to_value(&record).unwrap(), before);
+    assert!(client.sender.lock().unwrap().as_ref().unwrap().is_closed());
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_refresh_clears_absent_tier_but_keeps_identity_and_dca() {
+    let client = Transport::new(200, json!({"api_key":"LLM|new"}));
+    let preparer = capability(client);
+    let mut record = auth();
+    record
+        .metadata
+        .insert("email".into(), json!("existing@example.invalid"));
+    record
+        .metadata
+        .insert("subs_tier_name".into(), json!("old"));
+    record
+        .metadata
+        .insert("subs_tier_id".into(), json!("old-id"));
+    let candidate = preparer.refresh_candidate(&record).await.unwrap();
+    assert_eq!(candidate.metadata["email"], "existing@example.invalid");
+    assert!(!candidate.metadata.contains_key("subs_tier_name"));
+
+    assert!(!candidate.metadata.contains_key("subs_tier_id"));
+    assert_eq!(candidate.metadata["dca_token"], "dca:test-only-device");
+    assert_eq!(candidate.metadata["dca_expired"], "2023-11-14T23:13:20Z");
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_wrong_provider_fails_before_http_and_debug_redacts() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client.clone());
+    let mut record = auth();
+    record.provider = "other-provider".into();
+    assert!(!preparer.should_prepare(&record));
+    assert!(preparer.refresh_candidate(&record).await.is_err());
+    assert!(client.requests.lock().unwrap().is_empty());
+    let debug = format!("{:?} {:?}", preparer, meta_credentials(&record));
+    assert!(!debug.contains("fixture.invalid"));
+    assert!(!debug.contains("test-only"));
+}
+
+fn spawn_mint(
+    preparer: Arc<MetaRequestAuthPreparer>,
+    record: Auth,
+) -> tokio::task::JoinHandle<Result<Auth, AuthPreparationError>> {
+    tokio::spawn(async move { preparer.refresh_candidate(&record).await })
+}
+async fn wait_for_shared_mint(coordinator: &MetaMintCoordinator) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let joined = coordinator
+                .flights
+                .lock()
+                .unwrap()
+                .values()
+                .any(|flight| flight.strong_count() >= 2);
+            if joined {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+fn finish_held_mint(client: &Transport) {
+    let sender = client.sender.lock().unwrap().take().unwrap();
+    sender
+        .try_send(HttpStreamChunk {
+            payload: serde_json::to_vec(&minted()).unwrap(),
+            error: None,
+        })
+        .unwrap();
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_shared_dca_mints_once_for_concurrent_accounts() {
+    let client = Transport::held();
+    let coordinator = Arc::new(MetaMintCoordinator::default());
+    let first = Arc::new(capability(client.clone()).with_mint_coordinator(coordinator.clone()));
+    let second = Arc::new(capability(client.clone()).with_mint_coordinator(coordinator.clone()));
+    let record = auth();
+    let left = spawn_mint(first, record.clone());
+    let mut other = record.clone();
+    other.id = "second-fixture-meta".into();
+    let right = spawn_mint(second, other);
+    wait_for_shared_mint(&coordinator).await;
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+    finish_held_mint(&client);
+    let left = left.await.unwrap().unwrap();
+    let right = right.await.unwrap().unwrap();
+    assert_eq!(left.id, "fixture-meta");
+    assert_eq!(right.id, "second-fixture-meta");
+    assert_eq!(left.metadata["api_key"], right.metadata["api_key"]);
+    assert!(coordinator.flights.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_cancelled_waiter_does_not_cancel_remaining_owner() {
+    let client = Transport::held();
+    let coordinator = Arc::new(MetaMintCoordinator::default());
+    let preparer = Arc::new(capability(client.clone()).with_mint_coordinator(coordinator.clone()));
+    let first = spawn_mint(preparer.clone(), auth());
+    let second = spawn_mint(preparer, auth());
+    wait_for_shared_mint(&coordinator).await;
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    assert!(!client.sender.lock().unwrap().as_ref().unwrap().is_closed());
+    finish_held_mint(&client);
+    assert_eq!(
+        second.await.unwrap().unwrap().metadata["api_key"],
+        "LLM|test-only-minted"
+    );
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+    assert!(coordinator.flights.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn candidate_meta_request_auth_later_401_is_not_served_by_completed_mint_cache() {
+    let client = Transport::new(200, minted());
+    let preparer = capability(client.clone());
+    let first = preparer.refresh_candidate(&auth()).await.unwrap();
+    let second = preparer.refresh_candidate(&first).await.unwrap();
+    assert_eq!(second.metadata["api_key"], "LLM|test-only-minted");
+    assert_eq!(client.requests.lock().unwrap().len(), 2);
+    assert!(preparer.mints.flights.lock().unwrap().is_empty());
+}
