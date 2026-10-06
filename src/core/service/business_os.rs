@@ -9100,7 +9100,8 @@ mod tests {
         assert!(source.contains("const canonicalProfile = (raw) =>"));
         assert!(source.contains(r"url.pathname.match(/^\/profile\/([^/]+)\/?$/i)"));
         assert!(
-            source.contains(r#"push("person_xing", profile.url, "high", employerNote, profile.url)"#),
+            source
+                .contains(r#"push("person_xing", profile.url, "high", employerNote, profile.url)"#),
             "profile values and evidence must use the validated canonical URL"
         );
         assert!(!source.contains("console."));

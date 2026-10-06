@@ -1403,9 +1403,9 @@ function harnessHtml() {
       document.body.innerHTML = '<main class="harness-app">' + ['Tickets', 'Conversations', 'Notizen', 'Documents', 'Knowledge', 'Kunden', 'App Store', 'Source Editor'].map((name) => '<div class="harness-module">' + name + '</div>').join('') + '</main>';
       if (options.appPresence) {
         // Shell stand-ins: a v2 window per app plus the desktop icon grid,
-        // shaped like window-manager.js / app.js render them.
-        document.body.insertAdjacentHTML('beforeend', ['documents', 'ctox'].map((id) => '<div class="shell-window" data-owner-id="module:' + id + '" style="position:absolute;top:120px;left:' + (id === 'ctox' ? 700 : 300) + 'px;width:320px;height:200px;border:1px solid #333"><div class="shell-window-v2-icon" style="position:absolute;top:0;left:0;width:44px;height:44px;overflow:hidden;background:#222"><span data-window-app-label>' + id[0].toUpperCase() + '</span></div></div>').join('')
-          + '<div data-desktop-icons style="position:absolute;top:400px;left:900px;display:flex;gap:24px">' + ['documents', 'ctox'].map((id) => '<button class="desktop-icon" data-target="' + id + '"><span class="desktop-icon-glyph" style="display:block;width:56px;height:56px;border-radius:14px;background:#2a2a2a"></span><span class="desktop-icon-label">' + id + '</span></button>').join('') + '</div>');
+        // Use the 80px window/desktop glyph contract in app.css (--shell-v2-icon-size).
+        document.body.insertAdjacentHTML('beforeend', ['documents', 'ctox'].map((id) => '<div class="shell-window" data-owner-id="module:' + id + '" style="position:absolute;top:120px;left:' + (id === 'ctox' ? 700 : 300) + 'px;width:320px;height:200px;border:1px solid #333"><div class="shell-window-v2-icon" style="position:absolute;top:0;left:0;width:80px;height:80px;overflow:hidden;background:#222"><span data-window-app-label>' + id[0].toUpperCase() + '</span></div></div>').join('')
+          + '<div data-desktop-icons style="position:absolute;top:400px;left:900px;display:flex;gap:24px">' + ['documents', 'ctox'].map((id) => '<button class="desktop-icon" data-target="' + id + '"><span class="desktop-icon-glyph" style="display:block;width:80px;height:80px;border-radius:14px;background:#2a2a2a"></span><span class="desktop-icon-label">' + id + '</span></button>').join('') + '</div>');
       }
       localStorage.clear();
       sessionStorage.clear();
