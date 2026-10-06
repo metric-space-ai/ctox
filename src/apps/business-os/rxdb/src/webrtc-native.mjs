@@ -67,6 +67,45 @@ const STALLED_INCOMING_TRANSFER_TIMEOUT_MS = FRAME_ACK_TIMEOUT_MS * 3;
 // preserving normal multiplexed traffic headroom.
 const MAX_INCOMING_FRAME_TRANSFERS = 8;
 const MAX_INCOMING_FRAME_BUFFERED_BYTES = MAX_TRANSFER_BYTES * 4;
+// Native peers deflate large framed payloads once the browser advertises
+// CTOX_FRAME_DEFLATE_CAPABILITY. JSON documents compress 5-10x, so the wire
+// budget above applies to the compressed text and the inflated payload gets
+// its own ceiling to bound memory for a hostile or corrupt stream.
+export const CTOX_FRAME_DEFLATE_CAPABILITY = 'ctox-rxdb-frame-deflate-v1';
+const FRAME_ENCODING_DEFLATE_BASE64 = 'deflate-raw-base64';
+const MAX_INFLATED_FRAME_BYTES = MAX_TRANSFER_BYTES * 16;
+
+export function frameDeflateSupported() {
+  return typeof DecompressionStream === 'function' && typeof atob === 'function';
+}
+
+async function decodeFramePayload(text, encoding) {
+  if (encoding !== FRAME_ENCODING_DEFLATE_BASE64) {
+    throw new Error(`unsupported WebRTC frame encoding: ${encoding}`);
+  }
+  const binary = atob(text);
+  const compressed = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    compressed[index] = binary.charCodeAt(index);
+  }
+  const reader = new Blob([compressed]).stream()
+    .pipeThrough(new DecompressionStream('deflate-raw'))
+    .getReader();
+  const decoder = new TextDecoder();
+  let inflatedBytes = 0;
+  let out = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    inflatedBytes += value.byteLength;
+    if (inflatedBytes > MAX_INFLATED_FRAME_BYTES) {
+      await reader.cancel();
+      throw new Error(`inflated WebRTC frame exceeds ${MAX_INFLATED_FRAME_BYTES} bytes`);
+    }
+    out += decoder.decode(value, { stream: true });
+  }
+  return out + decoder.decode();
+}
 const MAX_INBOUND_REQUESTS = 32;
 const FRAME_RESUME_TIMEOUT_MS = 1_000;
 const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
@@ -1517,6 +1556,7 @@ export class CtoxWebRtcNativePeer {
         // a slow-but-live transfer is never discarded.
         lastProgressAt: Date.now(),
         attempt: Number(payload.attempt || 0),
+        encoding: typeof payload.encoding === 'string' ? payload.encoding : '',
         contiguousSeq: -1,
         nextAckSeq: Math.min(FRAME_ACK_WINDOW - 1, totalFrames - 1),
       });
@@ -1694,7 +1734,8 @@ export class CtoxWebRtcNativePeer {
       completedAckCacheSize: this.completedFrameAcks.size,
     });
     try {
-      await this.handleDataChannelFrame(peerId, JSON.parse(text));
+      const decoded = entry.encoding ? await decodeFramePayload(text, entry.encoding) : text;
+      await this.handleDataChannelFrame(peerId, JSON.parse(decoded));
     } catch (error) {
       this.events.emit('error', {
         code: 'ctox_webrtc_frame_decode_failed',

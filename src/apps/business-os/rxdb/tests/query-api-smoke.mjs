@@ -145,6 +145,41 @@ assert(liveStorage.stats.queryCalls === 1, 'collection.$ must apply change delta
 assert(collectionEmissions.at(-1).documents.map((doc) => doc.id).sort().join(',') === 'a,b', 'collection.$ delta must include created doc');
 collectionSub.unsubscribe();
 
+// invalidateOnly: change notifications without materializing the demand
+// window (control-plane subscribers re-run their own bounded queries).
+{
+  const invalidationStorage = createLiveStorage([{ id: 'a', title: 'Alpha' }]);
+  const invalidationDb = await createRxDatabase({
+    name: 'query-invalidate-only-fake',
+    storage: { nativeStorage: { collection() { return invalidationStorage; }, close() {} } },
+  });
+  await invalidationDb.addCollections({
+    live_items: {
+      schema: { version: 0, primaryKey: 'id', type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } } },
+    },
+  });
+  const liveStorage = invalidationStorage;
+  const liveDb = invalidationDb;
+  const queryCallsBefore = liveStorage.stats.queryCalls;
+  const invalidations = [];
+  const invalidationSub = liveDb.live_items.$.subscribe((value) => invalidations.push(value), { invalidateOnly: true });
+  await waitFor(() => invalidations.length === 1);
+  assert(invalidations[0].invalidated === true && invalidations[0].collectionName === 'live_items', 'invalidateOnly must announce itself once');
+  assert(!Object.hasOwn(invalidations[0], 'documents'), 'invalidateOnly must not pose as a snapshot');
+  liveStorage.emitChange({ z: { id: 'z', title: 'Zeta' } });
+  liveStorage.emitChange({ y: { id: 'y', title: 'Ypsilon' } });
+  await waitFor(() => invalidations.length === 2);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert(invalidations.length === 2, `burst changes must collapse into one invalidation (got ${invalidations.length})`);
+  assert(liveStorage.stats.queryCalls === queryCallsBefore, `invalidateOnly must not query storage (got ${liveStorage.stats.queryCalls - queryCallsBefore} reads)`);
+  invalidationSub.unsubscribe();
+  liveStorage.emitChange({ x: { id: 'x', title: 'Xi' } });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert(invalidations.length === 2, 'no invalidation after unsubscribe');
+  await invalidationDb.close();
+}
+
+
 const retryStorage = createRetryingLiveStorage([
   { id: 'retry-a', title: 'Retry Alpha', status: 'open' },
 ], 2);
