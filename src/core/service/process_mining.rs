@@ -1727,9 +1727,13 @@ fn is_process_mining_internal_table(table_name: &str) -> bool {
         )
 }
 
-fn install_process_mining_views(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
-        r#"
+// Views are recreated only when their stored definition differs. An
+// unconditional DROP/CREATE bumped schema_version six times per call; with
+// ensure_process_mining_schema running at the start and end of every CLI
+// command, every open connection in the daemon had to re-parse the multi-MB
+// trigger schema after each `ctox ...` invocation, which stalled the Business
+// OS HTTP workers on slower hosts (THESEN on-prem, 06.10.2026).
+const PROCESS_MINING_VIEWS_SQL: &str = r#"
         DROP VIEW IF EXISTS ctox_pm_case_events;
         CREATE VIEW ctox_pm_case_events AS
         SELECT
@@ -1811,9 +1815,35 @@ fn install_process_mining_views(conn: &Connection) -> Result<()> {
         FROM ordered
         WHERE next_activity IS NOT NULL
         GROUP BY activity, next_activity;
-        "#,
-    )?;
+        "#;
+
+fn install_process_mining_views(conn: &Connection) -> Result<()> {
+    for statement in PROCESS_MINING_VIEWS_SQL
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| statement.starts_with("CREATE VIEW "))
+    {
+        let view_name = statement["CREATE VIEW ".len()..]
+            .split_whitespace()
+            .next()
+            .context("process mining view statement has no name")?;
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = ?1",
+                params![view_name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if stored.as_deref().map(normalize_view_sql) == Some(normalize_view_sql(statement)) {
+            continue;
+        }
+        conn.execute_batch(&format!("DROP VIEW IF EXISTS {view_name};\n{statement};"))?;
+    }
     Ok(())
+}
+
+fn normalize_view_sql(sql: &str) -> String {
+    sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn sqlite_access_record_from_auth_context(
@@ -8233,5 +8263,31 @@ mod tests {
         assert_eq!(summary["accepted"], false);
         assert_eq!(summary["violation_count"], 1);
         assert_eq!(summary["violation_codes"][0], "WP-Outcome-Missing");
+    }
+
+    #[test]
+    fn repeated_schema_ensure_does_not_bump_schema_version() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        let schema_version = |conn: &Connection| -> Result<i64> {
+            Ok(conn.query_row("PRAGMA schema_version", [], |row| row.get(0))?)
+        };
+        let settled = schema_version(&conn)?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        assert_eq!(schema_version(&conn)?, settled);
+
+        // A missing or outdated view is still (re)installed.
+        conn.execute_batch("DROP VIEW ctox_pm_case_events;")?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        let restored: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND name = 'ctox_pm_case_events'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(restored, 1);
+        Ok(())
     }
 }

@@ -1622,6 +1622,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
         );
         eprintln!("ctox service: Business OS native RxDB peer autostart disabled");
     }
+    let _transfer_worker = crate::transfers_cli::start_daemon(root)?;
     start_business_os_surfaces(root, state.clone());
     match crate::execution::cliproxyapi_host::start_instance_codex_proxy_supervisor(
         root.to_path_buf(),

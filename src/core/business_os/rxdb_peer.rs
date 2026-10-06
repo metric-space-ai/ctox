@@ -712,7 +712,7 @@ const DEVICE_PROOF_VERSION: &str = "ctox-device-proof-v1";
 #[path = "rxdb_peer_admission_tests.rs"]
 mod peer_admission_tests;
 
-fn validate_device_bound_peer_session(
+pub(super) fn validate_device_bound_peer_session(
     root: &Path,
     protocol: &Value,
     expected_nonce: Option<&str>,
@@ -835,7 +835,7 @@ fn validate_and_bind_mobile_device_proof(
     Accept
 }
 
-fn p256_public_key_and_thumbprint(jwk: &Value) -> Option<(Vec<u8>, String)> {
+pub(super) fn p256_public_key_and_thumbprint(jwk: &Value) -> Option<(Vec<u8>, String)> {
     if jwk.get("kty").and_then(Value::as_str) != Some("EC")
         || jwk.get("crv").and_then(Value::as_str) != Some("P-256")
     {
@@ -2246,13 +2246,18 @@ where
     }
     runtime.block_on(async move {
         let database = open_database(database_path).await?;
-        register_collections_tolerant(&database, collection_creators()).await?;
-        let output = operation(None, Arc::clone(&database)).await?;
+        let output = async {
+            register_collections_tolerant(&database, collection_creators()).await?;
+            operation(None, Arc::clone(&database)).await
+        }
+        .await;
+        // Registration or publication failure still owns this temporary handle.
+        // Drain it before returning the error and dropping the local runtime.
         database
             .close()
             .await
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
-        Ok(output)
+        output
     })
 }
 
@@ -3012,7 +3017,9 @@ async fn run_native_peer(
                     }),
                 )?;
                 let workjet_device_root = root.clone();
+                super::rxdb_peer_transfer_publication::register(pool, &root)?;
                 let business_data_root = root.clone();
+
                 let business_data_database = Arc::clone(&database);
                 let business_data_source = ctox_sync::business_data_remote::BusinessDataSource::new(
                     business_data_database,

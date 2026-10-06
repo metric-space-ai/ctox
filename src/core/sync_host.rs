@@ -1,4 +1,19 @@
 //! CTOX adapter for the native Sync host and its provisioned signing identity.
+pub(crate) const SIGNING_IDENTITY_SECRET_KEY: (&str, &str) = ("ctox-sync-host", "identity-pkcs8");
+/// Decode only bytes borrowed from the caller's current encrypted-store fence.
+pub(crate) fn signing_identity_from_record(
+    encoded: &[u8],
+) -> anyhow::Result<ctox_sync::authority::auth::SigningIdentity> {
+    #[cfg(unix)]
+    {
+        unix::decode_key(encoded)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = encoded;
+        anyhow::bail!("native Sync identity is unavailable on this platform")
+    }
+}
 #[cfg(unix)]
 #[path = "sync_host/unix.rs"]
 mod unix;

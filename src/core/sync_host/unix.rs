@@ -19,8 +19,8 @@ use std::{
 
 #[path = "runtime.rs"]
 mod runtime;
-const SECRET_SCOPE: &str = "ctox-sync-host";
-const IDENTITY_SECRET: &str = "identity-pkcs8";
+const SECRET_SCOPE: &str = super::SIGNING_IDENTITY_SECRET_KEY.0;
+const IDENTITY_SECRET: &str = super::SIGNING_IDENTITY_SECRET_KEY.1;
 const INPUT_LIMIT: u64 = 1024 * 1024;
 
 fn directory(root: &Path) -> PathBuf {
@@ -39,7 +39,7 @@ fn load_config(root: &Path) -> Result<Option<HostConfiguration>> {
 fn configuration(root: &Path) -> Result<HostConfiguration> {
     load_config(root)?.context("native Sync host is not configured")
 }
-fn decode_key(encoded: &[u8]) -> Result<SigningIdentity> {
+pub(super) fn decode_key(encoded: &[u8]) -> Result<SigningIdentity> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct StoredKey {

@@ -77,8 +77,10 @@ const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 10;
 // turn/start loads the durable thread rollout before submitting input, so it
 // gets a more generous bound than ordinary control requests — but it must be
 // bounded: an unbounded await here hangs the whole prompt worker when the
-// session runtime is wedged (ctox#21).
-const DIRECT_SESSION_TURN_START_TIMEOUT_SECS: u64 = 30;
+// session runtime is wedged (ctox#21). 60 s rather than 30 s: thread/start
+// opens the core SQLite store (multi-MB process-mining schema) twice, which on
+// customer on-prem hosts with ~4x slower cores measured past 30 s (05.10.2026).
+const DIRECT_SESSION_TURN_START_TIMEOUT_SECS: u64 = 60;
 
 fn queue_turn_terminal_event(event: &InProcessServerEvent, thread_id: &str, turn_id: &str) -> bool {
     match event {

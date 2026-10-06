@@ -31,6 +31,9 @@ mod install;
 mod iot;
 mod knowledge;
 mod mission;
+mod native_data_device;
+mod native_transfer_accounts;
+mod native_transfer_routing;
 mod paths;
 mod persistence;
 mod report;
@@ -38,6 +41,12 @@ mod secrets;
 mod service;
 mod skill_store;
 mod sync_host;
+#[cfg(unix)]
+mod transfers_checkpoint;
+mod transfers_cli;
+mod transfers_grant;
+mod transfers_native;
+mod transfers_peer;
 mod ui;
 mod web_stack;
 
@@ -412,6 +421,11 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             // declared research workspace. Opening the global CLI ledger
             // first is both unnecessary and forbidden from a worker sandbox.
             "web" => return true,
+            // The bounded foreground transfer worker owns its durable queue.
+            // Do not retain a separate CLI ledger connection for its lifetime.
+            "transfer" if args.get(1).map(String::as_str) == Some("run") => {
+                return true;
+            }
             // Knowledge commands are routed to the daemon-owned IPC handler
             // when the service is active. The daemon owns policy, persistence,
             // and audit evidence; the sandboxed caller must not open the
@@ -442,7 +456,7 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
                 if args.get(1).map(String::as_str) == Some("peer")
                     && matches!(
                         args.get(2).map(String::as_str),
-                        None | Some("status" | "ensure" | "rotate")
+                        None | Some("status" | "ensure" | "rotate" | "start")
                     ) =>
             {
                 return true;
@@ -802,6 +816,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some("office") => business_os::office_cli::handle_command(&args[1..]),
         Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),
+        Some("transfer") => transfers_cli::handle(root, &args[1..]),
         Some("workjet-transfer") => {
             let outcome = business_os::execute_workjet_transfer_git_cli(&args[1..])?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);

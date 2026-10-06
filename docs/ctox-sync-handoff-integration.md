@@ -69,6 +69,29 @@ acceptance results. The daemon's embedded pi sidecar remains the owner of
 Business OS app coding turns; native session handoff must not redirect
 `ctox.coding.turn` into the Codex guest producer.
 
+## Native file-transfer publication composition
+
+The existing transfer carrier now registers grant/provision services through the
+guarded auxiliary dispatcher. Each queued reply retains the original accepted
+peer and token. Every physical callback rereads the current encrypted capability
+issuer, source identity and exact grant or routing credential tuple, then holds
+current policy and any required file-generation projection transaction through
+that callback. A changed principal, device, epoch, issuer, scope, content
+generation or accepted connection cannot publish the prepared success.
+
+The composed native framing implementation keeps main's pipelined cumulative
+ACK windows. Capacity waits, each physical chunk, restart and resume retain their
+own completion owner and publication guard; the existing transfer guard retires
+all outstanding ACKs on termination. The owned GuardedChunkLease interface
+remains the native frame-source boundary.
+
+Registered-service regressions use real native stores and P256 admission with a
+controlled zero-byte Pending sink. Separate production framing regressions cover
+current pipelined delivery, second-window revocation/owner retirement and revoked
+resume. These tests are unrun on this composition. They are not Linux/two-host or
+full session-handoff acceptance. This file-transfer connection does not supply
+the missing session enrollment, provider/artifact export or target-resume path.
+
 ## Recorder-owned journal capture
 
 The admitted native producer retains its actual loaded CodexThread from the same

@@ -236,6 +236,9 @@ jobs:
             # Nexus 9 boots at 2048x1536; rotation 1 turns it into portrait.
             adb shell settings put system user_rotation 0
             adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
+            # Nexus 9 is natively landscape (2048x1536); rotation 1 turns it portrait.
+            adb shell cmd window user-rotation lock 0
+            adb shell cmd window user-rotation
             sleep 2
             adb exec-out screencap -p > "$RUNNER_TEMP/android-tablet-4x3.png"
             python3 src/scripts/assert_android_tablet_screenshot.py "$RUNNER_TEMP/android-tablet-4x3.png"

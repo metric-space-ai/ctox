@@ -18026,6 +18026,23 @@ pub(super) fn with_current_webrtc_capability_signer<T>(
     )
 }
 
+/// One issuer/record tuple; never reenter its non-recursive store fence.
+pub(super) fn with_current_webrtc_capability_secrets<T>(
+    root: &Path,
+    additional: &[(&str, &str)],
+    apply: impl FnOnce(&[u8], &[&[u8]]) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let mut keys = vec![(CAPABILITY_SECRET_SCOPE, CAPABILITY_SECRET_NAME)];
+    keys.extend_from_slice(additional);
+    crate::secrets::with_current_secret_values(root, &keys, |values| {
+        anyhow::ensure!(
+            !std::str::from_utf8(values[0])?.trim().is_empty(),
+            "current capability issuer is empty"
+        );
+        apply(values[0], &values[1..])
+    })
+}
+
 /// Verify a Business OS capability token and return its actor role, or `None`
 /// if the token is missing, malformed or expired. Binds a sync-mesh browser
 /// peer to its server-authenticated role for the per-collection authz gate.
@@ -18208,6 +18225,48 @@ pub(super) fn webrtc_capability_allows_collection_permission_from_connection(
 
 pub(super) fn verify_webrtc_capability_actor(root: &Path, token: &str) -> Option<(String, String)> {
     verified_webrtc_capability_claims(root, token).map(|claims| (claims.user_id, claims.role))
+}
+
+/// Renew only the already admitted device assertion. No user upsert, role
+/// change, new pairing or caller-supplied principal is performed here.
+pub(super) fn renew_native_transfer_capability(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<(String, i64)> {
+    let before = verified_webrtc_capability_claims(root, token)
+        .ok_or_else(|| anyhow::anyhow!("native transfer account unauthorized"))?;
+    anyhow::ensure!(
+        before.device_binding.is_some(),
+        "enrolled native device required"
+    );
+    let now = now_ms() as i64;
+    let expires = now
+        .checked_add(CAPABILITY_TOKEN_TTL_MS)
+        .ok_or_else(|| anyhow::anyhow!("native transfer capability unavailable"))?;
+    let secret = capability_signing_secret(root)?;
+    let renewed = super::capability::issue_capability_token_with_epoch_and_identity(
+        &secret,
+        &before.user_id,
+        before.email.as_deref(),
+        &before.role,
+        before.actor_epoch,
+        now,
+        expires,
+        before.device_binding.as_ref(),
+    );
+    let after = verified_webrtc_capability_claims(root, token)
+        .ok_or_else(|| anyhow::anyhow!("native transfer account revoked"))?;
+    let issued = verified_webrtc_capability_claims(root, &renewed)
+        .ok_or_else(|| anyhow::anyhow!("native transfer renewal rejected"))?;
+    anyhow::ensure!(
+        before == after
+            && issued.user_id == before.user_id
+            && issued.role == before.role
+            && issued.actor_epoch == before.actor_epoch
+            && issued.device_binding == before.device_binding,
+        "native transfer account changed"
+    );
+    Ok((renewed, expires))
 }
 
 pub(super) fn capability_allows_collection_permission(
