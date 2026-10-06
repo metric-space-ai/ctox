@@ -2,7 +2,7 @@
 //! WebRTC send, and a delivered observation is consumed before an input attempt.
 use super::super::guest_runtime::{GuestAction, GuestFrame, GuestInput};
 use super::*;
-use rxdb::plugins::replication_webrtc::file_fetch_handler::GuardedFileSource;
+use rxdb::plugins::replication_webrtc::file_fetch_handler::{GuardedChunkSend, GuardedFileSource};
 use rxdb::rx_error::{new_rx_error, RxResult};
 use serde_json::{json, Value};
 use std::sync::{
@@ -529,7 +529,7 @@ impl GuardedFileSource for NativeFrameSource {
         max: usize,
         terminal: bool,
         capability_token: &str,
-        send: &mut dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
+        send: &mut GuardedChunkSend<'_>,
     ) -> RxResult<()> {
         let registry = self.current_registry().map_err(transport_error)?;
         let execution = registry.frame_execution(id).map_err(transport_error)?;
