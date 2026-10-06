@@ -47,7 +47,7 @@ fn v16_eof_choice(delta: Value, finish_reason: Value) -> HttpStreamChunk {
 
 async fn v16_eof_run(chunks: Vec<HttpStreamChunk>, tools: Value) -> (Vec<Value>, Vec<String>) {
     let registry = Arc::new(Registry::new());
-    crate::internal::translator::openai::openai::responses::register_openai_responses_chat_completions(&registry);
+    crate::internal::translator::openai::passthrough::responses::register_openai_responses_chat_completions(&registry);
     let executor =
         OpenAiCompatExecutor::new("fixture", Arc::new(OpenAiCompatConfig::default()), registry);
     let payload = serde_json::to_vec(&json!({

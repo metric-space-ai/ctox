@@ -577,7 +577,7 @@ impl OpenAiCompatExecutor {
                 return;
             }
             if response_format.as_str() == "openai-response"
-                && !crate::internal::translator::openai::openai::responses::can_finalize_response_stream(&state)
+                && !crate::internal::translator::openai::passthrough::responses::can_finalize_response_stream(&state)
             {
                 let _ = sender.send(stream_error(
                     502, "upstream stream closed before [DONE]",
