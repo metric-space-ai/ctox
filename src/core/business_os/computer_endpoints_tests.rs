@@ -471,7 +471,10 @@ fn legacy_ssh_algorithm_omission_preserves_connection_and_job_authority() -> Res
     let decoded: ComputerEndpoint = serde_json::from_value(original.clone())?;
     assert!(matches!(
         decoded,
-        ComputerEndpoint::Ssh { host_key_algorithm: None, .. }
+        ComputerEndpoint::Ssh {
+            host_key_algorithm: None,
+            ..
+        }
     ));
     assert_eq!(serde_json::to_value(decoded)?, original);
     let before = resolve_computer_endpoint(root.path(), &request())?;
@@ -505,24 +508,45 @@ fn ssh_algorithm_constraint_is_strict_persisted_and_invalidates_old_jobs() -> Re
         assert_eq!(serde_json::to_value(&after.connection)?, connection);
         assert_ne!(after.fingerprint, before.fingerprint);
         let mut entered = false;
-        assert!(with_current_computer_endpoint(root.path(), &request(), &before.fingerprint, |_, _| {
-            entered = true;
-            Ok(())
-        }).is_err());
+        assert!(with_current_computer_endpoint(
+            root.path(),
+            &request(),
+            &before.fingerprint,
+            |_, _| {
+                entered = true;
+                Ok(())
+            }
+        )
+        .is_err());
         assert!(!entered);
-        with_current_computer_endpoint(root.path(), &request(), &after.fingerprint, |resolved, _| {
-            assert!(matches!(&resolved.connection, ComputerEndpoint::Ssh {
+        with_current_computer_endpoint(
+            root.path(),
+            &request(),
+            &after.fingerprint,
+            |resolved, _| {
+                assert!(matches!(&resolved.connection, ComputerEndpoint::Ssh {
                 host_key_algorithm: Some(value), ..
             } if *value == algorithm));
-            Ok(())
-        })?;
+                Ok(())
+            },
+        )?;
     }
     let last = resolve_computer_endpoint(root.path(), &request())?;
-    for unsupported in ["ssh-rsa", "ssh-dss", "ed25519", "ecdsa", "ssh-ed25519-cert-v01@openssh.com", ""] {
+    for unsupported in [
+        "ssh-rsa",
+        "ssh-dss",
+        "ed25519",
+        "ecdsa",
+        "ssh-ed25519-cert-v01@openssh.com",
+        "",
+    ] {
         let mut connection = ssh();
         connection["host_key_algorithm"] = json!(unsupported);
         assert!(upsert(root.path(), connection).is_err());
     }
-    assert_eq!(resolve_computer_endpoint(root.path(), &request())?.fingerprint, last.fingerprint);
+    assert_eq!(
+        resolve_computer_endpoint(root.path(), &request())?.fingerprint,
+        last.fingerprint
+    );
     Ok(())
 }
