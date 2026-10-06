@@ -1,8 +1,8 @@
 // ref: internal/translator/codex/openai/chat-completions/codex_openai_response.go @ a88197f845c979132c8978ea223c6af05cc81536
-// Port-Status: ported
+// Port-Status: candidate — URL citations additionally ported from v8.0.14/16d98881
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -26,6 +26,8 @@ pub struct CodexToChatStreamState {
     tool_call_keys: HashMap<String, usize>,
     current_tool_call: Option<usize>,
     last_image_hash_by_item_id: HashMap<String, [u8; 32]>,
+    emitted_text_runes: i64,
+    citation_keys: HashSet<String>,
 }
 
 pub fn convert_codex_response_to_openai_chat_stream(
@@ -82,8 +84,23 @@ pub fn convert_codex_response_to_openai_chat_stream(
             let Some(delta) = root.get("delta") else {
                 return Vec::new();
             };
-            output["choices"][0]["delta"] =
-                json!({"role":"assistant","content":value_string(delta)});
+            let delta = value_string(delta);
+            state.emitted_text_runes += delta.chars().count() as i64;
+            output["choices"][0]["delta"] = json!({"role":"assistant","content":delta});
+        }
+        // ref: upstream codex_openai_response.go:161-168 @ 16d98881
+        "response.output_text.annotation.added"
+        | "response.output_text.done"
+        | "response.content_part.done" => {
+            let citations = build_codex_url_citations(
+                codex_annotations_from_event(&root),
+                state.emitted_text_runes,
+                &mut state.citation_keys,
+            );
+            if citations.is_empty() {
+                return Vec::new();
+            }
+            output["choices"][0]["delta"] = json!({"role":"assistant","annotations":citations});
         }
         "response.image_generation_call.partial_image" => {
             let item_id = string(&root, "/item_id");
@@ -162,7 +179,18 @@ pub fn convert_codex_response_to_openai_chat_stream(
             let Some(item) = root.get("item") else {
                 return Vec::new();
             };
-            if item.get("type").and_then(Value::as_str) == Some("image_generation_call") {
+            // ref: upstream codex_openai_response.go:295-309 @ 16d98881
+            if item.get("type").and_then(Value::as_str) == Some("message") {
+                let citations = build_codex_url_citations(
+                    codex_annotations_from_event(&root),
+                    state.emitted_text_runes,
+                    &mut state.citation_keys,
+                );
+                if citations.is_empty() {
+                    return Vec::new();
+                }
+                output["choices"][0]["delta"] = json!({"role":"assistant","annotations":citations});
+            } else if item.get("type").and_then(Value::as_str) == Some("image_generation_call") {
                 let image = item.get("result").and_then(Value::as_str).unwrap_or("");
                 let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
                 if image.is_empty() || duplicate_image(state, item_id, image) {
@@ -237,6 +265,9 @@ pub fn convert_codex_response_to_openai_chat_non_stream(
     let mut reasoning = String::new();
     let mut tools = Vec::new();
     let mut images = Vec::new();
+    let mut annotations = Vec::new();
+    let mut annotation_keys = HashSet::new();
+    let mut content_rune_offset = 0_i64;
     for item in response
         .get("output")
         .and_then(Value::as_array)
@@ -247,8 +278,20 @@ pub fn convert_codex_response_to_openai_chat_non_stream(
             "reasoning" => if let Some(part) = item.get("summary").and_then(Value::as_array).into_iter().flatten().find(|part| part.get("type").and_then(Value::as_str) == Some("summary_text")) {
                 reasoning.push_str(part.get("text").and_then(Value::as_str).unwrap_or(""));
             },
-            "message" => if let Some(part) = item.get("content").and_then(Value::as_array).into_iter().flatten().find(|part| part.get("type").and_then(Value::as_str) == Some("output_text")) {
-                text.push_str(part.get("text").and_then(Value::as_str).unwrap_or(""));
+            // ref: upstream codex_openai_response.go:524-540 @ 16d98881
+            "message" => {
+                for part in item.get("content").and_then(Value::as_array).into_iter().flatten() {
+                    if part.get("type").and_then(Value::as_str) != Some("output_text") {
+                        continue;
+                    }
+                    let part_text = part.get("text").and_then(Value::as_str).unwrap_or("");
+                    text.push_str(part_text);
+                    annotations.extend(build_codex_url_citations(
+                        codex_annotation_results(part.get("annotations")),
+                        content_rune_offset, &mut annotation_keys,
+                    ));
+                    content_rune_offset += part_text.chars().count() as i64;
+                }
             },
             "function_call" | "custom_tool_call" => tools.push(json!({
                 "id":item.get("call_id").and_then(Value::as_str).unwrap_or(""),"type":"function",
@@ -263,6 +306,9 @@ pub fn convert_codex_response_to_openai_chat_non_stream(
     }
     if !text.is_empty() {
         output["choices"][0]["message"]["content"] = Value::String(text);
+    }
+    if !annotations.is_empty() {
+        output["choices"][0]["message"]["annotations"] = Value::Array(annotations);
     }
     if !reasoning.is_empty() {
         output["choices"][0]["message"]["reasoning_content"] = Value::String(reasoning);
@@ -297,6 +343,76 @@ pub fn convert_codex_response_to_openai_chat_non_stream(
         }
     }
     serde_json::to_vec(&output).unwrap_or_default()
+}
+
+// ref: internal/translator/codex/openai/chat-completions/codex_openai_response.go:638-718 @ 16d98881
+fn codex_annotation_results(value: Option<&Value>) -> Vec<&Value> {
+    match value {
+        Some(Value::Array(values)) => values.iter().collect(),
+        Some(value) => vec![value],
+        None => Vec::new(),
+    }
+}
+
+fn codex_annotations_from_event(event: &Value) -> Vec<&Value> {
+    let mut annotations = Vec::new();
+    for pointer in ["/annotation", "/annotations", "/part/annotations"] {
+        annotations.extend(codex_annotation_results(event.pointer(pointer)));
+    }
+    if let Some(item) = event.get("item") {
+        annotations.extend(codex_annotation_results(item.get("annotations")));
+        for content in item
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            annotations.extend(codex_annotation_results(content.get("annotations")));
+        }
+    }
+    annotations
+}
+
+fn build_codex_url_citations(
+    annotations: Vec<&Value>,
+    rune_offset: i64,
+    seen: &mut HashSet<String>,
+) -> Vec<Value> {
+    let mut citations = Vec::new();
+    for annotation in annotations {
+        if annotation.get("type").and_then(Value::as_str) != Some("url_citation") {
+            continue;
+        }
+        // Retain upstream GJSON integer conversion rather than accepting a
+        // different numeric grammar at this new boundary.
+        let raw = serde_json::to_string(annotation).unwrap_or_default();
+        let raw_start_index = gjson::get(&raw, "start_index").i64();
+        let raw_end_index = gjson::get(&raw, "end_index").i64();
+        let start_index = raw_start_index.wrapping_add(rune_offset);
+        let end_index = raw_end_index.wrapping_add(rune_offset);
+        if start_index < 0 || end_index < start_index {
+            continue;
+        }
+        let url = string(annotation, "/url");
+        let id = string(annotation, "/id");
+        let key = format!(
+            "{}\0{raw_start_index}",
+            if url.is_empty() { &id } else { &url }
+        );
+        let mut keys = vec![key];
+        if !id.is_empty() {
+            keys.push(format!("id\0{id}"));
+        }
+        if keys.iter().any(|key| seen.contains(key)) {
+            continue;
+        }
+        seen.extend(keys);
+        citations.push(json!({
+            "type":"url_citation", "url":url, "title":string(annotation, "/title"),
+            "start_index":start_index, "end_index":end_index
+        }));
+    }
+    citations
 }
 
 fn register_tool(state: &mut CodexToChatStreamState, event: &Value, item: &Value) -> usize {
@@ -470,6 +586,10 @@ fn trim_ascii(mut value: &[u8]) -> &[u8] {
     }
     value
 }
+
+#[cfg(test)]
+#[path = "codex_openai_response_candidate_test.rs"]
+mod candidate_tests;
 
 #[cfg(test)]
 mod tests {

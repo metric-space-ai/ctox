@@ -18,7 +18,7 @@ fn registry() -> ModelRegistry {
 #[test]
 fn model_override_headers_from_embedded_models() {
     const WANT_UA: &str =
-        "codex-tui/0.144.0 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.144.0)";
+        "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)";
     let registry = registry();
     assert_eq!(
         registry.model_override_headers("gpt-5.6-luna", "").unwrap()["user-agent"],
@@ -53,7 +53,7 @@ fn xai_builtins_include_video_preview_and_replace_case_insensitively() {
             .count(),
         1
     );
-    assert_eq!(models.len(), 4);
+    assert_eq!(models.len(), 6);
 }
 
 #[test]
@@ -101,6 +101,64 @@ fn antigravity_web_search_requires_requested_provider_capability() {
     );
 }
 
+// ref: internal/registry/models/models.json @ 16d98881d4bb37adaa827599e4be8f5154e81646
+#[test]
+fn candidate_v14_antigravity_claude_catalog_keeps_provider_and_thinking_limits() {
+    let catalog = embedded_models_catalog().unwrap();
+    let models = models_for_channel(&catalog, "antigravity").unwrap();
+    for (id, display) in [
+        ("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
+        ("claude-sonnet-5-5-high", "Claude Sonnet 5.5 (High)"),
+    ] {
+        let model = models.iter().find(|model| model.id == id).unwrap();
+        assert_eq!(model.provider_type, "antigravity");
+        assert_eq!(model.owned_by, "antigravity");
+        assert_eq!(model.display_name, display);
+        assert_eq!(model.name, id);
+        assert_eq!(model.description, display);
+        assert_eq!(model.context_length, 1_000_000);
+        assert_eq!(model.max_completion_tokens, 128_000);
+        assert_eq!(
+            model.supported_input_modalities,
+            vec!["text".to_owned(), "image".to_owned()]
+        );
+        assert_eq!(model.supported_output_modalities, vec!["text".to_owned()]);
+        let thinking = model.thinking.as_ref().unwrap();
+        assert_eq!((thinking.min, thinking.max), (1024, 64_000));
+        assert!(thinking.zero_allowed && thinking.dynamic_allowed);
+    }
+    for (id, display) in [
+        ("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)"),
+        ("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)"),
+    ] {
+        let model = models.iter().find(|model| model.id == id).unwrap();
+        assert_eq!(model.provider_type, "antigravity");
+        assert_eq!(model.owned_by, "antigravity");
+        assert_eq!(model.display_name, display);
+        assert_eq!(model.name, id);
+        assert_eq!(model.description, display);
+        assert_eq!(model.context_length, 200_000);
+        assert_eq!(model.max_completion_tokens, 64_000);
+        assert_eq!(
+            model.supported_input_modalities,
+            vec!["text".to_owned(), "image".to_owned()]
+        );
+        assert_eq!(model.supported_output_modalities, vec!["text".to_owned()]);
+        let thinking = model.thinking.as_ref().unwrap();
+        assert_eq!((thinking.min, thinking.max), (1024, 64_000));
+        assert!(thinking.zero_allowed && thinking.dynamic_allowed);
+        let registry = ModelRegistry::from_store(Arc::new(ModelCatalogStore::new(catalog.clone())));
+        let resolved = registry.lookup_model_info(id, "antigravity").unwrap();
+        assert_eq!(resolved.provider_type, "antigravity");
+        assert_eq!(resolved.context_length, 200_000);
+        assert_eq!(resolved.max_completion_tokens, 64_000);
+    }
+    assert!(models_for_channel(&catalog, "claude")
+        .unwrap()
+        .iter()
+        .any(|model| model.id == "claude-sonnet-4-6"));
+}
+
 #[test]
 fn complete_embedded_catalog_hash_channels_and_lookup_are_stable() {
     assert_eq!(
@@ -108,17 +166,23 @@ fn complete_embedded_catalog_hash_channels_and_lookup_are_stable() {
             "{:x}",
             Sha256::digest(include_str!("models/models.json").trim_end().as_bytes())
         ),
-        "483f7fb1b0f159bcda08c01ea91e21162b8f50ad34e83b7d7884e6a5384525c7"
+        "8fad5ea79ca3a61dc4dfca72338ec4cd966218c3f9f62c6b074233d4af9579e6"
     );
     let expected = [
-        ("claude", 15),
-        ("gemini", 12),
-        ("vertex", 19),
-        ("aistudio", 14),
-        ("codex", 10),
-        ("kimi", 8),
-        ("antigravity", 12),
-        ("xai", 13),
+        ("claude", 18),
+        ("gemini", 14),
+        ("gemini-interactions", 14),
+        ("vertex", 21),
+        ("aistudio", 16),
+        ("codex", 14),
+        ("codex-free", 10),
+        ("codex-team", 14),
+        ("codex-plus", 14),
+        ("codex-pro", 14),
+        ("kimi", 10),
+        ("antigravity", 14),
+        ("xai", 18),
+        ("meta", 5),
     ];
     for (channel, count) in expected {
         assert_eq!(
@@ -184,6 +248,10 @@ async fn updater_falls_back_validates_commits_atomically_and_notifies() {
     let initial = embedded_models_catalog().unwrap();
     let mut next = initial.clone();
     next.kimi[0].description.push_str(" changed");
+    // Network catalogs retain private capabilities omitted by public model JSON.
+    let mut next_json: serde_json::Value =
+        serde_json::from_str(include_str!("models/models.json")).unwrap();
+    next_json["kimi"][0]["description"] = next.kimi[0].description.clone().into();
     let store = Arc::new(ModelCatalogStore::new(initial));
     let registry = ModelRegistry::from_store(Arc::clone(&store));
     let source = Arc::new(Source(Mutex::new(HashMap::from([
@@ -192,7 +260,10 @@ async fn updater_falls_back_validates_commits_atomically_and_notifies() {
             "invalid".to_owned(),
             Ok(br#"{"claude": [{"id": ""}]}"#.to_vec()),
         ),
-        ("valid".to_owned(), Ok(serde_json::to_vec(&next).unwrap())),
+        (
+            "valid".to_owned(),
+            Ok(serde_json::to_vec(&next_json).unwrap()),
+        ),
     ]))));
     let notifications = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
     let target = Arc::clone(&notifications);

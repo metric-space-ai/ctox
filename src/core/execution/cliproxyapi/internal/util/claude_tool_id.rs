@@ -11,6 +11,36 @@ use sha2::{Digest, Sha256};
 const GEMINI_CLAUDE_TOOL_USE_ID_PREFIX: &str = "cpa_gemini_";
 static CLAUDE_TOOL_USE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Keeps Claude function names inside `^[a-zA-Z0-9_-]{1,64}`.
+/// Dots and colons from MCP tool names become `_`. An empty name stays empty.
+#[must_use]
+pub fn sanitize_claude_function_name(name: &str) -> String {
+    if name.is_empty() {
+        return String::new();
+    }
+    let mut sanitized: String = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.len() > 64 {
+        let mut end = 64;
+        while !sanitized.is_char_boundary(end) {
+            end -= 1;
+        }
+        sanitized.truncate(end);
+    }
+    if sanitized.is_empty() {
+        sanitized.push('_');
+    }
+    sanitized
+}
+
 pub fn sanitize_claude_tool_id(id: &str) -> String {
     let mut sanitized = id
         .chars()

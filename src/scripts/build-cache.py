@@ -309,7 +309,7 @@ def main():
     build.add_argument("--entry")
     build.add_argument("--cwd", type=Path, default=Path.cwd())
     # Managed upgrades build each release in a release-local target, i.e. a
-    # full rebuild. On customer on-prem hosts with slow cores (THESEN: Xeon
+    # full rebuild. On customer on-prem hosts with slow cores (customer: Xeon
     # Silver 4208 under Hyper-V) that alone took ~60 min and the 1 h bound
     # aborted the upgrade under ordinary load (06.10.2026). Keep a hard bound
     # against hung builds, but one a full rebuild on such a host fits into.

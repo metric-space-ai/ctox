@@ -670,11 +670,19 @@ fn interactions_step_start_to_responses(
                 .get(&index)
                 .cloned()
                 .unwrap_or_default();
+            // ref: interactions_openai_responses_response.go:425-437 @ d7914afd
             let sequence = next_sequence(state);
-            vec![emit_responses_event(
-                "response.output_item.added",
-                json!({"type":"response.output_item.added","output_index":index,"item":{"id":item_id,"type":"reasoning","status":"in_progress","encrypted_content":encrypted,"summary":[]},"sequence_number":sequence}),
-            )]
+            let part_sequence = next_sequence(state);
+            vec![
+                emit_responses_event(
+                    "response.output_item.added",
+                    json!({"type":"response.output_item.added","output_index":index,"item":{"id":item_id,"type":"reasoning","status":"in_progress","encrypted_content":encrypted,"summary":[]},"sequence_number":sequence}),
+                ),
+                emit_responses_event(
+                    "response.reasoning_summary_part.added",
+                    json!({"type":"response.reasoning_summary_part.added","item_id":item_id,"output_index":index,"summary_index":0,"part":{"type":"summary_text","text":""},"sequence_number":part_sequence}),
+                ),
+            ]
         }
         "function_call" => {
             if state.function_calls.contains_key(&index) {
@@ -731,10 +739,11 @@ fn interactions_step_delta_to_responses(
                     .or_default()
                     .push(text.clone());
             }
+            let item_id = state.item_ids.get(&index).cloned().unwrap_or_default();
             let sequence = next_sequence(state);
             vec![emit_responses_event(
                 "response.reasoning_summary_text.delta",
-                json!({"type":"response.reasoning_summary_text.delta","output_index":index,"delta":text,"sequence_number":sequence}),
+                json!({"type":"response.reasoning_summary_text.delta","item_id":item_id,"output_index":index,"summary_index":0,"delta":text,"sequence_number":sequence}),
             )]
         }
         "thought_signature" => {
@@ -868,6 +877,32 @@ fn interactions_step_stop_to_responses(
             }
             events
         }
+        "thought" => {
+            // ref: interactions_openai_responses_response.go:685-711 @ d7914afd
+            let text = state
+                .reasoning_summaries
+                .get(&index)
+                .map(|parts| parts.concat())
+                .unwrap_or_default();
+            let text_sequence = next_sequence(state);
+            let part_sequence = next_sequence(state);
+            let item_sequence = next_sequence(state);
+            let item = responses_reasoning_item(index, state);
+            vec![
+                emit_responses_event(
+                    "response.reasoning_summary_text.done",
+                    json!({"type":"response.reasoning_summary_text.done","item_id":item_id,"output_index":index,"summary_index":0,"text":text,"sequence_number":text_sequence}),
+                ),
+                emit_responses_event(
+                    "response.reasoning_summary_part.done",
+                    json!({"type":"response.reasoning_summary_part.done","item_id":item_id,"output_index":index,"summary_index":0,"part":{"type":"summary_text","text":text},"sequence_number":part_sequence}),
+                ),
+                emit_responses_event(
+                    "response.output_item.done",
+                    json!({"type":"response.output_item.done","output_index":index,"item":item,"sequence_number":item_sequence}),
+                ),
+            ]
+        }
         _ => {
             let item = responses_reasoning_item(index, state);
             let sequence = next_sequence(state);
@@ -920,19 +955,19 @@ fn completed_output(state: &InteractionsToResponsesStreamState) -> Vec<Value> {
         .collect()
 }
 
+// ref: interactions_openai_responses_response.go:926-940 @ d7914afd
 fn responses_reasoning_item(index: i64, state: &InteractionsToResponsesStreamState) -> Value {
-    let summary: Vec<_> = state
+    let text = state
         .reasoning_summaries
         .get(&index)
-        .into_iter()
-        .flatten()
-        .map(|text| json!({"type":"summary_text","text":text}))
-        .collect();
+        .map(|parts| parts.concat())
+        .unwrap_or_default();
     json!({
         "id":state.item_ids.get(&index).cloned().unwrap_or_default(),
         "type":"reasoning",
+        "status":"completed",
         "encrypted_content":state.reasoning_encrypted.get(&index).cloned().unwrap_or_default(),
-        "summary":summary,
+        "summary":[{"type":"summary_text","text":text}],
     })
 }
 

@@ -477,7 +477,7 @@ export function parseDelimitedText(text, options = {}) {
 // whose header cells Excel fills with placeholders ("Spalte1" … "Spalte16334",
 // "Column1" …). A North Data export of 49,804 firms had 48 real and 16,334
 // placeholder columns; mapping every placeholder onto every row object built
-// ~800 million properties and crashed the browser tab (THESEN, 06.10.2026).
+// ~800 million properties and crashed the browser tab (customer deployment, 06.10.2026).
 const PLACEHOLDER_HEADER = /^(spalte|column|col)\s*\d+$/i;
 
 function trimTrailingEmptyColumns(rows) {

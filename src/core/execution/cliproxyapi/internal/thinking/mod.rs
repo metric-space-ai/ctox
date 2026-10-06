@@ -2,9 +2,11 @@
 // License: AGPL-3.0-only
 
 mod apply;
+mod configuration_update;
 mod convert;
 mod errors;
 mod json;
+mod model_view;
 mod provider;
 mod strip;
 mod suffix;
@@ -19,6 +21,7 @@ pub use convert::{
     THRESHOLD_MINIMAL,
 };
 pub use errors::{ErrorCode, ThinkingError};
+pub use model_view::{ModelInfoView, ThinkingSupportView};
 pub use provider::{
     AntigravityApplier, ClaudeApplier, CodexApplier, GeminiApplier, InteractionsApplier,
     KimiApplier, OpenAiApplier, XaiApplier,
@@ -27,7 +30,7 @@ pub use strip::strip_thinking_config;
 pub use suffix::{parse_level_suffix, parse_numeric_suffix, parse_special_suffix, parse_suffix};
 pub use summary::{
     apply_summary_config, apply_summary_config_for_model, apply_summary_config_for_resolved_model,
-    extract_explicit_summary_config, extract_summary_config,
+    extract_explicit_summary_config, extract_summary_config, extract_translated_summary_config,
     strip_inferred_claude_summary_activation, SummaryConfig, SummaryMode,
 };
 pub use text::get_thinking_text;
@@ -66,5 +69,15 @@ mod apply_configured_api_key_test;
 mod kimi_max_clamp_repro_test;
 pub use apply::{
     extract_reasoning_effort, extract_translated_reasoning_effort, EmbeddedModelInfoResolver,
-    ModelInfoResolver, ResolvedThinkingRequest, ThinkingEngine, ThinkingRequest,
+    ModelInfoResolver, RegistryModelInfoResolver, ResolvedCapabilityThinkingRequest,
+    ResolvedThinkingRequest, ThinkingEngine, ThinkingRequest,
 };
+
+#[cfg(test)]
+mod request_pipeline_candidate_test;
+
+#[cfg(test)]
+mod configuration_update_candidate_test;
+
+#[cfg(test)]
+mod native_responses_log_candidate_test;

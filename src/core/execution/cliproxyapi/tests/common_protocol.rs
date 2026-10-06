@@ -63,7 +63,7 @@ fn sse_decoder_ignores_invalid_retry_and_clears_empty_event_fields() {
 fn sse_encoder_matches_upstream_shape() {
     assert_eq!(
         sse_event_data("response.done", br#"{"ok":true}"#),
-        b"event: response.done\ndata: {\"ok\":true}"
+        b"event: response.done\ndata: {\"ok\":true}\n\n"
     );
 }
 

@@ -95,10 +95,15 @@ export async function mount(ctx) {
   bindElements(ctx.host);
   applyHeaderActionIcons();
   wireEvents();
-  await Promise.all([
-    ctx.sync?.startCollection?.('business_module_catalog'),
-    ctx.sync?.startCollection?.('business_commands'),
-  ]);
+  // The shell owns the module's sync lease. Starting these bridges is
+  // warmup, not permission to read or a prerequisite for cached rendering.
+  // Catalog queries and commands retain their existing authority checks.
+  void Promise.all([
+    Promise.resolve().then(() => ctx.sync?.startCollection?.('business_module_catalog')),
+    Promise.resolve().then(() => ctx.sync?.startCollection?.('business_commands')),
+  ]).catch((error) => {
+    console.warn('[app-store] Sync warmup failed:', error);
+  });
   await loadCatalog();
   applyCatalogMarketplaceState();
   state.unsubscribe = ctx.db?.collection?.('business_module_catalog')

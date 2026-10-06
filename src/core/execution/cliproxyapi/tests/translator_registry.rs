@@ -204,6 +204,7 @@ fn pipeline_middleware_wraps_in_registration_order() {
         model: "m".into(),
         stream: false,
         body: b"{}".to_vec(),
+        configuration_updates_changed: false,
     };
     let output = pipeline
         .translate_request(&TranslationContext::default(), from, to.clone(), request)

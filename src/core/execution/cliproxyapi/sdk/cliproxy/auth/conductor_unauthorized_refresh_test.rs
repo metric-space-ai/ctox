@@ -209,6 +209,7 @@ fn successful_refresh_normalizes_auth_and_recovers_unauthorized_model_state() {
                 reason: "quota".into(),
                 next_recover_at: now + chrono::Duration::minutes(30),
                 backoff_level: 2,
+                ..QuotaState::default()
             },
             updated_at: now - chrono::Duration::minutes(1),
         },

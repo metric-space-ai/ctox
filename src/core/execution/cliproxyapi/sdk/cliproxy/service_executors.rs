@@ -1,4 +1,4 @@
-// ref: sdk/cliproxy/service_executors.go @ a88197f845c979132c8978ea223c6af05cc81536
+// ref: sdk/cliproxy/service_executors.go:164-326 @ d7914afdedca7af95ee974a42453dc49fc1388ce
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::auth::{Auth, ProviderExecutorRegistration};
 use super::service_auth::{ServiceAuthError, ServiceAuthRuntime};
 
-pub const BASELINE_EXECUTOR_PROVIDERS: [&str; 10] = [
+pub const BASELINE_EXECUTOR_PROVIDERS: [&str; 14] = [
     "codex",
     "claude",
     "gemini",
@@ -17,7 +17,11 @@ pub const BASELINE_EXECUTOR_PROVIDERS: [&str; 10] = [
     "aistudio",
     "antigravity",
     "kimi",
+    "kimi-ai",
+    "kimi.ai",
     "xai",
+    "devin",
+    "meta",
     "openai-compatibility",
 ];
 
@@ -276,5 +280,5 @@ fn openai_compatible_provider_key(provider: &str) -> String {
 }
 
 fn is_native_provider(provider: &str) -> bool {
-    BASELINE_EXECUTOR_PROVIDERS.contains(&provider)
+    BASELINE_EXECUTOR_PROVIDERS.contains(&provider) || provider == "kimi.com"
 }

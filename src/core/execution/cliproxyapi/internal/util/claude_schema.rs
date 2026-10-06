@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::value::RawValue;
+use serde_json::{Map, Value};
 
 const EMPTY_CLAUDE_TOOL_INPUT_SCHEMA: &[u8] = br#"{"type":"object","properties":{}}"#;
 const ROOT_UNIONS: [&str; 3] = ["anyOf", "oneOf", "allOf"];
@@ -199,4 +200,123 @@ fn push_html_escape(output: &mut String, character: char) {
         '&' => r#"\u0026"#,
         _ => unreachable!("caller filters HTML-sensitive bytes"),
     });
+}
+
+/// JSON Schema keywords whose values are maps of subschemas.
+pub const SCHEMA_MAP_KEYWORDS: &[&str] = &[
+    "properties",
+    "$defs",
+    "definitions",
+    "patternProperties",
+    "dependentSchemas",
+    "dependencies",
+];
+
+/// JSON Schema keywords whose values are one subschema or a list of subschemas.
+pub const SCHEMA_VALUE_KEYWORDS: &[&str] = &[
+    "items",
+    "prefixItems",
+    "contains",
+    "additionalProperties",
+    "propertyNames",
+    "unevaluatedProperties",
+    "unevaluatedItems",
+    "additionalItems",
+    "contentSchema",
+    "anyOf",
+    "oneOf",
+    "allOf",
+    "not",
+    "if",
+    "then",
+    "else",
+];
+
+/// Reports a regex construct that strict upstream JSON Schema validators reject.
+///
+/// Unicode property escapes (`\p{...}` / `\P{...}`) and the octal NUL escape
+/// (`\0`) are the two spellings Anthropic accepts but later providers do not.
+/// An escaped backslash stays literal.
+#[must_use]
+pub fn has_unsupported_unicode_property_escape(pattern: &str) -> bool {
+    let bytes = pattern.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'\\' {
+            index += 1;
+            continue;
+        }
+        if index + 1 >= bytes.len() {
+            break;
+        }
+        let next = bytes[index + 1];
+        if (next == b'p' || next == b'P') && index + 2 < bytes.len() && bytes[index + 2] == b'{' {
+            return true;
+        }
+        if next == b'0' {
+            return true;
+        }
+        index += 2;
+    }
+    false
+}
+
+/// Removes unsupported `pattern` values and `patternProperties` keys.
+///
+/// Only subschemas under known JSON Schema keywords are visited, so a
+/// `pattern` key inside user data such as `default` or `enum` stays.
+pub fn strip_unsupported_schema_patterns(value: &mut Value) -> bool {
+    match value {
+        Value::Object(schema) => strip_unsupported_schema_object(schema),
+        Value::Array(items) => {
+            let mut changed = false;
+            for item in items {
+                changed |= strip_unsupported_schema_patterns(item);
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+fn strip_unsupported_schema_object(schema: &mut Map<String, Value>) -> bool {
+    let mut changed = false;
+    let drop_pattern = schema
+        .get("pattern")
+        .and_then(Value::as_str)
+        .is_some_and(has_unsupported_unicode_property_escape);
+    if drop_pattern {
+        schema.remove("pattern");
+        changed = true;
+    }
+    if let Some(Value::Object(pattern_props)) = schema.get_mut("patternProperties") {
+        let rejected = pattern_props
+            .keys()
+            .filter(|key| has_unsupported_unicode_property_escape(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in rejected {
+            pattern_props.remove(&key);
+            changed = true;
+        }
+        for child in pattern_props.values_mut() {
+            changed |= strip_unsupported_schema_patterns(child);
+        }
+    }
+    for key in SCHEMA_MAP_KEYWORDS {
+        if *key == "patternProperties" {
+            continue;
+        }
+        if let Some(Value::Object(children)) = schema.get_mut(*key) {
+            for child in children.values_mut() {
+                changed |= strip_unsupported_schema_patterns(child);
+            }
+        }
+    }
+    for key in SCHEMA_VALUE_KEYWORDS {
+        if let Some(child @ (Value::Object(_) | Value::Array(_))) = schema.get_mut(*key) {
+            changed |= strip_unsupported_schema_patterns(child);
+        }
+    }
+    changed
 }

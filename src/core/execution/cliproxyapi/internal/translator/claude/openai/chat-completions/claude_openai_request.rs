@@ -7,16 +7,35 @@ use crate::internal::thinking::{convert_level_to_budget, has_level, map_to_claud
 use crate::internal::translator::common::{
     attach_cache_control as attach_cache_control_bytes,
     attach_message_cache_control as attach_message_cache_control_bytes,
+    attach_tool_message_cache_control as attach_tool_message_cache_control_bytes,
 };
 use serde_json::{json, Map, Value};
 
-/// Converts the independently gated OpenAI Chat Completions request surface
-/// into Claude Messages JSON. Responses remain unavailable until their own
-/// non-stream and stream parity gates land.
+/// Converts OpenAI Chat Completions input into Claude Messages JSON.
+/// Compatibility thinking preservation is available through its explicit facade.
 pub fn convert_openai_chat_request_to_claude(
     model_name: &str,
     input: &[u8],
     stream: bool,
+) -> Vec<u8> {
+    convert_openai_chat_request_to_claude_impl(model_name, input, stream, false)
+}
+
+/// ref: internal/translator/claude/openai/chat-completions/claude_openai_request.go:40-46
+/// Candidate e2bff010: preserve assistant reasoning_content as unsigned thinking.
+pub fn convert_openai_chat_request_to_claude_with_compat(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+) -> Vec<u8> {
+    convert_openai_chat_request_to_claude_impl(model_name, input, stream, true)
+}
+
+fn convert_openai_chat_request_to_claude_impl(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+    preserve_empty_thinking_blocks: bool,
 ) -> Vec<u8> {
     let Ok(root) = serde_json::from_slice::<Value>(input) else {
         return input.to_vec();
@@ -68,7 +87,19 @@ pub fn convert_openai_chat_request_to_claude(
         match role {
             "system" | "developer" => append_system_blocks(&mut system, message),
             "user" | "assistant" => {
-                let mut content = convert_message_content(message.get("content"));
+                let mut content = Vec::new();
+                if preserve_empty_thinking_blocks && role == "assistant" {
+                    if let Some(reasoning_content) = message
+                        .get("reasoning_content")
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
+                    {
+                        content.push(json!({
+                            "type":"thinking", "thinking":reasoning_content, "signature":"",
+                        }));
+                    }
+                }
+                content.extend(convert_message_content(message.get("content")));
                 if role == "assistant" {
                     for call in message
                         .get("tool_calls")
@@ -115,7 +146,13 @@ pub fn convert_openai_chat_request_to_claude(
                     "tool_use_id":id,
                     "content":convert_tool_result_content(message.get("content"))
                 });
+                // Anthropic rejects cache_control inside tool_result.content.
+                // Hoist part-level or message-level control onto the block
+                // before parallel tool results are grouped.
+                let mut wrapped = json!({"role":"user", "content":[result]});
+                attach_tool_message_cache_control(&mut wrapped, message);
                 if previous_role == "tool" {
+                    let result = wrapped["content"][0].clone();
                     if let Some(parts) = messages
                         .last_mut()
                         .and_then(|value| value.get_mut("content"))
@@ -124,9 +161,7 @@ pub fn convert_openai_chat_request_to_claude(
                         parts.push(result);
                     }
                 } else {
-                    let mut converted = json!({"role":"user", "content":[result]});
-                    attach_message_cache_control(&mut converted, message);
-                    messages.push(converted);
+                    messages.push(wrapped);
                 }
             }
             _ => {}
@@ -220,17 +255,21 @@ fn convert_message_content(content: Option<&Value>) -> Vec<Value> {
 }
 
 fn convert_content_part(part: &Value) -> Option<Value> {
-    let kind = part.get("type").and_then(Value::as_str)?;
-    let mut converted = match kind {
-        "text" => {
-            json!({"type":"text", "text":part.get("text").and_then(Value::as_str).unwrap_or("")})
-        }
-        "image_url" => media_part(part.pointer("/image_url/url")?.as_str()?, "image", false)?,
-        "file" => media_part(part.pointer("/file/file_data")?.as_str()?, "document", true)?,
-        _ => return None,
-    };
+    let mut converted = convert_content_part_raw(part)?;
     attach_cache_control(&mut converted, part);
     Some(converted)
+}
+
+fn convert_content_part_raw(part: &Value) -> Option<Value> {
+    let kind = part.get("type").and_then(Value::as_str)?;
+    match kind {
+        "text" => Some(
+            json!({"type":"text", "text":part.get("text").and_then(Value::as_str).unwrap_or("")}),
+        ),
+        "image_url" => media_part(part.pointer("/image_url/url")?.as_str()?, "image", false),
+        "file" => media_part(part.pointer("/file/file_data")?.as_str()?, "document", true),
+        _ => None,
+    }
 }
 
 fn media_part(raw: &str, target: &str, data_only: bool) -> Option<Value> {
@@ -255,12 +294,14 @@ fn convert_tool_result_content(content: Option<&Value>) -> Value {
         None => Value::String(String::new()),
         Some(Value::String(text)) => Value::String(text.clone()),
         Some(Value::Array(parts)) => {
+            // Raw conversion matches upstream: tool-result parts must not
+            // carry cache_control. The caller hoists it onto the block.
             let converted: Vec<Value> = parts
                 .iter()
                 .filter_map(|part| {
                     part.as_str()
                         .map(|text| json!({"type":"text", "text":text}))
-                        .or_else(|| convert_content_part(part))
+                        .or_else(|| convert_content_part_raw(part))
                 })
                 .collect();
             if converted.is_empty() && !parts.is_empty() {
@@ -269,7 +310,7 @@ fn convert_tool_result_content(content: Option<&Value>) -> Value {
                 Value::Array(converted)
             }
         }
-        Some(value @ Value::Object(_)) => convert_content_part(value)
+        Some(value @ Value::Object(_)) => convert_content_part_raw(value)
             .map(|part| Value::Array(vec![part]))
             .unwrap_or_else(|| value.clone()),
         Some(value) => value.clone(),
@@ -284,6 +325,18 @@ fn attach_cache_control(target: &mut Value, source: &Value) {
     if updated != encoded {
         if let Ok(value) = serde_json::from_slice(&updated) {
             *target = value;
+        }
+    }
+}
+
+fn attach_tool_message_cache_control(message: &mut Value, source: &Value) {
+    let Ok(encoded) = serde_json::to_vec(message) else {
+        return;
+    };
+    let updated = attach_tool_message_cache_control_bytes(&encoded, source);
+    if updated != encoded {
+        if let Ok(value) = serde_json::from_slice(&updated) {
+            *message = value;
         }
     }
 }

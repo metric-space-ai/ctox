@@ -14,7 +14,7 @@ use super::store::{AuthStore, AuthStoreError};
 use super::types::{go_zero_time, is_go_zero_time, parse_time_value};
 use super::{
     access_token_sha256, Auth, AuthError, AuthKind, AuthStatus, HomeAuthRuntime,
-    HomeDispatchSelection, ModelState, QuotaState,
+    HomeDispatchSelection, ModelState,
 };
 
 pub const REFRESH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
@@ -275,17 +275,37 @@ fn elapsed_at_least(now: DateTime<Utc>, earlier: DateTime<Utc>, duration: Durati
         .is_ok_and(|elapsed| elapsed >= duration)
 }
 
+#[derive(Default)]
+struct RefreshCancellationState {
+    cancelled: AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
 #[derive(Clone, Default)]
-pub struct RefreshCancellation(Arc<AtomicBool>);
+pub struct RefreshCancellation(Arc<RefreshCancellationState>);
 
 impl RefreshCancellation {
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        if !self.0.cancelled.swap(true, Ordering::AcqRel) {
+            self.0.wake.notify_waiters();
+        }
     }
 
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Wakes all active refresh awaits, and also completes when cancellation
+    /// preceded registration. Enable before checking to prevent a lost wake.
+    pub async fn cancelled(&self) {
+        let notified = self.0.wake.notified();
+        tokio::pin!(notified);
+        let _ = notified.as_mut().enable();
+        if self.is_cancelled() {
+            return;
+        }
+        notified.await;
     }
 }
 
@@ -501,8 +521,16 @@ impl RefreshCoordinator {
             }
         }
 
+        if cancellation.is_cancelled() {
+            return Err(RefreshTransactionError::Cancelled);
+        }
         let mut cloned = auth.clone();
         let result = refresher.refresh_with_cancellation(&mut cloned, cancellation);
+        // A provider may finish with a candidate or an error while shutdown is
+        // requested. Neither result may publish after the cancellation signal.
+        if cancellation.is_cancelled() {
+            return Err(RefreshTransactionError::Cancelled);
+        }
         let mut updated = match result {
             Err(RefreshExecutorError::Cancelled) => return Err(RefreshTransactionError::Cancelled),
             Err(RefreshExecutorError::Failed(error)) => {
@@ -531,6 +559,9 @@ impl RefreshCoordinator {
         if ineffective {
             updated.next_refresh_after = add_std(now, REFRESH_INEFFECTIVE_BACKOFF)
                 .ok_or(RefreshTransactionError::InvalidRefreshedIdentity)?;
+        }
+        if cancellation.is_cancelled() {
+            return Err(RefreshTransactionError::Cancelled);
         }
         self.store
             .save(&updated)
@@ -655,7 +686,7 @@ fn reset_model_state(state: &mut ModelState, now: DateTime<Utc>) {
     state.status_message.clear();
     state.next_retry_after = go_zero_time();
     state.last_error = None;
-    state.quota = QuotaState::default();
+    state.quota.clear_cooldown();
     state.updated_at = now;
 }
 
@@ -718,12 +749,16 @@ fn update_aggregated_availability(auth: &mut Auth, now: DateTime<Utc>) {
         auth.quota.next_recover_at = quota_recover.unwrap_or_else(go_zero_time);
         auth.quota.backoff_level = max_backoff_level;
     } else {
-        auth.quota = QuotaState::default();
+        auth.quota.clear_cooldown();
     }
 }
 
 fn clear_aggregated_availability(auth: &mut Auth) {
     auth.unavailable = false;
     auth.next_retry_after = go_zero_time();
-    auth.quota = QuotaState::default();
+    auth.quota.clear_cooldown();
 }
+
+#[cfg(test)]
+#[path = "quota_observation_test.rs"]
+mod quota_observation_test;

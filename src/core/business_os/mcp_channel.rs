@@ -41,6 +41,8 @@ mod crew_context;
 mod crew_execution;
 #[path = "mcp_crew_plan.rs"]
 mod crew_plan;
+#[path = "mcp_metadata_read.rs"]
+mod metadata_read;
 #[path = "mcp_project_crew.rs"]
 mod project_crew_request;
 pub(crate) use command_writeback::supports_command_writeback;
@@ -521,6 +523,8 @@ struct BusinessOsMcpInternalSessionClaims {
     #[serde(default)]
     allowed_collections: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata_read_contract: Option<metadata_read::ReadContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     crew_binding: Option<crew_context::SessionBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     crew_work_key: Option<String>,
@@ -671,6 +675,19 @@ pub(crate) fn issue_internal_command_session_token(
         !workspace.is_empty(),
         "Business OS command workspace is empty"
     );
+    let metadata_read_contract = writeback_contract
+        .get("metadata_read_contract")
+        .map(metadata_read::ReadContract::parse)
+        .transpose()?;
+    if let Some(contract) = &metadata_read_contract {
+        anyhow::ensure!(
+            allowed_actions_from_writeback_contract(writeback_contract)?.is_empty()
+                && normalized_string_array(writeback_contract.get("allowed_collections"))
+                    .is_empty(),
+            "metadata-only sessions cannot also carry action or collection grants"
+        );
+        metadata_read::validate_admission(root, command_id, payload_hash, actor, &role, contract)?;
+    }
     let issued_at_ms = now_ms();
     let claims = BusinessOsMcpInternalSessionClaims {
         schema: "ctox.business_os.mcp_command_session.v1".to_string(),
@@ -681,6 +698,7 @@ pub(crate) fn issue_internal_command_session_token(
         payload_hash: payload_hash.to_string(),
         allowed_actions: allowed_actions_from_writeback_contract(writeback_contract)?,
         allowed_collections: normalized_string_array(writeback_contract.get("allowed_collections")),
+        metadata_read_contract,
         crew_binding: None,
         crew_work_key: None,
         crew_only: false,
@@ -811,6 +829,7 @@ pub(crate) fn verify_internal_command_session_token(
         "payload_hash": claims.payload_hash,
         "allowed_actions": claims.allowed_actions,
         "allowed_collections": claims.allowed_collections,
+        "metadata_read_contract": claims.metadata_read_contract,
         "expires_at_ms": claims.expires_at_ms,
     }))
 }
@@ -961,32 +980,70 @@ async fn connect_managed_gateway_async(
     root: &Path,
     options: BusinessOsMcpGatewayConnectOptions,
 ) -> anyhow::Result<()> {
+    run_managed_gateway_connector(
+        &options,
+        || connect_managed_gateway_once(root, &options),
+        |delay_ms| tokio::time::sleep(Duration::from_millis(delay_ms)),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedGatewayConnectionExit {
+    MaxAgeReached,
+    StreamEnded,
+}
+
+// Keep the retry loop testable without sockets or wall-clock backoff waits.
+async fn run_managed_gateway_connector<Connect, Connection, Sleep, Delay>(
+    options: &BusinessOsMcpGatewayConnectOptions,
+    mut connect: Connect,
+    mut sleep: Sleep,
+) -> anyhow::Result<()>
+where
+    Connect: FnMut() -> Connection,
+    Connection: std::future::Future<Output = anyhow::Result<ManagedGatewayConnectionExit>>,
+    Sleep: FnMut(u64) -> Delay,
+    Delay: std::future::Future<Output = ()>,
+{
     let max_delay_ms = options
         .max_reconnect_delay_ms
         .max(250)
         .min(DEFAULT_GATEWAY_RECONNECT_MAX_DELAY_MS);
     let mut attempt = 0_u32;
     loop {
-        let result = connect_managed_gateway_once(root, &options).await;
+        let result = connect().await;
         if !options.reconnect {
-            return result;
+            return result.map(|_| ());
         }
-        if let Err(error) = &result {
-            eprintln!("[business-os-mcp] managed gateway disconnected: {error:#}");
-        } else {
-            eprintln!("[business-os-mcp] managed gateway disconnected");
+        match result {
+            Ok(ManagedGatewayConnectionExit::MaxAgeReached) => {
+                // A full connection lifetime is planned rotation, not another
+                // failure. Do not carry an old outage into this reconnect.
+                attempt = 0;
+                eprintln!(
+                    "[business-os-mcp] managed gateway reached max age; rotating immediately"
+                );
+                continue;
+            }
+            Ok(ManagedGatewayConnectionExit::StreamEnded) => {
+                eprintln!("[business-os-mcp] managed gateway disconnected");
+            }
+            Err(error) => {
+                eprintln!("[business-os-mcp] managed gateway disconnected: {error:#}");
+            }
         }
         attempt = attempt.saturating_add(1);
         let delay_ms = reconnect_delay_ms(attempt, max_delay_ms);
         eprintln!("[business-os-mcp] reconnecting in {delay_ms}ms");
-        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        sleep(delay_ms).await;
     }
 }
 
 async fn connect_managed_gateway_once(
     root: &Path,
     options: &BusinessOsMcpGatewayConnectOptions,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ManagedGatewayConnectionExit> {
     install_rustls_crypto_provider();
     let mut request = options.url.as_str().into_client_request()?;
     if let Some(token) = options
@@ -1044,7 +1101,7 @@ async fn connect_managed_gateway_once(
                     .context("Business OS MCP gateway heartbeat failed")?;
             }
             _ = &mut reconnect_after => {
-                anyhow::bail!("Business OS MCP gateway connection reached max age of {max_connection_age_ms}ms");
+                return Ok(ManagedGatewayConnectionExit::MaxAgeReached);
             }
             message = read.next() => {
                 let Some(message) = message else {
@@ -1062,8 +1119,12 @@ async fn connect_managed_gateway_once(
             }
         }
     }
-    Ok(())
+    Ok(ManagedGatewayConnectionExit::StreamEnded)
 }
+
+#[cfg(test)]
+#[path = "mcp_gateway_lifecycle_tests.rs"]
+mod gateway_lifecycle_tests;
 
 fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1284,6 +1345,11 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 required_string("meeting_id"),
                 optional_string("reason"),
             ]),
+        ),
+        read_tool(
+            metadata_read::TOOL,
+            "Read only exact credential row-presence selectors granted by the current signed delegated-command session. No values, account IDs or provider readiness; no caller-selected arguments.",
+            object_schema(vec![]),
         ),
         read_tool(
             "business_os.list_modules",
@@ -2955,6 +3021,7 @@ fn call_tool_inner(
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
+        metadata_read::TOOL => metadata_read::read(root, trusted_gateway_context, &arguments)?,
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
         }
@@ -7103,6 +7170,17 @@ fn enforce_internal_command_session_scope(
         crew_only_session_allows_tool(tool_name, Some(context)),
         "tool is outside this Crew-only command session"
     );
+    if let Some(contract) = context
+        .get("metadata_read_contract")
+        .filter(|value| !value.is_null())
+    {
+        metadata_read::ReadContract::parse(contract)?;
+        anyhow::ensure!(
+            tool_name == metadata_read::TOOL,
+            "metadata-only command session cannot invoke other tools"
+        );
+        return Ok(());
+    }
     let allowed_actions = context
         .get("allowed_actions")
         .and_then(Value::as_array)

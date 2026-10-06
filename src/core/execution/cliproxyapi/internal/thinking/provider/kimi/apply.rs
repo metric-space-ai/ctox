@@ -6,9 +6,11 @@ use serde_json::Value;
 
 use crate::internal::{
     registry::ModelInfo,
+    thinking::ModelInfoView,
     thinking::{
-        convert_budget_to_level, is_user_defined_model,
+        convert_budget_to_level,
         json::{remove_path, serialize_if_changed, set_path},
+        model_view::is_user_defined_model_view as is_user_defined_model,
         ProviderApplier, ThinkingConfig, ThinkingError, ThinkingMode, LEVEL_AUTO, LEVEL_NONE,
     },
 };
@@ -28,6 +30,16 @@ impl ProviderApplier for Applier {
         body: &[u8],
         config: &ThinkingConfig,
         model_info: Option<&ModelInfo>,
+    ) -> Result<Vec<u8>, ThinkingError> {
+        let view = model_info.map(ModelInfoView::from);
+        self.apply_model_info(body, config, view.as_ref())
+    }
+
+    fn apply_model_info(
+        &self,
+        body: &[u8],
+        config: &ThinkingConfig,
+        model_info: Option<&ModelInfoView<'_>>,
     ) -> Result<Vec<u8>, ThinkingError> {
         if is_user_defined_model(model_info) {
             return Ok(apply_compatible(body, config));
