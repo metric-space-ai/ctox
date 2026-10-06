@@ -17,7 +17,12 @@ mod desktop_files;
 mod domain_effect;
 mod external_sql_sync;
 mod guest_commands;
+#[cfg(unix)]
+mod guest_registry;
+#[cfg(unix)]
+pub(crate) use guest_registry::{NativeGuestAssignment, NativeGuestExecution, NativeGuestRegistry};
 mod guest_runtime;
+pub(crate) use guest_runtime::run_native_guest_desktop;
 pub(crate) mod harness_cockpit;
 mod hashing;
 mod importer;
@@ -36,12 +41,15 @@ mod outbound_update_digest;
 mod person_research_command;
 mod person_research_gap_closure;
 pub mod policy;
+mod populated_store_recovery;
 mod project_chats;
 mod project_crew;
 pub(crate) use project_crew::project_crew_member_for_task;
+pub mod computer_capabilities;
 mod rxdb_peer;
 mod rxdb_peer_browser;
 mod rxdb_peer_business_data;
+mod rxdb_peer_business_data_source;
 mod rxdb_peer_commands;
 mod rxdb_peer_demand_files;
 mod rxdb_peer_desktop_files;
@@ -52,9 +60,17 @@ mod rxdb_peer_intake_state;
 mod rxdb_peer_knowledge_rows;
 mod rxdb_peer_projections;
 mod rxdb_peer_tombstones;
+mod rxdb_peer_transfer_accounts;
+mod rxdb_peer_transfer_grants;
+mod rxdb_peer_transfer_publication;
+#[cfg(test)]
+mod rxdb_peer_transfer_publication_tests;
+mod transfer_publish;
+pub(crate) use transfer_publish::publish_native_file;
 mod rxdb_peer_workjet_devices;
 pub mod server;
 mod session;
+mod session_handoff_gate;
 mod shell_assets;
 pub mod shell_update;
 pub mod store;
@@ -98,6 +114,12 @@ pub fn audit_customer_apps(root: &std::path::Path) -> anyhow::Result<serde_json:
 }
 pub(crate) use browser_runtime::BrowserSessionAutomationRequest;
 pub use outbound_update_digest::tick as outbound_update_digest_tick;
+pub use populated_store_recovery::{
+    backup_native_rxdb_immutable_store, default_native_rxdb_immutable_backup_path,
+    materialize_supported_historical_rxdb_fixture, native_rxdb_cutover_receipt,
+    native_rxdb_store_inventory, restore_native_rxdb_immutable_backup,
+    run_production_native_rxdb_cutover, supported_historical_rxdb_versions,
+};
 pub use rxdb_peer::enqueue_business_command_document;
 pub use rxdb_peer::initialize_business_os_rxdb;
 pub use rxdb_peer::native_peer_status;
@@ -110,6 +132,8 @@ pub(crate) use rxdb_peer::sync_knowledge_tables;
 pub use rxdb_peer::{ensure_native_peer, native_peer_maintenance_health, restart_native_peer};
 pub use server::serve_business_os;
 pub use server::BusinessOsServeOptions;
+pub use session_handoff_gate::native_session_handoff_gate;
+pub use session_handoff_gate::NativeSessionHandoffGate;
 
 pub(crate) use external_sql_sync::start_background_sync;
 pub(crate) use person_research_command::recover_once as recover_person_research_commands_once;

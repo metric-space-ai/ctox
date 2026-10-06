@@ -344,7 +344,23 @@ pub struct Codex {
     pub(crate) session_loop_termination: SessionLoopTermination,
 }
 
-pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
+pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, Result<(), ()>>>;
+
+// Remove receipts when a caller is cancelled, including while enqueueing.
+struct PendingTurnInterrupt {
+    session: Arc<Session>,
+    id: String,
+}
+
+impl Drop for PendingTurnInterrupt {
+    fn drop(&mut self) {
+        self.session
+            .interrupt_receipts
+            .lock()
+            .expect("interrupt receipts poisoned")
+            .remove(&self.id);
+    }
+}
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
 /// the submission id for the initial `ConfigureSession` request and the
@@ -678,8 +694,18 @@ impl Codex {
             Err(CodexErr::InternalAgentDied) => {}
             Err(err) => return Err(err),
         }
-        session_loop_termination.await;
-        Ok(())
+        session_loop_termination
+            .await
+            .map_err(|()| CodexErr::InternalAgentDied)?;
+        match self.session.shutdown_journal_result.get() {
+            Some(Ok(())) => Ok(()),
+            Some(Err(kind)) => Err(std::io::Error::new(
+                *kind,
+                "session shutdown did not flush its rollout journal",
+            )
+            .into()),
+            None => Err(CodexErr::InternalAgentDied),
+        }
     }
 
     pub async fn next_event(&self) -> CodexResult<Event> {
@@ -689,6 +715,34 @@ impl Codex {
             .await
             .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(event)
+    }
+
+    /// Return true only after this submission stopped the named active turn.
+    pub async fn interrupt_turn(&self, turn_id: String) -> CodexResult<bool> {
+        let id = Uuid::now_v7().to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let receipt = PendingTurnInterrupt {
+            session: Arc::clone(&self.session),
+            id: id.clone(),
+        };
+        self.session
+            .interrupt_receipts
+            .lock()
+            .expect("interrupt receipts poisoned")
+            .insert(id.clone(), tx);
+        self.submit_with_id(Submission {
+            id,
+            op: Op::InterruptTurn { turn_id },
+            trace: None,
+        })
+        .await?;
+        let result = tokio::select! {
+            biased;
+            result = rx => result.map_err(|_| CodexErr::InternalAgentDied),
+            _ = self.session_loop_termination.clone() => Err(CodexErr::InternalAgentDied),
+        };
+        drop(receipt);
+        result
     }
 
     pub async fn steer_input(
@@ -727,21 +781,21 @@ impl Codex {
     pub(crate) fn enabled(&self, feature: Feature) -> bool {
         self.session.enabled(feature)
     }
+
+    pub(crate) async fn rollout_materialization_pending(&self) -> bool {
+        self.session.rollout_materialization_pending().await
+    }
 }
 
 #[cfg(test)]
 pub(crate) fn completed_session_loop_termination() -> SessionLoopTermination {
-    futures::future::ready(()).boxed().shared()
+    futures::future::ready(Ok(())).boxed().shared()
 }
 
 pub(crate) fn session_loop_termination_from_handle(
     handle: JoinHandle<()>,
 ) -> SessionLoopTermination {
-    async move {
-        let _ = handle.await;
-    }
-    .boxed()
-    .shared()
+    async move { handle.await.map_err(|_| ()) }.boxed().shared()
 }
 
 /// Context for an initialized model agent
@@ -759,6 +813,10 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    interrupt_receipts: std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    /// Only the real shutdown handler can certify the journal I/O boundary.
+    /// Termination, channel closure, or a prior error event is not that receipt.
+    shutdown_journal_result: std::sync::OnceLock<Result<(), std::io::ErrorKind>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -1859,6 +1917,8 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            interrupt_receipts: std::sync::Mutex::new(HashMap::new()),
+            shutdown_journal_result: std::sync::OnceLock::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -2005,6 +2065,14 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    pub(crate) async fn rollout_materialization_pending(&self) -> bool {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        recorder.is_some_and(|recorder| recorder.materialization_pending())
     }
 
     /// Ensure rollout file writes are durably flushed.
@@ -4009,6 +4077,15 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
+    pub(crate) async fn retain_native_journal(
+        &self,
+    ) -> std::io::Result<crate::NativeJournalReader> {
+        let recorder = self.services.rollout.lock().await.clone().ok_or_else(|| {
+            std::io::Error::other("native Core Session has no live rollout recorder")
+        })?;
+        recorder.retain_native_journal().await
+    }
+
     pub(crate) async fn current_rollout_path(&self) -> Option<PathBuf> {
         let recorder = {
             let guard = self.services.rollout.lock().await;
@@ -4152,6 +4229,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             match sub.op.clone() {
                 Op::Interrupt => {
                     handlers::interrupt(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::InterruptTurn { turn_id } => {
+                    if handlers::interrupt_turn(&sess, &sub.id, &turn_id).await {
+                        handlers::compact_after_interrupt(&sess, sub.id.clone()).await;
+                    }
                     false
                 }
                 Op::CleanBackgroundTerminals => {
@@ -4446,6 +4529,10 @@ mod handlers {
 
     pub async fn interrupt(sess: &Arc<Session>, sub_id: String) {
         sess.interrupt_task().await;
+        compact_after_interrupt(sess, sub_id).await;
+    }
+
+    pub async fn compact_after_interrupt(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
         let _ = run_inline_interrupt_compact_task(
             Arc::clone(sess),
@@ -4457,6 +4544,20 @@ mod handlers {
 
     pub async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
+    }
+
+    pub async fn interrupt_turn(sess: &Arc<Session>, sub_id: &str, turn_id: &str) -> bool {
+        let interrupted = sess.abort_turn(turn_id).await;
+        // Only this submission can resolve its receipt; broadcast events cannot.
+        if let Some(receipt) = sess
+            .interrupt_receipts
+            .lock()
+            .expect("interrupt receipts poisoned")
+            .remove(sub_id)
+        {
+            let _ = receipt.send(interrupted);
+        }
+        interrupted
     }
 
     pub async fn override_turn_context(
@@ -5118,9 +5219,17 @@ mod handlers {
             let mut guard = sess.services.rollout.lock().await;
             guard.take()
         };
-        if let Some(rec) = recorder_opt
-            && let Err(e) = rec.shutdown().await
-        {
+        let journal_result = match recorder_opt {
+            Some(rec) => rec.shutdown().await,
+            None => Ok(()),
+        };
+        let _ = sess.shutdown_journal_result.set(
+            journal_result
+                .as_ref()
+                .map(|_| ())
+                .map_err(|err| err.kind()),
+        );
+        if let Err(e) = journal_result {
             warn!("failed to shutdown rollout recorder: {e}");
             let event = Event {
                 id: sub_id.clone(),

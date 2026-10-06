@@ -49,7 +49,10 @@ function current(p,role,completionOnly=true){
  const retro=new Set(a.filter(a=>a.rubric==='legacy-retrospective-v1').map(a=>a.actor_id));
  a=a.filter(a=>a.rubric!=='legacy-delivery-v1'||!retro.has(a.actor_id));
  const completed=role==='parent'&&completionOnly?a.filter(a=>parentScore(a)!=null):[];
- return completed.length?completed:a;
+ if(completed.length)return completed;
+ if(role==='parent'&&completionOnly&&p.closing_review?.model)
+ return [{...p.closing_review,role:'parent'}];
+ return a;
 }
 function reworkCount(p){
  if(Number.isInteger(p.rework_iterations)&&p.rework_iterations>=0)return p.rework_iterations;
@@ -215,4 +218,3 @@ $('prev').onclick=()=>{page--;draw()};$('next').onclick=()=>{page++;draw()};$('s
 $('export').onclick=()=>{const b=new Blob([JSON.stringify(D,null,2)],{type:'application/json'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='MODEL-EXPERIENCE.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),0)};
 refresh();
 </script></body></html>
-

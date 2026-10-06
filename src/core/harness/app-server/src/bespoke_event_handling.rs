@@ -47,7 +47,6 @@ use ctox_app_server_protocol::GuardianApprovalReview;
 use ctox_app_server_protocol::GuardianApprovalReviewStatus;
 use ctox_app_server_protocol::HookCompletedNotification;
 use ctox_app_server_protocol::HookStartedNotification;
-use ctox_app_server_protocol::InterruptConversationResponse;
 use ctox_app_server_protocol::ItemCompletedNotification;
 use ctox_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use ctox_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
@@ -94,7 +93,6 @@ use ctox_app_server_protocol::Turn;
 use ctox_app_server_protocol::TurnCompletedNotification;
 use ctox_app_server_protocol::TurnDiffUpdatedNotification;
 use ctox_app_server_protocol::TurnError;
-use ctox_app_server_protocol::TurnInterruptResponse;
 use ctox_app_server_protocol::TurnPlanStep;
 use ctox_app_server_protocol::TurnPlanUpdatedNotification;
 use ctox_app_server_protocol::TurnStartedNotification;
@@ -1688,30 +1686,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
         }
-        // If this is a TurnAborted, reply to any pending interrupt requests.
-        EventMsg::TurnAborted(turn_aborted_event) => {
+        // Interrupt RPC receipts are resolved by their exact core submission.
+        EventMsg::TurnAborted(_) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
-            let pending = {
-                let mut state = thread_state.lock().await;
-                std::mem::take(&mut state.pending_interrupts)
-            };
-            if !pending.is_empty() {
-                for (rid, ver) in pending {
-                    match ver {
-                        ApiVersion::V1 => {
-                            let response = InterruptConversationResponse {
-                                abort_reason: turn_aborted_event.reason.clone(),
-                            };
-                            outgoing.send_response(rid, response).await;
-                        }
-                        ApiVersion::V2 => {
-                            let response = TurnInterruptResponse {};
-                            outgoing.send_response(rid, response).await;
-                        }
-                    }
-                }
-            }
 
             thread_watch_manager
                 .note_turn_interrupted(&conversation_id.to_string())

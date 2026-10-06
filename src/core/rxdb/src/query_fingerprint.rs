@@ -31,6 +31,8 @@ pub enum FingerprintError {
     InvalidOptionalNumber,
     #[error("window must be an object")]
     InvalidWindow,
+    #[error("projection requires an array of safe non-empty field paths")]
+    InvalidProjection,
 }
 
 pub fn canonicalize_query_input(input: &Value) -> Result<Value, FingerprintError> {
@@ -66,7 +68,47 @@ pub fn canonicalize_query_input(input: &Value) -> Result<Value, FingerprintError
     out.insert("skip".into(), skip);
     out.insert("sort".into(), sort);
     out.insert("window".into(), window);
+    if let Some(projection) =
+        normalize_query_projection(obj.get("projection").unwrap_or(&Value::Null))?
+    {
+        out.insert("projection".into(), Value::from(projection));
+    }
     Ok(Value::Object(out))
+}
+
+/// Keep absent/empty projections byte-compatible with existing query fingerprints.
+pub fn normalize_query_projection(value: &Value) -> Result<Option<Vec<String>>, FingerprintError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let values = value
+        .as_array()
+        .ok_or(FingerprintError::InvalidProjection)?;
+    let mut fields = Vec::with_capacity(values.len());
+    for value in values {
+        let field = value.as_str().ok_or(FingerprintError::InvalidProjection)?;
+        if field.is_empty()
+            || field.split('.').any(|part| {
+                part.is_empty() || matches!(part, "__proto__" | "constructor" | "prototype")
+            })
+        {
+            return Err(FingerprintError::InvalidProjection);
+        }
+        fields.push(field.to_owned());
+    }
+    fields.sort();
+    fields.dedup();
+    let mut normalized: Vec<String> = Vec::with_capacity(fields.len());
+    for field in fields {
+        if !normalized.iter().any(|parent| {
+            field
+                .strip_prefix(parent.as_str())
+                .is_some_and(|suffix| suffix.starts_with('.'))
+        }) {
+            normalized.push(field);
+        }
+    }
+    Ok((!normalized.is_empty()).then_some(normalized))
 }
 
 pub fn canonical_query_json(input: &Value) -> Result<String, FingerprintError> {

@@ -738,6 +738,17 @@ export const collections = {
           patch_sha256: { type: 'string', minLength: 64, maxLength: 64, pattern: '^[0-9a-f]{64}$' },
           untracked_file_id: { type: 'string', maxLength: 160 },
           untracked_sha256: { type: 'string', minLength: 64, maxLength: 64, pattern: '^[0-9a-f]{64}$' },
+          index: {
+            type: 'object',
+            properties: {
+              tree: { type: 'string', minLength: 40, maxLength: 40, pattern: '^[0-9a-f]{40}$' },
+              patch_file_id: { type: 'string', minLength: 1, maxLength: 160 },
+              patch_sha256: { type: 'string', minLength: 64, maxLength: 64, pattern: '^[0-9a-f]{64}$' }
+            },
+            required: ['tree', 'patch_file_id', 'patch_sha256'],
+            additionalProperties: false
+          },
+
           dirty: { type: 'boolean' }
         },
         required: [

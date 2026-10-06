@@ -636,9 +636,9 @@ mod tests {
     use crate::rxjs_compat::DEFAULT_SUBJECT_BUFFER;
     use crate::types::{
         BulkWriteRow, DocumentsWithCheckpoint, FirstSyncDone, ReplicationEvents, ReplicationStats,
-        RxConflictHandler, RxReplicationMasterChange, RxStorageInstance,
-        RxStorageInstanceCreationParams, RxStorageInstanceReplicationInput,
-        RxStorageInstanceReplicationState, RxStorageReplicationDirection, StreamQueue,
+        RxReplicationMasterChange, RxStorageInstance, RxStorageInstanceCreationParams,
+        RxStorageInstanceReplicationInput, RxStorageInstanceReplicationState,
+        RxStorageReplicationDirection, StreamQueue,
     };
 
     async fn guarded_master_test_instance(name: &str) -> Arc<dyn RxStorageInstance> {
@@ -1016,7 +1016,10 @@ mod tests {
                 .master_changes_since(checkpoint.clone(), 20)
                 .await
                 .unwrap();
-            assert!(serde_json::to_vec(&page).unwrap().len() < 1024 * 1024 + 1024);
+            assert!(
+                serde_json::to_vec(&page).unwrap().len()
+                    < crate::collection_policy::DEFAULT_MASTER_RESPONSE_CEILING_BYTES + 1024
+            );
             if page.documents.is_empty() {
                 break;
             }

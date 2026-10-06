@@ -750,15 +750,17 @@ fn run_semantic_answer_review_leg(
     })?;
     let timeout = Duration::from_secs(SEMANTIC_ANSWER_REVIEW_TIMEOUT_SECS);
     let report = session.run_turn(prompt, Some(timeout), None, Some(false), 0);
-    session.shutdown();
-    report.map_err(|err| {
-        anyhow::anyhow!(
-            "semantic answer review did not produce a verdict within {}s for {}: {}",
-            timeout.as_secs(),
-            clip_text(&request.preview, 120),
-            err
-        )
-    })
+    let shutdown = session.shutdown();
+    report
+        .and_then(|report| shutdown.map(|()| report))
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "semantic answer review did not produce a verdict within {}s for {}: {}",
+                timeout.as_secs(),
+                clip_text(&request.preview, 120),
+                err
+            )
+        })
 }
 
 fn run_external_review_leg_with_wall_timeout(
@@ -805,16 +807,18 @@ fn run_external_review_leg_with_wall_timeout(
         }
         Err(err) => Err(err),
     };
-    session.shutdown();
-    report.map_err(|err| {
-        anyhow::anyhow!(
-            "completion review leg {} did not produce a verdict within {}s for {}: {}",
-            leg + 1,
-            timeout.as_secs(),
-            clip_text(&request.preview, 120),
-            err
-        )
-    })
+    let shutdown = session.shutdown();
+    report
+        .and_then(|report| shutdown.map(|()| report))
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "completion review leg {} did not produce a verdict within {}s for {}: {}",
+                leg + 1,
+                timeout.as_secs(),
+                clip_text(&request.preview, 120),
+                err
+            )
+        })
 }
 
 fn review_turn_completed_without_assistant_message(err: &anyhow::Error) -> bool {

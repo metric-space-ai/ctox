@@ -2,7 +2,7 @@ name: Native Sync
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, codex/checkpoint-workspace-restore]
     paths:
       - '.github/workflows/native-sync.yml'
       - 'Cargo.toml'
@@ -12,6 +12,8 @@ on:
       - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
+      - 'src/core/harness/protocol/src/portable_journal*'
+      - 'tests/portable_journal_roundtrip.rs'
       - 'src/core/sync_host/**'
       - 'src/core/sync_host.rs'
       - 'src/core/rxdb/**'
@@ -35,6 +37,8 @@ on:
       - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
+      - 'src/core/harness/protocol/src/portable_journal*'
+      - 'tests/portable_journal_roundtrip.rs'
       - 'src/core/sync_host/**'
       - 'src/core/sync_host.rs'
       - 'src/core/rxdb/**'
@@ -287,6 +291,19 @@ jobs:
           cargo run --locked --manifest-path src/core/sync/Cargo.toml --features webrtc --example host_cli_acceptance -- \
             "$CARGO_TARGET_DIR/debug/ctox" "$RUNNER_TEMP/ctox-host-fixtures" \
             | tee "$RUNNER_TEMP/ctox-host-proof/acceptance.json"
+      - name: Verify strict portable journals and real recorder roundtrip
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --manifest-path src/core/harness/protocol/Cargo.toml portable_journal -- --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/portable-journal-protocol-tests.log"
+          cargo test --locked --test portable_journal_roundtrip -- --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/portable-journal-roundtrip-tests.log"
+          cargo test --locked --manifest-path src/core/sync/Cargo.toml checkpoint -- --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/portable-journal-checkpoint-tests.log"
+          cargo test --locked --manifest-path src/core/sync/Cargo.toml capture -- --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/portable-journal-capture-tests.log"
       - name: Command completion and queue transaction regressions
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
@@ -297,6 +314,27 @@ jobs:
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox --jobs 2 -- mission::channels::tests::business_command mission::channels::tests::business_control incomplete_plan command_writeback_tests direct_plan_v2 --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
+          for regression in \
+            admitted_command_projects_rxdb_identity_without_regressing_advanced_status \
+            command_only_outbox_delivers_newer_result_after_queue_stamped_admission \
+            push_collection_records_rebuilds_authoritative_queue_fields_from_snapshot \
+            push_collection_records_does_not_restore_cleared_authoritative_fields \
+            refresh_queue_projection_keeps_canonical_and_compatibility_in_one_transaction \
+            cancelled_record_command_overwrites_running_and_blocked_compatibility \
+            stale_accepted_record_command_does_not_overwrite_running_or_cancelled_compatibility \
+            delayed_accepted_outbox_does_not_regress_terminal_compatibility_status
+          do
+            regression_log="$RUNNER_TEMP/ctox-host-proof/$regression.log"
+            cargo test --locked --bin ctox --jobs 2 -- \
+              "business_os::store::tests::$regression" --exact --test-threads=2 \
+              | tee "$regression_log"
+            python3 - "$regression_log" <<'PY'
+          import pathlib
+          import sys
+          result = pathlib.Path(sys.argv[1]).read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in result, result
+          PY
+          done
       - name: Knowledge Parquet snapshot regressions
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
@@ -333,7 +371,6 @@ jobs:
             first_party_catalog_apps_get_admin_grants_for_declared_collections_only; do
             grep -F "test business_os::store::tests::$regression ... ok" "$RUNNER_TEMP/ctox-host-proof/capability-grant-tests.log"
           done
-
       - name: Preserve native schema migration history and deletion markers
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
@@ -348,6 +385,23 @@ jobs:
             business_os::rxdb_peer::tests::runtime_empty_legacy_table \
             business_os::rxdb_peer::tests::rxdb_schema_drift_repair \
             --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/schema-migration-tests.log"
+          # build-pi-sidecar is the existing compile prerequisite for the
+          # include_bytes! sidecar bundle. Do not invent a stub dist/ctox-pi-sidecar.mjs.
+          cargo test --locked --bin ctox -- business_os::populated_store_recovery --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-recovery-tests.log"
+      - name: Prove populated historical store migration and recovery
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test src/core/rxdb/tools/populated_store_recovery_acceptance.test.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-admission-oracle.log"
+          POPULATED_STORE_EVIDENCE_DIR="$RUNNER_TEMP/ctox-host-proof" \
+            POPULATED_STORE_ROOT="$RUNNER_TEMP/ctox-host-fixtures/populated-store" \
+            CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            node src/core/rxdb/tools/populated_store_recovery_acceptance.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-recovery.jsonl"
       - name: Verify fresh secret reads and bounded Core reader reuse
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
@@ -356,6 +410,29 @@ jobs:
           cargo test --locked --bin ctox -- persistence::tests secrets::tests business_os::domain_effect::tests business_os::rxdb_peer_domain_recovery::tests business_os::rxdb_peer_intake::tests business_os::store::peer_revocations::tests business_os::store::tests::peer_revocation_registry_round_trips business_os::rxdb_peer::peer_admission_tests business_os::rxdb_peer_business_data::tests \
             --nocapture --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/secret-reader-tests.log"
+      - name: Verify native handoff grants, migration and BusinessData ownership
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(
+            business_os::store_policy::handoff_grant_scope_tests::handoff_grants_require_named_actor_and_exact_binding_scope
+            business_os::store::grant_scope_migration_tests::grant_scope_migration_rolls_back_and_retries_inside_transaction
+            business_os::session_handoff_gate::tests::authorized_disclose_mints_a_verifiable_current_permit
+            business_os::session_handoff_gate::tests::unknown_or_revoked_binding_denies
+            business_os::session_handoff_gate::tests::wrong_instance_or_missing_grant_denies
+            business_os::session_handoff_gate::tests::tampered_request_fields_deny_as_binding_mismatch
+            business_os::rxdb_peer_business_data_source::owner_receipt_tests::canonical_owner_binding_requires_exact_owner
+            business_os::rxdb_peer_business_data_source::owner_receipt_tests::claimed_owner_and_client_context_cannot_replace_native_receipt
+            business_os::rxdb_peer_business_data_source::owner_receipt_tests::native_receipt_binds_exact_command_and_owner
+            business_os::rxdb_peer_business_data_source::owner_receipt_tests::signed_queue_admission_preserves_exact_observation_owner
+            business_os::store::tests::control_claim_owner_binding_rejects_cross_owner_replay
+          )
+          for test in "${tests[@]}"; do
+            log="$RUNNER_TEMP/ctox-host-proof/${test##*::}.log"
+            cargo test --locked --jobs 2 --bin ctox "$test" -- --exact --test-threads=2 | tee "$log"
+            python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(); assert re.search(r"test result: ok\. 1 passed; 0 failed; 0 ignored;", text), "required exact test did not run"' "$log"
+          done
       - name: Context prompt first paint and authorized native command
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10
@@ -393,7 +470,7 @@ jobs:
             SMOKE_COMMAND_TIMING_REPORT_OUTPUT="$RUNNER_TEMP/ctox-host-proof/command-stages.json" \
             SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/command-processes.json" \
             node src/core/rxdb/tools/browser_rust_smoke.js \
-            | tee "$RUNNER_TEMP/ctox-host-proof/command-browser.log"
+            2>&1 | tee "$RUNNER_TEMP/ctox-host-proof/command-browser.log"
           node src/apps/business-os/rxdb/tests/command-roundtrip-budget.mjs \
             --input "$RUNNER_TEMP/ctox-host-proof/command-marks.json" \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-budget.json"

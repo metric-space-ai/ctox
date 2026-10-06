@@ -32,7 +32,9 @@
 //! bundle.
 
 pub mod connection_handler_rs;
+pub mod file_fetch_client;
 pub mod file_fetch_handler;
+mod guarded_file_source;
 pub mod index_mod;
 pub mod local_session;
 pub(super) mod protocol_contract_generated;
@@ -69,5 +71,5 @@ pub use webrtc::peer_connection::RTCIceServer;
 pub use webrtc_helper::{is_master_in_webrtc_replication, send_message_and_await_answer};
 pub use webrtc_types::{
     PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCMessage,
-    WebRTCPeerSessionValidator, WebRTCResponse, WebRTCWireFrame,
+    WebRTCPeerSessionValidator, WebRTCPublicationGuard, WebRTCResponse, WebRTCWireFrame,
 };

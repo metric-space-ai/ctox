@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -60,6 +61,10 @@ const MCP_POLICY_PAYLOAD_KEY: &str = "business_os.mcp_policy.v1";
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const APPSEC_MCP_MODULE_ID: &str = "appsec-pentest";
 const DEFAULT_GATEWAY_RECONNECT_MAX_DELAY_MS: u64 = 30_000;
+/// MCP requests a gateway connection works on at the same time.
+const GATEWAY_CONCURRENT_REQUESTS: usize = 4;
+/// How long a planned max-age rotation waits for running requests.
+const GATEWAY_ROTATION_GRACE: Duration = Duration::from_secs(60);
 const DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
 const DEFAULT_GATEWAY_MAX_CONNECTION_AGE_MS: u64 = 15 * 60 * 1000;
 const MAX_APP_SOURCE_WRITE_BYTES: usize = 1024 * 1024;
@@ -1092,6 +1097,14 @@ async fn connect_managed_gateway_once(
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let reconnect_after = tokio::time::sleep(Duration::from_millis(max_connection_age_ms));
     tokio::pin!(reconnect_after);
+    // Requests are handled off the socket loop, a bounded number at a time,
+    // and answered as they finish (responses carry their request_id). Handling
+    // them inline serialized every tool call behind the slowest one and froze
+    // the heartbeat with it; on a slow host clients hit 90 s timeouts.
+    let (response_tx, mut response_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let permits = Arc::new(tokio::sync::Semaphore::new(GATEWAY_CONCURRENT_REQUESTS));
+    let mut in_flight = 0_usize;
+    let mut rotating = false;
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
@@ -1101,9 +1114,26 @@ async fn connect_managed_gateway_once(
                     .context("Business OS MCP gateway heartbeat failed")?;
             }
             _ = &mut reconnect_after => {
-                return Ok(ManagedGatewayConnectionExit::MaxAgeReached);
+                if rotating || in_flight == 0 {
+                    return Ok(ManagedGatewayConnectionExit::MaxAgeReached);
+                }
+                // Planned rotation waits for answers already being worked on.
+                rotating = true;
+                reconnect_after
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + GATEWAY_ROTATION_GRACE);
             }
-            message = read.next() => {
+            Some(response) = response_rx.recv() => {
+                in_flight = in_flight.saturating_sub(1);
+                write
+                    .send(Message::Text(response.into()))
+                    .await
+                    .context("Business OS MCP gateway websocket write failed")?;
+                if rotating && in_flight == 0 {
+                    return Ok(ManagedGatewayConnectionExit::MaxAgeReached);
+                }
+            }
+            message = read.next(), if !rotating => {
                 let Some(message) = message else {
                     break;
                 };
@@ -1111,14 +1141,26 @@ async fn connect_managed_gateway_once(
                 let Message::Text(text) = message else {
                     continue;
                 };
-                let response = handle_gateway_message(root, text.as_ref());
-                write
-                    .send(Message::Text(response.into()))
-                    .await
-                    .context("Business OS MCP gateway websocket write failed")?;
+                in_flight += 1;
+                let root = root.to_path_buf();
+                let response_tx = response_tx.clone();
+                let permits = Arc::clone(&permits);
+                tokio::spawn(async move {
+                    let _permit = permits.acquire_owned().await;
+                    let text = text.to_string();
+                    let response =
+                        tokio::task::spawn_blocking(move || handle_gateway_message(&root, &text))
+                            .await
+                            .unwrap_or_else(|_| {
+                                r#"{"type":"mcp_response","request_id":"","status":500,"headers":{"content-type":"application/json; charset=utf-8"},"body":"{}"}"#.to_string()
+                            });
+                    let _ = response_tx.send(response);
+                });
             }
         }
     }
+    // Requests still running when the gateway closes the stream cannot be
+    // answered any more; the socket is gone.
     Ok(ManagedGatewayConnectionExit::StreamEnded)
 }
 
@@ -1540,9 +1582,10 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         write_tool(
             "business_os.create_app",
-            "Use this when a coding agent should ask CTOX Business OS to create and deploy a new runtime-installed app; returns command ids, app source paths, required skill resources, and validation commands.",
+            "Ask CTOX to create an app. Preserve idempotency_key and identical arguments when retrying one logical request; changed intent with the same key is rejected. Returns durable command/task ids and development resources.",
             object_schema(vec![
                 required_string("instruction"),
+                optional_string("idempotency_key"),
                 optional_string("module_id"),
                 optional_string("title"),
                 optional_string("description"),
@@ -1552,10 +1595,11 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         write_tool(
             "business_os.modify_app",
-            "Use this when a coding agent should ask CTOX Business OS to modify and redeploy an existing app; returns command ids, app source paths, required skill resources, and validation commands.",
+            "Ask CTOX to modify an app. Preserve idempotency_key and identical arguments when retrying one logical request; changed intent with the same key is rejected. Returns durable command/task ids and development resources.",
             object_schema(vec![
                 required_string("module_id"),
                 required_string("instruction"),
+                optional_string("idempotency_key"),
                 optional_string("title"),
             ]),
         ),
@@ -1658,7 +1702,10 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("record_id"),
                 optional_string("title"),
                 optional_string("objective"),
-                optional_string("idempotency_key"),
+                ("idempotency_key", serde_json::json!({
+                    "type": "string",
+                    "description": "For ctox.delegate_task: reuse the key and intent after transport uncertainty; the original native task and status are returned. web_stack.person_research retains its own retry contract. Other actions reject this field."
+                }), false),
                 optional_action_payload("payload"),
             ]),
         ),
@@ -2145,6 +2192,47 @@ pub fn upsert_user(
     store::upsert_user(root, &session, mutation)
 }
 
+/// Scope app create/modify retry keys to the resolved actor and workspace,
+/// not to the per-transport request id. The queue atomically rejects changed
+/// intent for the resulting command id. No key preserves legacy new requests.
+fn mcp_app_command_id(
+    context: &McpChannelRequestContext,
+    actor: &Value,
+    arguments: &Value,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = arguments.get("idempotency_key") else {
+        return Ok(None);
+    };
+    let key = value
+        .as_str()
+        .map(str::trim)
+        .filter(|key| !key.is_empty() && key.len() <= 256 && !key.chars().any(char::is_control))
+        .ok_or_else(|| {
+            BusinessOsMcpError::validation(
+                "idempotency_key",
+                "expected a non-empty string of at most 256 bytes without control characters",
+            )
+        })?;
+    let actor_id = actor
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .context("resolved MCP actor has no id")?;
+    let identity = serde_json::to_vec(&serde_json::json!([
+        "business-os-mcp-app-v1",
+        actor_id,
+        context.workspace.trim(),
+        key
+    ]))?;
+    let hash = digest::digest(&digest::SHA256, &identity);
+    let suffix = hash
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(Some(format!("cmd_mcp_{suffix}")))
+}
+
 pub fn create_app(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -2189,7 +2277,7 @@ pub fn create_app(
         AuthenticatedMcpAppCommand::from_context(context)?,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
-            id: None,
+            id: mcp_app_command_id(context, &actor, arguments)?,
             module: "creator".to_string(),
             command_type: "ctox.business_os.app.create".to_string(),
             record_id: Some(module_id.clone()),
@@ -2271,7 +2359,7 @@ pub fn modify_app(
         AuthenticatedMcpAppCommand::from_context(context)?,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
-            id: None,
+            id: mcp_app_command_id(context, &actor, arguments)?,
             module: "creator".to_string(),
             command_type: "ctox.business_os.app.modify".to_string(),
             record_id: Some(module_id.clone()),
@@ -4927,9 +5015,8 @@ pub fn propose_action(
         .get("payload")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
-    // Validate the declared transport types before normalization can hide a
-    // malformed list or boolean. No malformed proposal may reach enqueue.
-    if action_id == "web_stack.person_research" {
+    if action.action_id == "web_stack.person_research" {
+        // Validate the caller's types before transport compatibility coercion.
         validate_person_research_action_arguments(arguments, &raw_payload)?;
     }
     let mut payload = normalize_native_mcp_action_payload(action_id, raw_payload);
@@ -5146,6 +5233,19 @@ pub fn execute_action(
         "business_os.execute_action",
         &policy_arguments,
     )?;
+    // Preserve the existing delegation/person-research identity contracts.
+    // A key on another action must not be silently ignored.
+    if arguments.get("idempotency_key").is_some()
+        && !matches!(
+            action_id,
+            "ctox.delegate_task" | "web_stack.person_research"
+        )
+    {
+        return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+            "idempotency_key",
+            "this action has no execute_action retry-key contract",
+        )));
+    }
     let proposal = propose_action(root, context, module_id, action_id, arguments)?;
     if proposal.confirmation_required
         && context.confirmation_state != McpConfirmationState::Approved
@@ -5300,7 +5400,7 @@ pub fn execute_action(
                 .and_then(Value::as_str)
                 .map(str::to_string);
             return Ok(BusinessOsActionExecution {
-                ok: true,
+                ok: status != "failed",
                 action: proposal.action,
                 module_id: module_id.to_string(),
                 record_id: proposal.record_id,
@@ -7134,6 +7234,13 @@ fn context_from_arguments_with_trusted_gateway_context(
             // allowed action as the originating user's approval; the scope
             // guard below still rejects every other module or operation.
             McpConfirmationState::Approved
+        } else if arguments
+            .pointer("/_context/confirmation_state")
+            .and_then(Value::as_str)
+            == Some("rejected")
+        {
+            // Caller input may restrict approval, never mint trusted approval.
+            McpConfirmationState::Rejected
         } else {
             match string_field(context, "confirmation_state")
                 .unwrap_or_else(|| "not_required".to_string())
@@ -8776,6 +8883,18 @@ mod tests {
             );
         }
 
+        let mut caller_approved = arguments.clone();
+        caller_approved["_context"]["confirmation_state"] = serde_json::json!("approved");
+        let proposal_context = context_from_arguments_with_trusted_gateway_context(
+            "business_os.propose_action",
+            &caller_approved,
+            Some(&trusted),
+        )?;
+        assert_eq!(
+            proposal_context.confirmation_state,
+            McpConfirmationState::NotRequired
+        );
+
         let wrong_operation = serde_json::json!({
             "module_id": "crm",
             "action_id": "external_sql.write",
@@ -9122,7 +9241,8 @@ mod tests {
                 "id": id,
                 "title": title,
                 "description": "Test module",
-                // Non-system fixtures cannot self-promote to canonical core.
+                // Synthetic fixture IDs are not canonical system apps. Use the
+                // supported source-app scope instead of claiming core membership.
                 "install_scope": "internal",
                 "entry": format!("modules/{id}/index.html"),
                 "collections": collections,
@@ -11579,6 +11699,261 @@ mod tests {
     }
 
     #[test]
+    fn mcp_app_retry_keys_bind_actor_and_workspace_not_transport_request() -> anyhow::Result<()> {
+        let mut context = test_context("business_os.modify_app");
+        let actor = serde_json::json!({ "id": "member-a" });
+        let arguments = serde_json::json!({ "idempotency_key": "workjet-turn-1" });
+        let first = mcp_app_command_id(&context, &actor, &arguments)?;
+        assert!(first.is_some());
+        context.request_id = "another-http-request".into();
+        assert_eq!(first, mcp_app_command_id(&context, &actor, &arguments)?);
+        assert_ne!(
+            first,
+            mcp_app_command_id(
+                &context,
+                &serde_json::json!({ "id": "member-b" }),
+                &arguments
+            )?
+        );
+        context.workspace = "another-workspace".into();
+        assert_ne!(first, mcp_app_command_id(&context, &actor, &arguments)?);
+        assert_eq!(
+            None,
+            mcp_app_command_id(&context, &actor, &serde_json::json!({}))?
+        );
+        for key in [
+            Value::Null,
+            serde_json::json!(1),
+            serde_json::json!(" "),
+            serde_json::json!("a\nb"),
+            serde_json::json!("a".repeat(257)),
+        ] {
+            let error = mcp_app_command_id(
+                &context,
+                &actor,
+                &serde_json::json!({ "idempotency_key": key }),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error
+                    .downcast_ref::<BusinessOsMcpError>()
+                    .and_then(|error| error.field.as_deref()),
+                Some("idempotency_key")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_retry_keeps_task_and_terminal_outcome() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "mcp-retry", "MCP Retry", &["retry_items"])?;
+        seed_default_mcp_admin(root)?;
+        let mut arguments = serde_json::json!({
+            "module_id": "mcp-retry",
+            "instruction": "Add an inventory review action without changing existing data.",
+            "idempotency_key": "workjet-turn-retry",
+            "_context": { "actor": "chatgpt:test-user", "workspace": "test", "request_id": "http-1" }
+        });
+        let first = call_tool(root, "business_os.modify_app", arguments.clone())?;
+        let command_id = first["command_id"].as_str().context("command id")?;
+        let task_id = first["task_id"].as_str().context("task id")?;
+        arguments["_context"]["request_id"] = serde_json::json!("http-2");
+        let retry = call_tool(root, "business_os.modify_app", arguments.clone())?;
+        assert_eq!(retry["command_id"], first["command_id"]);
+        assert_eq!(retry["task_id"], first["task_id"]);
+        store::mark_business_command_failed(root, command_id, "test execution failure", 42)?;
+        let before = crate::mission::channels::business_command_projection(root, command_id)?;
+        arguments["_context"]["request_id"] = serde_json::json!("http-3");
+        let retry = call_tool(root, "business_os.modify_app", arguments.clone())?;
+        assert_eq!(retry["status"], "failed");
+        assert_eq!(retry["ok"], false);
+        assert_eq!(retry["task_id"], task_id);
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root, command_id)?,
+            before
+        );
+        // This also checks the compatibility projection: the read path must
+        // not put the failed command back into the accepted state.
+        let conn = store::open_store(root)?;
+        let status: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = ?1",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(status, "failed");
+        arguments["instruction"] = serde_json::json!("A different logical request.");
+        let error = call_tool(root, "business_os.modify_app", arguments).unwrap_err();
+        assert!(
+            error.to_string().contains("idempotency_conflict"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_retry_delegation_keeps_native_task_and_failure() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "mcp-delegate", "MCP Delegate", &["delegate_items"])?;
+        seed_default_mcp_admin(root)?;
+        let mut arguments = serde_json::json!({
+            "module_id": "mcp-delegate",
+            "action_id": "ctox.delegate_task",
+            "title": "Inspect inventory",
+            "objective": "Review the inventory and propose the next steps.",
+            "idempotency_key": "workjet-native-turn",
+            "_context": { "actor": "chatgpt:test-user", "workspace": "test", "request_id": "http-1" }
+        });
+        let first = call_tool(root, "business_os.execute_action", arguments.clone())?;
+        let command_id = first["command_id"].as_str().context("command id")?;
+        let task_id = first["task_id"].as_str().context("task id")?;
+        assert_eq!(first["command_type"], "ctox.delegate_task");
+        assert!(crate::mission::channels::load_queue_task(root, task_id)?.is_some());
+        arguments["_context"]["request_id"] = serde_json::json!("http-2");
+        let retry = call_tool(root, "business_os.execute_action", arguments.clone())?;
+        assert_eq!(retry["command_id"], command_id);
+        assert_eq!(retry["task_id"], task_id);
+        store::mark_business_command_failed(root, command_id, "test failure", 42)?;
+        let before = crate::mission::channels::business_command_projection(root, command_id)?;
+        arguments["_context"]["request_id"] = serde_json::json!("http-3");
+        let retry = call_tool(root, "business_os.execute_action", arguments.clone())?;
+        assert_eq!(retry["status"], "failed");
+        assert_eq!(retry["ok"], false);
+        assert_eq!(retry["task_id"], task_id);
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root, command_id)?,
+            before
+        );
+        arguments["objective"] = serde_json::json!("A different request.");
+        let error = call_tool(root, "business_os.execute_action", arguments.clone()).unwrap_err();
+        assert!(
+            error.to_string().contains("conflicts with existing intent"),
+            "{error:#}"
+        );
+        // Legacy clients without a key still explicitly create new work.
+        arguments
+            .as_object_mut()
+            .context("arguments")?
+            .remove("idempotency_key");
+        let separate = call_tool(root, "business_os.execute_action", arguments)?;
+        assert_ne!(separate["command_id"], command_id);
+        assert_ne!(separate["task_id"], task_id);
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_retry_create_returns_the_same_native_task() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        for (key, module_id) in [
+            ("create-default-request", None),
+            ("create-explicit-request", Some("mcp-create-retry")),
+        ] {
+            let mut arguments = serde_json::json!({
+                "instruction": "Create an inventory app with reorder review.",
+                "idempotency_key": key,
+                "_context": { "actor": "chatgpt:test-user", "workspace": "test", "request_id": "transport-first" }
+            });
+            if let Some(module_id) = module_id {
+                arguments["module_id"] = serde_json::json!(module_id);
+            }
+            let first = call_tool(root, "business_os.create_app", arguments.clone())?;
+            arguments["_context"]["request_id"] = serde_json::json!("transport-retry");
+            let retry = call_tool(root, "business_os.create_app", arguments)?;
+            assert!(first["task_id"].as_str().is_some());
+            assert_eq!(retry["module_id"], first["module_id"]);
+            assert_eq!(retry["command_id"], first["command_id"]);
+            assert_eq!(retry["task_id"], first["task_id"]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_retry_preserves_native_cancellation() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(
+            root,
+            "mcp-cancel-retry",
+            "MCP Cancel Retry",
+            &["cancel_items"],
+        )?;
+        seed_default_mcp_admin(root)?;
+        let mut arguments = serde_json::json!({
+            "module_id": "mcp-cancel-retry",
+            "instruction": "Add a bounded inventory review action.",
+            "idempotency_key": "cancelled-app-request",
+            "_context": { "actor": "chatgpt:test-user", "workspace": "test-workspace", "request_id": "http-start" }
+        });
+        let first = call_tool(root, "business_os.modify_app", arguments.clone())?;
+        let command_id = first["command_id"].as_str().context("command id")?;
+        let task_id = first["task_id"].as_str().context("task id")?;
+        let rejected = call_tool(
+            root,
+            "business_os.cancel_project_task",
+            serde_json::json!({
+                "target_command_id": command_id,
+                "idempotency_key": "stop-cancelled-app-request",
+                "reason": "Owner cancelled this app modification.",
+                "_context": { "actor": "chatgpt:test-user", "workspace": "test-workspace" }
+            }),
+        )
+        .expect_err("the project-only MCP tool must reject an app modification");
+        assert!(rejected
+            .to_string()
+            .contains("native project target command is required"));
+
+        // App cancellation enters through the native command owner/policy gate.
+        let context = test_context("business_os.modify_app");
+        let actor = resolved_mcp_actor_context(root, &context)?;
+        let cancellation_id = "native-stop-cancelled-app-request";
+        let accepted = store::accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": cancellation_id,
+                "command_id": cancellation_id,
+                "module": "ctox",
+                "command_type": "ctox.command.cancel",
+                "payload": {
+                    "target_command_id": command_id,
+                    "reason": "Owner cancelled this app modification."
+                },
+                "client_context": {
+                    "actor": actor,
+                    "channel": context.channel,
+                    "surface": context.surface,
+                    "workspace": context.workspace,
+                    "request_id": cancellation_id
+                }
+            }),
+        )?;
+        assert_ne!(accepted.get("ok").and_then(Value::as_bool), Some(false));
+        let cancellation =
+            crate::mission::channels::business_command_projection(root, cancellation_id)?;
+        assert_eq!(cancellation["status"], "completed");
+        assert_eq!(cancellation["result"]["target_command_id"], command_id);
+        assert_eq!(cancellation["result"]["execution_task_id"], task_id);
+        let before = crate::mission::channels::business_command_projection(root, command_id)?;
+        assert_eq!(before["status"], "cancelled");
+        arguments["_context"]["request_id"] = serde_json::json!("http-retry");
+        let retry = call_tool(root, "business_os.modify_app", arguments)?;
+        assert_eq!(retry["command_id"], command_id);
+        assert_eq!(retry["task_id"], task_id);
+        assert_eq!(retry["status"], "cancelled");
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root, command_id)?,
+            before
+        );
+        let task = crate::mission::channels::load_queue_task(root, task_id)?
+            .context("cancelled durable task")?;
+        assert_eq!(task.route_status, "cancelled");
+        Ok(())
+    }
+
+    #[test]
     fn modify_app_tool_rejects_unknown_module_without_recording_command() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -12606,10 +12981,13 @@ mod tests {
                         &id,
                     )?;
                 }
+                // Native policy exposes harness status to users; grants still
+                // cannot open protected event/run streams or any writes.
+                let readable = role != "user" || collection == "ctox_harness_status";
                 assert_eq!(
                     business_os_mcp_collection_read_decision(root.path(), &context, collection)?
                         .allowed,
-                    role != "user" || collection == "ctox_harness_status"
+                    readable
                 );
                 assert_eq!(
                     business_os_mcp_record_read_decision(
@@ -12619,7 +12997,7 @@ mod tests {
                         "fixture"
                     )?
                     .allowed,
-                    role != "user" || collection == "ctox_harness_status"
+                    readable
                 );
                 assert!(
                     !business_os_mcp_collection_write_decision(root.path(), &context, collection)?
@@ -12960,15 +13338,22 @@ mod tests {
             &["unreleased_records"],
             None,
         )?;
-        // Team visibility comes from a released lifecycle, never the version number.
+        seed_default_mcp_admin(root)?;
         let conn = store::open_store(root)?;
         conn.execute(
-            r#"INSERT INTO business_module_releases
-             (version_id, module_id, version, status, manifest_json, snapshot_json,
-              created_by, created_at_ms, notes)
-             VALUES ('modrel_team_one_1', 'team-one', 1, 'released', '{}',
-                     '{"release_channel":"team"}', 'release-owner', 1, 'fixture release')"#,
-            [],
+            "INSERT INTO business_module_releases
+                (version_id, module_id, version, status, manifest_json, snapshot_json,
+                 created_by, created_at_ms, notes)
+             VALUES (?1, ?2, 1, 'released', ?3, ?4, ?5, ?6, '')",
+            params![
+                "release-team-one",
+                "team-one",
+                serde_json::json!({"id": "team-one", "version": "1.0.0"}).to_string(),
+                serde_json::json!({"target_version": "1.0.0", "release_channel": "team"})
+                    .to_string(),
+                "chatgpt:test-user",
+                now_ms() as i64
+            ],
         )?;
         drop(conn);
         seed_business_user(root, "chatgpt:reader", "team")?;
@@ -13016,11 +13401,11 @@ mod tests {
         );
         assert!(
             ids.contains(&"team-one".to_string()),
-            "a released team app should be visible"
+            "a native released app should be team-visible"
         );
         assert!(
             !ids.contains(&"unreleased-one".to_string()),
-            "version 1.0.0 alone must not publish a private app"
+            "a version string must not publish an app without a native release"
         );
         assert!(
             !ids.contains(&"private-zero".to_string()),
@@ -14303,6 +14688,33 @@ mod tests {
             assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
             let expected_field = format!("payload.{field}");
             assert_eq!(typed.field.as_deref(), Some(expected_field.as_str()));
+        }
+
+        for (field, invalid_value) in [
+            ("include_private", serde_json::json!({"item": ["email"]})),
+            ("auto_browser_capture", serde_json::json!("true")),
+        ] {
+            let mut invalid_payload = payload.clone();
+            invalid_payload[field] = invalid_value;
+            let error = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({
+                    "record_id": "lead_1",
+                    "payload": invalid_payload
+                }),
+            )
+            .expect_err("each transport-coerced field must be rejected before enqueue");
+            let typed = error
+                .downcast_ref::<BusinessOsMcpError>()
+                .context("typed payload validation error")?;
+            assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
+            assert_eq!(
+                typed.field.as_deref(),
+                Some(format!("payload.{field}").as_str())
+            );
         }
 
         let execute_tool = tool_descriptors()
@@ -15819,5 +16231,78 @@ mod tests {
             Some("changes_requested")
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod gateway_socket_tests {
+    use super::*;
+
+    #[test]
+    fn gateway_answers_pipelined_requests() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.expect("accept");
+                let mut ws = tokio_tungstenite::accept_async(socket).await.expect("ws");
+                // Three requests before reading any answer: all must come back.
+                for index in 0..3 {
+                    ws.send(Message::Text(
+                        serde_json::json!({ "type": "not_a_request", "request_id": format!("r{index}") })
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .expect("send");
+                }
+                let mut answered = BTreeSet::new();
+                while answered.len() < 3 {
+                    let Some(Ok(Message::Text(text))) = ws.next().await else {
+                        panic!("gateway closed before answering");
+                    };
+                    let value: Value = serde_json::from_str(text.as_ref()).expect("json");
+                    if value.get("type").and_then(Value::as_str) == Some("mcp_response") {
+                        answered.insert(
+                            value
+                                .get("request_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                        );
+                    }
+                }
+                ws.close(None).await.ok();
+                answered
+            });
+            let root = tempfile::tempdir().expect("root");
+            let options = BusinessOsMcpGatewayConnectOptions {
+                url: format!("ws://{addr}"),
+                token: None,
+                reconnect: false,
+                max_reconnect_delay_ms: 1_000,
+                heartbeat_interval_ms: 5_000,
+                max_connection_age_ms: 60_000,
+            };
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                connect_managed_gateway_once(root.path(), &options),
+            )
+            .await
+            .expect("gateway session finished");
+            assert!(result.is_ok(), "orderly close ends the session: {result:?}");
+            let answered = server.await.expect("server");
+            assert_eq!(
+                answered.into_iter().collect::<Vec<_>>(),
+                vec!["r0".to_string(), "r1".to_string(), "r2".to_string()]
+            );
+        });
     }
 }

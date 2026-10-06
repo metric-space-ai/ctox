@@ -13,7 +13,7 @@ use serde_json::json;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -184,6 +184,110 @@ pub fn read_secret_value(root: &Path, scope: &str, name: &str) -> Result<String>
     get_secret_value(root, scope, name)
 }
 
+/// Holds current encrypted-record authority through one synchronous publication
+/// callback. Enter BEFORE worker, Core, policy or controller locks. The callback
+/// must perform at most one bounded IO poll, never await or reenter secret APIs.
+/// No cached plaintext, schema initialization, migration or key generation is
+/// permitted here. SQLite rotations/deletions are fenced until the callback
+/// returns; the next poll rereads the current record and protected master key.
+/// Protected filesystem replacement is governed by native runtime ownership,
+/// not by SQLite's writer lock.
+pub(crate) fn with_current_secret_value<T>(
+    root: &Path,
+    scope: &str,
+    name: &str,
+    apply: impl FnOnce(&[u8]) -> Result<T>,
+) -> Result<T> {
+    with_current_secret_values(root, &[(scope, name)], |values| apply(values[0]))
+}
+
+/// Borrow one bounded credential tuple under the same encrypted-store fence.
+/// Never recursively acquire the issuer fence to read another member.
+pub(crate) fn with_current_secret_values<T>(
+    root: &Path,
+    keys: &[(&str, &str)],
+    apply: impl FnOnce(&[&[u8]]) -> Result<T>,
+) -> Result<T> {
+    anyhow::ensure!(
+        !keys.is_empty() && keys.len() <= 8,
+        "invalid publication secret tuple"
+    );
+    let master = master_key_guard(root);
+    let _master = master
+        .try_lock()
+        .map_err(|_| anyhow::anyhow!("secret master-key authority is unavailable"))?;
+    let conn = Connection::open_with_flags(
+        resolve_db_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )?;
+    conn.busy_timeout(std::time::Duration::ZERO)?;
+    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+    // This file is reread, rather than treating a formerly valid key as current.
+    // Bound its read independently of an accidentally replaced large file.
+    let mut raw = Zeroizing::new(String::new());
+    fs::File::open(master_key_path(root))?
+        .take(129)
+        .read_to_string(&mut raw)?;
+    anyhow::ensure!(raw.len() <= 128, "secret master-key file is oversized");
+    let key = decode_master_key(&raw, "failed to decode current secret master key")?;
+    let embedded: Option<String> = tx
+        .query_row(
+            "SELECT value FROM ctox_secret_kv WHERE key = ?1",
+            [MASTER_KEY_STORAGE_KEY],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(embedded) = embedded {
+        anyhow::ensure!(
+            embedded.trim() == raw.trim(),
+            "secret master key conflicts with the embedded legacy key"
+        );
+    }
+    // Retain legacy conflict detection without invoking persistence helpers
+    // that initialize a database or write migrations while authority is held.
+    let legacy_path = persistence::sqlite_path(root);
+    let legacy = if legacy_path.try_exists()? {
+        let conn =
+            Connection::open_with_flags(legacy_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        conn.busy_timeout(std::time::Duration::ZERO)?;
+        Some(conn)
+    } else {
+        None
+    };
+    // Core owns this same legacy database. Do not acquire another Core writer
+    // transaction here: the callback must obtain its own native worker/Core
+    // authority, and a second connection would self-conflict. Legacy key rows
+    // are migration conflict diagnostics, not the canonical issuer record.
+    if let Some(legacy) = &legacy {
+        let value: Option<String> = legacy
+            .query_row(
+                "SELECT kv_value FROM ctox_kv_store WHERE kv_key = ?1",
+                [MASTER_KEY_STORAGE_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(value) = value {
+            anyhow::ensure!(
+                value.trim() == raw.trim(),
+                "secret master key conflicts with the legacy runtime key"
+            );
+        }
+    }
+    let values = keys.iter().map(|(scope, name)| {
+        let (nonce, ciphertext): (String, String) = tx.query_row(
+            "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
+            params![scope, name], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?.context("current secret not found")?;
+        decrypt_secret_value(&key, &nonce, &ciphertext)
+    }).collect::<Result<Vec<_>>>()?;
+    let borrowed = values
+        .iter()
+        .map(|value| value.as_slice())
+        .collect::<Vec<_>>();
+    apply(&borrowed)
+}
+
 /// One encrypted secret mutation used by callers that must rotate a credential
 /// tuple atomically (for example access/refresh/ID tokens).
 #[derive(Debug, Clone)]
@@ -228,6 +332,27 @@ pub fn read_secret_values(root: &Path, keys: &[(&str, &str)]) -> Result<Vec<Stri
 /// Encrypts a credential tuple first and commits every record in one SQLite
 /// transaction. Encryption or SQL failure leaves the previous tuple intact.
 pub fn write_secret_records(root: &Path, records: &[SecretRecordWrite<'_>]) -> Result<()> {
+    mutate_secret_records(root, &[], records, &[])?;
+    Ok(())
+}
+
+/// Compare and commit inside one IMMEDIATE SQLite transaction. Stale native
+/// refreshes/disconnects cannot replace a later account or revocation.
+pub(crate) fn compare_and_write_secret_records(
+    root: &Path,
+    guards: &[(&str, &str, Option<&str>)],
+    records: &[SecretRecordWrite<'_>],
+    deletes: &[(&str, &str)],
+) -> Result<bool> {
+    mutate_secret_records(root, guards, records, deletes)
+}
+
+fn mutate_secret_records(
+    root: &Path,
+    guards: &[(&str, &str, Option<&str>)],
+    records: &[SecretRecordWrite<'_>],
+    deletes: &[(&str, &str)],
+) -> Result<bool> {
     let (key_bytes, _) = ensure_secret_master_key(root)?;
     let encrypted = records
         .iter()
@@ -240,7 +365,29 @@ pub fn write_secret_records(root: &Path, records: &[SecretRecordWrite<'_>]) -> R
         })
         .collect::<Result<Vec<_>>>()?;
     let mut conn = open_secret_db(root)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for &(scope, name, expected) in guards {
+        let current: Option<(String, String)> = tx.query_row(
+            "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
+            params![scope, name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        let current = current
+            .map(|(nonce, ciphertext)| {
+                let value = decrypt_secret_value(&key_bytes, &nonce, &ciphertext)?;
+                Ok::<_, anyhow::Error>(std::str::from_utf8(&value)?.to_owned())
+            })
+            .transpose()?;
+        if current.as_deref() != expected {
+            return Ok(false);
+        }
+    }
+    for (scope, name) in deletes {
+        tx.execute(
+            "DELETE FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
+            params![scope, name],
+        )?;
+    }
     let now = now_iso_string();
     for (record, encrypted, metadata_json) in encrypted {
         let secret_id = format!("secret:{}:{}", record.scope, stable_digest(record.name));
@@ -270,7 +417,7 @@ pub fn write_secret_records(root: &Path, records: &[SecretRecordWrite<'_>]) -> R
         )?;
     }
     tx.commit()?;
-    Ok(())
+    Ok(true)
 }
 
 /// Deletes a credential tuple in one SQLite transaction. This is used after
@@ -308,6 +455,70 @@ pub fn write_secret_record(
     metadata: Value,
 ) -> Result<SecretRecordView> {
     put_secret(root, scope, name, value, description, metadata)
+}
+
+/// Read a protected record's content version without decrypting it or repairing
+/// the store. File length and modification time alone can miss a committed
+/// credential change. This private digest is not an authorization receipt.
+pub(crate) fn secret_record_content_version(
+    root: &Path,
+    scope: &str,
+    name: &str,
+) -> Result<Option<String>> {
+    let path = secret_store_path(root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    // This optional cache-coherence probe also runs under the cache lock.
+    // A busy store must bypass caching without delaying unrelated roots for
+    // the ordinary authoritative Secret Store read's full busy timeout.
+    conn.busy_timeout(std::time::Duration::from_millis(100))?;
+    let protected_record: Option<(String, String)> =
+        rusqlite::OptionalExtension::optional(conn.query_row(
+            "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records
+             WHERE scope = ?1 AND secret_name = ?2",
+            params![scope, name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ))?;
+    Ok(protected_record.map(|(nonce, ciphertext)| stable_digest(&format!("{nonce}:{ciphertext}"))))
+}
+
+/// Atomically create an encrypted record without ever replacing its existing
+/// value. SQLite's unique tuple and single INSERT arbitrate across processes;
+/// callers must read the stored winner rather than return their candidate.
+pub(crate) fn create_secret_record_if_absent(
+    root: &Path,
+    scope: &str,
+    name: &str,
+    value: &str,
+    metadata: Value,
+) -> Result<bool> {
+    let conn = open_secret_db(root)?;
+    ensure_secret_schema(&conn)?;
+    let (key_bytes, _) = ensure_secret_master_key(root)?;
+    let encrypted = encrypt_secret_value(&key_bytes, value.as_bytes())?;
+    let now = now_iso_string();
+    let secret_id = format!("secret:{}:{}", scope, stable_digest(name));
+    Ok(conn.execute(
+        "INSERT INTO ctox_secret_records
+         (secret_id, scope, secret_name, description, metadata_json,
+          nonce_b64, ciphertext_b64, created_at, updated_at)
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?7)
+         ON CONFLICT(scope, secret_name) DO NOTHING",
+        params![
+            secret_id,
+            scope,
+            name,
+            serde_json::to_string(&metadata)?,
+            encrypted.nonce_b64,
+            encrypted.ciphertext_b64,
+            now
+        ],
+    )? == 1)
 }
 
 pub fn delete_secret_record(root: &Path, scope: &str, name: &str) -> Result<()> {
@@ -1169,6 +1380,21 @@ fn load_legacy_master_key(root: &Path) -> Result<Option<String>> {
     persistence::load_text_value(root, MASTER_KEY_STORAGE_KEY)
 }
 
+type MasterKeyGuard = std::sync::Arc<Mutex<()>>;
+
+fn master_key_guard(root: &Path) -> MasterKeyGuard {
+    static GUARDS: OnceLock<Mutex<HashMap<PathBuf, MasterKeyGuard>>> = OnceLock::new();
+    let mut guards = GUARDS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    std::sync::Arc::clone(
+        guards
+            .entry(master_key_path(root))
+            .or_insert_with(|| std::sync::Arc::new(Mutex::new(()))),
+    )
+}
+
 fn ensure_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str)> {
     resolve_secret_master_key(root, true)
 }
@@ -1183,11 +1409,8 @@ fn resolve_secret_master_key(
     root: &Path,
     create_if_missing: bool,
 ) -> Result<(SecretMaterial, &'static str)> {
-    static MASTER_KEY_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-    let _guard = MASTER_KEY_GUARD
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
+    let guard = master_key_guard(root);
+    let _guard = guard.lock().unwrap_or_else(|error| error.into_inner());
     let conn = open_secret_db(root)?;
     let key_path = master_key_path(root);
     if key_path.is_file() {
@@ -1865,6 +2088,199 @@ mod tests {
         assert_eq!(records.len(), 1);
 
         let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn current_secret_tuple_fences_all_records_and_reloads_rotated_values() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        for (name, value) in [("issuer", "issuer-before"), ("grant", "grant-before")] {
+            put_secret(root.path(), "tuple-fixture", name, value, None, json!({}))?;
+        }
+        let keys = [("tuple-fixture", "issuer"), ("tuple-fixture", "grant")];
+        let writer = Connection::open(resolve_db_path(root.path()))?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        with_current_secret_values(root.path(), &keys, |values| {
+            assert_eq!(
+                values,
+                &[b"issuer-before".as_slice(), b"grant-before".as_slice()]
+            );
+            for name in ["issuer", "grant"] {
+                let error = writer.execute(
+                    "UPDATE ctox_secret_records SET ciphertext_b64='invalid' WHERE scope='tuple-fixture' AND secret_name=?1",
+                    [name],
+                ).expect_err("all tuple records remain fenced during publication");
+                assert!(
+                    matches!(error, rusqlite::Error::SqliteFailure(code, _) if matches!(
+                        code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                    ))
+                );
+            }
+            Ok(())
+        })?;
+        put_secret(
+            root.path(),
+            "tuple-fixture",
+            "grant",
+            "grant-after",
+            None,
+            json!({}),
+        )?;
+        with_current_secret_values(root.path(), &keys, |values| {
+            assert_eq!(
+                values,
+                &[b"issuer-before".as_slice(), b"grant-after".as_slice()]
+            );
+            Ok(())
+        })?;
+        delete_secret(root.path(), "tuple-fixture", "grant")?;
+        let mut entered = false;
+        assert!(with_current_secret_values(root.path(), &keys, |_| {
+            entered = true;
+            Ok(())
+        })
+        .is_err());
+        assert!(!entered, "a partial tuple must not authorize publication");
+        Ok(())
+    }
+
+    #[test]
+    fn current_secret_publication_fences_rotation_and_reads_the_next_issuer() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        persistence::store_text_value(root.path(), "publication_fixture", Some("present"))?;
+        put_secret(
+            root.path(),
+            "issuer-fixture",
+            "token",
+            "before",
+            None,
+            json!({}),
+        )?;
+        let writer = Connection::open(resolve_db_path(root.path()))?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        let changes = writer.total_changes();
+        with_current_secret_value(root.path(), "issuer-fixture", "token", |value| {
+            assert_eq!(value, b"before");
+            let error = writer.execute(
+                "UPDATE ctox_secret_records SET ciphertext_b64='invalid' WHERE scope='issuer-fixture' AND secret_name='token'",
+                [],
+            ).expect_err("rotation cannot cross the bounded publication callback");
+            assert!(
+                matches!(error, rusqlite::Error::SqliteFailure(code, _) if matches!(
+                    code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ))
+            );
+            // The issuer fence must not own a second Core writer transaction.
+            let core = Connection::open(persistence::sqlite_path(root.path()))?;
+            core.busy_timeout(std::time::Duration::ZERO)?;
+            let _core_tx = rusqlite::Transaction::new_unchecked(
+                &core,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            Ok(())
+        })?;
+        assert_eq!(writer.total_changes(), changes);
+        put_secret(
+            root.path(),
+            "issuer-fixture",
+            "token",
+            "after",
+            None,
+            json!({}),
+        )?;
+        with_current_secret_value(root.path(), "issuer-fixture", "token", |value| {
+            assert_eq!(value, b"after");
+            Ok(())
+        })?;
+        delete_secret(root.path(), "issuer-fixture", "token")?;
+        let mut called = false;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called, "a deleted issuer cannot publish cached plaintext");
+        Ok(())
+    }
+
+    #[test]
+    fn current_secret_publication_denies_busy_missing_and_conflicting_authority() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut called = false;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
+        assert!(
+            !root.path().join("runtime").exists(),
+            "verification cannot create runtime state"
+        );
+        put_secret(
+            root.path(),
+            "issuer-fixture",
+            "token",
+            "present",
+            None,
+            json!({}),
+        )?;
+        let writer = Connection::open(resolve_db_path(root.path()))?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        {
+            let _tx = rusqlite::Transaction::new_unchecked(
+                &writer,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            assert!(
+                with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                    called = true;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert!(!called);
+        }
+        let conflict = BASE64_STANDARD.encode([0u8; 32]);
+        writer.execute(
+            "INSERT INTO ctox_secret_kv (key, value) VALUES (?1, ?2)",
+            params![MASTER_KEY_STORAGE_KEY, conflict],
+        )?;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
+        writer.execute(
+            "DELETE FROM ctox_secret_kv WHERE key=?1",
+            [MASTER_KEY_STORAGE_KEY],
+        )?;
+        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, Some(&conflict))?;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
+        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, None)?;
+        fs::write(master_key_path(root.path()), "invalid-protected-key")?;
+        assert!(
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
         Ok(())
     }
 

@@ -31,6 +31,9 @@ mod install;
 mod iot;
 mod knowledge;
 mod mission;
+mod native_data_device;
+mod native_transfer_accounts;
+mod native_transfer_routing;
 mod paths;
 mod persistence;
 mod report;
@@ -38,6 +41,12 @@ mod secrets;
 mod service;
 mod skill_store;
 mod sync_host;
+#[cfg(unix)]
+mod transfers_checkpoint;
+mod transfers_cli;
+mod transfers_grant;
+mod transfers_native;
+mod transfers_peer;
 mod ui;
 mod web_stack;
 
@@ -297,6 +306,13 @@ fn raise_open_file_limit() {}
 /// (30.09.2026, 6 cores) ctox-real reached 6.86 GB after 43 minutes, and
 /// `malloc_trim(0)` returned 4.36 GB of it (2.50 GB left). Bounding the arena
 /// count must happen before the first threads start.
+/// Rust allocations on the Linux service go through mimalloc (per-thread
+/// heaps, no global arena locks, freed pages returned to the OS). See the
+/// Cargo.toml target dependency for the measurement behind it.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn limit_glibc_malloc_arenas() {
     // SAFETY: mallopt only adjusts allocator tuning; called before threads spawn.
@@ -325,6 +341,10 @@ fn main() -> anyhow::Result<()> {
     install_process_rustls_crypto_provider();
     raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The isolated guest endpoint owns no CTOX daemon database or CLI ledger.
+    if args.first().map(String::as_str) == Some("__native-guest-desktop") {
+        return business_os::run_native_guest_desktop(&args[1..]);
+    }
     let root = resolve_explicit_or_workspace_root(&args)?;
     if args.first().map(String::as_str) == Some("__native-qwen3-embedding-service") {
         return handle_native_qwen3_embedding_service(&args[1..]);
@@ -408,6 +428,11 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             // declared research workspace. Opening the global CLI ledger
             // first is both unnecessary and forbidden from a worker sandbox.
             "web" => return true,
+            // The bounded foreground transfer worker owns its durable queue.
+            // Do not retain a separate CLI ledger connection for its lifetime.
+            "transfer" if args.get(1).map(String::as_str) == Some("run") => {
+                return true;
+            }
             // Knowledge commands are routed to the daemon-owned IPC handler
             // when the service is active. The daemon owns policy, persistence,
             // and audit evidence; the sandboxed caller must not open the
@@ -438,7 +463,7 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
                 if args.get(1).map(String::as_str) == Some("peer")
                     && matches!(
                         args.get(2).map(String::as_str),
-                        None | Some("status" | "ensure" | "rotate")
+                        None | Some("status" | "ensure" | "rotate" | "start")
                     ) =>
             {
                 return true;
@@ -798,6 +823,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some("office") => business_os::office_cli::handle_command(&args[1..]),
         Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),
+        Some("transfer") => transfers_cli::handle(root, &args[1..]),
         Some("workjet-transfer") => {
             let outcome = business_os::execute_workjet_transfer_git_cli(&args[1..])?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);

@@ -68,22 +68,60 @@ impl std::error::Error for GuestChannelError {}
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WireRequest {
-    Observe { id: u64 },
-    Input { id: u64, input: GuestInput },
+    Probe {
+        id: u64,
+    },
+    Observe {
+        id: u64,
+    },
+    Input {
+        id: u64,
+        input: GuestInput,
+    },
+    ObserveSession {
+        id: u64,
+        session_id: String,
+    },
+    InputSession {
+        id: u64,
+        session_id: String,
+        input: GuestInput,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WireReply {
-    Observation { id: u64, width: u32, height: u32 },
-    Applied { id: u64 },
-    Failed { id: u64 },
+    Endpoint {
+        id: u64,
+        guest_id: String,
+        session_id: String,
+    },
+    Observation {
+        id: u64,
+        width: u32,
+        height: u32,
+    },
+    Applied {
+        id: u64,
+    },
+    Failed {
+        id: u64,
+    },
 }
 
 pub(super) struct GuestChannel<S> {
     stream: S,
     next_id: u64,
     usable: bool,
+    session: Option<GuestEndpointSession>,
+}
+
+/// Correlated to this owned channel; neither a controller nor an input permit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct GuestEndpointSession {
+    pub(super) guest_id: String,
+    pub(super) session_id: String,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> GuestChannel<S> {
@@ -92,7 +130,51 @@ impl<S: AsyncRead + AsyncWrite + Unpin> GuestChannel<S> {
             stream,
             next_id: 1,
             usable: true,
+            session: None,
         }
+    }
+
+    pub(super) async fn probe_endpoint(
+        &mut self,
+        expected_guest: &str,
+    ) -> Result<GuestEndpointSession, GuestChannelError> {
+        if !identifier(expected_guest) {
+            return Err(GuestChannelError::Failed);
+        }
+        let id = self.begin()?;
+        let result = tokio::time::timeout(CHANNEL_TIMEOUT, async {
+            write_json(
+                &mut self.stream,
+                &WireRequest::Probe { id },
+                MAX_CONTROL_BYTES,
+            )
+            .await?;
+            match read_json::<_, WireReply>(&mut self.stream, MAX_CONTROL_BYTES).await? {
+                WireReply::Endpoint {
+                    id: reply_id,
+                    guest_id,
+                    session_id,
+                } if reply_id == id
+                    && guest_id == expected_guest
+                    && uuid::Uuid::parse_str(&session_id)
+                        .is_ok_and(|uuid| uuid.to_string() == session_id) =>
+                {
+                    Ok(GuestEndpointSession {
+                        guest_id,
+                        session_id,
+                    })
+                }
+                _ => Err(GuestChannelError::UnknownOutcome),
+            }
+        })
+        .await;
+        let session = self.finish(result)?;
+        if self.session.as_ref().is_some_and(|old| old != &session) {
+            self.usable = false;
+            return Err(GuestChannelError::UnknownOutcome);
+        }
+        self.session = Some(session.clone());
+        Ok(session)
     }
 
     pub(super) async fn observe(&mut self) -> Result<GuestFrame, GuestChannelError> {
@@ -145,12 +227,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> GuestChannel<S> {
     }
 
     async fn exchange_observe(&mut self, id: u64) -> Result<GuestFrame, GuestChannelError> {
-        write_json(
-            &mut self.stream,
-            &WireRequest::Observe { id },
-            MAX_CONTROL_BYTES,
-        )
-        .await?;
+        let request = match &self.session {
+            Some(session) => WireRequest::ObserveSession {
+                id,
+                session_id: session.session_id.clone(),
+            },
+            None => WireRequest::Observe { id },
+        };
+        write_json(&mut self.stream, &request, MAX_CONTROL_BYTES).await?;
         match read_json::<_, WireReply>(&mut self.stream, MAX_CONTROL_BYTES).await? {
             WireReply::Observation {
                 id: reply_id,
@@ -175,15 +259,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> GuestChannel<S> {
         id: u64,
         input: &GuestInput,
     ) -> Result<(), GuestChannelError> {
-        write_json(
-            &mut self.stream,
-            &WireRequest::Input {
+        let request = match &self.session {
+            Some(session) => WireRequest::InputSession {
+                id,
+                session_id: session.session_id.clone(),
+                input: input.clone(),
+            },
+            None => WireRequest::Input {
                 id,
                 input: input.clone(),
             },
-            MAX_CONTROL_BYTES,
-        )
-        .await?;
+        };
+        write_json(&mut self.stream, &request, MAX_CONTROL_BYTES).await?;
         match read_json::<_, WireReply>(&mut self.stream, MAX_CONTROL_BYTES).await? {
             WireReply::Applied { id: reply_id } if reply_id == id => Ok(()),
             WireReply::Failed { id: reply_id } if reply_id == id => Err(GuestChannelError::Failed),
@@ -212,6 +299,43 @@ impl<S> RemoteGuestDriver<S> {
         &self.guest_id
     }
 }
+#[cfg(unix)]
+impl RemoteGuestDriver<tokio::net::UnixStream> {
+    /// Only a retained host channel can validate this pinned endpoint. No IO
+    /// future or guest-channel lock escapes the current physical-poll fence.
+    pub(super) fn ensure_current_endpoint(&self, expected_session: &str) -> Result<()> {
+        use std::os::fd::AsRawFd;
+        let channel = self
+            .channel
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("guest endpoint is busy"))?;
+        ensure!(
+            channel.usable
+                && channel
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.guest_id == self.guest_id
+                        && session.session_id == expected_session),
+            "guest endpoint session retired or replaced"
+        );
+        let mut byte = 0u8;
+        // No bytes are consumed. EOF, unexpected pending replies, and syscall
+        // errors retire the send; EAGAIN means the same socket is still open.
+        let read = unsafe {
+            libc::recv(
+                channel.stream.as_raw_fd(),
+                (&mut byte as *mut u8).cast(),
+                1,
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        ensure!(
+            read < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock,
+            "guest endpoint closed or has an unresolved reply"
+        );
+        Ok(())
+    }
+}
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> GuestDriver for RemoteGuestDriver<S> {
     fn guest_id(&self) -> &str {
@@ -238,6 +362,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> GuestDriver for RemoteGuestDriver
     }
 }
 
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> RemoteGuestDriver<S> {
+    pub(super) async fn probe_endpoint(&self) -> Result<GuestEndpointSession, GuestChannelError> {
+        self.channel
+            .try_lock()
+            .map_err(|_| GuestChannelError::Unavailable)?
+            .probe_endpoint(&self.guest_id)
+            .await
+    }
+}
+
 /// Guest-side execution endpoint. Reads typed observe/input frames and calls
 /// the local driver. No identity, shell, or extra arguments are accepted.
 pub(super) async fn serve_guest_desktop<S, D>(
@@ -260,6 +394,11 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     D: GuestDriver + Sync,
 {
+    if !identifier(driver.guest_id()) {
+        return Err(GuestChannelError::Unavailable);
+    }
+    // A restarted endpoint receives a new identity even in the same QEMU.
+    let session_id = uuid::Uuid::new_v4().to_string();
     loop {
         let bytes = match read_idle_frame(&mut stream, MAX_CONTROL_BYTES, frame_timeout).await? {
             None => return Ok(()),
@@ -267,6 +406,42 @@ where
         };
         let request: WireRequest =
             serde_json::from_slice(&bytes).map_err(|_| GuestChannelError::UnknownOutcome)?;
+        let request = match request {
+            WireRequest::Probe { id } => {
+                with_deadline(
+                    frame_timeout,
+                    write_json(
+                        &mut stream,
+                        &WireReply::Endpoint {
+                            id,
+                            guest_id: driver.guest_id().into(),
+                            session_id: session_id.clone(),
+                        },
+                        MAX_CONTROL_BYTES,
+                    ),
+                )
+                .await?;
+                continue;
+            }
+            WireRequest::ObserveSession {
+                id,
+                session_id: expected,
+            } if expected == session_id => WireRequest::Observe { id },
+            WireRequest::InputSession {
+                id,
+                session_id: expected,
+                input,
+            } if expected == session_id => WireRequest::Input { id, input },
+            WireRequest::ObserveSession { id, .. } | WireRequest::InputSession { id, .. } => {
+                with_deadline(
+                    frame_timeout,
+                    write_json(&mut stream, &WireReply::Failed { id }, MAX_CONTROL_BYTES),
+                )
+                .await?;
+                continue;
+            }
+            legacy => legacy,
+        };
         match request {
             WireRequest::Observe { id } => match driver.capture().await {
                 Ok(frame) => {
@@ -315,6 +490,7 @@ where
                     Err(_) => return Err(GuestChannelError::UnknownOutcome),
                 }
             }
+            _ => return Err(GuestChannelError::UnknownOutcome),
         }
     }
 }
@@ -730,5 +906,8 @@ async fn read_idle_frame<S: AsyncRead + Unpin>(
     .await
 }
 
+#[cfg(test)]
+#[path = "channel/endpoint_tests.rs"]
+mod endpoint_tests;
 #[cfg(test)]
 mod tests;

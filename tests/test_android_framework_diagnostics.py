@@ -513,7 +513,7 @@ def _fake_adb(directory: Path, broken: bool = False, slow: bool = False) -> Path
 import time
 with open({json.dumps(str(child_pid_path))}, \"w\") as handle:
     handle.write(str(os.getpid()))
-time.sleep(0.5)
+time.sleep(3)
 """
     else:
         interpreter = "/bin/sh"
@@ -598,7 +598,10 @@ class OwnershipLifecycleTest(unittest.TestCase):
 
     def test_deadline_limits_active_batch_and_marks_gap(self):
         adb = _fake_adb(self.root, slow=True)
-        self.assertEqual(0, self._start(adb, lifetime=0.15, command_timeout=1))
+        # A cold interpreter can need more than 150 ms before writing its PID.
+        # Keep the monitor deadline below both command timeout and fixture work,
+        # so this proves interruption of a started child, not interpreter startup.
+        self.assertEqual(0, self._start(adb, lifetime=1, command_timeout=2))
         metadata = json.loads(self.ownership.read_text())
         child_pid_path = self.root / "adb-child.pid"
         self.assertTrue(_wait_for_file(child_pid_path))
@@ -819,6 +822,9 @@ class WorkflowIntegrationTest(unittest.TestCase):
             "adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk",
             "adb shell settings put system accelerometer_rotation 0",
             "adb shell settings put system user_rotation 0",
+            "adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity",
+            "adb shell cmd window user-rotation lock 0",
+            "adb shell cmd window user-rotation",
             "python3 src/scripts/assert_android_tablet_screenshot.py \"$RUNNER_TEMP/android-tablet-4x3.png\"",
         ):
             self.assertIn(expected, self.workflow)

@@ -55,6 +55,92 @@ fn prompt_options(
     }
 }
 
+struct NativeEmissionProbe {
+    thread: String,
+    turn: String,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::native_mcp_dispatch::NativeMcpDispatch for NativeEmissionProbe {
+    fn dispatch(
+        &self,
+        invocation: crate::native_mcp_dispatch::NativeMcpInvocation<'_>,
+    ) -> Option<Result<CallToolResult, String>> {
+        assert_eq!(invocation.thread_id(), self.thread);
+        assert_eq!(invocation.turn_id(), self.turn);
+        assert_eq!(invocation.call_id(), "actual-call");
+        assert_eq!(invocation.server(), "native-test");
+        assert_eq!(invocation.tool(), "actual-tool");
+        // Model-provided labels remain arguments, never dispatch identity.
+        assert_eq!(
+            invocation.arguments(),
+            Some(&serde_json::json!({"thread_id": "forged", "turn_id": "forged"})),
+        );
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(Ok(CallToolResult {
+            content: vec![],
+            structured_content: Some(serde_json::json!({"native": true})),
+            is_error: None,
+            meta: None,
+        }))
+    }
+}
+
+#[tokio::test]
+async fn native_mcp_emission_uses_actual_session_and_turn_after_argument_validation() {
+    let (session, turn, _events) = crate::codex::make_session_and_context_with_rx().await;
+    let probe = Arc::new(NativeEmissionProbe {
+        thread: session.conversation_id.to_string(),
+        turn: turn.sub_id.clone(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let registration =
+        crate::native_mcp_dispatch::register_native_mcp_dispatch(&session, probe.clone()).unwrap();
+    crate::native_mcp_dispatch::tests::start_live_turn(&session, &turn).await;
+    let invalid = handle_mcp_tool_call(
+        session.clone(),
+        &turn,
+        "actual-call".into(),
+        "native-test".into(),
+        "actual-tool".into(),
+        "{".into(),
+    )
+    .await;
+    assert_eq!(invalid.is_error, Some(true));
+    assert_eq!(probe.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let result = handle_mcp_tool_call(
+        session.clone(),
+        &turn,
+        "actual-call".into(),
+        "native-test".into(),
+        "actual-tool".into(),
+        r#"{"thread_id":"forged","turn_id":"forged"}"#.into(),
+    )
+    .await;
+    assert_eq!(
+        result.structured_content,
+        Some(serde_json::json!({"native": true}))
+    );
+    assert_eq!(probe.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(session.abort_turn(&turn.sub_id).await);
+    drop(registration);
+    let absent = dispatch_mcp_tool(
+        &session,
+        &turn,
+        "actual-call",
+        "native-test",
+        "actual-tool",
+        None,
+        None,
+    )
+    .await;
+    assert!(
+        absent.is_err(),
+        "unregistered call should use the absent normal MCP server"
+    );
+    assert_eq!(probe.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
 #[test]
 fn approval_required_when_read_only_false_and_destructive() {
     let annotations = annotations(Some(false), Some(true), None);

@@ -1,0 +1,94 @@
+{
+  "id": "outbound-lead-generation",
+  "title": "Outbound Lead Generation",
+  "description": "Private Lead-Recherche und kontrollierte Übergabe an Sellify.",
+  "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-outbound-lead-generation\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-outbound-lead-generation\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f6a55e\"/><stop offset=\"100%\" stop-color=\"#de6b68\"/></linearGradient></defs><path d=\"M10.5 18a7.5 7.5 0 1 1 5.8-2.75\" stroke=\"url(#grad-outbound-lead-generation)\" stroke-width=\"2.2\" stroke-linecap=\"round\"/><path d=\"M15.3 15.25 22 8.55M17.2 8.55H22v4.8\" stroke=\"url(#grad-outbound-lead-generation)\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><circle cx=\"10.5\" cy=\"10.5\" r=\"2.1\" fill=\"url(#grad-outbound-lead-generation)\" fill-opacity=\".24\" stroke=\"url(#grad-outbound-lead-generation)\" stroke-width=\"1.5\"/></svg>",
+  "entry": "local-modules/outbound-lead-generation/index.html",
+  "collections": [
+    "outbound_lead_generation_sources",
+    "outbound_lead_generation_adapters",
+    "outbound_lead_generation_imports",
+    "outbound_lead_generation_research_policies",
+    "outbound_lead_generation_leads",
+    "sellify_companies"
+  ],
+  "record_fields": {
+    "outbound_lead_generation_leads": {
+      "contacts": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      },
+      "selected_contact_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "evidence": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  "source": "local",
+  "core": false,
+  "editable": true,
+  "deletable": false,
+  "layout": {
+    "shell": "windowed",
+    "shell_contract": "v2",
+    "shell_geometry_contract": "business-os-v2-global-1",
+    "shell_header_rows": 2,
+    "shell_icon_rows": 2,
+    "icon_asset": "local-modules/outbound-lead-generation/assets/icon/outbound-lead-generation.svg",
+    "frame_palette": {
+      "start": "#f6a55e",
+      "middle": "#de6b68",
+      "top_joint": "#de6b68",
+      "left_joint": "#8b5fbf",
+      "end": "#182441",
+      "surface": "#10141c",
+      "surface_alt": "#151b26",
+      "accent": "#de6b68"
+    },
+    "left": "Kampagnen",
+    "center": "Importierte und recherchierte Leads",
+    "right": "Prüfung und Sellify-Übergabe",
+    "third_pane_justification": "Die Detailansicht hält Quellenbelege und Freigabe während der Lead-Auswahl sichtbar."
+  },
+  "category": "Sales",
+  "version": "1.0.293",
+  "developer": "CTOX",
+  "license": "Proprietary",
+  "tags": [
+    "outbound",
+    "research",
+    "sellify",
+    "leadgen"
+  ],
+  "install_scope": "local",
+  "default_installed": false,
+  "launch_kind": "desktop-app",
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": [
+      "window",
+      "maximized",
+      "focus"
+    ],
+    "initial_size": {
+      "width": 1240,
+      "height": 780
+    },
+    "minimum_size": {
+      "width": 680,
+      "height": 520
+    },
+    "multi_instance": false,
+    "auto_restore": false
+  }
+}

@@ -70,6 +70,13 @@ assert.equal((api.scoreCell(api.current(parentFixture,'parent'),'parent_completi
 assert.equal(api.reworkCount(parentFixture),2,'Hidden earlier source evidence must still support the complete PR iteration count');
 assert.equal(api.current(parentFixture,'parent',false).length,2);
 api.getAll().pop();api.getAll().pop();
+const closureOnly={url:'fixture-closure-only',closing_review:{actor_id:'actual-closer',model:'gpt-6.1-sol',harness:'codex'}};
+assert.match(api.actorCell(api.current(closureOnly,'parent'),'P'),/gpt-6\.1-sol \(@codex\)/);
+assert.equal(api.parentScore(api.current(closureOnly,'parent')[0]),null,'Closing model evidence must not invent a grade');
+assert.equal(api.scoreCell(api.current(closureOnly,'parent'),'parent_completion'),'—');
+assert.equal(api.current(closureOnly,'parent',false).length,0,'Metadata is not an assessment or iteration history');
+assert.equal(api.reworkCount(closureOnly),null,'A proven closer does not prove zero corrections');
+assert.equal(api.current({url:'fixture-no-provenance'},'parent').length,0);
 for(const pr of JSON.parse(data).prs){
  const parents=api.current(pr,'parent');
  if(parents.some(a=>api.parentScore(a)!=null))assert.ok(parents.every(a=>api.parentScore(a)!=null),'No historical source-only parent rows beside a completion score');
@@ -193,4 +200,3 @@ assert.ok(!document.getElementById('workerboard').innerHTML.includes('Codex Desk
 assert.ok(!document.getElementById('prlist').innerHTML.includes('Codex Desktop'));
 assert.ok(!html.includes('<div class="filters">'));
 console.log('PASS: sortable 4/5/7 columns, numeric and null ordering, full-list sorting before pagination, score bars, chart with real edges and first/end/arrows/color controls.');
-

@@ -63,6 +63,73 @@ pub use crate::remote::RemoteAppServerConnectArgs;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+// Constructed before returning the shutdown future, so cancellation before
+// its first poll also aborts the owned facade worker.
+struct ShutdownWorker(tokio::task::JoinHandle<()>);
+
+impl Drop for ShutdownWorker {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+async fn finish_client_shutdown(
+    command_tx: mpsc::Sender<ClientCommand>,
+    event_rx: mpsc::Receiver<InProcessServerEvent>,
+    mut worker: ShutdownWorker,
+    budget: Duration,
+) -> IoResult<()> {
+    // Release event backpressure before delivering the shutdown request.
+    drop(event_rx);
+    let (response_tx, response_rx) = oneshot::channel();
+    let command_result = match timeout(
+        budget,
+        command_tx.send(ClientCommand::Shutdown { response_tx }),
+    )
+    .await
+    {
+        Ok(Ok(())) => match timeout(budget, response_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(IoError::new(
+                ErrorKind::BrokenPipe,
+                "in-process app-server shutdown acknowledgement lost",
+            )),
+            Err(_) => Err(IoError::new(
+                ErrorKind::TimedOut,
+                "in-process app-server shutdown acknowledgement timed out",
+            )),
+        },
+        Ok(Err(_)) => Err(IoError::new(
+            ErrorKind::BrokenPipe,
+            "in-process app-server shutdown channel closed",
+        )),
+        Err(_) => Err(IoError::new(
+            ErrorKind::TimedOut,
+            "in-process app-server shutdown request timed out",
+        )),
+    };
+    // Never return early and detach the owned worker on an error response.
+    let worker_result = match timeout(budget, &mut worker.0).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(IoError::other(
+            "in-process app-server worker shutdown failed",
+        )),
+        Err(_) => {
+            worker.0.abort();
+            let _ = (&mut worker.0).await;
+            Err(IoError::new(
+                ErrorKind::TimedOut,
+                "in-process app-server worker shutdown timed out",
+            ))
+        }
+    };
+    command_result.and(worker_result)
+}
+
+#[cfg(test)]
+#[path = "shutdown_tests.rs"]
+mod shutdown_tests;
+
 /// Raw app-server request result for typed in-process requests.
 ///
 /// Even on the in-process path, successful responses still travel back through
@@ -779,9 +846,10 @@ impl InProcessAppServerClient {
 
     /// Shuts down worker and in-process runtime with bounded wait.
     ///
-    /// If graceful shutdown exceeds timeout, the worker task is aborted to
-    /// avoid leaking background tasks in embedding callers.
-    pub async fn shutdown(self) -> IoResult<()> {
+    /// Forced shutdown, task failure and missing acknowledgements return an
+    /// error. Dropping this future aborts its owned worker even before polling.
+    /// Success alone is not a journal-I/O or provider-continuation receipt.
+    pub fn shutdown(self) -> impl std::future::Future<Output = IoResult<()>> {
         let Self {
             command_tx,
             event_rx,
@@ -789,41 +857,12 @@ impl InProcessAppServerClient {
             auth_manager: _,
             thread_manager: _,
         } = self;
-        let mut worker_handle = worker_handle;
-        // Drop the caller-facing receiver before asking the worker to shut
-        // down. That unblocks any pending must-deliver `event_tx.send(..)`
-        // so the worker can reach `handle.shutdown()` instead of timing out
-        // and getting aborted with the runtime still attached.
-        drop(event_rx);
-        let (response_tx, response_rx) = oneshot::channel();
-        match timeout(
+        finish_client_shutdown(
+            command_tx,
+            event_rx,
+            ShutdownWorker(worker_handle),
             SHUTDOWN_TIMEOUT,
-            command_tx.send(ClientCommand::Shutdown { response_tx }),
         )
-        .await
-        {
-            Ok(Ok(())) => {
-                if let Ok(command_result) = timeout(SHUTDOWN_TIMEOUT, response_rx).await {
-                    command_result.map_err(|_| {
-                        IoError::new(
-                            ErrorKind::BrokenPipe,
-                            "in-process app-server shutdown channel is closed",
-                        )
-                    })??;
-                }
-            }
-            Ok(Err(_)) | Err(_) => {
-                worker_handle.abort();
-                let _ = worker_handle.await;
-                return Ok(());
-            }
-        }
-
-        if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut worker_handle).await {
-            worker_handle.abort();
-            let _ = worker_handle.await;
-        }
-        Ok(())
     }
 
     /// Abort the facade worker immediately. This is intentionally harsher
@@ -961,10 +1000,12 @@ impl AppServerClient {
         }
     }
 
-    pub async fn shutdown(self) -> IoResult<()> {
+    pub fn shutdown(self) -> impl std::future::Future<Output = IoResult<()>> {
+        // Construct the embedded ownership guard at the public call boundary,
+        // before the returned future can be dropped without ever being polled.
         match self {
-            Self::InProcess(client) => client.shutdown().await,
-            Self::Remote(client) => client.shutdown().await,
+            Self::InProcess(client) => futures::future::Either::Left(client.shutdown()),
+            Self::Remote(client) => futures::future::Either::Right(client.shutdown()),
         }
     }
 
@@ -1746,6 +1787,49 @@ mod tests {
         );
 
         client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn public_shutdown_unpolled_future_aborts_embedded_worker() {
+        let fixture = start_test_client(SessionSource::Cli).await;
+        let auth_manager = fixture.auth_manager();
+        let thread_manager = fixture.thread_manager();
+        fixture.shutdown().await.expect("fixture shutdown");
+
+        struct WorkerDropped(Option<oneshot::Sender<()>>);
+        impl Drop for WorkerDropped {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+
+        let (drop_tx, drop_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let worker_handle = tokio::spawn(async move {
+            let _dropped = WorkerDropped(Some(drop_tx));
+            let _ = ready_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::channel(1);
+        let client = AppServerClient::InProcess(InProcessAppServerClient {
+            command_tx,
+            event_rx,
+            worker_handle,
+            auth_manager,
+            thread_manager,
+        });
+        ready_rx.await.expect("owned worker started");
+
+        // No helper or ShutdownWorker is constructed by this test. The public
+        // enum facade itself must retain ownership before its future is polled.
+        drop(client.shutdown());
+        timeout(Duration::from_secs(1), drop_rx)
+            .await
+            .expect("public unpolled shutdown must abort its owned worker")
+            .expect("owned worker dropped");
     }
 
     #[tokio::test]

@@ -912,6 +912,51 @@ fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 Ok(())
             }
         }
+        Some("supported-historical-versions") => {
+            print_json(&crate::business_os::supported_historical_rxdb_versions()?)
+        }
+        Some("materialize-historical-fixture") => {
+            require_rxdb_confirm_flag(
+                args,
+                "--confirm-synthetic-fixture",
+                "ctox business-os rxdb materialize-historical-fixture --confirm-synthetic-fixture",
+            )?;
+            print_json(&crate::business_os::materialize_supported_historical_rxdb_fixture(root)?)
+        }
+        Some("inventory") => print_json(&crate::business_os::native_rxdb_store_inventory(root)?),
+        Some("backup-immutable") => {
+            let output = flag_value(args, "--output").map(Path::new);
+            print_json(&crate::business_os::backup_native_rxdb_immutable_store(
+                root, output,
+            )?)
+        }
+        Some("run-populated-store-cutover") => {
+            require_rxdb_confirm_flag(
+                args,
+                "--confirm-synthetic-fixture",
+                "ctox business-os rxdb run-populated-store-cutover --confirm-synthetic-fixture",
+            )?;
+            print_json(&crate::business_os::run_production_native_rxdb_cutover(
+                root,
+            )?)
+        }
+        Some("restore-immutable-backup") => {
+            require_rxdb_confirm_flag(
+                args,
+                "--confirm-restore",
+                "ctox business-os rxdb restore-immutable-backup --confirm-restore --from <backup>",
+            )?;
+            let from = flag_value(args, "--from").context(
+                "usage: ctox business-os rxdb restore-immutable-backup --confirm-restore --from <backup>",
+            )?;
+            print_json(&crate::business_os::restore_native_rxdb_immutable_backup(
+                root,
+                Path::new(from),
+            )?)
+        }
+        Some("cutover-receipt") => {
+            print_json(&crate::business_os::native_rxdb_cutover_receipt(root)?)
+        }
         Some("repair-optional-drift") => {
             let collection = flag_value(args, "--collection")
                 .or_else(|| {
@@ -935,6 +980,14 @@ fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some(other) => anyhow::bail!("unknown business-os rxdb command `{other}`"),
     }
+}
+
+fn require_rxdb_confirm_flag(args: &[String], flag: &str, usage: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        args.iter().any(|arg| arg == flag),
+        "refusing populated-store recovery command without {flag}\nusage: {usage}"
+    );
+    Ok(())
 }
 
 fn enrich_rxdb_peer_status_with_production_readiness(
@@ -2585,6 +2638,48 @@ fn run_business_os_web_stack_source_capture_with_browser_authorization(
     }))
 }
 
+const DNB_BROWSER_WZ_PARSER: &str = r#"
+function dnbCompanyDetailMatches(company, snapshot, expectedUrl) {
+  const normalize = (value) => String(value || "").normalize("NFKC")
+    .toLocaleLowerCase("de-DE").replace(/[^a-z0-9äöüß]+/g, " ").trim();
+  const identity = (raw) => {
+    try {
+      const url = new URL(raw);
+      if (!url.href.startsWith("https://app.dnbhoovers.com/")) return null;
+      return url.pathname.match(/^\/company\/([^/]+)(?:\/|$)/)?.[1] || null;
+    } catch { return null; }
+  };
+  const expected = identity(expectedUrl);
+  if (!expected || identity(snapshot?.url) !== expected) return false;
+  const name = normalize(company);
+  if (!name) return false;
+  const headings = Array.isArray(snapshot.headings)
+    ? snapshot.headings.filter((value) => typeof value === "string" && value.trim()) : [];
+  // A different observed heading cannot be rescued by the requested name in
+  // navigation, recommendations or the full body.
+  if (headings.length) return headings.some((value) => normalize(value) === name)
+    && !headings.some((value) => normalize(value) !== name);
+  const titleName = String(snapshot.title || "").split("|")[0].trim();
+  return normalize(titleName) === name;
+}
+
+function parseDnbWzEvidence(company, snapshot, expectedUrl) {
+  if (!dnbCompanyDetailMatches(company, snapshot, expectedUrl)) return null;
+  const text = typeof snapshot.text === "string" ? snapshot.text : "";
+  // WZ 2008 (DE) and its five-digit subclass must be explicit. Never infer
+  // that missing fifth digit from NACE, SIC, NOGA or OENACE.
+  const pattern = /\bWZ\s*2008\s*(?:\(\s*DE\s*\))?\s*(?:[|:]\s*)?(\d{5}|\d{2}\.\d{2}\.\d)\b(?![.\d])[^\r\n|]*/gi;
+  const matches = Array.from(text.matchAll(pattern));
+  if (!matches.length || new Set(matches.map((match) => match[1].replace(/\./g, ""))).size !== 1) return null;
+  const quote = matches[0][0].trim();
+  return {
+    field: "wz_code", value: matches[0][1], confidence: "medium",
+    source_url: snapshot.url, source_quote: quote,
+    note: `D&B Hoovers Firmenseite: ${quote}`,
+  };
+}
+"#;
+
 fn build_web_stack_authenticated_source_capture(
     source_id: &str,
     company: &str,
@@ -2602,6 +2697,7 @@ fn build_web_stack_authenticated_source_capture(
         r#"const sourceId = {};
 const company = {};
 const country = {};
+{}
 const allowedHosts = {{
   "dnbhoovers.com": ["dnbhoovers.com", "app.dnbhoovers.com"],
   "leadfeeder.com": ["leadfeeder.com", "app.leadfeeder.com"],
@@ -2715,17 +2811,20 @@ if (sourceId === "dnbhoovers.com") {{
         if (size > 4000) break;
       }}
       if (hostAllowed(page.url()) && /\/company\//i.test(page.url())) {{
-        const detail = await page.evaluate(() => String(document.body?.innerText || "").replace(/[ \t]+/g, " "));
-        // The classification year is not a code: "WZ 2008" read as wz_code=2008
-        // for HAMM AG (25.09.2026). Label and value may sit on separate lines.
-        const codeRe = /\b(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)\b[^0-9]{{0,80}}(?!(?:1993|2003|2008)\b)(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})\b/i;
-        const code = detail.match(codeRe);
-        if (code) {{
-          push("wz_code", code[2], "medium", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
-        }}
-        const marker = detail.search(/\b(Branchencodes?|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC|NAICS)\b/i);
-        if (marker >= 0) {{
-          push("branche_codes_rohtext", detail.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", page.url());
+        const detail = await page.evaluate(() => ({{
+          url: location.href,
+          title: document.title,
+          headings: Array.from(document.querySelectorAll('h1, [data-testid="company-name"]'))
+            .map((node) => String(node.innerText || node.textContent || "").trim()),
+          text: String(document.body?.innerText || "").replace(/[ \t]+/g, " "),
+        }}));
+        if (dnbCompanyDetailMatches(company, detail, hit.url)) {{
+          const wz = parseDnbWzEvidence(company, detail, hit.url);
+          if (wz) records.push(wz);
+          const marker = detail.text.search(/\b(Branchencodes?|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC|NAICS)\b/i);
+          if (marker >= 0) {{
+            push("branche_codes_rohtext", detail.text.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", detail.url);
+          }}
         }}
       }}
     }} catch {{}}
@@ -2755,6 +2854,7 @@ return {{
         serde_json::to_string(source_id)?,
         serde_json::to_string(company)?,
         serde_json::to_string(country)?,
+        DNB_BROWSER_WZ_PARSER,
     ))
 }
 
@@ -4383,7 +4483,7 @@ fn business_os_usage() -> String {
 }
 
 fn business_os_usage_base() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os customer-apps audit\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb init\n  ctox business-os rxdb status [--json]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os turn status\n  ctox business-os turn set [--url turns:host:5349] [--secret <coturn use-auth-secret>]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app refresh-catalog\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|xing.com> --company <name> [--country <DE|AT|CH>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os customer-apps audit\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb init\n  ctox business-os rxdb status [--json]\n  ctox business-os rxdb supported-historical-versions\n  ctox business-os rxdb materialize-historical-fixture --confirm-synthetic-fixture\n  ctox business-os rxdb inventory\n  ctox business-os rxdb backup-immutable [--output <path>]\n  ctox business-os rxdb cutover-receipt\n  ctox business-os rxdb run-populated-store-cutover --confirm-synthetic-fixture\n  ctox business-os rxdb restore-immutable-backup --confirm-restore --from <backup>\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os turn status\n  ctox business-os turn set [--url turns:host:5349] [--secret <coturn use-auth-secret>]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app refresh-catalog\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|xing.com> --company <name> [--country <DE|AT|CH>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {
@@ -7845,6 +7945,45 @@ mod tests {
     }
 
     #[test]
+    fn business_os_usage_documents_populated_store_recovery() {
+        let usage = business_os_usage();
+        assert!(usage.contains(
+            "ctox business-os rxdb materialize-historical-fixture --confirm-synthetic-fixture"
+        ));
+        assert!(usage.contains(
+            "ctox business-os rxdb run-populated-store-cutover --confirm-synthetic-fixture"
+        ));
+        assert!(usage.contains(
+            "ctox business-os rxdb restore-immutable-backup --confirm-restore --from <backup>"
+        ));
+    }
+
+    #[test]
+    fn populated_store_recovery_cli_requires_confirm_flags() {
+        let root = tempfile::tempdir().expect("temp root");
+        let err =
+            handle_business_os_rxdb(root.path(), &["materialize-historical-fixture".to_string()])
+                .expect_err("materialize must require confirm");
+        assert!(
+            err.to_string().contains("--confirm-synthetic-fixture"),
+            "unexpected materialize error: {err:#}"
+        );
+        let restore_err = handle_business_os_rxdb(
+            root.path(),
+            &[
+                "restore-immutable-backup".to_string(),
+                "--from".to_string(),
+                "missing.sqlite3".to_string(),
+            ],
+        )
+        .expect_err("restore must require confirm");
+        assert!(
+            restore_err.to_string().contains("--confirm-restore"),
+            "unexpected restore error: {restore_err:#}"
+        );
+    }
+
+    #[test]
     fn rxdb_status_includes_production_readiness_contract() {
         let status = enrich_rxdb_peer_status_with_production_readiness(serde_json::json!({
             "running": true,
@@ -8825,8 +8964,8 @@ mod tests {
         assert!(dnb.contains("D&B Hoovers exact company result"));
         // The classification year "WZ 2008" must never be read as the code, and
         // the rendered script carries plain regex braces (format escapes gone).
-        assert!(dnb.contains("(?!(?:1993|2003|2008)\\b)"));
-        assert!(dnb.contains("[^0-9]{0,80}"));
+        assert!(dnb.contains("parseDnbWzEvidence(company, detail, hit.url)"));
+        assert!(dnb.contains("source_quote: quote"));
         assert!(dnb.contains("SIC|NAICS)\\b/i"));
         assert!(dnb.contains("(?:\\s*[KMB]\\b)?"));
 
@@ -9050,7 +9189,13 @@ mod tests {
         assert!(source.contains("https://www.xing.com/search/companies"));
         assert!(source.contains("https://www.xing.com/search/members"));
         assert!(!source.contains("https://www.xing.com/search/people"));
-        assert!(source.contains("XING canonical profile URL"));
+        assert!(source.contains("const canonicalProfile = (raw) =>"));
+        assert!(source.contains(r"url.pathname.match(/^\/profile\/([^/]+)\/?$/i)"));
+        assert!(
+            source
+                .contains(r#"push("person_xing", profile.url, "high", employerNote, profile.url)"#),
+            "profile values and evidence must use the validated canonical URL"
+        );
         assert!(!source.contains("console."));
         assert!(!source.contains("credentialValue"));
 
@@ -9398,9 +9543,20 @@ mod tests {
         Ok(())
     }
 
+    fn app_command_fixture_root() -> anyhow::Result<tempfile::TempDir> {
+        let root = tempfile::tempdir()?;
+        let shell_root = root.path().join("src/apps/business-os");
+        fs::create_dir_all(&shell_root)?;
+        fs::write(
+            shell_root.join("index.html"),
+            "<!doctype html><title>Business OS test shell</title>",
+        )?;
+        Ok(root)
+    }
+
     #[test]
     fn app_bench_run_submits_real_tasks_without_writing_app_artifacts() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = app_command_fixture_root()?;
         let installed_root = root.path().join("runtime/business-os/installed-modules");
         fs::create_dir_all(installed_root.join("bench_old"))?;
         fs::create_dir_all(installed_root.join("real_inventory"))?;
@@ -9522,7 +9678,7 @@ mod tests {
 
     #[test]
     fn app_create_cli_enqueues_real_task_without_writing_app_artifacts() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = app_command_fixture_root()?;
         let module_id = "cli-inventory";
         let installed_root = root.path().join("runtime/business-os/installed-modules");
 
@@ -9554,6 +9710,7 @@ mod tests {
         assert!(task
             .prompt
             .contains("runtime/business-os/installed-modules/cli-inventory"));
+        assert_eq!(task.route_status, "pending");
         assert!(task.prompt.contains(
             "ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
         ));
@@ -9562,7 +9719,20 @@ mod tests {
 
     #[test]
     fn app_modify_cli_enqueues_app_modify_skill_task() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = app_command_fixture_root()?;
+        let module_dir = root
+            .path()
+            .join("runtime/business-os/installed-modules/cli-inventory");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_string(&serde_json::json!({
+                "id": "cli-inventory",
+                "title": "Inventory",
+                "entry": "index.html",
+                "collections": []
+            }))?,
+        )?;
 
         handle_business_os_app(
             root.path(),
@@ -9584,9 +9754,14 @@ mod tests {
             Some(BUSINESS_OS_APP_BENCH_SKILL)
         );
         assert!(task.prompt.contains("ctox.business_os.app.modify"));
+        assert!(
+            !module_dir.join("index.html").exists(),
+            "app modify admission must leave execution to the coding worker"
+        );
         assert!(task
             .prompt
             .contains("runtime/business-os/installed-modules/cli-inventory"));
+        assert_eq!(task.route_status, "pending");
         Ok(())
     }
 
@@ -9749,7 +9924,7 @@ mod tests {
 
     #[test]
     fn app_bench_status_records_partial_artifacts_without_marking_green() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = app_command_fixture_root()?;
         let args = vec![
             "--run-id".to_string(),
             "rstatus".to_string(),

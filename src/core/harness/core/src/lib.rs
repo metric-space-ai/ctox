@@ -5,6 +5,16 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+/// Actual compiled harness identity; no caller-supplied version/alias.
+pub const fn native_harness_name() -> &'static str {
+    env!("CARGO_PKG_NAME")
+}
+
+/// Actual build version written into this harness's portable SessionMeta.
+pub const fn native_harness_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
@@ -67,6 +77,7 @@ pub mod mention_syntax;
 mod mentions;
 mod message_history;
 mod model_provider_info;
+pub mod native_mcp_dispatch;
 pub mod path_utils;
 pub mod personality_migration;
 pub mod plugins;
@@ -115,6 +126,7 @@ pub use auth::CodexAuth;
 pub mod default_client;
 pub mod project_doc;
 mod rollout;
+pub use rollout::recorder::NativeJournalReader;
 pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
@@ -128,6 +140,7 @@ pub mod turn_diff_tracker;
 mod turn_metadata;
 mod turn_timing;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
+pub use rollout::EventPersistenceMode;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
 pub use rollout::RolloutRecorderParams;
@@ -147,9 +160,23 @@ pub use rollout::list::ThreadsPage;
 pub use rollout::list::parse_cursor;
 pub use rollout::list::read_head_for_summary;
 pub use rollout::list::read_session_meta_line;
-pub use rollout::policy::EventPersistenceMode;
 pub use rollout::rollout_date_parts;
 pub use rollout::session_index::find_thread_names_by_ids;
+
+#[cfg(feature = "integration-test-support")]
+#[doc(hidden)]
+pub mod rollout_test_support {
+    use super::RolloutRecorder;
+    use ctox_protocol::protocol::RolloutItem;
+
+    /// Test-only access to the recorder queue for external integration tests.
+    pub async fn record_items(
+        recorder: &RolloutRecorder,
+        items: &[RolloutItem],
+    ) -> std::io::Result<()> {
+        recorder.record_items(items).await
+    }
+}
 mod function_tool;
 mod state;
 mod tasks;

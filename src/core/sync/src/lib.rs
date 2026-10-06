@@ -5,6 +5,8 @@ pub mod business_data;
 #[cfg(feature = "webrtc")]
 pub mod business_data_ipc;
 #[cfg(feature = "webrtc")]
+pub mod business_data_remote;
+#[cfg(feature = "webrtc")]
 pub mod business_data_session;
 pub use authority::auth::business_data_identity;
 #[path = "business-data.generated.rs"]
@@ -14,6 +16,8 @@ pub mod checkpoint;
 #[path = "contracts.generated.rs"]
 pub mod contracts;
 pub mod credential_ipc;
+#[cfg(unix)]
+pub mod guest_restore;
 pub mod host_config;
 #[cfg(feature = "webrtc")]
 pub mod host_runtime;
@@ -26,3 +30,4 @@ pub mod local_host;
 pub mod native;
 #[cfg(feature = "webrtc")]
 pub mod native_execution;
+pub mod reconstruct;

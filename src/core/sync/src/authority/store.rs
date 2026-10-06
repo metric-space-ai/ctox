@@ -371,7 +371,7 @@ impl RaftStateMachine<TypeConfig> for SqliteStore {
                         let id=match &request.command {
                             super::Command::AdmitWorker{..}|super::Command::RevokeWorker{..}=>None,
                             super::Command::Create{spec,..}=>Some(&spec.job_id),
-                            super::Command::ProtectCheckpoint{job_id,..}|super::Command::TakeOver{job_id,..}|super::Command::BeginEffect{job_id,..}|super::Command::CompleteEffect{job_id,..}|super::Command::Stop{job_id,..}=>Some(job_id),
+                            super::Command::ProtectCheckpoint{job_id,..}|super::Command::CommitEffectCheckpoint{job_id,..}|super::Command::TakeOver{job_id,..}|super::Command::BeginEffect{job_id,..}|super::Command::CompleteEffect{job_id,..}|super::Command::Stop{job_id,..}=>Some(job_id),
                         };
                         let mut state=State {workers:get(&tx,"workers")?.unwrap_or_default(),..State::default()};
                         if let Some(id)=id {if let Some(job)=read_job(&tx,id)? {state.jobs.insert(id.clone(),job);}}

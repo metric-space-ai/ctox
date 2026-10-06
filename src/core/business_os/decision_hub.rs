@@ -25,8 +25,8 @@
 
 use super::policy::{BusinessOsPermission, BusinessOsScope};
 use super::store::{
-    load_rxdb_collection_record, load_rxdb_collection_records, now_ms, open_store,
-    upsert_projection_record, BusinessCommand,
+    load_rxdb_collection_record, load_rxdb_collection_records, load_rxdb_collection_records_by_ids,
+    now_ms, open_store, upsert_projection_record, BusinessCommand,
 };
 use super::store_policy::{enforce_command_policy, CommandPolicyRequirement};
 use crate::mission::channels;
@@ -99,12 +99,21 @@ pub fn project_inbound_messages(root: &Path) -> anyhow::Result<usize> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
+    // One existence check for the whole batch. Per-message `load_any_record`
+    // opened the RxDB store (and the record store) 200 times on every channel
+    // poll even when nothing was new — ~4 s CPU per poll on an on-prem host.
+    let vorgang_ids = rows
+        .iter()
+        .map(|row| deterministic_id("kpl-v", &row.0))
+        .collect::<Vec<_>>();
+    let existing = existing_record_ids(root, COL_VORGAENGE, &vorgang_ids)?;
+
     let mut created = 0usize;
     for (message_key, thread_key, sender_display, sender_address, subject, body_text, created_at) in
         rows
     {
         let vorgang_id = deterministic_id("kpl-v", &message_key);
-        if load_any_record(root, COL_VORGAENGE, &vorgang_id)?.is_some() {
+        if existing.contains(&vorgang_id) {
             continue;
         }
         let clean_body = strip_mail_ballast(&body_text);
@@ -1170,6 +1179,46 @@ fn load_any_record(
     .optional()?
     .map(|raw| serde_json::from_str::<Value>(&raw).context("decode record payload"))
     .transpose()
+}
+
+/// Ids for which `load_any_record` would return a record: live in the RxDB
+/// store, or absent there and live in the `business_records` projection.
+fn existing_record_ids(
+    root: &Path,
+    collection: &str,
+    record_ids: &[String],
+) -> anyhow::Result<std::collections::HashSet<String>> {
+    let mut existing = std::collections::HashSet::new();
+    let rxdb = load_rxdb_collection_records_by_ids(root, collection, record_ids)?;
+    let mut fallback = Vec::new();
+    for record_id in record_ids {
+        match rxdb.get(record_id) {
+            Some(record) => {
+                if record.get("is_deleted").and_then(Value::as_bool) != Some(true) {
+                    existing.insert(record_id.clone());
+                }
+            }
+            None => fallback.push(record_id),
+        }
+    }
+    if fallback.is_empty() {
+        return Ok(existing);
+    }
+    let conn = open_store(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT 1 FROM business_records
+         WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+    )?;
+    for record_id in fallback {
+        if stmt
+            .query_row(params![collection, record_id], |_| Ok(()))
+            .optional()?
+            .is_some()
+        {
+            existing.insert(record_id.clone());
+        }
+    }
+    Ok(existing)
 }
 
 fn route_sender(projekte: &[Value], sender: &str) -> (Option<Projekt>, Option<Projekt>) {

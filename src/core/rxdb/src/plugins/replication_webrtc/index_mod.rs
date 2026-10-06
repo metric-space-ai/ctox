@@ -123,11 +123,109 @@ pub type AuxiliaryRequestFuture =
 pub type AuxiliaryRequestHandler =
     Arc<dyn Fn(String, String, Vec<Value>) -> AuxiliaryRequestFuture + Send + Sync + 'static>;
 
+/// Native publication authority is retained separately from the wire payload.
+/// A JSON field can never create this guard or opt into a privileged responder.
+pub struct GuardedAuxiliaryResponse {
+    pub result: Value,
+    pub publication: Arc<dyn super::webrtc_types::WebRTCPublicationGuard>,
+}
+pub type GuardedAuxiliaryRequestFuture =
+    Pin<Box<dyn Future<Output = Result<GuardedAuxiliaryResponse, String>> + Send + 'static>>;
+pub type GuardedAuxiliaryRequestHandler<P> =
+    Arc<dyn Fn(P, String, Vec<Value>) -> GuardedAuxiliaryRequestFuture + Send + Sync + 'static>;
+
 #[derive(Clone)]
-struct RegisteredAuxiliaryRequest {
-    handler: AuxiliaryRequestHandler,
+enum AuxiliaryHandler<P> {
+    Plain(AuxiliaryRequestHandler),
+    Guarded(GuardedAuxiliaryRequestHandler<P>),
+}
+#[derive(Clone)]
+struct RegisteredAuxiliaryRequest<P> {
+    handler: AuxiliaryHandler<P>,
     public_identity: bool,
 }
+struct AuxiliaryAnswer {
+    result: Value,
+    publication: Option<Arc<dyn super::webrtc_types::WebRTCPublicationGuard>>,
+}
+impl<P> RegisteredAuxiliaryRequest<P> {
+    async fn answer(
+        &self,
+        peer: P,
+        peer_identity: String,
+        capability: String,
+        params: Vec<Value>,
+    ) -> Result<AuxiliaryAnswer, String> {
+        match &self.handler {
+            AuxiliaryHandler::Plain(handler) => Ok(AuxiliaryAnswer {
+                result: handler(peer_identity, capability, params).await?,
+                publication: None,
+            }),
+            AuxiliaryHandler::Guarded(handler) => {
+                // A rejected setup has no publication authority. Never place
+                // an arbitrary native error string (possibly private data) on
+                // the unguarded error-response path.
+                let response = handler(peer, capability, params)
+                    .await
+                    .map_err(|_| "guarded_auxiliary_request_failed".to_string())?;
+                Ok(AuxiliaryAnswer {
+                    result: response.result,
+                    publication: Some(response.publication),
+                })
+            }
+        }
+    }
+}
+struct AuxiliaryPublicationGuard<H: WebRTCConnectionHandler> {
+    pool: std::sync::Weak<RxWebRTCReplicationPool<H>>,
+    peer: H::Peer,
+    capability: String,
+    native: Arc<dyn super::webrtc_types::WebRTCPublicationGuard>,
+}
+impl<H: WebRTCConnectionHandler> super::webrtc_types::WebRTCPublicationGuard
+    for AuxiliaryPublicationGuard<H>
+{
+    fn with_current(
+        &self,
+        publish: &mut dyn FnMut() -> crate::rx_error::RxResult<()>,
+    ) -> crate::rx_error::RxResult<()> {
+        let denied = || {
+            new_rx_error(
+                "RC_WEBRTC_CONTROL",
+                Some(serde_json::json!({
+                    "message": "auxiliary publication authority retired or changed"
+                })),
+            )
+        };
+        let pool = self.pool.upgrade().ok_or_else(denied)?;
+        let mut invoked = false;
+        self.native.with_current(&mut || {
+            let alive = pool.auxiliary_publication_alive.lock();
+            if invoked
+                || !*alive
+                || pool.canceled.load(Ordering::SeqCst)
+                || !pool.connection_handler.is_peer_current(&self.peer)
+                || self.capability.is_empty()
+                || pool
+                    .connection_handler
+                    .peer_capability_token(&self.peer)
+                    .as_deref()
+                    != Some(self.capability.as_str())
+            {
+                return Err(denied());
+            }
+            invoked = true;
+            // Pool cancellation takes this same fence before draining tasks.
+            // The native guard and this fence both release at Pending.
+            publish()
+        })?;
+        if !invoked {
+            return Err(denied());
+        }
+        Ok(())
+    }
+}
+
 const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-rxdb-native-v1",
     "ctox-file-chunks-v1",
@@ -264,6 +362,7 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// Per-collection master replication handler, keyed by collection name.
     pub master_replication_handlers: HashMap<String, Arc<dyn RxReplicationHandler>>,
     pub canceled: std::sync::atomic::AtomicBool,
+    auxiliary_publication_alive: Mutex<bool>,
     /// Makes concurrent `cancel()` callers wait for the in-flight teardown
     /// instead of returning merely because cancellation has started.
     cancel_lifecycle: AsyncMutex<()>,
@@ -274,7 +373,7 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// Typed, explicitly registered request methods that share the authenticated
     /// WebRTC DataChannel without becoming RxDB documents. This is reserved for
     /// latency-sensitive ephemeral control planes such as the live Browser.
-    auxiliary_request_handlers: Mutex<HashMap<String, RegisteredAuxiliaryRequest>>,
+    auxiliary_request_handlers: Mutex<HashMap<String, RegisteredAuxiliaryRequest<H::Peer>>>,
     /// Room admission is also required before sending auxiliary control RPCs.
     authenticated_peers: Arc<Mutex<HashSet<H::Peer>>>,
     outbound_ready_peers: Mutex<HashSet<H::Peer>>,
@@ -378,6 +477,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             connection_handler,
             master_replication_handlers,
             canceled: std::sync::atomic::AtomicBool::new(false),
+            auxiliary_publication_alive: Mutex::new(true),
             cancel_lifecycle: AsyncMutex::new(()),
             error_subject: RxSubject::new(),
             query_fetch_registry: registry,
@@ -450,7 +550,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         self.auxiliary_request_handlers.lock().insert(
             method.into(),
             RegisteredAuxiliaryRequest {
-                handler,
+                handler: AuxiliaryHandler::Plain(handler),
                 public_identity: false,
             },
         );
@@ -463,7 +563,32 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         method: impl Into<String>,
         handler: AuxiliaryRequestHandler,
     ) -> Result<(), RxError> {
-        self.register_auxiliary(method.into(), handler, false)
+        self.register_auxiliary(method.into(), AuxiliaryHandler::Plain(handler), false)
+    }
+
+    async fn send_auxiliary_response(
+        self: &Arc<Self>,
+        peer: &H::Peer,
+        capability: String,
+        response: WebRTCResponse,
+        publication: Option<Arc<dyn super::webrtc_types::WebRTCPublicationGuard>>,
+    ) -> Result<(), RxError> {
+        let frame = WebRTCWireFrame::Response(response);
+        match publication {
+            Some(native) => {
+                let guard = Arc::new(AuxiliaryPublicationGuard {
+                    pool: Arc::downgrade(self),
+                    peer: peer.clone(),
+                    capability,
+                    native,
+                });
+                // Unsupported guarded transports reject; never retry as plain.
+                self.connection_handler
+                    .send_guarded(peer, frame, guard)
+                    .await
+            }
+            None => self.connection_handler.send(peer, frame).await,
+        }
     }
 
     /// Register a public source-key challenge responder before room admission.
@@ -485,13 +610,23 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
                 })),
             ));
         }
-        self.register_auxiliary(method, handler, true)
+        self.register_auxiliary(method, AuxiliaryHandler::Plain(handler), true)
+    }
+
+    /// The exact accepted connection is passed by value. Never resolve a
+    /// guarded request through a replaceable signaling peer-id lookup.
+    pub fn register_guarded_auxiliary_request_handler(
+        &self,
+        method: impl Into<String>,
+        handler: GuardedAuxiliaryRequestHandler<H::Peer>,
+    ) -> Result<(), RxError> {
+        self.register_auxiliary(method.into(), AuxiliaryHandler::Guarded(handler), false)
     }
 
     fn register_auxiliary(
         &self,
         method: String,
-        handler: AuxiliaryRequestHandler,
+        handler: AuxiliaryHandler<H::Peer>,
         public_identity: bool,
     ) -> Result<(), RxError> {
         let mut handlers = self.auxiliary_request_handlers.lock();
@@ -793,6 +928,8 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
     }
 
     pub async fn cancel(&self) {
+        // Fence queued auxiliary bytes before the first lifecycle await.
+        *self.auxiliary_publication_alive.lock() = false;
         let _cancel_lifecycle = self.cancel_lifecycle.lock().await;
         if self
             .canceled
@@ -1396,7 +1533,6 @@ where
                         BROWSER_LIVE_HANDLER_FOUND.fetch_add(1, Ordering::Relaxed);
                     }
                     let pool_task = Arc::clone(&pool_clone);
-                    let handler_task = Arc::clone(&handler);
                     let peer = item.peer.clone();
                     let request = item.message.clone();
                     let browser_operation = request
@@ -1415,12 +1551,18 @@ where
                         handler.peer_capability_token(&peer).unwrap_or_default()
                     };
                     pool_clone.spawn_auxiliary_tracked(async move {
-                        let answer =
-                            (auxiliary.handler)(peer_identity, capability_token, request.params)
-                                .await;
-                        let (result, error) = match answer {
-                            Ok(result) => (result, None),
-                            Err(error) => (Value::Null, Some(error)),
+                        let publication_capability = capability_token.clone();
+                        let answer = auxiliary
+                            .answer(
+                                peer.clone(),
+                                peer_identity,
+                                capability_token,
+                                request.params,
+                            )
+                            .await;
+                        let (result, error, publication) = match answer {
+                            Ok(answer) => (answer.result, None, answer.publication),
+                            Err(error) => (Value::Null, Some(error), None),
                         };
                         let response = WebRTCResponse {
                             id: request.id,
@@ -1442,10 +1584,15 @@ where
                         // path despite reporting send success. Pending RPC ids
                         // are shared across both channels, so the browser
                         // correlates this response without a protocol change.
-                        if let Err(error) = handler_task
-                            .send(&peer, WebRTCWireFrame::Response(response))
-                            .await
-                        {
+                        let sent = pool_task
+                            .send_auxiliary_response(
+                                &peer,
+                                publication_capability,
+                                response,
+                                publication,
+                            )
+                            .await;
+                        if let Err(error) = sent {
                             pool_task.error_subject.next(error);
                         }
                     });
@@ -1527,6 +1674,23 @@ where
                     let result = match item.message.method.as_str() {
                         "token" => Value::String(storage_token),
                         "ctoxProtocol" => {
+                            if item
+                                .message
+                                .params
+                                .first()
+                                .and_then(|payload| payload.get("capabilities"))
+                                .and_then(Value::as_array)
+                                .is_some_and(|capabilities| {
+                                    capabilities.iter().any(|capability| {
+                                        capability.as_str()
+                                            == Some(
+                                                super::connection_handler_rs::CTOX_FRAME_DEFLATE_CAPABILITY,
+                                            )
+                                    })
+                                })
+                            {
+                                handler_task.enable_frame_compression_for_peer(&item.peer);
+                            }
                             let flag = pool_task.query_fetch_registry.is_feature_enabled();
                             let rows_fetch_registered =
                                 pool_task.rows_fetch_registry.has_any_source();
@@ -1543,8 +1707,10 @@ where
                             let mut protocol = ctox_protocol_response_with_flag(
                                 target.as_ref(),
                                 peer_session_id.as_deref(),
-                                flag,
-                                rows_fetch_registered,
+                                CtoxProtocolReadCapabilities {
+                                    query_demand_loading_enabled: flag,
+                                    rows_fetch_registered,
+                                },
                                 room_payload.collection_schemas,
                                 room_payload.collection_checkpoints,
                                 Some(&storage_token),
@@ -1794,8 +1960,10 @@ where
                     let mut local_protocol = ctox_protocol_response_with_flag(
                         representative.as_ref(),
                         peer_session_id.as_deref(),
-                        local_flag,
-                        rows_fetch_registered,
+                        CtoxProtocolReadCapabilities {
+                            query_demand_loading_enabled: local_flag,
+                            rows_fetch_registered,
+                        },
                         local_room_payload.collection_schemas,
                         local_room_payload.collection_checkpoints,
                         Some(&storage_token),
@@ -2256,11 +2424,17 @@ async fn collection_checkpoints_payload(collections: &[Arc<RxCollection>]) -> Va
     Value::Object(map)
 }
 
+/// Independently advertised read capabilities captured at handshake build.
+#[derive(Clone, Copy)]
+struct CtoxProtocolReadCapabilities {
+    query_demand_loading_enabled: bool,
+    rows_fetch_registered: bool,
+}
+
 async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     collection: Option<&Arc<RxCollection>>,
     peer_session_id: Option<&str>,
-    query_demand_loading_enabled: bool,
-    rows_fetch_registered: bool,
+    read_capabilities: CtoxProtocolReadCapabilities,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
@@ -2287,8 +2461,7 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     let mut payload = ctox_protocol_response_payload_with_flag(
         collection_payload,
         peer_session_id,
-        query_demand_loading_enabled,
-        rows_fetch_registered,
+        read_capabilities,
         collection_schemas,
         collection_checkpoints,
         storage_generation,
@@ -2303,12 +2476,54 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
 }
 
 #[cfg(test)]
+#[test]
+fn protocol_read_capabilities_remain_independent() {
+    for (query_demand_loading_enabled, rows_fetch_registered) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let payload = ctox_protocol_response_payload_with_flag(
+            Value::Null,
+            Some("read-capability-matrix"),
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled,
+                rows_fetch_registered,
+            },
+            None,
+            None,
+            Some("storage-generation"),
+            NativePeerRole::CtoxInstance,
+        );
+        let capabilities = payload["capabilities"].as_array().expect("capability list");
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|value| value.as_str() == Some(CTOX_QUERY_FETCH_CAPABILITY)),
+            query_demand_loading_enabled,
+        );
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|value| value.as_str() == Some(CTOX_ROWS_FETCH_CAPABILITY)),
+            rows_fetch_registered,
+        );
+        assert_eq!(
+            payload
+                .pointer("/v1_5/queryDemandLoadingEnabled")
+                .and_then(Value::as_bool),
+            Some(query_demand_loading_enabled),
+        );
+    }
+}
+
+#[cfg(test)]
 fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
     ctox_protocol_response_payload_with_flag(
         collection,
         peer_session_id,
-        true,
-        false,
+        CtoxProtocolReadCapabilities {
+            query_demand_loading_enabled: true,
+            rows_fetch_registered: false,
+        },
         None,
         None,
         None,
@@ -2319,13 +2534,16 @@ fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&st
 fn ctox_protocol_response_payload_with_flag(
     collection: Value,
     peer_session_id: Option<&str>,
-    query_demand_loading_enabled: bool,
-    rows_fetch_registered: bool,
+    read_capabilities: CtoxProtocolReadCapabilities,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
     peer_role: NativePeerRole,
 ) -> Value {
+    let CtoxProtocolReadCapabilities {
+        query_demand_loading_enabled,
+        rows_fetch_registered,
+    } = read_capabilities;
     let peer_session_id = peer_session_id
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
@@ -3556,8 +3774,10 @@ mod tests {
         let multiplexed = ctox_protocol_response_payload_with_flag(
             collection_payload,
             Some("rxdb-rs-run-a"),
-            true,
-            false,
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled: true,
+                rows_fetch_registered: false,
+            },
             None,
             Some(checkpoints_map.clone()),
             Some(storage_generation),
@@ -3829,8 +4049,10 @@ mod tests {
             let payload = ctox_protocol_response_payload_with_flag(
                 Value::Null,
                 Some("session"),
-                true,
-                false,
+                CtoxProtocolReadCapabilities {
+                    query_demand_loading_enabled: true,
+                    rows_fetch_registered: false,
+                },
                 None,
                 None,
                 None,
@@ -3858,8 +4080,10 @@ mod tests {
         let single = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
-            true,
-            false,
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled: true,
+                rows_fetch_registered: false,
+            },
             None,
             None,
             Some("storage-generation-1"),
@@ -3872,8 +4096,10 @@ mod tests {
         let multi = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
-            true,
-            false,
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled: true,
+                rows_fetch_registered: false,
+            },
             Some(local_schemas_two()),
             Some(serde_json::json!({
                 "documents": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "documents" },
@@ -3919,6 +4145,7 @@ mod tests {
         role: NativePeerRole,
         local_provider: PlMutex<Option<super::super::LocalSessionProvider<MockPeer>>>,
         retired: PlMutex<HashSet<MockPeer>>,
+        capabilities: PlMutex<HashMap<MockPeer, String>>,
         connect: crate::rxjs_compat::RxSubject<MockPeer>,
         disconnect: crate::rxjs_compat::RxSubject<MockPeer>,
         message: crate::rxjs_compat::RxSubject<PeerWithMessage<MockPeer>>,
@@ -3939,6 +4166,7 @@ mod tests {
                 role,
                 local_provider: PlMutex::new(None),
                 retired: PlMutex::new(HashSet::new()),
+                capabilities: PlMutex::new(HashMap::new()),
                 connect: crate::rxjs_compat::RxSubject::new(),
                 disconnect: crate::rxjs_compat::RxSubject::new(),
                 message: crate::rxjs_compat::RxSubject::new(),
@@ -3990,6 +4218,10 @@ mod tests {
 
         fn is_peer_current(&self, peer: &Self::Peer) -> bool {
             !self.retired.lock().contains(peer)
+        }
+
+        fn peer_capability_token(&self, peer: &Self::Peer) -> Option<String> {
+            self.capabilities.lock().get(peer).cloned()
         }
 
         // This fixture has no private document fields.
@@ -4063,11 +4295,275 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(
-            (installed.handler)(String::new(), String::new(), vec![])
+            installed
+                .answer(
+                    MockPeer("requester".into(), 1),
+                    String::new(),
+                    String::new(),
+                    vec![]
+                )
                 .await
-                .unwrap(),
+                .unwrap()
+                .result,
             serde_json::json!("first")
         );
+    }
+
+    struct AuxiliaryAuthority(StdArc<PlMutex<bool>>);
+    impl super::super::webrtc_types::WebRTCPublicationGuard for AuxiliaryAuthority {
+        fn with_current(
+            &self,
+            publish: &mut dyn FnMut() -> crate::rx_error::RxResult<()>,
+        ) -> crate::rx_error::RxResult<()> {
+            let alive = self.0.lock();
+            if !*alive {
+                return Err(new_rx_error("fixture_authority_retired", None));
+            }
+            publish()
+        }
+    }
+
+    #[tokio::test]
+    async fn guarded_auxiliary_answer_retains_native_authority_and_exact_connection() {
+        use super::super::webrtc_types::WebRTCPublicationGuard;
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("guarded_control").await;
+        let handler = MockHandler::new();
+        let peer = MockPeer("same-signaling-peer".into(), 1);
+        handler
+            .capabilities
+            .lock()
+            .insert(peer.clone(), "capability-a".into());
+        let pool = RxWebRTCReplicationPool::new(collection, handler.clone());
+        let alive = StdArc::new(PlMutex::new(true));
+        let expected_peer = peer.clone();
+        let current = alive.clone();
+        pool.register_guarded_auxiliary_request_handler(
+            "ctox.business_data.fixture",
+            StdArc::new(move |accepted_peer, capability, params| {
+                assert_eq!(accepted_peer, expected_peer);
+                assert_eq!(capability, "capability-a");
+                assert_eq!(params[0]["connectionGeneration"], 2);
+                let current = current.clone();
+                Box::pin(async move {
+                    Ok(GuardedAuxiliaryResponse {
+                        result: serde_json::json!({"record":"private-fixture"}),
+                        publication: StdArc::new(AuxiliaryAuthority(current)),
+                    })
+                })
+            }),
+        )
+        .unwrap();
+        // A wire generation and replaceable signaling identity cannot replace
+        // the exact accepted connection supplied by the pool.
+        let installed = pool
+            .auxiliary_request_handlers
+            .lock()
+            .get("ctox.business_data.fixture")
+            .unwrap()
+            .clone();
+        assert!(!installed.public_identity);
+        let answer = installed
+            .answer(
+                peer.clone(),
+                "same-signaling-peer".into(),
+                "capability-a".into(),
+                vec![serde_json::json!({"connectionGeneration":2})],
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer.result["record"], "private-fixture");
+        let guard = AuxiliaryPublicationGuard {
+            pool: StdArc::downgrade(&pool),
+            peer: peer.clone(),
+            capability: "capability-a".into(),
+            native: answer.publication.unwrap(),
+        };
+        let mut published = 0;
+        guard
+            .with_current(&mut || {
+                assert!(
+                    alive.try_lock().is_none(),
+                    "native authority escaped the physical callback"
+                );
+                assert!(
+                    pool.auxiliary_publication_alive.try_lock().is_none(),
+                    "pool fence escaped the physical callback"
+                );
+                published += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            alive.try_lock().is_some(),
+            "authority cannot survive Pending/await"
+        );
+        assert_eq!(published, 1);
+        *alive.lock() = false;
+        assert!(guard
+            .with_current(&mut || {
+                published += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(
+            published, 1,
+            "already prepared JSON cannot escape revoked native authority"
+        );
+        *alive.lock() = true;
+        handler
+            .capabilities
+            .lock()
+            .insert(peer.clone(), "capability-b".into());
+        assert!(guard
+            .with_current(&mut || {
+                published += 1;
+                Ok(())
+            })
+            .is_err());
+        handler
+            .capabilities
+            .lock()
+            .insert(peer.clone(), "capability-a".into());
+        handler.retired.lock().insert(peer);
+        assert!(guard
+            .with_current(&mut || {
+                published += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(published, 1);
+        pool.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn rejected_guarded_setup_does_not_publish_private_error_text() {
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("guarded_error").await;
+        let pool = RxWebRTCReplicationPool::new(collection, MockHandler::new());
+        pool.register_guarded_auxiliary_request_handler(
+            "ctox.private.rejected",
+            StdArc::new(|_, _, _| {
+                Box::pin(async { Err("private-error-fixture-must-never-reach-wire".into()) })
+            }),
+        )
+        .unwrap();
+        let installed = pool
+            .auxiliary_request_handlers
+            .lock()
+            .get("ctox.private.rejected")
+            .unwrap()
+            .clone();
+        let answer = installed
+            .answer(
+                MockPeer("peer".into(), 1),
+                "peer".into(),
+                "capability".into(),
+                vec![],
+            )
+            .await;
+        match answer {
+            Err(error) => assert_eq!(error, "guarded_auxiliary_request_failed"),
+            Ok(_) => panic!("rejected guarded setup cannot return data"),
+        }
+        pool.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn guarded_auxiliary_response_never_retries_as_plain_transport() {
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("auxiliary_no_fallback")
+                .await;
+        let handler = MockHandler::new();
+        let peer = MockPeer("peer".into(), 1);
+        let pool = RxWebRTCReplicationPool::new(collection, handler.clone());
+        pool.register_guarded_auxiliary_request_handler(
+            "ctox.private.fixture",
+            StdArc::new(|_, _, _| {
+                Box::pin(async {
+                    Ok(GuardedAuxiliaryResponse {
+                        result: serde_json::json!({"private":"fixture"}),
+                        publication: StdArc::new(AuxiliaryAuthority(StdArc::new(PlMutex::new(
+                            true,
+                        )))),
+                    })
+                })
+            }),
+        )
+        .unwrap();
+        assert!(pool
+            .register_auxiliary_request_handler(
+                "ctox.private.fixture",
+                StdArc::new(|_, _, _| Box::pin(async { Ok(Value::Null) }))
+            )
+            .is_err());
+        let installed = pool
+            .auxiliary_request_handlers
+            .lock()
+            .get("ctox.private.fixture")
+            .unwrap()
+            .clone();
+        let answer = installed
+            .answer(peer.clone(), "peer".into(), "capability".into(), vec![])
+            .await
+            .unwrap();
+        let error = pool
+            .send_auxiliary_response(
+                &peer,
+                "capability".into(),
+                WebRTCResponse {
+                    id: "private-response".into(),
+                    result: answer.result,
+                    error: None,
+                    collection: None,
+                },
+                answer.publication,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "ctox_webrtc_publication_guard_unsupported");
+        assert!(
+            handler.sent_responses().is_empty(),
+            "private JSON cannot fall back to the plain transport"
+        );
+        pool.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn auxiliary_cancel_fences_prepared_response_before_lifecycle_await() {
+        use super::super::webrtc_types::WebRTCPublicationGuard;
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("auxiliary_cancel").await;
+        let handler = MockHandler::new();
+        let peer = MockPeer("peer".into(), 1);
+        handler
+            .capabilities
+            .lock()
+            .insert(peer.clone(), "capability".into());
+        let pool = RxWebRTCReplicationPool::new(collection, handler);
+        let guard = AuxiliaryPublicationGuard {
+            pool: StdArc::downgrade(&pool),
+            peer,
+            capability: "capability".into(),
+            native: StdArc::new(AuxiliaryAuthority(StdArc::new(PlMutex::new(true)))),
+        };
+        let lifecycle = pool.cancel_lifecycle.lock().await;
+        let cancelling = pool.cancel();
+        tokio::pin!(cancelling);
+        assert!(futures::poll!(cancelling.as_mut()).is_pending());
+        let mut published = false;
+        assert!(guard
+            .with_current(&mut || {
+                published = true;
+                Ok(())
+            })
+            .is_err());
+        assert!(
+            !published,
+            "queued bytes must retire before asynchronous teardown can proceed"
+        );
+        drop(lifecycle);
+        cancelling.await;
     }
 
     #[tokio::test]
@@ -4358,6 +4854,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unsupported_publication_guard_never_falls_back_to_ordinary_send() {
+        struct MustNotRun;
+        impl super::super::webrtc_types::WebRTCPublicationGuard for MustNotRun {
+            fn with_current(
+                &self,
+                _publish: &mut dyn FnMut() -> crate::rx_error::RxResult<()>,
+            ) -> crate::rx_error::RxResult<()> {
+                panic!("unsupported transport must reject before invoking native authority");
+            }
+        }
+        let handler = MockHandler::new();
+        let mut sent = handler.sent_subject.subscribe();
+        let peer = MockPeer("guarded-peer".into(), 1);
+        let result = handler
+            .send_guarded(
+                &peer,
+                WebRTCWireFrame::Message(WebRTCMessage {
+                    id: "guarded-request".into(),
+                    method: "guarded-fixture".into(),
+                    params: vec![],
+                    collection: None,
+                }),
+                Arc::new(MustNotRun),
+            )
+            .await;
+        assert_eq!(
+            result.unwrap_err().code(),
+            "ctox_webrtc_publication_guard_unsupported"
+        );
+        assert!(tokio::time::timeout(Duration::from_millis(16), sent.next())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn control_only_protocol_explicitly_advertises_no_collections() {
         let pool = RxWebRTCReplicationPool::new_multi(Vec::new(), MockHandler::new());
         let payload = pool.protocol_room_payload().await;
@@ -4366,8 +4897,10 @@ mod tests {
         let protocol = ctox_protocol_response_with_flag(
             None,
             Some("worker-session"),
-            false,
-            false,
+            CtoxProtocolReadCapabilities {
+                query_demand_loading_enabled: false,
+                rows_fetch_registered: false,
+            },
             payload.collection_schemas,
             payload.collection_checkpoints,
             Some("worker-storage"),
@@ -4428,8 +4961,10 @@ mod tests {
             let protocol = ctox_protocol_response_with_flag(
                 None,
                 Some("control-session"),
-                false,
-                false,
+                CtoxProtocolReadCapabilities {
+                    query_demand_loading_enabled: false,
+                    rows_fetch_registered: false,
+                },
                 Some(serde_json::json!({})),
                 Some(serde_json::json!({})),
                 Some(remote_token),

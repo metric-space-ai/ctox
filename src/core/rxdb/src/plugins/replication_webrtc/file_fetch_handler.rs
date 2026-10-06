@@ -89,9 +89,33 @@ pub type FileChunkStreamFn = dyn Fn(&str, &str, Option<&FileRange>, &mut dyn FnM
     + Send
     + Sync;
 pub type FileAuthCheckFn = dyn Fn(&str, &str) -> bool + Send + Sync;
+pub use super::guarded_file_source::{GuardedChunkLease, GuardedFileChunk, GuardedFileSource};
+
+/// Native-only slot lease. Drop removes only this owner's exact source;
+/// captured source callbacks retain their own live authority guards.
+pub struct GuardedSourceRegistration {
+    registry: std::sync::Weak<FileFetchRegistry>,
+    collection: String,
+    source: Arc<dyn GuardedFileSource>,
+}
+impl Drop for GuardedSourceRegistration {
+    fn drop(&mut self) {
+        if let Some(registry) = self.registry.upgrade() {
+            let mut sources = registry.guarded_sources.lock();
+            if sources
+                .get(&self.collection)
+                .is_some_and(|source| Arc::ptr_eq(source, &self.source))
+            {
+                sources.remove(&self.collection);
+            }
+        }
+    }
+}
 
 pub struct FileFetchRegistry {
     sources: Mutex<HashMap<String, Arc<FileChunkStreamFn>>>,
+    guarded_sources: Mutex<HashMap<String, Arc<dyn GuardedFileSource>>>,
+    guarded_collections: Mutex<std::collections::HashSet<String>>,
     // Keep this field name so the existing in-module count assertion continues
     // to exercise the shared in-flight core without changing its test body.
     inflight_count: FetchInflight,
@@ -103,6 +127,8 @@ impl FileFetchRegistry {
     pub fn new(max_inflight: u64) -> Self {
         Self {
             sources: Mutex::new(HashMap::new()),
+            guarded_sources: Mutex::new(HashMap::new()),
+            guarded_collections: Mutex::new(std::collections::HashSet::new()),
             inflight_count: FetchInflight::new(max_inflight),
             feature_enabled: AtomicBool::new(true),
             auth_check: Mutex::new(None),
@@ -112,7 +138,37 @@ impl FileFetchRegistry {
     /// Register a bounded-memory chunk stream. The stream callback owns the
     /// disk or database read loop and emits chunks through `emit_chunk`.
     pub fn register_stream_source(&self, collection: &str, source: Arc<FileChunkStreamFn>) {
-        self.sources.lock().insert(collection.to_string(), source);
+        let mut sources = self.sources.lock();
+        if self.guarded_collections.lock().contains(collection) {
+            tracing::warn!(
+                collection,
+                "ordinary file source cannot shadow a native guarded collection"
+            );
+            return;
+        }
+        sources.insert(collection.to_string(), source);
+    }
+
+    /// Native registration never replaces another live owner.
+    pub fn register_guarded_source(
+        self: &Arc<Self>,
+        collection: &str,
+        source: Arc<dyn GuardedFileSource>,
+    ) -> RxResult<GuardedSourceRegistration> {
+        let ordinary = self.sources.lock();
+        let mut guarded = self.guarded_sources.lock();
+        if ordinary.contains_key(collection) || guarded.contains_key(collection) {
+            return Err(new_rx_error("GUARDED_SOURCE_EXISTS", None));
+        }
+        self.guarded_collections
+            .lock()
+            .insert(collection.to_owned());
+        guarded.insert(collection.to_owned(), source.clone());
+        Ok(GuardedSourceRegistration {
+            registry: Arc::downgrade(self),
+            collection: collection.to_owned(),
+            source,
+        })
     }
 
     pub fn set_feature_enabled(&self, enabled: bool) {
@@ -191,7 +247,7 @@ fn file_fetch_error_code_for_rx_error(err: &RxError) -> (&'static str, bool) {
     }
 }
 
-pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
+pub async fn run_file_fetch<H: WebRTCConnectionHandler + 'static>(
     registry: Arc<FileFetchRegistry>,
     handler: Arc<H>,
     peer: H::Peer,
@@ -248,22 +304,25 @@ pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
         return Ok(());
     }
 
-    let source = match registry.get_source(&request.collection_name) {
-        Some(s) => s,
-        None => {
-            send_file_error(
-                handler.as_ref(),
-                &peer,
-                &message.id,
-                &request.request_id,
-                FILE_FETCH_ERROR_NOT_FOUND,
-                "no file source registered for this collection",
-                false,
-            )
-            .await;
-            return Ok(());
-        }
-    };
+    let source = registry.get_source(&request.collection_name);
+    let guarded_source = registry
+        .guarded_sources
+        .lock()
+        .get(&request.collection_name)
+        .cloned();
+    if source.is_none() && guarded_source.is_none() {
+        send_file_error(
+            handler.as_ref(),
+            &peer,
+            &message.id,
+            &request.request_id,
+            FILE_FETCH_ERROR_NOT_FOUND,
+            "no file source registered for this collection",
+            false,
+        )
+        .await;
+        return Ok(());
+    }
 
     let connection_identity = handler.connection_identity(&peer);
     let cancel_flag = match registry.try_acquire(&connection_identity, &request.request_id) {
@@ -285,7 +344,39 @@ pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
 
     send_fetch_accepted(handler.as_ref(), &peer, &message.id, &request.request_id).await;
 
-    let outcome = stream_file(handler.as_ref(), &peer, &request, source, &cancel_flag).await;
+    let outcome = if let Some(source) = guarded_source {
+        let result = super::guarded_file_source::stream_guarded_file(
+            handler.clone(),
+            peer.clone(),
+            request.clone(),
+            source,
+            cancel_flag.clone(),
+        )
+        .await;
+        if let Err(err) = &result {
+            let (code, retryable) = file_fetch_error_code_for_rx_error(err);
+            send_file_error(
+                handler.as_ref(),
+                &peer,
+                "",
+                &request.request_id,
+                code,
+                "native guarded file delivery refused",
+                retryable,
+            )
+            .await;
+        }
+        result
+    } else {
+        stream_file(
+            handler.as_ref(),
+            &peer,
+            &request,
+            source.expect("checked registered source"),
+            &cancel_flag,
+        )
+        .await
+    };
     registry.release(&connection_identity, &request.request_id);
     outcome
 }
@@ -471,7 +562,7 @@ async fn send_file_error<H: WebRTCConnectionHandler>(
     .await;
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(64);
@@ -499,6 +590,64 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::super::webrtc_types::{PeerWithMessage, PeerWithResponse};
+
+    struct UnusedGuardedSource;
+    impl GuardedFileSource for UnusedGuardedSource {
+        fn byte_len(&self, _: &str) -> RxResult<u64> {
+            panic!("slot fixture must not read files")
+        }
+        fn prepare_chunk(
+            &self,
+            _: &str,
+            _: u64,
+            _: usize,
+            _: bool,
+            _: &str,
+            _: Arc<std::sync::atomic::AtomicBool>,
+        ) -> RxResult<GuardedFileChunk> {
+            panic!("slot fixture must not send files")
+        }
+    }
+    #[test]
+    fn guarded_source_owner_drop_releases_the_exact_slot_for_restart() {
+        let registry = Arc::new(FileFetchRegistry::new(2));
+        let first = registry
+            .register_guarded_source("guest_frames", Arc::new(UnusedGuardedSource))
+            .unwrap();
+        assert!(registry
+            .register_guarded_source("guest_frames", Arc::new(UnusedGuardedSource))
+            .is_err());
+        drop(first);
+        assert!(!registry.guarded_sources.lock().contains_key("guest_frames"));
+        let replacement = registry
+            .register_guarded_source("guest_frames", Arc::new(UnusedGuardedSource))
+            .unwrap();
+        assert!(registry.guarded_sources.lock().contains_key("guest_frames"));
+        drop(replacement);
+        assert!(!registry.guarded_sources.lock().contains_key("guest_frames"));
+    }
+    #[test]
+    fn guarded_collection_never_falls_back_to_an_ordinary_source_after_owner_drop() {
+        let registry = Arc::new(FileFetchRegistry::new(2));
+        let owner = registry
+            .register_guarded_source("guest_frames", Arc::new(UnusedGuardedSource))
+            .unwrap();
+        registry.register_stream_source(
+            "guest_frames",
+            Arc::new(|_, _, _, _| panic!("native source shadowed")),
+        );
+        assert!(registry.get_source("guest_frames").is_none());
+        drop(owner);
+        registry.register_stream_source(
+            "guest_frames",
+            Arc::new(|_, _, _, _| panic!("native source fallback")),
+        );
+        assert!(registry.get_source("guest_frames").is_none());
+        assert!(!registry.guarded_sources.lock().contains_key("guest_frames"));
+        let _replacement = registry
+            .register_guarded_source("guest_frames", Arc::new(UnusedGuardedSource))
+            .unwrap();
+    }
 
     #[derive(Clone, Default, Debug)]
     struct MockPeer(&'static str);

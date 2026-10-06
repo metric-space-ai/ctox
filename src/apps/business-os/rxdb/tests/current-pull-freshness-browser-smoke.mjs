@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { chromium } from '../../node_modules/playwright/index.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const playwrightModule = process.env.PLAYWRIGHT_MODULE_PATH
+  ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE_PATH, 'index.mjs')).href
+  : '../../node_modules/playwright/index.mjs';
+const { chromium } = await import(playwrightModule);
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const assets = new Map([

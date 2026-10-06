@@ -154,6 +154,10 @@ const EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR: i64 = 4;
 const CTOX_PERSISTENT_WORKER_THREAD_NAME: &str = "ctox-service-worker";
 const BUSINESS_OS_MCP_ADDR_KEY: &str = "CTOX_BUSINESS_OS_MCP_ADDR";
 const BUSINESS_OS_MCP_DEFAULT_ADDR: &str = "127.0.0.1:8788";
+#[cfg(unix)]
+#[path = "native_guest_mcp.rs"]
+mod native_guest_mcp;
+
 const BUSINESS_OS_MCP_SESSION_SERVER_NAME: &str = "ctox-business-os";
 const BUSINESS_OS_MCP_SESSION_TOOLS: &[&str] = &[
     "business_os.get_module",
@@ -897,12 +901,109 @@ pub(crate) struct PersistentSession {
     additional_writable_roots: Vec<PathBuf>,
     additional_readable_roots: Vec<PathBuf>,
     persistent_worker: bool,
+    native_checkpoint_binding: Option<crate::channels::NativeProviderCheckpointBinding>,
+    native_capture_thread: Option<Arc<ctox_core::CodexThread>>,
+    #[cfg(unix)]
+    native_command_session_token: Option<String>,
+    #[cfg(unix)]
+    native_command_context: Option<JsonValue>,
+    #[cfg(unix)]
+    native_provider_admission: Option<std::sync::Arc<dyn crate::channels::NativeProviderAdmission>>,
+    #[cfg(unix)]
+    native_guest_registry: Option<(
+        std::sync::Arc<crate::business_os::NativeGuestRegistry>,
+        String,
+    )>,
+    #[cfg(unix)]
+    native_guest_execution: Option<crate::business_os::NativeGuestExecution>,
+    #[cfg(unix)]
+    native_capture_owner: Option<crate::channels::NativeProviderCaptureOwner>,
     /// Set when a turn ended ambiguously (e.g. `turn/start` timed out with
     /// the request still detached server-side). A poisoned session refuses
     /// further turns: reusing it could overlap or steer into the original
     /// turn and duplicate side effects (ctox#21 re-review). Owners must
     /// rebuild the session.
     poisoned: bool,
+}
+
+/// Checked native source teardown with current capture-only authority.
+/// Private native objects cannot be reconstructed from a manifest or wire claim.
+/// Artifact enumeration/export and the protected transport remain separate.
+#[cfg(unix)]
+pub(crate) struct NativeSessionCapture {
+    source: crate::channels::NativeProviderCaptureOwner,
+    journal: ctox_core::NativeJournalReader,
+    execution: crate::business_os::NativeGuestExecution,
+    thread_id: String,
+    root: PathBuf,
+    command_session_token: String,
+    command_context: JsonValue,
+}
+
+#[cfg(unix)]
+impl NativeSessionCapture {
+    pub(crate) fn with_current<T>(
+        &self,
+        capture: impl FnOnce(
+            &ctox_sync::contracts::ExecutionSpec,
+            &ctox_sync::authority::Ownership,
+        ) -> Result<T>,
+    ) -> Result<T> {
+        self.verify_command_authority()?;
+        let captured = self
+            .execution
+            .with_capture_authority(&self.source, |spec, ownership| {
+                anyhow::ensure!(
+                    spec.session_id == self.thread_id,
+                    "native capture session differs from the actual producer"
+                );
+                capture(spec, ownership)
+            })?;
+        self.verify_command_authority()?;
+        Ok(captured)
+    }
+
+    /// Exact native journal bytes, checked against the actual producer ID.
+    /// The result is private capture input; it must not bypass the separate
+    /// held publication guard or be labelled provider continuation evidence.
+    pub(crate) fn read_journal(
+        &self,
+        limits: ctox_protocol::portable_journal::PortableJournalLimits,
+    ) -> Result<(
+        Vec<u8>,
+        ctox_protocol::portable_journal::ValidatedPortableJournal,
+    )> {
+        use ctox_protocol::portable_journal::{
+            validate_portable_journal, PortableArtifactRef, PortableJournalExpectation,
+            PortableJournalFormat,
+        };
+        self.with_current(|_, _| {
+            let bytes = self.journal.read_bytes(limits.max_bytes)?;
+            let expected = PortableJournalExpectation {
+                format: PortableJournalFormat::current(),
+                session_id: ctox_protocol::ThreadId::from_string(&self.thread_id)
+                    .context("native capture producer identity is invalid")?,
+            };
+            let artifact = PortableArtifactRef {
+                sha256: format!("{:x}", Sha256::digest(&bytes)),
+                size_bytes: bytes.len() as u64,
+            };
+            let validated = validate_portable_journal(&bytes, &artifact, &expected, &limits)?;
+            Ok((bytes, validated))
+        })
+    }
+
+    fn verify_command_authority(&self) -> Result<()> {
+        let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
+            &self.root,
+            &self.command_session_token,
+        )?;
+        anyhow::ensure!(
+            current == self.command_context,
+            "native capture command authority changed"
+        );
+        Ok(())
+    }
 }
 
 impl PersistentSession {
@@ -931,7 +1032,13 @@ impl PersistentSession {
             .unwrap_or(BUSINESS_OS_MCP_DEFAULT_ADDR);
         let token = crate::business_os::mcp_channel::mcp_operator_auth_token(root)?;
         let thread_config = business_os_mcp_thread_config(addr, &token, command_session_token)?;
-        Self::start_with_instructions_and_tool_mode(
+        #[cfg(unix)]
+        let command_context =
+            crate::business_os::mcp_channel::verify_internal_command_session_token(
+                root,
+                command_session_token,
+            )?;
+        let mut session = Self::start_with_instructions_and_tool_mode(
             root,
             settings,
             None,
@@ -942,7 +1049,85 @@ impl PersistentSession {
             Some(thread_config),
             false,
             false,
-        )
+        )?;
+        #[cfg(unix)]
+        {
+            session.native_command_context = Some(command_context);
+        }
+        Ok(session)
+    }
+
+    /// A native guest producer must install its real admission owner before a
+    /// turn. Ordinary queue workflows do not acquire a guest permit here.
+    #[cfg(unix)]
+    pub(crate) fn require_native_provider_admission(
+        &mut self,
+        admission: std::sync::Arc<dyn crate::channels::NativeProviderAdmission>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.native_checkpoint_binding.is_some() && !self.poisoned,
+            "native admission requires a fresh durable account-bound guest session"
+        );
+        anyhow::ensure!(
+            self.native_provider_admission.is_none(),
+            "native admission owner already installed"
+        );
+        self.native_provider_admission = Some(admission);
+        Ok(())
+    }
+
+    /// Create a fresh durable native guest session with actual pinned account
+    /// and policy-verified command provenance. No named legacy worker is reused.
+    /// This creates no model turn and does not itself grant Raft/guest execution.
+    #[cfg(unix)]
+    pub(crate) fn start_native_guest_with_business_os_mcp(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        command_session_token: &str,
+        persona: Option<&str>,
+        registry: std::sync::Arc<crate::business_os::NativeGuestRegistry>,
+        guest_id: &str,
+        guest_peer: &ctox_sync::native::NativeSyncSession,
+    ) -> Result<Self> {
+        let context = crate::business_os::mcp_channel::verify_internal_command_session_token(
+            root,
+            command_session_token,
+        )?;
+        let addr = settings
+            .get(BUSINESS_OS_MCP_ADDR_KEY)
+            .map(String::as_str)
+            .unwrap_or(BUSINESS_OS_MCP_DEFAULT_ADDR);
+        let token = crate::business_os::mcp_channel::mcp_operator_auth_token(root)?;
+        let config = business_os_mcp_thread_config(addr, &token, command_session_token)?;
+        let mut session = Self::start_with_native_mode(
+            root,
+            settings,
+            None,
+            persona,
+            false,
+            false,
+            false,
+            Some(config),
+            false,
+            false,
+            true,
+        )?;
+        let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
+            root,
+            command_session_token,
+        )?;
+        anyhow::ensure!(
+            current == context,
+            "native guest command authority changed during startup"
+        );
+        session.native_command_context = Some(current);
+        session.native_command_session_token = Some(command_session_token.to_owned());
+        session.require_native_provider_admission(registry.admission(guest_id)?)?;
+        // Install the guarded source on the retained native peer, before any
+        // model turn can observe a guest. Wire claims cannot create this owner.
+        registry.attach_frame_transport(guest_peer)?;
+        session.native_guest_registry = Some((registry, guest_id.to_owned()));
+        Ok(session)
     }
 
     /// Start a fresh worker session that cannot resume the process-wide
@@ -1123,6 +1308,35 @@ impl PersistentSession {
         read_only_sandbox: bool,
         persistent_worker: bool,
     ) -> Result<Self> {
+        Self::start_with_native_mode(
+            root,
+            settings,
+            base_instructions,
+            persona,
+            disable_compaction,
+            disable_active_tools,
+            disable_mcp_servers,
+            thread_config,
+            read_only_sandbox,
+            persistent_worker,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_with_native_mode(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        base_instructions: Option<&str>,
+        persona: Option<&str>,
+        disable_compaction: bool,
+        disable_active_tools: bool,
+        disable_mcp_servers: bool,
+        thread_config: Option<HashMap<String, JsonValue>>,
+        read_only_sandbox: bool,
+        persistent_worker: bool,
+        native_guest: bool,
+    ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -1142,14 +1356,25 @@ impl PersistentSession {
                 thread_config.as_ref(),
                 read_only_sandbox,
                 persistent_worker,
+                native_guest,
             )
             .await
         });
-        let (client, thread_id, cwd, seq, model, model_provider, api_provider, reasoning_effort) =
-            match start_result {
-                Ok(started) => started,
-                Err(err) => return Err(err),
-            };
+        let (
+            client,
+            thread_id,
+            cwd,
+            seq,
+            model,
+            model_provider,
+            api_provider,
+            reasoning_effort,
+            native_checkpoint_binding,
+            native_capture_thread,
+        ) = match start_result {
+            Ok(started) => started,
+            Err(err) => return Err(err),
+        };
 
         let mut policy = CompactPolicy::from_settings(
             settings.get("CTOX_COMPACT_TRIGGER").map(String::as_str),
@@ -1221,6 +1446,20 @@ impl PersistentSession {
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             persistent_worker,
+            native_checkpoint_binding,
+            native_capture_thread,
+            #[cfg(unix)]
+            native_command_session_token: None,
+            #[cfg(unix)]
+            native_command_context: None,
+            #[cfg(unix)]
+            native_provider_admission: None,
+            #[cfg(unix)]
+            native_guest_registry: None,
+            #[cfg(unix)]
+            native_guest_execution: None,
+            #[cfg(unix)]
+            native_capture_owner: None,
             poisoned: false,
         })
     }
@@ -1321,6 +1560,12 @@ impl PersistentSession {
         let additional_writable_roots = self.additional_writable_roots.clone();
         let additional_readable_roots = self.additional_readable_roots.clone();
         let persistent_worker = self.persistent_worker;
+        #[cfg(unix)]
+        let native_command_context = self.native_command_context.clone();
+        #[cfg(unix)]
+        let native_provider_admission = self.native_provider_admission.clone();
+        #[cfg(unix)]
+        let native_guest_registry = self.native_guest_registry.clone();
         let required_initial_tool = required_initial_tool.map(str::to_string);
         self.ctx_log.log(
             "turn_request",
@@ -1331,6 +1576,9 @@ impl PersistentSession {
             .runtime
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("session runtime already shut down"))?;
+        let native_checkpoint_binding = self.native_checkpoint_binding.clone();
+        #[cfg(unix)]
+        let native_command_session_token = self.native_command_session_token.clone();
         let result = runtime.block_on(async {
             Self::run_turn_async(
                 client,
@@ -1359,6 +1607,19 @@ impl PersistentSession {
                 progress,
                 required_initial_tool.as_deref(),
                 queue_turn_lease,
+                native_checkpoint_binding.as_ref(),
+                #[cfg(unix)]
+                native_command_session_token.as_deref(),
+                #[cfg(unix)]
+                native_command_context.as_ref(),
+                #[cfg(unix)]
+                native_provider_admission.as_ref(),
+                #[cfg(unix)]
+                native_guest_registry.as_ref(),
+                #[cfg(unix)]
+                &mut self.native_guest_execution,
+                #[cfg(unix)]
+                &mut self.native_capture_owner,
             )
             .await
         });
@@ -1376,9 +1637,95 @@ impl PersistentSession {
         result
     }
 
-    /// Shut down the client and runtime cleanly.
-    pub fn shutdown(mut self) {
-        self.shutdown_inner("shutting down");
+    /// Finish owned client cleanup and return its checked shutdown result.
+    /// Forced teardown cannot certify a quiescent provider checkpoint.
+    pub fn shutdown(mut self) -> Result<()> {
+        let has_owners = self.runtime.is_some() && self.client.is_some();
+        self.shutdown_inner("shutting down")?;
+        anyhow::ensure!(
+            has_owners,
+            "persistent session shutdown ownership is missing"
+        );
+        Ok(())
+    }
+
+    /// Consume the actual native producer. No capture authority escapes a
+    /// failed/forced teardown, stale worker/account/policy, or ambiguous turn.
+    /// This does not export artifacts or certify provider continuation.
+    #[cfg(unix)]
+    pub(crate) fn quiesce_native_capture(mut self) -> Result<NativeSessionCapture> {
+        anyhow::ensure!(
+            !self.poisoned,
+            "ambiguous native turn requires reconciliation"
+        );
+        anyhow::ensure!(
+            self.runtime.is_some() && self.client.is_some(),
+            "native capture requires both actual shutdown owners"
+        );
+        anyhow::ensure!(
+            self.native_capture_owner.is_some(),
+            "native turn has not retired to capture authority"
+        );
+        // This API owns a synchronous runtime. A nested runtime cannot supply
+        // checked teardown; the existing shutdown path performs bounded cleanup.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let _ = self.shutdown_inner("rejecting asynchronous native capture");
+            anyhow::bail!("native capture requires a synchronous owner");
+        }
+        let actual_thread = self
+            .native_capture_thread
+            .take()
+            .context("native capture has no retained actual Core Session")?;
+        let journal = self
+            .runtime
+            .as_ref()
+            .expect("checked runtime owner")
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS),
+                    actual_thread.retain_native_journal(),
+                )
+                .await
+                .context("native journal retention timed out")?
+                .context("actual native journal could not be retained")
+            });
+        let journal = match journal {
+            Ok(journal) => journal,
+            Err(error) => {
+                let _ = self.shutdown_inner("failed native journal retention");
+                return Err(error);
+            }
+        };
+        let capture = NativeSessionCapture {
+            journal,
+            source: self
+                .native_capture_owner
+                .take()
+                .context("native turn has not retired to capture authority")?,
+            execution: self
+                .native_guest_execution
+                .take()
+                .context("native capture has no actual admitted guest execution")?,
+            thread_id: self.thread_id.clone(),
+            root: self.root.clone(),
+            command_session_token: self
+                .native_command_session_token
+                .take()
+                .context("native capture has no retained signed command authorization")?,
+            command_context: self
+                .native_command_context
+                .take()
+                .context("native capture has no verified command context")?,
+        };
+        let before = capture.with_current(|_, _| Ok(()));
+        let shutdown = self.shutdown_inner("quiescing native capture");
+        before?;
+        shutdown?;
+        capture.with_current(|_, _| Ok(()))?;
+        // Writer receipt alone cannot certify identity, syntax or bounded size.
+        // A malformed/missing/changed journal never returns a capture owner.
+        capture.read_journal(ctox_protocol::portable_journal::PortableJournalLimits::default())?;
+        Ok(capture)
     }
 
     // --- Internal async helpers ---
@@ -1393,6 +1740,7 @@ impl PersistentSession {
         thread_config: Option<&HashMap<String, JsonValue>>,
         read_only_sandbox: bool,
         persistent_worker: bool,
+        native_guest: bool,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -1402,6 +1750,8 @@ impl PersistentSession {
         Option<String>,
         Option<String>,
         Option<ReasoningEffort>,
+        Option<crate::channels::NativeProviderCheckpointBinding>,
+        Option<Arc<ctox_core::CodexThread>>,
     )> {
         let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
         let runtime_local_preset = resolved_runtime
@@ -1488,6 +1838,14 @@ impl PersistentSession {
             .map_err(|err| anyhow::anyhow!("load config.toml: {err}"))?;
         let auth_credentials_store_mode =
             config_toml.cli_auth_credentials_store.unwrap_or_default();
+        if native_guest {
+            anyhow::ensure!(
+                config_toml.chatgpt_base_url.as_deref().is_none_or(
+                    |url| url.trim_end_matches('/') == "https://chatgpt.com/backend-api"
+                ),
+                "native account-bound guest cannot use a replacement ChatGPT endpoint"
+            );
+        }
         if use_chatgpt_subscription_auth {
             let _ = restore_chatgpt_subscription_auth_from_instance(
                 root,
@@ -1496,7 +1854,16 @@ impl PersistentSession {
             );
         }
 
-        let auth_manager = if let Some(ref key) = api_key {
+        let auth_manager = if native_guest {
+            anyhow::ensure!(
+                use_chatgpt_subscription_auth && !use_provider_subscription_proxy,
+                "native guest requires an account-bound direct provider; proxy account selection is unresolved"
+            );
+            AuthManager::from_account_bound_storage(
+                codex_home.clone(),
+                auth_credentials_store_mode,
+            )?
+        } else if let Some(ref key) = api_key {
             AuthManager::from_runtime_auth(
                 ctox_core::CodexAuth::from_api_key(key),
                 codex_home.clone(),
@@ -1525,11 +1892,17 @@ impl PersistentSession {
         );
 
         // Resolve model-provider BEFORE building overrides
-        let api_provider = super::turn_loop::resolve_api_model_provider_spec(
-            &model,
-            settings,
-            resolved_runtime.as_ref(),
-        );
+        let api_provider = if native_guest {
+            // Native account-bound ChatGPT uses the canonical authenticated
+            // harness route, never a no-auth CTOX API/proxy adapter.
+            None
+        } else {
+            super::turn_loop::resolve_api_model_provider_spec(
+                &model,
+                settings,
+                resolved_runtime.as_ref(),
+            )
+        };
         let local_provider =
             super::turn_loop::resolve_local_model_provider_spec(resolved_runtime.as_ref());
         if api_provider.is_some()
@@ -1551,14 +1924,18 @@ impl PersistentSession {
                 "CTOX local runtime requires socket-based Responses transport; no managed socket path is available"
             );
         }
-        let selected_provider_id = local_provider
-            .as_ref()
-            .map(|provider| provider.provider_id.to_string())
-            .or_else(|| {
-                api_provider
-                    .as_ref()
-                    .map(|provider| provider.provider_id.to_string())
-            });
+        let selected_provider_id = if native_guest {
+            Some("openai".to_owned())
+        } else {
+            local_provider
+                .as_ref()
+                .map(|provider| provider.provider_id.to_string())
+                .or_else(|| {
+                    api_provider
+                        .as_ref()
+                        .map(|provider| provider.provider_id.to_string())
+                })
+        };
         let tracking_api_provider =
             if use_chatgpt_subscription_auth || use_provider_subscription_proxy {
                 None
@@ -1586,7 +1963,7 @@ impl PersistentSession {
                 SandboxMode::WorkspaceWrite
             }),
             include_apply_patch_tool: Some(true),
-            ephemeral: Some(true),
+            ephemeral: Some(!native_guest),
             disable_mcp_servers,
             ..Default::default()
         };
@@ -1623,6 +2000,29 @@ impl PersistentSession {
             .build()
             .await
             .map_err(|err| anyhow::anyhow!("config build: {err}"))?;
+        let native_checkpoint_binding = if native_guest {
+            anyhow::ensure!(
+                local_provider.is_none(),
+                "native guest account is not a local model route"
+            );
+            anyhow::ensure!(
+                config.model_provider.requires_openai_auth
+                    && config.model_provider.wire_api.to_string() == "responses"
+                    && config.model_provider.base_url.is_none()
+                    && config.model_provider.transport_endpoint.is_none()
+                    && config.model_provider.env_key.is_none()
+                    && config.model_provider.experimental_bearer_token.is_none(),
+                "native provider route must use its pinned direct account"
+            );
+            Some(
+                crate::channels::NativeProviderCheckpointBinding::from_pinned_auth(
+                    auth_manager.clone(),
+                    &config.model_provider_id,
+                )?,
+            )
+        } else {
+            None
+        };
         let config = Arc::new(config);
         let session_source = SessionSource::Exec;
         let thread_manager = Arc::new(ThreadManager::new(
@@ -1639,7 +2039,7 @@ impl PersistentSession {
             loader_overrides: Default::default(),
             cloud_requirements,
             auth_manager: Some(auth_manager),
-            thread_manager: Some(thread_manager),
+            thread_manager: Some(thread_manager.clone()),
             feedback: CodexFeedback::new(),
             config_warnings: vec![],
             session_source,
@@ -1669,10 +2069,23 @@ impl PersistentSession {
             disable_mcp_servers,
             thread_config,
             persistent_worker,
+            durable_guest: native_guest,
             persistent_thread_name: persistent_thread_name.as_deref(),
         };
         let timeouts = production_session_control_timeouts();
         let thread_id = bind_session_thread(&client, &mut seq, &spec, &timeouts).await?;
+        let native_capture_thread = if native_guest {
+            let actual_id = ctox_protocol::ThreadId::from_string(&thread_id)
+                .context("native producer returned an invalid thread identity")?;
+            Some(
+                thread_manager
+                    .get_thread(actual_id)
+                    .await
+                    .context("native producer has no actual loaded Core Session")?,
+            )
+        } else {
+            None
+        };
 
         Ok((
             client,
@@ -1683,6 +2096,8 @@ impl PersistentSession {
             selected_provider_id,
             tracking_api_provider,
             reasoning_effort,
+            native_checkpoint_binding,
+            native_capture_thread,
         ))
     }
 
@@ -1713,7 +2128,20 @@ impl PersistentSession {
         progress: &mut dyn FnMut(&JsonValue),
         required_initial_tool: Option<&str>,
         queue_turn_lease: Option<&crate::channels::QueueTurnLeaseFence>,
+        native_checkpoint_binding: Option<&crate::channels::NativeProviderCheckpointBinding>,
+        #[cfg(unix)] native_command_session_token: Option<&str>,
+        #[cfg(unix)] native_command_context: Option<&JsonValue>,
+        #[cfg(unix)] native_provider_admission: Option<
+            &std::sync::Arc<dyn crate::channels::NativeProviderAdmission>,
+        >,
+        #[cfg(unix)] native_guest_registry: Option<&(
+            std::sync::Arc<crate::business_os::NativeGuestRegistry>,
+            String,
+        )>,
+        #[cfg(unix)] native_guest_execution: &mut Option<crate::business_os::NativeGuestExecution>,
+        #[cfg(unix)] native_capture_owner: &mut Option<crate::channels::NativeProviderCaptureOwner>,
     ) -> Result<String> {
+        let native_guest = native_checkpoint_binding.is_some();
         let lease_reader = queue_turn_lease
             .map(|fence| fence.open_reader())
             .transpose()?;
@@ -1853,6 +2281,7 @@ impl PersistentSession {
             disable_mcp_servers,
             thread_config,
             persistent_worker,
+            durable_guest: native_guest,
             persistent_thread_name: persistent_thread_name.as_deref(),
         };
         let timeouts = production_session_control_timeouts();
@@ -1864,17 +2293,175 @@ impl PersistentSession {
                 "queue turn cancelled before turn start: native lease revoked"
             );
         }
-        let turn_resp: TurnStartResponse = start_bound_turn(
-            client,
-            seq,
-            session_thread_id,
-            turn_start_params,
-            &spec,
-            &timeouts,
-        )
-        .await?;
+        #[cfg(unix)]
+        let execution = queue_turn_lease.and_then(|fence| fence.execution.as_ref());
+        #[cfg(unix)]
+        let mut provider_owner = execution
+            .map(|execution| {
+                crate::channels::NativeProviderTurnOwner::prepare_with_checkpoint(
+                    execution,
+                    session_thread_id,
+                    model,
+                    model_provider,
+                    api_provider,
+                    native_command_context,
+                    native_checkpoint_binding,
+                )
+            })
+            .transpose()?;
+        // Register before start so an early sensitive MCP call fails closed
+        // until bind_turn has the actual TurnStart response. Only a guest
+        // admission installs this native path; ordinary MCP stays unchanged.
+        #[cfg(unix)]
+        let _native_mcp_registration = if let Some(admission) = native_provider_admission {
+            let owner = provider_owner
+                .as_ref()
+                .context("native MCP dispatch requires the actual worker/provider owner")?;
+            Some(native_guest_mcp::register(client, owner, std::sync::Arc::clone(admission)).await?)
+        } else {
+            None
+        };
+        #[cfg(unix)]
+        if let Some(admission) = native_provider_admission {
+            let (registry, guest_id) = native_guest_registry.ok_or_else(|| {
+                SessionPoisoned("native guest has no actual lifecycle registry".into())
+            })?;
+            if native_guest_execution.is_some() {
+                return Err(SessionPoisoned(
+                    "native guest execution already bound; continuation requires lifecycle reconciliation".into()
+                ).into());
+            }
+            let provider = provider_owner.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "guest provider admission requires the actual native worker execution"
+                )
+            })?;
+            let token = native_command_session_token.ok_or_else(|| {
+                anyhow::anyhow!("native guest has no retained command authorization")
+            })?;
+            let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
+                root, token,
+            )?;
+            anyhow::ensure!(
+                native_command_context == Some(&current),
+                "native guest command authority changed"
+            );
+            if let Err(error) = provider
+                .binding()
+                .admit_before_start(admission.as_ref())
+                .await
+            {
+                return Err(SessionPoisoned(format!(
+                    "native guest admission requires reconciliation: {error}"
+                ))
+                .into());
+            }
+            let current =
+                crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)
+                    .map_err(|error| {
+                        SessionPoisoned(format!(
+                "native guest authority changed after admission; reconciliation required: {error}"
+            ))
+                    })?;
+            if native_command_context != Some(&current) {
+                return Err(SessionPoisoned(
+                    "native guest command authority changed after admission; reconciliation required".into()
+                ).into());
+            }
+            let execution = registry
+                .bind_admitted_execution(provider.binding(), guest_id)
+                .await
+                .map_err(|error| {
+                    SessionPoisoned(format!(
+                        "native guest controller binding requires reconciliation: {error}"
+                    ))
+                })?;
+            let current =
+                crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)
+                    .map_err(|error| {
+                        SessionPoisoned(format!(
+                            "native guest authority changed after controller binding: {error}"
+                        ))
+                    })?;
+            if native_command_context != Some(&current) {
+                return Err(SessionPoisoned(
+                    "native guest command changed before TurnStart; reconciliation required".into(),
+                )
+                .into());
+            }
+            // Observation handle only. Actual guest operations independently
+            // revalidate provider/account/policy/controller and quorum ownership.
+            *native_guest_execution = Some(execution);
+        }
+        // Only the explicitly native-admitted guest lane forbids isolated
+        // fallback. Ordinary isolated sessions retain their existing rotation.
+        #[cfg(unix)]
+        let prepared_guest = native_provider_admission.is_some();
+        #[cfg(not(unix))]
+        let prepared_guest = false;
+        let turn_resp: TurnStartResponse = if prepared_guest {
+            super::session_continuity::start_prepared_turn(
+                client,
+                seq,
+                session_thread_id,
+                turn_start_params,
+                &spec,
+                &timeouts,
+            )
+            .await?
+        } else {
+            start_bound_turn(
+                client,
+                seq,
+                session_thread_id,
+                turn_start_params,
+                &spec,
+                &timeouts,
+            )
+            .await?
+        };
         let thread_id = session_thread_id.clone();
         let turn_id = turn_resp.turn.id;
+        #[cfg(unix)]
+        {
+            // A normal isolated server rejection can rotate the actual thread.
+            // It has no guest admission; replace its observation before binding
+            // the actual turn. An admitted guest can never take this branch.
+            let binding_result = (|| -> Result<()> {
+                if let Some(owner) = provider_owner.as_ref() {
+                    let prepared = owner.binding().with_live_provider(|facts, _| {
+                        Ok(facts.provider_session_id == thread_id)
+                    })?;
+                    if !prepared {
+                        anyhow::ensure!(!prepared_guest, "admitted provider session rotated");
+                        drop(provider_owner.take());
+                        provider_owner = Some(
+                            crate::channels::NativeProviderTurnOwner::prepare_with_checkpoint(
+                                execution.expect("provider owner requires execution"),
+                                &thread_id,
+                                model,
+                                model_provider,
+                                api_provider,
+                                native_command_context,
+                                native_checkpoint_binding,
+                            )?,
+                        );
+                    }
+                }
+                if let Some(owner) = provider_owner.as_ref() {
+                    owner.bind_turn(&thread_id, &turn_id)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = binding_result {
+                let terminal =
+                    interrupt_cancelled_queue_turn(client, seq, &thread_id, &turn_id).await;
+                return Err(SessionPoisoned(format!(
+                    "actual provider turn binding failed: {error}; terminal_observed={terminal}"
+                ))
+                .into());
+            }
+        }
 
         // Event loop
         let mut reply_capture = DirectSessionReplyCapture::default();
@@ -1886,6 +2473,8 @@ impl PersistentSession {
         // `TurnStarted` for OUR turn_id; everything before that belongs to an
         // earlier turn and is ignored for reply attribution.
         let mut saw_our_turn_started = false;
+        #[cfg(unix)]
+        let mut saw_our_turn_completed = false;
         let turn_started_at = Instant::now();
         let mut last_usage_event_at = turn_started_at;
         let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;
@@ -2250,6 +2839,11 @@ impl PersistentSession {
                                 // Preserve a witnessed explicit final answer
                                 // when the terminal item is only Crew metadata.
                                 // The reducer also rejects known commentary.
+                                #[cfg(unix)]
+                                {
+                                    saw_our_turn_completed = legacy_notification_thread_id(&notif)
+                                        == Some(thread_id.as_str());
+                                }
                                 completion_message = tc.last_agent_message;
                                 break;
                             }
@@ -2359,9 +2953,37 @@ impl PersistentSession {
             ),
         );
 
-        final_message.ok_or_else(|| anyhow::anyhow!("turn completed without assistant message"))
+        let final_message = final_message
+            .ok_or_else(|| anyhow::anyhow!("turn completed without assistant message"))?;
+        #[cfg(unix)]
+        if prepared_guest {
+            if !saw_our_turn_completed {
+                return Err(SessionPoisoned(
+                    "native capture requires the exact completed thread/turn witness".into(),
+                )
+                .into());
+            }
+            anyhow::ensure!(
+                native_capture_owner.is_none() && native_guest_execution.is_some(),
+                "native source owner already retired or lacks admitted execution"
+            );
+            // This follows the exact TurnComplete witness. It retires command
+            // and frame consumers; checked shutdown still has to drain the
+            // actual session task and journal before returning capture authority.
+            *native_capture_owner = Some(
+                provider_owner
+                    .take()
+                    .context("native terminal turn lost its actual provider owner")?
+                    .retire_turn_for_capture(&thread_id, &turn_id)?,
+            );
+        }
+        Ok(final_message)
     }
 }
+
+#[cfg(test)]
+#[path = "direct_session_shutdown_tests.rs"]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3160,52 +3782,70 @@ mod tests {
 
 impl Drop for PersistentSession {
     fn drop(&mut self) {
-        self.shutdown_inner("dropping");
+        // Drop performs bounded cleanup but cannot issue a quiescence receipt.
+        let _ = self.shutdown_inner("dropping");
     }
 }
 
 impl PersistentSession {
-    fn shutdown_inner(&mut self, action: &str) {
-        if let Some(runtime) = self.runtime.take() {
-            if let Some(client) = self.client.take() {
-                let tid = self.thread_id.clone();
-                eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
-                // `block_on` (and blocking runtime shutdown below) panics
-                // when invoked from inside an async runtime. All in-tree
-                // owners drop the session from synchronous worker threads,
-                // but a future async owner must not turn teardown into a
-                // panic — degrade to the abrupt path instead.
-                if tokio::runtime::Handle::try_current().is_ok() {
-                    eprintln!(
-                        "[ctox direct-session] {action} from async context; skipping graceful shutdown thread_id={tid}"
-                    );
-                    client.abort_now();
-                    runtime.shutdown_background();
-                    return;
-                }
-                // Try a bounded graceful shutdown first. `abort_now` skips
-                // the processor teardown (`clear_all_thread_listeners`,
-                // `shutdown_threads`), which leaves the durable thread's
-                // rollout with a dangling active turn that the next session
-                // resumes by name (ctox#21). If graceful shutdown exceeds
-                // its budget the runtime kill below still bounds teardown.
-                let graceful = runtime.block_on(async {
+    fn shutdown_inner(&mut self, action: &str) -> Result<()> {
+        // Take both owners before any branch. An orphaned client must still
+        // be aborted, even when its runtime is absent.
+        let client = self.client.take();
+        let Some(runtime) = self.runtime.take() else {
+            if let Some(client) = client {
+                client.abort_now();
+                anyhow::bail!("persistent session runtime ownership is missing");
+            }
+            return Ok(());
+        };
+        let tid = &self.thread_id;
+        eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
+        // Blocking runtime cleanup would panic in an async owner. Abrupt
+        // cleanup is allowed here, but it must never acknowledge quiescence.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            if let Some(client) = client {
+                client.abort_now();
+            }
+            runtime.shutdown_background();
+            eprintln!(
+                "[ctox direct-session] {action} from async context; forced cleanup thread_id={tid}"
+            );
+            anyhow::bail!("persistent session graceful shutdown requires a synchronous owner");
+        }
+        let result = match client {
+            Some(client) => {
+                // The client retains cancellation ownership if this timeout
+                // drops shutdown while its actual cleanup is still in flight.
+                match runtime.block_on(async {
                     tokio::time::timeout(Duration::from_secs(8), client.shutdown()).await
-                });
-                match graceful {
-                    Ok(Ok(())) => eprintln!(
-                        "[ctox direct-session] persistent session shut down thread_id={tid}"
-                    ),
-                    Ok(Err(err)) => eprintln!(
-                        "[ctox direct-session] persistent session shutdown error thread_id={tid}: {err}"
-                    ),
-                    Err(_) => eprintln!(
-                        "[ctox direct-session] persistent session shutdown timed out thread_id={tid}; forcing runtime teardown"
-                    ),
+                }) {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(err)) => Err(anyhow::Error::from(err)
+                        .context("persistent session client shutdown failed")),
+                    Err(_) => Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "persistent session shutdown timed out",
+                    )
+                    .into()),
                 }
             }
-            runtime.shutdown_timeout(Duration::from_secs(2));
+            None => Err(anyhow::anyhow!(
+                "persistent session client ownership is missing"
+            )),
+        };
+        // Cleanup always finishes its bounded runtime drain before returning
+        // the original client result. Runtime teardown cannot replace an error.
+        runtime.shutdown_timeout(Duration::from_secs(2));
+        match &result {
+            Ok(()) => {
+                eprintln!("[ctox direct-session] persistent session shut down thread_id={tid}")
+            }
+            Err(err) => eprintln!(
+                "[ctox direct-session] persistent session shutdown error thread_id={tid}: {err}"
+            ),
         }
+        result
     }
 }
 

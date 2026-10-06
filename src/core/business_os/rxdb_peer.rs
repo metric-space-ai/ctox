@@ -712,7 +712,7 @@ const DEVICE_PROOF_VERSION: &str = "ctox-device-proof-v1";
 #[path = "rxdb_peer_admission_tests.rs"]
 mod peer_admission_tests;
 
-fn validate_device_bound_peer_session(
+pub(super) fn validate_device_bound_peer_session(
     root: &Path,
     protocol: &Value,
     expected_nonce: Option<&str>,
@@ -835,7 +835,7 @@ fn validate_and_bind_mobile_device_proof(
     Accept
 }
 
-fn p256_public_key_and_thumbprint(jwk: &Value) -> Option<(Vec<u8>, String)> {
+pub(super) fn p256_public_key_and_thumbprint(jwk: &Value) -> Option<(Vec<u8>, String)> {
     if jwk.get("kty").and_then(Value::as_str) != Some("EC")
         || jwk.get("crv").and_then(Value::as_str) != Some("P-256")
     {
@@ -1372,6 +1372,7 @@ pub(super) struct NativePeer {
     shutdown_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     _process_lock: File,
     _pools: Vec<ctox_sync::native::NativeSyncSession>,
+    business_data_sources: Vec<Arc<ctox_sync::business_data_remote::BusinessDataSource>>,
     _command_consumer: tokio::task::JoinHandle<()>,
     _command_outbox: tokio::task::JoinHandle<()>,
     _notes_sync: tokio::task::JoinHandle<()>,
@@ -1537,6 +1538,7 @@ impl NativePeer {
             for pool in &self._pools {
                 pool.shutdown().await;
             }
+            shutdown_business_data_sources(&self.business_data_sources).await;
             // Tear down any live browser processes so stop leaves no zombies.
             for session_id in browser_runtime_manager().active_session_ids() {
                 browser_runtime_manager().stop(&session_id).await;
@@ -1554,6 +1556,19 @@ impl NativePeer {
                  releasing the run for supervised reconfiguration",
                 NATIVE_PEER_SHUTDOWN_TIMEOUT_SECS
             );
+        }
+    }
+}
+
+// Sources own snapshot/watch tasks independently of the replication pool.
+// Drain them from the NativePeer owner after transport/request shutdown; a
+// cancellation observer tracked by that pool would itself be aborted.
+async fn shutdown_business_data_sources(
+    sources: &[Arc<ctox_sync::business_data_remote::BusinessDataSource>],
+) {
+    for source in sources {
+        if let Err(error) = source.shutdown().await {
+            eprintln!("[business-os] BusinessData source cleanup failed: {error}");
         }
     }
 }
@@ -1844,6 +1859,48 @@ pub fn native_peer_status(root: &Path) -> Value {
     })
 }
 
+/// How long a pending-sync scan result is served before one caller rescans.
+const COMMAND_PLANE_SCAN_TTL: Duration = Duration::from_secs(5);
+
+type CommandPlaneScan = Result<(u64, u64), String>;
+
+/// The pending-sync scan reads every business_commands document with
+/// json_extract (7,941 documents / 131 MB on a customer tenant) and ran on
+/// every index document load through sync_config_for_browser. It is a status
+/// figure: serve the last scan to concurrent callers while exactly one caller
+/// refreshes it (06.10.2026).
+fn cached_command_plane_scan(path: &Path) -> CommandPlaneScan {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Instant, CommandPlaneScan)>>> = OnceLock::new();
+    static REFRESHING: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let refreshing = REFRESHING.get_or_init(|| Mutex::new(HashSet::new()));
+    let key = path.to_path_buf();
+    let stale = match cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        Some((at, value)) if at.elapsed() < COMMAND_PLANE_SCAN_TTL => return value.clone(),
+        Some((_, value)) => Some(value.clone()),
+        None => None,
+    };
+    if let Some(stale) = stale {
+        if !refreshing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone())
+        {
+            return stale;
+        }
+    }
+    let fresh = scan_command_plane(path).map_err(|error| error.to_string());
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key.clone(), (Instant::now(), fresh.clone()));
+    refreshing
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&key);
+    fresh
+}
+
 fn command_plane_status(root: &Path) -> Value {
     let runtime = COMMAND_PLANE_METRICS.snapshot();
     let path = store::rxdb_store_path(root);
@@ -1854,9 +1911,38 @@ fn command_plane_status(root: &Path) -> Value {
             "oldest_pending_age_ms": 0,
         });
     }
+    match cached_command_plane_scan(&path) {
+        Ok((pending_sync_count, oldest_pending_age_ms)) => json!({
+            "runtime": runtime,
+            "pending_sync_count": pending_sync_count,
+            "oldest_pending_age_ms": oldest_pending_age_ms,
+        }),
+        Err(error) => json!({
+            "runtime": runtime,
+            "pending_sync_count": Value::Null,
+            "oldest_pending_age_ms": Value::Null,
+            "diagnostic_error": error,
+        }),
+    }
+}
+
+/// `deleted IN (0, 1)` matches every row (the column is 0/1) but lets SQLite
+/// use the `(deleted, json_extract(data,'$.status'), ...)` index. Without it the
+/// planner scanned and JSON-parsed every command document: 350-460 ms on 7.9k
+/// commands / 124 MB (on-prem deployment, 06.10.2026) on each sync-config and index
+/// request; with it ~0.02 ms.
+fn command_plane_pending_query(quoted_table: &str) -> String {
+    format!(
+        "SELECT COUNT(*), MIN(CAST(COALESCE(json_extract(data, '$.created_at_ms'), json_extract(data, '$.updated_at_ms'), 0) AS INTEGER))
+         FROM {quoted_table}
+         WHERE deleted IN (0, 1) AND json_extract(data, '$.status') = 'pending_sync'"
+    )
+}
+
+fn scan_command_plane(path: &Path) -> anyhow::Result<(u64, u64)> {
     let result = (|| -> anyhow::Result<(u64, u64)> {
         let conn = Connection::open_with_flags(
-            &path,
+            path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
@@ -1864,11 +1950,7 @@ fn command_plane_status(root: &Path) -> Value {
             return Ok((0, 0));
         };
         let quoted = sqlite_quote_identifier(&table);
-        let query = format!(
-            "SELECT COUNT(*), MIN(CAST(COALESCE(json_extract(data, '$.created_at_ms'), json_extract(data, '$.updated_at_ms'), 0) AS INTEGER))
-             FROM {quoted}
-             WHERE json_extract(data, '$.status') = 'pending_sync'"
-        );
+        let query = command_plane_pending_query(&quoted);
         let (count, oldest_at_ms): (u64, Option<u64>) =
             conn.query_row(&query, [], |row| Ok((row.get(0)?, row.get(1)?)))?;
         Ok((
@@ -1879,19 +1961,7 @@ fn command_plane_status(root: &Path) -> Value {
                 .unwrap_or_default(),
         ))
     })();
-    match result {
-        Ok((pending_sync_count, oldest_pending_age_ms)) => json!({
-            "runtime": runtime,
-            "pending_sync_count": pending_sync_count,
-            "oldest_pending_age_ms": oldest_pending_age_ms,
-        }),
-        Err(error) => json!({
-            "runtime": runtime,
-            "pending_sync_count": Value::Null,
-            "oldest_pending_age_ms": Value::Null,
-            "diagnostic_error": error.to_string(),
-        }),
-    }
+    result
 }
 
 fn native_peer_health_error(
@@ -2246,13 +2316,18 @@ where
     }
     runtime.block_on(async move {
         let database = open_database(database_path).await?;
-        register_collections_tolerant(&database, collection_creators()).await?;
-        let output = operation(None, Arc::clone(&database)).await?;
+        let output = async {
+            register_collections_tolerant(&database, collection_creators()).await?;
+            operation(None, Arc::clone(&database)).await
+        }
+        .await;
+        // Registration or publication failure still owns this temporary handle.
+        // Drain it before returning the error and dropping the local runtime.
         database
             .close()
             .await
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
-        Ok(output)
+        output
     })
 }
 
@@ -2760,6 +2835,11 @@ async fn run_native_peer(
     // persisted source row has been migrated and verified may the legacy sweep
     // remove old version tables. Migration failures are fatal: continuing would
     // publish a live heartbeat for a peer whose runtime collections are empty.
+    if let Err(err) = super::populated_store_recovery::mark_cutover_in_progress(&root)
+        .context("mark native RxDB cutover in progress before migration")
+    {
+        return Err(release_database_after_failed_bring_up(&database, err).await);
+    }
     if let Err(err) = migrate_additive_native_rxdb_collection_versions(&root)
         .context("migrate native Business OS RxDB collection schema versions")
     {
@@ -2789,6 +2869,13 @@ async fn run_native_peer(
             )
             .await);
         }
+    }
+    // Write-once. Later restarts must not hash the store or reset the restore
+    // baseline; accepted writes after this receipt fail-close rollback.
+    if let Err(err) = super::populated_store_recovery::record_native_rxdb_cutover_receipt(&root)
+        .context("record native RxDB cutover receipt after verified migration")
+    {
+        return Err(release_database_after_failed_bring_up(&database, err).await);
     }
     match compact_desktop_file_index_store(&root).await {
         Ok(stats) if stats.changed() => {
@@ -2836,6 +2923,7 @@ async fn run_native_peer(
         .collect();
     let collection_count = collection_list.len();
     let mut pools = Vec::with_capacity(1);
+    let mut business_data_sources = Vec::with_capacity(1);
     if collection_count == 0 {
         eprintln!(
             "[business-os] no Business OS RxDB collections to replicate; skipping WebRTC bring-up"
@@ -3018,7 +3106,23 @@ async fn run_native_peer(
                     }),
                 )?;
                 let workjet_device_root = root.clone();
+                super::rxdb_peer_transfer_publication::register(pool, &root)?;
                 let business_data_root = root.clone();
+
+                let business_data_database = Arc::clone(&database);
+                let business_data_source = ctox_sync::business_data_remote::BusinessDataSource::new(
+                    business_data_database,
+                    Arc::new(
+                        super::rxdb_peer_business_data_source::NativeBusinessDataPolicy::new(
+                            root.clone(),
+                        ),
+                    ),
+                    pool.connection_handler.clone(),
+                );
+                // Retain before registration so partial setup failure also
+                // drains any source tasks before the database is released.
+                business_data_sources.push(Arc::clone(&business_data_source));
+                business_data_source.register(pool)?;
                 let identity_transport = pool.connection_handler.clone();
                 pool.register_identity_request_handler(
                     ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
@@ -3077,6 +3181,7 @@ async fn run_native_peer(
                 pools.push(session);
             }
             Err(err) => {
+                shutdown_business_data_sources(&business_data_sources).await;
                 return Err(release_database_after_failed_bring_up(
                     &database,
                     native_peer_bring_up_failure(format!(
@@ -3202,6 +3307,7 @@ async fn run_native_peer(
         shutdown_tx: Mutex::new(Some(shutdown_tx)),
         _process_lock: process_lock,
         _pools: pools,
+        business_data_sources,
         _command_consumer: command_consumer,
         _command_outbox: command_outbox,
         _notes_sync: notes_sync,
@@ -9009,7 +9115,9 @@ struct NativeMigrationRow {
 /// A non-empty source table requires every declarative step from its version to
 /// the registered target version. Empty legacy tables deliberately require no
 /// chain so currently deployed zero-row leftovers can be swept safely.
-fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Result<Value> {
+pub(super) fn migrate_additive_native_rxdb_collection_versions(
+    root: &Path,
+) -> anyhow::Result<Value> {
     let database_path = store::rxdb_store_path(root);
     if !database_path.is_file() {
         return Ok(json!({
@@ -9542,7 +9650,7 @@ pub fn repair_optional_rxdb_collection_schema_drift(
     repair_rxdb_collection_schema_version_drift(root, collection, dry_run, force)
 }
 
-fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<Value> {
+pub(super) fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<Value> {
     let database_path = store::rxdb_store_path(root);
     if !database_path.is_file() {
         return Ok(json!({
@@ -9837,7 +9945,7 @@ struct StaleRxdbCollectionTrigger {
     stale_versions: Vec<i64>,
 }
 
-fn expected_rxdb_collection_version(collection: &str) -> i64 {
+pub(super) fn expected_rxdb_collection_version(collection: &str) -> i64 {
     business_os_schema_contract()
         .get(collection)
         .and_then(|schema| schema.get("version"))
@@ -21798,5 +21906,50 @@ pub(in crate::business_os) mod tests {
                 Some("rolled_back")
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod command_plane_query_tests {
+    use super::*;
+
+    #[test]
+    fn pending_sync_count_uses_the_status_index() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE "ctox_business_os__business_commands__v2" (
+                id TEXT PRIMARY KEY, data TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0
+            );
+            CREATE INDEX "ctox_business_os__business_commands__v2_json__deleted__status__updated_at_ms__id_idx"
+              ON "ctox_business_os__business_commands__v2"("deleted", json_extract(data, '$.status'), json_extract(data, '$.updated_at_ms'), "id");
+            INSERT INTO "ctox_business_os__business_commands__v2"(id, data, deleted) VALUES
+              ('a', '{"status":"pending_sync","created_at_ms":5}', 0),
+              ('b', '{"status":"completed","created_at_ms":1}', 0),
+              ('c', '{"status":"pending_sync","created_at_ms":3}', 1);
+            "#,
+        )
+        .unwrap();
+        let query = command_plane_pending_query("\"ctox_business_os__business_commands__v2\"");
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step.contains("USING INDEX")),
+            "command-plane scan must not scan the table: {plan:?}"
+        );
+        let (count, oldest): (u64, Option<u64>) = conn
+            .query_row(&query, [], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+        assert_eq!(
+            (count, oldest),
+            (2, Some(3)),
+            "deleted rows still count, as before"
+        );
     }
 }

@@ -15,7 +15,10 @@ use serde_json::Value;
 /// combine many individually valid documents into one response above that hard
 /// limit. Keep ordinary collections comfortably below the wire ceiling; known
 /// chunk-heavy collections may install tighter exact-name overrides below.
-pub const DEFAULT_MASTER_RESPONSE_CEILING_BYTES: usize = 1024 * 1024;
+///
+/// 4 MiB (half the wire limit): with ~60 KB documents a 1 MiB ceiling paid a
+/// full pull round-trip per ~15 documents (on-prem deployment, 06.10.2026).
+pub const DEFAULT_MASTER_RESPONSE_CEILING_BYTES: usize = 4 * 1024 * 1024;
 
 /// A collection/context-specific write decision applied by a storage backend.
 #[derive(Clone, Debug, Eq, PartialEq)]

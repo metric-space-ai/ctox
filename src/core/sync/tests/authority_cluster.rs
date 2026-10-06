@@ -1,4 +1,4 @@
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn network_timing_confirms_delayed_quorum_but_denies_isolated_leader() {
     let timing = ctox_sync::authority::timing::AuthorityTiming::default();
     // An 80 ms RPC cannot satisfy the old implicit 50 ms read deadline.
@@ -71,7 +71,7 @@ async fn network_timing_confirms_delayed_quorum_but_denies_isolated_leader() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nonvoting_worker_uses_local_ipc_and_survives_authority_leader_loss() {
     use ctox_sync::{
         authority::{
@@ -257,7 +257,7 @@ async fn nonvoting_worker_uses_local_ipc_and_survives_authority_leader_loss() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn minority_cannot_confirm_worker_admission() {
     use ctox_sync::authority::{store::SqliteStore, WorkerMembership};
     let c = Cluster::new().await;
@@ -303,7 +303,7 @@ use ctox_sync::authority::{
     network::Packet,
     node::AuthorityNode,
     CheckpointCopyReceipt, Command, ExecutionSpec, NodeId, Ownership, Peer, Receipt, Rejection,
-    Request,
+    Request, SessionHandoffPermit, SessionHandoffPhase,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -579,7 +579,7 @@ impl Cluster {
     }
 }
 #[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
     use ctox_sync::{
         contracts::{SyncIpcOperation, SyncIpcRequest, SyncIpcResponse, SyncIpcResult},
@@ -670,7 +670,7 @@ async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
 }
 
 #[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
     use ctox_sync::local_host::LocalIpcHost;
     use std::process::Stdio;
@@ -691,7 +691,7 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
         .unwrap();
         let mut handoff_spec = spec();
         handoff_spec.job_id = "workjet-handoff-job".into();
-        handoff_spec.session_id = "workjet-handoff-session".into();
+        handoff_spec.session_id = "44444444-4444-4444-8444-444444444444".into();
         let receipts: Vec<_> = [1, 2]
             .into_iter()
             .map(|id| {
@@ -709,8 +709,11 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
             "target": target_host.endpoint(), "spec": handoff_spec, "receipts": receipts,
         });
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let workjet = source
-            .join("../../../../workjet")
+        // Build lanes can keep the pinned real consumer in an owned checkout.
+        // CI retains its existing sibling-checkout layout by default.
+        let workjet = std::env::var_os("CTOX_TEST_WORKJET_ROOT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| source.join("../../../../workjet"))
             .canonicalize()
             .expect("the Workjet checkout is required for the actual IPC consumer test");
         let mut child = tokio::process::Command::new("node")
@@ -753,10 +756,340 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
     .expect("native/Workjet IPC flow timed out");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn effect_checkpoint_commit_fences_stale_takeover_and_survives_restart() {
+    let mut c = Cluster::new().await;
+    c.create().await;
+    let old = checkpoint(&c, 1);
+    assert!(matches!(
+        c.send(
+            1,
+            "initial-copy",
+            Command::ProtectCheckpoint {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                receipts: old.clone(),
+                disclosure: disclosure(&c, 1, "initial-copy", &old),
+            }
+        )
+        .await,
+        Receipt::Applied(_)
+    ));
+    assert!(matches!(
+        c.send(
+            1,
+            "exact-process",
+            Command::BeginEffect {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                effect_id: "retained-child".into()
+            }
+        )
+        .await,
+        Receipt::Applied(_)
+    ));
+    let fresh = checkpoint(&c, 2);
+    let commit = |request_id: &str, effect: &str, receipts: Vec<CheckpointCopyReceipt>| {
+        Command::CommitEffectCheckpoint {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            effect_id: effect.into(),
+            disclosure: disclosure(&c, 1, request_id, &receipts),
+            receipts,
+        }
+    };
+    let mut forged = fresh.clone();
+    forged[1].signature = "0".repeat(128);
+    for (id, command, reason) in [
+        (
+            "old-copy",
+            commit("old-copy", "retained-child", old.clone()),
+            Rejection::CheckpointRegressed,
+        ),
+        (
+            "one-copy",
+            commit("one-copy", "retained-child", vec![fresh[0].clone()]),
+            Rejection::CheckpointUnavailable,
+        ),
+        (
+            "forged-copy",
+            commit("forged-copy", "retained-child", forged),
+            Rejection::CheckpointUnavailable,
+        ),
+        (
+            "foreign-effect",
+            commit("foreign-effect", "another-child", fresh.clone()),
+            Rejection::EffectNotStarted,
+        ),
+        (
+            "forged-disclosure",
+            {
+                let mut command = commit("forged-disclosure", "retained-child", fresh.clone());
+                if let Command::CommitEffectCheckpoint { disclosure, .. } = &mut command {
+                    disclosure.signature = "0".repeat(128);
+                }
+                command
+            },
+            Rejection::PolicyDenied,
+        ),
+        (
+            "replayed-disclosure",
+            commit("another-request", "retained-child", fresh.clone()),
+            Rejection::PolicyDenied,
+        ),
+    ] {
+        assert_eq!(c.send(1, id, command).await, Receipt::Rejected(reason));
+        let job = c.nodes[&1]
+            .validate_ownership("job", &ownership(1, 1))
+            .await
+            .unwrap();
+        assert_eq!(
+            job.pending_effects,
+            BTreeSet::from(["retained-child".into()])
+        );
+        assert_eq!(job.checkpoint.unwrap().receipts, old);
+        assert!(job.checkpoint_requires_refresh);
+    }
+    // Another unresolved effect cannot be cleared by the process checkpoint.
+    c.send(
+        1,
+        "other-start",
+        Command::BeginEffect {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            effect_id: "unrelated".into(),
+        },
+    )
+    .await;
+    assert_eq!(
+        c.send(
+            1,
+            "other-pending",
+            commit("other-pending", "retained-child", fresh.clone())
+        )
+        .await,
+        Receipt::Rejected(Rejection::ReconciliationRequired)
+    );
+    assert!(matches!(
+        c.send(
+            1,
+            "other-complete",
+            Command::CompleteEffect {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                effect_id: "unrelated".into()
+            }
+        )
+        .await,
+        Receipt::Applied(_)
+    ));
+    // Deterministic legacy snapshots must not use the policy-only upgrade
+    // exception to clear a dirty checkpoint or complete its live effect.
+    let mut legacy_job = c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .unwrap();
+    legacy_job.checkpoint.as_mut().unwrap().disclosure = None;
+    let mut legacy_state = ctox_sync::authority::State::default();
+    legacy_state.jobs.insert("job".into(), legacy_job.clone());
+    assert_eq!(
+        legacy_state.apply(
+            &Request {
+                actor: 1,
+                request_id: "legacy-effect-old-copy".into(),
+                command: commit("legacy-effect-old-copy", "retained-child", old.clone()),
+            },
+            &c.peers,
+        ),
+        Receipt::Rejected(Rejection::CheckpointRegressed)
+    );
+    assert_eq!(legacy_state.jobs["job"], legacy_job);
+    legacy_job.pending_effects.clear();
+    legacy_job.completed_effects.insert("retained-child".into());
+    let mut completed_legacy_state = ctox_sync::authority::State::default();
+    completed_legacy_state
+        .jobs
+        .insert("job".into(), legacy_job.clone());
+    assert_eq!(
+        completed_legacy_state.apply(
+            &Request {
+                actor: 1,
+                request_id: "legacy-completed-old-copy".into(),
+                command: Command::ProtectCheckpoint {
+                    job_id: "job".into(),
+                    ownership: ownership(1, 1),
+                    receipts: old.clone(),
+                    disclosure: disclosure(&c, 1, "legacy-completed-old-copy", &old),
+                },
+            },
+            &c.peers,
+        ),
+        Receipt::Rejected(Rejection::CheckpointRegressed)
+    );
+    assert_eq!(completed_legacy_state.jobs["job"], legacy_job);
+    // Actual signed RPCs race at independent Raft stores. In either log order,
+    // there is no state with the old checkpoint and no process fence.
+    let transition = commit("stop-checkpoint-atomic", "retained-child", fresh.clone());
+    let (committed, stale) = tokio::join!(
+        c.send(1, "stop-checkpoint-atomic", transition.clone()),
+        c.send(
+            2,
+            "stale-takeover-race",
+            Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: old[0].checkpoint_digest.clone(),
+                owner: 2,
+                resume: resume(&c, 2, "stale-takeover-race", &old),
+            }
+        )
+    );
+    let Receipt::Applied(job) = committed else {
+        panic!("atomic transition failed: {committed:?}");
+    };
+    assert!(matches!(
+        stale,
+        Receipt::Rejected(Rejection::ReconciliationRequired | Rejection::CheckpointUnavailable)
+    ));
+    assert!(job.pending_effects.is_empty());
+    assert!(job.completed_effects.contains("retained-child"));
+    assert!(!job.checkpoint_requires_refresh);
+    assert_eq!(job.checkpoint.as_ref().unwrap().receipts, fresh);
+    for id in 1..=3 {
+        c.stop(id).await;
+    }
+    for id in 1..=3 {
+        c.start(id).await;
+    }
+    for node in c.nodes.values() {
+        node.wait_for_leader(Duration::from_secs(10)).await.unwrap();
+    }
+    assert_eq!(
+        c.send(1, "stop-checkpoint-atomic", transition).await,
+        Receipt::Replayed(job.clone())
+    );
+    let restored = c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .unwrap();
+    assert_eq!(restored, job);
+    assert_eq!(
+        c.send(
+            1,
+            "late-old-process",
+            Command::CompleteEffect {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                effect_id: "retained-child".into()
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::EffectNotStarted)
+    );
+    let moved = c
+        .send(
+            2,
+            "fresh-checkpoint-takeover",
+            Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: fresh[0].checkpoint_digest.clone(),
+                owner: 2,
+                resume: resume(&c, 2, "fresh-checkpoint-takeover", &fresh),
+            },
+        )
+        .await;
+    assert!(matches!(moved, Receipt::Applied(ref job) if job.ownership == ownership(2, 2)));
+    assert!(c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .is_err());
+    c.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_effect_cannot_reenable_old_checkpoint_after_restart() {
+    let mut c = Cluster::new().await;
+    c.create().await;
+    let old = checkpoint(&c, 1);
+    c.send(
+        1,
+        "protect",
+        Command::ProtectCheckpoint {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            receipts: old.clone(),
+            disclosure: disclosure(&c, 1, "protect", &old),
+        },
+    )
+    .await;
+    c.send(
+        1,
+        "begin",
+        Command::BeginEffect {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            effect_id: "retained-child".into(),
+        },
+    )
+    .await;
+    c.send(
+        1,
+        "complete",
+        Command::CompleteEffect {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            effect_id: "retained-child".into(),
+        },
+    )
+    .await;
+    for id in 1..=3 {
+        c.stop(id).await;
+    }
+    for id in 1..=3 {
+        c.start(id).await;
+    }
+    for node in c.nodes.values() {
+        node.wait_for_leader(Duration::from_secs(10)).await.unwrap();
+    }
+    let job = c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .unwrap();
+    assert!(job.pending_effects.is_empty());
+    assert!(job.checkpoint_requires_refresh);
+    assert_eq!(
+        c.send(
+            2,
+            "stale-takeover",
+            Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: old[0].checkpoint_digest.clone(),
+                owner: 2,
+                resume: resume(&c, 2, "stale-takeover", &old),
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::ReconciliationRequired)
+    );
+    let mut legacy = serde_json::to_value(job).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("checkpointRequiresRefresh");
+    let legacy: ctox_sync::authority::Job = serde_json::from_value(legacy).unwrap();
+    assert!(
+        legacy.checkpoint_requires_refresh,
+        "legacy snapshots cannot invent a freshness proof"
+    );
+    c.close().await;
+}
+
 fn spec() -> ExecutionSpec {
     ExecutionSpec {
         job_id: "job".into(),
-        session_id: "session".into(),
+        session_id: "11111111-1111-1111-1111-111111111111".into(),
         scope_id: "test-scope".into(),
         harness: "codex".into(),
         harness_version: "pinned-test".into(),
@@ -787,11 +1120,50 @@ fn checkpoint(c: &Cluster, sequence: u64) -> Vec<CheckpointCopyReceipt> {
         })
         .collect()
 }
+/// Source-disclosure evidence minted by the job owner for one exact request.
+fn disclosure(
+    c: &Cluster,
+    owner: NodeId,
+    request_id: &str,
+    receipts: &[CheckpointCopyReceipt],
+) -> SessionHandoffPermit {
+    let first = receipts
+        .first()
+        .expect("disclosure evidence needs a copy set");
+    checkpoint_fixture::handoff_permit(
+        &c.keys[&owner],
+        SessionHandoffPhase::Disclose,
+        &spec(),
+        &first.checkpoint_digest,
+        first.sequence,
+        &ownership(1, owner),
+        request_id,
+    )
+}
+/// Target-resume evidence minted by the new owner for one exact request.
+fn resume(
+    c: &Cluster,
+    new_owner: NodeId,
+    request_id: &str,
+    receipts: &[CheckpointCopyReceipt],
+) -> SessionHandoffPermit {
+    let first = receipts.first().expect("resume evidence needs a copy set");
+    checkpoint_fixture::handoff_permit(
+        &c.keys[&new_owner],
+        SessionHandoffPhase::Resume,
+        &spec(),
+        &first.checkpoint_digest,
+        first.sequence,
+        &ownership(1, new_owner),
+        request_id,
+    )
+}
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn minority_cannot_authorize_and_majority_fences_old_owner() {
     let c = Cluster::new().await;
     c.create().await;
+    let copies = checkpoint(&c, 1);
     assert!(matches!(
         c.send(
             1,
@@ -799,7 +1171,8 @@ async fn minority_cannot_authorize_and_majority_fences_old_owner() {
             Command::ProtectCheckpoint {
                 job_id: "job".into(),
                 ownership: ownership(1, 1),
-                receipts: checkpoint(&c, 1)
+                receipts: copies.clone(),
+                disclosure: disclosure(&c, 1, "checkpoint", &copies),
             }
         )
         .await,
@@ -828,8 +1201,9 @@ async fn minority_cannot_authorize_and_majority_fences_old_owner() {
             Command::TakeOver {
                 job_id: "job".into(),
                 expected: ownership(1, 1),
-                checkpoint_digest: checkpoint(&c, 1)[0].checkpoint_digest.clone(),
+                checkpoint_digest: copies[0].checkpoint_digest.clone(),
                 owner: 2,
+                resume: resume(&c, 2, "takeover", &copies),
             },
         )
         .await;
@@ -847,17 +1221,19 @@ async fn minority_cannot_authorize_and_majority_fences_old_owner() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unconfirmed_external_effect_blocks_takeover() {
     let c = Cluster::new().await;
     c.create().await;
+    let copies = checkpoint(&c, 1);
     c.send(
         1,
         "checkpoint",
         Command::ProtectCheckpoint {
             job_id: "job".into(),
             ownership: ownership(1, 1),
-            receipts: checkpoint(&c, 1),
+            receipts: copies.clone(),
+            disclosure: disclosure(&c, 1, "checkpoint", &copies),
         },
     )
     .await;
@@ -878,8 +1254,9 @@ async fn unconfirmed_external_effect_blocks_takeover() {
             Command::TakeOver {
                 job_id: "job".into(),
                 expected: ownership(1, 1),
-                checkpoint_digest: checkpoint(&c, 1)[0].checkpoint_digest.clone(),
-                owner: 2
+                checkpoint_digest: copies[0].checkpoint_digest.clone(),
+                owner: 2,
+                resume: resume(&c, 2, "takeover", &copies),
             }
         )
         .await,
@@ -888,7 +1265,7 @@ async fn unconfirmed_external_effect_blocks_takeover() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn state_and_receipts_survive_all_peer_restarts() {
     let mut c = Cluster::new().await;
     let created = c.create().await;
@@ -901,6 +1278,7 @@ async fn state_and_receipts_survive_all_peer_restarts() {
                 job_id: "job".into(),
                 ownership: ownership(1, 1),
                 receipts: copies.clone(),
+                disclosure: disclosure(&c, 1, "protect-before-restart", &copies),
             }
         )
         .await,
@@ -949,7 +1327,7 @@ async fn state_and_receipts_survive_all_peer_restarts() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn checkpoint_protection_requires_distinct_authentic_matching_durable_copies() {
     let c = Cluster::new().await;
     c.create().await;
@@ -1007,14 +1385,36 @@ async fn checkpoint_protection_requires_distinct_authentic_matching_durable_copi
     .into_iter()
     .enumerate()
     {
+        let request_id = format!("invalid-copy-{index}");
+        let disclosure = match receipts.first() {
+            Some(first) => checkpoint_fixture::handoff_permit(
+                &c.keys[&1],
+                SessionHandoffPhase::Disclose,
+                &spec(),
+                &first.checkpoint_digest,
+                first.sequence,
+                &ownership(1, 1),
+                &request_id,
+            ),
+            None => checkpoint_fixture::handoff_permit(
+                &c.keys[&1],
+                SessionHandoffPhase::Disclose,
+                &spec(),
+                &"a".repeat(64),
+                1,
+                &ownership(1, 1),
+                &request_id,
+            ),
+        };
         assert_eq!(
             c.send(
                 1,
-                &format!("invalid-copy-{index}"),
+                &request_id,
                 Command::ProtectCheckpoint {
                     job_id: "job".into(),
                     ownership: ownership(1, 1),
                     receipts,
+                    disclosure,
                 }
             )
             .await,
@@ -1030,13 +1430,14 @@ async fn checkpoint_protection_requires_distinct_authentic_matching_durable_copi
         .is_none());
     assert!(
         matches!(c.send(1, "valid-copy", Command::ProtectCheckpoint {
-        job_id: "job".into(), ownership: ownership(1, 1), receipts: valid,
+        job_id: "job".into(), ownership: ownership(1, 1), receipts: valid.clone(),
+        disclosure: disclosure(&c, 1, "valid-copy", &valid),
     }).await, Receipt::Applied(job) if job.checkpoint.as_ref().unwrap().replicas == BTreeSet::from([1, 2]))
     );
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn witness_cannot_claim_execution_or_count_as_data_copy() {
     let c = Cluster::new().await;
     c.create().await;
@@ -1056,7 +1457,8 @@ async fn witness_cannot_claim_execution_or_count_as_data_copy() {
             Command::ProtectCheckpoint {
                 job_id: "job".into(),
                 ownership: ownership(1, 1),
-                receipts: invalid
+                receipts: invalid.clone(),
+                disclosure: disclosure(&c, 1, "checkpoint", &invalid),
             }
         )
         .await,
@@ -1096,7 +1498,7 @@ async fn witness_cannot_claim_execution_or_count_as_data_copy() {
     c.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn additional_worker_requires_committed_membership_but_never_gets_a_vote() {
     use ctox_sync::{
         authority::{
@@ -1357,5 +1759,314 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
         ))
     ));
     assert_eq!(reopened.worker(4).await.unwrap(), Some(revoked));
+    c.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_and_takeover_require_current_signed_handoff_evidence() {
+    let c = Cluster::new().await;
+    c.create().await;
+    let copies = checkpoint(&c, 1);
+    let digest = copies[0].checkpoint_digest.clone();
+
+    // A disclosure signed by a non-owner key is forgery, not authorization.
+    let forged = checkpoint_fixture::handoff_permit(
+        &c.keys[&2],
+        SessionHandoffPhase::Disclose,
+        &spec(),
+        &digest,
+        1,
+        &ownership(1, 1),
+        "forged-disclosure",
+    );
+    assert_eq!(
+        c.send(
+            1,
+            "forged-disclosure",
+            Command::ProtectCheckpoint {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                receipts: copies.clone(),
+                disclosure: forged,
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::PolicyDenied)
+    );
+    // A permit minted for another request cannot be replayed into this one.
+    let replayed = disclosure(&c, 1, "some-other-request", &copies);
+    assert_eq!(
+        c.send(
+            1,
+            "replayed-disclosure",
+            Command::ProtectCheckpoint {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                receipts: copies.clone(),
+                disclosure: replayed,
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::PolicyDenied)
+    );
+    // The wrong phase is not a disclosure decision.
+    let wrong_phase = checkpoint_fixture::handoff_permit(
+        &c.keys[&1],
+        SessionHandoffPhase::Resume,
+        &spec(),
+        &digest,
+        1,
+        &ownership(1, 1),
+        "wrong-phase",
+    );
+    assert_eq!(
+        c.send(
+            1,
+            "wrong-phase",
+            Command::ProtectCheckpoint {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                receipts: copies.clone(),
+                disclosure: wrong_phase,
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::PolicyDenied)
+    );
+    // A permit naming a different checkpoint does not cover this one.
+    let wrong_checkpoint = checkpoint_fixture::handoff_permit(
+        &c.keys[&1],
+        SessionHandoffPhase::Disclose,
+        &spec(),
+        &"d".repeat(64),
+        1,
+        &ownership(1, 1),
+        "wrong-checkpoint",
+    );
+    assert_eq!(
+        c.send(
+            1,
+            "wrong-checkpoint",
+            Command::ProtectCheckpoint {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                receipts: copies.clone(),
+                disclosure: wrong_checkpoint,
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::PolicyDenied)
+    );
+    // Denials never publish a checkpoint.
+    assert!(c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .unwrap()
+        .checkpoint
+        .is_none());
+    // The exact, current, owner-signed disclosure succeeds.
+    assert!(matches!(
+        c.send(
+            1,
+            "protect",
+            Command::ProtectCheckpoint {
+                job_id: "job".into(),
+                ownership: ownership(1, 1),
+                receipts: copies.clone(),
+                disclosure: disclosure(&c, 1, "protect", &copies),
+            }
+        )
+        .await,
+        Receipt::Applied(_)
+    ));
+    // Restore the real protected job through the persisted State representation.
+    // Removing only disclosure models a pre-permit snapshot, not a bad signature.
+    let protected_job = c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .unwrap();
+    let mut snapshot_state = ctox_sync::authority::State::default();
+    snapshot_state.jobs.insert("job".into(), protected_job);
+    let snapshot = serde_json::to_value(&snapshot_state).unwrap();
+    let peers = [1_u64, 2]
+        .into_iter()
+        .map(|id| {
+            (
+                id,
+                ctox_sync::authority::Peer {
+                    identity: c.keys[&id].public_identity(),
+                    executor: true,
+                    data_replica: true,
+                },
+            )
+        })
+        .collect();
+    let takeover = Request {
+        request_id: "restored-resume".into(),
+        actor: 2,
+        command: Command::TakeOver {
+            job_id: "job".into(),
+            expected: ownership(1, 1),
+            checkpoint_digest: digest.clone(),
+            owner: 2,
+            resume: resume(&c, 2, "restored-resume", &copies),
+        },
+    };
+    let mut restored: ctox_sync::authority::State =
+        serde_json::from_value(snapshot.clone()).unwrap();
+    assert!(matches!(
+        restored.apply(&takeover, &peers),
+        Receipt::Applied(_)
+    ));
+    assert_eq!(restored.jobs["job"].ownership, ownership(2, 2));
+    let mut legacy_snapshot = snapshot;
+    assert!(legacy_snapshot["jobs"]["job"]["checkpoint"]
+        .as_object_mut()
+        .unwrap()
+        .remove("disclosure")
+        .is_some());
+    let mut legacy: ctox_sync::authority::State = serde_json::from_value(legacy_snapshot).unwrap();
+    assert_eq!(
+        legacy.apply(&takeover, &peers),
+        Receipt::Rejected(Rejection::PolicyDenied)
+    );
+    assert_eq!(legacy.jobs["job"].ownership, ownership(1, 1));
+    let upgrade = Request {
+        request_id: "authorize-legacy".into(),
+        actor: 1,
+        command: Command::ProtectCheckpoint {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            receipts: copies.clone(),
+            disclosure: disclosure(&c, 1, "authorize-legacy", &copies),
+        },
+    };
+    let mut foreign_upgrade = upgrade.clone();
+    foreign_upgrade.request_id = "foreign-legacy-upgrade".into();
+    foreign_upgrade.actor = 2;
+    assert_eq!(
+        legacy.apply(&foreign_upgrade, &peers),
+        Receipt::Rejected(Rejection::StaleOwner)
+    );
+    assert!(matches!(
+        legacy.apply(&upgrade, &peers),
+        Receipt::Applied(_)
+    ));
+    assert_eq!(legacy.jobs["job"].ownership, ownership(1, 1));
+    // Once upgraded, equal-sequence replacement remains forbidden.
+    let repeated_upgrade = Request {
+        request_id: "repeat-legacy-upgrade".into(),
+        actor: 1,
+        command: Command::ProtectCheckpoint {
+            job_id: "job".into(),
+            ownership: ownership(1, 1),
+            receipts: copies.clone(),
+            disclosure: disclosure(&c, 1, "repeat-legacy-upgrade", &copies),
+        },
+    };
+    assert_eq!(
+        legacy.apply(&repeated_upgrade, &peers),
+        Receipt::Rejected(Rejection::CheckpointRegressed)
+    );
+    // The historical denial remains idempotent, even after new authorization.
+    assert_eq!(
+        legacy.apply(&takeover, &peers),
+        Receipt::Rejected(Rejection::PolicyDenied)
+    );
+    let fresh_takeover = Request {
+        request_id: "upgraded-resume".into(),
+        actor: 2,
+        command: Command::TakeOver {
+            job_id: "job".into(),
+            expected: ownership(1, 1),
+            checkpoint_digest: digest.clone(),
+            owner: 2,
+            resume: resume(&c, 2, "upgraded-resume", &copies),
+        },
+    };
+    assert!(matches!(
+        legacy.apply(&fresh_takeover, &peers),
+        Receipt::Applied(_)
+    ));
+    assert_eq!(legacy.jobs["job"].ownership, ownership(2, 2));
+    // Even the correct target signer cannot substitute another handoff binding.
+    let mut other_binding = resume(&c, 2, "other-binding", &copies);
+    other_binding.binding_digest = "c".repeat(64);
+    other_binding.signature.clear();
+    let other_binding = c.keys[&2]
+        .sign_session_handoff_permit(&other_binding)
+        .unwrap();
+    assert_eq!(
+        c.send(
+            2,
+            "other-binding",
+            Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: digest.clone(),
+                owner: 2,
+                resume: other_binding,
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::PolicyDenied)
+    );
+    assert!(c.nodes[&1]
+        .validate_ownership("job", &ownership(1, 1))
+        .await
+        .is_ok());
+    // The old owner's resume decision does not authorize the new owner.
+    let stale_resume = resume(&c, 1, "foreign-resume", &copies);
+    assert_eq!(
+        c.send(
+            2,
+            "foreign-resume",
+            Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: digest.clone(),
+                owner: 2,
+                resume: stale_resume,
+            }
+        )
+        .await,
+        Receipt::Rejected(Rejection::PolicyDenied)
+    );
+    // An expired permit is rejected at admission before any quorum work.
+    let mut expired = resume(&c, 2, "expired-resume", &copies);
+    expired.issued_at_ms = 1;
+    expired.expires_at_ms = 2;
+    expired.signature.clear();
+    let expired = c.keys[&2].sign_session_handoff_permit(&expired).unwrap();
+    assert!(c.nodes[&2]
+        .submit(Request {
+            request_id: "expired-resume".into(),
+            actor: 2,
+            command: Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: digest.clone(),
+                owner: 2,
+                resume: expired,
+            },
+        })
+        .await
+        .is_err());
+    // The exact, current, target-signed resume succeeds.
+    assert!(matches!(
+        c.send(
+            2,
+            "takeover",
+            Command::TakeOver {
+                job_id: "job".into(),
+                expected: ownership(1, 1),
+                checkpoint_digest: digest,
+                owner: 2,
+                resume: resume(&c, 2, "takeover", &copies),
+            }
+        )
+        .await,
+        Receipt::Applied(ref job) if job.ownership == ownership(2, 2)
+    ));
     c.close().await;
 }

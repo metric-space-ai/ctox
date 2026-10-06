@@ -337,6 +337,42 @@ fn equivalent_desktop_file_chunk_rows_from_sqlite(
     Ok(Vec::new())
 }
 
+/// Immutable bytes/generation authority for native transfer admission. Reuse
+/// the demand source's live-file predicate inside one read snapshot.
+pub(super) fn desktop_file_transfer_metadata(
+    root: &Path,
+    file_id: &str,
+) -> anyhow::Result<Option<DesktopFileDemandMetadata>> {
+    let path = store::rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    let tx = conn.transaction()?;
+    let metadata = desktop_file_transfer_metadata_from_connection(&tx, file_id)?;
+    tx.commit()?;
+    Ok(metadata)
+}
+
+/// The caller already holds the projection mutation fence; never reopen it.
+pub(super) fn desktop_file_transfer_metadata_from_connection(
+    conn: &Connection,
+    file_id: &str,
+) -> anyhow::Result<Option<DesktopFileDemandMetadata>> {
+    let Some(metadata) = active_desktop_file_metadata_from_sqlite(conn, file_id)? else {
+        return Ok(None);
+    };
+    let scheme: Option<String> = conn.query_row(
+        "SELECT json_extract(data, '$.content_hash_scheme') FROM ctox_business_os__desktop_files__v0 WHERE id = ?1 AND COALESCE(deleted, 0) = 0",
+        [file_id], |row| row.get(0),
+    )?;
+    if scheme.as_deref() != Some(DESKTOP_FILE_CONTENT_HASH_SCHEME) {
+        return Ok(None);
+    }
+    Ok(Some(metadata))
+}
+
 fn active_desktop_file_metadata_from_sqlite(
     conn: &Connection,
     file_id: &str,

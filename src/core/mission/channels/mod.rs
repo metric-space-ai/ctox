@@ -1,4 +1,62 @@
+/// Server-resolved provider facts for a portable native guest session.
+/// The public account ID is not an entitlement or a replacement policy grant.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct NativeProviderCheckpointContract {
+    pub(crate) harness: String,
+    pub(crate) harness_version: String,
+    pub(crate) model_route_id: String,
+    pub(crate) gateway_account_id: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct NativeProviderCheckpointBinding {
+    contract: NativeProviderCheckpointContract,
+    auth: std::sync::Arc<ctox_core::AuthManager>,
+}
+impl NativeProviderCheckpointBinding {
+    pub(crate) fn from_pinned_auth(
+        auth: std::sync::Arc<ctox_core::AuthManager>,
+        model_route_id: &str,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !model_route_id.trim().is_empty(),
+            "native model route is missing"
+        );
+        let guard = auth.current_runtime_account_guard()?;
+        let account_id = auth
+            .runtime_account_binding()
+            .ok_or_else(|| anyhow::anyhow!("native provider account is not bound"))?
+            .to_owned();
+        let contract = NativeProviderCheckpointContract {
+            harness: ctox_core::native_harness_name().into(),
+            harness_version: ctox_core::native_harness_version().into(),
+            model_route_id: model_route_id.into(),
+            gateway_account_id: account_id,
+        };
+        drop(guard);
+        Ok(Self { contract, auth })
+    }
+}
+
 mod account_helpers;
+#[cfg(unix)]
+mod native_guest_admission;
+#[cfg(unix)]
+mod queue_execution_fence;
+#[cfg(unix)]
+mod queue_provider_binding;
+#[cfg(unix)]
+pub(crate) use native_guest_admission::{
+    NativeGuestAdmission, NativeGuestAdmissionDestination, NativeGuestAdmissionOwner,
+};
+#[cfg(unix)]
+pub(crate) use queue_execution_fence::{QueueExecutionFence, QueueWorkerLifetime};
+#[cfg(unix)]
+pub(crate) use queue_provider_binding::{
+    lookup_native_provider_binding, NativeProviderAdmission, NativeProviderBinding,
+    NativeProviderCaptureOwner, NativeProviderCommand, NativeProviderCommandEmitter,
+    NativeProviderFacts, NativeProviderTurnOwner,
+};
 mod outbound_review;
 use crate::communication_store::parse_string_json_array;
 pub(crate) use crate::communication_store::{
@@ -71,19 +129,23 @@ pub(crate) use command_saga::{
     business_command_projection, business_command_projection_from_conn,
     business_command_retention_maintenance, business_command_saga_pending_compensation_steps,
     business_command_saga_status, business_command_saga_step_evidence,
-    claim_business_command_saga_step, claim_business_command_waiting_dependencies,
-    claim_business_command_with_queue, claim_business_control_command,
+    canonical_command_mirror_projection, claim_business_command_saga_step,
+    claim_business_command_waiting_dependencies, claim_business_command_with_queue,
+    claim_business_control_command, communication_projection_clock_version,
     complete_business_command_saga_step, complete_business_control_command,
     fail_business_command_saga_step, inspect_business_command, inspect_business_command_for_task,
-    inspect_business_command_for_task_from_conn, mark_business_command_outbox_delivered,
-    mark_business_command_outbox_failed, pending_business_command_outbox,
-    persist_business_command_worker_result, progress_business_control_command,
-    reconcile_business_command_invariants, record_business_command_applied_effect_delivery_failure,
+    inspect_business_command_for_task_from_conn, load_business_command_projection_if_present,
+    load_business_os_queue_mirror_snapshot, load_business_os_queue_mirror_snapshot_from_conn,
+    mark_business_command_outbox_delivered, mark_business_command_outbox_failed,
+    pending_business_command_outbox, persist_business_command_worker_result,
+    progress_business_control_command, reconcile_business_command_invariants,
+    record_business_command_applied_effect_delivery_failure,
     record_business_command_intake_failure, record_business_command_review,
-    record_business_command_saga_step_evidence, resolve_business_command_intake_failures,
-    retry_failed_app_create_business_command, runtime_business_command_action_snapshot,
-    start_business_command_saga, start_runtime_business_command_saga,
-    transition_business_command_for_task,
+    record_business_command_saga_step_evidence, reject_legacy_unowned_external_sql_command,
+    resolve_business_command_intake_failures, retry_failed_app_create_business_command,
+    runtime_business_command_action_snapshot, start_business_command_saga,
+    start_runtime_business_command_saga, transition_business_command_for_task,
+    BusinessOsQueueMirrorSnapshot,
 };
 pub(crate) use route_status::QueueRouteStatus;
 
@@ -402,6 +464,8 @@ pub(crate) struct BusinessCommandQueueClaim {
 
 #[derive(Debug, Clone)]
 pub(crate) struct BusinessCommandControlClaim {
+    // Original admission hash, also on an equivalent reordered replay.
+    pub payload_hash: String,
     pub disposition: &'static str,
     pub result: Option<Value>,
     pub terminal_status: Option<String>,
@@ -3574,7 +3638,31 @@ pub fn load_queue_task_last_error(root: &Path, message_key: &str) -> Result<Opti
 }
 
 pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result<QueueTaskView> {
-    update_queue_task_with_optional_terminal_policy_grant(root, request, None, false, false)
+    update_queue_task_with_optional_terminal_policy_grant(root, request, None, false, false, None)
+}
+
+/// Recovery feedback belongs to this exact live native lease, never its successor.
+pub(crate) fn update_queue_recovery_feedback(
+    root: &Path,
+    request: QueueTaskUpdateRequest,
+    worker_id: &str,
+) -> Result<QueueTaskView> {
+    anyhow::ensure!(
+        !worker_id.trim().is_empty(),
+        "recovery feedback has no native worker identity"
+    );
+    anyhow::ensure!(
+        request.route_status.is_none(),
+        "recovery feedback cannot change queue disposition"
+    );
+    update_queue_task_with_optional_terminal_policy_grant(
+        root,
+        request,
+        None,
+        false,
+        false,
+        Some(worker_id),
+    )
 }
 
 pub(crate) fn update_queue_task_with_terminal_policy_grant(
@@ -3588,6 +3676,7 @@ pub(crate) fn update_queue_task_with_terminal_policy_grant(
         Some(terminal_policy_grant),
         false,
         false,
+        None,
     )
 }
 
@@ -3596,7 +3685,14 @@ pub(crate) fn control_queue_task(
     request: QueueTaskUpdateRequest,
     reset_failure: bool,
 ) -> Result<QueueTaskView> {
-    update_queue_task_with_optional_terminal_policy_grant(root, request, None, reset_failure, true)
+    update_queue_task_with_optional_terminal_policy_grant(
+        root,
+        request,
+        None,
+        reset_failure,
+        true,
+        None,
+    )
 }
 
 /// Every linked command must permit release, regardless of link insertion order.
@@ -3630,6 +3726,7 @@ fn update_queue_task_with_optional_terminal_policy_grant(
     terminal_policy_grant: Option<TerminalPolicyGrant>,
     reset_failure: bool,
     cockpit_control: bool,
+    recovery_worker_id: Option<&str>,
 ) -> Result<QueueTaskView> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
@@ -3751,6 +3848,21 @@ fn update_queue_task_with_optional_terminal_policy_grant(
     // promoted once the peer committed (SQLite 517, "database is locked" at once,
     // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if let Some(worker_id) = recovery_worker_id {
+        // The writer lock keeps cancellation/replacement from racing the feedback write.
+        let owned: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM communication_routing_state
+             WHERE message_key=?1 AND route_status='leased' AND lease_owner='ctox-service'
+               AND lease_worker_id=?2 AND attempt>0
+               AND julianday(lease_expires_at)>julianday('now'))",
+            params![request.message_key, worker_id],
+            |row| row.get(0),
+        )?;
+        anyhow::ensure!(
+            owned,
+            "recovery feedback requires the current unexpired native worker lease"
+        );
+    }
     if cockpit_control {
         let status = current_queue_route_status(&tx, &current.message_key)?;
         anyhow::ensure!(
@@ -4214,6 +4326,8 @@ pub(crate) struct QueueTurnLeaseFence {
     pub(crate) root: PathBuf,
     pub(crate) message_keys: Vec<String>,
     pub(crate) worker_id: String,
+    #[cfg(unix)]
+    pub(crate) execution: Option<QueueExecutionFence>,
 }
 
 pub(crate) struct QueueTurnLeaseReader {
@@ -4255,6 +4369,14 @@ impl QueueTurnLeaseFence {
     }
 
     pub(crate) fn still_owned(&self, reader: &QueueTurnLeaseReader) -> Result<bool> {
+        #[cfg(unix)]
+        if self
+            .execution
+            .as_ref()
+            .is_some_and(|execution| !execution.matches_current_rows(&reader.connection))
+        {
+            return Ok(false);
+        }
         let path = resolve_db_path(&self.root, None);
         #[cfg(unix)]
         let conn = {
@@ -6022,7 +6144,10 @@ fn ack_messages(
     if let Some(root) = projection_root {
         attach_queue_projection_store(root, conn)?;
     }
-    let tx = conn.unchecked_transaction()?;
+    // Acknowledgement reads before updating Core and its attached projection
+    // store. Reserve both writers first so a concurrent WAL commit cannot
+    // invalidate the read snapshot during promotion (SQLITE_BUSY_SNAPSHOT).
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let updated = ack_messages_in_transaction(
         &tx,
         message_keys,

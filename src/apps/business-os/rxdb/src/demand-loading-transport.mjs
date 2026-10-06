@@ -420,11 +420,18 @@ export function createDemandLoadingTransport({
     const documents = [];
     let authoritativeRevision = null;
     for (const c of chunks) {
+      if (envelope?.projection?.length && JSON.stringify(c[CTOX_QUERY_RPC.projectionResponseField]) !== JSON.stringify(envelope.projection)) {
+        throw Object.assign(new Error('QUERY_PROJECTION_NOT_SUPPORTED: native peer did not confirm the requested fields'), {
+          code: 'QUERY_PROJECTION_NOT_SUPPORTED', retryable: false,
+        });
+      }
       const decoded = await decodeChunk(c);
       for (const d of decoded) documents.push(d);
       if (c.authoritativeRevision) authoritativeRevision = c.authoritativeRevision;
     }
-    return { documents, authoritativeRevision };
+    return { documents, authoritativeRevision,
+      ...(envelope?.projection?.length ? { appliedProjection: [...envelope.projection] } : {}),
+    };
   }
 
   function isRetryableQueryStreamLimit(error) {

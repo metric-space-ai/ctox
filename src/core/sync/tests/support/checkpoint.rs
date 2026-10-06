@@ -1,3 +1,6 @@
+use ctox_sync::contracts::{
+    SessionHandoffPermit, SessionHandoffPhase, CTOX_SYNC_SESSION_HANDOFF_PERMIT_VERSION,
+};
 use ctox_sync::{
     authority::{auth::SigningIdentity, ExecutionSpec, Ownership},
     checkpoint::CheckpointStore,
@@ -9,6 +12,47 @@ use ctox_sync::{
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, io::Cursor, path::Path};
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Mint quorum-evidence permits with the real signing path, exactly as the
+/// native policy adapter does after a policy decision: audience is the job
+/// scope, nonce is the command request id.
+pub fn handoff_permit(
+    key: &SigningIdentity,
+    phase: SessionHandoffPhase,
+    spec: &ExecutionSpec,
+    checkpoint_digest: &str,
+    sequence: u64,
+    ownership: &Ownership,
+    request_id: &str,
+) -> SessionHandoffPermit {
+    let now = now_ms();
+    key.sign_session_handoff_permit(&SessionHandoffPermit {
+        version: CTOX_SYNC_SESSION_HANDOFF_PERMIT_VERSION,
+        binding_digest: "b".repeat(64),
+        phase,
+        audience: spec.scope_id.clone(),
+        nonce: request_id.to_owned(),
+        job_id: spec.job_id.clone(),
+        session_id: spec.session_id.clone(),
+        scope_id: spec.scope_id.clone(),
+        checkpoint_digest: checkpoint_digest.to_owned(),
+        checkpoint_sequence: sequence,
+        ownership_generation: ownership.generation,
+        principal_epoch: 0,
+        binding_revision: 1,
+        issued_at_ms: now,
+        expires_at_ms: now + 60_000,
+        signature: String::new(),
+    })
+    .unwrap()
+}
+
 /// Even consensus-only fixtures obtain receipts from independently persisted data.
 pub fn copy_receipt(
     root: &Path,
@@ -19,9 +63,29 @@ pub fn copy_receipt(
     sequence: u64,
 ) -> CheckpointCopyReceipt {
     let store = CheckpointStore::open(root.join(format!("copy-{id}")), 4096).unwrap();
-    let data = b"complete synthetic journal for authority fixture";
+    let meta = serde_json::json!({
+        "timestamp": "2026-09-20T12:00:00Z",
+        "type": "session_meta",
+        "payload": {
+            "id": spec.session_id,
+            "timestamp": "2026-09-20T12:00:00Z",
+            "cwd": "/original/workspace",
+            "originator": "codex_cli_rs",
+            "cli_version": "1.0.0",
+            "source": "exec",
+            "model_provider": "test-provider",
+            "base_instructions": {"text": "test"},
+            "capability_profile": "workspace_worker",
+        },
+    });
+    let event = serde_json::json!({
+        "timestamp": "2026-09-20T12:00:00Z",
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "ready"},
+    });
+    let data = format!("{meta}\n{event}\n").into_bytes();
     let journal = ArtifactRef {
-        sha256: format!("{:x}", Sha256::digest(data)),
+        sha256: format!("{:x}", Sha256::digest(&data)),
         size_bytes: data.len() as u64,
     };
     store.ingest_blob(&journal, Cursor::new(data)).unwrap();

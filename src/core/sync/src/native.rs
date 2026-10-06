@@ -378,6 +378,11 @@ impl NativeSyncSession {
             .expect("a started native session owns its pool")
     }
 
+    /// Typed data operations retain the same owned pool, not a replacement.
+    pub fn pool_clone(&self) -> NativePool {
+        self.pool().clone()
+    }
+
     /// Offer to a current, browser-admitted data route using existing WebRTC.
     /// This is transport setup only. It never issues a ready user-data handle.
     /// The host owns bounded discovery/retry and must await session shutdown.
@@ -411,6 +416,24 @@ impl NativeSyncSession {
         rxdb::rx_error::RxError,
     > {
         rxdb::plugins::replication_webrtc::query_fetch_client::fetch_query_page(
+            self.pool().clone(),
+            connection,
+            request,
+        )
+        .await
+    }
+
+    /// Read one bounded file range over the current admitted WebRTC connection.
+    /// The host owns source authorization, durable resume and final content identity.
+    pub async fn file_range(
+        &self,
+        connection: rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        request: rxdb::plugins::replication_webrtc::file_fetch_handler::FileFetchRequest,
+    ) -> Result<
+        rxdb::plugins::replication_webrtc::file_fetch_client::FileRangeBytes,
+        rxdb::rx_error::RxError,
+    > {
+        rxdb::plugins::replication_webrtc::file_fetch_client::fetch_file_range(
             self.pool().clone(),
             connection,
             request,
