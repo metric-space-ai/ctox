@@ -13,10 +13,10 @@ on top of `ctox.computer-capabilities.v1`. SSH storage uses SFTP with a pinned
 SHA-256 server key and an in-memory private key. SMB storage requires encrypted
 SMB3, disables DFS referrals and rejects reparse points. NFS is not supported by
 this increment. Neither adapter reads ambient credentials or executes shell text.
-Socket connection attempts and individual library I/O calls use ten-second
-timeouts. One storage operation can contain several such calls (for example,
-parent checks, open, range write, flush and close); ten seconds is not a total
-operation deadline. Cancellation is checked between operations, after the current
+SSH authentication and each complete SSH storage operation have a ten-second
+deadline, including parent checks, range I/O, flush and close. SMB uses ten-second
+connection and individual library I/O timeouts; an SMB storage operation can
+contain several calls, so its total deadline is not ten seconds. Cancellation is checked between operations, after the current
 operation settles and before the worker lease is released.
 
 Uploads first import the pinned local content into the private object store.
@@ -57,9 +57,10 @@ acceptance uses no declared quota until that server setting is enrolled.
 
 The native resolver, CLI and daemon worker are wired. Component tests and real
 loopback SFTP/SMB3 pause/restart/upload/download/no-replace fixtures passed on gpu3.
-Native root checks and installed acceptance remain open. The required real
-acceptance is gpu3 → ASUSTOR `flashstore24-nas` at 10.0.0.28, including interruption
-and resume of the same durable job. Instances reported that SSH authentication
-currently fails; the registered SecretStore reference, host-key pin and actual
-NAS destination root are not yet available. Example paths in the capabilities
-document must not be used as live destinations.
+Native root checks and installed acceptance remain open. The root linker exposed
+an OpenSSL/BoringSSL collision in libssh2; SSH now uses russh/russh-sftp and its
+protocol fixtures must pass again. The required real acceptance is gpu3 → ASUSTOR
+`flashstore24-nas` at 10.0.0.28, including interruption and resume of the same
+durable job. The operator approved `/volume1/Build-Tmp/build-lane-offload` and the
+pinned SSH endpoint. Native Owner enrollment and SecretStore provisioning remain
+owned by Instances; no credential value is stored in this document.

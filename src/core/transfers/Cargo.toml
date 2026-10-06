@@ -16,8 +16,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 url = "2"
 
 tempfile = "3"
-ssh2 = "=0.9.6"
-base64 = "0.22"
+russh = { version = "=0.62.1", default-features = false, features = ["ring", "rsa"] }
+russh-sftp = "=2.4.0"
 smb = { version = "=0.12.1", default-features = false, features = ["single_threaded", "sign", "encrypt"] }
 
 # sspi 0.21.3 exhaustively matches the pre-0.12.5 GSS error enum.

@@ -1,15 +1,20 @@
-//! SSH storage uses SFTP, a pinned server key and a native SecretStore credential.
-//! No shell command, ssh-agent, user config, or credential-bearing URI is used.
+//! SFTP with a pinned server key and borrowed native SecretStore credentials.
+//! Pure Rust SSH avoids libssh2's OpenSSL collision with the daemon's BoringSSL.
 use crate::{validate_relative_path, StorageConnection};
 use anyhow::{ensure, Context, Result};
-use base64::Engine;
-use sha2::{Digest, Sha256};
-use std::{
-    io::{Read, Seek, SeekFrom, Write},
-    net::{TcpStream, ToSocketAddrs},
-    path::{Path, PathBuf},
-    time::Duration,
+use russh::{
+    client,
+    keys::{decode_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKey},
 };
+use russh_sftp::{
+    client::{error::Error as SftpError, RawSftpSession},
+    protocol::{FileAttributes, OpenFlags, StatusCode},
+};
+use std::{future::Future, sync::Arc, time::Duration};
+use tokio::runtime::Runtime;
+
+const DEADLINE: Duration = Duration::from_secs(10);
+const PACKET: usize = 32 * 1024;
 
 pub struct SshStorageOptions<'a> {
     pub host: String,
@@ -21,181 +26,340 @@ pub struct SshStorageOptions<'a> {
     pub passphrase: Option<&'a str>,
 }
 
+struct PinnedKey(String);
+impl client::Handler for PinnedKey {
+    type Error = anyhow::Error;
+    async fn check_server_key(&mut self, key: &PublicKey) -> Result<bool> {
+        Ok(key.fingerprint(HashAlg::Sha256).to_string() == self.0)
+    }
+}
+
 pub fn connect(options: SshStorageOptions<'_>) -> Result<Box<dyn StorageConnection>> {
     ensure!(
         options.port != 0 && !options.host.is_empty() && !options.username.is_empty(),
         "invalid SSH endpoint"
     );
-    let timeout = Duration::from_secs(10);
-    let addresses: Vec<_> = (options.host.as_str(), options.port)
-        .to_socket_addrs()?
-        .take(8)
-        .collect();
-    let mut stream = None;
-    for address in addresses {
-        if let Ok(socket) = TcpStream::connect_timeout(&address, timeout) {
-            stream = Some(socket);
-            break;
-        }
-    }
-    let stream = stream.context("SSH storage connection failed")?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    let mut session = ssh2::Session::new()?;
-    session.set_timeout(10_000);
-    session.set_tcp_stream(stream);
-    session.handshake()?;
-    let (host_key, _) = session.host_key().context("SSH server key missing")?;
-    let observed = format!(
-        "SHA256:{}",
-        base64::engine::general_purpose::STANDARD_NO_PAD.encode(Sha256::digest(host_key))
-    );
-    ensure!(
-        observed == options.host_key_sha256,
-        "SSH storage host key mismatch"
-    );
-    session.userauth_pubkey_memory(
-        &options.username,
-        None,
-        &options.private_key,
-        options.passphrase.as_deref(),
-    )?;
-    ensure!(session.authenticated(), "SSH storage authentication failed");
-    let sftp = session.sftp()?;
-    let root = PathBuf::from(&options.root);
-    ensure!(
-        root.is_absolute() && sftp.realpath(&root)? == root && sftp.lstat(&root)?.is_dir(),
-        "storage root must be a canonical directory"
-    );
-    Ok(Box::new(SshStorage {
-        session,
-        sftp,
-        root,
-    }))
+    // A scoped thread permits borrowed credentials and also works when our
+    // synchronous API is called from a current-thread Tokio runtime. It joins
+    // before the SecretStore credential callback returns.
+    let storage = std::thread::scope(|scope| {
+        scope
+            .spawn(move || -> Result<SshStorage> {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()?;
+                let result = runtime.block_on(async {
+                    tokio::time::timeout(DEADLINE, async {
+                        let key =
+                            Arc::new(decode_secret_key(options.private_key, options.passphrase)?);
+                        let key_lifetime = Arc::downgrade(&key);
+                        let mut session = client::connect(
+                            Arc::new(client::Config::default()),
+                            (options.host.as_str(), options.port),
+                            PinnedKey(options.host_key_sha256),
+                        )
+                        .await?;
+                        let algorithm = session.best_supported_rsa_hash().await?.flatten();
+                        ensure!(
+                            session
+                                .authenticate_publickey(
+                                    &options.username,
+                                    PrivateKeyWithHashAlg::new(key, algorithm)
+                                )
+                                .await?
+                                .success(),
+                            "SSH storage authentication failed"
+                        );
+                        // Fail closed if the SSH implementation retains signing credentials
+                        // after authentication; only the authenticated transport may survive.
+                        ensure!(
+                            key_lifetime.upgrade().is_none(),
+                            "SSH authentication retained signing credentials"
+                        );
+                        let channel = session.channel_open_session().await?;
+                        channel.request_subsystem(true, "sftp").await?;
+                        let sftp = Arc::new(RawSftpSession::new(channel.into_stream()));
+                        sftp.init().await?;
+                        canonical_root(&sftp, &options.root).await?;
+                        Ok::<_, anyhow::Error>((session, sftp))
+                    })
+                    .await
+                    .context("SSH storage authentication timed out")?
+                });
+                match result {
+                    Ok((session, sftp)) => Ok(SshStorage {
+                        runtime: Some(runtime),
+                        session: Some(session),
+                        sftp,
+                        root: options.root,
+                        failed: false,
+                    }),
+                    Err(error) => {
+                        runtime.shutdown_timeout(Duration::from_secs(1));
+                        Err(error)
+                    }
+                }
+            })
+            .join()
+    })
+    .map_err(|_| anyhow::anyhow!("SSH authentication thread failed"))??;
+    Ok(Box::new(storage))
 }
 
 struct SshStorage {
-    session: ssh2::Session,
-    sftp: ssh2::Sftp,
-    root: PathBuf,
+    runtime: Option<Runtime>,
+    session: Option<client::Handle<PinnedKey>>,
+    sftp: Arc<RawSftpSession>,
+    root: String,
+    failed: bool,
 }
 impl SshStorage {
-    fn path(&self, relative: &str) -> Result<PathBuf> {
-        if relative.starts_with(".ctox-transfer-") {
-            ensure!(
-                !relative.contains('/')
-                    && relative.ends_with(".part")
-                    && relative.len() == 84
-                    && relative[15..79].bytes().all(|b| b.is_ascii_hexdigit()),
-                "invalid storage staging path"
-            );
-        } else {
-            validate_relative_path(relative)?;
-        }
-        // Recheck the admitted root on every operation: a reconnect is not
-        // required for another server-side writer to replace the directory.
+    fn invoke<T: Send + 'static>(
+        &mut self,
+        operation: impl Future<Output = Result<T>> + Send + 'static,
+    ) -> Result<T> {
         ensure!(
-            self.sftp.realpath(&self.root)? == self.root && self.sftp.lstat(&self.root)?.is_dir(),
-            "storage root is no longer a canonical directory"
+            !self.failed,
+            "SSH attempt must reconnect after an operation failure"
         );
-        let path = self.root.join(relative);
-        let mut parent = self.root.clone();
-        for component in Path::new(relative)
-            .parent()
-            .into_iter()
-            .flat_map(Path::components)
-        {
-            parent.push(component);
+        let runtime = self.runtime.as_ref().context("SSH connection closed")?;
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        runtime.spawn(async move {
+            let result = tokio::time::timeout(DEADLINE, operation)
+                .await
+                .context("SSH storage operation timed out")
+                .and_then(|r| r);
+            let _ = send.send(result);
+        });
+        let result = receive.recv().context("SSH operation task terminated")?;
+        self.failed = result.is_err();
+        result
+    }
+}
+
+async fn canonical_root(sftp: &RawSftpSession, root: &str) -> Result<()> {
+    let canonical = sftp.realpath(root).await?;
+    ensure!(
+        root.starts_with('/')
+            && canonical.files.len() == 1
+            && canonical.files[0].filename == root
+            && sftp.lstat(root).await?.attrs.file_type().is_dir(),
+        "storage root is no longer a canonical directory"
+    );
+    Ok(())
+}
+async fn checked_path(sftp: &RawSftpSession, root: &str, relative: &str) -> Result<String> {
+    if relative.starts_with(".ctox-transfer-") {
+        ensure!(
+            !relative.contains('/')
+                && relative.ends_with(".part")
+                && relative.len() == 84
+                && relative[15..79].bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid storage staging path"
+        );
+    } else {
+        validate_relative_path(relative)?;
+    }
+    // Revalidate even without reconnect: another server-side writer may replace
+    // the admitted root or a parent with a link between storage operations.
+    canonical_root(sftp, root).await?;
+    let mut path = root.trim_end_matches('/').to_owned();
+    let components: Vec<_> = relative.split('/').collect();
+    for (index, component) in components.iter().enumerate() {
+        path.push('/');
+        path.push_str(component);
+        if index + 1 < components.len() {
             ensure!(
-                self.sftp.lstat(&parent)?.is_dir(),
+                sftp.lstat(&path).await?.attrs.file_type().is_dir(),
                 "storage path parent is not a directory"
             );
         }
-        match self.sftp.lstat(&path) {
-            Ok(stat) => ensure!(stat.is_file(), "storage object is not a regular file"),
-            Err(error) if absent(&error) => (),
-            Err(error) => return Err(error.into()),
-        }
-        Ok(path)
     }
-    fn file(&self, path: &str, write: bool) -> Result<ssh2::File> {
-        let path = self.path(path)?;
-        let flags = if write {
-            ssh2::OpenFlags::READ | ssh2::OpenFlags::WRITE
-        } else {
-            ssh2::OpenFlags::READ
-        };
-        let mut file = self
-            .sftp
-            .open_mode(path, flags, 0o600, ssh2::OpenType::File)?;
-        ensure!(
-            file.stat()?.is_file(),
-            "storage handle is not a regular file"
-        );
-        Ok(file)
+    match sftp.lstat(&path).await {
+        Ok(stat) => ensure!(
+            stat.attrs.file_type().is_file(),
+            "storage object is not a regular file"
+        ),
+        Err(error) if absent(&error) => (),
+        Err(error) => return Err(error.into()),
     }
+    Ok(path)
 }
-fn absent(error: &ssh2::Error) -> bool {
-    matches!(error.code(), ssh2::ErrorCode::SFTP(2 | 10))
+fn absent(error: &SftpError) -> bool {
+    matches!(error, SftpError::Status(status) if status.status_code == StatusCode::NoSuchFile)
+}
+async fn file(sftp: &RawSftpSession, root: &str, path: &str, flags: OpenFlags) -> Result<String> {
+    let path = checked_path(sftp, root, path).await?;
+    let handle = sftp
+        .open(
+            path,
+            flags,
+            FileAttributes {
+                permissions: Some(0o600),
+                ..Default::default()
+            },
+        )
+        .await?
+        .handle;
+    ensure!(
+        sftp.fstat(&handle).await?.attrs.file_type().is_file(),
+        "storage handle is not a regular file"
+    );
+    Ok(handle)
+}
+// Raw fsync deliberately fails if the server lacks the extension; the high-level
+// SFTP File::sync_all silently succeeds in that case and cannot guard checkpoints.
+async fn flush_close(sftp: &RawSftpSession, handle: String) -> Result<()> {
+    sftp.fsync(&handle).await?;
+    sftp.close(handle).await?;
+    Ok(())
 }
 impl StorageConnection for SshStorage {
     fn length(&mut self, path: &str) -> Result<Option<u64>> {
-        let path = self.path(path)?;
-        match self.sftp.lstat(&path) {
-            Ok(stat) => Ok(Some(stat.size.context("remote length missing")?)),
-            Err(error) if absent(&error) => Ok(None),
-            Err(error) => Err(error.into()),
-        }
+        let (sftp, root, path) = (self.sftp.clone(), self.root.clone(), path.to_owned());
+        self.invoke(async move {
+            let path = checked_path(&sftp, &root, &path).await?;
+            match sftp.lstat(path).await {
+                Ok(stat) => Ok(Some(stat.attrs.size.context("remote length missing")?)),
+                Err(error) if absent(&error) => Ok(None),
+                Err(error) => Err(error.into()),
+            }
+        })
     }
     fn read(&mut self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>> {
         ensure!(length <= 1024 * 1024, "storage range too large");
-        let mut file = self.file(path, false)?;
-        file.seek(SeekFrom::Start(offset))?;
-        let mut bytes = vec![0; length];
-        file.read_exact(&mut bytes)?;
-        file.close()?;
-        Ok(bytes)
+        let (sftp, root, path) = (self.sftp.clone(), self.root.clone(), path.to_owned());
+        self.invoke(async move {
+            let handle = file(&sftp, &root, &path, OpenFlags::READ).await?;
+            let mut bytes = Vec::with_capacity(length);
+            while bytes.len() < length {
+                let wanted = (length - bytes.len()).min(PACKET);
+                let data = sftp
+                    .read(
+                        &handle,
+                        offset
+                            .checked_add(bytes.len() as u64)
+                            .context("storage offset overflow")?,
+                        wanted as u32,
+                    )
+                    .await?
+                    .data;
+                ensure!(
+                    !data.is_empty() && data.len() <= wanted,
+                    "invalid SFTP read length"
+                );
+                bytes.extend_from_slice(&data);
+            }
+            sftp.close(handle).await?;
+            Ok(bytes)
+        })
     }
     fn create(&mut self, path: &str) -> Result<()> {
-        let path = self.path(path)?;
-        let mut file = self.sftp.open_mode(
-            path,
-            ssh2::OpenFlags::WRITE | ssh2::OpenFlags::CREATE | ssh2::OpenFlags::EXCLUSIVE,
-            0o600,
-            ssh2::OpenType::File,
-        )?;
-        file.fsync()?;
-        file.close()?;
-        Ok(())
+        let (sftp, root, path) = (self.sftp.clone(), self.root.clone(), path.to_owned());
+        self.invoke(async move {
+            let handle = file(
+                &sftp,
+                &root,
+                &path,
+                OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE,
+            )
+            .await?;
+            flush_close(&sftp, handle).await
+        })
     }
     fn truncate(&mut self, path: &str, length: u64) -> Result<()> {
-        let mut file = self.file(path, true)?;
-        let mut stat = file.stat()?;
-        stat.size = Some(length);
-        file.setstat(stat)?;
-        file.fsync()?;
-        file.close()?;
-        Ok(())
+        let (sftp, root, path) = (self.sftp.clone(), self.root.clone(), path.to_owned());
+        self.invoke(async move {
+            let handle = file(&sftp, &root, &path, OpenFlags::READ | OpenFlags::WRITE).await?;
+            sftp.fsetstat(
+                &handle,
+                FileAttributes {
+                    size: Some(length),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            flush_close(&sftp, handle).await
+        })
     }
     fn write(&mut self, path: &str, offset: u64, bytes: &[u8]) -> Result<()> {
-        let mut file = self.file(path, true)?;
-        file.seek(SeekFrom::Start(offset))?;
-        file.write_all(bytes)?;
-        file.fsync()?;
-        file.close()?;
-        Ok(())
+        ensure!(bytes.len() <= 1024 * 1024, "storage range too large");
+        let (sftp, root, path, bytes) = (
+            self.sftp.clone(),
+            self.root.clone(),
+            path.to_owned(),
+            bytes.to_vec(),
+        );
+        self.invoke(async move {
+            let handle = file(&sftp, &root, &path, OpenFlags::READ | OpenFlags::WRITE).await?;
+            for (index, chunk) in bytes.chunks(PACKET).enumerate() {
+                sftp.write(
+                    &handle,
+                    offset
+                        .checked_add((index * PACKET) as u64)
+                        .context("storage offset overflow")?,
+                    chunk.to_vec(),
+                )
+                .await?;
+            }
+            flush_close(&sftp, handle).await
+        })
     }
     fn publish(&mut self, staging: &str, destination: &str) -> Result<()> {
-        self.sftp.rename(
-            &self.path(staging)?,
-            &self.path(destination)?,
-            Some(ssh2::RenameFlags::empty()),
-        )?;
-        Ok(())
+        let (sftp, root, staging, destination) = (
+            self.sftp.clone(),
+            self.root.clone(),
+            staging.to_owned(),
+            destination.to_owned(),
+        );
+        self.invoke(async move {
+            let staging = checked_path(&sftp, &root, &staging).await?;
+            let destination = checked_path(&sftp, &root, &destination).await?;
+            // SFTP v3 rename refuses an existing destination. Do not use the
+            // OpenSSH posix-rename extension, which replaces it.
+            sftp.rename(staging, destination).await?;
+            Ok(())
+        })
     }
     fn close(&mut self) -> Result<()> {
-        self.session
-            .disconnect(None, "transfer attempt finished", None)?;
-        Ok(())
+        let Some(runtime) = self.runtime.take() else {
+            return Ok(());
+        };
+        let session = self.session.take();
+        let sftp = self.sftp.clone();
+        // Runtime shutdown must never run directly inside a caller's Tokio task.
+        std::thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    let result = runtime.block_on(async {
+                        tokio::time::timeout(DEADLINE, async {
+                            sftp.close_session()?;
+                            if let Some(session) = session {
+                                session
+                                    .disconnect(
+                                        russh::Disconnect::ByApplication,
+                                        "transfer attempt finished",
+                                        "en",
+                                    )
+                                    .await?;
+                                session.await?;
+                            }
+                            Ok::<_, anyhow::Error>(())
+                        })
+                        .await
+                        .context("SSH storage close timed out")?
+                    });
+                    runtime.shutdown_timeout(Duration::from_secs(1));
+                    result
+                })
+                .join()
+        })
+        .map_err(|_| anyhow::anyhow!("SSH shutdown thread failed"))?
+    }
+}
+impl Drop for SshStorage {
+    fn drop(&mut self) {
+        let _ = self.close();
     }
 }
