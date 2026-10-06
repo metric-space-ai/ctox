@@ -25,6 +25,7 @@ function showBusinessConfirm(message, options = {}) { return shellConfirm(messag
 function showBusinessPrompt(message, options = {}) { return shellPrompt(message, { host: eigenesDialogZiel(), ...options }); }
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCollectionReloader } from './collection-reloader.mjs';
+import { loadLeadRevisionChanges } from './lead-revision-loader.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -1359,6 +1360,7 @@ function bindCollections() {
     collections: state.collections,
     reload: (keys) => reload(keys),
     afterReload: (keys) => {
+      if (keys.length === 1 && keys[0] === 'leads' && state.lastLeadReloadChanged === false && state.leads.length) return;
       render();
       if (!keys.includes('leads')) return;
       if (state.leads.length) state.nachladenFehlschlaege = 0;
@@ -1592,11 +1594,15 @@ async function alleDokumente(collection, selector = {}, seitengroesse = SEITENGR
 async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   const collections = state.collections;
   const requested = [...new Set(keys)].filter((key) => collections[key]);
+  let leadChanges = null;
+  const previousLeads = state.leadHydrationBindingGeneration === bindingGeneration ? state.leads : [];
   const results = await Promise.all(requested.map(async (key) => {
     const collection = collections[key];
-    const docs = key === 'leads'
-      ? await alleDokumente(collection, {}, LEAD_SEITENGROESSE)
-      : await collection.find().exec();
+    if (key === 'leads') {
+      leadChanges = await loadLeadRevisionChanges(collection, previousLeads);
+      return [key, leadChanges.rows];
+    }
+    const docs = await collection.find().exec();
     return [key, docs.map((doc) => doc.toJSON())];
   }));
   // Unmount or a recovered collection handle invalidates the old read. Order
@@ -1653,9 +1659,12 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
     .filter((item) => item.id !== LEGACY_RESEARCH_POLICY_IMPORT_ID)
     .sort((a, b) => b.updated_at_ms - a.updated_at_ms);
   if (fresh.has('leads')) {
-    state.leads = applyPendingLeadPatches(leads.map(normalizeLeadRecipientShape))
-      .sort((a, b) => b.updated_at_ms - a.updated_at_ms);
-    invalidateChangedRecipientEligibility(state.leads);
+    state.leadHydrationBindingGeneration = bindingGeneration;
+    state.lastLeadReloadChanged = Boolean(leadChanges.changedIds.size || leadChanges.removedIds.size);
+    state.leads = applyPendingLeadPatches(leads.map((lead) => (
+      leadChanges.changedIds.has(lead.id) ? normalizeLeadRecipientShape(lead) : lead
+    ))).sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+    if (state.lastLeadReloadChanged) invalidateChangedRecipientEligibility(state.leads);
   }
   if (!fresh.has('leads') && !fresh.has('imports')) return;
   const campaigns = campaignRows();

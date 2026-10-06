@@ -97,7 +97,7 @@ const source = fileURLToPath(new URL('../../customer-modules/outbound-lead-gener
 mkdirSync(join(fixture, 'modules', 'olg'), { recursive: true });
 mkdirSync(join(fixture, 'shared'), { recursive: true });
 writeFileSync(join(fixture, 'package.json'), '{"type":"module"}');
-for (const name of ['index.js', 'collection-reloader.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
+for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
 writeFileSync(join(fixture, 'shared', 'universal-importer.js'), [
   'extractCompanyRowsFromWorkbookFile', 'extractCompanyRowsFromText', 'normalizeCompanyRow', 'openUniversalImporter', 'parseDelimitedText',
 ].map((name) => `export function ${name}() {}`).join('\n'));
@@ -109,7 +109,7 @@ try {
   const state = hooks.testState();
   function setup(overrides = {}) {
     const reads = [];
-    const existingLead = { id: 'lead_a', name: 'Firma', campaign: 'K', updated_at_ms: 1, contacts: [], selected_contact_ids: [] };
+    const existingLead = { id: 'lead_a', _rev: '1-a', name: 'Firma', campaign: 'K', updated_at_ms: 1, contacts: [], selected_contact_ids: [] };
     const values = {
       sources: [{ id: 'source_a', label: 'Register', enabled: true }], adapters: [], imports: [], researchPolicies: [], leads: [existingLead],
     };
@@ -123,7 +123,7 @@ try {
     }]));
     Object.assign(state, {
       collections: db, sources: [], adapters: [], imports: [], leads: [existingLead],
-      collectionBindingGeneration: 1, reloadAngewendetJeSammlung: new Map(),
+      collectionBindingGeneration: 1, leadHydrationBindingGeneration: 1, reloadAngewendetJeSammlung: new Map(),
       sourceToggleIntent: new Map(), pendingLeadPatches: new Map(),
       selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
       researchPolicyLoaded: true, researchPolicy: 'saved', researchPolicyDraft: 'unsaved',
@@ -157,9 +157,9 @@ try {
     }
   });
   await test('pagination retrieves all leads, not just the default 200-window', async () => {
-    const rows = Array.from({ length: 351 }, (_, i) => ({ id: 'lead_' + String(i).padStart(4, '0'), campaign: 'K', updated_at_ms: i }));
+    const rows = Array.from({ length: 351 }, (_, i) => ({ id: 'lead_' + String(i).padStart(4, '0'), campaign: 'K', updated_at_ms: i, _rev: '1-' + i }));
     const { reads } = setup({ leads: async (query) => rows
-      .filter((row) => !query.selector.id || row.id > query.selector.id.$gt)
+      .filter((row) => !query.selector.id || (query.selector.id.$in ? query.selector.id.$in.includes(row.id) : row.id > query.selector.id.$gt))
       .slice(0, query.limit).map((row) => ({ toJSON: () => row })) });
     await hooks.reload(['leads']);
     assert.equal(state.leads.length, 351);
