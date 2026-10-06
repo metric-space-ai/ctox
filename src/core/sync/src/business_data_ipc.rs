@@ -21,7 +21,7 @@ const MAX_PENDING_WRITES: usize = MAX_IN_FLIGHT;
 /// cancellable. Acceptance of the first byte is the linearization point: the
 /// authority valid at queueing wins, and the frame then finishes uninterrupted
 /// so the private stream never mixes a partial frame with another frame.
-pub(crate) struct WatchLifetime {
+pub struct WatchLifetime {
     state: std::sync::Mutex<WatchLifetimeState>,
 }
 

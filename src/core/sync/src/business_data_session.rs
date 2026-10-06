@@ -142,7 +142,6 @@ impl OwnedStartup {
 /// One locally owned remote event subscription. Its pump is aborted and awaited
 /// with the session or explicit Unwatch.
 struct OwnedWatch {
-    subscription_id: String,
     request_id: String,
     pump: OwnedEventPump,
 }
@@ -886,7 +885,6 @@ impl BusinessDataService {
             subscription_id.clone(),
             OwnedWatch {
                 request_id: request_id.to_owned(),
-                subscription_id,
                 pump,
             },
         );
@@ -1045,7 +1043,6 @@ impl BusinessDataService {
                     format!("command:{command_id}"),
                     OwnedWatch {
                         request_id: request_id.to_owned(),
-                        subscription_id: format!("command:{command_id}"),
                         pump,
                     },
                 );
