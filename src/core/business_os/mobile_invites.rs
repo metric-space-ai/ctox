@@ -5,7 +5,7 @@ use anyhow::Context;
 use base64::Engine;
 use qrcode::{render::svg, EcLevel, QrCode};
 use ring::rand::SecureRandom;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -509,6 +509,14 @@ pub(super) fn is_active_paired_device_user(root: &Path, user_id: &str) -> bool {
     if ensure_table(&conn).is_err() {
         return false;
     }
+    is_active_paired_device_user_from_connection(&conn, user_id)
+}
+
+/// Only reads the already initialized, held native policy connection.
+pub(super) fn is_active_paired_device_user_from_connection(
+    conn: &Connection,
+    user_id: &str,
+) -> bool {
     conn.query_row(
         "SELECT 1 FROM business_mobile_invites
          WHERE user_id=?1 AND revoked_at_ms IS NULL AND proof_key_thumbprint IS NOT NULL",
@@ -536,6 +544,23 @@ pub(super) fn claims_for_webrtc_invite_secret(
     }
     let conn = super::store::open_store(root).ok()?;
     ensure_table(&conn).ok()?;
+    claims_for_webrtc_invite_secret_from_connection(&conn, invite_secret, at_ms)
+}
+
+/// No open, schema repair or write occurs inside a publication authority.
+pub(super) fn claims_for_webrtc_invite_secret_from_connection(
+    conn: &Connection,
+    invite_secret: &str,
+    at_ms: i64,
+) -> Option<super::capability::CapabilityClaims> {
+    let invite_secret = invite_secret.trim();
+    if invite_secret.len() != 43
+        || !invite_secret
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return None;
+    }
     type InviteClaimsRow = (
         String,
         String,
@@ -711,6 +736,15 @@ pub(super) fn is_active_device_binding(
     if ensure_table(&conn).is_err() {
         return false;
     }
+    is_active_device_binding_from_connection(&conn, user_id, binding)
+}
+
+/// The exact durable pairing edge is checked through the caller's authority.
+pub(super) fn is_active_device_binding_from_connection(
+    conn: &Connection,
+    user_id: &str,
+    binding: &super::capability::CapabilityDeviceBinding,
+) -> bool {
     conn.query_row(
         "SELECT 1
          FROM business_mobile_invites

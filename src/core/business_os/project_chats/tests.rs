@@ -631,6 +631,104 @@ fn private_execution_results_follow_native_command_and_task_relationships() -> a
 }
 
 #[test]
+fn held_visibility_readers_preserve_native_lineage_and_fence_owner_mutation() -> anyhow::Result<()>
+{
+    use crate::mission::channels;
+    let root = fixture()?;
+    let initial = add(root.path(), "held-add")?;
+    let chat = initial["first_chat_id"].as_str().unwrap();
+    let private = command(
+        "business_os.chat.task",
+        "held-private",
+        json!({"thread_id":chat, "instruction":"Private bounded fixture"}),
+    );
+    let admitted = channels::claim_business_command_with_queue(
+        root.path(),
+        store::business_command_core_claim("held-private", &private)?,
+        channels::QueueTaskCreateRequest {
+            title: "Private task".into(),
+            prompt: "Private bounded fixture".into(),
+            thread_key: "held-private-thread".into(),
+            workspace_root: Some(root.path().display().to_string()),
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"business_os_command_id":"held-private"})),
+        },
+    )?;
+    let document = json!({"id":"held-run", "task_id":admitted.task.message_key});
+    let core = channels::open_channel_db(&crate::paths::core_db(root.path()))?;
+    let store_conn = open_store(root.path())?;
+    let writer = open_store(root.path())?;
+    writer.busy_timeout(std::time::Duration::ZERO)?;
+    let mut project = outbound_load_record(&writer, "workjet_projects", "project")?.unwrap();
+    project["owner_user_id"] = json!("new-owner");
+    {
+        let core_tx =
+            rusqlite::Transaction::new_unchecked(&core, rusqlite::TransactionBehavior::Immediate)?;
+        let store_tx = rusqlite::Transaction::new_unchecked(
+            &store_conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let core_path = crate::paths::core_db(root.path());
+        channels::reset_channel_db_open_count_for_tests(&core_path);
+        assert_eq!(
+            document_visible_from_connections(&core_tx, &store_tx, "ctox_runs", &document, "owner",),
+            Some(true)
+        );
+        assert_eq!(
+            document_visible_from_connections(
+                &core_tx,
+                &store_tx,
+                "ctox_runs",
+                &document,
+                "other-user",
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            document_visible_from_connections(
+                &core_tx,
+                &store_tx,
+                "ctox_runs",
+                &json!({"id":"missing-run","task_id":"missing-native-task"}),
+                "owner",
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            channels::channel_db_open_count_for_tests(&core_path),
+            0,
+            "borrowed authority must not reopen or initialize Core"
+        );
+        let error = store::upsert_business_record(
+            &writer,
+            "workjet_projects",
+            "project",
+            2,
+            project.clone(),
+        )
+        .expect_err("another writer cannot revoke ownership during held authority");
+        assert!(matches!(error.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(code, _)) if matches!(code.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)));
+    }
+    store::upsert_business_record(&writer, "workjet_projects", "project", 2, project)?;
+    let core_tx =
+        rusqlite::Transaction::new_unchecked(&core, rusqlite::TransactionBehavior::Immediate)?;
+    let store_tx = rusqlite::Transaction::new_unchecked(
+        &store_conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )?;
+    assert_eq!(
+        document_visible_from_connections(&core_tx, &store_tx, "ctox_runs", &document, "owner",),
+        Some(false),
+        "next held callback must observe native ownership revocation"
+    );
+    Ok(())
+}
+
+#[test]
 fn private_threads_reject_foreign_human_mentions_and_admin_mutation() -> anyhow::Result<()> {
     let root = fixture()?;
     let initial = add(root.path(), "add")?;
