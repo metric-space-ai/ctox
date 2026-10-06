@@ -3120,16 +3120,6 @@ impl WebRTCRsConnectionHandler {
         let _transfer_guard = FramedTransferGuard::new(self, peer, &transfer_id);
 
         let mut transfer_attempt = 0usize;
-<<<<<<< HEAD
-        let start = transport_start_frame(&transfer_id, transfer_attempt, chunks.len(), text.len());
-        send_json_text_owned(
-            &data_channel,
-            &start,
-            completion.as_deref_mut(),
-            publication,
-        )
-        .await?;
-=======
         let start = transport_start_frame(
             &transfer_id,
             transfer_attempt,
@@ -3137,8 +3127,13 @@ impl WebRTCRsConnectionHandler {
             text.len(),
             encoding,
         );
-        send_json_text(&data_channel, &start).await?;
->>>>>>> origin/main
+        send_json_text_owned(
+            &data_channel,
+            &start,
+            completion.as_deref_mut(),
+            publication,
+        )
+        .await?;
         self.record_sent_transport_frame(&start);
 
         let windows: Vec<(usize, usize)> = (0..chunks.len())
