@@ -50,6 +50,8 @@ use frame_contract_generated::{
 const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_RESUME_TIMEOUT: Duration = Duration::from_secs(1);
 const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
+/// ACK windows a framed transfer keeps in flight (each FRAME_ACK_WINDOW chunks).
+const FRAME_PIPELINE_WINDOWS: usize = 8;
 static AUXILIARY_TRANSFER_COUNTER: AtomicU64 = AtomicU64::new(1);
 // Phase 1 (constant real-time stream): native -> browser SCTP send-buffer
 // watermarks. webrtc-rs exposes no buffered-amount *getter*, only threshold
@@ -1377,10 +1379,21 @@ impl WebRTCRsConnectionHandler {
         let transfer = TransferStateKey::new(peer, transfer_id);
         let mut pending = self.pending_frame_acks.lock();
         match ack_seq {
-            Some(ack_seq) => pending
-                .remove(&PendingFrameAckKey { transfer, ack_seq })
-                .into_iter()
-                .collect(),
+            // ACKs are cumulative: the browser acknowledges its highest
+            // contiguous frame, so every outstanding window ending at or below
+            // it is complete. With one window in flight this is the exact
+            // match it used to be; with pipelined windows one ACK can close
+            // several.
+            Some(ack_seq) => {
+                let keys: Vec<PendingFrameAckKey> = pending
+                    .keys()
+                    .filter(|key| key.transfer == transfer && key.ack_seq <= ack_seq)
+                    .cloned()
+                    .collect();
+                keys.into_iter()
+                    .filter_map(|key| pending.remove(&key))
+                    .collect()
+            }
             None => {
                 let keys: Vec<PendingFrameAckKey> = pending
                     .keys()
@@ -2853,55 +2866,90 @@ impl WebRTCRsConnectionHandler {
         send_json_text(&data_channel, &start).await?;
         self.record_sent_transport_frame(&start);
 
-        for window_start in (0..chunks.len()).step_by(FRAME_ACK_WINDOW) {
-            self.drain_high_priority_inline_frames(peer, &data_channel, available)
-                .await?;
-            let window_end = usize::min(window_start + FRAME_ACK_WINDOW, chunks.len()) - 1;
-            let ack_key = PendingFrameAckKey::new(peer, &transfer_id, window_end);
-            let mut attempt = transfer_attempt;
-            let mut restart_from_zero = false;
+        let windows: Vec<(usize, usize)> = (0..chunks.len())
+            .step_by(FRAME_ACK_WINDOW)
+            .map(|window_start| {
+                (
+                    window_start,
+                    usize::min(window_start + FRAME_ACK_WINDOW, chunks.len()) - 1,
+                )
+            })
+            .collect();
+        'attempts: loop {
+            if transfer_attempt > 0 {
+                let restart =
+                    transport_start_frame(&transfer_id, transfer_attempt, chunks.len(), text.len());
+                send_json_text(&data_channel, &restart).await?;
+                self.record_sent_transport_frame(&restart);
+            }
+            // Up to FRAME_PIPELINE_WINDOWS ACK windows are in flight. Waiting
+            // for every 4-chunk window before sending the next capped a relayed
+            // channel at ~40 KB per round trip (~1 MB/s measured on the THESEN
+            // on-prem tenant). The browser ACKs cumulatively, so the oldest
+            // outstanding window bounds what has to be resent.
+            let mut outstanding: VecDeque<(
+                usize,
+                PendingFrameAckKey,
+                tokio::sync::oneshot::Receiver<()>,
+            )> = VecDeque::new();
+            let mut windows_iter = windows.iter().copied();
             loop {
-                if restart_from_zero {
-                    let restart =
-                        transport_start_frame(&transfer_id, attempt, chunks.len(), text.len());
-                    send_json_text(&data_channel, &restart).await?;
-                    self.record_sent_transport_frame(&restart);
-                }
-                let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-                self.pending_frame_acks.lock().insert(
-                    ack_key.clone(),
-                    PendingFrameAck {
-                        sender: ack_tx,
-                        sent_at_ms: now_ms(),
-                    },
-                );
-                self.refresh_dynamic_transport_status();
-
-                for (seq, data) in chunks
-                    .iter()
-                    .enumerate()
-                    .take(window_end + 1)
-                    .skip(if restart_from_zero { 0 } else { window_start })
-                {
-                    // Phase 1: pace on the SCTP send buffer so a large transfer
-                    // never bursts past what the channel can deliver in real
-                    // time (which would overrun the buffer and get the channel
-                    // killed by the browser).
-                    if let Err(error) = self.wait_for_send_capacity(peer, available).await {
-                        self.pending_frame_acks.lock().remove(&ack_key);
-                        self.refresh_dynamic_transport_status();
-                        return Err(error);
+                let next_window = if outstanding.len() < FRAME_PIPELINE_WINDOWS {
+                    windows_iter.next()
+                } else {
+                    None
+                };
+                if let Some((window_start, window_end)) = next_window {
+                    self.drain_high_priority_inline_frames(peer, &data_channel, available)
+                        .await?;
+                    let ack_key = PendingFrameAckKey::new(peer, &transfer_id, window_end);
+                    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                    self.pending_frame_acks.lock().insert(
+                        ack_key.clone(),
+                        PendingFrameAck {
+                            sender: ack_tx,
+                            sent_at_ms: now_ms(),
+                        },
+                    );
+                    self.refresh_dynamic_transport_status();
+                    for (seq, data) in chunks
+                        .iter()
+                        .enumerate()
+                        .take(window_end + 1)
+                        .skip(window_start)
+                    {
+                        // Phase 1: pace on the SCTP send buffer so a large transfer
+                        // never bursts past what the channel can deliver in real
+                        // time (which would overrun the buffer and get the channel
+                        // killed by the browser).
+                        let sent = match self.wait_for_send_capacity(peer, available).await {
+                            Ok(()) => {
+                                let chunk = transport_chunk_frame(
+                                    &transfer_id,
+                                    transfer_attempt,
+                                    seq,
+                                    data,
+                                );
+                                send_json_text(&data_channel, &chunk)
+                                    .await
+                                    .map(|()| self.record_sent_transport_frame(&chunk))
+                            }
+                            Err(error) => Err(error),
+                        };
+                        if let Err(error) = sent {
+                            self.remove_outstanding_frame_acks(
+                                outstanding.iter().map(|(_, key, _)| key).chain([&ack_key]),
+                            );
+                            return Err(error);
+                        }
+                        tokio::time::sleep(SEND_FRAME_PAUSE).await;
                     }
-                    let chunk = transport_chunk_frame(&transfer_id, attempt, seq, data);
-                    if let Err(error) = send_json_text(&data_channel, &chunk).await {
-                        self.pending_frame_acks.lock().remove(&ack_key);
-                        self.refresh_dynamic_transport_status();
-                        return Err(error);
-                    }
-                    self.record_sent_transport_frame(&chunk);
-                    tokio::time::sleep(SEND_FRAME_PAUSE).await;
+                    outstanding.push_back((window_end, ack_key, ack_rx));
+                    continue;
                 }
-
+                let Some((window_end, ack_key, ack_rx)) = outstanding.pop_front() else {
+                    break 'attempts;
+                };
                 // A chunked cold-start response can take many ACK windows. Do
                 // not let it head-of-line-block small control/masterWrite
                 // responses that arrive while we wait for the browser ACK.
@@ -2924,10 +2972,11 @@ impl WebRTCRsConnectionHandler {
                     }
                 };
                 match ack_result {
-                    Some(Ok(())) => break,
+                    Some(Ok(())) => continue,
                     Some(Err(_)) => {
-                        self.pending_frame_acks.lock().remove(&ack_key);
-                        self.refresh_dynamic_transport_status();
+                        self.remove_outstanding_frame_acks(
+                            outstanding.iter().map(|(_, key, _)| key).chain([&ack_key]),
+                        );
                         return Err(new_rx_error(
                             "RC_WEBRTC_PEER",
                             Some(serde_json::json!({
@@ -2947,39 +2996,54 @@ impl WebRTCRsConnectionHandler {
                                 Arc::clone(&data_channel),
                                 &transfer_id,
                                 window_end,
-                                attempt,
+                                transfer_attempt,
                             )
                             .await?
                         {
-                            break;
+                            continue;
                         }
-                        if attempt >= MAX_FRAME_RETRIES {
+                        self.remove_outstanding_frame_acks(
+                            outstanding.iter().map(|(_, key, _)| key),
+                        );
+                        if transfer_attempt >= MAX_FRAME_RETRIES {
                             return Err(new_rx_error(
                                 "RC_WEBRTC_PEER",
                                 Some(serde_json::json!({
                                     "message": "timed out waiting for WebRTC frame ack",
                                     "transferId": transfer_id,
                                     "ackSeq": window_end,
-                                    "attempt": attempt,
+                                    "attempt": transfer_attempt,
                                     "peer": peer,
                                 })),
                             ));
                         }
-                        attempt += 1;
-                        transfer_attempt = attempt;
-                        restart_from_zero = true;
+                        transfer_attempt += 1;
                         self.record_status(|status| {
                             status.retry_count = status.retry_count.saturating_add(1);
                         });
                         tokio::time::sleep(Duration::from_millis(
-                            u64::try_from(usize::min(250 * attempt, 1000)).unwrap_or(1000),
+                            u64::try_from(usize::min(250 * transfer_attempt, 1000)).unwrap_or(1000),
                         ))
                         .await;
+                        continue 'attempts;
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    fn remove_outstanding_frame_acks<'a>(
+        &self,
+        keys: impl IntoIterator<Item = &'a PendingFrameAckKey>,
+    ) {
+        {
+            let mut pending = self.pending_frame_acks.lock();
+            for key in keys {
+                pending.remove(key);
+            }
+        }
+        self.refresh_dynamic_transport_status();
     }
 
     async fn drain_high_priority_inline_frames(
