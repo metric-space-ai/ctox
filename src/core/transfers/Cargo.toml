@@ -16,11 +16,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 url = "2"
 
 tempfile = "3"
-russh = { version = "=0.59.0", default-features = false, features = ["ring", "rsa"] }
+russh = { version = "=0.64.1", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = "=2.4.0"
-smb = { version = "=0.12.1", default-features = false, features = ["single_threaded", "sign", "encrypt"] }
+smb = { path = "vendor/smb", default-features = false, features = ["single_threaded", "sign", "encrypt"] }
 
-# sspi 0.21.3 exhaustively matches the pre-0.12.5 GSS error enum.
-picky-krb = "=0.12.4"
 
 [dev-dependencies]

@@ -719,6 +719,9 @@ jobs:
           cp src/core/transfers/aria2-rust/LICENSE bundle/licenses/aria2-rust/LICENSE
           cp src/core/transfers/aria2-GPL-2.0.txt bundle/licenses/aria2-rust/COPYING
           cp src/core/transfers/aria2-rust/PROVENANCE.json bundle/licenses/aria2-rust/PROVENANCE.json
+          mkdir -p bundle/licenses/smb
+          cp src/core/transfers/vendor/smb/LICENSE.md bundle/licenses/smb/LICENSE.md
+          cp src/core/transfers/vendor/SMB-UPSTREAM.md bundle/licenses/smb/UPSTREAM.md
           # Runtime source assets the installed daemon serves (validated by
           # the installer against contracts/binary_bundle_manifest.txt — the
           # shared single source of truth for this bundle's contents).
@@ -764,6 +767,9 @@ jobs:
           Copy-Item -Path "src\core\transfers\aria2-rust\LICENSE" -Destination "bundle\licenses\aria2-rust\LICENSE"
           Copy-Item -Path "src\core\transfers\aria2-GPL-2.0.txt" -Destination "bundle\licenses\aria2-rust\COPYING"
           Copy-Item -Path "src\core\transfers\aria2-rust\PROVENANCE.json" -Destination "bundle\licenses\aria2-rust\PROVENANCE.json"
+          New-Item -ItemType Directory -Force bundle\licenses\smb | Out-Null
+          Copy-Item -Path "src\core\transfers\vendor\smb\LICENSE.md" -Destination "bundle\licenses\smb\LICENSE.md"
+          Copy-Item -Path "src\core\transfers\vendor\SMB-UPSTREAM.md" -Destination "bundle\licenses\smb\UPSTREAM.md"
           Copy-Item -Path "Cargo.toml" -Destination "bundle\"
           New-Item -ItemType Directory -Force bundle\contracts | Out-Null
           Copy-Item -Path "contracts\source_origins_manifest.json" -Destination "bundle\contracts\"

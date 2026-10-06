@@ -4,7 +4,7 @@ use crate::{validate_relative_path, StorageConnection};
 use anyhow::{ensure, Context, Result};
 use russh::{
     client,
-    keys::{decode_secret_key, Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKey},
+    keys::{decode_secret_key, Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate},
 };
 use russh_sftp::{
     client::{error::Error as SftpError, RawSftpSession},
@@ -30,8 +30,13 @@ pub struct SshStorageOptions<'a> {
 struct PinnedKey(String);
 impl client::Handler for PinnedKey {
     type Error = anyhow::Error;
-    async fn check_server_key(&mut self, key: &PublicKey) -> Result<bool> {
-        Ok(key.fingerprint(HashAlg::Sha256).to_string() == self.0)
+    async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool> {
+        Ok(match key {
+            PublicKeyOrCertificate::PublicKey { key, .. } => {
+                key.fingerprint(HashAlg::Sha256).to_string() == self.0
+            }
+            PublicKeyOrCertificate::Certificate(_) => false,
+        })
     }
 }
 

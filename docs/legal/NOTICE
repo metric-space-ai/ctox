@@ -5,6 +5,13 @@ and integrated per-model inference trees.
 
 Primary integrated source trees:
 
+- src/core/transfers/vendor/smb
+  Published smb 0.12.1 from https://github.com/afiffon/smb-rs at
+  7c7d4a60c930e3780e95208967aa13b6346eaa25, MIT license.
+  Rust sources are unchanged; its manifest selects compatible SSPI 0.23.0.
+  Original copyright/license are retained in LICENSE.md and binary bundles.
+  Provenance and the manifest-only patch: src/core/transfers/vendor/SMB-UPSTREAM.md.
+
 - src/core/transfers/aria2-rust
   Unchanged tracked-source snapshot of https://github.com/mkh-welsch/aria2-rust at
   8364bcd7902dbd853a0f746c3dc937bbaadec561 (based on 7bfacc2cf27e55d4755b06623c1b997880d0c697).
