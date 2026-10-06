@@ -1166,6 +1166,28 @@ mod tests {
 
     #[tokio::test]
     async fn create_database_and_add_collection() {
+        const ISOLATED_COUNT_TEST: &str = "CTOX_RXDB_DATABASE_COUNT_TEST_CHILD";
+        if std::env::var_os(ISOLATED_COUNT_TEST).is_none() {
+            // Other parallel tests can close databases between the two global
+            // counter reads. Keep the original increment assertion in a child
+            // running exactly this real creation/collection lifecycle test.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "rx_database::tests::create_database_and_add_collection",
+                    "--test-threads=1",
+                ])
+                .env(ISOLATED_COUNT_TEST, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed; 0 failed"),
+                "isolated database lifecycle failed: {stdout} {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let storage = get_rx_storage_memory(());
         let before_count = db_count();
         let database = create_rx_database(RxDatabaseCreator {
