@@ -136,10 +136,13 @@ def main():
         if "QMP" not in greeting:
             raise ValueError("invalid QMP greeting")
         counter = 0
-        def monitor(execute):
+        def monitor(execute, arguments=None):
             nonlocal counter
             counter += 1
-            qmp.sendall(json.dumps(dict(execute=execute, id=counter)).encode() + b"\n")
+            command = dict(execute=execute, id=counter)
+            if arguments is not None:
+                command["arguments"] = arguments
+            qmp.sendall(json.dumps(command).encode() + b"\n")
             for _ in range(50):
                 line = f.readline(65536)
                 if not line:
@@ -208,6 +211,13 @@ def main():
         receipt["status"] = "component_passed"
     except BaseException as e:
         receipt.update(status="failed", error=str(e))
+        signal.alarm(0)
+        if proc and proc.poll() is None and "monitor" in locals():
+            try:
+                monitor("screendump", dict(filename=str(out / "boot-display.ppm")))
+                receipt["diagnostic_boot_display"] = "boot-display.ppm"
+            except Exception as diagnostic_error:
+                receipt["diagnostic_error"] = str(diagnostic_error)
         raise
     finally:
         signal.alarm(0)
