@@ -26,6 +26,7 @@ struct OaiToResponsesState {
     created: i64,
     started: bool,
     completed_emitted: bool,
+    finish_reason: String,
     sequence_number: i64,
     msg_text_buf: HashMap<i64, String>,
     reasonings: Vec<OaiToResponsesStateReasoning>,
@@ -206,6 +207,7 @@ pub fn convert_openai_chat_completions_response_to_openai_responses(
         st.reasoning_tokens = 0;
         st.usage_seen = false;
         st.completed_emitted = false;
+        st.finish_reason.clear();
         st.reasoning_id_field.clear();
         st.reasoning_index_field = 0;
         st.reasoning_text_buffer.clear();
@@ -445,6 +447,7 @@ pub fn convert_openai_chat_completions_response_to_openai_responses(
             }
             if let Some(fr) = choice.get("finish_reason").and_then(Value::as_str) {
                 if !fr.is_empty() {
+                    st.finish_reason = fr.to_owned();
                     finalize_choice(st, idx, request_for_namespace, &mut out, next_seq);
                 }
             }
@@ -452,6 +455,30 @@ pub fn convert_openai_chat_completions_response_to_openai_responses(
     }
     st.sequence_number = counter;
     out
+}
+
+/// Checks translator-owned terminal state before synthesizing a terminator at EOF.
+/// ref: internal/translator/openai/openai/responses/openai_openai-responses_response.go:1154:1181 @ a2976eb8a303f11b4ea5177bce9f9ff752634dfc
+pub fn can_finalize_response_stream(state: &TranslationState) -> bool {
+    let Some(st) = state
+        .as_ref()
+        .and_then(|state| state.downcast_ref::<OaiToResponsesState>())
+    else {
+        return false;
+    };
+    st.started
+        && !st.completed_emitted
+        && !st.finish_reason.is_empty()
+        && (!st.msg_item_added.is_empty() || !st.func_item_added.is_empty())
+        && st
+            .msg_item_added
+            .keys()
+            .all(|index| st.msg_item_done.get(index) == Some(&true))
+        && st
+            .func_item_added
+            .keys()
+            .all(|key| st.func_item_done.get(key) == Some(&true))
+        && st.reasoning_id_field.is_empty()
 }
 
 fn oai_to_responses_state(state: &mut TranslationState) -> &mut OaiToResponsesState {

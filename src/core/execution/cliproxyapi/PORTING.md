@@ -108,9 +108,17 @@
   empty before clearing content, and remove orphan IDs only when store is disabled. Actual injected
   HTTP guards cover selected-model and Home precedence and reject untrusted
   metadata/auth flags. These guards are prepared, not executed. Explicit Claude
-  cache options, Responses EOF completion, catalog policy, reasoning accounting,
-  shared observations/replay and OAuth alias ownership still require complete
-  review and verification.
+  cache options, catalog policy, reasoning accounting, shared observations/replay
+  and OAuth alias ownership still require complete review and verification.
+  The OpenAI-compatible stream now consults the actual request-local Responses
+  translator before synthesizing a terminator at clean EOF. Nonempty finish
+  reason, existing output and all closed message/function/reasoning items are
+  required. Late usage is preserved; partial/empty output and read errors fail.
+  A delivered source terminator closes the stream before later bytes/errors.
+  Six injected HTTP/registered-translator guards are prepared, including custom
+  apply_patch output, late usage, same-chunk completion and terminal ownership.
+  Full tool-validation parity, cancellation/usage binding, native execution and
+  promotion remain open.
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.16.
 - Previous observed upstream release: v8.0.15, published 2026-10-04 22:29:27 UTC,
   commit a4acc9f752bd46571f737a10c04bf413656ab06b. The exact primary

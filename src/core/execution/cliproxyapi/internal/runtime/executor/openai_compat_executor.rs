@@ -34,6 +34,10 @@ use super::openai_responses_signature::sanitize_openai_responses_reasoning_encry
 #[path = "openai_compat_resolved_compat_test.rs"]
 mod candidate_resolved_model_capability_tests;
 
+#[cfg(test)]
+#[path = "candidate_v16_openai_eof_test.rs"]
+mod candidate_v16_openai_eof_tests;
+
 pub const OPENAI_COMPAT_IMAGE_HANDLER_TYPE: &str = "openai-image";
 pub const OPENAI_COMPAT_IMAGES_GENERATIONS_PATH: &str = "/images/generations";
 pub const OPENAI_COMPAT_IMAGES_EDITS_PATH: &str = "/images/edits";
@@ -569,6 +573,17 @@ impl OpenAiCompatExecutor {
             {
                 return;
             }
+            if sender.is_closed() {
+                return;
+            }
+            if response_format.as_str() == "openai-response"
+                && !crate::internal::translator::openai::openai::responses::can_finalize_response_stream(&state)
+            {
+                let _ = sender.send(stream_error(
+                    502, "upstream stream closed before [DONE]",
+                )).await;
+                return;
+            }
             let _ = process_stream_line(
                 &sender,
                 &registry,
@@ -990,7 +1005,9 @@ async fn process_stream_line(
             return false;
         }
     }
-    true
+    // Once the source terminator was delivered, later bytes/errors cannot
+    // replace a successfully completed response or produce another terminator.
+    trim_ascii(line.strip_prefix(b"data:").unwrap_or(line)) != b"[DONE]"
 }
 
 fn bridge_raw_stream(
