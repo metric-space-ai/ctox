@@ -2669,7 +2669,9 @@ pub fn spawn_remote_event_pump(
     authority: EventAuthorityCheck,
     publication: Arc<crate::business_data_ipc::WatchLifetime>,
 ) -> OwnedEventPump {
-    let alive = publication;
+    let alive = Arc::new(crate::business_data_ipc::WatchLifetime::for_watch(
+        &publication,
+    ));
     let failed = Arc::new(AtomicBool::new(false));
     let release = Arc::new(AtomicBool::new(false));
     let notify = Arc::new(Notify::new());

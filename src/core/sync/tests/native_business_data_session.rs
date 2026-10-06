@@ -2519,6 +2519,7 @@ async fn send_request(
     request_id: &str,
     operation: NativeBusinessDataOperation,
 ) {
+    eprintln!("fixture sending request: {request_id}");
     write_frame(
         stream,
         &Frame::Request {
@@ -2593,6 +2594,7 @@ async fn read_event(
 ) -> ctox_sync::business_data_contract::NativeBusinessDataEvent {
     // The test-level deadline owns cancellation. Reading through the
     // persistent stream retains any partial frame for the next poll.
+    eprintln!("fixture waiting for event: {context}");
     let frame = read_frame(stream).await;
     match frame {
         Frame::Event { event } => event,
