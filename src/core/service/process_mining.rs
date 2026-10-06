@@ -1732,7 +1732,7 @@ fn is_process_mining_internal_table(table_name: &str) -> bool {
 // ensure_process_mining_schema running at the start and end of every CLI
 // command, every open connection in the daemon had to re-parse the multi-MB
 // trigger schema after each `ctox ...` invocation, which stalled the Business
-// OS HTTP workers on slower hosts (THESEN on-prem, 06.10.2026).
+// OS HTTP workers on slower hosts (customer on-prem, 06.10.2026).
 const PROCESS_MINING_VIEWS_SQL: &str = r#"
         DROP VIEW IF EXISTS ctox_pm_case_events;
         CREATE VIEW ctox_pm_case_events AS
