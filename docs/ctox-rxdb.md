@@ -2072,6 +2072,35 @@ ACK windows, retries and the WebRTC-only data boundary remain unchanged.
 timers held. Transport diagnostics report page visibility and a bounded,
 expiring observed timer-delay sample; visibility alone does not prove throttling.
 
+
+### Projected query windows
+
+List reads may pass `projection: ['id', 'payload.weitere_kampagnen', 'payload.tasks.status']`
+to `find({ selector, sort, skip, limit, projection })`. Projections include the
+collection primary key, `_rev`, and `_deleted`, normalize duplicates and parent
+paths, and have separate query fingerprints. An absent, null, or empty projection
+preserves the existing full-query fingerprint. Nested arrays retain their positions.
+
+Projected RxDocuments and their direct `toJSON()` values are read-only.
+Before mutation, bulk actions, or export, hydrate the selected full document
+through an unprojected query. For an authoritative edit use a fresh
+`requireRevision` token; a missing or replaced bridge cannot satisfy that read
+from a prior generation.
+
+Projected payloads never enter the primary document store. Their separate
+IndexedDB cache retains at most 16 MiB and 64 windows; each window contains at
+most 200 rows and 1 MiB. Window metadata records the payload key and current
+read-permission digest. Missing/evicted payloads refetch, and unknown or changed
+permission identities cannot authorize cached rows. Metadata scans do not read
+payload blobs. Revalidation notifies query subscriptions without synthetic
+canonical writes.
+
+Every projected native chunk confirms the normalized fields in
+`appliedProjection`, including compressed and terminal chunks. A peer that
+omits or changes the confirmation fails with `QUERY_PROJECTION_NOT_SUPPORTED`;
+there is no transfer of full rows as a fallback. Server document filters and
+field policy remain authoritative.
+
 ## 10. Build & release
 
 

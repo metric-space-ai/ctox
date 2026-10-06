@@ -23,6 +23,10 @@ import { getActiveCollectionRegistry } from './active-collections.mjs';
 import { getPresenceRegistry } from './presence.mjs';
 import { getMultiTabSyncCoordinator } from './multi-tab-sync-coordinator.mjs';
 import { DEFAULT_WINDOW_LIMIT, isControlPlaneStatusCollection } from './query-demand-loader.mjs';
+import { cloneQueryRow, normalizeQueryProjection, projectQueryDocument, projectedDocumentWriteError } from './query-projection.mjs';
+
+const readOnlyProjectedDocuments = new WeakSet();
+const readOnlyProjectedRows = new WeakSet();
 
 export function getCtoxIndexedDbStorage() {
   return { name: 'ctox-indexeddb-native' };
@@ -208,6 +212,8 @@ class CtoxRxCollection {
     this.storageCollection = storageCollection;
     this.demandLoader = null;
     this.demandLoaderListeners = new Set();
+    this.projectedLoaderListeners = new Set();
+    this.queryWindowListeners = new Set();
     this.localReplicaComplete = false;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
@@ -224,6 +230,7 @@ class CtoxRxCollection {
     if (isControlPlaneStatusCollection(this.name)) {
       for (const listener of this.demandLoaderListeners) listener();
     }
+    for (const listener of this.projectedLoaderListeners) listener();
   }
 
   // Set by the replication state of an eagerly pulled collection once its
@@ -233,9 +240,19 @@ class CtoxRxCollection {
     this.localReplicaComplete = Boolean(complete) && !isControlPlaneStatusCollection(this.name);
   }
 
-  subscribeDemandLoaderChange(listener) {
-    this.demandLoaderListeners.add(listener);
-    return () => this.demandLoaderListeners.delete(listener);
+  subscribeDemandLoaderChange(listener, projected = false) {
+    const listeners = projected ? this.projectedLoaderListeners : this.demandLoaderListeners;
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  subscribeQueryWindowChange(listener) {
+    this.queryWindowListeners.add(listener);
+    return () => this.queryWindowListeners.delete(listener);
+  }
+
+  notifyQueryWindowChange() {
+    for (const listener of this.queryWindowListeners) listener();
   }
 
   async insert(doc) {
@@ -596,9 +613,9 @@ class CtoxRxQuery {
         // 200-row window when a loader/complete eager replica serves it.
         // Check dynamically: a loader may attach after subscription starts.
         const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
-        const canApplyPrimaryDelta = () => !controlPlaneRead && Boolean(primaryId)
+        const canApplyPrimaryDelta = () => !controlPlaneRead && !this.query.projection && Boolean(primaryId)
           && !this.collection.demandLoader && !this.query.requireRevision;
-        const canApplyQueryDelta = () => !controlPlaneRead && !this.single
+        const canApplyQueryDelta = () => !controlPlaneRead && !this.query.projection && !this.single
           && !this.collection.demandLoader && !this.query.requireRevision
           && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
@@ -735,7 +752,9 @@ class CtoxRxQuery {
           initialized = false;
           listener(this.single ? null : []);
           flushEmit();
-        });
+        }, Boolean(this.query.projection));
+        const unsubscribeWindow = this.query.projection
+          ? this.collection.subscribeQueryWindowChange(emit) : () => {};
         flushEmit();
         const unsubscribe = this.collection.observe(emit);
         return {
@@ -755,6 +774,7 @@ class CtoxRxQuery {
             unsubscribe();
             unsubscribeLoader();
             registry.subscriptionEnded(this.collection.name);
+            unsubscribeWindow();
           },
         };
       },
@@ -808,9 +828,14 @@ class CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
+    if (this.query.requireRevision && !demandLoader) {
+      throw Object.assign(new Error('QUERY_GENERATION_REQUIRED: strict demand read has no loader'), {
+        code: 'QUERY_GENERATION_REQUIRED', retryable: false,
+      });
+    }
     // Replica coverage answers ordinary reads only. Explicit revision tokens
     // still require the loader's authority and connection-generation checks.
-    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
+    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision || this.query.projection)) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
         ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
         : {};
@@ -865,7 +890,7 @@ class CtoxRxQuery {
         docs = docs.slice(0, this.query.limit);
       }
     }
-    if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
+    if ((isControlPlaneStatusCollection(this.collection.name) || this.query.requireRevision || this.query.projection) && demandLoader !== this.collection.demandLoader) {
       // A response authorized under the previous bridge must not reach a
       // subscriber after that bridge has been detached or replaced.
       if (this.query.requireRevision) {
@@ -883,7 +908,11 @@ class CtoxRxQuery {
         retryable: false,
       });
     }
-    const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
+    const wrapped = docs.map((doc) => new CtoxRxDocument(
+      this.collection,
+      this.query.projection ? projectQueryDocument(doc, this.query.projection) : doc,
+      { projected: Boolean(this.query.projection) },
+    ));
     return this.single ? wrapped[0] || null : wrapped;
   }
 
@@ -895,6 +924,8 @@ class CtoxRxQuery {
       limit: patch.limit ?? this.query.limit,
       skip: patch.skip ?? this.query.skip,
       requireRevision: patch.requireRevision ?? this.query.requireRevision,
+      projection: this.query.projection,
+      signal: this.signal,
     }, this.single);
   }
 
@@ -909,14 +940,18 @@ class CtoxRxQuery {
 }
 
 class CtoxRxDocument {
-  constructor(collection, data) {
+  constructor(collection, data, { projected = false } = {}) {
     this.collection = collection;
-    this._data = { ...data };
+    this._data = projected ? cloneQueryRow(data) : { ...data };
     Object.assign(this, this._data);
+    if (projected) readOnlyProjectedDocuments.add(this);
   }
 
   toJSON() {
-    return { ...this._data };
+    if (!readOnlyProjectedDocuments.has(this)) return { ...this._data };
+    const row = cloneQueryRow(this._data);
+    readOnlyProjectedRows.add(row);
+    return row;
   }
 
   async patch(fields) {
@@ -935,6 +970,7 @@ class CtoxRxDocument {
   }
 
   async incrementalModify(modifier) {
+    if (readOnlyProjectedDocuments.has(this)) throw projectedDocumentWriteError();
     const current = this.toJSON();
     const next = await modifier({ ...current });
     return this.incrementalPatch(next || current);
@@ -945,6 +981,7 @@ class CtoxRxDocument {
   }
 
   async incrementalPatch(fields) {
+    if (readOnlyProjectedDocuments.has(this)) throw projectedDocumentWriteError();
     const updatedAtMs = Number(fields?.updated_at_ms || Date.now());
     const next = {
       ...this._data,
@@ -972,9 +1009,10 @@ function normalizeQuery(query, primaryPath) {
   if (typeof query === 'string') {
     return { selector: { [primaryPath]: query } };
   }
-  if (query && typeof query === 'object' && !query.selector && Object.keys(query).length && !query.sort && !query.limit && !query.skip) {
+  if (query && typeof query === 'object' && !query.selector && Object.keys(query).length && !query.sort && !query.limit && !query.skip && !Object.hasOwn(query, 'projection')) {
     return { selector: query };
   }
+  const projection = normalizeQueryProjection(query?.projection, primaryPath);
   return {
     selector: query?.selector || {},
     sort: normalizeSort(query?.sort),
@@ -984,6 +1022,7 @@ function normalizeQuery(query, primaryPath) {
     requireRevision: typeof query?.requireRevision === 'string' && query.requireRevision
       ? query.requireRevision
       : undefined,
+    ...(projection ? { projection } : {}),
   };
 }
 
@@ -1300,6 +1339,9 @@ function primaryPathFromSchema(schema) {
 }
 
 function normalizeDoc(doc, primaryPath) {
+  if (readOnlyProjectedRows.has(doc) || readOnlyProjectedDocuments.has(doc)) {
+    throw projectedDocumentWriteError();
+  }
   if (!doc || typeof doc !== 'object') {
     throw new TypeError('document must be an object');
   }
