@@ -32,10 +32,32 @@ and use the existing hash-checked object publication. Wrong content cannot produ
 a completed receipt. Remote flush acknowledgements establish protocol-level
 persistence, not a claim about NAS hardware power-loss guarantees.
 
+
+## Local operator commands
+
+`ctox transfer storage-upload ID OWNER COMPUTER ENDPOINT PURPOSE SHA256 SIZE RELATIVE_PATH FILE`
+imports an existing local artifact and queues its upload. `storage-download` uses
+the same arguments without `FILE` and publishes verified content in the local
+object store. `PURPOSE` is `artifacts`, `backups` or `exchange`. The computer and
+endpoint must already be registered for that owner; command arguments never carry
+credential values. The native resolver freezes the endpoint, capability and
+credential-version fingerprint when the job is admitted.
+
+Use `ctox transfer status ID`, `pause ID`, `resume ID` and `cancel ID` for the
+existing durable lifecycle. `ctox transfer run SECONDS` runs a bounded local
+worker. Cancel is terminal; pause can resume after process restart. A changed
+endpoint or credential version requires a newly admitted job.
+
+A configured `quota_gib` is a declared storage budget checked against each
+artifact size at admission. It does not enforce aggregate usage across files or
+clients. A hard total quota must be configured on the storage server; NAS
+acceptance uses no declared quota until that server setting is enrolled.
+
 ## Integration and acceptance status
 
-Implementation is in progress. Native endpoint resolver/CLI wiring, final checks
-and installed acceptance must land before claiming support. The required real
+The native resolver, CLI and daemon worker are wired. Component tests and real
+loopback SFTP/SMB3 pause/restart/upload/download/no-replace fixtures passed on gpu3.
+Native root checks and installed acceptance remain open. The required real
 acceptance is gpu3 → ASUSTOR `flashstore24-nas` at 10.0.0.28, including interruption
 and resume of the same durable job. Instances reported that SSH authentication
 currently fails; the registered SecretStore reference, host-key pin and actual
