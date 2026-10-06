@@ -195,12 +195,12 @@ async fn exact_turn_interrupt_receipt_waits_for_its_own_stop() {
     })
     .await;
     let unrelated = events.recv().await.unwrap();
-    assert_eq!(unrelated.id, "unrelated");
+    std::assert_eq!(unrelated.id, "unrelated");
     assert!(
         !request.is_finished(),
         "broadcast abort cannot resolve a receipt"
     );
-    assert_eq!(sess.interrupt_receipts.lock().unwrap().len(), 1);
+    std::assert_eq!(sess.interrupt_receipts.lock().unwrap().len(), 1);
     release.notify_one();
     assert!(stop.await.unwrap());
     assert!(request.await.unwrap().unwrap());

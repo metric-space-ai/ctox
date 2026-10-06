@@ -1,8 +1,8 @@
-# THESEN Outbound source
+# customer Outbound source
 
 Opt-in customer module; this directory is not part of the standard module catalog.
-The production writer installs these files into the existing THESEN local module
-only after the THESEN paired runtime upgrade signal. This is not a replacement
+The production writer installs these files into the existing customer local module
+only after the customer paired runtime upgrade signal. This is not a replacement
 for the unrelated built-in `modules/outbound` app.
 
 Baseline: installed Outbound 1.0.291, captured 2026-10-06; original index.js
@@ -27,7 +27,7 @@ does not claim the <1 MB startup goal or production acceptance.
 
 Runtime dependencies: main PR277's confirmed projection/strict hydration API,
 and collection.$.subscribe(callback,{invalidateOnly:true}). The latter exists
-in THESEN's live sync-invalidate-v454 overlay but was absent from the merged
+in customer's live sync-invalidate-v454 overlay but was absent from the merged
 query-projection-v454 source. The Shell owner has that concrete compatibility
 handoff. Deployment requires the actual paired runtime to support both APIs.
 
@@ -40,4 +40,4 @@ Required regressions (through the Linux GPU lane):
 - node src/apps/business-os/scripts/tests/outbound-lead-revision-loader.test.mjs
 
 Real browser load/transfer, detail, edit, export, live updates and reconnect
-acceptance follow installation on the identified THESEN runtime.
+acceptance follow installation on the identified customer runtime.

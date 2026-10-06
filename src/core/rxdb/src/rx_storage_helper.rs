@@ -22,7 +22,8 @@ use crate::rx_schema_helper::get_primary_field_of_primary_key;
 use crate::types::{
     BulkWriteRow, RxJsonSchema, RxStorage, RxStorageBulkWriteResponse,
     RxStorageChangedDocumentsSinceResult, RxStorageCountResult, RxStorageInstance,
-    RxStorageInstanceCreationParams, RxStorageQueryResult, RxStorageWriteError,
+    RxStorageInstanceCreationParams, RxStorageQueryResult, RxStorageSnapshotEvent,
+    RxStorageWriteError,
 };
 
 // ref: rxdb/src/rx-storage-helper.ts:52
@@ -472,6 +473,16 @@ impl RxStorageInstance for DatabaseWrappedStorageInstance {
     ) -> Option<Result<(), RxError>> {
         self.inner
             .query_stream_into_blocking(prepared_query, chunk_size, on_batch)
+    }
+
+    fn query_snapshot_stream_into_blocking(
+        &self,
+        prepared_query: &Value,
+        chunk_size: usize,
+        on_event: &mut (dyn FnMut(RxStorageSnapshotEvent) -> RxResult<bool> + Send),
+    ) -> Option<RxResult<()>> {
+        self.inner
+            .query_snapshot_stream_into_blocking(prepared_query, chunk_size, on_event)
     }
 
     async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError> {

@@ -230,6 +230,7 @@ mod tests {
             "native-token-rotated",
             "connection-replaced",
         ] {
+            eprintln!("account publication case={change}");
             let (root, token, request, pairing) = fixture();
             let actor = principal(root.path(), &token).unwrap();
             let pending = PendingReply::start(

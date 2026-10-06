@@ -1166,28 +1166,28 @@ mod tests {
 
     #[tokio::test]
     async fn create_database_and_add_collection() {
-        // Other tests open and close databases concurrently. Keep the global
-        // counter assertions in a child running only this lifecycle test.
-        const CHILD_MARKER: &str = "CTOX_RXDB_TEST_DATABASE_COUNT_CHILD";
-        if std::env::var_os(CHILD_MARKER).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        const ISOLATED_COUNT_TEST: &str = "CTOX_RXDB_DATABASE_COUNT_TEST_CHILD";
+        if std::env::var_os(ISOLATED_COUNT_TEST).is_none() {
+            // Other parallel tests can close databases between the two global
+            // counter reads. Keep the original increment assertion in a child
+            // running exactly this real creation/collection lifecycle test.
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
                     "rx_database::tests::create_database_and_add_collection",
                     "--test-threads=1",
                 ])
-                .env(CHILD_MARKER, "1")
+                .env(ISOLATED_COUNT_TEST, "1")
                 .output()
-                .expect("start isolated database lifecycle test");
+                .unwrap();
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
                 output.status.success() && stdout.contains("1 passed; 0 failed"),
-                "isolated database lifecycle test failed: {stdout}\n{stderr}"
+                "isolated database lifecycle failed: {stdout} {}",
+                String::from_utf8_lossy(&output.stderr)
             );
             return;
         }
-
         let storage = get_rx_storage_memory(());
         let before_count = db_count();
         let database = create_rx_database(RxDatabaseCreator {

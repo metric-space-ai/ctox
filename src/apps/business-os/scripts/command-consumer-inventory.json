@@ -3,6 +3,7 @@
   "generated_at": "2026-09-01",
   "dispatch_consumers": [
     "app.js",
+    "customer-modules/outbound-lead-generation/index.js",
     "desktop-apps/code-editor/app.js",
     "desktop-apps/file-viewer/app.js",
     "modules/app-store/index.js",
@@ -47,6 +48,7 @@
   ],
   "projection_readers": [
     "app.js",
+    "customer-modules/outbound-lead-generation/index.js",
     "desktop-apps/code-editor/app.js",
     "desktop-apps/file-viewer/app.js",
     "modules/appsec-pentest/index.js",

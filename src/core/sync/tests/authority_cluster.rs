@@ -45,7 +45,7 @@ async fn network_timing_confirms_delayed_quorum_but_denies_isolated_leader() {
     // the surviving majority can authorize its own new execution instead.
     let mut next_spec = spec();
     next_spec.job_id = "survivor-job".into();
-    let Receipt::Applied(next_job) = c
+    let next_job = match c
         .send(
             replacement,
             "survivor-create",
@@ -55,9 +55,19 @@ async fn network_timing_confirms_delayed_quorum_but_denies_isolated_leader() {
             },
         )
         .await
-    else {
-        panic!("surviving majority did not create an execution");
+    {
+        Receipt::Applied(job) => job,
+        Receipt::Replayed(job) => {
+            // Routing may lose the first committed reply during leader change.
+            // The retained request ID proves the same creation, not permission
+            // to execute: require a fresh quorum ownership check below.
+            eprintln!("survivor-create returned its durable replay receipt");
+            job
+        }
+        other => panic!("surviving majority did not create an execution: {other:?}"),
     };
+    assert_eq!(next_job.spec.job_id, "survivor-job");
+    assert_eq!(next_job.ownership.node_id, replacement);
     c.nodes[&replacement]
         .validate_ownership("survivor-job", &next_job.ownership)
         .await
@@ -573,7 +583,7 @@ impl Cluster {
             )
             .await
         {
-            Receipt::Applied(job) => job,
+            Receipt::Applied(job) | Receipt::Replayed(job) => job,
             other => panic!("{other:?}"),
         }
     }
@@ -705,8 +715,28 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
                 )
             })
             .collect();
+        let checkpoint = &receipts[0];
+        let disclosure = checkpoint_fixture::handoff_permit(
+            &cluster.keys[&1],
+            SessionHandoffPhase::Disclose,
+            &handoff_spec,
+            &checkpoint.checkpoint_digest,
+            checkpoint.sequence,
+            &ownership(1, 1),
+            "handoff-protect",
+        );
+        let resume = checkpoint_fixture::handoff_permit(
+            &cluster.keys[&2],
+            SessionHandoffPhase::Resume,
+            &handoff_spec,
+            &checkpoint.checkpoint_digest,
+            checkpoint.sequence,
+            &ownership(1, 2),
+            "handoff-takeover",
+        );
         let handoff = serde_json::json!({
             "target": target_host.endpoint(), "spec": handoff_spec, "receipts": receipts,
+            "disclosure": disclosure, "resume": resume,
         });
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         // Build lanes can keep the pinned real consumer in an owned checkout.
