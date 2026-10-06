@@ -1985,9 +1985,7 @@ impl WebRTCRsConnectionHandler {
         // registered generation. No await occurs inside the boundary.
         let mut pending = self.pending_offers.lock();
         if self.closed.load(Ordering::Acquire)
-            || !pending
-                .get(&pending_key)
-                .is_some_and(|entry| !entry.terminal)
+            || pending.get(&pending_key).is_none_or(|entry| entry.terminal)
         {
             pending.remove(&pending_key);
             return Err(new_rx_error(
@@ -2055,9 +2053,9 @@ impl WebRTCRsConnectionHandler {
             let Some(entry) = peers.get(remote_peer_id) else {
                 return;
             };
-            if current_local_peer_id.is_some() && entry.local_peer_id != current_local_peer_id {
-                Some(PeerRemoval::Generation(entry.generation))
-            } else if should_rebuild_peer_for_inbound_offer(true, entry.data_channel_open) {
+            if (current_local_peer_id.is_some() && entry.local_peer_id != current_local_peer_id)
+                || should_rebuild_peer_for_inbound_offer(true, entry.data_channel_open)
+            {
                 Some(PeerRemoval::Generation(entry.generation))
             } else {
                 None

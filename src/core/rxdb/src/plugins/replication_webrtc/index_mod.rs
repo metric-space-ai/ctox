@@ -1543,8 +1543,10 @@ where
                             let mut protocol = ctox_protocol_response_with_flag(
                                 target.as_ref(),
                                 peer_session_id.as_deref(),
-                                flag,
-                                rows_fetch_registered,
+                                ProtocolReadiness {
+                                    query_demand_loading_enabled: flag,
+                                    rows_fetch_registered,
+                                },
                                 room_payload.collection_schemas,
                                 room_payload.collection_checkpoints,
                                 Some(&storage_token),
@@ -1794,8 +1796,10 @@ where
                     let mut local_protocol = ctox_protocol_response_with_flag(
                         representative.as_ref(),
                         peer_session_id.as_deref(),
-                        local_flag,
-                        rows_fetch_registered,
+                        ProtocolReadiness {
+                            query_demand_loading_enabled: local_flag,
+                            rows_fetch_registered,
+                        },
                         local_room_payload.collection_schemas,
                         local_room_payload.collection_checkpoints,
                         Some(&storage_token),
@@ -2256,11 +2260,18 @@ async fn collection_checkpoints_payload(collections: &[Arc<RxCollection>]) -> Va
     Value::Object(map)
 }
 
+/// Registry readiness captured for this handshake; query and row sources remain
+/// independently advertised rather than granting access through a wire field.
+#[derive(Clone, Copy)]
+struct ProtocolReadiness {
+    query_demand_loading_enabled: bool,
+    rows_fetch_registered: bool,
+}
+
 async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     collection: Option<&Arc<RxCollection>>,
     peer_session_id: Option<&str>,
-    query_demand_loading_enabled: bool,
-    rows_fetch_registered: bool,
+    readiness: ProtocolReadiness,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
@@ -2287,8 +2298,7 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     let mut payload = ctox_protocol_response_payload_with_flag(
         collection_payload,
         peer_session_id,
-        query_demand_loading_enabled,
-        rows_fetch_registered,
+        readiness,
         collection_schemas,
         collection_checkpoints,
         storage_generation,
@@ -2307,8 +2317,10 @@ fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&st
     ctox_protocol_response_payload_with_flag(
         collection,
         peer_session_id,
-        true,
-        false,
+        ProtocolReadiness {
+            query_demand_loading_enabled: true,
+            rows_fetch_registered: false,
+        },
         None,
         None,
         None,
@@ -2319,13 +2331,16 @@ fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&st
 fn ctox_protocol_response_payload_with_flag(
     collection: Value,
     peer_session_id: Option<&str>,
-    query_demand_loading_enabled: bool,
-    rows_fetch_registered: bool,
+    readiness: ProtocolReadiness,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
     peer_role: NativePeerRole,
 ) -> Value {
+    let ProtocolReadiness {
+        query_demand_loading_enabled,
+        rows_fetch_registered,
+    } = readiness;
     let peer_session_id = peer_session_id
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
@@ -3556,8 +3571,10 @@ mod tests {
         let multiplexed = ctox_protocol_response_payload_with_flag(
             collection_payload,
             Some("rxdb-rs-run-a"),
-            true,
-            false,
+            ProtocolReadiness {
+                query_demand_loading_enabled: true,
+                rows_fetch_registered: false,
+            },
             None,
             Some(checkpoints_map.clone()),
             Some(storage_generation),
@@ -3829,8 +3846,10 @@ mod tests {
             let payload = ctox_protocol_response_payload_with_flag(
                 Value::Null,
                 Some("session"),
-                true,
-                false,
+                ProtocolReadiness {
+                    query_demand_loading_enabled: true,
+                    rows_fetch_registered: false,
+                },
                 None,
                 None,
                 None,
@@ -3858,8 +3877,10 @@ mod tests {
         let single = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
-            true,
-            false,
+            ProtocolReadiness {
+                query_demand_loading_enabled: true,
+                rows_fetch_registered: false,
+            },
             None,
             None,
             Some("storage-generation-1"),
@@ -3872,8 +3893,10 @@ mod tests {
         let multi = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
-            true,
-            false,
+            ProtocolReadiness {
+                query_demand_loading_enabled: true,
+                rows_fetch_registered: false,
+            },
             Some(local_schemas_two()),
             Some(serde_json::json!({
                 "documents": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "documents" },
@@ -4366,8 +4389,10 @@ mod tests {
         let protocol = ctox_protocol_response_with_flag(
             None,
             Some("worker-session"),
-            false,
-            false,
+            ProtocolReadiness {
+                query_demand_loading_enabled: false,
+                rows_fetch_registered: false,
+            },
             payload.collection_schemas,
             payload.collection_checkpoints,
             Some("worker-storage"),
@@ -4428,8 +4453,10 @@ mod tests {
             let protocol = ctox_protocol_response_with_flag(
                 None,
                 Some("control-session"),
-                false,
-                false,
+                ProtocolReadiness {
+                    query_demand_loading_enabled: false,
+                    rows_fetch_registered: false,
+                },
                 Some(serde_json::json!({})),
                 Some(serde_json::json!({})),
                 Some(remote_token),

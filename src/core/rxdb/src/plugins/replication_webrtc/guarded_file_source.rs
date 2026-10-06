@@ -16,6 +16,11 @@ use std::sync::{
 use std::task::Poll;
 use std::time::{Duration, Instant};
 
+/// A borrowed sender that keeps native authority and its current checker inside
+/// the source callback; neither bytes nor the checker can escape this lifetime.
+pub type GuardedChunkSend<'a> =
+    dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> + 'a;
+
 /// Implemented by the retained native lifecycle owner. Metadata is native
 /// output for peer filtering, never input used to reconstruct guest permission.
 pub trait GuardedFileSource: Send + Sync {
@@ -32,7 +37,7 @@ pub trait GuardedFileSource: Send + Sync {
         max_bytes: usize,
         terminal: bool,
         capability_token: &str,
-        send: &mut dyn FnMut(&Value, &[u8], &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
+        send: &mut GuardedChunkSend<'_>,
     ) -> RxResult<()>;
 }
 
