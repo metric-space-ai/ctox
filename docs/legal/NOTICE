@@ -16,6 +16,9 @@ Primary integrated source trees:
   upstream LICENSE is unchanged. The owner authorized this
   in-tree redistribution; builds do not require private upstream Git access.
   PROVENANCE.json records the source tree and SHA-256 of each imported file.
+  Release bundles retain these license/provenance documents under licenses/aria2-rust.
+  Corresponding source is included in the public CTOX repository and its release-tag
+  source archives at https://github.com/metric-space-ai/ctox.
 
 - src/harness
   Derived from https://github.com/openai/codex

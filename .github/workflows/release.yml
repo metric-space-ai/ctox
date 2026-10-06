@@ -715,6 +715,10 @@ jobs:
           cp install.sh install.ps1 bundle/
           cp LICENSE bundle/
           cp docs/legal/NOTICE bundle/NOTICE
+          mkdir -p bundle/licenses/aria2-rust
+          cp src/core/transfers/aria2-rust/LICENSE bundle/licenses/aria2-rust/LICENSE
+          cp src/core/transfers/aria2-GPL-2.0.txt bundle/licenses/aria2-rust/COPYING
+          cp src/core/transfers/aria2-rust/PROVENANCE.json bundle/licenses/aria2-rust/PROVENANCE.json
           # Runtime source assets the installed daemon serves (validated by
           # the installer against contracts/binary_bundle_manifest.txt — the
           # shared single source of truth for this bundle's contents).
@@ -756,6 +760,10 @@ jobs:
           Copy-Item -Path "src\apps\business-os\rxdb\tests\*.mjs" -Destination "bundle\rxdb-js\app-local\tests\"
           Copy-Item -Path "install.sh", "install.ps1", "LICENSE" -Destination "bundle\"
           Copy-Item -Path "docs\legal\NOTICE" -Destination "bundle\NOTICE"
+          New-Item -ItemType Directory -Force bundle\licenses\aria2-rust | Out-Null
+          Copy-Item -Path "src\core\transfers\aria2-rust\LICENSE" -Destination "bundle\licenses\aria2-rust\LICENSE"
+          Copy-Item -Path "src\core\transfers\aria2-GPL-2.0.txt" -Destination "bundle\licenses\aria2-rust\COPYING"
+          Copy-Item -Path "src\core\transfers\aria2-rust\PROVENANCE.json" -Destination "bundle\licenses\aria2-rust\PROVENANCE.json"
           Copy-Item -Path "Cargo.toml" -Destination "bundle\"
           New-Item -ItemType Directory -Force bundle\contracts | Out-Null
           Copy-Item -Path "contracts\source_origins_manifest.json" -Destination "bundle\contracts\"
