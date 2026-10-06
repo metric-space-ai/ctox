@@ -4077,6 +4077,15 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
+    pub(crate) async fn retain_native_journal(
+        &self,
+    ) -> std::io::Result<crate::NativeJournalReader> {
+        let recorder = self.services.rollout.lock().await.clone().ok_or_else(|| {
+            std::io::Error::other("native Core Session has no live rollout recorder")
+        })?;
+        recorder.retain_native_journal().await
+    }
+
     pub(crate) async fn current_rollout_path(&self) -> Option<PathBuf> {
         let recorder = {
             let guard = self.services.rollout.lock().await;

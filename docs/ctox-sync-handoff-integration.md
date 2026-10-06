@@ -69,6 +69,35 @@ acceptance results. The daemon's embedded pi sidecar remains the owner of
 Business OS app coding turns; native session handoff must not redirect
 `ctox.coding.turn` into the Codex guest producer.
 
+## Recorder-owned journal capture
+
+The admitted native producer retains its actual loaded CodexThread from the same
+ThreadManager that starts the embedded client. Capture asks that Core Session's
+actual RolloutRecorder for one opaque descriptor; neither a path from ThreadRead
+nor a caller's session label can select the file. Retention refuses an
+unmaterialized recorder and does not create a deferred journal.
+
+The reader stays sealed until the writer flushes all preceding commands, closes
+its command receiver and records the descriptor's final metadata. Failed writer
+shutdown cannot seal it. After checked Core/client/runtime teardown, the native
+capture owner rechecks current worker/account/policy/command authority and reads
+bounded bytes from that retained descriptor. Metadata changes since shutdown or
+during the read reject the candidate. The existing strict portable journal
+validator binds those bytes and their SHA-256 to the actual producer thread ID;
+malformed, truncated, unsupported or conflicting journals cannot return a capture
+owner. Later reads repeat authority and journal checks.
+
+This supplies actual journal input only. It does not establish provider resume,
+capture every attachment or VM file, reconcile effects, enroll the handoff,
+publish protected bytes or reconstruct a target. No checkpoint is published with
+an empty or fabricated provider-state blob. The native factory still needs its
+explicit production lifecycle caller.
+
+Four added recorder regressions exercise real writer retention and path
+replacement, post-shutdown mutation, failed writer shutdown and deferred-thread
+refusal. Formatting and source checks are separate from compilation/runtime
+evidence; these new tests have not yet been run in the shared composed verifier.
+
 ## Capture-only source ownership
 
 The native producer now consumes its actual turn owner after a successful reply

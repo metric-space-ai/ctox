@@ -8,9 +8,7 @@ use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(test)]
 use std::sync::Mutex;
-#[cfg(test)]
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -91,6 +89,69 @@ pub struct RolloutRecorder {
     event_persistence_mode: EventPersistenceMode,
 }
 
+/// Linear read capability cloned from the actual writer descriptor.
+/// A pathname is never reopened. Bytes are unavailable until that writer has
+/// successfully flushed and stopped; the outer owner must separately complete
+/// checked Core/client shutdown and retain current capture authority.
+pub struct NativeJournalReader {
+    file: Mutex<File>,
+    seal: Arc<OnceLock<std::fs::Metadata>>,
+}
+
+impl NativeJournalReader {
+    /// Read exact sealed bytes with a finite allocation bound. This is journal
+    /// evidence only, not a provider-resume or external-effect certificate.
+    pub fn read_bytes(&self, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let sealed = self.seal.get().ok_or_else(|| {
+            IoError::other("native journal writer has not completed checked shutdown")
+        })?;
+        if max_bytes == 0 || max_bytes > 64 * 1024 * 1024 || sealed.len() > max_bytes {
+            return Err(IoError::other("native journal exceeds its byte budget"));
+        }
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| IoError::other("native journal reader ownership is poisoned"))?;
+        if !journal_metadata_matches(sealed, &file.metadata()?) {
+            return Err(IoError::other(
+                "native journal changed after writer shutdown",
+            ));
+        }
+        file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        (&mut *file).take(max_bytes + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 != sealed.len()
+            || !journal_metadata_matches(sealed, &file.metadata()?)
+        {
+            return Err(IoError::other("native journal changed while reading"));
+        }
+        Ok(bytes)
+    }
+}
+
+fn journal_metadata_matches(expected: &std::fs::Metadata, actual: &std::fs::Metadata) -> bool {
+    if !actual.is_file() || expected.len() != actual.len() {
+        return false;
+    }
+    match (expected.modified(), actual.modified()) {
+        (Ok(expected), Ok(actual)) if expected == actual => {}
+        _ => return false,
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        expected.dev() == actual.dev()
+            && expected.ino() == actual.ino()
+            && expected.ctime() == actual.ctime()
+            && expected.ctime_nsec() == actual.ctime_nsec()
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 #[derive(Clone)]
 pub enum RolloutRecorderParams {
     Create {
@@ -109,6 +170,9 @@ pub enum RolloutRecorderParams {
 
 enum RolloutCmd {
     AddItems(Vec<RolloutItem>),
+    RetainNativeJournal {
+        ack: oneshot::Sender<std::io::Result<NativeJournalReader>>,
+    },
     Persist {
         ack: oneshot::Sender<std::io::Result<()>>,
     },
@@ -481,6 +545,7 @@ impl RolloutRecorder {
                 } => (
                     Some(
                         tokio::fs::OpenOptions::new()
+                            .read(true)
                             .append(true)
                             .open(&path)
                             .await?,
@@ -570,6 +635,19 @@ impl RolloutRecorder {
             .send(RolloutCmd::AddItems(filtered))
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
+    }
+
+    /// Retain one opaque descriptor from this writer, without materializing an
+    /// empty/deferred thread. No filename or caller-supplied session is accepted.
+    pub(crate) async fn retain_native_journal(&self) -> std::io::Result<NativeJournalReader> {
+        let (ack, result) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::RetainNativeJournal { ack })
+            .await
+            .map_err(|_| IoError::other("native journal writer is unavailable"))?;
+        result
+            .await
+            .map_err(|_| IoError::other("native journal retention was not acknowledged"))?
     }
 
     /// Materialize the rollout file and persist all buffered items.
@@ -775,6 +853,7 @@ fn open_materializing_log_file(path: &Path) -> std::io::Result<File> {
     };
     fs::create_dir_all(parent)?;
     std::fs::OpenOptions::new()
+        .read(true)
         .append(true)
         .create_new(true)
         .open(path)
@@ -856,6 +935,7 @@ async fn rollout_writer(
 ) -> std::io::Result<()> {
     let mut writer = file.map(|file| JsonlWriter { file });
     let mut buffered_items = Vec::<RolloutItem>::new();
+    let mut native_journal_seal = None::<Arc<OnceLock<std::fs::Metadata>>>;
     if let Some(builder) = state_builder.as_mut() {
         builder.rollout_path = rollout_path.clone();
     }
@@ -882,6 +962,28 @@ async fn rollout_writer(
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
+            RolloutCmd::RetainNativeJournal { ack } => {
+                let result = async {
+                    if native_journal_seal.is_some() {
+                        return Err(IoError::other("native journal was already retained"));
+                    }
+                    let writer = writer
+                        .as_ref()
+                        .ok_or_else(|| IoError::other("native journal is not materialized"))?;
+                    let file = writer.file.try_clone().await?.into_std().await;
+                    if !file.metadata()?.is_file() {
+                        return Err(IoError::other("native journal is not a regular file"));
+                    }
+                    let seal = Arc::new(OnceLock::new());
+                    native_journal_seal = Some(seal.clone());
+                    Ok(NativeJournalReader {
+                        file: Mutex::new(file),
+                        seal,
+                    })
+                }
+                .await;
+                let _ = ack.send(result);
+            }
             RolloutCmd::AddItems(items) => {
                 if items.is_empty() {
                     continue;
@@ -1022,15 +1124,35 @@ async fn rollout_writer(
                 let _ = ack.send(Ok(()));
             }
             RolloutCmd::Shutdown { ack } => {
-                if let Some(writer) = writer.as_mut()
-                    && let Err(err) = writer.file.flush().await
-                {
+                let result: std::io::Result<()> = async {
+                    if let Some(writer) = writer.as_mut() {
+                        writer.file.flush().await?;
+                    }
+                    if let Some(seal) = native_journal_seal.as_ref() {
+                        let writer = writer.as_ref().ok_or_else(|| {
+                            IoError::other("retained native journal lost its writer")
+                        })?;
+                        let metadata = writer.file.metadata().await?;
+                        if !metadata.is_file() || metadata.len() == 0 {
+                            return Err(IoError::other(
+                                "native journal is empty or not a regular file",
+                            ));
+                        }
+                        // No writer operation or await follows the seal.
+                        rx.close();
+                        seal.set(metadata).map_err(|_| {
+                            IoError::other("native journal shutdown was already sealed")
+                        })?;
+                    } else {
+                        rx.close();
+                    }
+                    Ok(())
+                }
+                .await;
+                if let Err(err) = result {
                     let _ = ack.send(Err(IoError::new(err.kind(), err.to_string())));
                     return Err(err);
                 }
-                // Retained clones and cancellation of the acknowledgement waiter
-                // must not keep the writer alive or admit post-shutdown writes.
-                rx.close();
                 let _ = ack.send(Ok(()));
                 return Ok(());
             }

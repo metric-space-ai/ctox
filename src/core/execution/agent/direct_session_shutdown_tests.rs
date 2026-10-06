@@ -82,6 +82,7 @@ fn fixture(root: &Path) -> (PersistentSession, std_mpsc::Receiver<()>) {
         additional_readable_roots: Vec::new(),
         persistent_worker: false,
         native_checkpoint_binding: None,
+        native_capture_thread: None,
         #[cfg(unix)]
         native_command_session_token: None,
         #[cfg(unix)]

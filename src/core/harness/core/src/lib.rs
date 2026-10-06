@@ -126,6 +126,7 @@ pub use auth::CodexAuth;
 pub mod default_client;
 pub mod project_doc;
 mod rollout;
+pub use rollout::recorder::NativeJournalReader;
 pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
