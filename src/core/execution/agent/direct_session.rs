@@ -1546,9 +1546,16 @@ impl PersistentSession {
         result
     }
 
-    /// Shut down the client and runtime cleanly.
-    pub fn shutdown(mut self) {
-        self.shutdown_inner("shutting down");
+    /// Finish owned client cleanup and return its checked shutdown result.
+    /// Forced teardown cannot certify a quiescent provider checkpoint.
+    pub fn shutdown(mut self) -> Result<()> {
+        let has_owners = self.runtime.is_some() && self.client.is_some();
+        self.shutdown_inner("shutting down")?;
+        anyhow::ensure!(
+            has_owners,
+            "persistent session shutdown ownership is missing"
+        );
+        Ok(())
     }
 
     // --- Internal async helpers ---
@@ -2759,6 +2766,10 @@ impl PersistentSession {
 }
 
 #[cfg(test)]
+#[path = "direct_session_shutdown_tests.rs"]
+mod shutdown_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -3555,52 +3566,70 @@ mod tests {
 
 impl Drop for PersistentSession {
     fn drop(&mut self) {
-        self.shutdown_inner("dropping");
+        // Drop performs bounded cleanup but cannot issue a quiescence receipt.
+        let _ = self.shutdown_inner("dropping");
     }
 }
 
 impl PersistentSession {
-    fn shutdown_inner(&mut self, action: &str) {
-        if let Some(runtime) = self.runtime.take() {
-            if let Some(client) = self.client.take() {
-                let tid = self.thread_id.clone();
-                eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
-                // `block_on` (and blocking runtime shutdown below) panics
-                // when invoked from inside an async runtime. All in-tree
-                // owners drop the session from synchronous worker threads,
-                // but a future async owner must not turn teardown into a
-                // panic — degrade to the abrupt path instead.
-                if tokio::runtime::Handle::try_current().is_ok() {
-                    eprintln!(
-                        "[ctox direct-session] {action} from async context; skipping graceful shutdown thread_id={tid}"
-                    );
-                    client.abort_now();
-                    runtime.shutdown_background();
-                    return;
-                }
-                // Try a bounded graceful shutdown first. `abort_now` skips
-                // the processor teardown (`clear_all_thread_listeners`,
-                // `shutdown_threads`), which leaves the durable thread's
-                // rollout with a dangling active turn that the next session
-                // resumes by name (ctox#21). If graceful shutdown exceeds
-                // its budget the runtime kill below still bounds teardown.
-                let graceful = runtime.block_on(async {
+    fn shutdown_inner(&mut self, action: &str) -> Result<()> {
+        // Take both owners before any branch. An orphaned client must still
+        // be aborted, even when its runtime is absent.
+        let client = self.client.take();
+        let Some(runtime) = self.runtime.take() else {
+            if let Some(client) = client {
+                client.abort_now();
+                anyhow::bail!("persistent session runtime ownership is missing");
+            }
+            return Ok(());
+        };
+        let tid = &self.thread_id;
+        eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
+        // Blocking runtime cleanup would panic in an async owner. Abrupt
+        // cleanup is allowed here, but it must never acknowledge quiescence.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            if let Some(client) = client {
+                client.abort_now();
+            }
+            runtime.shutdown_background();
+            eprintln!(
+                "[ctox direct-session] {action} from async context; forced cleanup thread_id={tid}"
+            );
+            anyhow::bail!("persistent session graceful shutdown requires a synchronous owner");
+        }
+        let result = match client {
+            Some(client) => {
+                // The client retains cancellation ownership if this timeout
+                // drops shutdown while its actual cleanup is still in flight.
+                match runtime.block_on(async {
                     tokio::time::timeout(Duration::from_secs(8), client.shutdown()).await
-                });
-                match graceful {
-                    Ok(Ok(())) => eprintln!(
-                        "[ctox direct-session] persistent session shut down thread_id={tid}"
-                    ),
-                    Ok(Err(err)) => eprintln!(
-                        "[ctox direct-session] persistent session shutdown error thread_id={tid}: {err}"
-                    ),
-                    Err(_) => eprintln!(
-                        "[ctox direct-session] persistent session shutdown timed out thread_id={tid}; forcing runtime teardown"
-                    ),
+                }) {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(err)) => Err(anyhow::Error::from(err)
+                        .context("persistent session client shutdown failed")),
+                    Err(_) => Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "persistent session shutdown timed out",
+                    )
+                    .into()),
                 }
             }
-            runtime.shutdown_timeout(Duration::from_secs(2));
+            None => Err(anyhow::anyhow!(
+                "persistent session client ownership is missing"
+            )),
+        };
+        // Cleanup always finishes its bounded runtime drain before returning
+        // the original client result. Runtime teardown cannot replace an error.
+        runtime.shutdown_timeout(Duration::from_secs(2));
+        match &result {
+            Ok(()) => {
+                eprintln!("[ctox direct-session] persistent session shut down thread_id={tid}")
+            }
+            Err(err) => eprintln!(
+                "[ctox direct-session] persistent session shutdown error thread_id={tid}: {err}"
+            ),
         }
+        result
     }
 }
 
