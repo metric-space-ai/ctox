@@ -3057,18 +3057,6 @@ impl WebRTCRsConnectionHandler {
         self.refresh_send_queue_status();
     }
 
-    #[cfg(test)]
-    async fn send_framed_text(
-        &self,
-        peer: &WebRTCRsPeer,
-        data_channel: Arc<dyn DataChannel>,
-        text: String,
-        available: &Arc<tokio::sync::Notify>,
-    ) -> Result<(), RxError> {
-        self.send_framed_text_owned(peer, data_channel, text, available, None, None)
-            .await
-    }
-
     async fn send_framed_text_owned(
         &self,
         peer: &WebRTCRsPeer,
