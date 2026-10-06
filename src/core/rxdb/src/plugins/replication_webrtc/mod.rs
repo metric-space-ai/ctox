@@ -70,5 +70,5 @@ pub use webrtc::peer_connection::RTCIceServer;
 pub use webrtc_helper::{is_master_in_webrtc_replication, send_message_and_await_answer};
 pub use webrtc_types::{
     PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCMessage,
-    WebRTCPeerSessionValidator, WebRTCResponse, WebRTCWireFrame,
+    WebRTCPeerSessionValidator, WebRTCPublicationGuard, WebRTCResponse, WebRTCWireFrame,
 };

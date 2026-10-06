@@ -4420,6 +4420,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unsupported_publication_guard_never_falls_back_to_ordinary_send() {
+        struct MustNotRun;
+        impl super::super::webrtc_types::WebRTCPublicationGuard for MustNotRun {
+            fn with_current(
+                &self,
+                _publish: &mut dyn FnMut() -> crate::rx_error::RxResult<()>,
+            ) -> crate::rx_error::RxResult<()> {
+                panic!("unsupported transport must reject before invoking native authority");
+            }
+        }
+        let handler = MockHandler::new();
+        let mut sent = handler.sent_subject.subscribe();
+        let peer = MockPeer("guarded-peer".into(), 1);
+        let result = handler
+            .send_guarded(
+                &peer,
+                WebRTCWireFrame::Message(WebRTCMessage {
+                    id: "guarded-request".into(),
+                    method: "guarded-fixture".into(),
+                    params: vec![],
+                    collection: None,
+                }),
+                Arc::new(MustNotRun),
+            )
+            .await;
+        assert_eq!(
+            result.unwrap_err().code(),
+            "ctox_webrtc_publication_guard_unsupported"
+        );
+        assert!(tokio::time::timeout(Duration::from_millis(16), sent.next())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn control_only_protocol_explicitly_advertises_no_collections() {
         let pool = RxWebRTCReplicationPool::new_multi(Vec::new(), MockHandler::new());
         let payload = pool.protocol_room_payload().await;

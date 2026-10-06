@@ -166,6 +166,31 @@ revision or a held SQLite publication guard: external policy/capability changes
 still require that additional authority integration at the actual queued IO.
 A successful authorization before enqueue is not proof of current policy at IO.
 
+The native transport now has an explicit `send_guarded` entry point.
+`WebRTCPublicationGuard` is a host-owned object carried by the exact queued item,
+including independently draining high-priority inline frames and framed
+starts/chunks/retries. Its synchronous callback holds current native mutation
+authority while polling physical IO once, releases it on Pending, and reacquires
+it before the next poll. A bounded 16ms recheck detects revocation even if the
+transport never wakes; the existing send-capacity timeout bounds that wait.
+Missing or repeated callbacks fail, and an unsupported handler rejects guarded
+publication rather than dropping the guard into ordinary send. An inline
+authority rejection is delivered to its own caller without aborting a different
+framed owner; genuine transport errors retain the existing failure behavior.
+
+This transport implementation is a prerequisite, not native BusinessData
+policy wiring. The current source response/event publishers still use ordinary
+send. Their adapter must carry the same retained authority through both the
+auxiliary response and Watch/Observe queues. It must use the existing signed
+actor/device claims, native collection/query/field policy, exact command owner
+and authoritative document visibility. Those decisions read both the Business
+OS relationship store and Core execution state: holding one independently
+opened transaction while helpers reopen stores or perform schema initialization
+does not establish a common publication boundary. Checks must borrow the held
+native authority, without awaiting or re-entering its store inside the IO
+callback. Production wiring and external SQLite mutation regressions remain
+required; the transport regressions have not run.
+
 ## Existing implementation and reuse boundary
 
 - `NativeSyncSession::start_data_client` selects a query-only consumer using
