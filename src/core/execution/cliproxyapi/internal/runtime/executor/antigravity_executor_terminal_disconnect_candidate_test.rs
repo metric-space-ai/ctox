@@ -102,21 +102,25 @@ const ANTIGRAVITY_PARTIAL_WIRE: &[u8] = br#"data: {"response":{"responseId":"par
 
 "#;
 
-async fn consume_antigravity_terminal(stream: &mut AntigravityTrackedResponsesStream, kind: &str) {
+async fn consume_antigravity_terminal(
+    stream: &mut AntigravityTrackedResponsesStream,
+    kind: &str,
+) -> serde_json::Value {
     for _ in 0..64 {
         let event = tokio::time::timeout(Duration::from_secs(1), stream.next_event())
             .await
             .expect("native terminal should not require upstream EOF")
             .expect("terminal event expected")
             .expect("terminal should not be a transport error");
-        if event.split(|byte| *byte == b'\n').any(|line| {
+        for line in event.split(|byte| *byte == b'\n') {
             let line = line.trim_ascii();
             let payload = line.strip_prefix(b"data:").unwrap_or(line).trim_ascii();
-            serde_json::from_slice::<serde_json::Value>(payload)
-                .ok()
-                .is_some_and(|value| value["type"] == kind)
-        }) {
-            return;
+            let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) else {
+                continue;
+            };
+            if value["type"] == kind {
+                return value;
+            }
         }
     }
     panic!("terminal event was not delivered");
@@ -189,7 +193,14 @@ async fn candidate_antigravity_terminal_cancel_is_success_not_cooldown() {
 async fn candidate_antigravity_terminal_plain_cancel_on_claude_keeps_success() {
     let (mut stream, sender, cache, manager, capture, state) =
         antigravity_terminal_fixture(ANTIGRAVITY_TERMINAL_WIRE, None, true).await;
-    consume_antigravity_terminal(&mut stream, "message_stop").await;
+    // Upstream emits the final stop reason and measured usage before EOF;
+    // message_stop is the clean-EOF tail, not this source-terminal frame.
+    // ref: antigravity_executor_stream.go:294-348,373-388 @ a4acc9f7
+    let terminal = consume_antigravity_terminal(&mut stream, "message_delta").await;
+    assert_eq!(terminal["delta"]["stop_reason"], "end_turn");
+    assert_eq!(terminal["usage"]["output_tokens"], 5);
+    assert!(stream.stream.completed_delivery());
+    assert!(!sender.is_closed(), "the upstream body is still live");
     stream.cancel();
     assert!(stream.next_event().await.is_none());
     stream.record_terminal_failure().await;
