@@ -271,6 +271,33 @@ store and authenticated transport, pre-byte and mid-transfer revocation tests,
 restoration of populated stores, independent-host durability, and real provider
 continuation. No production-readiness or rollout claim follows from these edits.
 
+### Native transfer response publication
+
+The native grant and account-provisioning services register guarded auxiliary
+handlers. Their responses retain the exact accepted connection and its captured
+capability; a signaling-ID lookup cannot substitute a reconnected peer. Each
+physical send poll revalidates the original enrolled principal and current
+capability issuer under a single encrypted-secret transaction, then holds native
+policy through the callback. No store initialization, cached issuer or recursive
+secret-store acquisition is allowed inside that callback.
+
+Grant replies additionally retain the exact persisted grant, expiry and source
+identity. Active grants hold the current desktop-file projection through the
+poll and require the same generation, size and hash. Account replies revalidate
+the renewed signed capability, its expiry and principal, plus the persisted
+room/native signaling credential tuple and routing validity. This does not
+certify live TURN reachability or configuration changes outside that tuple.
+All fences release on Pending and are reacquired before another physical poll.
+
+The service regressions use real device verification, policy and encrypted
+stores through the actual auxiliary dispatcher, with a controlled byte sink
+held Pending at zero bytes. They cover current delivery, device/user/epoch and
+grant revocation, credential rotation, changed file generation and replacement
+connections with the same signaling ID. Native queue polling has separate
+transport regressions. These source tests are not two-host acceptance; final
+composed execution, dirty/untracked Git fidelity and reconnect/resume remain
+required before describing the worktree transfer as usable.
+
 ### Auth-assist command recovery
 
 `web_stack.auth_assist.request` represents an outstanding human login request.

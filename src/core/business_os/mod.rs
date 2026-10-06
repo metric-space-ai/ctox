@@ -61,6 +61,9 @@ mod rxdb_peer_projections;
 mod rxdb_peer_tombstones;
 mod rxdb_peer_transfer_accounts;
 mod rxdb_peer_transfer_grants;
+mod rxdb_peer_transfer_publication;
+#[cfg(test)]
+mod rxdb_peer_transfer_publication_tests;
 mod transfer_publish;
 pub(crate) use transfer_publish::publish_native_file;
 mod rxdb_peer_workjet_devices;

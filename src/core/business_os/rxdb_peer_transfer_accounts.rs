@@ -12,7 +12,16 @@ fn denied() -> String {
     "native transfer account unavailable or unauthorized".into()
 }
 
+#[cfg(test)]
 pub(super) fn handle(root: &Path, token: &str, params: Vec<Value>) -> Result<Value, String> {
+    prepare(root, token, params).map(|reply| reply.result)
+}
+
+pub(super) fn prepare(
+    root: &Path,
+    token: &str,
+    params: Vec<Value>,
+) -> Result<rxdb::plugins::replication_webrtc::index_mod::GuardedAuxiliaryResponse, String> {
     if params.len() != 1 || serde_json::to_vec(&params).map_or(true, |v| v.len() > 4096) {
         return Err(denied());
     }
@@ -82,7 +91,14 @@ pub(super) fn handle(root: &Path, token: &str, params: Vec<Value>) -> Result<Val
     if principal(root, token)? != actor || principal(root, &capability_token)? != actor {
         return Err(denied());
     }
-    serde_json::to_value(NativeTransferProvisionReply {
+    let authority = super::rxdb_peer_transfer_publication::TransferPublication {
+        root: root.to_path_buf(),
+        original_token: token.to_owned(),
+        principal: actor.clone(),
+        source_public_identity: identity.clone(),
+        source_instance_id: config.instance_id.clone(),
+    };
+    let reply = NativeTransferProvisionReply {
         version: 1,
         source_public_identity: identity,
         source_instance_id: config.instance_id,
@@ -90,8 +106,66 @@ pub(super) fn handle(root: &Path, token: &str, params: Vec<Value>) -> Result<Val
         capability_token,
         capability_expires_at_ms,
         routing,
-    })
-    .map_err(|_| denied())
+    };
+    Ok(
+        rxdb::plugins::replication_webrtc::index_mod::GuardedAuxiliaryResponse {
+            result: serde_json::to_value(&reply).map_err(|_| denied())?,
+            publication: std::sync::Arc::new(AccountPublication { authority, reply }),
+        },
+    )
+}
+
+struct AccountPublication {
+    authority: super::rxdb_peer_transfer_publication::TransferPublication,
+    reply: NativeTransferProvisionReply,
+}
+
+impl rxdb::plugins::replication_webrtc::WebRTCPublicationGuard for AccountPublication {
+    fn with_current(
+        &self,
+        publish: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
+    ) -> rxdb::rx_error::RxResult<()> {
+        use anyhow::{ensure, Context};
+        self.authority
+            .with_current(
+                &store::native_transfer_routing_secret_keys(),
+                |policy, signer, values, at_ms| {
+                    let issued = super::capability::verify_capability_token(
+                        signer,
+                        &self.reply.capability_token,
+                        at_ms,
+                    )
+                    .context("renewed capability issuer or expiry changed")?;
+                    ensure!(
+                        issued.expires_at_ms == self.reply.capability_expires_at_ms,
+                        "prepared capability expiry changed"
+                    );
+                    let current = store::verified_webrtc_capability_claims_from_connection(
+                        policy,
+                        &self.reply.capability_token,
+                        signer,
+                        at_ms,
+                    )
+                    .context("renewed native capability revoked")?;
+                    ensure!(
+                        super::rxdb_peer_transfer_grants::principal_from_claims(current)
+                            .map_err(|_| anyhow::anyhow!("renewed device unavailable"))?
+                            == self.authority.principal,
+                        "renewed principal changed"
+                    );
+                    self.reply
+                        .routing
+                        .validate(&self.authority.source_instance_id, at_ms)?;
+                    store::validate_native_transfer_routing_publication(
+                        &self.reply.routing,
+                        &self.authority.source_instance_id,
+                        values,
+                    )?;
+                    Ok(publish())
+                },
+            )
+            .map_err(|_| super::rxdb_peer_transfer_publication::denied())?
+    }
 }
 
 #[cfg(test)]
@@ -141,6 +215,98 @@ mod tests {
             .to_owned();
         (root, token, request, device.pairing_id)
     }
+    #[tokio::test]
+    async fn prepared_account_service_response_rechecks_authority_after_zero_byte_pending() {
+        use super::super::rxdb_peer_transfer_publication_tests::PendingReply;
+        use crate::native_transfer_routing::NATIVE_TRANSFER_PROVISION_METHOD;
+        for change in [
+            "current",
+            "device-revoked",
+            "user-disabled",
+            "epoch-changed",
+            "issuer-rotated",
+            "source-rotated",
+            "room-rotated",
+            "native-token-rotated",
+            "connection-replaced",
+        ] {
+            let (root, token, request, pairing) = fixture();
+            let actor = principal(root.path(), &token).unwrap();
+            let pending = PendingReply::start(
+                root.path(),
+                &token,
+                "source",
+                NATIVE_TRANSFER_PROVISION_METHOD,
+                serde_json::to_value(request).unwrap(),
+            )
+            .await;
+            let reply: NativeTransferProvisionReply =
+                serde_json::from_value(pending.result.clone()).unwrap();
+            assert_eq!(reply.principal, actor);
+            assert!(!reply.capability_token.is_empty());
+            match change {
+                "current" => {}
+                "device-revoked" => {
+                    super::super::mobile_invites::revoke_by_device_pairing_id(
+                        root.path(),
+                        &pairing,
+                    )
+                    .unwrap();
+                }
+                "user-disabled" | "epoch-changed" => {
+                    let sql = if change == "user-disabled" {
+                        "UPDATE business_users SET active=0 WHERE user_id=?1"
+                    } else {
+                        "UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id=?1"
+                    };
+                    assert_eq!(
+                        store::open_store(root.path())
+                            .unwrap()
+                            .execute(sql, [&actor.user_id])
+                            .unwrap(),
+                        1
+                    );
+                }
+                "issuer-rotated" | "room-rotated" | "native-token-rotated" => {
+                    let (scope, name) = match change {
+                        "issuer-rotated" => ("credentials", "BUSINESS_OS_CAPABILITY_SECRET"),
+                        "room-rotated" => ("business-os", "webrtc_room_password"),
+                        _ => ("business-os", "webrtc_native_signaling_token"),
+                    };
+                    crate::secrets::write_secret_record(
+                        root.path(),
+                        scope,
+                        name,
+                        &"b".repeat(64),
+                        None,
+                        json!({}),
+                    )
+                    .unwrap();
+                }
+                "source-rotated" => {
+                    use base64::Engine;
+                    use ctox_sync::authority::auth::SigningIdentity;
+                    let pkcs8 = SigningIdentity::generate_pkcs8().unwrap();
+                    let key = SigningIdentity::from_pkcs8(&pkcs8).unwrap();
+                    crate::secrets::write_secret_record(
+                        root.path(),
+                        "ctox-sync-host",
+                        "identity-pkcs8",
+                        &json!({"identity":key.public_identity(),
+                            "pkcs8":base64::engine::general_purpose::STANDARD.encode(pkcs8)})
+                        .to_string(),
+                        None,
+                        json!({}),
+                    )
+                    .unwrap();
+                }
+                "connection-replaced" => pending.replace_connection(),
+                _ => unreachable!(),
+            }
+            pending.finish(change == "current").await;
+        }
+    }
+
     #[test]
     fn confirmed_source_renews_only_the_original_enrolled_principal() {
         let (root, token, request, _) = fixture();

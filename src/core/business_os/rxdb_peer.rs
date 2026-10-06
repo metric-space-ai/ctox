@@ -3017,85 +3017,9 @@ async fn run_native_peer(
                     }),
                 )?;
                 let workjet_device_root = root.clone();
-                let transfer_grant_root = root.clone();
-                let transfer_grant_transport = pool.connection_handler.clone();
-                pool.register_auxiliary_request_handler(
-                    crate::transfers_grant::TRANSFER_GRANT_METHOD,
-                    Arc::new(move |peer_identity, capability_token, params| {
-                        let root = transfer_grant_root.clone();
-                        let transport = transfer_grant_transport.clone();
-                        Box::pin(async move {
-                            use rxdb::plugins::replication_webrtc::WebRTCConnectionHandler as _;
-                            let connection = transport
-                                .connection_for_peer(&peer_identity)
-                                .ok_or_else(|| "native transfer recipient retired".to_string())?;
-                            // The auxiliary dispatcher admits only authenticated
-                            // peers. This captured token was installed after the
-                            // existing nonce-bound P-256 session validator passed.
-                            // A current store binding alone cannot replace it.
-                            let current = || {
-                                transport.is_peer_current(&connection)
-                                    && transport.peer_capability_token(&connection).as_deref()
-                                        == Some(capability_token.as_str())
-                            };
-                            if !current() {
-                                return Err("native transfer recipient retired".into());
-                            }
-                            let authenticated_token = capability_token.clone();
-                            let answer = tokio::task::spawn_blocking(move || {
-                                super::rxdb_peer_transfer_grants::handle_transfer_grant_request(
-                                    &root,
-                                    &authenticated_token,
-                                    params,
-                                )
-                            })
-                            .await
-                            .map_err(|_| "native transfer grant task failed".to_string())?;
-                            if !current() {
-                                return Err("native transfer recipient retired".into());
-                            }
-                            answer
-                        })
-                    }),
-                )?;
+                super::rxdb_peer_transfer_publication::register(pool, &root)?;
                 let business_data_root = root.clone();
-                let transfer_account_root = root.clone();
-                let transfer_account_transport = pool.connection_handler.clone();
-                pool.register_auxiliary_request_handler(
-                    crate::native_transfer_routing::NATIVE_TRANSFER_PROVISION_METHOD,
-                    Arc::new(move |peer_identity, capability_token, params| {
-                        let root = transfer_account_root.clone();
-                        let transport = transfer_account_transport.clone();
-                        Box::pin(async move {
-                            use rxdb::plugins::replication_webrtc::WebRTCConnectionHandler as _;
-                            let connection = transport
-                                .connection_for_peer(&peer_identity)
-                                .ok_or_else(|| {
-                                    "native transfer account recipient retired".to_string()
-                                })?;
-                            let current = || {
-                                transport.is_peer_current(&connection)
-                                    && transport.peer_capability_token(&connection).as_deref()
-                                        == Some(capability_token.as_str())
-                            };
-                            if !current() {
-                                return Err("native transfer account recipient retired".into());
-                            }
-                            // The dispatcher already validated the P-256 nonce
-                            // proof. Capture and recheck that exact session token.
-                            let token = capability_token.clone();
-                            let answer = tokio::task::spawn_blocking(move || {
-                                super::rxdb_peer_transfer_accounts::handle(&root, &token, params)
-                            })
-                            .await
-                            .map_err(|_| "native transfer account task failed".to_string())?;
-                            if !current() {
-                                return Err("native transfer account recipient retired".into());
-                            }
-                            answer
-                        })
-                    }),
-                )?;
+
                 let business_data_database = Arc::clone(&database);
                 let business_data_source = ctox_sync::business_data_remote::BusinessDataSource::new(
                     business_data_database,

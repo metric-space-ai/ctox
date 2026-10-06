@@ -198,6 +198,20 @@ pub(crate) fn with_current_secret_value<T>(
     name: &str,
     apply: impl FnOnce(&[u8]) -> Result<T>,
 ) -> Result<T> {
+    with_current_secret_values(root, &[(scope, name)], |values| apply(values[0]))
+}
+
+/// Borrow one bounded credential tuple under the same encrypted-store fence.
+/// Never recursively acquire the issuer fence to read another member.
+pub(crate) fn with_current_secret_values<T>(
+    root: &Path,
+    keys: &[(&str, &str)],
+    apply: impl FnOnce(&[&[u8]]) -> Result<T>,
+) -> Result<T> {
+    anyhow::ensure!(
+        !keys.is_empty() && keys.len() <= 8,
+        "invalid publication secret tuple"
+    );
     let master = master_key_guard(root);
     let _master = master
         .try_lock()
@@ -260,16 +274,18 @@ pub(crate) fn with_current_secret_value<T>(
             );
         }
     }
-    let (nonce, ciphertext): (String, String) = tx
-        .query_row(
+    let values = keys.iter().map(|(scope, name)| {
+        let (nonce, ciphertext): (String, String) = tx.query_row(
             "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
-            params![scope, name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?
-        .context("current secret not found")?;
-    let value = decrypt_secret_value(&key, &nonce, &ciphertext)?;
-    apply(&value)
+            params![scope, name], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?.context("current secret not found")?;
+        decrypt_secret_value(&key, &nonce, &ciphertext)
+    }).collect::<Result<Vec<_>>>()?;
+    let borrowed = values
+        .iter()
+        .map(|value| value.as_slice())
+        .collect::<Vec<_>>();
+    apply(&borrowed)
 }
 
 /// One encrypted secret mutation used by callers that must rotate a credential
@@ -1894,6 +1910,59 @@ mod tests {
         assert_eq!(records.len(), 1);
 
         let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn current_secret_tuple_fences_all_records_and_reloads_rotated_values() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        for (name, value) in [("issuer", "issuer-before"), ("grant", "grant-before")] {
+            put_secret(root.path(), "tuple-fixture", name, value, None, json!({}))?;
+        }
+        let keys = [("tuple-fixture", "issuer"), ("tuple-fixture", "grant")];
+        let writer = Connection::open(resolve_db_path(root.path()))?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        with_current_secret_values(root.path(), &keys, |values| {
+            assert_eq!(
+                values,
+                &[b"issuer-before".as_slice(), b"grant-before".as_slice()]
+            );
+            for name in ["issuer", "grant"] {
+                let error = writer.execute(
+                    "UPDATE ctox_secret_records SET ciphertext_b64='invalid' WHERE scope='tuple-fixture' AND secret_name=?1",
+                    [name],
+                ).expect_err("all tuple records remain fenced during publication");
+                assert!(
+                    matches!(error, rusqlite::Error::SqliteFailure(code, _) if matches!(
+                        code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                    ))
+                );
+            }
+            Ok(())
+        })?;
+        put_secret(
+            root.path(),
+            "tuple-fixture",
+            "grant",
+            "grant-after",
+            None,
+            json!({}),
+        )?;
+        with_current_secret_values(root.path(), &keys, |values| {
+            assert_eq!(
+                values,
+                &[b"issuer-before".as_slice(), b"grant-after".as_slice()]
+            );
+            Ok(())
+        })?;
+        delete_secret(root.path(), "tuple-fixture", "grant")?;
+        let mut entered = false;
+        assert!(with_current_secret_values(root.path(), &keys, |_| {
+            entered = true;
+            Ok(())
+        })
+        .is_err());
+        assert!(!entered, "a partial tuple must not authorize publication");
         Ok(())
     }
 

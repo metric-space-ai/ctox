@@ -35,6 +35,11 @@ fn denied() -> String {
 }
 pub(super) fn principal(root: &Path, token: &str) -> Result<NativeBusinessDataPrincipal, String> {
     let claims = store::verified_webrtc_capability_claims(root, token).ok_or_else(denied)?;
+    principal_from_claims(claims)
+}
+pub(super) fn principal_from_claims(
+    claims: super::capability::CapabilityClaims,
+) -> Result<NativeBusinessDataPrincipal, String> {
     // Transfer authority is always a revocable enrolled daemon/device edge.
     // Ordinary bearer-only sessions remain valid for other surfaces but cannot
     // issue, check or revoke a native background transfer grant.
@@ -103,11 +108,20 @@ fn load(root: &Path, id: &str) -> Result<IssuedGrant, String> {
 
 /// Registered by the supervised native peer; blocking store work is off the
 /// transport executor. The peer pool has already validated its device proof.
+#[cfg(test)]
 pub(super) fn handle_transfer_grant_request(
     root: &Path,
     token: &str,
     params: Vec<Value>,
 ) -> Result<Value, String> {
+    prepare(root, token, params).map(|reply| reply.result)
+}
+
+pub(super) fn prepare(
+    root: &Path,
+    token: &str,
+    params: Vec<Value>,
+) -> Result<rxdb::plugins::replication_webrtc::index_mod::GuardedAuxiliaryResponse, String> {
     if params.len() != 1 || serde_json::to_vec(&params).map_or(true, |v| v.len() > 4096) {
         return Err(denied());
     }
@@ -117,7 +131,7 @@ pub(super) fn handle_transfer_grant_request(
     // secret tuples themselves are encrypted and transactionally durable.
     let _guard = secrets::credential_lifecycle_guard();
     let actor = principal(root, token)?;
-    match request {
+    let (result, grant_id, expected) = match request {
         TransferGrantRequest::Issue { scope } => {
             let generation = current_content(root, token, &scope)?;
             let mut random = [0u8; 32];
@@ -148,12 +162,13 @@ pub(super) fn handle_transfer_grant_request(
                 return Err(denied());
             }
             save(root, &id, &grant)?;
-            serde_json::to_value(TransferGrantReply {
-                grant_id: id,
+            let result = serde_json::to_value(TransferGrantReply {
+                grant_id: id.clone(),
                 scope,
                 expires_at_ms,
             })
-            .map_err(|_| denied())
+            .map_err(|_| denied())?;
+            (result, id, grant)
         }
         TransferGrantRequest::Check { grant_id, scope } => {
             let grant = load(root, &grant_id)?;
@@ -166,7 +181,7 @@ pub(super) fn handle_transfer_grant_request(
             {
                 return Err(denied());
             }
-            Ok(json!({"authorized":true}))
+            (json!({"authorized":true}), grant_id, grant)
         }
         TransferGrantRequest::Revoke { grant_id } => {
             let mut grant = load(root, &grant_id)?;
@@ -175,8 +190,60 @@ pub(super) fn handle_transfer_grant_request(
             }
             grant.revoked = true;
             save(root, &grant_id, &grant)?;
-            Ok(json!({"revoked":true}))
+            (json!({"revoked":true}), grant_id, grant)
         }
+    };
+    let publication = GrantPublication {
+        authority: super::rxdb_peer_transfer_publication::TransferPublication {
+            root: root.to_path_buf(),
+            original_token: token.to_owned(),
+            principal: actor,
+            source_instance_id: expected.scope.source_instance_id.clone(),
+            source_public_identity: expected.scope.source_public_key.clone(),
+        },
+        grant_id,
+        expected,
+    };
+    Ok(
+        rxdb::plugins::replication_webrtc::index_mod::GuardedAuxiliaryResponse {
+            result,
+            publication: std::sync::Arc::new(publication),
+        },
+    )
+}
+
+struct GrantPublication {
+    authority: super::rxdb_peer_transfer_publication::TransferPublication,
+    grant_id: String,
+    expected: IssuedGrant,
+}
+impl rxdb::plugins::replication_webrtc::WebRTCPublicationGuard for GrantPublication {
+    fn with_current(
+        &self,
+        publish: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
+    ) -> rxdb::rx_error::RxResult<()> {
+        use anyhow::{ensure, Context};
+        self.authority.with_current(&[(SECRET_SCOPE, self.grant_id.as_str())], |policy, signer, values, at_ms| {
+            let current: IssuedGrant = serde_json::from_slice(values[0])?;
+            ensure!(serde_json::to_value(&current)? == serde_json::to_value(&self.expected)?, "prepared transfer grant changed");
+            ensure!(current.principal == self.authority.principal, "transfer grant principal changed");
+            if !current.revoked {
+                ensure!(current.expires_at_ms > at_ms, "transfer grant expired");
+                ensure!(store::webrtc_capability_allows_collection_permission_from_connection(
+                    policy, &self.authority.original_token, signer, &current.scope.collection, BusinessOsPermission::DataRead, at_ms,
+                ), "transfer file policy revoked");
+                let mut projection = super::rxdb_peer_transfer_publication::open_current_store(store::rxdb_store_path(&self.authority.root))?;
+                let projection = projection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let content = super::rxdb_peer_desktop_files::desktop_file_transfer_metadata_from_connection(&projection, &current.scope.file_id)?
+                    .context("transfer source content unavailable")?;
+                ensure!(content.generation_id == current.content_generation
+                    && content.content_hash == current.scope.sha256 && content.size_bytes == current.scope.size, "transfer content changed");
+                return Ok(publish());
+            }
+            // A revoke acknowledgement is bound to that exact persisted revoked
+            // record and current original principal; it grants no file access.
+            Ok(publish())
+        }).map_err(|_| super::rxdb_peer_transfer_publication::denied())?
     }
 }
 
@@ -400,6 +467,103 @@ mod tests {
             },
         )
     }
+    #[tokio::test]
+    async fn prepared_grant_service_response_rechecks_authority_after_zero_byte_pending() {
+        use super::super::rxdb_peer_transfer_publication_tests::PendingReply;
+        use crate::transfers_grant::TRANSFER_GRANT_METHOD;
+        for change in [
+            "current",
+            "grant-revoked",
+            "grant-expired",
+            "grant-scope",
+            "device-revoked",
+            "user-disabled",
+            "epoch-changed",
+            "issuer-rotated",
+            "content-replaced",
+            "connection-replaced",
+        ] {
+            let (root, token, scope) = fixture();
+            let actor = principal(root.path(), &token).unwrap();
+            let pending = PendingReply::start(
+                root.path(),
+                &token,
+                "source-operator",
+                TRANSFER_GRANT_METHOD,
+                serde_json::to_value(TransferGrantRequest::Issue { scope }).unwrap(),
+            )
+            .await;
+            let reply: TransferGrantReply = serde_json::from_value(pending.result.clone()).unwrap();
+            // Every mutation happens after the real registered service has
+            // successfully prepared and queued its response with zero bytes.
+            match change {
+                "current" => {}
+                "grant-revoked" => {
+                    call(
+                        root.path(),
+                        &token,
+                        TransferGrantRequest::Revoke {
+                            grant_id: reply.grant_id.clone(),
+                        },
+                    )
+                    .unwrap();
+                }
+                "grant-expired" | "grant-scope" => {
+                    let mut grant = load(root.path(), &reply.grant_id).unwrap();
+                    if change == "grant-expired" {
+                        grant.expires_at_ms = chrono::Utc::now().timestamp_millis() - 1;
+                    } else {
+                        grant.scope.transfer_id = "different-transfer".into();
+                    }
+                    save(root.path(), &reply.grant_id, &grant).unwrap();
+                }
+                "device-revoked" => {
+                    super::super::mobile_invites::revoke_by_device_pairing_id(
+                        root.path(),
+                        &actor.device.as_ref().unwrap().pairing_id,
+                    )
+                    .unwrap();
+                }
+                "user-disabled" | "epoch-changed" => {
+                    let sql = if change == "user-disabled" {
+                        "UPDATE business_users SET active=0 WHERE user_id=?1"
+                    } else {
+                        "UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id=?1"
+                    };
+                    assert_eq!(
+                        store::open_store(root.path())
+                            .unwrap()
+                            .execute(sql, [&actor.user_id])
+                            .unwrap(),
+                        1
+                    );
+                }
+                "issuer-rotated" => {
+                    secrets::write_secret_record(
+                        root.path(),
+                        "credentials",
+                        "BUSINESS_OS_CAPABILITY_SECRET",
+                        &"b".repeat(64),
+                        None,
+                        json!({}),
+                    )
+                    .unwrap();
+                }
+                "content-replaced" => {
+                    let conn =
+                        rusqlite::Connection::open(store::rxdb_store_path(root.path())).unwrap();
+                    assert_eq!(conn.execute(
+                        "UPDATE ctox_business_os__desktop_files__v0 SET data=json_set(data,'$.content_generation_id','generation_2') WHERE id='file_1'",
+                        [],
+                    ).unwrap(), 1);
+                }
+                "connection-replaced" => pending.replace_connection(),
+                _ => unreachable!(),
+            }
+            pending.finish(change == "current").await;
+        }
+    }
+
     #[test]
     fn grant_is_durable_and_revocation_survives_reopen() {
         let (root, token, scope) = fixture();

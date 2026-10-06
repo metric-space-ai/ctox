@@ -18022,6 +18022,23 @@ pub(super) fn with_current_webrtc_capability_signer<T>(
     )
 }
 
+/// One issuer/record tuple; never reenter its non-recursive store fence.
+pub(super) fn with_current_webrtc_capability_secrets<T>(
+    root: &Path,
+    additional: &[(&str, &str)],
+    apply: impl FnOnce(&[u8], &[&[u8]]) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let mut keys = vec![(CAPABILITY_SECRET_SCOPE, CAPABILITY_SECRET_NAME)];
+    keys.extend_from_slice(additional);
+    crate::secrets::with_current_secret_values(root, &keys, |values| {
+        anyhow::ensure!(
+            !std::str::from_utf8(values[0])?.trim().is_empty(),
+            "current capability issuer is empty"
+        );
+        apply(values[0], &values[1..])
+    })
+}
+
 /// Verify a Business OS capability token and return its actor role, or `None`
 /// if the token is missing, malformed or expired. Binds a sync-mesh browser
 /// peer to its server-authenticated role for the per-collection authz gate.

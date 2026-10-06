@@ -350,17 +350,26 @@ pub(super) fn desktop_file_transfer_metadata(
     let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(Duration::from_secs(5))?;
     let tx = conn.transaction()?;
-    let Some(metadata) = active_desktop_file_metadata_from_sqlite(&tx, file_id)? else {
+    let metadata = desktop_file_transfer_metadata_from_connection(&tx, file_id)?;
+    tx.commit()?;
+    Ok(metadata)
+}
+
+/// The caller already holds the projection mutation fence; never reopen it.
+pub(super) fn desktop_file_transfer_metadata_from_connection(
+    conn: &Connection,
+    file_id: &str,
+) -> anyhow::Result<Option<DesktopFileDemandMetadata>> {
+    let Some(metadata) = active_desktop_file_metadata_from_sqlite(conn, file_id)? else {
         return Ok(None);
     };
-    let scheme: Option<String> = tx.query_row(
+    let scheme: Option<String> = conn.query_row(
         "SELECT json_extract(data, '$.content_hash_scheme') FROM ctox_business_os__desktop_files__v0 WHERE id = ?1 AND COALESCE(deleted, 0) = 0",
         [file_id], |row| row.get(0),
     )?;
     if scheme.as_deref() != Some(DESKTOP_FILE_CONTENT_HASH_SCHEME) {
         return Ok(None);
     }
-    tx.commit()?;
     Ok(Some(metadata))
 }
 

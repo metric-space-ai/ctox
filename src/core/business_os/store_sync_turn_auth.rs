@@ -579,6 +579,49 @@ pub(crate) fn mobile_invite_sync_config(
 }
 pub(crate) const BUSINESS_OS_SIGNALING_AUTH_VERSION: &str = "ctox-role-bound-v1";
 
+pub(super) fn native_transfer_routing_secret_keys() -> [(&'static str, &'static str); 2] {
+    [
+        (
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME,
+        ),
+        (
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_SIGNALING_NATIVE_TOKEN_SECRET_NAME,
+        ),
+    ]
+}
+
+/// Validate the prepared role credentials using this same held secret tuple.
+/// No cache, environment fallback, key creation or secret API reentry at IO.
+pub(super) fn validate_native_transfer_routing_publication(
+    routing: &crate::native_transfer_routing::NativeTransferRouting,
+    instance_id: &str,
+    values: &[&[u8]],
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        values.len() == 2,
+        "current signaling credentials unavailable"
+    );
+    let room = std::str::from_utf8(values[0])?.trim();
+    let native = std::str::from_utf8(values[1])?.trim();
+    anyhow::ensure!(
+        !room.is_empty() && !native.is_empty(),
+        "current signaling credentials empty"
+    );
+    let browser = signaling_token_from_room_password(room)
+        .ok_or_else(|| anyhow::anyhow!("current browser signaling credential unavailable"))?;
+    anyhow::ensure!(
+        routing.auth_version == BUSINESS_OS_SIGNALING_AUTH_VERSION
+            && routing.room == format!("ctox-business-os:{instance_id}:{}", room_secret_id(room))
+            && routing.browser_token == browser
+            && routing.browser_token_hash == signaling_token_hash(&browser)
+            && routing.native_token_hash == signaling_token_hash(native),
+        "prepared routing issuer changed"
+    );
+    Ok(())
+}
+
 /// Safe inside an auxiliary handler: avoids the recursive peer liveness
 /// snapshot in sync_config while preserving the source's configured ICE/TURN.
 pub(super) fn native_transfer_ice_config(
