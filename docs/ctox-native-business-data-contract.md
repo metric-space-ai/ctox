@@ -152,6 +152,14 @@ ownerless commands must not acquire an owner from the next requester. They
 remain unavailable to owner-scoped observation and conflict with a newly bound
 intent; no automatic ownership backfill is implemented.
 
+Recovery of an accepted background control first requires its original native
+authorization receipt, including its permission, module scope and trusted actor.
+A current capability cannot replace a missing receipt or adopt that actor's
+effect. When a live capability is supplied, its authenticated user must match
+the original actor before current module policy is checked. Token-redacted
+native recovery still derives its actor from the unchanged receipt. A rejected
+recovery does not rewrite the admission hash or install a new owner/receipt.
+
 Tests for canonical store replay/conflict and receipt validation are present as
 source but have not been executed for this rework. Full authenticated intake,
 observation, recovery and migration evidence is still required.

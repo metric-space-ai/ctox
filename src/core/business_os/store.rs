@@ -19236,16 +19236,6 @@ pub(super) fn authorize_recoverable_background_control_command(
 ) -> anyhow::Result<BusinessCommand> {
     let permission = recoverable_background_control_permission(&command.command_type)
         .context("command type is not recoverable")?;
-    if let Ok(session) = rxdb_authenticated_session(root, command) {
-        let decision = module_policy_decision(root, &session, permission, &command.module)?;
-        anyhow::ensure!(
-            decision.allowed,
-            "accepted recoverable command authorization is no longer valid: {}",
-            decision.display_reason
-        );
-        return Ok(command.clone());
-    }
-
     let command_id = command
         .id
         .as_deref()
@@ -19283,6 +19273,23 @@ pub(super) fn authorize_recoverable_background_control_command(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .context("accepted recoverable command authorized actor is missing")?;
+
+    // Authentication now is not authority for an earlier accepted effect.
+    // Require its original native receipt even when a live token is supplied,
+    // then revalidate the same actor against current module policy.
+    if let Ok(session) = rxdb_authenticated_session(root, command) {
+        anyhow::ensure!(
+            session_user_id(&session) == Some(actor_id),
+            "accepted recoverable command authenticated actor changed after admission"
+        );
+        let decision = module_policy_decision(root, &session, permission, &command.module)?;
+        anyhow::ensure!(
+            decision.allowed,
+            "accepted recoverable command authorization is no longer valid: {}",
+            decision.display_reason
+        );
+        return Ok(command.clone());
+    }
 
     let mut recovered = command.clone();
     recovered.origin = CommandOrigin::TrustedLocal;
@@ -44874,6 +44881,111 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn recoverable_control_requires_original_receipt_even_with_live_capability(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "recovery-live-token-missing-receipt";
+        seed_business_user(root, "operator", "chef")?;
+        let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+        let command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.into()),
+            module: "inventory".into(),
+            command_type: "external_sql.write".into(),
+            record_id: Some("inventory-item-42".into()),
+            payload: serde_json::json!({"source_id":"primary", "item_id":42}),
+            client_context: serde_json::json!({
+                "capability_token": token,
+                "actor": {"id":"operator"}
+            }),
+        };
+        assert_eq!(
+            session_user_id(&rxdb_authenticated_session(root, &command)?),
+            Some("operator")
+        );
+        channels::claim_business_control_command(
+            root,
+            business_command_core_claim(command_id, &command)?,
+        )?;
+        let before = channels::business_command_projection(root, command_id)?;
+        let error = authorize_recoverable_background_control_command(root, &command)
+            .expect_err("a live token cannot supply missing historical authority");
+        assert!(error.to_string().contains("native authorization receipt"));
+        let after = channels::business_command_projection(root, command_id)?;
+        assert_eq!(after["payload_hash"], before["payload_hash"]);
+        assert_eq!(after["execution_phase"], "accepted");
+        assert!(after.get("native_authorization").is_none());
+        assert!(after.get("native_owner").is_none());
+        let commands: i64 = open_store(root)?.query_row(
+            "SELECT COUNT(*) FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(commands, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn recoverable_control_rejects_changed_live_actor() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "recovery-live-token-wrong-actor";
+        seed_business_user(root, "alice", "chef")?;
+        seed_business_user(root, "bob", "chef")?;
+        let (alice_token, _) = issue_business_os_capability_token(root, "alice", now_ms() as i64)?;
+        let (bob_token, _) = issue_business_os_capability_token(root, "bob", now_ms() as i64)?;
+        let mut command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.into()),
+            module: "inventory".into(),
+            command_type: "external_sql.write".into(),
+            record_id: Some("inventory-item-42".into()),
+            payload: serde_json::json!({"source_id":"primary", "item_id":42}),
+            client_context: serde_json::json!({
+                "capability_token": alice_token,
+                "actor": {"id":"alice"}
+            }),
+        };
+        let authorization = recoverable_background_control_authorization(root, &command)
+            .context("original native actor requires a receipt")?;
+        assert_eq!(authorization["allowed"], true);
+        channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&authorization),
+            )?,
+        )?;
+        let before = channels::business_command_projection(root, command_id)?;
+        let same_actor = authorize_recoverable_background_control_command(root, &command)?;
+        assert_eq!(same_actor.client_context, command.client_context);
+        command.client_context = serde_json::json!({
+            "capability_token": bob_token,
+            "actor": {"id":"bob"}
+        });
+        assert_eq!(
+            session_user_id(&rxdb_authenticated_session(root, &command)?),
+            Some("bob")
+        );
+        let error = authorize_recoverable_background_control_command(root, &command)
+            .expect_err("another valid actor cannot recover the admitted effect");
+        assert!(error.to_string().contains("authenticated actor changed"));
+        let after = channels::business_command_projection(root, command_id)?;
+        assert_eq!(after["payload_hash"], before["payload_hash"]);
+        assert_eq!(after["native_authorization"]["actor"]["id"], "alice");
+        assert_eq!(after["execution_phase"], "accepted");
+        let commands: i64 = open_store(root)?.query_row(
+            "SELECT COUNT(*) FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(commands, 0);
+        Ok(())
+    }
+
+    #[test]
     fn accepted_external_sql_without_authorization_receipt_fails_terminally() -> anyhow::Result<()>
     {
         let temp = tempdir()?;
@@ -45193,9 +45305,19 @@ pub(super) mod tests {
             payload: document["payload"].clone(),
             client_context: document["client_context"].clone(),
         };
+        // Match real intake before the crash: the original native permission
+        // receipt is part of admission, never backfilled by a later token.
+        let authorization = recoverable_background_control_authorization(root, &command)
+            .context("accepted research fixture requires original native authorization")?;
+        assert_eq!(authorization["allowed"], true);
+        assert_eq!(authorization["permission"], "data.read");
         let claim = channels::claim_business_control_command(
             root,
-            business_command_core_claim(command_id, &command)?,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&authorization),
+            )?,
         )?;
         assert_eq!(claim.disposition, "new");
 
