@@ -8,13 +8,13 @@
 
 use crate::business_data_contract::{
     NativeBusinessDataCommand as Command, NativeBusinessDataCommandState as CommandState,
-    NativeBusinessDataCommandStatus, NativeBusinessDataErrorCode as ErrorCode,
-    NativeBusinessDataEvent as Event, NativeBusinessDataEventPayload as EventPayload,
-    NativeBusinessDataOperation as Operation, NativeBusinessDataQuery as Query,
-    NativeBusinessDataRecord as Record, NativeBusinessDataRequest as Request,
-    NativeBusinessDataResponse as Response, NativeBusinessDataResult as WireResult,
-    NativeBusinessDataScope as Scope, NativeBusinessDataSessionRef as SessionRef,
-    CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES, CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
+    NativeBusinessDataErrorCode as ErrorCode, NativeBusinessDataEvent as Event,
+    NativeBusinessDataEventPayload as EventPayload, NativeBusinessDataOperation as Operation,
+    NativeBusinessDataQuery as Query, NativeBusinessDataRecord as Record,
+    NativeBusinessDataRequest as Request, NativeBusinessDataResponse as Response,
+    NativeBusinessDataResult as WireResult, NativeBusinessDataScope as Scope,
+    NativeBusinessDataSessionRef as SessionRef, CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES,
+    CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
 };
 use crate::native::NativePool;
 use async_trait::async_trait;
@@ -252,7 +252,6 @@ enum SnapshotItem {
 
 struct SnapshotSession {
     snapshot_id: String,
-    identity_key: String,
     fingerprint: String,
     collection: String,
     receiver: tokio::sync::Mutex<mpsc::Receiver<SnapshotItem>>,
@@ -1200,7 +1199,6 @@ impl BusinessDataSource {
         });
         let snapshot = Arc::new(SnapshotSession {
             snapshot_id: snapshot_id.clone(),
-            identity_key: identity_key.to_owned(),
             fingerprint,
             collection: query.collection.clone(),
             receiver: tokio::sync::Mutex::new(receiver),
@@ -1869,33 +1867,6 @@ fn command_watch_query(command_id: &str) -> Query {
             "sort": [{ "id": "asc" }]
         }),
         page_size: 1,
-    }
-}
-
-fn command_state_from_document(document: &Value) -> CommandState {
-    let status = match document.get("status").and_then(Value::as_str) {
-        Some("completed") => NativeBusinessDataCommandStatus::Completed,
-        Some("failed") => NativeBusinessDataCommandStatus::Failed,
-        Some("unknown") => NativeBusinessDataCommandStatus::Unknown,
-        _ => NativeBusinessDataCommandStatus::Pending,
-    };
-    CommandState {
-        command_id: document
-            .get("command_id")
-            .or_else(|| document.get("id"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
-        status,
-        result: document
-            .get("result")
-            .cloned()
-            .filter(|value| !value.is_null()),
-        error: document
-            .get("last_retry_error")
-            .or_else(|| document.get("error"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
     }
 }
 
