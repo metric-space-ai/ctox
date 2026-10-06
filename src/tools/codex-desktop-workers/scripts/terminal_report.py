@@ -13,8 +13,9 @@ import statistics
 import subprocess
 import uuid
 
-REPOS = ("metric-space-ai/ctox", "metric-space-ai/workjet", "mkh-welsch/ctox-dev")
-PROJECTS = dict(zip(REPOS, ("CTOX", "Workjet", "ctox-dev")))
+REPOS = ("metric-space-ai/ctox", "metric-space-ai/workjet", "mkh-welsch/ctox-dev",
+         "metric-space-ai/greppy", "mkh-welsch/miltonticket-app")
+PROJECTS = dict(zip(REPOS, ("CTOX", "Workjet", "ctox-dev", "Greppy", "miltonticket-app")))
 
 STOP = {174, 177, 181, 188, 189}
 WEIGHTS = dict(correctness=.30, assignment_fulfillment=.25, evidence_quality=.20,
@@ -455,6 +456,8 @@ def build(base):
         pr["project"] = PROJECTS.get(pr["repository"], "External registry")
     mapping = {p["url"]: p for p in prs}
     records, non_delivery_attempts = partition_deliveries(assessments(base))
+    records = [row for row in records if row["pr_url"] in mapping]
+    non_delivery_attempts = [row for row in non_delivery_attempts if row["pr_url"] in mapping]
     legacy = []
     registry = jobs(base)
     for j in registry:
