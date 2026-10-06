@@ -25,7 +25,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
   assert.match(controlSource, /waitForProjectedWorkjetWorkingCopy\(/);
-  assert.match(controlSource, /return \{ action: 'project\.list', projects \}/);
+  assert.match(controlSource, /return \{ action: 'project\.list', projects, count, truncated: false \}/);
   assert.match(controlSource, /action: 'project\.create',\s+project:/);
 });
 
@@ -97,7 +97,8 @@ test('Workjet project create/list is idempotent across optional copies and compu
         dispatched.push(command);
         if (command.command_type === 'ctox.workjet.project.list') {
           return { command_id: command.id, status: 'completed', ok: true,
-            result: { ok: true, collection: 'workjet_projects' } };
+            result: { ok: true, collection: 'workjet_projects',
+              count: collections.workjet_projects.length, truncated: false } };
         }
         if (completedCommandIds.has(command.id)) return { status: 'completed' };
         completedCommandIds.add(command.id);
@@ -260,8 +261,10 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
       assert.equal(options.until, 'terminal');
       assert.equal(options.sync_queue_tasks, false);
       assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 29_000);
+      const nativeCount = rows.workjet_projects.filter((row) => row.is_deleted !== true).length;
       const receipt = { command_id: command.id, status: 'completed', ok: true,
-        result: { ok: true, collection: 'workjet_projects' } };
+        result: { ok: true, collection: 'workjet_projects',
+          count: Math.min(nativeCount, 100), truncated: nativeCount > 100 } };
       return dispatch ? dispatch(receipt, state) : receipt;
     } },
   };
@@ -293,8 +296,75 @@ test('each project list requires new native authority and accepts a confirmed em
   await fixture.invoke();
   fixture.rows.workjet_projects.length = 0;
   fixture.rows.workjet_working_copies.length = 0;
-  assert.deepEqual((await fixture.invoke()).projects, []);
+  const empty = await fixture.invoke();
+  assert.deepEqual(empty.projects, []);
+  assert.equal(empty.count, 0);
+  assert.equal(empty.truncated, false);
   assert.notEqual(fixture.reads[0].query.requireRevision, fixture.reads[2].query.requireRevision);
+});
+
+test('nonempty native project counts cannot confirm empty or partial projections', async () => {
+  for (const projectedCount of [0, 8]) {
+    const fixture = nativeProjectListFixture({ exec: (name) => name === 'workjet_projects'
+      ? fixture.rows.workjet_projects.slice(0, projectedCount) : [] });
+    fixture.rows.workjet_projects = Array.from({ length: 16 }, (_, index) => ({
+      id: `project-${index}`, name: `Project ${index}`, status: 'active', owner_user_id: 'owner-1',
+    }));
+    await assert.rejects(fixture.invoke(), (error) =>
+      error.code === 'WORKJET_PROJECT_LIST_INCOMPLETE' && error.retryable === true);
+    assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+  }
+});
+
+test('missing or malformed native completeness metadata rejects before any projection read', async () => {
+  for (const count of [undefined, -1, 0.5, '1', 101, NaN, Infinity]) {
+    const fixture = nativeProjectListFixture({ dispatch: (receipt) => {
+      receipt.result.count = count;
+      return receipt;
+    } });
+    await assert.rejects(fixture.invoke(), (error) =>
+      error.code === 'WORKJET_PROJECT_LIST_UNCONFIRMED' && error.retryable === false);
+    assert.equal(fixture.reads.length, 0);
+  }
+  const fixture = nativeProjectListFixture({ dispatch: (receipt) => {
+    delete receipt.result.truncated;
+    return receipt;
+  } });
+  await assert.rejects(fixture.invoke(), (error) => error.code === 'WORKJET_PROJECT_LIST_UNCONFIRMED');
+  assert.equal(fixture.reads.length, 0);
+});
+
+test('a truncated native window cannot be delivered as a complete project list', async () => {
+  const fixture = nativeProjectListFixture({ dispatch: (receipt) => {
+    receipt.result.count = 100;
+    receipt.result.truncated = true;
+    return receipt;
+  } });
+  await assert.rejects(fixture.invoke(), (error) =>
+    error.code === 'WORKJET_PROJECT_LIST_INCOMPLETE' && error.retryable === false);
+  assert.equal(fixture.reads.length, 0);
+});
+
+test('a native zero count cannot confirm extra or discarded projection rows', async () => {
+  const stale = nativeProjectListFixture({ dispatch: (receipt) => {
+    receipt.result.count = 0;
+    return receipt;
+  } });
+  await assert.rejects(stale.invoke(), (error) => error.code === 'WORKJET_PROJECT_LIST_INCOMPLETE');
+  const deleted = nativeProjectListFixture({ exec: (name) => name === 'workjet_projects'
+    ? [{ id: 'native-project', name: 'Deleted projection', is_deleted: true }] : [] });
+  await assert.rejects(deleted.invoke(), (error) => error.code === 'WORKJET_PROJECT_LIST_INCOMPLETE');
+});
+
+test('identity remains fenced through final project serialization', async () => {
+  let reads = 0;
+  const fixture = nativeProjectListFixture({ exec: (name) => name === 'workjet_projects'
+    ? [{ toJSON() {
+      if (++reads === 2) fixture.state.session = { id: 'owner-2' };
+      return { id: 'native-project', name: 'Native project', owner_user_id: 'owner-1' };
+    } }] : [] });
+  await assert.rejects(fixture.invoke(), /session changed/);
+  assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
 });
 
 test('native working-copy reads page through 200-row windows up to the declared 500-row cap', async () => {
