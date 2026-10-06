@@ -55,6 +55,10 @@ pub fn normalize_mango_query(schema: &RxJsonSchema, mango_query: MangoQuery) -> 
     if let Some(obj) = selector.as_object_mut() {
         let keys: Vec<String> = obj.keys().cloned().collect();
         for field in keys {
+            // Logical operators contain selectors, not field equality values.
+            if field.starts_with('$') {
+                continue;
+            }
             let entry = obj.get(&field).cloned().unwrap_or(Value::Null);
             if !entry.is_object() {
                 obj.insert(field, json!({ "$eq": entry }));
@@ -282,4 +286,36 @@ fn value_compare(a: &Value, b: &Value) -> Ordering {
 fn _phantom_use(d: &Value) -> Value {
     let _ = flat_clone(d);
     clone_deep(d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalization_preserves_logical_selectors_for_live_point_queries() {
+        let schema: RxJsonSchema = serde_json::from_value(json!({
+            "version": 0, "primaryKey": "id", "type": "object",
+            "properties": { "id": { "type": "string", "maxLength": 64 } },
+            "required": ["id"]
+        }))
+        .unwrap();
+        for (id, expected) in [("native-live", true), ("outside-watch-selector", false)] {
+            let logical = json!([
+                {"id": {"$gte": "native-", "$lt": "native."}},
+                {"id": {"$eq": id}, "_deleted": false}
+            ]);
+            let mango: MangoQuery = serde_json::from_value(json!({
+                "selector": {"$and": logical, "_deleted": false},
+                "sort": [{"id": "asc"}]
+            }))
+            .unwrap();
+            let normalized = normalize_mango_query(&schema, mango);
+            assert_eq!(normalized.selector["$and"], logical);
+            assert_eq!(normalized.selector["_deleted"], json!({"$eq": false}));
+            let matches = get_query_matcher(&schema, &normalized);
+            assert_eq!(matches(&json!({"id": id, "_deleted": false})), expected);
+            assert!(!matches(&json!({"id": id, "_deleted": true})));
+        }
+    }
 }
