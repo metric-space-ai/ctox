@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261004-shell-v2-native-lease-badges-v449';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261006-shell-v2-sync-perf-v452';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {

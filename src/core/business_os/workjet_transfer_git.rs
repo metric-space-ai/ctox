@@ -26,6 +26,7 @@ pub const MANIFEST_ENTRY_LIMIT_EXCEEDED: &str = "manifest_entry_limit_exceeded";
 
 const BUNDLE_NAME: &str = "bundle.gitbundle";
 const PATCH_NAME: &str = "tracked.patch";
+const INDEX_PATCH_NAME: &str = "index.patch";
 const UNTRACKED_NAME: &str = "untracked.tar";
 const MANIFEST_NAME: &str = "manifest.json";
 const MAX_MANIFEST_ENTRIES: usize = 1_000_000;
@@ -49,6 +50,16 @@ pub struct GitManifestProof {
     pub patch_sha256: String,
     pub untracked_sha256: String,
     pub dirty: bool,
+    /// Absent in legacy packs, which stage the combined working-tree patch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<GitIndexProof>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitIndexProof {
+    pub tree: String,
+    pub patch_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -96,6 +107,8 @@ pub fn pack_git_working_copy(
         return Err(command_error("git symbolic-ref", &branch_output));
     };
 
+    let artifacts_dir = prepare_artifacts_directory(source_dir, artifacts_dir)?;
+
     let files = collect_manifest_files(source_dir)?;
     ensure!(
         files.len() <= MAX_MANIFEST_ENTRIES,
@@ -106,25 +119,28 @@ pub fn pack_git_working_copy(
         &["ls-files", "--others", "--exclude-standard", "-z"],
     )?;
 
-    fs::create_dir_all(artifacts_dir).with_context(|| {
-        format!(
-            "{GIT_PACK_FAILED}: failed to create artifacts directory {}",
-            artifacts_dir.display()
-        )
-    })?;
-    let artifacts_dir = fs::canonicalize(artifacts_dir).with_context(|| {
-        format!(
-            "{GIT_PACK_FAILED}: resolve artifacts directory {}",
-            artifacts_dir.display()
-        )
-    })?;
     let bundle_path = artifacts_dir.join(BUNDLE_NAME);
     let patch_path = artifacts_dir.join(PATCH_NAME);
+    let index_patch_path = artifacts_dir.join(INDEX_PATCH_NAME);
     let untracked_path = artifacts_dir.join(UNTRACKED_NAME);
     let manifest_path = artifacts_dir.join(MANIFEST_NAME);
-    if bundle_path.exists() {
-        fs::remove_file(&bundle_path)
-            .with_context(|| format!("{GIT_PACK_FAILED}: replace {}", bundle_path.display()))?;
+    // Unlink old artifact entries rather than truncating their targets: even an
+    // external artifact directory can contain links into the source worktree.
+    for artifact in [
+        &bundle_path,
+        &patch_path,
+        &index_patch_path,
+        &untracked_path,
+        &manifest_path,
+    ] {
+        match fs::remove_file(artifact) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("{GIT_PACK_FAILED}: replace {}", artifact.display()))
+            }
+        }
     }
 
     let mut bundle_args = vec![
@@ -141,15 +157,80 @@ pub fn pack_git_working_copy(
 
     let patch_output = git_output(
         source_dir,
-        &["diff", "--binary", "--full-index", "HEAD", "--"],
+        &[
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+        ],
     )?;
     ensure!(
         patch_output.status.success(),
         "{GIT_PACK_FAILED}: {}",
         command_error("git diff", &patch_output)
     );
-    fs::write(&patch_path, patch_output.stdout)
-        .with_context(|| format!("{GIT_PACK_FAILED}: write {}", patch_path.display()))?;
+    write_pack_artifact(&patch_path, &patch_output.stdout)?;
+    // A tree identity binds staging independently from the working files. An
+    // unresolved index cannot produce a tree and is rejected before publication.
+    let index_tree = git_text(source_dir, &["write-tree"])?;
+    validate_object_id(&index_tree, "index.tree")?;
+    // Intent-to-add has no tree representation. Refuse it instead of silently
+    // turning it into an ordinary untracked file at the destination.
+    let visible = git_paths(
+        source_dir,
+        &[
+            "diff",
+            "--cached",
+            "--ita-visible-in-index",
+            "--name-only",
+            "-z",
+            "HEAD",
+            "--",
+        ],
+    )?;
+    let invisible = git_paths(
+        source_dir,
+        &[
+            "diff",
+            "--cached",
+            "--ita-invisible-in-index",
+            "--name-only",
+            "-z",
+            "HEAD",
+            "--",
+        ],
+    )?;
+    ensure!(
+        visible == invisible,
+        "{GIT_PACK_FAILED}: intent-to-add index entries are unsupported"
+    );
+    let index_patch = git_output(
+        source_dir,
+        &[
+            "diff",
+            "--cached",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+        ],
+    )?;
+    ensure!(
+        index_patch.status.success(),
+        "{GIT_PACK_FAILED}: index diff failed"
+    );
+    write_pack_artifact(&index_patch_path, &index_patch.stdout)?;
     write_untracked_tar(source_dir, &untracked_paths, &untracked_path)?;
 
     let patch_sha256 = sha256_file(&patch_path)?;
@@ -164,13 +245,131 @@ pub fn pack_git_working_copy(
             patch_sha256,
             untracked_sha256,
             dirty,
+            index: Some(GitIndexProof {
+                tree: index_tree,
+                patch_sha256: sha256_file(&index_patch_path)?,
+            }),
         },
         manifest_sha256: String::new(),
     };
     manifest.manifest_sha256 = sha256_bytes(&canonical_manifest_bytes(&manifest)?);
-    fs::write(&manifest_path, canonical_manifest_bytes(&manifest)?)
-        .with_context(|| format!("{GIT_PACK_FAILED}: write {}", manifest_path.display()))?;
+    write_pack_artifact(&manifest_path, &canonical_manifest_bytes(&manifest)?)?;
+    // A successful pack is an artifact-publication boundary: callers may now
+    // record it durably or hand it to another peer. Flush every artifact before
+    // confirming the pack, then persist the directory entries and parent link.
+    for artifact in [
+        &bundle_path,
+        &patch_path,
+        &index_patch_path,
+        &untracked_path,
+        &manifest_path,
+    ] {
+        File::open(artifact)?
+            .sync_all()
+            .with_context(|| format!("{GIT_PACK_FAILED}: flush {}", artifact.display()))?;
+    }
+    sync_materialized_directory(&artifacts_dir)?;
+    if let Some(parent) = artifacts_dir.parent() {
+        sync_materialized_directory(parent)?;
+    }
     Ok(manifest)
+}
+
+fn write_pack_artifact(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    File::options()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(bytes))
+        .with_context(|| format!("{GIT_PACK_FAILED}: create artifact {}", path.display()))
+}
+
+/// Resolve the existing ancestor before appending missing components, so a
+/// symlink alias cannot hide output beneath the source or shared Git storage.
+fn resolve_future_directory(path: &Path) -> anyhow::Result<PathBuf> {
+    ensure!(
+        !path.as_os_str().is_empty(),
+        "{GIT_PACK_FAILED}: empty artifact path"
+    );
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut ancestor = absolute.as_path();
+    let mut missing = Vec::new();
+    loop {
+        match fs::symlink_metadata(ancestor) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(
+                    ancestor
+                        .file_name()
+                        .ok_or_else(|| {
+                            anyhow!("{GIT_PACK_FAILED}: invalid unresolved artifact path")
+                        })?
+                        .to_owned(),
+                );
+                ancestor = ancestor.parent().ok_or_else(|| {
+                    anyhow!("{GIT_PACK_FAILED}: artifact path has no existing ancestor")
+                })?;
+            }
+            Err(error) => return Err(error).context("resolve artifact ancestor"),
+        }
+    }
+    let mut resolved = fs::canonicalize(ancestor)?;
+    for component in missing.into_iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
+}
+
+fn prepare_artifacts_directory(source: &Path, requested: &Path) -> anyhow::Result<PathBuf> {
+    let source = fs::canonicalize(source)?;
+    let top = fs::canonicalize(git_text(&source, &["rev-parse", "--show-toplevel"])?)?;
+    ensure!(
+        source == top,
+        "{GIT_PACK_FAILED}: source must be the Git worktree root"
+    );
+    let git_dir = fs::canonicalize(git_text(&source, &["rev-parse", "--absolute-git-dir"])?)?;
+    let common = PathBuf::from(git_text(&source, &["rev-parse", "--git-common-dir"])?);
+    let common = fs::canonicalize(if common.is_absolute() {
+        common
+    } else {
+        source.join(common)
+    })?;
+    let protected = [source, git_dir, common];
+    let verify = |path: &Path| -> anyhow::Result<()> {
+        ensure!(
+            protected.iter().all(|root| !path.starts_with(root)),
+            "{GIT_PACK_FAILED}: artifacts must be outside the source worktree and Git metadata"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            // A case-insensitive filesystem can retain different path spelling
+            // for the same directory. Compare ancestor identities as well.
+            for root in &protected {
+                let expected = fs::metadata(root)?;
+                for ancestor in path.ancestors() {
+                    match fs::metadata(ancestor) {
+                        Ok(actual) => ensure!(actual.dev() != expected.dev() || actual.ino() != expected.ino(),
+                            "{GIT_PACK_FAILED}: artifacts must be outside the source worktree and Git metadata"),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                        Err(error) => return Err(error).context("verify artifact ancestor identity"),
+                    }
+                }
+            }
+        }
+        Ok(())
+    };
+    let output = resolve_future_directory(requested)?;
+    verify(&output)?;
+    fs::create_dir_all(&output).context("create transfer artifact directory")?;
+    let output = fs::canonicalize(output)?;
+    // Recheck after creation before replacing any artifact if a parent changed.
+    verify(&output)?;
+    Ok(output)
 }
 
 /// Applies artifacts into a sibling partial directory, verifies them, then renames it.
@@ -190,6 +389,7 @@ pub fn apply_git_working_copy(
 
     match apply_in_temp(artifacts_dir, manifest, &temp_dir) {
         Ok(report) => {
+            sync_materialized_tree(&temp_dir)?;
             if target_dir.exists() {
                 fs::remove_dir(target_dir).with_context(|| {
                     format!("failed to remove empty target {}", target_dir.display())
@@ -202,9 +402,57 @@ pub fn apply_git_working_copy(
                     target_dir.display()
                 )
             })?;
+            let parent = target_dir
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            sync_materialized_directory(parent)?;
             Ok(report)
         }
         Err(error) => Err(anyhow!("{error:#}; temporary_dir={}", temp_dir.display())),
+    }
+}
+
+/// Flush every materialized file and then directories in child-before-parent order.
+fn sync_materialized_tree(root: &Path) -> anyhow::Result<()> {
+    // Include Git objects, refs and index, not just the dirty-file manifest.
+    // Never follow symlinks: their entries are made durable by the parent sync.
+    let mut pending = vec![root.to_path_buf()];
+    let mut directories = Vec::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                File::open(entry.path())?.sync_all()?;
+            } else {
+                ensure!(
+                    kind.is_symlink(),
+                    "{UNSUPPORTED_FILE_TYPE}: materialized entry"
+                );
+            }
+        }
+        directories.push(directory);
+    }
+    for directory in directories.into_iter().rev() {
+        sync_materialized_directory(&directory)?;
+    }
+    Ok(())
+}
+
+fn sync_materialized_directory(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(path)?
+            .sync_all()
+            .context("flush materialized directory")
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        bail!("durable Git target publication is not certified on this platform")
     }
 }
 
@@ -247,11 +495,13 @@ pub(crate) fn execute_cli(args: &[String]) -> anyhow::Result<Value> {
                 "hashes": {
                     "manifest_sha256": manifest.manifest_sha256,
                     "patch_sha256": manifest.git.patch_sha256,
+                    "index_patch_sha256": manifest.git.index.as_ref().map(|index| &index.patch_sha256),
                     "untracked_sha256": manifest.git.untracked_sha256,
                 },
                 "artifacts": {
                     "bundle": Path::new(artifacts).join(BUNDLE_NAME),
                     "patch": Path::new(artifacts).join(PATCH_NAME),
+                    "index_patch": Path::new(artifacts).join(INDEX_PATCH_NAME),
                     "untracked": Path::new(artifacts).join(UNTRACKED_NAME),
                     "manifest": Path::new(artifacts).join(MANIFEST_NAME),
                 }
@@ -288,6 +538,13 @@ fn apply_in_temp(
     let bundle = artifacts_dir.join(BUNDLE_NAME);
     let patch = artifacts_dir.join(PATCH_NAME);
     let untracked = artifacts_dir.join(UNTRACKED_NAME);
+    let index_patch = artifacts_dir.join(INDEX_PATCH_NAME);
+    if let Some(index) = &manifest.git.index {
+        ensure!(
+            sha256_file(&index_patch)? == index.patch_sha256,
+            "{APPLY_HASH_MISMATCH}: index patch hash differs from manifest"
+        );
+    }
     let actual_patch_sha256 = sha256_file(&patch)?;
     let actual_untracked_sha256 = sha256_file(&untracked)?;
     ensure!(
@@ -327,15 +584,29 @@ fn apply_in_temp(
 
     let applied_patch = fs::metadata(&patch)?.len() > 0;
     if applied_patch {
-        run_git_owned(
-            temp_dir,
-            &[
-                "apply".to_owned(),
-                "--binary".to_owned(),
-                "--index".to_owned(),
-                path_arg(&patch)?,
-            ],
-        )?;
+        let mut args = vec!["apply".to_owned(), "--binary".to_owned()];
+        if manifest.git.index.is_none() {
+            args.push("--index".to_owned());
+        }
+        args.push(path_arg(&patch)?);
+        run_git_owned(temp_dir, &args)?;
+    }
+    if let Some(index) = &manifest.git.index {
+        if fs::metadata(&index_patch)?.len() > 0 {
+            run_git_owned(
+                temp_dir,
+                &[
+                    "apply".to_owned(),
+                    "--binary".to_owned(),
+                    "--cached".to_owned(),
+                    path_arg(&index_patch)?,
+                ],
+            )?;
+        }
+        ensure!(
+            git_text(temp_dir, &["write-tree"])? == index.tree,
+            "{APPLY_HASH_MISMATCH}: restored index tree differs"
+        );
     }
     let untracked_files = extract_untracked_tar(&untracked, temp_dir)?;
 
@@ -358,6 +629,7 @@ fn apply_in_temp(
             patch_sha256: actual_patch_sha256,
             untracked_sha256: actual_untracked_sha256,
             dirty: !manifest.files.is_empty(),
+            index: manifest.git.index.clone(),
         },
         manifest_sha256: String::new(),
     };
@@ -403,6 +675,13 @@ fn read_manifest(artifacts_dir: &Path) -> anyhow::Result<GitPackManifest> {
 }
 
 fn validate_manifest(manifest: &GitPackManifest) -> anyhow::Result<()> {
+    if let Some(index) = &manifest.git.index {
+        validate_object_id(&index.tree, "index.tree")?;
+        ensure!(
+            is_lower_hex_64(&index.patch_sha256),
+            "{APPLY_HASH_MISMATCH}: invalid index patch SHA-256"
+        );
+    }
     validate_object_id(&manifest.git.head, "git.head")?;
     validate_object_id(&manifest.git.base_commit, "git.base_commit")?;
     ensure!(
@@ -440,9 +719,14 @@ fn validate_manifest(manifest: &GitPackManifest) -> anyhow::Result<()> {
 
 fn collect_manifest_files(repo: &Path) -> anyhow::Result<Vec<GitManifestFile>> {
     let tracked = git_paths(repo, &["diff", "--name-only", "-z", "HEAD", "--"])?;
+    let staged = git_paths(
+        repo,
+        &["diff", "--cached", "--name-only", "-z", "HEAD", "--"],
+    )?;
     let untracked = git_paths(repo, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     let mut paths = BTreeSet::new();
     paths.extend(tracked);
+    paths.extend(staged);
     paths.extend(untracked);
     ensure!(
         paths.len() <= MAX_MANIFEST_ENTRIES,
@@ -499,7 +783,10 @@ fn write_untracked_tar(root: &Path, paths: &[String], output: &Path) -> anyhow::
     let mut sorted = paths.to_vec();
     sorted.sort();
     sorted.dedup();
-    let mut out = File::create(output)
+    let mut out = File::options()
+        .write(true)
+        .create_new(true)
+        .open(output)
         .with_context(|| format!("failed to create untracked archive {}", output.display()))?;
     for relative in sorted {
         validate_relative_path(&relative)?;
@@ -1115,6 +1402,264 @@ mod tests {
         repo
     }
 
+    #[test]
+    fn pack_rejects_source_overlap_without_replacing_worktree_files() {
+        let repo = dirty_repository();
+        fs::write(repo.path().join(BUNDLE_NAME), b"irreplaceable source file").unwrap();
+        let before = git_output(
+            repo.path(),
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        )
+        .unwrap()
+        .stdout;
+        for output in [
+            repo.path().to_owned(),
+            repo.path().join("new-pack/nested"),
+            repo.path().join(".git/pack-output"),
+        ] {
+            assert!(pack_git_working_copy(repo.path(), &output)
+                .unwrap_err()
+                .to_string()
+                .contains("artifacts must be outside"));
+        }
+        assert_eq!(
+            fs::read(repo.path().join(BUNDLE_NAME)).unwrap(),
+            b"irreplaceable source file"
+        );
+        assert!(!repo.path().join("new-pack").exists());
+        assert!(!repo.path().join(".git/pack-output").exists());
+        assert_eq!(
+            git_output(
+                repo.path(),
+                &["status", "--porcelain=v1", "-z", "--untracked-files=all"]
+            )
+            .unwrap()
+            .stdout,
+            before
+        );
+    }
+
+    #[test]
+    fn pack_rejects_subdirectory_sources_and_linked_git_storage() {
+        let repo = dirty_repository();
+        let scratch = tempfile::tempdir().unwrap();
+        let output = scratch.path().join("subdir-output");
+        assert!(pack_git_working_copy(&repo.path().join("nested"), &output)
+            .unwrap_err()
+            .to_string()
+            .contains("source must be the Git worktree root"));
+        assert!(!output.exists());
+        let linked = scratch.path().join("linked");
+        git(
+            repo.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "linked/test",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        let private = repo.path().join(".git/transfer-output");
+        assert!(pack_git_working_copy(&linked, &private)
+            .unwrap_err()
+            .to_string()
+            .contains("artifacts must be outside"));
+        assert!(!private.exists());
+        // A linked worktree remains supported when its output is independent.
+        pack_git_working_copy(&linked, &scratch.path().join("safe/nested/artifacts")).unwrap();
+        git(
+            repo.path(),
+            &["worktree", "remove", linked.to_str().unwrap()],
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pack_replaces_artifact_links_without_truncating_source() {
+        use std::os::unix::fs::{symlink, MetadataExt};
+        for symbolic in [false, true] {
+            let repo = dirty_repository();
+            let scratch = tempfile::tempdir().unwrap();
+            let victim = repo.path().join("source-sentinel");
+            fs::write(&victim, b"irreplaceable source bytes").unwrap();
+            let before = git_output(
+                repo.path(),
+                &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            )
+            .unwrap()
+            .stdout;
+            let names = [
+                BUNDLE_NAME,
+                PATCH_NAME,
+                INDEX_PATCH_NAME,
+                UNTRACKED_NAME,
+                MANIFEST_NAME,
+            ];
+            for name in names {
+                let path = scratch.path().join(name);
+                if symbolic {
+                    symlink(&victim, path).unwrap();
+                } else {
+                    fs::hard_link(&victim, path).unwrap();
+                }
+            }
+            let packed = pack_git_working_copy(repo.path(), scratch.path()).unwrap();
+            assert_eq!(fs::read(&victim).unwrap(), b"irreplaceable source bytes");
+            assert_eq!(
+                git_output(
+                    repo.path(),
+                    &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                )
+                .unwrap()
+                .stdout,
+                before
+            );
+            let source = fs::metadata(&victim).unwrap();
+            for name in names {
+                let artifact = fs::symlink_metadata(scratch.path().join(name)).unwrap();
+                assert!(artifact.file_type().is_file());
+                assert!(artifact.dev() != source.dev() || artifact.ino() != source.ino());
+            }
+            // Repacking a previous complete output remains supported.
+            assert_eq!(
+                pack_git_working_copy(repo.path(), scratch.path())
+                    .unwrap()
+                    .manifest_sha256,
+                packed.manifest_sha256
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pack_rejects_symlink_alias_into_source() {
+        let repo = repository();
+        let scratch = tempfile::tempdir().unwrap();
+        let alias = scratch.path().join("alias");
+        std::os::unix::fs::symlink(repo.path(), &alias).unwrap();
+        assert!(pack_git_working_copy(repo.path(), &alias.join("output"))
+            .unwrap_err()
+            .to_string()
+            .contains("artifacts must be outside"));
+        assert!(!repo.path().join("output").exists());
+    }
+
+    #[test]
+    fn workjet_transfer_git_preserves_index_and_worktree_independently() {
+        let repo = repository();
+        fs::write(repo.path().join("tracked.txt"), b"staged\n").unwrap();
+        fs::write(repo.path().join("staged-new.bin"), [0, 7, 255]).unwrap();
+        git(repo.path(), &["add", "."]);
+        fs::write(repo.path().join("tracked.txt"), b"unstaged\n").unwrap();
+        fs::remove_file(repo.path().join("staged-new.bin")).unwrap();
+        fs::write(repo.path().join("untracked.txt"), b"untracked\n").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = root.path().join("artifacts");
+        let target = root.path().join("target");
+        let manifest = pack_git_working_copy(repo.path(), &artifacts).unwrap();
+        apply_git_working_copy(&artifacts, &manifest, &target).unwrap();
+        for args in [
+            vec!["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            vec!["diff", "--binary", "--full-index"],
+            vec!["diff", "--cached", "--binary", "--full-index"],
+            vec!["log", "--format=%H", "HEAD"],
+            vec!["write-tree"],
+        ] {
+            assert_eq!(
+                git_output(repo.path(), &args).unwrap().stdout,
+                git_output(&target, &args).unwrap().stdout,
+                "{args:?}"
+            );
+        }
+        assert!(!target.join("staged-new.bin").exists());
+        assert_eq!(fs::read(target.join("tracked.txt")).unwrap(), b"unstaged\n");
+    }
+
+    #[test]
+    fn workjet_transfer_git_index_only_change_is_dirty() {
+        let repo = repository();
+        fs::write(repo.path().join("tracked.txt"), b"staged\n").unwrap();
+        git(repo.path(), &["add", "tracked.txt"]);
+        fs::write(repo.path().join("tracked.txt"), b"before\n").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = root.path().join("artifacts");
+        let target = root.path().join("target");
+        let manifest = pack_git_working_copy(repo.path(), &artifacts).unwrap();
+        assert!(manifest.git.dirty);
+        assert_eq!(manifest.git.patch_sha256, sha256_bytes(&[]));
+        apply_git_working_copy(&artifacts, &manifest, &target).unwrap();
+        assert_eq!(
+            git_text(repo.path(), &["write-tree"]).unwrap(),
+            git_text(&target, &["write-tree"]).unwrap()
+        );
+        assert_eq!(fs::read(target.join("tracked.txt")).unwrap(), b"before\n");
+    }
+
+    #[test]
+    fn workjet_transfer_git_rejects_index_tamper_and_tree_mismatch() {
+        let repo = dirty_repository();
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = root.path().join("artifacts");
+        let mut manifest = pack_git_working_copy(repo.path(), &artifacts).unwrap();
+        fs::write(artifacts.join(INDEX_PATCH_NAME), b"tampered").unwrap();
+        let target = root.path().join("target-tamper");
+        assert!(apply_git_working_copy(&artifacts, &manifest, &target)
+            .unwrap_err()
+            .to_string()
+            .contains(APPLY_HASH_MISMATCH));
+        assert!(!target.exists());
+        fs::write(artifacts.join(INDEX_PATCH_NAME), b"").unwrap();
+        manifest.git.index.as_mut().unwrap().tree = "1".repeat(40);
+        manifest.manifest_sha256 = sha256_bytes(&canonical_manifest_bytes(&manifest).unwrap());
+        let target = root.path().join("target-tree");
+        assert!(apply_git_working_copy(&artifacts, &manifest, &target)
+            .unwrap_err()
+            .to_string()
+            .contains("restored index tree differs"));
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn workjet_transfer_git_legacy_manifest_retains_legacy_staging_semantics() {
+        let repo = dirty_repository();
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = root.path().join("artifacts");
+        let target = root.path().join("target");
+        let mut manifest = pack_git_working_copy(repo.path(), &artifacts).unwrap();
+        manifest.git.index = None;
+        manifest.manifest_sha256 = sha256_bytes(&canonical_manifest_bytes(&manifest).unwrap());
+        fs::write(
+            artifacts.join(MANIFEST_NAME),
+            canonical_manifest_bytes(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(artifacts.join(INDEX_PATCH_NAME)).unwrap();
+        assert_eq!(read_manifest(&artifacts).unwrap(), manifest);
+        apply_git_working_copy(&artifacts, &manifest, &target).unwrap();
+        assert!(git_output(&target, &["diff", "--exit-code"])
+            .unwrap()
+            .status
+            .success());
+        assert!(!git_output(&target, &["diff", "--cached", "--exit-code"])
+            .unwrap()
+            .status
+            .success());
+    }
+
+    #[test]
+    fn workjet_transfer_git_rejects_intent_to_add() {
+        let repo = repository();
+        fs::write(repo.path().join("new.txt"), b"pending\n").unwrap();
+        git(repo.path(), &["add", "--intent-to-add", "new.txt"]);
+        let artifacts = tempfile::tempdir().unwrap();
+        assert!(pack_git_working_copy(repo.path(), artifacts.path())
+            .unwrap_err()
+            .to_string()
+            .contains("intent-to-add"));
+    }
+
     fn is_hash(value: &str) -> bool {
         is_lower_hex_64(value)
     }
@@ -1125,7 +1670,13 @@ mod tests {
         let artifacts = tempfile::tempdir().unwrap();
         let manifest = pack_git_working_copy(repo.path(), artifacts.path()).unwrap();
 
-        for name in [BUNDLE_NAME, PATCH_NAME, UNTRACKED_NAME, MANIFEST_NAME] {
+        for name in [
+            BUNDLE_NAME,
+            PATCH_NAME,
+            INDEX_PATCH_NAME,
+            UNTRACKED_NAME,
+            MANIFEST_NAME,
+        ] {
             assert!(artifacts.path().join(name).is_file(), "missing {name}");
         }
         assert_eq!(manifest.git.branch.as_deref(), Some("workjet/test"));

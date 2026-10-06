@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const businessOsRoot = resolve(here, '../..');
@@ -163,6 +164,22 @@ assert.ok(
     && desktopLayoutAuthoritySource.includes('return defaultLayout();'),
   'Desktop layout loading must leave replicated state untouched when authority is unavailable'
 );
+{
+  const fallback = { taskbar_pins: ['ctox'] };
+  let reads = 0;
+  const result = await ensureDesktopLayoutWithAuthority({
+    collection: {},
+    defaultLayout: () => fallback,
+    readNativeDocument: async () => {
+      reads += 1;
+      throw new Error('IDBDatabase connection is closing');
+    },
+    insertMissingSeed: async () => assert.fail('transient IndexedDB shutdown must not seed layout'),
+  });
+  assert.equal(reads, 1, 'Desktop layout must attempt the strict native read');
+  assert.deepEqual(result, fallback,
+    'Desktop initial layout loading must tolerate transient IndexedDB connection shutdown');
+}
 assert.ok(
   desktopSource.includes('icon seed skipped during database restart'),
   'Desktop initial icon seeding must tolerate transient IndexedDB connection shutdown'

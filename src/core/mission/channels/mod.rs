@@ -463,6 +463,8 @@ pub(crate) struct BusinessCommandQueueClaim {
 
 #[derive(Debug, Clone)]
 pub(crate) struct BusinessCommandControlClaim {
+    // Original admission hash, also on an equivalent reordered replay.
+    pub payload_hash: String,
     pub disposition: &'static str,
     pub result: Option<Value>,
     pub terminal_status: Option<String>,

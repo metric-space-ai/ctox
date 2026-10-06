@@ -308,7 +308,12 @@ def main():
     build.add_argument("--owner")
     build.add_argument("--entry")
     build.add_argument("--cwd", type=Path, default=Path.cwd())
-    build.add_argument("--timeout-seconds", type=float, default=3600)
+    # Managed upgrades build each release in a release-local target, i.e. a
+    # full rebuild. On customer on-prem hosts with slow cores (THESEN: Xeon
+    # Silver 4208 under Hyper-V) that alone took ~60 min and the 1 h bound
+    # aborted the upgrade under ordinary load (06.10.2026). Keep a hard bound
+    # against hung builds, but one a full rebuild on such a host fits into.
+    build.add_argument("--timeout-seconds", type=float, default=3 * 3600)
     build.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     cache = args.cache_root.resolve()

@@ -1400,6 +1400,18 @@ fn runtime_config_string(root: &Path, key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// Validate native peer configuration before starting the service workers.
+/// Success requests the supervised peer lifecycle; it does not certify that
+/// signaling, replication, or a native guest is ready.
+fn start_business_os_native_peer(root: &Path) -> Result<bool> {
+    if !runtime_config_bool(root, BUSINESS_OS_NATIVE_PEER_AUTOSTART_KEY, true) {
+        return Ok(false);
+    }
+    crate::business_os::ensure_native_peer(root)
+        .context("failed to configure the Business OS native RxDB peer")?;
+    Ok(true)
+}
+
 fn parse_boolish(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
@@ -1593,6 +1605,16 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     run_boot_auto_submitted_reclassifier(root, &state);
     release_stale_service_communication_leases_on_boot(root, &state);
     quarantine_synthetic_e2e_queue_tasks_on_boot(root, &state);
+    // A configuration failure must not leave queue/app workers running with
+    // an unusable native data path. The peer supervisor owns later readiness
+    // and respawn; the daemon must first accept its actual configuration.
+    if !start_business_os_native_peer(root)? {
+        push_event(
+            &state,
+            "Business OS native RxDB peer autostart disabled".to_string(),
+        );
+        eprintln!("ctox service: Business OS native RxDB peer autostart disabled");
+    }
     push_event(&state, format!("Loop ready on {}", listen_addr));
     start_channel_router(root.to_path_buf(), state.clone());
     start_business_os_app_recovery_loop(root.to_path_buf(), state.clone());
@@ -1611,17 +1633,8 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     if runtime_env::config_flag(root, "CTOX_SERVICE_PREWARM_BACKENDS") {
         supervisor::start_backend_supervisor(root.to_path_buf());
     }
-    if runtime_config_bool(root, BUSINESS_OS_NATIVE_PEER_AUTOSTART_KEY, true) {
-        if let Err(err) = crate::business_os::ensure_native_peer(root) {
-            eprintln!("ctox service: Business OS native RxDB peer failed to start: {err:#}");
-        }
-    } else {
-        push_event(
-            &state,
-            "Business OS native RxDB peer autostart disabled".to_string(),
-        );
-        eprintln!("ctox service: Business OS native RxDB peer autostart disabled");
-    }
+
+    let _transfer_worker = crate::transfers_cli::start_daemon(root)?;
     start_business_os_surfaces(root, state.clone());
     match crate::execution::cliproxyapi_host::start_instance_codex_proxy_supervisor(
         root.to_path_buf(),
@@ -28156,6 +28169,33 @@ mod tests {
                     .iter()
                     .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id))
             })
+    }
+
+    #[test]
+    fn native_peer_startup_rejects_invalid_instance_identity_and_honors_disabled_config() {
+        let root = temp_root("native-peer-invalid-instance");
+        let identity = root.join("runtime/business-os-instance-id");
+        std::fs::create_dir_all(&identity).expect("make invalid identity directory");
+
+        let error = start_business_os_native_peer(&root)
+            .expect_err("invalid real native configuration must abort startup");
+        assert!(error
+            .to_string()
+            .contains("failed to configure the Business OS native RxDB peer"));
+        assert!(
+            identity.is_dir(),
+            "startup must not replace an invalid identity"
+        );
+
+        let mut settings = runtime_env::load_runtime_env_map(&root).unwrap_or_default();
+        settings.insert(
+            BUSINESS_OS_NATIVE_PEER_AUTOSTART_KEY.to_string(),
+            "0".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings).expect("disable native autostart");
+        assert!(!start_business_os_native_peer(&root).expect("explicit disable skips peer setup"));
+        assert!(identity.is_dir());
+        std::fs::remove_dir_all(&root).expect("remove isolated native startup fixture");
     }
 
     #[test]

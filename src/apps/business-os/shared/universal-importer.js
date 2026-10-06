@@ -2,7 +2,7 @@ import { readStoredFileFromDemandChunks } from './file-integrity.js?v=20260831-c
 import { showBusinessAlert } from './dialogs.js';
 
 const STATUS_KEY = 'ctox.businessOs.importer.status.v1';
-const IMPORTER_STYLE_BUILD = '20260827-thesen-import-preview-v1';
+const IMPORTER_STYLE_BUILD = '20261006-import-preview-groups-v1';
 
 export async function openUniversalImporter(ctx, config = {}) {
   await ensureImporterStyles();
@@ -309,7 +309,7 @@ export async function openUniversalImporter(ctx, config = {}) {
         const signature = importPreviewSignature(payload);
         const preview = await config.previewImport({ payload, drawer });
         if (drawer.importPreviewSignature !== signature) {
-          renderImportPreview(drawer, preview);
+          renderImportPreview(drawer, preview, config);
           drawer.importPreviewSignature = signature;
           submitButton.textContent = preview?.canProceed === false
             ? (config.submitLabel || 'Vorschau erneut prüfen')
@@ -319,7 +319,7 @@ export async function openUniversalImporter(ctx, config = {}) {
           return;
         }
         if (preview?.canProceed === false) {
-          renderImportPreview(drawer, preview);
+          renderImportPreview(drawer, preview, config);
           throw new Error(preview?.message || 'Der Import enthält keine gültigen Datensätze.');
         }
       }
@@ -473,12 +473,33 @@ export function parseDelimitedText(text, options = {}) {
   });
 }
 
+// Excel tables formatted to the sheet edge carry thousands of empty columns
+// whose header cells Excel fills with placeholders ("Spalte1" … "Spalte16334",
+// "Column1" …). A North Data export of 49,804 firms had 48 real and 16,334
+// placeholder columns; mapping every placeholder onto every row object built
+// ~800 million properties and crashed the browser tab (THESEN, 06.10.2026).
+const PLACEHOLDER_HEADER = /^(spalte|column|col)\s*\d+$/i;
+
+function trimTrailingEmptyColumns(rows) {
+  let width = 0;
+  rows.forEach((row, rowIndex) => {
+    for (let index = row.length - 1; index >= width; index -= 1) {
+      const cell = row[index];
+      if (!cell) continue;
+      if (rowIndex === 0 && rows.length > 1 && PLACEHOLDER_HEADER.test(cell)) continue;
+      width = index + 1;
+      break;
+    }
+  });
+  return rows.map((row) => (row.length > width ? row.slice(0, width) : row));
+}
+
 export function tabularCellsToCompanyRows(matrix, options = {}) {
-  const rows = Array.isArray(matrix)
+  const rows = trimTrailingEmptyColumns(Array.isArray(matrix)
     ? matrix
       .map((row) => (Array.isArray(row) ? row.map((cell) => cleanCell(cell)) : []))
       .filter((row) => row.some(Boolean))
-    : [];
+    : []);
   if (!rows.length) return [];
   const header = rows[0].map(normalizeHeader);
   const hasHeader = header.some((name) => COMPANY_HEADER_KEYS.has(name) || DOMAIN_HEADER_KEYS.has(name))
@@ -505,24 +526,87 @@ export function tabularCellsToCompanyRows(matrix, options = {}) {
     .filter((row) => row.name);
 }
 
+// `options.withMeta` returns `{ rows, meta }` instead of the bare row array:
+// meta.skippedOutsideTable counts filled rows outside the sheet's Excel table,
+// meta.sheets carries the matrices of `options.includeSheets` (lookup sheets
+// such as a WZ-code mapping shipped in the same workbook).
 export async function extractCompanyRowsFromWorkbookFile(file, options = {}) {
-  if (!/\.(xlsx)$/i.test(file?.name || '')) return [];
+  const result = await extractWorkbookCompanyRows(file, options);
+  return options.withMeta ? result : result.rows;
+}
+
+async function extractWorkbookCompanyRows(file, options) {
+  const empty = { rows: [], meta: { skippedOutsideTable: 0, tableRange: null, sheets: {} } };
+  if (!/\.(xlsx)$/i.test(file?.name || '')) return empty;
   const bytes = file.base64
     ? base64ToBytes(file.base64)
     : new Uint8Array(await file.arrayBuffer?.() || []);
-  if (!bytes.length) return [];
+  if (!bytes.length) return empty;
   const zip = await readZipEntries(bytes);
   const workbookXml = await zipText(zip, 'xl/workbook.xml');
-  if (!workbookXml) return [];
+  if (!workbookXml) return empty;
   const workbook = parseXml(workbookXml);
   const relsXml = await zipText(zip, 'xl/_rels/workbook.xml.rels');
   const relTargets = workbookRelationshipTargets(relsXml);
   const sheetEntry = selectWorkbookSheet(workbook, relTargets, options.sheet || '');
-  if (!sheetEntry?.path) return [];
+  if (!sheetEntry?.path) return empty;
   const sharedStrings = await readSharedStrings(zip);
   const sheetXml = await zipText(zip, sheetEntry.path);
-  const matrix = sheetXmlToMatrix(sheetXml, sharedStrings);
-  return tabularCellsToCompanyRows(matrix, options);
+  let matrix = sheetXmlToMatrix(sheetXml, sharedStrings);
+  // A sheet with an Excel table holds its data inside the table. Rows below
+  // it are leftovers (a North Data export carried 16,876 name-only rows under
+  // a 32,929-row table); the owner decided they are not imported (06.10.2026).
+  const tableRange = await sheetTableRowRange(zip, sheetEntry.path);
+  let skippedOutsideTable = 0;
+  if (tableRange) {
+    const rowNumbers = matrix.rowNumbers || [];
+    const kept = [];
+    matrix.forEach((cells, index) => {
+      const rowNumber = rowNumbers[index] || index + 1;
+      if (rowNumber >= tableRange.first && rowNumber <= tableRange.last) kept.push(cells);
+      else if (cells.some((cell) => cleanCell(cell))) skippedOutsideTable += 1;
+    });
+    matrix = kept;
+  }
+  const rows = tabularCellsToCompanyRows(matrix, options);
+  const sheets = {};
+  for (const name of options.includeSheets || []) {
+    const entry = selectWorkbookSheet(workbook, relTargets, name);
+    if (!entry?.path || entry.path === sheetEntry.path || normalizeHeader(entry.name) !== normalizeHeader(name)) continue;
+    sheets[entry.name] = trimTrailingEmptyColumns(
+      sheetXmlToMatrix(await zipText(zip, entry.path), sharedStrings)
+        .map((row) => row.map((cell) => cleanCell(cell))),
+    );
+  }
+  return { rows, meta: { sheet: sheetEntry.name, skippedOutsideTable, tableRange, sheets } };
+}
+
+async function sheetTableRowRange(zip, sheetPath) {
+  const slash = sheetPath.lastIndexOf('/');
+  const relsXml = await zipText(zip, `${sheetPath.slice(0, slash)}/_rels/${sheetPath.slice(slash + 1)}.rels`);
+  if (!relsXml) return null;
+  let range = null;
+  for (const rel of Array.from(parseXml(relsXml).querySelectorAll('Relationship'))) {
+    if (!/\/table$/.test(rel.getAttribute('Type') || '')) continue;
+    const tableXml = await zipText(zip, resolveWorkbookPath(sheetPath, rel.getAttribute('Target') || ''));
+    const ref = tableXml ? parseXml(tableXml).documentElement?.getAttribute('ref') || '' : '';
+    const match = ref.match(/^[A-Z]+(\d+):[A-Z]+(\d+)$/i);
+    if (!match) continue;
+    const first = Number(match[1]);
+    const last = Number(match[2]);
+    range = range ? { first: Math.min(range.first, first), last: Math.max(range.last, last) } : { first, last };
+  }
+  return range;
+}
+
+function resolveWorkbookPath(basePath, target) {
+  if (target.startsWith('/')) return target.replace(/^\/+/, '');
+  const parts = basePath.split('/').slice(0, -1);
+  for (const segment of target.split('/')) {
+    if (segment === '..') parts.pop();
+    else if (segment && segment !== '.') parts.push(segment);
+  }
+  return parts.join('/');
 }
 
 export function renderUniversalImportDrawerMarkup(options = {}) {
@@ -776,8 +860,12 @@ async function buildImportPayload(drawer, config) {
   if (sourceType === 'text' && !text.trim()) throw new Error('Bitte Text oder Zeilen einfügen.');
   if (sourceType === 'url' && !url) throw new Error('Bitte eine URL angeben.');
   if ((sourceType === 'document' || sourceType === 'table' || sourceType === 'excel') && files.length === 0) throw new Error('Bitte mindestens eine Datei auswählen.');
+  const groupInputs = Array.from(drawer.querySelectorAll('[data-import-group]'));
   return {
     record_id: `import_${Date.now()}_${crypto.randomUUID()}`,
+    selected_groups: groupInputs.length
+      ? groupInputs.filter((input) => input.checked).map((input) => input.value)
+      : undefined,
     title,
     module_id: config.moduleId || '',
     entity_type: config.entityType || '',
@@ -920,6 +1008,7 @@ function importPreviewSignature(payload) {
     source_type: payload?.source_type || '',
     text: payload?.source?.text || '',
     url: payload?.source?.url || '',
+    selected_groups: payload?.selected_groups || null,
     files: (payload?.source?.files || []).map((file) => ({
       name: file?.name || '',
       size: Number(file?.size) || 0,
@@ -928,17 +1017,64 @@ function importPreviewSignature(payload) {
   });
 }
 
-function renderImportPreview(drawer, preview = {}) {
+// `preview.groups` ([{ id, label, count, selected }]) renders a selectable
+// list; the checked ids travel back as `payload.selected_groups`, and any
+// change re-arms the preview step so the module re-validates the selection.
+function renderImportPreviewGroups(preview) {
+  const groups = Array.isArray(preview.groups) ? preview.groups : [];
+  if (!groups.length) return '';
+  const number = (value) => Number(value || 0).toLocaleString('de-DE');
+  return `
+    <fieldset class="universal-importer-preview-groups" data-import-groups data-limit="${Number(preview.groupLimit) || 0}">
+      <legend>${escapeHtml(preview.groupsLabel || 'Auswahl')}</legend>
+      <div class="universal-importer-preview-group-list">
+        ${groups.map((group) => `
+          <label>
+            <input type="checkbox" data-import-group value="${escapeHtml(group.id)}" data-count="${Number(group.count) || 0}" ${group.selected ? 'checked' : ''} />
+            <span>${escapeHtml(group.label)}</span>
+            <span class="universal-importer-preview-group-count">${number(group.count)}</span>
+          </label>`).join('')}
+      </div>
+      <p class="universal-importer-preview-group-total" data-import-group-total></p>
+    </fieldset>`;
+}
+
+function updateImportPreviewGroupTotal(section) {
+  const fieldset = section.querySelector('[data-import-groups]');
+  const total = section.querySelector('[data-import-group-total]');
+  if (!fieldset || !total) return;
+  const limit = Number(fieldset.dataset.limit) || 0;
+  const selected = Array.from(fieldset.querySelectorAll('[data-import-group]:checked'))
+    .reduce((sum, input) => sum + (Number(input.dataset.count) || 0), 0);
+  const number = (value) => value.toLocaleString('de-DE');
+  total.textContent = limit
+    ? `Ausgewählt: ${number(selected)} von höchstens ${number(limit)}`
+    : `Ausgewählt: ${number(selected)}`;
+  total.dataset.kind = limit && selected > limit ? 'error' : selected ? 'success' : 'warning';
+}
+
+function renderImportPreview(drawer, preview = {}, config = {}) {
   const section = drawer.querySelector('[data-import-preview]');
   if (!section) return;
   const items = Array.isArray(preview.items) ? preview.items : [];
   section.hidden = false;
   section.innerHTML = `
     <strong>${escapeHtml(preview.heading || 'Importvorschau')}</strong>
+    ${renderImportPreviewGroups(preview)}
     ${items.length
       ? `<ul>${items.map((item) => `<li data-kind="${escapeHtml(item?.kind || 'info')}">${escapeHtml(item?.text || '')}</li>`).join('')}</ul>`
       : `<p>${escapeHtml(preview.message || 'Keine prüfbaren Datensätze gefunden.')}</p>`}
   `;
+  updateImportPreviewGroupTotal(section);
+  if (!section.dataset.groupsBound) {
+    section.dataset.groupsBound = '1';
+    section.addEventListener('change', (event) => {
+      if (!event.target?.matches?.('[data-import-group]')) return;
+      updateImportPreviewGroupTotal(section);
+      const submitButton = drawer.querySelector('[data-action="submit-importer"]');
+      if (submitButton) submitButton.textContent = config.submitLabel || 'Vorschau prüfen';
+    });
+  }
 }
 
 function updateImporterFields(drawer) {
@@ -1137,6 +1273,7 @@ function sheetXmlToMatrix(sheetXml, sharedStrings) {
   if (!sheetXml) return [];
   const doc = parseXml(sheetXml);
   const rows = [];
+  const rowNumbers = [];
   doc.querySelectorAll('sheetData row').forEach((rowEl) => {
     const cells = [];
     rowEl.querySelectorAll('c').forEach((cellEl) => {
@@ -1145,7 +1282,9 @@ function sheetXmlToMatrix(sheetXml, sharedStrings) {
       cells[columnIndex] = cellValue(cellEl, sharedStrings);
     });
     rows.push(cells.map((cell) => cell || ''));
+    rowNumbers.push(Number(rowEl.getAttribute('r')) || (rowNumbers.at(-1) || 0) + 1);
   });
+  rows.rowNumbers = rowNumbers;
   return rows;
 }
 
