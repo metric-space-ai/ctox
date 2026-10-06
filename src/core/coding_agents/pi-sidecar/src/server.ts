@@ -136,7 +136,13 @@ export async function handleTurnRequest(
         : /\b429\b|rate.limit/i.test(detail) ? "rate_limited"
         : /timeout|timed out/i.test(detail) ? "timeout"
         : "provider_error";
-      return { id: request.id, ok: false, error: `pi coding turn failed: ${category}` };
+      // OpenAI-compatible providers prefix HTTP failures with their status.
+      // Keep only that bounded number when the category is otherwise opaque;
+      // never project the provider body, URL, headers or request credentials.
+      const statusPrefix = /^\s*(?:HTTP(?:\s+status)?\s*:?\s*)?([45]\d{2})(?=\s|:|$)/i.exec(detail);
+      const reportedStatus = category === "provider_error" && statusPrefix
+        ? ` (provider HTTP ${statusPrefix[1]})` : "";
+      return { id: request.id, ok: false, error: `pi coding turn failed: ${category}${reportedStatus}` };
     }
     const terminalAssistant = [...result.messages].reverse().find((message) => message.role === "assistant");
     if (terminalAssistant?.role !== "assistant" || terminalAssistant.stopReason !== "stop") {
