@@ -3632,7 +3632,7 @@ function isDemandOnlyPullCollection(collection) {
     || collection === 'ctox_queue_tasks'
     // The chat dock reads a bounded window (CHAT_QUERY_WINDOW_LIMIT) and
     // writes by id. Eagerly mirroring every chat (1,257 docs / 18.6 MB on the
-    // THESEN tenant) ran on every cold profile and kept re-validating the
+    // measured tenant) ran on every cold profile and kept re-validating the
     // window against the unfinished pull, which occupied the channel for tens
     // of seconds of each start (06.10.2026). Hydrate through the bounded query.
     || collection === 'business_chats'
