@@ -266,13 +266,12 @@ async fn physical_frame_poll_checks_pinned_socket_without_await_or_consuming_rep
     guest.write_all(&[7]).await.unwrap();
     assert!(remote.ensure_current_endpoint("session-a").is_err());
     let mut byte = [0u8];
-    remote
-        .channel
-        .try_lock()
-        .unwrap()
-        .stream
-        .try_read(&mut byte)
-        .unwrap();
+    {
+        let channel = remote.channel.try_lock().unwrap();
+        // Test-only readiness wait, outside every native publication fence.
+        channel.stream.readable().await.unwrap();
+        channel.stream.try_read(&mut byte).unwrap();
+    }
     assert_eq!(
         byte,
         [7],

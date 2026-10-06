@@ -393,76 +393,90 @@ impl NativeGuestExecution {
     fn with_frame<T>(
         &self,
         id: &str,
-        apply: impl FnOnce(&mut Observation, &mut dyn FnMut() -> Result<()>, &Connection) -> Result<T>,
+        apply: impl FnOnce(
+            &mut Observation,
+            &mut dyn FnMut() -> Result<()>,
+            &Connection,
+            &[u8],
+        ) -> Result<T>,
     ) -> Result<T> {
         let transport = self.registry.current_transport()?;
-        self.provider
-            .with_live_provider_transaction(|tx, facts, turn| {
-                self.with_held_worker_policy(tx, facts, |entry, verify, policy| {
-                    self.current_process_effect(entry)?;
-                    let frame = entry.frame.as_ref().context("native observation retired")?;
-                    ensure!(
-                        frame.id == id
-                            && !transport.canceled.load(Ordering::SeqCst)
-                            && frame
-                                .transport
-                                .upgrade()
-                                .is_some_and(|pool| Arc::ptr_eq(&pool, &transport))
-                            && frame.deadline > Instant::now()
-                            && turn == Some(frame.turn.as_str()),
-                        "native observation expired/replaced or turn changed"
-                    );
-                    #[cfg(not(target_os = "linux"))]
-                    {
-                        let _ = apply;
-                        anyhow::bail!("native frame delivery requires Linux QEMU");
-                    }
-                    #[cfg(target_os = "linux")]
-                    {
-                        let endpoint = frame.endpoint.clone();
-                        let desktop = entry.desktop.as_mut().context("native child missing")?;
-                        desktop.ensure_live_endpoint_current(&endpoint)?;
-                        verify()?;
-                        // Ownership cannot be handed over while the exact registered
-                        // process effect is pending. Revoke/stop use this controller.
-                        let result = {
+        super::super::store::with_current_webrtc_capability_signer(
+            self.provider.runtime_root(),
+            |signing_secret| {
+                self.provider
+                    .with_live_provider_transaction(|tx, facts, turn| {
+                        self.with_held_worker_policy(tx, facts, |entry, verify, policy| {
+                            self.current_process_effect(entry)?;
                             let frame =
-                                entry.frame.as_mut().context("native observation retired")?;
-                            let deadline = frame.deadline;
-                            let mut current = || {
+                                entry.frame.as_ref().context("native observation retired")?;
+                            ensure!(
+                                frame.id == id
+                                    && !transport.canceled.load(Ordering::SeqCst)
+                                    && frame
+                                        .transport
+                                        .upgrade()
+                                        .is_some_and(|pool| Arc::ptr_eq(&pool, &transport))
+                                    && frame.deadline > Instant::now()
+                                    && turn == Some(frame.turn.as_str()),
+                                "native observation expired/replaced or turn changed"
+                            );
+                            #[cfg(not(target_os = "linux"))]
+                            {
+                                let _ = (apply, policy, signing_secret);
+                                anyhow::bail!("native frame delivery requires Linux QEMU");
+                            }
+                            #[cfg(target_os = "linux")]
+                            {
+                                let endpoint = frame.endpoint.clone();
+                                let desktop =
+                                    entry.desktop.as_mut().context("native child missing")?;
+                                desktop.ensure_live_endpoint_current(&endpoint)?;
                                 verify()?;
-                                self.registry
-                                    .verify_runtime_root(self.provider.runtime_root())?;
-                                ensure!(
-                                    !transport.canceled.load(Ordering::SeqCst)
-                                        && deadline > Instant::now(),
-                                    "native frame authority expired or pool closed"
-                                );
-                                desktop.ensure_live_endpoint_current(&endpoint)
-                            };
-                            let result = apply(frame, &mut current, policy);
-                            if let Err(error) = current() {
-                                frame.consumed = true;
-                                return Err(error);
+                                // Ownership cannot be handed over while the exact registered
+                                // process effect is pending. Revoke/stop use this controller.
+                                let result = {
+                                    let frame = entry
+                                        .frame
+                                        .as_mut()
+                                        .context("native observation retired")?;
+                                    let deadline = frame.deadline;
+                                    let mut current = || {
+                                        verify()?;
+                                        self.registry
+                                            .verify_runtime_root(self.provider.runtime_root())?;
+                                        ensure!(
+                                            !transport.canceled.load(Ordering::SeqCst)
+                                                && deadline > Instant::now(),
+                                            "native frame authority expired or pool closed"
+                                        );
+                                        desktop.ensure_live_endpoint_current(&endpoint)
+                                    };
+                                    let result = apply(frame, &mut current, policy, signing_secret);
+                                    if let Err(error) = current() {
+                                        frame.consumed = true;
+                                        return Err(error);
+                                    }
+                                    result
+                                };
+                                if transport.canceled.load(Ordering::SeqCst) {
+                                    if let Some(frame) = entry.frame.as_mut() {
+                                        frame.consumed = true;
+                                    }
+                                    anyhow::bail!("native frame pool closed during delivery");
+                                }
+                                if let Err(error) = verify() {
+                                    if let Some(frame) = entry.frame.as_mut() {
+                                        frame.consumed = true;
+                                    }
+                                    return Err(error);
+                                }
+                                result
                             }
-                            result
-                        };
-                        if transport.canceled.load(Ordering::SeqCst) {
-                            if let Some(frame) = entry.frame.as_mut() {
-                                frame.consumed = true;
-                            }
-                            anyhow::bail!("native frame pool closed during delivery");
-                        }
-                        if let Err(error) = verify() {
-                            if let Some(frame) = entry.frame.as_mut() {
-                                frame.consumed = true;
-                            }
-                            return Err(error);
-                        }
-                        result
-                    }
-                })
-            })
+                        })
+                    })
+            },
+        )
     }
     pub(super) fn execute_frame_action(
         &self,
@@ -576,7 +590,7 @@ impl NativeChunkLease {
     ) -> Result<T> {
         let registry = self.source.current_registry()?;
         let execution = registry.frame_execution(&self.id)?;
-        execution.with_frame(&self.id, |frame, native_current, policy| {
+        execution.with_frame(&self.id, |frame, native_current, policy, signing_secret| {
             ensure!(
                 !self.cancelled.load(Ordering::SeqCst)
                     && self.active.load(Ordering::SeqCst)
@@ -590,12 +604,7 @@ impl NativeChunkLease {
                     !self.cancelled.load(Ordering::SeqCst) && self.active.load(Ordering::SeqCst),
                     "native chunk lease closed"
                 );
-                validate_frame_peer(
-                    policy,
-                    &registry.runtime_root,
-                    &self.capability,
-                    &self.metadata,
-                )
+                validate_frame_peer(policy, signing_secret, &self.capability, &self.metadata)
             };
             current()?;
             let result = apply(frame, &mut current);
@@ -642,12 +651,34 @@ impl GuardedChunkLease for NativeChunkLease {
 /// helper must never initialize/reopen the worker or policy store.
 fn validate_frame_peer(
     policy: &Connection,
-    root: &Path,
+    signing_secret: &[u8],
     capability: &str,
     metadata: &Value,
 ) -> Result<()> {
-    let _ = (policy, root, capability, metadata);
-    anyhow::bail!("native borrowed-connection peer verifier integration pending")
+    let at_ms = i64::try_from(super::super::store::now_ms())?;
+    let claims = super::super::store::verified_webrtc_capability_claims_from_connection(
+        policy,
+        capability,
+        signing_secret,
+        at_ms,
+    )
+    .context("native frame peer capability is not current for this instance")?;
+    ensure!(
+        metadata.get("owner_user_id").and_then(Value::as_str) == Some(claims.user_id.as_str()),
+        "native frame belongs to another authenticated owner"
+    );
+    ensure!(
+        super::super::store::webrtc_capability_allows_collection_permission_from_connection(
+            policy,
+            capability,
+            signing_secret,
+            COLLECTION,
+            super::super::policy::BusinessOsPermission::DataRead,
+            at_ms,
+        ),
+        "native frame peer read permission was revoked"
+    );
+    Ok(())
 }
 impl GuardedFileSource for NativeFrameSource {
     fn byte_len(&self, id: &str) -> RxResult<u64> {
@@ -677,7 +708,7 @@ impl GuardedFileSource for NativeFrameSource {
         .map_err(transport_error)?;
         ensure_current_job(&execution, &job, &effect).map_err(transport_error)?;
         execution
-            .with_frame(id, |frame, current, _| {
+            .with_frame(id, |frame, current, _, _| {
                 ensure!(
                     !frame.consumed && !frame.delivered && frame.pending.is_none(),
                     "native observation already attempted"
@@ -699,14 +730,9 @@ impl GuardedFileSource for NativeFrameSource {
         let registry = self.current_registry().map_err(transport_error)?;
         let execution = registry.frame_execution(id).map_err(transport_error)?;
         execution
-            .with_frame(id, |frame, current, policy| {
+            .with_frame(id, |frame, current, policy, signing_secret| {
                 current()?;
-                validate_frame_peer(
-                    policy,
-                    &registry.runtime_root,
-                    capability_token,
-                    &frame.metadata,
-                )?;
+                validate_frame_peer(policy, signing_secret, capability_token, &frame.metadata)?;
                 ensure!(
                     !cancelled.load(Ordering::SeqCst),
                     "native frame transfer cancelled"
