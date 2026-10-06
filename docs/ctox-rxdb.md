@@ -1034,6 +1034,12 @@ submission still calls the command bus's scoped sync preparation before it
 inserts a command, so this changes first-paint latency rather than write
 authorization or persistence semantics.
 
+App Store bridge acquisition is also background warmup. A pending or failed
+native connection cannot delay mounting an already authorized cached catalog
+behind the bridge's three-second startup window. Its existing catalog query
+still runs before rendering, and a rejected catalog read still rejects mount.
+Command submission retains the existing native readiness and permission gates.
+
 A stricter authority-readiness barrier is separate from the render hint. It
 requires query-fetch capability plus a successfully installed demand loader for
 the current connection generation. `requireRevision` reads use this barrier and
