@@ -59,3 +59,90 @@ export function buildWzMapping(sheet) {
 
   return result;
 }
+
+export function selectImportGroups(rows, sheet, selectedGroups) {
+  const wzMapping = buildWzMapping(sheet);
+  const list = Array.isArray(rows) ? rows : [];
+  const incoming = Array.isArray(selectedGroups)
+    ? selectedGroups.filter((x) => typeof x === 'string')
+    : [];
+  const selectedIds = new Set(incoming);
+
+  const groups = new Map();
+
+  for (let i = 0; i < list.length; i++) {
+    const row = list[i];
+    if (row == null) continue;
+    const raw = row.raw;
+    const wzValue = raw ? raw['branche(wz)'] : undefined;
+    const division = normalizeWzDivision(wzValue);
+
+    let id;
+    let label;
+    if (division === '') {
+      id = 'missing:0';
+      label = '(ohne WZ-Code)';
+    } else {
+      const mapped = wzMapping.get(division);
+      if (mapped) {
+        id = 'list:' + encodeURIComponent(mapped);
+        label = mapped;
+      } else {
+        id = 'div:' + division;
+        label = 'WZ-Abteilung ' + division;
+      }
+    }
+
+    let g = groups.get(id);
+    const isSelected = selectedIds.has(id);
+    if (!g) {
+      g = { id, label, count: 0, selected: isSelected, rows: [] };
+      groups.set(id, g);
+    } else if (isSelected) {
+      g.selected = true;
+    }
+    g.count++;
+    g.rows.push(row);
+  }
+
+  const groupArr = Array.from(groups.values());
+  const collator = new Intl.Collator('de', { sensitivity: 'base' });
+  groupArr.sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return collator.compare(a.label, b.label);
+  });
+
+  const groupsOut = groupArr.map((g) => ({
+    id: g.id,
+    label: g.label,
+    count: g.count,
+    selected: g.selected,
+  }));
+
+  const selectedRows = [];
+  for (let i = 0; i < groupArr.length; i++) {
+    const g = groupArr[i];
+    if (g.selected) {
+      for (let j = 0; j < g.rows.length; j++) {
+        selectedRows.push(g.rows[j]);
+      }
+    }
+  }
+
+  const selectedCount = selectedRows.length;
+  const groupLimit = 5000;
+  const canProceed = selectedCount > 0 && selectedCount <= groupLimit;
+  let message = '';
+  if (selectedCount > groupLimit) {
+    message = 'Mehr als ' + groupLimit + ' Zeilen ausgewählt — Auswahl bitte reduzieren.';
+  }
+
+  return {
+    groups: groupsOut,
+    selectedRows,
+    selectedCount,
+    canProceed,
+    message,
+    groupLimit,
+  };
+}
