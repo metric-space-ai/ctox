@@ -2726,7 +2726,13 @@ fn frame_kind(frame: &Frame) -> &'static str {
     match frame {
         Frame::Request { .. } => "request",
         Frame::Response { .. } => "response",
-        Frame::Event { .. } => "event",
+        Frame::Event { event } => match event.payload {
+            NativeBusinessDataEventPayload::Upsert { .. } => "event:upsert",
+            NativeBusinessDataEventPayload::Remove { .. } => "event:remove",
+            NativeBusinessDataEventPayload::Command { .. } => "event:command",
+            NativeBusinessDataEventPayload::CaughtUp { .. } => "event:caughtUp",
+            _ => "event:other",
+        },
         Frame::CredentialChallenge { .. } => "credentialChallenge",
         Frame::CredentialReply { .. } => "credentialReply",
     }
