@@ -3781,7 +3781,10 @@ fn business_os_static_cache_control(is_index: bool, rel: &str, request_url: &str
     // made a warm start issue ~78 sequential conditional requests through the
     // ctox.dev tenant route (on-prem deployment: last shell script at 4.8 s,
     // 06.10.2026). Serve them fresh for an hour and stale-while-revalidate
-    // afterwards so a load never blocks on them.
+    // afterwards so a load never blocks on them. `s-maxage` lets the tenant
+    // route's edge (Vercel) keep them too: Cloudflare does not cache the
+    // `.mjs` sync bundle by extension, so without it every cold start sent the
+    // 600 KB bundle through the SSH hop.
     // The sync-engine bundle is addressed by the same APP_BUILD token (the
     // sole `?v=` in shared/rxdb-runtime.js, bumped on every bundle change), so
     // a URL never names two different bundles. At 600 KB it was the largest
@@ -3791,7 +3794,7 @@ fn business_os_static_cache_control(is_index: bool, rel: &str, request_url: &str
             .get("v")
             .is_some_and(|value| business_os_shell_generation_token(value))
     {
-        return "public, max-age=3600, stale-while-revalidate=604800";
+        return "public, max-age=3600, s-maxage=3600, stale-while-revalidate=604800";
     }
 
     // The generation gate above rejects a stale query before bytes from the
@@ -4921,7 +4924,7 @@ mod tests {
         ] {
             assert_eq!(
                 business_os_static_cache_control(false, rel, url),
-                "public, max-age=3600, stale-while-revalidate=604800",
+                "public, max-age=3600, s-maxage=3600, stale-while-revalidate=604800",
                 "{url}"
             );
         }
@@ -4940,7 +4943,7 @@ mod tests {
                 "rxdb/dist/ctox-rxdb-js.mjs",
                 "/rxdb/dist/ctox-rxdb-js.mjs?v=20261006-shell-v2-sync-invalidate-v454"
             ),
-            "public, max-age=3600, stale-while-revalidate=604800"
+            "public, max-age=3600, s-maxage=3600, stale-while-revalidate=604800"
         );
         assert_eq!(
             business_os_static_cache_control(
