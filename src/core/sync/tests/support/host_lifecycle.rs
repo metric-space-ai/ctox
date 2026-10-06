@@ -77,22 +77,22 @@ async fn shared_host_loop_withdraws_its_listener_after_stop() {
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let (started, ready) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        host_runtime::run_with_authority(
+        host_runtime::run_with_native_session(
             &config,
             &path,
             &ipc,
             key,
             options,
             async { stopped.await.map_err(io::Error::other) },
-            move |ready, authority| {
+            move |ready, authority, peer| {
                 started
-                    .send((ready, authority))
+                    .send((ready, authority, peer.pool_clone()))
                     .map_err(|_| io::Error::other("startup receiver closed"))
             },
         )
         .await
     });
-    let (ready, authority) = tokio::time::timeout(Duration::from_secs(10), ready)
+    let (ready, authority, pool) = tokio::time::timeout(Duration::from_secs(10), ready)
         .await
         .unwrap()
         .unwrap();
@@ -100,6 +100,7 @@ async fn shared_host_loop_withdraws_its_listener_after_stop() {
     assert_eq!(ready.scope_id, "lifecycle");
     assert_eq!(authority.node_id(), ready.node_id);
     assert_eq!(authority.scope_id(), ready.scope_id);
+    assert!(!pool.canceled.load(Ordering::SeqCst));
     assert!(ready.ipc_endpoint.exists());
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), task)
@@ -108,6 +109,10 @@ async fn shared_host_loop_withdraws_its_listener_after_stop() {
         .unwrap()
         .unwrap();
     assert!(!ready.ipc_endpoint.exists());
+    assert!(
+        pool.canceled.load(Ordering::SeqCst),
+        "borrowed peer must close with its host"
+    );
     assert!(
         authority.worker_membership(4).await.is_err(),
         "retained native authority must reject after host shutdown"
