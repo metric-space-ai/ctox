@@ -737,6 +737,9 @@ async function recoverCommandChannel(reason) {
       console.warn('[olg] Handle-Neuaufloesung fehlgeschlagen', { name, message: String(error?.message || error) });
     }
   }
+  // Recovered handles need new invalidation subscriptions, not observers on
+  // the cancelled handles. Rebinding also invalidates their in-flight reads.
+  if (state.uiMounted !== false) bindCollections();
 }
 
 // Generischer Einmal-Retry fuer Kanalabrisse.
@@ -13620,6 +13623,7 @@ export const __leadgenOutboundTestHooks = {
   vermerkPruefungErledigt,
   reload,
   bindCollections,
+  recoverCommandChannel,
   scheduleCollectionReload,
   testState: () => state,
   planeLeerNachladen,

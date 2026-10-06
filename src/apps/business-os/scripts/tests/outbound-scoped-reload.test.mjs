@@ -131,6 +131,21 @@ try {
     });
     return { reads, existingLead };
   }
+  await test('channel recovery replaces subscriptions and disposes the cancelled handles', async () => {
+    const names = ['sources', 'adapters', 'imports', 'researchPolicies', 'leads'];
+    const old = collections(names), recovered = collections(names);
+    setup(); state.collections = old.result; state.uiMounted = true;
+    state.ctx = { sync: { restartCollection: async () => {} },
+      db: { collection: (name) => recovered.result[name.replace('outbound_lead_generation_', '').replace('research_policies', 'researchPolicies')] } };
+    hooks.bindCollections(); const generation = state.collectionBindingGeneration;
+    try {
+      await hooks.recoverCommandChannel('regression');
+      assert.equal(Object.keys(old.listeners).length, 0);
+      assert.equal(Object.keys(recovered.listeners).length, 5);
+      assert.equal(state.collectionBindingGeneration, generation + 1);
+      assert.deepEqual(old.reads, []); assert.deepEqual(recovered.reads, []);
+    } finally { state.collectionReloader.dispose(); state.collectionReloader = null; state.uiMounted = undefined; }
+  });
   await test('actual source/adapters/policy/import reloads never read the leads collection', async () => {
     for (const key of ['sources', 'adapters', 'researchPolicies', 'imports']) {
       const { reads, existingLead } = setup();
