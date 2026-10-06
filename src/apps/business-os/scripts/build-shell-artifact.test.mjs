@@ -26,6 +26,7 @@ import {
 
 const VERSION = '1.2.3-beta.1+shell.5';
 const SOURCE_COMMIT = '0123456789abcdef0123456789abcdef01234567';
+const MOBILE_CATALOG = { type: 'workjet.business-os-mobile-apps.v1', revision: 'fixture', apps: [] };
 
 async function makeFixture() {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'ctox-shell-artifact-'));
@@ -35,6 +36,9 @@ async function makeFixture() {
     await writeFile(join(sourceRoot, filename), `runtime:${filename}\n`);
   }
   await writeFile(join(sourceRoot, 'index.html'), '<!doctype html><html><head><title>CTOX</title></head><body></body></html>');
+  // Create this independently of the pack allowlist: removing the catalog from
+  // the shipped archive must fail even when the rest of the inventory matches.
+  await writeFile(join(sourceRoot, 'mobile-apps.json'), JSON.stringify(MOBILE_CATALOG));
   for (const tree of RUNTIME_TREES) {
     await mkdir(join(sourceRoot, tree), { recursive: true });
     await writeFile(join(sourceRoot, tree, 'runtime.txt'), `${tree}\n`);
@@ -236,6 +240,10 @@ test('deterministic builds have byte-identical archives and complete sorted inve
 
     const embeddedEntry = entries.find((entry) => entry.path === `${root}/ctox-shell-manifest.json`);
     const embedded = JSON.parse(embeddedEntry.data.toString('utf8'));
+    const mobileCatalog = entries.find((entry) => entry.path === `${root}/mobile-apps.json`);
+    assert.ok(mobileCatalog, 'the mobile host can load its packaged app catalog');
+    assert.deepEqual(JSON.parse(mobileCatalog.data.toString('utf8')), MOBILE_CATALOG);
+    assert.equal(embedded.files.find((file) => file.path === 'mobile-apps.json').sha256, sha256(mobileCatalog.data));
     const html = entries.find((entry) => entry.path === `${root}/index.html`).data.toString('utf8');
     assert.ok(html.includes(`<meta name="ctox-shell-version" content="${embedded.version}">`));
     assert.ok(html.includes(`<meta name="ctox-shell-source-commit" content="${embedded.sourceCommit}">`));

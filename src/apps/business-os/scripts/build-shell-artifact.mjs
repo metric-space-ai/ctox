@@ -23,6 +23,7 @@ export const ROOT_RUNTIME_FILES = Object.freeze([
   'app.css',
   'mobile-host.css',
   'mobile-host.js',
+  'mobile-apps.json',
   'system-apps.json',
   'standard-app-bundle.json',
 ]);

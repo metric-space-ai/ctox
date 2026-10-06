@@ -8,6 +8,43 @@ const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
 const controlEnd = appSource.indexOf('async function waitForSyncBridgeReady', controlStart);
 const controlSource = appSource.slice(controlStart, controlEnd);
+const syncWaitEnd = appSource.indexOf('\n}\n', controlEnd) + 3;
+const projectRuntimeSource = controlSource + appSource.slice(controlEnd, syncWaitEnd);
+
+test('project projection waits through the actual nested replication state', async () => {
+  let pulled = false;
+  const project = { id: 'project-nested', name: 'Nested', status: 'active', owner_user_id: 'owner-1' };
+  const context = vm.createContext({
+    state: { db: { collection: () => ({ findOne: () => ({ exec: async () => pulled ? project : null }) }) } },
+    window: { setTimeout }, setTimeout, clearTimeout,
+    Date,
+  });
+  vm.runInContext(projectRuntimeSource, context);
+  context.bridge = { state: { async awaitInSync() { pulled = true; } } };
+  const result = await vm.runInContext(
+    "waitForProjectedWorkjetProject('project-nested', 'Nested', 'owner-1', bridge, 200)", context,
+  );
+  assert.equal(result.id, project.id);
+  assert.equal(pulled, true);
+});
+
+test('working-copy projection waits through the actual nested replication state', async () => {
+  let pulled = false;
+  const copy = { id: 'copy-nested', project_id: 'project-nested', computer_id: 'computer-1', path: '/fixture/project', status: 'active', owner_user_id: 'owner-1' };
+  const context = vm.createContext({
+    state: { db: { collection: () => ({ find: () => ({ exec: async () => pulled ? [copy] : [] }) }) } },
+    window: { setTimeout }, setTimeout, clearTimeout,
+    Date,
+  });
+  vm.runInContext(projectRuntimeSource, context);
+  context.bridge = { state: { async awaitInSync() { pulled = true; } } };
+  const result = await vm.runInContext(
+    "waitForProjectedWorkjetWorkingCopy('project-nested', {computerId:'computer-1',path:'/fixture/project'}, 'owner-1', bridge, 200)", context,
+  );
+  assert.equal(result.computerId, copy.computer_id);
+  assert.equal(pulled, true);
+});
+
 
 test('Workjet project control is installed and uses the RxDB command plane', () => {
   assert.match(appSource, /globalThis\.workjetProjectControl = workjetProjectControl/);

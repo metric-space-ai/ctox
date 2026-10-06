@@ -1228,6 +1228,12 @@ master relays and fork states only for the collections advertised by both peers.
 All supplied collections must belong to the supplied database; a mismatch fails
 before the shared native session opens signaling.
 
+Native schema properties preserve both scalar type names and JSON-Schema type
+arrays, including nullable fields such as `active_task_id`. Parsing must not
+collapse `["string", "null"]` to `"string"`: the declared union is part of the
+cross-runtime schema hash. Write validation accepts declared union members and
+still rejects values outside the union. Index fields require a single type.
+
 The same crate provides separate voter/worker execution attachments with
 pinned OpenRaft 0.9.25 authority over signed WebRTC control messages. These are
 not attached by the productive Business OS host yet. Replication master/fork
@@ -2075,7 +2081,9 @@ A different loader URL can create a second module instance; an unversioned
 loader can keep an old bundle cached after a deployment. After any runtime
 `src/` change, rebuild dist with the command above and bump the single bundle
 buster in `rxdb-runtime.js`, APP_BUILD, the HTML entry and both loader imports
-to the same new revision. Shell-only build revisions also advance the canonical
+to the same new revision. Keep the `-shell-v2-` marker in that revision: the
+shell-generation guard checks this namespace as well as matching asset URLs.
+Shell-only build revisions also advance the canonical
 bundle URL even when its bytes are unchanged. The shared promise resets after import rejection, so a later call
 can retry the same URL without creating a second bundle identity.
 

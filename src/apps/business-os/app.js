@@ -6935,10 +6935,20 @@ function createModuleContext(mod, overrides = {}) {
 
 function createModuleDrawerController(hostEl) {
   const scope = hostEl?.closest?.('.shell-window-module-root') || hostEl;
-  const close = () => scope?.querySelector?.('[data-module-drawer-overlay]')?.remove();
+  let previousFocus = null;
+  let focusFrame = null;
+  const close = () => {
+    if (focusFrame !== null) cancelAnimationFrame(focusFrame);
+    focusFrame = null;
+    scope?.querySelector?.('[data-module-drawer-overlay]')?.remove();
+    const restoreFocus = previousFocus;
+    previousFocus = null;
+    if (restoreFocus?.isConnected) restoreFocus.focus?.({ preventScroll: true });
+  };
   const open = (side, content) => {
     if (!scope) return null;
     close();
+    previousFocus = document.activeElement;
     const placement = ['left', 'right', 'bottom'].includes(side) ? side : 'right';
     const overlay = document.createElement('div');
     overlay.className = `shell-module-drawer-overlay shell-module-drawer-overlay--${placement}`;
@@ -6963,11 +6973,17 @@ function createModuleDrawerController(hostEl) {
     overlay.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
+        event.stopPropagation();
         close();
       }
     });
     scope.append(overlay);
-    requestAnimationFrame(() => panel.focus({ preventScroll: true }));
+    focusFrame = requestAnimationFrame(() => {
+      focusFrame = null;
+      if (!panel.isConnected) return;
+      const firstControl = panel.querySelector('input, textarea, button, [tabindex="0"]');
+      (firstControl || panel).focus({ preventScroll: true });
+    });
     return panel;
   };
   return Object.freeze({ open, close });

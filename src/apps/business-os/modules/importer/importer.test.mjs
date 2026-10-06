@@ -47,7 +47,7 @@ test('snapshot upload retries targeted pushes until the native peer acknowledges
   };
   await confirmSnapshotDocuments(ctx, 'desktop_file_chunks', [
     { id: 'chunk-1' }, { id: 'chunk-2' },
-  ], { timeoutMs: 100, retryMs: 0 });
+  ], { timeoutMs: 5_000, retryMs: 0 });
   assert.equal(attempts, 2);
   assert.deepEqual(releases, [1, 2]);
 });

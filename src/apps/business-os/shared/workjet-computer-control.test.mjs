@@ -7,6 +7,32 @@ const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_COMPUTER_CONTROL_MAX_RESULTS');
 const controlEnd = appSource.indexOf('async function waitForSyncBridgeReady', controlStart);
 const controlSource = appSource.slice(controlStart, controlEnd);
+const syncWaitEnd = appSource.indexOf('\n}\n', controlEnd) + 3;
+const computerRuntimeSource = controlSource + appSource.slice(controlEnd, syncWaitEnd);
+
+for (const status of ['assigned', 'unassigned']) {
+  test(`computer projection waits through nested replication state for ${status}`, async () => {
+    let pulled = false;
+    const computer = {
+      id: 'computer-nested', display_name: 'Recovery computer', hosting_mode: 'workstation',
+      status, capabilities: [], owner_user_id: 'owner-1',
+    };
+    const context = vm.createContext({
+      state: { db: { collection: () => ({ findOne: () => ({ exec: async () => pulled ? computer : null }) }) } },
+      window: { setTimeout }, setTimeout, clearTimeout, Date,
+    });
+    vm.runInContext(computerRuntimeSource, context);
+    context.bridge = { state: { async awaitInSync() { pulled = true; } } };
+    context.expectedStatus = status;
+    const result = await vm.runInContext(
+      "waitForProjectedWorkjetComputer('computer-nested', 'owner-1', expectedStatus, bridge, 200)", context,
+    );
+    assert.equal(result.id, computer.id);
+    assert.equal(result.status, status);
+    assert.equal(pulled, true);
+  });
+}
+
 
 test('Workjet guest computer control is installed and WebRTC/RxDB-only', () => {
   assert.match(appSource, /globalThis\.workjetComputerControl = workjetComputerControl/);
