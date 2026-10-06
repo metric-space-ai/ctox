@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
 
-const execFileAsync = promisify(execFile);
 const repoRoot = findRepoRoot(dirname(fileURLToPath(import.meta.url)));
 const businessOsRoot = join(repoRoot, 'src/apps/business-os');
 
@@ -36,21 +34,32 @@ const server = createServer(async (request, response) => {
 
 await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
 const address = server.address();
+let browser;
 try {
-  const { stdout } = await execFileAsync(findChromiumExecutable(), [
-    '--headless=new',
-    '--no-sandbox',
-    '--disable-gpu',
-    '--disable-dev-shm-usage',
-    '--dump-dom',
-    '--virtual-time-budget=6000',
-    `http://127.0.0.1:${address.port}/`,
-  ], { maxBuffer: 8 * 1024 * 1024 });
+  browser = await chromium.launch({
+    executablePath: findChromiumExecutable(),
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    timeout: 30_000,
+  });
+  const page = await browser.newPage();
+  await page.goto(`http://127.0.0.1:${address.port}/`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 30_000,
+  });
+  await page.waitForFunction(() => document.body.dataset.testStatus !== 'running', {
+  }, { timeout: 6000 });
+  const stdout = await page.content();
   assert.match(stdout, /data-test-status="passed"/);
   assert.match(stdout, /Mail logic editor browser DOM test passed/);
   console.log('Mail logic editor browser DOM test passed');
 } finally {
-  await new Promise((resolveClose) => server.close(resolveClose));
+  try {
+    await browser?.close();
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolveClose) => server.close(resolveClose));
+  }
 }
 
 function testPage() {
