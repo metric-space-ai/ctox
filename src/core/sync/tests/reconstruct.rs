@@ -230,7 +230,10 @@ async fn reconstruct_roundtrips_a_clean_workspace_with_empty_patches() {
         .unwrap();
     assert_eq!(snapshot(&target), before);
     assert_eq!(snapshot(&workspace), before);
-    assert_eq!(fs::read(target.join("tracked.txt")).unwrap(), b"unchanged\n");
+    assert_eq!(
+        fs::read(target.join("tracked.txt")).unwrap(),
+        b"unchanged\n"
+    );
 }
 
 #[tokio::test]
