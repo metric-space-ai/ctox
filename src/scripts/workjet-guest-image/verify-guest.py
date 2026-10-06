@@ -180,7 +180,12 @@ def main():
             (out / name).write_bytes(png)
             assertion("fresh_same_session_capture", file=name, width=w, height=h, sha256=hashlib.sha256(png).hexdigest())
         capture(2, "capture-before.png")
-        bad = request(guest, dict(kind="input_session", id=3, session_id=str(uuid.uuid4()),
+        # XFCE can still be painting when the X11 endpoint first answers.
+        # Retain that first frame and inspect a second actual capture after a
+        # bounded cold-start settling period; neither proves a usable desktop.
+        time.sleep(10)
+        capture(3, "capture-desktop.png")
+        bad = request(guest, dict(kind="input_session", id=4, session_id=str(uuid.uuid4()),
                                  input=dict(kind="type", text="INVALID_SESSION_MUST_NOT_APPLY")))
         if bad.get("kind") != "failed":
             raise ValueError("stale guest session admitted input")
@@ -189,7 +194,7 @@ def main():
             actions = json.loads(args.input_json.read_text())
             if not isinstance(actions, list) or not 0 < len(actions) <= 30:
                 raise ValueError("bounded native action list required")
-            for i, action in enumerate(actions, 4):
+            for i, action in enumerate(actions, 5):
                 reply = request(guest, dict(kind="input_session", id=i, session_id=session_id, input=action))
                 if reply.get("kind") != "applied":
                     raise ValueError("requested component input failed")
