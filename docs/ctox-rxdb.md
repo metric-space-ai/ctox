@@ -1,5 +1,13 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### CLI app command admission
+
+CLI app create/modify and app-bench requests persist and enqueue the real coding
+task. Admission leaves generated app files and execution completion to the
+bounded worker and its existing review/validation lifecycle, as the Business OS
+MCP path does. A modify request still requires its existing module manifest.
+Synchronous starter materialization remains available to its other callers.
+
 ### Native field-review view
 
 Outbound App consumers can request `ctox.outbound.field_review_view.v1` over the
@@ -258,6 +266,23 @@ settles the helper and requests continuation of the original task, under the
 existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
+
+### D&B classification evidence
+
+Direct authenticated company capture keeps WZ 2008 (DE) distinct from NACE,
+SIC, NOGA and OENACE. It accepts a five-digit WZ subclass only from the
+observed company profile with the expected company ID and an exact observed
+company heading or title. Conflicting WZ values produce no `wz_code`.
+The result retains the literal WZ section in `source_quote`; an NACE value
+never supplies a missing WZ digit. These browser-capture source gates do not
+certify an installed capture or the independently registered scrape script.
+
+The separate Direct+ JSON parser is compiled from Workjet, selected by the
+Cargo Git revision. Its WZ correction and executing regressions belong in
+native/web-stack, followed by a reviewed CTOX dependency and lockfile update.
+The resolved package must execute the explicit-WZ, foreign-scheme, incomplete,
+conflicting and equivalent-notation cases. Editing CTOX's inactive
+src/tools/web-stack copy does not change the compiled parser.
 
 ### Outbound research source receipts
 

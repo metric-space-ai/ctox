@@ -11,41 +11,26 @@
 #   * signals record / resolve --repair links work and persist correctly
 #   * cleanup removes test rows so the registry returns to its prior state
 #
-# Stage 2 (--full, ~3m): real stealth regression. Sabotages a known patch
-# in src/tools/web-stack/assets/stealth_init.js, rebuilds ctox, runs a real
-# probe against bot.sannysoft.com expecting FAIL, restores the file,
-# rebuilds, runs the same probe again expecting PASS. Requires network
-# access and an installed patchright + chromium runtime.
+# Stage 2 (--stage2 or --full): copies the committed root and its resolved
+# immutable Workjet dependency into a task-owned TMPDIR sandbox. It builds the
+# daemon with that canonical source, requires an initial passing incolumitas
+# probe, short-circuits the copied stealth IIFE and requires actual failed
+# tests, then restores, rebuilds and requires a positive control. Shared Cargo
+# caches, operator source, lock and runtime DB are never mutated. Network and
+# isolated patchright + chromium preparation are required; admission remains
+# the caller responsibility. Set TMPDIR on /Volumes/tmp on the operator Mac.
 #
 # Usage:
-#   scripts/tests/test_web_unlock_e2e.sh             # Stage 1 only
-#   scripts/tests/test_web_unlock_e2e.sh --full      # Stage 1 + Stage 2
-#   scripts/tests/test_web_unlock_e2e.sh --stage2    # Stage 2 only
+#   src/tools/web-stack/scripts/test_web_unlock_e2e.sh --stage1
+#   src/tools/web-stack/scripts/test_web_unlock_e2e.sh --full
+#   src/tools/web-stack/scripts/test_web_unlock_e2e.sh --stage2
 #
 # Exit codes: 0 = all passed, non-zero = a stage failed (see logs).
 
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
-# Local dev keeps build artifacts under target.nosync/ to avoid iCloud sync;
-# CI uses the standard target/. Prefer .nosync if present, else fall back.
-if [[ -x "$ROOT/runtime/build/cargo-target/debug/ctox" ]]; then
-  CTOX="$ROOT/runtime/build/cargo-target/debug/ctox"
-elif [[ -x "$ROOT/runtime/build/cargo-target/release/ctox" ]]; then
-  CTOX="$ROOT/runtime/build/cargo-target/release/ctox"
-elif [[ -x "$ROOT/target.nosync/debug/ctox" ]]; then
-  CTOX="$ROOT/target.nosync/debug/ctox"
-elif [[ -x "$ROOT/target/debug/ctox" ]]; then
-  CTOX="$ROOT/target/debug/ctox"
-elif [[ -x "$ROOT/target.nosync/release/ctox" ]]; then
-  CTOX="$ROOT/target.nosync/release/ctox"
-elif [[ -x "$ROOT/target/release/ctox" ]]; then
-  CTOX="$ROOT/target/release/ctox"
-else
-  CTOX="$ROOT/target/debug/ctox" # will fail precondition below with a clear msg
-fi
 SQLITE_DB="$ROOT/runtime/ctox.sqlite3"
-STEALTH_FILE="$ROOT/src/tools/web-stack/assets/stealth_init.js"
+
 
 STAGE1=1
 STAGE2=0
@@ -73,19 +58,19 @@ assert_eq() {
 }
 
 # ── Preconditions ───────────────────────────────────────────────────────────
-
-[[ -x "$CTOX" ]] || die "ctox binary missing at $CTOX — run 'cargo build -p ctox' first"
-command -v jq >/dev/null 2>&1 || die "jq is required"
-command -v sqlite3 >/dev/null 2>&1 || die "sqlite3 is required"
-
-# The runtime DB is created automatically on first `ctox web unlock` call.
-# Seed it explicitly so the assertions below have schema + probe rows.
-if [[ ! -f "$SQLITE_DB" ]]; then
-  log "Seeding runtime DB via 'ctox web unlock list-probes'"
-  "$CTOX" web unlock list-probes >/dev/null 2>&1 || die "failed to seed runtime DB"
+# Stage 2 owns an isolated source/runtime copy and needs no operator DB or
+# pre-existing binary. Only Stage 1 uses the source-verified daemon receipt.
+if [[ $STAGE1 -eq 1 ]]; then
+  CTOX="$(python3 "$ROOT/scripts/web_stack_source.py" daemon-path)"
+  [[ -x "$CTOX" ]] || die "source-verified daemon is missing"
+  command -v jq >/dev/null 2>&1 || die "jq is required"
+  command -v sqlite3 >/dev/null 2>&1 || die "sqlite3 is required"
+  cd "$ROOT"
+  if [[ ! -f "$SQLITE_DB" ]]; then
+    log "Seeding runtime DB via list-probes"
+    "$CTOX" web unlock list-probes >/dev/null 2>&1 || die "failed to seed runtime DB"
+  fi
 fi
-
-cd "$ROOT"
 
 # ── Stage 1: synthetic regression through full lifecycle ───────────────────
 
@@ -228,108 +213,11 @@ EOF
   log "STAGE 1 PASSED"
 }
 
-# ── Stage 2: real stealth regression against bot.sannysoft.com ─────────────
+# ── Stage 2: isolated real stealth regression against bot.incolumitas.com ──
 
 run_stage2() {
-  log "STAGE 2 — real stealth regression against bot.incolumitas.com"
-
-  # incolumitas exposes the most specific JS-property checks (refMatch,
-  # overflowTest, connectionRTT, inconsistentWorker*) that only our
-  # stealth_init.js covers. sannysoft passes on Patchright alone for most
-  # checks, so it's a poor sabotage target.
-  if ! curl -fsS --max-time 10 -o /dev/null "https://bot.incolumitas.com/"; then
-    die "bot.incolumitas.com not reachable from this host — skip stage 2"
-  fi
-  ok "bot.incolumitas.com reachable"
-
-  local BACKUP="${STEALTH_FILE}.e2e-bak"
-  [[ ! -f "$BACKUP" ]] || die "$BACKUP already exists — a prior run aborted; remove it first"
-
-  cp "$STEALTH_FILE" "$BACKUP"
-  trap 'log "Restoring $STEALTH_FILE from backup"; mv "$BACKUP" "$STEALTH_FILE" 2>/dev/null || true' EXIT
-
-  log "Sabotaging stealth_init.js: short-circuit the IIFE so no evasions run"
-  # The full IIFE is bypassed via an early return. This kills all 17 JS-property
-  # evasions while leaving Patchright's CDP-level patches in place. Expected
-  # casualty on incolumitas: fpscanner.WEBDRIVER flips to FAIL because the
-  # `delete Navigator.prototype.webdriver` step is skipped.
-  python3 - <<PY
-import pathlib
-p = pathlib.Path("$STEALTH_FILE")
-src = p.read_text()
-marker = "(() => {\n  'use strict';"
-sabotage = "(() => {\n  'use strict';\n  return; /* e2e-sabotage */"
-if marker not in src:
-    raise SystemExit("could not find IIFE opening — stealth_init.js shape changed")
-if src.count(marker) != 1:
-    raise SystemExit("IIFE opening matched more than once — refusing to sabotage")
-new = src.replace(marker, sabotage, 1)
-p.write_text(new)
-PY
-  # cargo's incremental build tracks include_str! by mtime, not by content.
-  # Force a touch so the rebuild actually re-embeds the asset.
-  touch "$STEALTH_FILE"
-  ok "stealth_init.js sabotaged (IIFE returns immediately)"
-
-  log "Rebuilding ctox with sabotaged stealth (this can take ~1 min)"
-  cargo build -p ctox >/dev/null 2>&1
-  ok "rebuild complete"
-
-  log "Running baseline incolumitas --record (expect FAIL)"
-  set +e
-  local OUTPUT
-  OUTPUT=$("$CTOX" web unlock baseline incolumitas --record 2>&1)
-  local EXIT_CODE=$?
-  set -e
-
-  if [[ $EXIT_CODE -eq 0 ]]; then
-    echo "$OUTPUT"
-    die "baseline passed despite sabotage — stealth was not actually broken (test invalid)"
-  fi
-
-  local FAILED_TESTS
-  FAILED_TESTS=$(echo "$OUTPUT" | jq -r '.probes[0].failed_tests | join(",")')
-  ok "baseline failed as expected; failed_tests=[$FAILED_TESTS]"
-
-  # Record the run_id of the regression for later cross-checks
-  local REGRESSION_RUN_ID
-  REGRESSION_RUN_ID=$(sqlite3 "$SQLITE_DB" "
-    SELECT run_id FROM web_unlock_test_runs
-    WHERE probe_id='incolumitas' ORDER BY run_id DESC LIMIT 1;
-  ")
-  ok "regression captured as run_id=$REGRESSION_RUN_ID"
-
-  log "Restoring stealth_init.js from backup"
-  mv "$BACKUP" "$STEALTH_FILE"
-  # Same mtime-tracking caveat — force cargo to re-embed.
-  touch "$STEALTH_FILE"
-  trap - EXIT
-
-  log "Rebuilding ctox with restored stealth"
-  cargo build -p ctox >/dev/null 2>&1
-  ok "rebuild complete"
-
-  log "Re-running baseline incolumitas --record (expect PASS)"
-  set +e
-  OUTPUT=$("$CTOX" web unlock baseline incolumitas --record 2>&1)
-  EXIT_CODE=$?
-  set -e
-  local FAILED_COUNT
-  FAILED_COUNT=$(echo "$OUTPUT" | jq -r '.probes[0].failed_count // "?"')
-  local FAILED_TESTS_POST
-  FAILED_TESTS_POST=$(echo "$OUTPUT" | jq -r '.probes[0].failed_tests | join(",")' 2>/dev/null || echo "?")
-  if [[ "$FAILED_COUNT" != "0" ]]; then
-    echo "post-restore exit_code=$EXIT_CODE  failed_count=$FAILED_COUNT  failed_tests=[$FAILED_TESTS_POST]"
-    echo "---"
-    echo "$OUTPUT"
-    die "post-restore baseline did not pass — stealth was not actually restored"
-  fi
-  ok "post-restore failed_count = 0"
-
-  log "Cleanup — removing the regression run_id from history"
-  sqlite3 "$SQLITE_DB" "DELETE FROM web_unlock_test_runs WHERE run_id=$REGRESSION_RUN_ID;"
-  ok "regression run removed from history"
-
+  log "STAGE 2 — isolated canonical-source mutation and restored positive control"
+  python3 "$ROOT/scripts/web_stack_source.py" mutation-probe
   log "STAGE 2 PASSED"
 }
 
