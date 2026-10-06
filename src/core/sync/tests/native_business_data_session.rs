@@ -1208,6 +1208,22 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         assert_eq!(state.result, Some(json!({"generation": "current"})));
         assert_no_frame(&mut client_b, "replacement command on B").await;
 
+        // A second notification of the same durable public state is not a
+        // command transition, even when SQLite updates its internal revision.
+        server_db
+            .collection("business_commands")
+            .unwrap()
+            .upsert(json!({
+                "id": "overlap-command",
+                "owner_user_id": "fixture-user",
+                "status": "completed",
+                "result": {"generation": "current"}
+            }))
+            .await
+            .unwrap();
+        assert_no_frame(&mut client_a, "duplicate command state on A").await;
+        assert_no_frame(&mut client_b, "duplicate command state on B").await;
+
         // A post-replacement event for another command is stale for this watch.
         // It must not be relabeled or cross peer boundaries.
         server_db
