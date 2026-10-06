@@ -71,7 +71,9 @@ impl SmbStorage {
             ensure!(
                 relative.len() == 84
                     && relative.ends_with(".part")
-                    && relative.as_bytes()[15..79].iter().all(u8::is_ascii_hexdigit),
+                    && relative.as_bytes()[15..79]
+                        .iter()
+                        .all(u8::is_ascii_hexdigit),
                 "invalid storage staging path"
             );
         } else {
