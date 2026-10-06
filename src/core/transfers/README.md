@@ -50,7 +50,9 @@ The in-tree download engine is `aria2-rust/`, an unchanged tracked-source snapsh
 of `mkh-welsch/aria2-rust` at `8364bcd7902dbd853a0f746c3dc937bbaadec561`,
 based on remote main `7bfacc2cf27e55d4755b06623c1b997880d0c697`.
 Its original LICENSE, copyright notices, manifest and tests are retained under
-GPL-2.0-or-later. `aria2-rust/PROVENANCE.json` pins the upstream Git tree and the
+GPL-2.0-or-later. The full GPLv2 license text is additionally supplied in
+`aria2-GPL-2.0.txt`, outside the immutable engine snapshot.
+`aria2-rust/PROVENANCE.json` pins the upstream Git tree and the
 SHA-256 of every imported file. The provenance test binds that manifest to the
 receipt revision and checks every file. Builds use the local path and require no
 access to the private upstream repository. The pinned engine adds optional

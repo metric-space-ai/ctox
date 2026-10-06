@@ -9,7 +9,11 @@ Primary integrated source trees:
   Unchanged tracked-source snapshot of https://github.com/mkh-welsch/aria2-rust at
   8364bcd7902dbd853a0f746c3dc937bbaadec561 (based on 7bfacc2cf27e55d4755b06623c1b997880d0c697).
   License: GPL-2.0-or-later, per its retained original LICENSE and Cargo.toml.
-  Original copyright notices and tests are retained. The owner authorized this
+  Original copyright notices and tests are retained. The full GPLv2 license text
+  is additionally supplied in src/core/transfers/aria2-GPL-2.0.txt, copied verbatim
+  from https://github.com/spdx/license-list-data/blob/main/text/GPL-2.0-or-later.txt;
+  the original
+  upstream LICENSE is unchanged. The owner authorized this
   in-tree redistribution; builds do not require private upstream Git access.
   PROVENANCE.json records the source tree and SHA-256 of each imported file.
 
