@@ -4923,13 +4923,16 @@ pub fn propose_action(
     let title = optional_string_arg(arguments, "title").unwrap_or_else(|| action.title.clone());
     let objective =
         optional_string_arg(arguments, "objective").unwrap_or_else(|| action.description.clone());
-    let mut payload = normalize_native_mcp_action_payload(
-        action_id,
-        arguments
-            .get("payload")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
-    );
+    let raw_payload = arguments
+        .get("payload")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    // Validate the declared transport types before normalization can hide a
+    // malformed list or boolean. No malformed proposal may reach enqueue.
+    if action_id == "web_stack.person_research" {
+        validate_person_research_action_arguments(arguments, &raw_payload)?;
+    }
+    let mut payload = normalize_native_mcp_action_payload(action_id, raw_payload);
     if matches!(action_id, "ctox.coding.models" | "ctox.coding.turn") {
         anyhow::ensure!(
             record_id.is_none(),
