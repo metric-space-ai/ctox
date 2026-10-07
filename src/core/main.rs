@@ -826,6 +826,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("office") => business_os::office_cli::handle_command(&args[1..]),
         Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),
         Some("transfer") => transfers_cli::handle(root, &args[1..]),
+        Some("build-job") => business_os::build_jobs::handle_cli(root, &args[1..]),
         Some("workjet-transfer") => {
             let outcome = business_os::execute_workjet_transfer_git_cli(&args[1..])?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);

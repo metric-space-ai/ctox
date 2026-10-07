@@ -62,6 +62,10 @@ impl NativeBuildSsh {
         Ok(bound)
     }
 
+    pub(crate) fn grant(&self) -> &BuildCapability {
+        &self.grant
+    }
+
     pub(crate) fn fingerprint(&self) -> &str {
         &self.fingerprint
     }
