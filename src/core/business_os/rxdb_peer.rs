@@ -12158,80 +12158,82 @@ pub(in crate::business_os) mod tests {
     #[test]
     fn workjet_project_schema_migration_preserves_populated_v0_identity_and_history(
     ) -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
-        std::fs::create_dir_all(root.path().join("runtime"))?;
-        let collection = "workjet_projects";
-        assert_eq!(expected_rxdb_collection_version(collection), 1);
-        for version in [0, 1] {
-            create_runtime_migration_source_table(root.path(), collection, version)?;
-        }
-        let source = rxdb_collection_version_table_name(collection, 0);
-        let target = rxdb_collection_version_table_name(collection, 1);
-        let read_rows = || -> anyhow::Result<Vec<(String, String, i64, f64, Value)>> {
+        for source_version in [0, 1] {
+            let root = tempfile::tempdir()?;
+            std::fs::create_dir_all(root.path().join("runtime"))?;
+            let collection = "workjet_projects";
+            assert_eq!(expected_rxdb_collection_version(collection), 2);
+            for version in [0, 1, 2] {
+                create_runtime_migration_source_table(root.path(), collection, version)?;
+            }
+            let source = rxdb_collection_version_table_name(collection, source_version);
+            let target = rxdb_collection_version_table_name(collection, 2);
+            let read_rows = || -> anyhow::Result<Vec<(String, String, i64, f64, Value)>> {
+                let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+                let mut statement = conn.prepare(&format!(
+                    "SELECT id,revision,deleted,lastWriteTime,data FROM {target} ORDER BY id"
+                ))?;
+                let rows = statement.query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })?;
+                rows.map(|row| {
+                    let (id, rev, deleted, lwt, raw) = row?;
+                    Ok((id, rev, deleted, lwt, serde_json::from_str(&raw)?))
+                })
+                .collect()
+            };
+            let mut expected = Vec::new();
             let conn = Connection::open(store::rxdb_store_path(root.path()))?;
-            let mut statement = conn.prepare(&format!(
-                "SELECT id,revision,deleted,lastWriteTime,data FROM {target} ORDER BY id"
-            ))?;
-            let rows = statement.query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })?;
-            rows.map(|row| {
-                let (id, rev, deleted, lwt, raw) = row?;
-                Ok((id, rev, deleted, lwt, serde_json::from_str(&raw)?))
-            })
-            .collect()
-        };
-        let mut expected = Vec::new();
-        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
-        for n in 0..16 {
-            let id = format!("project-{n:02}");
-            let revision = format!("{}-retained", n + 1);
-            let deleted = i64::from(n == 15);
-            let lwt = 100.0 + f64::from(n);
-            let document = json!({"id":id,"name":format!("Existing project {n}"),"status":if n<12 {"active"} else {"archived"},"owner_user_id":"196a89ba-ee86-4413-885c-04ca60e6f291","created_at_ms":50,"updated_at_ms":100+n,"is_deleted":n==15,"_rev":revision,"_deleted":n==15,"_meta":{"lwt":lwt}});
-            conn.execute(
-                &format!("INSERT INTO {source} VALUES (?1,?2,?3,?4,?5)"),
-                params![id, revision, deleted, lwt, document.to_string()],
-            )?;
-            expected.push((id, revision, deleted, lwt, document));
+            for n in 0..16 {
+                let id = format!("project-{n:02}");
+                let revision = format!("{}-retained", n + 1);
+                let deleted = i64::from(n == 15);
+                let lwt = 100.0 + f64::from(n);
+                let document = json!({"id":id,"name":format!("Existing project {n}"),"status":if n<12 {"active"} else {"archived"},"owner_user_id":"196a89ba-ee86-4413-885c-04ca60e6f291","created_at_ms":50,"updated_at_ms":100+n,"is_deleted":n==15,"_rev":revision,"_deleted":n==15,"_meta":{"lwt":lwt}});
+                conn.execute(
+                    &format!("INSERT INTO {source} VALUES (?1,?2,?3,?4,?5)"),
+                    params![id, revision, deleted, lwt, document.to_string()],
+                )?;
+                expected.push((id, revision, deleted, lwt, document));
+            }
+            drop(conn);
+            let migrated = migrate_additive_native_rxdb_collection_versions(root.path())?;
+            assert_eq!(migrated["verified_rows"], 16);
+            assert_eq!(migrated["migrated_rows"], 16);
+            assert_eq!(read_rows()?, expected);
+            let mut newer = expected[0].4.clone();
+            newer["repo_url"] = json!("https://github.com/metric-space-ai/ctox");
+            newer["public_url"] = json!("https://ctox.dev");
+            newer["info"] = json!({"goal":"Retained current goal"});
+            newer["jour_fixe"] = json!({"weekday":1,"time":"13:00","timezone":"Europe/Berlin"});
+            newer["updated_at_ms"] = json!(300);
+            let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+            conn.execute(&format!("UPDATE {target} SET revision='20-newer',lastWriteTime=300,data=?1 WHERE id='project-00'"),params![newer.to_string()])?;
+            drop(conn);
+            expected[0].1 = "20-newer".to_owned();
+            expected[0].3 = 300.0;
+            expected[0].4 = newer;
+            let retry = migrate_additive_native_rxdb_collection_versions(root.path())?;
+            assert_eq!(retry["verified_rows"], 16);
+            assert_eq!(retry["migrated_rows"], 0);
+            assert_eq!(
+                read_rows()?,
+                expected,
+                "retry cannot overwrite current project configuration"
+            );
+            let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+            assert_eq!(
+                sqlite_table_row_count(&conn, &source)?,
+                16,
+                "source remains retained before verified cleanup"
+            );
         }
-        drop(conn);
-        let migrated = migrate_additive_native_rxdb_collection_versions(root.path())?;
-        assert_eq!(migrated["verified_rows"], 16);
-        assert_eq!(migrated["migrated_rows"], 16);
-        assert_eq!(read_rows()?, expected);
-        let mut newer = expected[0].4.clone();
-        newer["repo_url"] = json!("https://github.com/metric-space-ai/ctox");
-        newer["public_url"] = json!("https://ctox.dev");
-        newer["info"] = json!({"goal":"Retained current goal"});
-        newer["jour_fixe"] = json!({"weekday":1,"time":"13:00","timezone":"Europe/Berlin"});
-        newer["updated_at_ms"] = json!(300);
-        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
-        conn.execute(&format!("UPDATE {target} SET revision='20-newer',lastWriteTime=300,data=?1 WHERE id='project-00'"),params![newer.to_string()])?;
-        drop(conn);
-        expected[0].1 = "20-newer".to_owned();
-        expected[0].3 = 300.0;
-        expected[0].4 = newer;
-        let retry = migrate_additive_native_rxdb_collection_versions(root.path())?;
-        assert_eq!(retry["verified_rows"], 16);
-        assert_eq!(retry["migrated_rows"], 0);
-        assert_eq!(
-            read_rows()?,
-            expected,
-            "retry cannot overwrite current project configuration"
-        );
-        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
-        assert_eq!(
-            sqlite_table_row_count(&conn, &source)?,
-            16,
-            "source remains retained before verified cleanup"
-        );
         Ok(())
     }
 

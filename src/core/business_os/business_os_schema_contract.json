@@ -12255,7 +12255,7 @@
     "additionalProperties": false
   },
   "workjet_projects": {
-    "version": 1,
+    "version": 2,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -12282,6 +12282,10 @@
       "info": {
         "type": "object",
         "properties": {
+          "summary": {
+            "type": "string",
+            "maxLength": 4096
+          },
           "description": {
             "type": "string",
             "maxLength": 4096
