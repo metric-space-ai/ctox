@@ -11,6 +11,14 @@ on:
         description: "Strict SemVer shell version (without tag prefix)"
         required: true
         type: string
+      source_commit:
+        description: "Optional reviewed main commit; defaults to the workflow ref"
+        required: false
+        type: string
+
+concurrency:
+  group: business-os-shell-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -23,6 +31,24 @@ jobs:
     steps:
       - name: Check out release source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ inputs.source_commit || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify main release source
+        id: source
+        shell: bash
+        env:
+          INPUT_SOURCE: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse HEAD)"
+          if [[ -n "$INPUT_SOURCE" ]]; then
+            [[ "$INPUT_SOURCE" =~ ^[a-f0-9]{40}$ ]] || { echo "source_commit must be a full commit ID" >&2; exit 1; }
+            [[ "$source_commit" == "$INPUT_SOURCE" ]] || { echo "Checked-out source differs from requested commit" >&2; exit 1; }
+          fi
+          git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main
+          printf 'commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js 24
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
@@ -50,7 +76,7 @@ jobs:
           if (isTagRun && process.env.REF_NAME !== `${prefix}${version}`) {
             throw new Error(`Tag must equal ${prefix}<version>; received ${process.env.REF_NAME}`);
           }
-          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\nrelease_tag=${prefix}${version}\n`);
           const channel = !version.includes('-')
             ? 'stable'
             : version.includes('-nightly.')
@@ -58,6 +84,21 @@ jobs:
               : 'beta';
           appendFileSync(process.env.GITHUB_OUTPUT, `channel=${channel}\n`);
           NODE
+
+      - name: Guard immutable release version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.identity.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          error_file="$(mktemp)"
+          trap 'rm -f "$error_file"' EXIT
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > /dev/null 2> "$error_file"; then
+            echo "Release already exists; immutable assets must not be overwritten" >&2
+            exit 1
+          fi
+          [[ "$(cat "$error_file")" == *"HTTP 404"* ]] || { cat "$error_file" >&2; exit 1; }
 
       - name: Install pinned browser test dependencies
         run: npm ci --prefix src/apps/business-os
@@ -106,7 +147,7 @@ jobs:
             --source-root "$GITHUB_WORKSPACE/src/apps/business-os" \
             --output-dir "$GITHUB_WORKSPACE/artifacts/business-os-shell" \
             --version "$SHELL_VERSION" \
-            --source-commit "${{ github.sha }}"
+            --source-commit "${{ steps.source.outputs.commit }}"
 
       - name: Verify detached SHA-256
         working-directory: artifacts/business-os-shell
@@ -115,17 +156,15 @@ jobs:
         run: sha256sum -c "ctox-business-os-shell-${SHELL_VERSION}.tar.gz.sha256"
 
       - name: Build SPDX SBOM
-        if: github.event_name == 'push'
         env:
           SHELL_VERSION: ${{ steps.identity.outputs.version }}
         run: |
           npm run shell:sbom --prefix src/apps/business-os -- \
             --manifest "$GITHUB_WORKSPACE/artifacts/business-os-shell/ctox-business-os-shell-${SHELL_VERSION}.manifest.json" \
             --output "$GITHUB_WORKSPACE/artifacts/business-os-shell/ctox-business-os-shell-${SHELL_VERSION}.spdx.json" \
-            --namespace "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ctox-business-os-shell-${SHELL_VERSION}.spdx.json"
+            --namespace "https://github.com/${{ github.repository }}/releases/download/${{ steps.identity.outputs.release_tag }}/ctox-business-os-shell-${SHELL_VERSION}.spdx.json"
 
       - name: Sign release manifest and channel pointer
-        if: github.event_name == 'push'
         env:
           SHELL_VERSION: ${{ steps.identity.outputs.version }}
           SHELL_CHANNEL: ${{ steps.identity.outputs.channel }}
@@ -134,8 +173,8 @@ jobs:
         run: |
           test -n "$SHELL_SIGNING_KEY_ID"
           test -n "$SHELL_SIGNING_KEY"
-          published_at="$(git show -s --format=%cI '${{ github.sha }}')"
-          base_url="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          published_at="$(git show -s --format=%cI '${{ steps.source.outputs.commit }}')"
+          base_url="https://github.com/${{ github.repository }}/releases/download/${{ steps.identity.outputs.release_tag }}"
           npm run shell:sign-release --prefix src/apps/business-os -- \
             --manifest "$GITHUB_WORKSPACE/artifacts/business-os-shell/ctox-business-os-shell-${SHELL_VERSION}.manifest.json" \
             --output-dir "$GITHUB_WORKSPACE/artifacts/business-os-shell/signed" \
@@ -163,12 +202,12 @@ jobs:
             artifacts/business-os-shell/signed/business-os-shell-${{ steps.identity.outputs.channel }}.json
 
       - name: Publish GitHub release assets
-        if: github.event_name == 'push'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.identity.outputs.release_tag }}
+          target_commitish: ${{ steps.source.outputs.commit }}
           name: CTOX Business OS Shell ${{ steps.identity.outputs.version }}
           prerelease: ${{ contains(steps.identity.outputs.version, '-') }}
           generate_release_notes: true
@@ -180,7 +219,6 @@ jobs:
             artifacts/business-os-shell/signed/ctox-business-os-shell-${{ steps.identity.outputs.version }}.release.v2.json
 
       - name: Publish signed channel pointer
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SHELL_CHANNEL: ${{ steps.identity.outputs.channel }}
