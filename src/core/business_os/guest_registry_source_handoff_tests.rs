@@ -114,6 +114,28 @@ pub(super) fn assert_native_source_handoff_enrollment(
             [super::super::super::policy::BusinessOsPermission::SessionHandoffDisclose.as_str()])?;
         Ok(())
     }).unwrap();
+    registry
+        .with_policy(|tx| {
+            // The persistent trigger is visible to the gate's independent connection.
+            tx.execute_batch(
+                "CREATE TRIGGER fail_native_handoff_audit BEFORE INSERT ON business_events
+            WHEN NEW.command_type='business_os.session_handoff.allowed'
+            BEGIN SELECT RAISE(ABORT,'native audit fixture failure'); END;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        gate.authorize(&request).unwrap_err().reason_code,
+        "policy_audit_unavailable",
+        "an unaudited permit must never escape"
+    );
+    registry
+        .with_policy(|tx| {
+            tx.execute_batch("DROP TRIGGER fail_native_handoff_audit")?;
+            Ok(())
+        })
+        .unwrap();
     let permitted = gate.authorize(&request).unwrap();
     assert_eq!(permitted.session_id, spec.session_id);
     ctox_sync::authority::auth::session_handoff::verify_session_handoff_permit(
@@ -240,4 +262,49 @@ pub(super) fn assert_native_source_handoff_enrollment(
         target_rows, 0,
         "source preparation cannot enroll the target"
     );
+    drop(policy);
+    let mut untrusted = request.clone();
+    untrusted.binding_digest = "0".repeat(64);
+    untrusted.spec.job_id = "PRIVATE_UNTRUSTED_AUDIT_PAYLOAD".into();
+    untrusted.nonce = "PRIVATE_UNTRUSTED_AUDIT_NONCE".into();
+    assert!(gate.authorize(&untrusted).is_err());
+    let policy = super::super::super::store::open_store(root).unwrap();
+    let events: Vec<(String, String)> = policy
+        .prepare(
+            "SELECT command_type,payload_json FROM business_events
+         WHERE collection='business_session_handoff_bindings'",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(kind, _)| kind == "business_os.session_handoff.enrolled")
+            .count(),
+        1,
+        "exact enrollment retry emits no duplicate audit"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(kind, _)| kind == "business_os.session_handoff.revoked")
+            .count(),
+        1
+    );
+    assert!(events
+        .iter()
+        .any(|(kind, _)| kind == "business_os.session_handoff.allowed"));
+    assert!(events
+        .iter()
+        .any(|(kind, _)| kind == "business_os.session_handoff.denied"));
+    for (_, payload) in events {
+        assert!(!payload.contains("PRIVATE_UNTRUSTED_AUDIT_"));
+        assert!(!payload.contains("actual fixture reply"));
+        assert!(!payload.contains("capture original fixture turn"));
+        assert!(!payload.contains("fresh-native-disclosure-fixture"));
+        assert!(serde_json::from_str::<serde_json::Value>(&payload).is_ok());
+    }
 }

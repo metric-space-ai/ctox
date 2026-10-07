@@ -208,12 +208,67 @@ impl NativeSessionHandoffGate {
                     rusqlite::TransactionBehavior::Immediate,
                 )
                 .map_err(|_| deny("store_unavailable"))?;
-                apply(&tx, identity)
+                let decision = apply(&tx, identity);
+                tx.commit().map_err(|_| deny("policy_audit_unavailable"))?;
+                decision
             })();
             Ok(decision)
         })
         .map_err(|_| deny("identity_unavailable"))?
     }
+}
+
+fn audit_decision(
+    conn: &Connection,
+    request: &SessionHandoffGateRequest,
+    identity: &SigningIdentity,
+    decision: &Result<SessionHandoffPermit, SessionHandoffDenial>,
+) -> Result<(), SessionHandoffDenial> {
+    let binding = load_binding(conn, &request.binding_digest)
+        .map_err(|_| deny("policy_audit_unavailable"))?;
+    // Record only durable binding identifiers. Untrusted request fields may
+    // contain arbitrary data; never echo them, a nonce or reusable credentials.
+    let record_id = binding
+        .as_ref()
+        .map(|b| b.binding_id.as_str())
+        .unwrap_or("unknown_binding");
+    let principal = binding.as_ref().map(|b| match request.phase {
+        SessionHandoffPhase::Disclose => b.source_actor_user_id.as_str(),
+        SessionHandoffPhase::Receive | SessionHandoffPhase::Resume => {
+            b.target_principal_user_id.as_str()
+        }
+    });
+    let event_type = if decision.is_ok() {
+        "business_os.session_handoff.allowed"
+    } else {
+        "business_os.session_handoff.denied"
+    };
+    let reason = decision
+        .as_ref()
+        .err()
+        .map(|d| d.reason_code.as_str())
+        .unwrap_or("allowed");
+    super::store::insert_business_event(
+        conn,
+        "business_session_handoff_bindings",
+        record_id,
+        event_type,
+        serde_json::json!({
+            "version": 1, "event_type": event_type,
+            "phase": request.phase, "reason_code": reason,
+            "bound_principal_id": principal,
+            "issuer_identity": identity.public_identity(),
+            "binding_digest": binding.as_ref().map(|_| request.binding_digest.as_str()),
+            "binding_revision": binding.as_ref().map(|b| b.revision),
+            "job_id": binding.as_ref().map(|b| b.job_id.as_str()),
+            "session_id": binding.as_ref().map(|b| b.session_id.as_str()),
+            "scope_id": binding.as_ref().map(|b| b.scope_id.as_str()),
+            "checkpoint_digest": binding.as_ref().map(|b| b.checkpoint_digest.as_str()),
+            "principal_epoch": decision.as_ref().ok().map(|p| p.principal_epoch),
+        }),
+        now_ms() as i64,
+    )
+    .map_err(|_| deny("policy_audit_unavailable"))
 }
 
 impl SessionHandoffGate for NativeSessionHandoffGate {
@@ -224,20 +279,24 @@ impl SessionHandoffGate for NativeSessionHandoffGate {
         // Do not initialize/migrate stores or let separate reads straddle
         // revocation. The signature is made before either fence is released.
         self.with_current_authority(|conn, identity| {
-            if request.phase == SessionHandoffPhase::Disclose {
-                #[cfg(unix)]
-                {
-                    let config = crate::sync_host::handoff_configuration(&self.root)
-                        .map_err(|_| deny("host_unavailable"))?;
-                    super::session_handoff_enrollment::validate_source_decision(
-                        &self.root, conn, &config, identity, request,
-                    )
-                    .map_err(|_| deny("source_authority_changed"))?;
+            let decision = (|| {
+                if request.phase == SessionHandoffPhase::Disclose {
+                    #[cfg(unix)]
+                    {
+                        let config = crate::sync_host::handoff_configuration(&self.root)
+                            .map_err(|_| deny("host_unavailable"))?;
+                        super::session_handoff_enrollment::validate_source_decision(
+                            &self.root, conn, &config, identity, request,
+                        )
+                        .map_err(|_| deny("source_authority_changed"))?;
+                    }
+                    #[cfg(not(unix))]
+                    return Err(deny("source_authority_unavailable"));
                 }
-                #[cfg(not(unix))]
-                return Err(deny("source_authority_unavailable"));
-            }
-            self.authorize_with_conn(conn, request, identity)
+                self.authorize_with_conn(conn, request, identity)
+            })();
+            audit_decision(conn, request, identity, &decision)?;
+            decision
         })
     }
 }

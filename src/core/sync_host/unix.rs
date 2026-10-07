@@ -186,11 +186,8 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             })
         },
         ["handoff-revoke", binding] => {
-            let mut policy = crate::business_os::store::open_store(&root)?;
-            let tx = policy.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let changed = tx.execute("UPDATE business_session_handoff_bindings SET state='revoked',revision=revision+1 WHERE binding_id=?1 AND state='active'", [binding])?;
-            tx.commit()?;
-            print(serde_json::json!({"revoked": changed == 1}))
+            let revoked = crate::business_os::session_handoff_enrollment::revoke_binding(&root, binding)?;
+            print(serde_json::json!({"revoked": revoked}))
         },
         ["status"] => runtime::status(&root),
         ["configure-guests"] => {

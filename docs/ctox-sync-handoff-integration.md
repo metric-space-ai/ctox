@@ -113,6 +113,11 @@ capability set, ownership node/generation and destination peer before signing.
 Provider assignment is checked here; a currently held credential/account guard
 and a physical publication fence still belong to the future transfer owner.
 A permit is not permission to stream later without those retained guards.
+Enrollment, revocation and every gate decision use the existing Business OS
+event store. Decisions commit their identifier-only audit under the same held
+issuer/policy transaction; failure to persist the audit denies the permit.
+Request payloads, nonces, journal text and reusable credentials are excluded.
+
 Receive/execute grants, target-local enrollment, effect reconciliation,
 authenticated byte transport and same-session target activation remain open.
 

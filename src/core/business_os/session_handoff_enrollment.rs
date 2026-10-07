@@ -36,6 +36,32 @@ pub(crate) struct SourceHandoffEnrollmentReceipt {
     pub checkpoint_sequence: u64,
 }
 
+pub(crate) fn revoke_binding(root: &Path, binding: &str) -> Result<bool> {
+    ensure!(
+        !binding.is_empty() && binding.len() <= 128,
+        "invalid native binding ID"
+    );
+    let mut policy = open_store(root)?;
+    let tx = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = tx.execute(
+        "UPDATE business_session_handoff_bindings SET state='revoked',revision=revision+1
+        WHERE binding_id=?1 AND state='active'",
+        [binding],
+    )?;
+    if changed == 1 {
+        super::store::insert_business_event(
+            &tx,
+            "business_session_handoff_bindings",
+            binding,
+            "business_os.session_handoff.revoked",
+            serde_json::json!({"version":1,"operator_type":"local_native_operator"}),
+            now_ms() as i64,
+        )?;
+    }
+    tx.commit()?;
+    Ok(changed == 1)
+}
+
 fn validate_input(input: &SourceHandoffEnrollment) -> Result<()> {
     let id = |s: &str| {
         !s.is_empty()
@@ -159,7 +185,7 @@ pub(crate) fn enroll_source_with_conn(
     let hash = digest(&source, input, &issuer, target)?;
     let id = format!("handoff_{hash}");
     let now = i64::try_from(now_ms())?;
-    policy.execute(
+    let inserted = policy.execute(
         "INSERT INTO business_session_handoff_bindings
         (binding_id,binding_digest,revision,state,side,job_id,session_id,scope_id,
         checkpoint_digest,checkpoint_sequence,ownership_generation,source_instance_id,
@@ -214,6 +240,25 @@ pub(crate) fn enroll_source_with_conn(
         |r| r.get(0),
     )?;
     ensure!(exact, "native source provenance conflicts; reconcile");
+    if inserted == 1 {
+        super::store::insert_business_event(
+            policy,
+            "business_session_handoff_bindings",
+            &id,
+            "business_os.session_handoff.enrolled",
+            serde_json::json!({
+                "version":1, "side":"source", "binding_digest":hash,
+                "source_principal_id":source.owner_user_id,
+                "source_instance_id":source.source_instance_id,
+                "target_instance_id":input.target_instance_id,
+                "target_principal_id":input.target_principal_user_id,
+                "target_identity":target, "job_id":source.spec.job_id,
+                "session_id":source.spec.session_id,
+                "checkpoint_digest":source.checkpoint_digest,
+            }),
+            now,
+        )?;
+    }
     // No permission grant, durable-copy receipt, clean-effect witness or target
     // enrollment is written by this source-side preparation.
     Ok(SourceHandoffEnrollmentReceipt {
