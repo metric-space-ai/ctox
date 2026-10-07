@@ -1,4 +1,6 @@
 import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-supervisor-execution';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v2-supervisor-execution';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v2-supervisor-execution';
 import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v2-supervisor-execution';
 import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v2-supervisor-execution';
 import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v2-supervisor-execution';
@@ -13707,12 +13709,93 @@ async function workjetProjectControl(request = {}) {
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
   const supervisorActions = ['project.supervisor.bind', 'project.supervisor.turn.submit',
-    'project.supervisor.turn.watch', 'project.supervisor.turn.cancel'];
+    'project.supervisor.turn.watch', 'project.supervisor.turn.cancel',
+    'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read'];
   const acquisition = supervisorActions.includes(action)
     ? requireWorkjetSupervisorDataPlane() : requireWorkjetProjectDataPlane();
   const { projectBridge, workingCopyBridge } = listDeadline
     ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
     : await acquisition;
+
+  if (['project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {
+    const meetingRead = action === 'project.jour_fixe.meeting.read';
+    const configuring = action === 'project.kpis.configure';
+    const allowedKeys = new Set(['action', 'commandId', 'projectId']);
+    if (meetingRead) allowedKeys.add('meetingId');
+    if (configuring) for (const key of ['operationId', 'expectedRevision', 'prompts']) allowedKeys.add(key);
+    assertWorkjetProjectPayloadKeys(request, allowedKeys);
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const payload = { project_id: projectId };
+    if (meetingRead && request.meetingId !== undefined) {
+      payload.meeting_id = boundedWorkjetProjectText(request.meetingId, 'meetingId', 128);
+    }
+    if (configuring) {
+      payload.operation_id = boundedWorkjetProjectText(request.operationId, 'operationId', 128);
+      if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
+        throw new TypeError('Workjet KPI expectedRevision must be a nonnegative safe integer.');
+      }
+      payload.expected_revision = request.expectedRevision;
+      payload.prompts = request.prompts;
+    }
+    const requestType = meetingRead ? 'ReadMeetingRequest' : configuring ? 'ConfigureKpisRequest' : 'ReadKpisRequest';
+    const validate = meetingRead ? validateJourFixeValue : validateProjectKpiValue;
+    validate(requestType, payload);
+    if (configuring) payload.prompts = payload.prompts.map(prompt => {
+      assertWorkjetProjectPayloadKeys(prompt, new Set(['kpi_id', 'prompt']));
+      return { kpi_id: prompt.kpi_id, prompt: prompt.prompt };
+    });
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the native project result was delivered.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox', record_id: projectId,
+      command_type: meetingRead ? 'ctox.workjet.jour_fixe.meeting.read' : `ctox.workjet.${action}`,
+      payload, client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentIdentity();
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId || receipt.result?.ok !== true
+      || Object.entries(payload).some(([key, value]) => key === 'prompts'
+        ? !Array.isArray(receipt.payload?.prompts) || receipt.payload.prompts.length !== value.length
+          || value.some((prompt, index) => receipt.payload.prompts[index]?.kpi_id !== prompt.kpi_id
+            || receipt.payload.prompts[index]?.prompt !== prompt.prompt)
+        : receipt.payload?.[key] !== value)) {
+      throw new Error('Workjet native project command returned an uncorrelated or unsuccessful receipt.');
+    }
+    if (!meetingRead) {
+      const kpis = receipt.result.kpis;
+      validateProjectKpiValue('ProjectKpis', kpis);
+      if (kpis.project_id !== projectId || !Number.isSafeInteger(kpis.revision)) {
+        throw new Error('Workjet KPI result belongs to another project or revision.');
+      }
+      return { action, commandId, projectId, contract: PROJECT_KPIS_SCHEMA, kpis: JSON.parse(JSON.stringify(kpis)) };
+    }
+    const meeting = receipt.result.meeting;
+    if (meeting === null && payload.meeting_id !== undefined) {
+      throw new Error('Workjet explicitly requested meeting was not confirmed.');
+    }
+    if (meeting !== null) {
+      validateJourFixeValue('Meeting', meeting);
+      if (meeting.project_id !== projectId || !Number.isSafeInteger(meeting.revision)
+        || !Number.isSafeInteger(meeting.deck_revision)
+        || (payload.meeting_id !== undefined && meeting.id !== payload.meeting_id)) {
+        throw new Error('Workjet meeting result belongs to another project or meeting.');
+      }
+    }
+    const result = { action, commandId, projectId, contract: JOUR_FIXE_SCHEMA, meeting: JSON.parse(JSON.stringify(meeting)) };
+    if (receipt.result.preparation_task_id != null) {
+      if (meeting === null || typeof receipt.result.preparation_task_id !== 'string') {
+        throw new Error('Workjet preparation task requires a confirmed meeting and a native task id.');
+      }
+      result.preparationTaskId = boundedWorkjetProjectText(receipt.result.preparation_task_id, 'preparationTaskId', 256);
+    }
+    return result;
+  }
 
   if (action === 'project.worker.add' || action === 'project.chat.create') {
     const creatingChat = action === 'project.chat.create';

@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './workjet-supervisor-execution-contract.generated.mjs';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './workjet-project-kpis-contract.generated.mjs';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './workjet-jour-fixe-contract.generated.mjs';
 
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
@@ -21,7 +23,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 7);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 8);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -253,6 +255,117 @@ function projectConfigurationFixture(changeReceipt = () => {}) {
     invoke: async (request) => JSON.parse(JSON.stringify(await context.invoke(request))),
   };
 }
+
+function nativeProjectDetailsFixture(changeReceipt = () => {}) {
+  const commands = [];
+  const state = {
+    session: { id: 'owner-alias' }, db: { collection: () => ({}) },
+    sync: { async startCollection(name) { assert.equal(name, 'business_commands'); return {}; } },
+    commandBus: { async dispatch(command) {
+      commands.push(command);
+      const receipt = {
+        command_id: command.id, target_record_id: command.payload.project_id,
+        payload: structuredClone(command.payload), status: 'completed', ok: true,
+        result: command.command_type === 'ctox.workjet.jour_fixe.meeting.read'
+          ? { ok: true, meeting: null }
+          : { ok: true, kpis: { project_id: command.payload.project_id,
+            revision: command.payload.expected_revision === undefined ? 0 : command.payload.expected_revision + 1,
+            items: (command.payload.prompts || []).map(prompt => ({
+              prompt: { ...prompt, revision: 1 },
+              result: { status: 'missing_source', reason_code: 'source_not_bound', message: 'No source.' },
+            })) } },
+      };
+      changeReceipt(receipt, state);
+      return receipt;
+    } },
+  };
+  const context = { state, actorContext: session => ({ id: session.id }),
+    PROJECT_KPIS_SCHEMA, validateProjectKpiValue, JOUR_FIXE_SCHEMA, validateJourFixeValue };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
+}
+
+test('native KPI control reads, configures and clears prompts without a projection pull', async () => {
+  const fixture = nativeProjectDetailsFixture();
+  const base = { commandId: 'details-1', projectId: 'project-1' };
+  const read = await fixture.invoke({ ...base, action: 'project.kpis.read' });
+  assert.deepEqual(read.kpis, { project_id: 'project-1', revision: 0, items: [] });
+  const configured = await fixture.invoke({ ...base, action: 'project.kpis.configure',
+    operationId: 'operation-1', expectedRevision: 0, prompts: [{ prompt: 'Visitors per week', kpi_id: 'visitors' }] });
+  assert.equal(configured.contract, PROJECT_KPIS_SCHEMA);
+  assert.equal(configured.kpis.items[0].result.status, 'missing_source');
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[1].payload)), {
+    project_id: 'project-1', operation_id: 'operation-1', expected_revision: 0,
+    prompts: [{ kpi_id: 'visitors', prompt: 'Visitors per week' }],
+  });
+  const cleared = await fixture.invoke({ ...base, action: 'project.kpis.configure',
+    operationId: 'operation-2', expectedRevision: 1, prompts: [] });
+  assert.deepEqual(cleared.kpis, { project_id: 'project-1', revision: 2, items: [] });
+  assert.equal(fixture.commands[0].command_type, 'ctox.workjet.project.kpis.read');
+  assert.equal(fixture.commands[1].command_type, 'ctox.workjet.project.kpis.configure');
+});
+
+test('native project detail control rejects forged and invalid requests before dispatch', async () => {
+  const configure = { action: 'project.kpis.configure', commandId: 'details', projectId: 'project-1',
+    operationId: 'operation', expectedRevision: 0, prompts: [] };
+  for (const change of [{ value: 3 }, { owner_user_id: 'foreign' }, { expectedRevision: -1 },
+    { expectedRevision: Number.MAX_SAFE_INTEGER + 1 }, { prompts: [{ kpi_id: 'x', prompt: 'x', value: 4 }] },
+    { prompts: [{ kpi_id: 'x', prompt: 'x', constructor: 'forged' }] },
+    { prompts: Array.from({ length: 4 }, (_, i) => ({ kpi_id: String(i), prompt: 'x' })) }]) {
+    const fixture = nativeProjectDetailsFixture();
+    await assert.rejects(fixture.invoke({ ...configure, ...change }));
+    assert.equal(fixture.commands.length, 0);
+  }
+  const fixture = nativeProjectDetailsFixture();
+  await assert.rejects(fixture.invoke({ action: 'project.jour_fixe.meeting.read', commandId: 'details',
+    projectId: 'project-1', meetingId: '', ownerUserId: 'foreign' }));
+  assert.equal(fixture.commands.length, 0);
+});
+
+test('native KPI receipts reject foreign scope, changed intent and session replacement', async () => {
+  const request = { action: 'project.kpis.configure', commandId: 'details', projectId: 'project-1',
+    operationId: 'operation', expectedRevision: 0, prompts: [{ kpi_id: 'visitors', prompt: 'Visitors' }] };
+  for (const mutate of [receipt => { receipt.command_id = 'foreign'; },
+    receipt => { receipt.target_record_id = 'foreign'; }, receipt => { receipt.payload.operation_id = 'foreign'; },
+    receipt => { receipt.payload.prompts[0].prompt = 'Different intent'; },
+    receipt => { receipt.result.kpis.project_id = 'foreign'; },
+    receipt => { receipt.result.kpis.items[0].result = { status: 'ready' }; },
+    (receipt, state) => { state.session = { id: 'owner-alias' }; }]) {
+    await assert.rejects(nativeProjectDetailsFixture(mutate).invoke(request));
+  }
+});
+
+test('meeting read returns null or the authorized typed native meeting for a verified alias', async () => {
+  const request = { action: 'project.jour_fixe.meeting.read', commandId: 'details', projectId: 'project-1' };
+  const empty = await nativeProjectDetailsFixture().invoke(request);
+  assert.equal(empty.meeting, null);
+  assert.equal(empty.contract, JOUR_FIXE_SCHEMA);
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json', import.meta.url), 'utf8'));
+  const meeting = corpus.valid_cases.find(item => item.type === 'Meeting').value;
+  const fixture = nativeProjectDetailsFixture(receipt => {
+    receipt.result.meeting = meeting; receipt.result.preparation_task_id = 'actual-preparation';
+  });
+  const result = await fixture.invoke({ ...request, meetingId: meeting.id });
+  assert.deepEqual(result.meeting, meeting);
+  assert.equal(result.preparationTaskId, 'actual-preparation');
+  assert.equal(fixture.commands[0].command_type, 'ctox.workjet.jour_fixe.meeting.read');
+});
+
+test('meeting read rejects foreign, malformed and uncorrelated confirmations', async () => {
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json', import.meta.url), 'utf8'));
+  for (const mutate of [receipt => { receipt.result.meeting.project_id = 'foreign'; },
+    receipt => { receipt.result.meeting.id = 'foreign'; }, receipt => { delete receipt.result.meeting.supervisor; },
+    receipt => { receipt.payload.meeting_id = 'foreign'; },
+    receipt => { receipt.result.meeting = null; },
+    receipt => { receipt.result.meeting = null; receipt.result.preparation_task_id = 'invented'; }]) {
+    const fixture = nativeProjectDetailsFixture(receipt => {
+      receipt.result.meeting = structuredClone(corpus.valid_cases.find(item => item.type === 'Meeting').value);
+      mutate(receipt);
+    });
+    await assert.rejects(fixture.invoke({ action: 'project.jour_fixe.meeting.read', commandId: 'details',
+      projectId: 'project-1', meetingId: 'meeting-1' }));
+  }
+});
 
 function projectConfigurationRequest(extra = {}) {
   return {
