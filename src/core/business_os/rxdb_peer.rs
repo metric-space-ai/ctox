@@ -12161,12 +12161,12 @@ pub(in crate::business_os) mod tests {
         let root = tempfile::tempdir()?;
         std::fs::create_dir_all(root.path().join("runtime"))?;
         let collection = "workjet_projects";
-        assert_eq!(expected_rxdb_collection_version(collection), 1);
-        for version in [0, 1] {
+        assert_eq!(expected_rxdb_collection_version(collection), 2);
+        for version in [0, 1, 2] {
             create_runtime_migration_source_table(root.path(), collection, version)?;
         }
         let source = rxdb_collection_version_table_name(collection, 0);
-        let target = rxdb_collection_version_table_name(collection, 1);
+        let target = rxdb_collection_version_table_name(collection, 2);
         let read_rows = || -> anyhow::Result<Vec<(String, String, i64, f64, Value)>> {
             let conn = Connection::open(store::rxdb_store_path(root.path()))?;
             let mut statement = conn.prepare(&format!(

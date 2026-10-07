@@ -74,6 +74,8 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for ProjectField<T> {
 #[serde(deny_unknown_fields)]
 struct ProjectInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     goal: Option<String>,
@@ -291,6 +293,7 @@ pub(super) fn handle_workjet_project_upsert_command(
     let public_url =
         project_field_value(payload.public_url, |value| project_url(value, "public_url"))?;
     let info = project_field_value(payload.info, |mut info| {
+        info.summary = optional_project_info_text(info.summary, "info.summary", 4096)?;
         info.description = optional_project_info_text(info.description, "info.description", 4096)?;
         info.goal = optional_project_info_text(info.goal, "info.goal", 4096)?;
         info.phase = optional_bounded(info.phase, "info.phase", 128)?;
@@ -872,6 +875,21 @@ pub(crate) mod tests {
         }
         assert_eq!(cleared["project"]["description"], "Original");
         assert_eq!(cleared["project"]["status"], "active");
+        Ok(())
+    }
+
+    #[test]
+    fn project_info_summary_uses_the_shared_configuration_fixture() -> anyhow::Result<()> {
+        let corpus: Value = serde_json::from_str(include_str!("../rxdb/tests/fixtures/workjet-project-configuration-v1.json"))?;
+        for info in corpus["valid"].as_array().unwrap() {
+            let root = tempdir()?;
+            let result = handle_workjet_project_upsert_command(root.path(), &command("ctox.workjet.project.upsert", json!({"project_id":"project-1","name":"Project","info":info})), "owner-1")?;
+            assert_eq!(&result["project"]["info"], info);
+        }
+        for info in corpus["invalid"].as_array().unwrap() {
+            let root = tempdir()?;
+            assert!(handle_workjet_project_upsert_command(root.path(), &command("ctox.workjet.project.upsert", json!({"project_id":"project-1","name":"Project","info":info})), "owner-1").is_err());
+        }
         Ok(())
     }
 

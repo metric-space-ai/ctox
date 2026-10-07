@@ -12,6 +12,8 @@ mod recovery;
 mod supervisor;
 #[path = "supervisor_turn_tests.rs"]
 mod supervisor_turns;
+#[path = "weekly_report_tests.rs"]
+mod weekly_reports;
 
 fn command(kind: &str, id: &str, payload: Value) -> BusinessCommand {
     BusinessCommand {

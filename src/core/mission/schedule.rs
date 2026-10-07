@@ -223,30 +223,47 @@ pub fn handle_schedule_command(root: &Path, args: &[String]) -> Result<()> {
             print_json(&json!({"ok": true, "run": run}))
         }
         "tick" => {
-            let summary = emit_due_tasks(root)?;
+            let summary = if let Some(at) = required_flag_value(args, "--at") {
+                let task = required_flag_value(args, "--task-id").context("schedule tick --at requires --task-id")?;
+                emit_due_task_at(root, task, parse_rfc3339_utc(at)?)?
+            } else { emit_due_tasks(root)? };
             print_json(&json!({"ok": true, "summary": summary}))
         }
         _ => anyhow::bail!(
-            "usage:\n  ctox schedule init\n  ctox schedule add --name <label> --cron '<expr>' --prompt <text> [--thread-key <key>] [--skill <name>] [--timezone <IANA>] [--lead-minutes <0..1440>]\n  ctox schedule list\n  ctox schedule pause --task-id <id>\n  ctox schedule resume --task-id <id>\n  ctox schedule remove --task-id <id>\n  ctox schedule run-now --task-id <id>\n  ctox schedule tick"
+            "usage:\n  ctox schedule init\n  ctox schedule add --name <label> --cron '<expr>' --prompt <text> [--thread-key <key>] [--skill <name>] [--timezone <IANA>] [--lead-minutes <0..1440>]\n  ctox schedule list\n  ctox schedule pause --task-id <id>\n  ctox schedule resume --task-id <id>\n  ctox schedule remove --task-id <id>\n  ctox schedule run-now --task-id <id>\n  ctox schedule tick [--task-id <id> --at <RFC3339-test-time>]"
         ),
     }
 }
 
 pub fn emit_due_tasks(root: &Path) -> Result<EmitDueSummary> {
+    crate::business_os::reconcile_project_reports(root)?;
     let now = now_utc();
     if should_skip_emit_due_scan(root, &now) {
         return Ok(EmitDueSummary::default());
     }
 
+    emit_due_at(root, now, None)
+}
+
+/// Explicit operator test time uses the same native dispatcher, not a client timer.
+pub fn emit_due_task_at(root: &Path, task_id: &str, now: DateTime<Utc>) -> Result<EmitDueSummary> {
+    crate::business_os::reconcile_project_reports(root)?;
+    emit_due_at(root, now, Some(task_id))
+}
+
+fn emit_due_at(root: &Path, now: DateTime<Utc>, task_id: Option<&str>) -> Result<EmitDueSummary> {
     let conn = open_schedule_db(root)?;
     let mut due = list_due_tasks(&conn, &now)?;
+    if let Some(id) = task_id {
+        load_task(&conn, id)?.context("scheduled test task not found")?;
+        due.retain(|task| task.task_id == id);
+    }
     if due.is_empty() {
         let next_due_at = load_next_due_at(&conn)?;
         drop(conn);
         mark_emit_due_scan(root, next_due_at);
         return Ok(EmitDueSummary::default());
     }
-    let tx = conn.unchecked_transaction()?;
     let mut summary = EmitDueSummary::default();
     for task in due.drain(..) {
         let scheduled_for = task
@@ -254,7 +271,13 @@ pub fn emit_due_tasks(root: &Path) -> Result<EmitDueSummary> {
             .as_deref()
             .context("due task missing next_run_at")?;
         let is_one_shot_meeting_join = meeting_join_payload(&task.prompt).is_some();
-        let run = emit_task_run_tx(root, &tx, &task, scheduled_for)?;
+        // The native command plane writes the same Core DB. Admit the report
+        // before reserving this schedule transaction, and persist its receipt after.
+        let report = crate::business_os::emit_project_report(root, &task, scheduled_for)?;
+        let tx = conn.unchecked_transaction()?;
+        let run = if let Some((key, status)) = report {
+            persist_report_run(&tx, &task, scheduled_for, key, status)?
+        } else { emit_task_run_tx(root, &tx, &task, scheduled_for)? };
         let (next_run, enabled) = next_task_state_after_emit(
             is_one_shot_meeting_join,
             &run.status,
@@ -281,10 +304,10 @@ pub fn emit_due_tasks(root: &Path) -> Result<EmitDueSummary> {
                 now_iso
             ],
         )?;
+        tx.commit()?;
         summary.emitted_count += 1;
         summary.emitted_runs.push(run);
     }
-    tx.commit()?;
     let next_due_at = load_next_due_at(&conn)?;
     drop(conn);
     mark_emit_due_scan(root, next_due_at);
@@ -384,8 +407,11 @@ pub fn emit_task_now(root: &Path, task_id: &str) -> Result<ScheduleRunView> {
     let conn = open_schedule_db(root)?;
     let task = load_task(&conn, task_id)?.context("scheduled task not found")?;
     let scheduled_for = now_iso_string();
+    let report = crate::business_os::emit_project_report(root, &task, &scheduled_for)?;
     let tx = conn.unchecked_transaction()?;
-    let run = emit_task_run_tx(root, &tx, &task, &scheduled_for)?;
+    let run = if let Some((key, status)) = report {
+        persist_report_run(&tx, &task, &scheduled_for, key, status)?
+    } else { emit_task_run_tx(root, &tx, &task, &scheduled_for)? };
     let next_run_at = if task.enabled {
         next_run_after(&task.cron_expr, &task.calendar, now_utc())?
     } else {
@@ -415,6 +441,19 @@ pub fn ensure_task_with_calendar(
     request: ScheduleEnsureRequest,
     calendar: ScheduleCalendar,
 ) -> Result<ScheduledTaskView> {
+    ensure_calendar_task(root, request, calendar, false)
+}
+
+/// Automatic project reconciliation must not undo an explicit operator pause.
+pub(crate) fn ensure_task_with_calendar_preserving_pause(
+    root: &Path, request: ScheduleEnsureRequest, calendar: ScheduleCalendar,
+) -> Result<ScheduledTaskView> {
+    ensure_calendar_task(root, request, calendar, true)
+}
+
+fn ensure_calendar_task(
+    root: &Path, request: ScheduleEnsureRequest, calendar: ScheduleCalendar, preserve_pause: bool,
+) -> Result<ScheduledTaskView> {
     validate_cron_expr(&request.cron_expr)?;
     calendar.validate()?;
     let conn = open_schedule_db(root)?;
@@ -430,9 +469,11 @@ pub fn ensure_task_with_calendar(
             |row| row.get(0),
         )
         .optional()?;
+    let mut enabled = true;
     if let Some(task_id) = existing_task_id.as_deref() {
         let task = load_task(&conn, task_id)?.context("ensured schedule disappeared")?;
-        if task.enabled
+        enabled = task.enabled || !preserve_pause;
+        if (task.enabled || preserve_pause)
             && task.cron_expr == request.cron_expr.trim()
             && task.prompt == request.prompt.trim()
             && task.skill == request.skill
@@ -445,7 +486,7 @@ pub fn ensure_task_with_calendar(
         }
     }
     let now = now_iso_string();
-    let next_run_at = next_run_after(&request.cron_expr, &calendar, now_utc())?;
+    let next_run_at = if enabled { next_run_after(&request.cron_expr, &calendar, now_utc())? } else { None };
     if let Some(task_id) = existing_task_id {
         conn.execute(
             r#"
@@ -453,7 +494,7 @@ pub fn ensure_task_with_calendar(
             SET cron_expr = ?2,
                 prompt = ?3,
                 skill = ?4,
-                enabled = 1,
+                enabled = ?9,
                 next_run_at = ?5,
                 updated_at = ?6,
                 timezone = ?7,
@@ -469,6 +510,7 @@ pub fn ensure_task_with_calendar(
                 now,
                 calendar.timezone,
                 calendar.lead_minutes,
+                enabled,
             ],
         )?;
         return load_task(&conn, &task_id)?.context("failed to reload ensured scheduled task");
@@ -502,6 +544,13 @@ pub fn ensure_task_with_calendar(
         ],
     )?;
     load_task(&conn, &task_id)?.context("failed to reload inserted scheduled task")
+}
+
+fn persist_report_run(tx: &Transaction<'_>, task: &ScheduledTaskView, scheduled_for: &str, message_key: String, status: String) -> Result<ScheduleRunView> {
+    let run_id = format!("{}::{}", task.task_id, scheduled_for);
+    let emitted_at = now_iso_string();
+    tx.execute("INSERT INTO scheduled_task_runs(run_id,task_id,scheduled_for,emitted_at,message_key,status,error_text) VALUES (?1,?2,?3,?4,?5,?6,'') ON CONFLICT(run_id) DO NOTHING", params![run_id,task.task_id,scheduled_for,emitted_at,message_key,status])?;
+    Ok(ScheduleRunView {run_id,task_id:task.task_id.clone(),scheduled_for:scheduled_for.to_owned(),emitted_at,message_key,status})
 }
 
 fn emit_task_run_tx(
