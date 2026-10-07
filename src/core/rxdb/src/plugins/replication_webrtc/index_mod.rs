@@ -185,7 +185,7 @@ struct AuxiliaryPublicationGuard<H: WebRTCConnectionHandler> {
     capability: Option<String>,
     native: Arc<dyn super::webrtc_types::WebRTCPublicationGuard>,
 }
-impl<H: WebRTCConnectionHandler> super::webrtc_types::WebRTCPublicationGuard
+impl<H: WebRTCConnectionHandler + 'static> super::webrtc_types::WebRTCPublicationGuard
     for AuxiliaryPublicationGuard<H>
 {
     fn with_current(

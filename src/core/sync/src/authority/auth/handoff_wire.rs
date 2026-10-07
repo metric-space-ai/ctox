@@ -2,14 +2,16 @@
 //! its one-use challenge to the exact admitted transport connection. A valid
 //! signature alone is not policy authorization or connection admission.
 use super::{hex, invalid, unhex, verify, Body, Envelope, SigningIdentity};
-use crate::contracts::{SessionHandoffRequest, SessionHandoffWireReply, SessionHandoffWireRequest};
+use crate::contracts::{
+    SessionHandoffRequest, SessionHandoffWireReply, SessionHandoffWireRequest,
+    CTOX_SYNC_SESSION_HANDOFF_MAX_WIRE_BYTES, CTOX_SYNC_SESSION_HANDOFF_REPLY_KIND as REPLY_KIND,
+    CTOX_SYNC_SESSION_HANDOFF_REQUEST_KIND as REQUEST_KIND,
+};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::Value;
 use std::io;
 
-const REQUEST_KIND: &str = "session-handoff-request-v1";
-const REPLY_KIND: &str = "session-handoff-reply-v1";
-const MAX_WIRE_BYTES: usize = 32 * 1024;
+const MAX_WIRE_BYTES: usize = CTOX_SYNC_SESSION_HANDOFF_MAX_WIRE_BYTES as usize;
 
 pub fn fresh_nonce() -> io::Result<String> {
     let mut bytes = [0; 16];
@@ -29,6 +31,7 @@ pub struct SignedHandoffRequest {
     nonce: String,
     sender: String,
     request: SessionHandoffRequest,
+    expects_authorized: bool,
 }
 pub struct VerifiedHandoffRequest {
     message: SessionHandoffWireRequest,
@@ -115,6 +118,7 @@ impl SignedHandoffRequest {
         super::public_key(&request.issuer_identity)?;
         let nonce = fresh_nonce()?;
         let sender = identity.public_identity();
+        let expects_authorized = matches!(&message, SessionHandoffWireRequest::Authorize { .. });
         let envelope = serde_json::to_value(identity.sign(Body {
             version: 1,
             sender: sender.clone(),
@@ -131,6 +135,7 @@ impl SignedHandoffRequest {
             nonce,
             sender,
             request,
+            expects_authorized,
         })
     }
     pub fn nonce(&self) -> &str {
@@ -146,6 +151,9 @@ impl SignedHandoffRequest {
         }
         let reply: SessionHandoffWireReply =
             serde_json::from_value(envelope.body.data).map_err(io::Error::other)?;
+        if matches!(&reply, SessionHandoffWireReply::Authorized { .. }) != self.expects_authorized {
+            return Err(invalid("handoff reply has wrong phase stage"));
+        }
         match &reply {
             SessionHandoffWireReply::Challenge { challenge } => {
                 unhex::<16>(challenge)?;
