@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 103] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 106] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -364,10 +364,13 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 103] = [
     "ctox.workjet.computer.list",
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
+    "ctox.workjet.project.kpis.read",
+    "ctox.workjet.project.kpis.configure",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.supervisor.bind",
     "ctox.workjet.project.supervisor.turn.submit",
     "ctox.workjet.project.supervisor.turn.watch",
+    "ctox.workjet.jour_fixe.meeting.read",
     "ctox.workjet.project.supervisor.turn.cancel",
     "ctox.workjet.project.chat.create",
     "ctox.workjet.project.worker.add",
@@ -1263,13 +1266,17 @@ impl CentralCommandPolicyRequirement {
         } else if matches!(
             command_type,
             "ctox.workjet.project.list"
+                | "ctox.workjet.project.kpis.read"
                 | "ctox.workjet.computer.list"
                 | "ctox.workjet.session.list"
         ) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataRead,
             ))
-        } else if command_type == "ctox.workjet.project.supervisor.turn.watch" {
+        } else if matches!(
+            command_type,
+            "ctox.workjet.project.supervisor.turn.watch" | "ctox.workjet.jour_fixe.meeting.read"
+        ) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataRead,
             ))
@@ -1705,6 +1712,19 @@ fn dispatch_business_command(
         | "ctox.business_os.why" => {
             handle_business_os_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
         }
+        "ctox.workjet.jour_fixe.meeting.read" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let owner =
+                session_user_id(session).context("meeting read requires authenticated user")?;
+            match super::project_chats::jour_fixe_preparation::read(root, command, owner) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
+                )),
+            }
+        }
         "ctox.workjet.project.supervisor.turn.submit"
         | "ctox.workjet.project.supervisor.turn.watch"
         | "ctox.workjet.project.supervisor.turn.cancel" => {
@@ -1747,6 +1767,24 @@ fn dispatch_business_command(
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,
                     serde_json::json!({"ok": false, "error": error.to_string()}),
+                    error,
+                )),
+            }
+        }
+        "ctox.workjet.project.kpis.read" | "ctox.workjet.project.kpis.configure" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor =
+                session_user_id(session).context("KPI command requires an authenticated user")?;
+            match super::workjet_project_kpis::handle_command(
+                root,
+                command,
+                actor,
+                prepared.domain_effect_admission.as_ref(),
+            ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
                     error,
                 )),
             }

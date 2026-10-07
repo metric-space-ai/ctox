@@ -21,7 +21,7 @@ fn weekly_report_does_not_invent_an_owner_from_a_project_or_thread() -> anyhow::
     Ok(())
 }
 
-fn fixture() -> anyhow::Result<TempDir> {
+pub(super) fn fixture() -> anyhow::Result<TempDir> {
     let root = supervisor_turns::fixture()?;
     // Automatic work revalidates a persisted active user. The shared control
     // fixture has only project/thread records and a trusted local actor.
@@ -46,7 +46,10 @@ fn patch_project(root: &Path, patch: impl FnOnce(&mut Value)) -> anyhow::Result<
 }
 fn task(root: &Path) -> anyhow::Result<schedule::ScheduledTaskView> {
     crate::business_os::reconcile_project_reports(root)?;
-    let tasks = schedule::list_tasks(root)?;
+    let tasks: Vec<_> = schedule::list_tasks(root)?
+        .into_iter()
+        .filter(|task| task.name.starts_with("workjet-weekly-report:"))
+        .collect();
     assert_eq!(tasks.len(), 1);
     Ok(tasks.into_iter().next().unwrap())
 }
@@ -117,7 +120,7 @@ fn weekly_report_test_time_admits_the_real_supervisor_turn_with_owner_receipt() 
     assert_eq!(native.record_id.as_deref(), Some("project"));
     assert!(queued.prompt.contains("merged PRs"));
     assert!(
-        schedule::list_tasks(root.path())?[0]
+        task(root.path())?
             .next_run_at
             .as_deref()
             .map(instant)

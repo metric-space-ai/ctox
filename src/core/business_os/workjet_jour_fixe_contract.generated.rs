@@ -1256,6 +1256,38 @@ impl WireValidate for TranscriptEvent {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReadMeetingRequest {
+    pub(crate) project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) meeting_id: Option<String>,
+}
+impl WireValidate for ReadMeetingRequest {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("ReadMeetingRequest.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("ReadMeetingRequest.project_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.meeting_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("ReadMeetingRequest.meeting_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("ReadMeetingRequest.meeting_id violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -1323,6 +1355,9 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "TranscriptEvent" => serde_json::from_value::<TranscriptEvent>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "ReadMeetingRequest" => serde_json::from_value::<ReadMeetingRequest>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown contract type".into()),
