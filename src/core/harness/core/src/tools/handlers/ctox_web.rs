@@ -121,7 +121,7 @@ struct CtoxWebScrapeArgs {
 /// Script maintenance modes. The worker sandbox cannot run the `ctox scrape`
 /// CLI, so agents could not create or repair extraction scripts and fell
 /// back to throwaway Playwright/curl code that every later lead repeated
-/// (THESEN 07.10.2026). These modes run the same registry code in the
+/// (field report 07.10.2026). These modes run the same registry code in the
 /// harness process; paths must stay inside the task workspace.
 fn scrape_maintenance_mode(arguments: &str) -> Option<String> {
     let mode = serde_json::from_str::<serde_json::Value>(arguments)
