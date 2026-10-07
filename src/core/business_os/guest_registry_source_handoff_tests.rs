@@ -117,8 +117,10 @@ pub(super) fn assert_native_source_handoff_enrollment(
     let permitted = gate.authorize(&request).unwrap();
     assert_eq!(permitted.session_id, spec.session_id);
     ctox_sync::authority::auth::session_handoff::verify_session_handoff_permit(
-        &identity.public_identity(),
         &permitted,
+        &identity.public_identity(),
+        &request.audience,
+        &request.nonce,
     )
     .unwrap();
 
