@@ -3,7 +3,11 @@
 //! Target-local workspace preparation. This never starts Core or changes ownership.
 use super::*;
 use ctox_sync::contracts::WorkspaceEntryKind;
-use std::io::Write;
+use std::io::{Read, Write};
+
+#[cfg(test)]
+#[path = "session_handoff_core_import_tests.rs"]
+mod core_import_tests;
 
 struct StagedWorkspace {
     directory: tempfile::TempDir,
@@ -43,6 +47,27 @@ async fn stage<P: Clone + Eq + Hash + Send + Sync + 'static>(
             );
             let manifest = store.load(&t.request.checkpoint_digest)?;
             verify_manifest(&manifest, &t.request)?;
+            // Only already protected checkpoint bytes reach the Core decoder;
+            // it grants neither clean effects nor permission to start a turn.
+            let states: Vec<_> = manifest
+                .provider_state
+                .iter()
+                .filter(|e| {
+                    e.path == "native-session-state.json" && e.kind == WorkspaceEntryKind::File
+                })
+                .collect();
+            anyhow::ensure!(states.len() == 1, "native Core state absent or ambiguous");
+            let mut bytes = Vec::new();
+            store
+                .open_blob(&states[0].artifact)?
+                .take(64 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)?;
+            let _decoded = ctox_core::NativeSessionState::from_checkpoint(
+                &bytes,
+                ctox_protocol::ThreadId::from_string(&manifest.session.session_id)?,
+                &manifest.session.model_id,
+                &manifest.session.model_route_id,
+            )?;
             let mut bundles = manifest
                 .provider_state
                 .iter()

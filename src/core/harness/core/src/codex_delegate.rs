@@ -82,6 +82,7 @@ pub(crate) async fn run_codex_thread_interactive(
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         file_watcher: Arc::clone(&parent_session.services.file_watcher),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
+        native_state: None,
         session_source: SessionSource::SubAgent(subagent_source),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),

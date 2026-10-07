@@ -91,6 +91,154 @@ fn native_session_state_model_client_rejects_unfinished_or_lost_response_receipt
 }
 
 #[test]
+fn native_import_keeps_completed_chain_for_fresh_http_turn_without_credentials() {
+    let source = test_model_client(SessionSource::Exec);
+    let id = source.state.conversation_id;
+    let first = test_user_message("first");
+    let answer = test_assistant_message("completed");
+    let next = test_user_message("continue");
+    {
+        let mut turn = source.new_session();
+        turn.turn_state
+            .set("fixture-untransferable-routing-token".into())
+            .unwrap();
+        let mut request = test_responses_request(vec![first.clone()]);
+        request.parallel_tool_calls = false;
+        turn.websocket_session.last_request = Some(request);
+        turn.websocket_session.last_response = Some(LastResponse {
+            response_id: "fixture-completed-chain".into(),
+            items_added: vec![answer.clone()],
+        });
+    }
+    let exported = source.native_continuation_state(id).unwrap();
+    let imported: crate::native_session_state::NativeModelContinuation =
+        serde_json::from_value(exported.clone()).unwrap();
+    let mut target = test_model_client(SessionSource::Exec);
+    std::sync::Arc::get_mut(&mut target.state)
+        .unwrap()
+        .conversation_id = id;
+    target.import_native_continuation(&imported).unwrap();
+    assert_eq!(target.native_continuation_state(id).unwrap(), exported);
+    assert!(target.import_native_continuation(&imported).is_err());
+    let mut turn = target.new_session();
+    assert!(turn.turn_state.get().is_none());
+    assert!(turn.websocket_session.connection.is_none());
+    assert!(turn.websocket_session.native_reconnect_pending);
+    let mut request = test_responses_request(vec![first, answer, next.clone()]);
+    request.parallel_tool_calls = false;
+    let wire = turn.prepare_http_request(&request);
+    assert_eq!(
+        wire.previous_response_id.as_deref(),
+        Some("fixture-completed-chain")
+    );
+    assert_eq!(wire.input, vec![next]);
+    turn.reset_websocket_session();
+    assert!(!turn.websocket_session.native_reconnect_pending);
+    assert!(turn.websocket_session.last_response.is_none());
+}
+
+#[tokio::test]
+async fn native_import_first_fresh_websocket_keeps_completed_chain() {
+    let server = core_test_support::responses::start_websocket_server(vec![vec![vec![]]]).await;
+    let mut source = test_model_client(SessionSource::Exec);
+    {
+        let state = std::sync::Arc::get_mut(&mut source.state).unwrap();
+        state.provider.base_url = Some(server.uri().into());
+        state.provider.supports_websockets = true;
+        state.responses_websockets_enabled_by_feature = true;
+    }
+    let id = source.state.conversation_id;
+    let first = test_user_message("source");
+    let answer = test_assistant_message("completed");
+    let next = test_user_message("continue");
+    {
+        let mut turn = source.new_session();
+        turn.websocket_session.last_request = Some(test_responses_request(vec![first.clone()]));
+        turn.websocket_session.last_response = Some(LastResponse {
+            response_id: "fixture-websocket-chain".into(),
+            items_added: vec![answer.clone()],
+        });
+    }
+    let imported = serde_json::from_value(source.native_continuation_state(id).unwrap()).unwrap();
+    let target = ModelClient::new(
+        None,
+        id,
+        source.state.provider.clone(),
+        SessionSource::Exec,
+        None,
+        true,
+        false,
+        false,
+        None,
+    );
+    target.import_native_continuation(&imported).unwrap();
+    let mut turn = target.new_session();
+    let setup = target.current_client_setup().await.unwrap();
+    let auth_context = AuthRequestTelemetryContext::new(
+        setup.auth.as_ref().map(crate::CodexAuth::auth_mode),
+        &setup.api_auth,
+        PendingUnauthorizedRetry::default(),
+    );
+    let options = turn.build_responses_options(None, super::Compression::None);
+    let telemetry = test_session_telemetry();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        turn.websocket_connection(super::WebsocketConnectParams {
+            session_telemetry: &telemetry,
+            api_provider: setup.api_provider,
+            api_auth: setup.api_auth,
+            turn_metadata_header: None,
+            options: &options,
+            auth_context,
+            request_route_telemetry: super::RequestRouteTelemetry::for_endpoint(
+                super::RESPONSES_ENDPOINT,
+            ),
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(turn.websocket_session.connection.is_some());
+    assert!(!turn.websocket_session.native_reconnect_pending);
+    assert!(turn.turn_state.get().is_none());
+    assert_eq!(server.handshakes().len(), 1);
+    let request = test_responses_request(vec![first, answer, next.clone()]);
+    let super::ResponsesWsRequest::ResponseCreate(wire) =
+        turn.prepare_websocket_request(ResponseCreateWsRequest::from(&request), &request);
+    assert_eq!(
+        wire.previous_response_id.as_deref(),
+        Some("fixture-websocket-chain")
+    );
+    assert_eq!(wire.input, vec![next]);
+    turn.reset_websocket_session();
+    server.shutdown().await;
+}
+
+#[test]
+fn native_import_denies_foreign_incomplete_or_socket_bearing_state() {
+    let source = test_model_client(SessionSource::Exec);
+    let id = source.state.conversation_id;
+    let exported = source.native_continuation_state(id).unwrap();
+    for mutate in ["foreign", "unpaired", "socket", "routing"] {
+        let mut value = exported.clone();
+        match mutate {
+            "foreign" => value["conversationId"] = json!(ThreadId::new()),
+            "unpaired" => value["lastResponse"] = json!({"responseId":"fixture","itemsAdded":[]}),
+            "socket" => value["transportConnection"] = json!("live"),
+            _ => value["turnRoutingToken"] = json!("fixture-token"),
+        }
+        let imported: crate::native_session_state::NativeModelContinuation =
+            serde_json::from_value(value).unwrap();
+        let mut target = test_model_client(SessionSource::Exec);
+        std::sync::Arc::get_mut(&mut target.state)
+            .unwrap()
+            .conversation_id = id;
+        assert!(target.import_native_continuation(&imported).is_err());
+        assert_eq!(target.native_continuation_state(id).unwrap(), exported);
+    }
+}
+
+#[test]
 fn required_initial_tool_is_the_only_visible_required_tool_before_its_call() {
     let tools = vec![
         json!({"type": "function", "name": "exec_command"}),
