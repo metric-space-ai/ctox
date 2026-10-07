@@ -2567,12 +2567,16 @@ mod tests {
     }
 
     #[test]
-    fn minimax_m3_proxy_settings_resolve_core_api_provider() {
+    fn minimax_m3_preserves_explicit_provider_authority_with_proxy_settings() {
         let mut settings = BTreeMap::new();
         settings.insert("CTOX_API_PROVIDER".to_string(), "minimax".to_string());
         settings.insert(
             "CTOX_UPSTREAM_BASE_URL".to_string(),
             "https://llm.ctox.dev".to_string(),
+        );
+        settings.insert(
+            runtime_state::CTOX_LLM_PROXY_API_KEY_ENV.to_string(),
+            "fixture-unrelated-proxy-key".to_string(),
         );
 
         let spec =
@@ -2580,9 +2584,17 @@ mod tests {
 
         assert_eq!(spec.provider_id, "ctox_core_api");
         assert_eq!(spec.base_url, "https://llm.ctox.dev/v1");
-        assert_eq!(spec.env_key, runtime_state::CTOX_LLM_PROXY_API_KEY_ENV);
+        // The runtime's explicit provider identity selects credentials;
+        // a proxy URL or unrelated credential cannot rebind a MiniMax account.
+        assert_eq!(spec.env_key, "MINIMAX_API_KEY");
         assert_eq!(spec.wire_api, "responses");
         assert!(!spec.requires_full_responses_history);
+
+        settings.insert("CTOX_API_PROVIDER".to_string(), "ctox_proxy".to_string());
+        let proxy =
+            resolve_api_model_provider_spec("MiniMax-M3", &settings, None).expect("explicit proxy");
+        assert_eq!(proxy.env_key, runtime_state::CTOX_LLM_PROXY_API_KEY_ENV);
+        assert_eq!(proxy.base_url, spec.base_url);
     }
 
     #[test]

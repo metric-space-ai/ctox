@@ -27215,7 +27215,7 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             journal_sha256 TEXT NOT NULL,
             journal_size_bytes INTEGER NOT NULL CHECK(journal_size_bytes > 0 AND journal_size_bytes <= 67108864),
             journal_record_count INTEGER NOT NULL CHECK(journal_record_count > 0 AND journal_record_count <= 100000),
-            journal_bytes BLOB NOT NULL,
+            artifact_store_path TEXT NOT NULL,
             created_at_ms INTEGER NOT NULL,
             UNIQUE(job_id, session_id, ownership_generation)
         );

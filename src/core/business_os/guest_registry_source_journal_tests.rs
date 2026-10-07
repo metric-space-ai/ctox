@@ -48,11 +48,15 @@ fn source_spec() -> (ExecutionSpec, Ownership) {
 fn native_source_journal_reopens_exact_bytes_without_handoff_permission_or_payload_receipt() {
     let (root, registry, assignment) = fixture();
     let (spec, ownership) = source_spec();
+    let (store, store_root, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
     let bytes = journal_fixture(&spec.session_id, "private-fixture-history");
     let first = registry
         .with_policy(|tx| {
             super::super::source_journal::persist(
                 tx,
+                &store,
+                &store_root,
                 &assignment.destination,
                 &spec,
                 &ownership,
@@ -65,6 +69,8 @@ fn native_source_journal_reopens_exact_bytes_without_handoff_permission_or_paylo
         .with_policy(|tx| {
             super::super::source_journal::persist(
                 tx,
+                &store,
+                &store_root,
                 &assignment.destination,
                 &spec,
                 &ownership,
@@ -77,13 +83,28 @@ fn native_source_journal_reopens_exact_bytes_without_handoff_permission_or_paylo
     let wire = serde_json::to_string(&first).unwrap();
     assert!(!wire.contains("private-fixture-history"));
     assert!(!wire.contains("journal_bytes"));
+    assert!(!wire.contains("artifact_store_path"));
+    drop(store);
+    let (store, reopened_root, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
+    assert_eq!(reopened_root, store_root);
+    assert_eq!(
+        std::fs::read_dir(store_root.join("manifests"))
+            .unwrap()
+            .count(),
+        0
+    );
     let conn = super::super::super::store::open_store(root.path()).unwrap();
-    let stored: Vec<u8> = conn
-        .query_row(
-            "SELECT journal_bytes FROM business_native_source_journals WHERE capture_id=?1",
-            [&first.capture_id],
-            |row| row.get(0),
-        )
+    let artifact = ctox_sync::contracts::ArtifactRef {
+        sha256: first.journal_sha256.clone(),
+        size_bytes: first.journal_size_bytes,
+    };
+    use std::io::Read;
+    let mut stored = Vec::new();
+    store
+        .open_blob(&artifact)
+        .unwrap()
+        .read_to_end(&mut stored)
         .unwrap();
     assert_eq!(stored, bytes);
     for table in [
@@ -103,6 +124,8 @@ fn native_source_journal_reopens_exact_bytes_without_handoff_permission_or_paylo
 fn native_source_journal_rejects_truncated_foreign_and_malformed_input_before_storage() {
     let (root, registry, assignment) = fixture();
     let (spec, ownership) = source_spec();
+    let (store, store_root, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
     let mut truncated = journal_fixture(&spec.session_id, "fixture");
     truncated.pop();
     for bytes in [
@@ -114,6 +137,8 @@ fn native_source_journal_rejects_truncated_foreign_and_malformed_input_before_st
             .with_policy(|tx| {
                 super::super::source_journal::persist(
                     tx,
+                    &store,
+                    &store_root,
                     &assignment.destination,
                     &spec,
                     &ownership,
@@ -132,6 +157,10 @@ fn native_source_journal_rejects_truncated_foreign_and_malformed_input_before_st
         )
         .unwrap();
     assert_eq!(count, 0);
+    assert_eq!(
+        std::fs::read_dir(store_root.join("blobs")).unwrap().count(),
+        0
+    );
 }
 
 #[test]
@@ -139,11 +168,15 @@ fn native_source_journal_never_replaces_an_existing_capture_with_changed_policy_
 ) {
     let (root, registry, assignment) = fixture();
     let (spec, ownership) = source_spec();
+    let (store, store_root, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
     let bytes = journal_fixture(&spec.session_id, "original-private-fixture");
     registry
         .with_policy(|tx| {
             super::super::source_journal::persist(
                 tx,
+                &store,
+                &store_root,
                 &assignment.destination,
                 &spec,
                 &ownership,
@@ -167,6 +200,8 @@ fn native_source_journal_never_replaces_an_existing_capture_with_changed_policy_
                 .with_policy(|tx| {
                     super::super::source_journal::persist(
                         tx,
+                        &store,
+                        &store_root,
                         &destination,
                         &spec,
                         &ownership,
@@ -183,12 +218,48 @@ fn native_source_journal_never_replaces_an_existing_capture_with_changed_policy_
         );
     }
     let conn = super::super::super::store::open_store(root.path()).unwrap();
-    let stored: Vec<u8> = conn
+    let (sha256, size_bytes, policy, generation): (String, i64, String, i64) = conn
         .query_row(
-            "SELECT journal_bytes FROM business_native_source_journals",
+            "SELECT journal_sha256,journal_size_bytes,policy_revision,controller_generation FROM business_native_source_journals",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
         )
         .unwrap();
+    assert_eq!(policy, "fixture-policy");
+    assert_eq!(
+        generation,
+        i64::try_from(assignment.destination.controller_generation).unwrap()
+    );
+    let artifact = ctox_sync::contracts::ArtifactRef {
+        sha256,
+        size_bytes: u64::try_from(size_bytes).unwrap(),
+    };
+    use std::io::Read;
+    let mut stored = Vec::new();
+    store
+        .open_blob(&artifact)
+        .unwrap()
+        .read_to_end(&mut stored)
+        .unwrap();
     assert_eq!(stored, bytes);
+}
+
+#[test]
+fn native_source_journal_rejects_symlinked_or_public_artifact_directories() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let (_root, _registry, assignment) = fixture();
+    let foreign = tempfile::tempdir().unwrap();
+    let source = assignment.destination.import_parent.join("source-journals");
+    symlink(foreign.path(), &source).unwrap();
+    assert!(
+        super::super::source_journal::source_store(&assignment.destination.import_parent).is_err()
+    );
+    assert_eq!(std::fs::read_dir(foreign.path()).unwrap().count(), 0);
+    std::fs::remove_file(&source).unwrap();
+    let (_store, root, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
+    std::fs::set_permissions(root.join("blobs"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        super::super::source_journal::source_store(&assignment.destination.import_parent).is_err()
+    );
 }

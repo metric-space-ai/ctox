@@ -20,8 +20,44 @@ pub(crate) struct NativeSourceJournalReceipt {
     pub journal_size_bytes: u64,
 }
 
+pub(super) fn source_store(
+    parent: &Path,
+) -> Result<(
+    ctox_sync::checkpoint::CheckpointStore,
+    PathBuf,
+    FileIdentity,
+)> {
+    private_directory(parent)?;
+    ensure!(
+        std::fs::canonicalize(parent)? == parent,
+        "native source parent is not canonical"
+    );
+    let root = parent.join("source-journals");
+    for path in [&root, &root.join("blobs"), &root.join("manifests")] {
+        use std::os::unix::fs::DirBuilderExt;
+        match std::fs::DirBuilder::new().mode(0o700).create(path) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(error) => return Err(error.into()),
+        }
+        private_directory(path)?;
+    }
+    let identity = private_directory(&root)?;
+    let store = ctox_sync::checkpoint::CheckpointStore::open(
+        root.clone(),
+        PortableJournalLimits::default().max_bytes,
+    )?;
+    ensure!(
+        private_directory(&root)? == identity,
+        "native source artifact store changed; reconcile"
+    );
+    Ok((store, root, identity))
+}
+
 pub(super) fn persist(
     policy: &Connection,
+    store: &ctox_sync::checkpoint::CheckpointStore,
+    store_root: &Path,
     destination: &GuestRestoreDestination,
     spec: &ExecutionSpec,
     ownership: &Ownership,
@@ -46,6 +82,14 @@ pub(super) fn persist(
         &expected,
         &PortableJournalLimits::default(),
     )?;
+    let stored_artifact = ctox_sync::contracts::ArtifactRef {
+        sha256: artifact.sha256.clone(),
+        size_bytes: artifact.size_bytes,
+    };
+    store.ingest_blob(&stored_artifact, std::io::Cursor::new(bytes))?;
+    let store_path = store_root
+        .to_str()
+        .context("native source artifact path is not UTF-8")?;
     let spec_json = serde_json::to_string(spec)?;
     let ownership_json = serde_json::to_string(ownership)?;
     let capture_id = format!("capture_{}", uuid::Uuid::new_v4());
@@ -55,7 +99,7 @@ pub(super) fn persist(
           worker_profile_id,project_id,thread_id,source_instance_id,job_id,session_id,
           ownership_generation,spec_json,ownership_json,policy_revision,
           journal_format,journal_version,journal_sha256,journal_size_bytes,
-          journal_record_count,journal_bytes,created_at_ms)
+          journal_record_count,artifact_store_path,created_at_ms)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
          ON CONFLICT(job_id,session_id,ownership_generation) DO NOTHING",
         rusqlite::params![
@@ -79,7 +123,7 @@ pub(super) fn persist(
             artifact.sha256,
             i64::try_from(artifact.size_bytes)?,
             i64::try_from(validated.record_count)?,
-            bytes,
+            store_path,
             super::super::store::now_ms() as i64,
         ],
     )?;
@@ -93,7 +137,8 @@ pub(super) fn persist(
          AND guest_id=?4 AND controller_id=?5 AND controller_generation=?6
          AND owner_user_id=?7 AND worker_profile_id=?8 AND project_id=?9 AND thread_id=?10
          AND source_instance_id=?11 AND spec_json=?12 AND ownership_json=?13
-         AND policy_revision=?14 AND journal_sha256=?15 AND journal_bytes=?16",
+         AND policy_revision=?14 AND journal_sha256=?15 AND journal_size_bytes=?16
+         AND journal_record_count=?17 AND artifact_store_path=?18",
             rusqlite::params![
                 spec.job_id,
                 spec.session_id,
@@ -110,7 +155,9 @@ pub(super) fn persist(
                 ownership_json,
                 policy_revision,
                 artifact.sha256,
-                bytes,
+                i64::try_from(artifact.size_bytes)?,
+                i64::try_from(validated.record_count)?,
+                store_path,
             ],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
@@ -141,14 +188,23 @@ impl NativeGuestExecution {
             self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
                 verify()?;
                 let bytes = journal.read_bytes(PortableJournalLimits::default().max_bytes)?;
-                persist(
+                let (store, store_root, store_identity) =
+                    source_store(&entry.assignment.destination.import_parent)?;
+                let receipt = persist(
                     policy,
+                    &store,
+                    &store_root,
                     &entry.assignment.destination,
                     &self.binding.spec,
                     &self.binding.ownership,
                     &self.binding.admission.policy_revision,
                     &bytes,
-                )
+                )?;
+                ensure!(
+                    private_directory(&store_root)? == store_identity,
+                    "native source artifact store changed; reconcile"
+                );
+                Ok(receipt)
             })
         })
     }

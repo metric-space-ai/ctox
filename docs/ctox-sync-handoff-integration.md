@@ -130,8 +130,11 @@ shutdown, missing journal, stale command/account/policy/lease or invalid journal
 rejects that completion; it cannot fall back to a fresh session.
 
 The retired Core journal reader and exact capture-only provider owner publish
-the original validated bytes to the private native policy table
-`business_native_source_journals`. Publication holds the actual worker,
+the original validated bytes through the shared Sync kernel's content-addressed
+`CheckpointStore`, under a host-created private source directory. The native
+policy table `business_native_source_journals` stores the authority binding,
+artifact reference and private store location, not another journal payload.
+Renderer/model requests cannot supply that location. Publication holds the actual worker,
 account, policy and guest-controller guards. It binds the source instance,
 canonical owner/profile/project/chat, actual job/provider session, ownership
 generation and admission policy revision. A retry returns the same receipt only
@@ -147,8 +150,9 @@ This is durable private journal input, not a complete checkpoint or a disclosure
 receive or execution grant. No provider-state blob is fabricated from journal
 syntax. Workspace/files/attachments, provider continuation, external effects,
 authorized source/target binding enrollment and protected transport remain
-required. The policy transaction and assistant/worker store have separate
-commits: a later authority or reply-persistence failure can leave private journal
+required. Artifact fsync, the policy transaction and assistant/worker store have
+separate commits: failed metadata publication can leave a private orphan blob;
+a later authority or reply-persistence failure can leave private journal
 input without a successful worker marker and needs reconciliation. Installed
 model/VM/two-host acceptance remains separate from the source storage regressions.
 
