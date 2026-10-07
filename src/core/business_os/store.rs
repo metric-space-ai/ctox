@@ -27305,6 +27305,13 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             artifact_size_bytes INTEGER NOT NULL CHECK(artifact_size_bytes > 0 AND artifact_size_bytes <= 65536)
         );
 
+        CREATE TABLE IF NOT EXISTS business_native_source_session_states (
+            capture_id TEXT PRIMARY KEY REFERENCES business_native_source_journals(capture_id),
+            format_version INTEGER NOT NULL CHECK(format_version = 1),
+            artifact_sha256 TEXT NOT NULL,
+            artifact_size_bytes INTEGER NOT NULL CHECK(artifact_size_bytes > 0 AND artifact_size_bytes <= 67108864)
+        );
+
         CREATE TABLE IF NOT EXISTS business_session_handoff_bindings (
             binding_id TEXT PRIMARY KEY,
             binding_digest TEXT NOT NULL,

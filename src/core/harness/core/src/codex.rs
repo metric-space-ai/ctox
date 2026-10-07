@@ -708,6 +708,18 @@ impl Codex {
         }
     }
 
+    pub(crate) async fn capture_native_state(
+        &self,
+    ) -> std::io::Result<(ThreadConfigSnapshot, crate::NativeSessionState)> {
+        // A recorder receipt cannot hide a failed or still-running loop.
+        if !matches!(self.session_loop_termination.peek(), Some(Ok(()))) {
+            return Err(std::io::Error::other(
+                "native session loop has not terminated successfully",
+            ));
+        }
+        self.session.capture_native_state().await
+    }
+
     pub async fn next_event(&self) -> CodexResult<Event> {
         let event = self
             .rx_event
@@ -4075,6 +4087,65 @@ impl Session {
 
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {
         Arc::clone(&self.services.user_shell)
+    }
+
+    async fn capture_native_state(
+        &self,
+    ) -> std::io::Result<(ThreadConfigSnapshot, crate::NativeSessionState)> {
+        if !matches!(self.shutdown_journal_result.get(), Some(Ok(()))) {
+            return Err(std::io::Error::other(
+                "native state has no checked journal shutdown",
+            ));
+        }
+        let active = self.active_turn.lock().await;
+        if active.is_some() {
+            return Err(std::io::Error::other(
+                "native state still has an active turn",
+            ));
+        }
+        let state = self.state.lock().await;
+        let config = state.session_configuration.thread_config_snapshot();
+        if config.ephemeral || config.model_provider_id != crate::OPENAI_PROVIDER_ID {
+            return Err(std::io::Error::other(
+                "unsupported native session state producer",
+            ));
+        }
+        let settings = &state.session_configuration;
+        let payload = serde_json::json!({
+            "format": "ctox-native-session-state",
+            "version": 1,
+            "sessionId": self.conversation_id,
+            "harness": crate::native_harness_name(),
+            "harnessVersion": crate::native_harness_version(),
+            "modelId": config.model,
+            "modelRouteId": config.model_provider_id,
+            "history": state.history.raw_items(),
+            "referenceContext": state.reference_context_item(),
+            "tokenUsage": state.token_info(),
+            "previousTurn": state.previous_turn_settings().map(|previous| serde_json::json!({
+                "model": previous.model, "realtimeActive": previous.realtime_active
+            })),
+            "serverReasoningIncluded": state.server_reasoning_included,
+            "baseInstructions": settings.base_instructions,
+            "developerInstructions": settings.developer_instructions,
+            "userInstructions": settings.user_instructions,
+            "compactPrompt": settings.compact_prompt,
+            "collaborationMode": settings.collaboration_mode,
+            "reasoningSummary": settings.model_reasoning_summary,
+            "dynamicTools": settings.dynamic_tools,
+            "mcpDependencyPrompted": state.mcp_dependency_prompted.iter().collect::<std::collections::BTreeSet<_>>(),
+            "activeConnectorSelection": state.active_connector_selection.iter().collect::<std::collections::BTreeSet<_>>(),
+            "provider": self.services.model_client.native_continuation_state(self.conversation_id)?,
+            "targetAuthority": "reauthorization-required",
+            "externalEffects": "unknown"
+        });
+        let captured = crate::NativeSessionState::from_core(
+            self.conversation_id,
+            config.model.clone(),
+            config.model_provider_id.clone(),
+            &payload,
+        )?;
+        Ok((config, captured))
     }
 
     pub(crate) async fn retain_native_journal(
@@ -7560,6 +7631,10 @@ pub(crate) use tests::make_session_configuration_for_tests;
 #[cfg(test)]
 #[path = "codex_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "native_session_state_tests.rs"]
+mod native_session_state_tests;
 
 #[cfg(test)]
 #[path = "codex_required_plan_tests.rs"]

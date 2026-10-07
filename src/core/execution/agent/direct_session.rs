@@ -937,6 +937,7 @@ pub(crate) struct NativeSessionCapture {
     source: crate::channels::NativeProviderCaptureOwner,
     journal: ctox_core::NativeJournalReader,
     configuration: Option<ctox_core::ThreadConfigSnapshot>,
+    session_state: Option<ctox_core::NativeSessionState>,
     execution: crate::business_os::NativeGuestExecution,
     thread_id: String,
     root: PathBuf,
@@ -1009,6 +1010,9 @@ impl NativeSessionCapture {
             self.configuration
                 .as_ref()
                 .context("native capture has no final Core configuration")?,
+            self.session_state
+                .as_ref()
+                .context("native capture has no final Core session state")?,
         )?;
         self.verify_command_authority()?;
         Ok(receipt)
@@ -1745,6 +1749,7 @@ impl PersistentSession {
         let mut capture = NativeSessionCapture {
             journal,
             configuration: None,
+            session_state: None,
             source: self
                 .native_capture_owner
                 .take()
@@ -1769,15 +1774,18 @@ impl PersistentSession {
             runtime.block_on(async {
                 tokio::time::timeout(
                     Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS),
-                    actual_thread.config_snapshot(),
+                    actual_thread.capture_native_state(),
                 )
                 .await
-                .context("final native configuration capture timed out")
+                .context("final native state capture timed out")?
+                .context("final native state capture failed")
             })
         });
         before?;
-        capture.configuration =
-            Some(shutdown?.context("native configuration has no shutdown owner")?);
+        let (configuration, session_state) =
+            shutdown?.context("native state has no shutdown owner")?;
+        capture.configuration = Some(configuration);
+        capture.session_state = Some(session_state);
         capture.with_current(|_, _| Ok(()))?;
         // Writer receipt alone cannot certify identity, syntax or bounded size.
         // A malformed/missing/changed journal never returns a capture owner.

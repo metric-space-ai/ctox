@@ -41,6 +41,31 @@ These are source-added regressions; compiler/test execution and transport
 acceptance must be recorded separately before promotion.
 This change does not implement queue-claim cancellation or publication fencing.
 
+## 2026-10 Actual quiescent native session state
+
+The retained Core thread can export private state only after successful
+submission-loop termination and checked recorder shutdown, with no active
+turn. The sealed Rust object has no wire/deserialization constructor. It
+contains the actual compacted ContextManager history, reference context and
+token usage, previous-turn settings, session instructions/tools and the
+ModelClient's actual completed request/response continuity. A foreign client
+identity, missing/pending/lost response receipt, failed loop, unsupported
+provider or ephemeral session rejects export. Serialization is bounded.
+
+AuthManager, dependency environment, approval grants, live sockets and the
+turn-scoped sticky-routing token are not exported. Model-visible content and
+response IDs are protected payload, never log/receipt fields. The socket must
+reconnect; the next turn must get its own routing token. Target-local account,
+workspace and execution authorization are still required, and external effects
+remain unknown until reconciled. No original-session target resume is claimed
+by this source export.
+
+The native queue capture owner obtains settings and state from this same
+retained thread before runtime drain, rechecks its signed command and native
+authority, and publishes both beside its original journal in the existing
+CheckpointStore. Native policy stores only capture-associated references;
+retry cannot replace conflicting state, and old captures are not promoted.
+
 ## 2026-10 Native MCP emission boundary
 
 The MCP handler consults a live in-process native dispatcher immediately before
