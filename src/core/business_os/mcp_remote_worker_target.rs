@@ -3,6 +3,9 @@
 //! Explicit source-owner pairing of Workjet registry identities and native computers.
 //! The authenticated source Broker supplies its current registry facts. Native
 //! computer IDs stay opaque; neither labels nor environment IDs invent them.
+use super::super::super::computer_capabilities::{
+    validate_capabilities, BuildCapability, ComputerCapability,
+};
 use super::*;
 
 pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_remote_worker_targets (
@@ -56,11 +59,59 @@ struct Registration {
     target: Target,
     revision: u64,
     state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enrollment_digest: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EnrollmentTarget {
+    source_environment_id: String,
+    target_environment_id: String,
+    target_connection_id: String,
+    target_instance_id: String,
+}
+impl EnrollmentTarget {
+    fn validate(&self) -> anyhow::Result<()> {
+        for value in [
+            &self.source_environment_id,
+            &self.target_environment_id,
+            &self.target_connection_id,
+            &self.target_instance_id,
+        ] {
+            label(value)?;
+        }
+        anyhow::ensure!(
+            self.source_environment_id != self.target_environment_id,
+            "remote target must differ from the source environment"
+        );
+        Ok(())
+    }
+    fn bind(self, computer: String) -> Target {
+        Target {
+            source_environment_id: self.source_environment_id,
+            target_environment_id: self.target_environment_id,
+            target_connection_id: self.target_connection_id,
+            target_instance_id: self.target_instance_id,
+            target_computer_id: computer,
+        }
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EnrollmentComputer {
+    display_name: String,
+    hosting_mode: String,
+    build_capability: BuildCapability,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
+    EnrollTarget {
+        target: EnrollmentTarget,
+        computer: EnrollmentComputer,
+    },
     RegisterTarget {
         target: Target,
         expected_revision: Option<u64>,
@@ -77,7 +128,7 @@ enum Request {
 pub(super) fn handles(arguments: &Value) -> bool {
     matches!(
         arguments["action"].as_str(),
-        Some("register_target" | "resolve_target" | "revoke_target")
+        Some("enroll_target" | "register_target" | "resolve_target" | "revoke_target")
     )
 }
 
@@ -95,7 +146,8 @@ pub(super) fn execute(
     let mut conn = store::open_store(root)?;
     conn.execute_batch(SCHEMA)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let (role, _) = current_actor(&tx, context)?;
+    let (role, epoch) = current_actor(&tx, context)?;
+    let enrolling = matches!(&request, Request::EnrollTarget { .. });
     let retiring = matches!(&request, Request::RevokeTarget { .. });
     if !retiring {
         anyhow::ensure!(
@@ -112,6 +164,10 @@ pub(super) fn execute(
         );
     }
     let environment = match &request {
+        Request::EnrollTarget { target, .. } => {
+            label(&target.target_environment_id)?;
+            target.target_environment_id.as_str()
+        }
         Request::RegisterTarget { target, .. } => {
             target.validate()?;
             target.target_environment_id.as_str()
@@ -129,6 +185,54 @@ pub(super) fn execute(
     };
     let existing = load(&tx, context, environment)?;
     let mut record = match request {
+        Request::EnrollTarget { target, computer } => {
+            target.validate()?;
+            let intent = format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&(&target, &computer))?)
+            );
+            let mut config = vec![ComputerCapability::Build(computer.build_capability.clone())];
+            validate_capabilities(&mut config, false)?;
+            let mut target = target.bind(String::new());
+            if let Some(old) = existing {
+                target.target_computer_id = old.target.target_computer_id.clone();
+                target.validate()?;
+                anyhow::ensure!(old.state == "active" && old.target == target
+                    && old.enrollment_digest.as_deref() == Some(intent.as_str()),
+                    "worker enrollment differs from the original request; explicit assignment required");
+                let current = current_computer(&tx, context, &target.target_computer_id)?;
+                anyhow::ensure!(
+                    current["capability_config"] == serde_json::to_value(&config)?
+                        && current["hosting_mode"] == computer.hosting_mode,
+                    "native worker enrollment settings changed; reconcile"
+                );
+                old
+            } else {
+                // Validate registry scope before creating either durable record.
+                let native = super::super::super::store_workjet_computers::enroll_worker_computer(
+                    &tx,
+                    &context.actor,
+                    &computer.display_name,
+                    &computer.hosting_mode,
+                    computer.build_capability,
+                )?;
+                target.target_computer_id = native["id"]
+                    .as_str()
+                    .context("native enrollment did not issue a computer identity")?
+                    .to_owned();
+                target.validate()?;
+                Registration {
+                    contract: CONTRACT.into(),
+                    binding_id: uuid::Uuid::new_v4().to_string(),
+                    owner_user_id: context.actor.clone(),
+                    source_instance_id: context.workspace.clone(),
+                    target,
+                    revision: 1,
+                    state: "active".into(),
+                    enrollment_digest: Some(intent),
+                }
+            }
+        }
         Request::RegisterTarget {
             target,
             expected_revision,
@@ -156,6 +260,7 @@ pub(super) fn execute(
                         .context("worker target revision exhausted")?;
                     old.target = target;
                     old.state = "active".into();
+                    old.enrollment_digest = None;
                     old
                 }
             } else {
@@ -171,6 +276,7 @@ pub(super) fn execute(
                     target,
                     revision: 1,
                     state: "active".into(),
+                    enrollment_digest: None,
                 }
             }
         }
@@ -237,6 +343,47 @@ pub(super) fn execute(
             .context("current native build capability missing")?;
     }
     tx.commit()?;
+    if enrolling {
+        // Projection follows committed authority. Recheck under a fresh native
+        // transaction so rollback/unpair/revocation cannot publish a phantom.
+        let projection = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current_role, current_epoch) = current_actor(&projection, context)?;
+        anyhow::ensure!(
+            current_role == role && current_epoch == epoch,
+            "native worker enrollment authority changed before projection"
+        );
+        anyhow::ensure!(
+            super::super::super::store_policy::trusted_actor_policy_decision_with_conn(
+                &projection,
+                &context.actor,
+                &current_role,
+                BusinessOsPermission::IntegrationsManage,
+                BusinessOsScopeType::Workspace,
+                None
+            )?
+            .allowed,
+            "native enrollment projection denied"
+        );
+        let current = load(&projection, context, &record.target.target_environment_id)?
+            .context("native enrollment disappeared before projection")?;
+        anyhow::ensure!(
+            current.state == "active"
+                && current.binding_id == record.binding_id
+                && current.revision == record.revision
+                && current.target == record.target,
+            "native enrollment changed before projection"
+        );
+        let computer = current_computer(&projection, context, &record.target.target_computer_id)?;
+        anyhow::ensure!(
+            computer["capability_config"]
+                .as_array()
+                .and_then(|items| items.iter().find(|item| item["kind"] == "build"))
+                == Some(&response["buildCapability"]),
+            "native build settings changed before projection"
+        );
+        super::super::super::store_workjet_computers::project_computer_record(root, &computer)?;
+        projection.commit()?;
+    }
     Ok(response)
 }
 

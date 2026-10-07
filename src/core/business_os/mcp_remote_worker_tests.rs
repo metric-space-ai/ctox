@@ -96,6 +96,118 @@ fn operation(action: &str, receipt: &Value, execution: Option<&str>) -> Value {
     }
     args
 }
+fn enrollment() -> Value {
+    json!({"action":"enroll_target",
+        "target":{"sourceEnvironmentId":"source-env","targetEnvironmentId":"new-execution-environment",
+            "targetConnectionId":"connection-1","targetInstanceId":"target-instance"},
+        "computer":{"displayName":"Remote build computer","hostingMode":"self_hosted",
+            "buildCapability":{"ssh_endpoint_ref":"native-build-endpoint","slots":1,"jobs":2,
+                "lane_root":"/build-lane","disk_floor_gib":60,"toolchains":["rust"]}}})
+}
+fn computer_count(root: &Path) -> anyhow::Result<usize> {
+    Ok(store::outbound_load_records_by_string_field(
+        &store::open_store(root)?,
+        "workjet_computers",
+        "owner_user_id",
+        "owner",
+    )?
+    .len())
+}
+
+#[test]
+fn remote_worker_target_enrollment_issues_one_real_native_computer_and_projection(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let enroll = enrollment();
+    let enrolled = call(root.path(), "owner", enroll.clone())?;
+    let id = enrolled["target"]["targetComputerId"].as_str().unwrap();
+    uuid::Uuid::parse_str(id)?;
+    assert_ne!(id, "new-execution-environment");
+    assert_eq!(
+        call(root.path(), "owner", enroll.clone())?,
+        enrolled,
+        "lost enrollment ACK cannot create another native computer"
+    );
+    let persisted =
+        store::outbound_load_record(&store::open_store(root.path())?, "workjet_computers", id)?
+            .unwrap();
+    assert_eq!(persisted["owner_user_id"], "owner");
+    assert_eq!(persisted["status"], "assigned");
+    assert_eq!(persisted["capability_config"][0]["kind"], "build");
+    let projected =
+        store::load_rxdb_collection_record(root.path(), "workjet_computers", id)?.unwrap();
+    assert_eq!(projected["owner_user_id"], "owner");
+    assert!(
+        projected.get("capability_config").is_none(),
+        "operational config stays native"
+    );
+    assert_eq!(computer_count(root.path())?, 2);
+    for pointer in [
+        "/computer/displayName",
+        "/computer/buildCapability/jobs",
+        "/target/targetConnectionId",
+    ] {
+        let mut changed = enroll.clone();
+        *changed.pointer_mut(pointer).unwrap() = if pointer.ends_with("jobs") {
+            json!(3)
+        } else {
+            json!("changed-intent")
+        };
+        assert!(
+            call(root.path(), "owner", changed).is_err(),
+            "changed enrollment {pointer} accepted"
+        );
+    }
+    let mut request_binding = serde_json::to_value(binding())?;
+    request_binding["targetEnvironmentId"] = enrolled["target"]["targetEnvironmentId"].clone();
+    request_binding["targetComputerId"] = json!(id);
+    assert!(call(
+        root.path(),
+        "owner",
+        json!({"action":"issue","binding":request_binding,"ttl_seconds":300})
+    )
+    .is_ok());
+    Ok(())
+}
+
+#[test]
+fn remote_worker_invalid_or_revoked_enrollment_never_creates_another_assignment(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let enroll = enrollment();
+    for pointer in [
+        "/computer/hostingMode",
+        "/computer/buildCapability/slots",
+        "/target/sourceEnvironmentId",
+    ] {
+        let mut invalid = enroll.clone();
+        *invalid.pointer_mut(pointer).unwrap() = match pointer {
+            "/computer/hostingMode" => json!("managed_backend"),
+            "/computer/buildCapability/slots" => json!(0),
+            _ => json!("new-execution-environment"),
+        };
+        assert!(call(root.path(), "owner", invalid).is_err());
+    }
+    assert_eq!(
+        computer_count(root.path())?,
+        1,
+        "rejected enrollment leaves no assigned computer"
+    );
+    let enrolled = call(root.path(), "owner", enroll.clone())?;
+    let revoked = call(
+        root.path(),
+        "owner",
+        json!({"action":"revoke_target","target_environment_id":"new-execution-environment",
+            "expected_revision":enrolled["revision"]}),
+    )?;
+    assert_eq!(revoked["state"], "revoked");
+    assert!(
+        call(root.path(), "owner", enroll).is_err(),
+        "a replay cannot reactivate or mint another computer after unpair"
+    );
+    assert_eq!(computer_count(root.path())?, 2);
+    Ok(())
+}
 
 #[test]
 fn remote_worker_target_resolution_is_explicit_native_owner_and_source_scoped() -> anyhow::Result<()>
