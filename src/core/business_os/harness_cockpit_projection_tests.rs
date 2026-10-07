@@ -1359,3 +1359,22 @@ fn idle_event_query_cost_does_not_grow_with_retained_history() -> Result<()> {
     eprintln!("cockpit VM benchmark: 1000 tasks/50000 events; baseline task enumeration={baseline_steps}, incremental idle={idle_steps}, one inserted row={changed_steps}");
     Ok(())
 }
+
+#[test]
+fn maintenance_replays_events_only_without_cursor_or_after_the_replay_interval() {
+    let now = Instant::now();
+    // A fresh writer has no cursor and must rebuild.
+    assert!(event_replay_due(None, Some(now), now));
+    // The minute maintenance pass stays incremental between replays.
+    assert!(!event_replay_due(
+        Some(42),
+        Some(now - Duration::from_secs(60)),
+        now
+    ));
+    assert!(event_replay_due(
+        Some(42),
+        Some(now - EVENT_REPLAY_INTERVAL),
+        now
+    ));
+    assert!(event_replay_due(Some(42), None, now));
+}

@@ -39,6 +39,20 @@ struct BusinessProjectionWriter {
     // Append-only ledger position, advanced only after successful delivery.
     // Periodic replay repairs dropped notifications and in-place source repairs.
     event_cursor: Option<i64>,
+    last_event_replay: Option<Instant>,
+}
+
+/// A full event replay re-reads the latest 200 events of every active and
+/// recently finished task. The pump marks maintenance every minute; replaying
+/// on each of those passes kept the projection thread at half a core, with
+/// passes of 6 to 27 minutes, on the customer on-prem host (07.10.2026). The
+/// incremental cursor carries normal delivery; replay is the repair path.
+const EVENT_REPLAY_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+fn event_replay_due(cursor: Option<i64>, last_replay: Option<Instant>, now: Instant) -> bool {
+    cursor.is_none()
+        || last_replay
+            .is_none_or(|last| now.saturating_duration_since(last) >= EVENT_REPLAY_INTERVAL)
 }
 impl BusinessProjectionWriter {
     fn open(root: &Path) -> Result<Self> {
@@ -86,6 +100,7 @@ impl BusinessProjectionWriter {
             crew_sources: BTreeMap::new(),
             crew_maintenance_warned: false,
             event_cursor: None,
+            last_event_replay: None,
         })
     }
     fn upsert_source_projection(
@@ -697,8 +712,14 @@ fn refresh_measured_with(
                 crate::crew::repair_selection_events(root, conn)
             })?;
         }
+        let replay = flags & MAINTENANCE != 0
+            && event_replay_due(
+                writer.event_cursor,
+                writer.last_event_replay,
+                Instant::now(),
+            );
         timing.phase("project_events", || {
-            project_events_since(root, conn, writer, flags & MAINTENANCE != 0)
+            project_events_since(root, conn, writer, replay)
         })?;
     }
     if flags & RUNS != 0 {
@@ -1072,6 +1093,9 @@ fn project_events_since(
     }
     if delivered {
         writer.event_cursor = Some(high_water);
+        if since.is_none() {
+            writer.last_event_replay = Some(Instant::now());
+        }
     }
     Ok(())
 }
