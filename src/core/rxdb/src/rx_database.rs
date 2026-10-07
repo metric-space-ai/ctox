@@ -837,8 +837,18 @@ fn schemas_allow_additive_optional_properties(stored: &Value, current: &Value) -
     };
 
     for (name, stored_property) in stored_properties {
-        if current_properties.get(name) != Some(stored_property) {
-            return false;
+        match current_properties.get(name) {
+            Some(current_property) if current_property == stored_property => {}
+            // An existing object property may itself gain optional properties
+            // (thesen 07.10.2026: `git.index` added to workjet_session_transfers
+            // without a version bump made every restart skip the collection
+            // with DB6 and held the post-upgrade maintenance for 10 minutes).
+            Some(current_property)
+                if schemas_allow_additive_optional_properties(
+                    stored_property,
+                    current_property,
+                ) => {}
+            _ => return false,
         }
     }
     current_properties
@@ -1061,6 +1071,61 @@ mod tests {
         });
 
         assert!(schemas_compatible_for_meta_repair(&stored, &current));
+    }
+
+    #[test]
+    fn schema_meta_repair_allows_nested_additive_optional_properties() {
+        let git = |extra: Option<Value>| {
+            let mut properties = json!({
+                "commit": { "type": "string" },
+                "patch_file_id": { "type": "string" }
+            });
+            if let Some(extra) = extra {
+                properties["index"] = extra;
+            }
+            json!({
+                "type": "object",
+                "properties": properties,
+                "required": ["commit"],
+                "additionalProperties": false
+            })
+        };
+        let schema = |git: Value, required: Value| {
+            json!({
+                "version": 0,
+                "primaryKey": "id",
+                "type": "object",
+                "properties": { "id": { "type": "string" }, "git": git },
+                "required": required,
+                "additionalProperties": false
+            })
+        };
+        let index = json!({
+            "type": "object",
+            "properties": { "tree": { "type": "string" } },
+            "required": ["tree"],
+            "additionalProperties": false
+        });
+        let stored = schema(git(None), json!(["id"]));
+        // An optional nested object gains an optional property: compatible.
+        assert!(schemas_compatible_for_meta_repair(
+            &stored,
+            &schema(git(Some(index.clone())), json!(["id"]))
+        ));
+        // A nested property that becomes required is not.
+        let mut required_nested = git(Some(index));
+        required_nested["required"] = json!(["commit", "index"]);
+        assert!(!schemas_compatible_for_meta_repair(
+            &stored,
+            &schema(required_nested, json!(["id"]))
+        ));
+        // A changed nested type is not.
+        let mut retyped = git(None);
+        retyped["properties"]["commit"] = json!({ "type": "number" });
+        assert!(!schemas_compatible_for_meta_repair(
+            &stored,
+            &schema(retyped, json!(["id"]))
+        ));
     }
 
     #[test]
