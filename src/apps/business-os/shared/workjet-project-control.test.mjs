@@ -3,6 +3,7 @@ import { webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './workjet-supervisor-execution-contract.generated.mjs';
 
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
@@ -998,7 +999,7 @@ function supervisorTurnFixture(change = () => {}) {
       return receipt;
     } },
   };
-  const context = { state, actorContext: session => ({ id: session.id }), URL };
+  const context = { state, actorContext: session => ({ id: session.id }), URL, SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
 }
@@ -1065,4 +1066,92 @@ test('supervisor cancellation never pretends a running worker acknowledged inter
     receipt => { receipt.result.cancellation.side_effects_may_have_started = null; },
     receipt => { receipt.result.cancellation.command_id = ''; },
   ]) await assert.rejects(supervisorTurnFixture(change).invoke(supervisorTurnRequest('cancel')));
+});
+
+
+function nativeExecutionPage() {
+  return {
+    command_id: nativeTurnId, task_id: 'queue:system::supervisor-turn',
+    attempt: { attempt_id: 'native-attempt', attempt_index: 47 },
+    events: [{ id: 'event-actual', sequence: 12, kind: 'worker.tool_completed',
+      title: 'Saved native tool result', created_at_ms: 1791410400000, tool_name: 'native.tool', success: true }],
+    next_cursor: { after_sequence: 12, after_event_id: 'event-actual' }, has_more: false,
+  };
+}
+function executionFixture(change = () => {}) {
+  return supervisorTurnFixture((receipt, state) => {
+    receipt.result.execution_contract = SUPERVISOR_EXECUTION_SCHEMA;
+    receipt.result.execution_page = nativeExecutionPage();
+    change(receipt, state);
+  });
+}
+
+test('legacy supervisor watch has exactly the prior outer shape even if unsolicited facts arrive', async () => {
+  const result = await executionFixture().invoke(supervisorTurnRequest('watch'));
+  assert.deepEqual(Object.keys(result).sort(), ['action', 'binding', 'commandId', 'contract', 'projectId', 'turn']);
+  assert.equal(result.turn.attempt, 0);
+  assert.equal(result.executionPage, undefined);
+});
+
+test('opted-in supervisor watch forwards the bounded fixture contract and actual native facts', async () => {
+  const fixture = executionFixture(receipt => {
+    receipt.payload = { ...receipt.payload, execution_page: { limit: 1, attempt_id: 'native-attempt' } };
+    receipt.result.execution_page.next_cursor = { after_event_id: 'event-actual', after_sequence: 12 };
+  });
+  const result = await fixture.invoke(supervisorTurnRequest('watch', { executionPage: { attempt_id: 'native-attempt', limit: 1 } }));
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].command.payload.execution_page)), { attempt_id: 'native-attempt', limit: 1 });
+  assert.equal(result.executionContract, SUPERVISOR_EXECUTION_SCHEMA);
+  assert.equal(result.executionPage.attempt.attempt_id, 'native-attempt');
+  assert.equal(result.executionPage.attempt.attempt_index, 47);
+  assert.equal(result.executionPage.attempt.run_id, undefined);
+  assert.equal(result.executionPage.events[0].sequence, 12);
+});
+
+test('an opted-in queued supervisor turn preserves the absence of an actual attempt', async () => {
+  const fixture = executionFixture(receipt => {
+    receipt.result.execution_page = { command_id: nativeTurnId, task_id: 'queue:system::supervisor-turn', events: [], has_more: false };
+  });
+  const result = await fixture.invoke(supervisorTurnRequest('watch', { executionPage: {} }));
+  assert.equal(result.executionPage.attempt, undefined);
+  assert.deepEqual(result.executionPage.events, []);
+});
+
+test('execution page invalid bounds and extra caller authority never dispatch', async () => {
+  for (const executionPage of [null, { limit: 0 }, { limit: 51 }, { attempt_id: ' ' },
+    { attempt_id: '\u0085' }, { owner_user_id: 'foreign' },
+    JSON.parse('{"__proto__":{}}'), { cursor: { after_sequence: 0, after_event_id: 'x' } }]) {
+    const fixture = executionFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest('watch', { executionPage })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const action of ['submit', 'cancel']) {
+    const fixture = executionFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest(action, { executionPage: {} })));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('execution pages reject foreign native identities unsafe fields and receipt substitution', async () => {
+  for (const change of [
+    receipt => { receipt.result.execution_contract = 'foreign'; },
+    receipt => { receipt.result.execution_page.command_id = 'foreign'; },
+    receipt => { receipt.result.execution_page.task_id = 'foreign'; },
+    receipt => { receipt.result.execution_page.attempt.attempt_id = 'foreign'; },
+    receipt => { receipt.result.execution_page.events[0].arguments = { secret: 'private' }; },
+    receipt => { receipt.result.execution_page.events[0].sequence = Number.MAX_SAFE_INTEGER + 1; },
+    receipt => { receipt.payload = { ...receipt.payload, execution_page: { attempt_id: 'foreign' } }; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(executionFixture(change).invoke(supervisorTurnRequest('watch', { executionPage: { attempt_id: 'native-attempt' } })));
+});
+
+test('execution page cursor must match the ordered safe native event page', async () => {
+  for (const change of [
+    receipt => { receipt.result.execution_page.next_cursor.after_event_id = 'foreign'; },
+    receipt => { receipt.result.execution_page.events[0].sequence = 3; },
+    receipt => { receipt.result.execution_page.events.push({ ...receipt.result.execution_page.events[0] }); },
+    receipt => { receipt.result.execution_page.events = []; receipt.result.execution_page.has_more = true; },
+    receipt => { delete receipt.result.execution_page.attempt; },
+  ]) await assert.rejects(executionFixture(change).invoke(supervisorTurnRequest('watch', {
+    executionPage: { attempt_id: 'native-attempt', cursor: { after_sequence: 5, after_event_id: 'prior-event' } },
+  })));
 });

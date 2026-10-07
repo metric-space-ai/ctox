@@ -26,6 +26,8 @@ struct ObservePayload {
     project_id: String,
     thread_id: String,
     target_command_id: String,
+    #[serde(default)]
+    execution_page: Option<super::super::workjet_supervisor_execution_contract::ExecutionPageRequest>,
     #[serde(default, rename = "inbound_channel")]
     _inbound_channel: Option<String>,
 }
@@ -165,7 +167,15 @@ pub(in crate::business_os) fn control(
             let request: ObservePayload = serde_json::from_value(command.payload.clone())?;
             let binding = binding(root, owner, &request.project_id, &request.thread_id, false)?;
             let turn = owned_turn(root, owner, &binding, &request.target_command_id)?;
-            Ok(json!({"ok": true, "contract": CONTRACT, "binding": binding, "turn": turn}))
+            let mut response=json!({"ok": true, "contract": CONTRACT, "binding": binding, "turn": turn});
+            // Installed v1 decoders reject excess properties. Add observer facts
+            // only when the caller explicitly requests this separately versioned page.
+            if let Some(page)=request.execution_page {
+                let execution=super::supervisor_observation::page(root,&response["turn"],&page)?;
+                response["execution_contract"]=json!(super::super::workjet_supervisor_execution_contract::CONTRACT_SCHEMA);
+                response["execution_page"]=serde_json::to_value(execution)?;
+            }
+            Ok(response)
         }
         "ctox.workjet.project.supervisor.turn.cancel" => {
             let request: CancelPayload = serde_json::from_value(command.payload.clone())?;

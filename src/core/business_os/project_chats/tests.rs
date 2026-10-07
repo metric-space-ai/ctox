@@ -14,6 +14,8 @@ mod recovery;
 mod supervisor;
 #[path = "supervisor_turn_tests.rs"]
 mod supervisor_turns;
+#[path = "supervisor_observation_tests.rs"]
+mod supervisor_observation;
 #[path = "weekly_report_tests.rs"]
 mod weekly_reports;
 
