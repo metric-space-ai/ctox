@@ -52,12 +52,10 @@ fn typed_configuration_persists_and_rejects_unknown_fields() {
     };
     config.save(root.path()).unwrap();
     assert_eq!(SpeechRuntimeConfig::load(root.path()).unwrap(), config);
-    assert!(
-        serde_json::from_str::<SpeechRuntimeConfig>(
-            r#"{"synthesis":"mistral","transcription":"mistral","api_key":"secret"}"#
-        )
-        .is_err()
-    );
+    assert!(serde_json::from_str::<SpeechRuntimeConfig>(
+        r#"{"synthesis":"mistral","transcription":"mistral","api_key":"secret"}"#
+    )
+    .is_err());
     let invalid = SpeechRuntimeConfig {
         voice_id: Some(" ".into()),
         ..config
@@ -282,12 +280,10 @@ async fn real_websocket_streams_partial_then_final_with_end_mark() {
         }
         _ => panic!("expected final"),
     }
-    assert!(
-        timeout(IO_TIMEOUT, stream.next_event())
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(timeout(IO_TIMEOUT, stream.next_event())
+        .await
+        .unwrap()
+        .is_none());
     timeout(IO_TIMEOUT, server).await.unwrap().unwrap();
 }
 

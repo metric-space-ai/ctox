@@ -2,10 +2,10 @@
 // License: AGPL-3.0-only
 //! Server-side speech contract shared by meeting tools and native Workjet.
 //! Caller owns meeting authorization and persistence; credentials never cross this API.
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     fmt,
     io::Read,
@@ -18,10 +18,11 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async_with_config,
+    connect_async_with_config,
     tungstenite::{
-        Message, client::IntoClientRequest, http::HeaderValue, protocol::WebSocketConfig,
+        client::IntoClientRequest, http::HeaderValue, protocol::WebSocketConfig, Message,
     },
+    MaybeTlsStream, WebSocketStream,
 };
 
 const CONFIG_KEY: &str = "speech_gateway";
