@@ -237,12 +237,18 @@ fn alias_project_update_keeps_canonical_owner_and_private_chat_visibility() -> a
 }
 
 #[test]
-fn alias_project_chat_ensure_uses_current_native_identity_and_foreign_is_denied() -> anyhow::Result<()> {
-    let root=fixture()?;
-    let ensure_chat=|actor:&str,id:&str| command_plane::accept_rxdb_business_command(root.path(),json!({"id":id,"module":"ctox","command_type":"ctox.workjet.project.chat.ensure","record_id":"p0","payload":{"project_id":"p0"},"client_context":{"actor":{"id":actor,"role":"admin"}}}));
-    let admitted=ensure_chat(ALIAS,"alias-chat")?;
-    assert_eq!(admitted["status"],"completed");
-    let denied=ensure_chat(FOREIGN,"foreign-chat");
-    assert!(denied.is_err() || denied.as_ref().is_ok_and(|v|v["status"]=="failed"));
+fn alias_project_chat_ensure_uses_current_native_identity_and_foreign_is_denied(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let ensure_chat = |actor: &str, id: &str| {
+        command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({"id":id,"module":"ctox","command_type":"ctox.workjet.project.chat.ensure","record_id":"p0","payload":{"project_id":"p0"},"client_context":{"actor":{"id":actor,"role":"admin"}}}),
+        )
+    };
+    let admitted = ensure_chat(ALIAS, "alias-chat")?;
+    assert_eq!(admitted["status"], "completed");
+    let denied = ensure_chat(FOREIGN, "foreign-chat");
+    assert!(denied.is_err() || denied.as_ref().is_ok_and(|v| v["status"] == "failed"));
     Ok(())
 }

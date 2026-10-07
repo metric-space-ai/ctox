@@ -265,7 +265,8 @@ pub(super) fn handle_workjet_project_upsert_command(
     let applied = admission.apply(&mut conn, |transaction| {
         // Recheck identity inside the actual domain writer transaction, so an
         // alias revoked after dispatch cannot mutate the previous owner's row.
-        let owner_user_id = super::workjet_identity::owner_from_connection(transaction, &owner_user_id)?;
+        let owner_user_id =
+            super::workjet_identity::owner_from_connection(transaction, &owner_user_id)?;
         let mut chat_projections = Vec::new();
         let now = super::store::now_ms() as i64;
         let existing = outbound_load_record(&transaction, PROJECTS_COLLECTION, &project_id)?;
