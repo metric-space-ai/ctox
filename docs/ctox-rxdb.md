@@ -1,5 +1,11 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+Native checkpoint handoff uses the existing admitted control-only WebRTC pool
+for signed 8KiB blocks, with current source disclosure and target receive checks.
+The same-UID `ctox sync handoff-copy` control socket carries only identifiers and
+a final local-copy result. It carries no checkpoint payload or browser business
+data. See [the integration boundary](ctox-sync-handoff-integration.md#protected-native-checkpoint-copy)
+for limits, account guards, cancellation and remaining Core-resume work.
 ### CLI app command admission
 
 CLI app create/modify and app-bench requests persist and enqueue the real coding

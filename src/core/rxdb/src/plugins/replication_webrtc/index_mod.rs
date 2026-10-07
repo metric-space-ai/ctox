@@ -671,6 +671,31 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         self.register_auxiliary(method, AuxiliaryHandler::Guarded(handler), false, true)
     }
 
+    /// Guard a bounded native-control ingest callback with the same pool
+    /// cancellation fence as response publication. Host policy/account guards
+    /// must already be held; this grants no collection or native permission.
+    pub fn with_current_native_control_peer<T>(
+        &self,
+        peer: &H::Peer,
+        ingest: impl FnOnce() -> T,
+    ) -> Result<T, RxError> {
+        let alive = self.auxiliary_publication_alive.lock();
+        if !*alive
+            || self.canceled.load(Ordering::SeqCst)
+            || !self.collections.is_empty()
+            || self.connection_handler.is_data_client()
+            || !matches!(
+                self.connection_handler.local_peer_role(),
+                NativePeerRole::CtoxInstance | NativePeerRole::WorkjetExecutor
+            )
+            || !self.connection_handler.is_peer_current(peer)
+            || !self.is_peer_ready_for_control(peer)
+        {
+            return Err(new_rx_error("RC_WEBRTC_CONTROL", None));
+        }
+        Ok(ingest())
+    }
+
     fn register_auxiliary(
         &self,
         method: String,

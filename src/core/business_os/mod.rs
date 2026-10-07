@@ -162,7 +162,10 @@ pub use session_handoff_gate::native_session_handoff_gate;
 #[cfg(unix)]
 pub(crate) use session_handoff_gate::native_source_offer;
 #[cfg(unix)]
-pub(crate) use session_handoff_gate::transport::NativeHandoffHost;
+pub(crate) use session_handoff_gate::transport::{
+    CopyRequest as NativeCheckpointCopyRequest, CopyResponse as NativeCheckpointCopyResponse,
+    NativeHandoffHost,
+};
 pub use session_handoff_gate::NativeSessionHandoffGate;
 
 pub(crate) use external_sql_sync::start_background_sync;

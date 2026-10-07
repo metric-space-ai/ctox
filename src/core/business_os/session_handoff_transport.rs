@@ -1,9 +1,25 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 //! Live native policy RPC, using the existing native Sync peer, not HTTP.
-//! This installs phase authorization, not a checkpoint byte consumer or Core
-//! takeover. Every response poll reacquires issuer, policy and lifecycle fences.
+//! Phase decisions and bounded checkpoint reads use current native authority.
+//! Local copy commands ingest on the target; Core takeover stays separately gated.
 use super::*;
+#[path = "session_handoff_checkpoint.rs"]
+mod checkpoint;
+#[cfg(test)]
+pub(crate) use checkpoint::assert_native_checkpoint_path;
+pub(crate) use checkpoint::{CopyRequest, CopyResponse};
+impl NativeHandoffHost<rxdb::plugins::replication_webrtc::WebRTCRsConnection> {
+    pub(crate) fn serve_checkpoint(
+        &self,
+        ipc: &Path,
+        pool: Arc<
+            RxWebRTCReplicationPool<rxdb::plugins::replication_webrtc::WebRTCRsConnectionHandler>,
+        >,
+    ) -> anyhow::Result<checkpoint::CheckpointListener> {
+        checkpoint::listen(self.server.clone(), ipc, pool)
+    }
+}
 use ctox_sync::authority::auth::handoff_wire::{
     fresh_nonce, verify_request, VerifiedHandoffRequest,
 };
@@ -198,6 +214,9 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Server<P> {
                         authorized: false,
                     }),
                 })
+            }
+            SessionHandoffWireRequest::Fetch { .. } => {
+                checkpoint::fetch(self.clone(), peer, verified.clone())
             }
             SessionHandoffWireRequest::Authorize { request, challenge } => {
                 let (bound, result) = self.gate.with_current_authority(|conn, identity| {
