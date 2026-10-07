@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 106] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 110] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -371,6 +371,10 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 106] = [
     "ctox.workjet.project.supervisor.turn.submit",
     "ctox.workjet.project.supervisor.turn.watch",
     "ctox.workjet.jour_fixe.meeting.read",
+    "ctox.workjet.jour_fixe.meeting.start",
+    "ctox.workjet.jour_fixe.meeting.end",
+    "ctox.workjet.jour_fixe.transcript.append",
+    "ctox.workjet.jour_fixe.todos.revise",
     "ctox.workjet.project.supervisor.turn.cancel",
     "ctox.workjet.project.chat.create",
     "ctox.workjet.project.worker.add",
@@ -1711,6 +1715,21 @@ fn dispatch_business_command(
         | "ctox.business_os.support.export_diagnostics"
         | "ctox.business_os.why" => {
             handle_business_os_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
+        }
+        "ctox.workjet.jour_fixe.meeting.start"
+        | "ctox.workjet.jour_fixe.meeting.end"
+        | "ctox.workjet.jour_fixe.transcript.append"
+        | "ctox.workjet.jour_fixe.todos.revise" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor = session_user_id(session).context("meeting edit requires authenticated user")?;
+            match super::project_chats::jour_fixe_owner::handle(
+                root, command, actor,
+                prepared.domain_effect_admission.as_ref().context("meeting edit requires domain admission")?,
+            ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),error)),
+            }
         }
         "ctox.workjet.jour_fixe.meeting.read" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;

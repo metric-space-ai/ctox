@@ -60,10 +60,20 @@ pub(super) fn binding(
     thread_id: &str,
     active: bool,
 ) -> anyhow::Result<supervisor_binding::SupervisorBinding> {
+    let conn = open_store(root)?;
+    binding_from_connection(&conn, owner, project_id, thread_id, active)
+}
+
+pub(super) fn binding_from_connection(
+    conn: &Connection,
+    owner: &str,
+    project_id: &str,
+    thread_id: &str,
+    active: bool,
+) -> anyhow::Result<supervisor_binding::SupervisorBinding> {
     let project_id = required(project_id, "project_id", 128)?;
     let thread_id = required(thread_id, "thread_id", 36)?;
-    let conn = open_store(root)?;
-    owned_project(&conn, &project_id, owner, active)?;
+    owned_project(conn, &project_id, owner, active)?;
     let binding = supervisor_binding::for_thread(&conn, owner, &thread_id)?
         .context("register this project's existing supervisor before submitting a turn")?;
     ensure!(

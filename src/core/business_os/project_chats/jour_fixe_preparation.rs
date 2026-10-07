@@ -12,7 +12,7 @@ use wire::WireValidate;
 
 pub(super) const PREFIX: &str = "workjet-jour-fixe-prepare:";
 const MARKER: &str = "CTOX_WORKJET_JOUR_FIXE_PREPARE:";
-const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_jour_fixe_meetings (
+pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_jour_fixe_meetings (
  meeting_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
  scheduled_at_ms INTEGER NOT NULL, metadata_json TEXT NOT NULL, preparation_task_id TEXT
 );
