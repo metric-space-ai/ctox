@@ -118,6 +118,16 @@ event store. Decisions commit their identifier-only audit under the same held
 issuer/policy transaction; failure to persist the audit denies the permit.
 Request payloads, nonces, journal text and reusable credentials are excluded.
 
+Creating or changing a permission grant increments the principal capability
+epoch. A grant added after this source capture therefore invalidates its
+captured policy and cannot enable disclosure. This preparation does not
+reset epochs or reauthorize provider/workspace assignments. A production
+grant-before-capture intent or explicit native capture-policy reconciliation
+is still needed before a protected transfer consumer can use the enrollment.
+The allowed/audit regression seeds an aligned isolated fixture epoch after
+first proving that the real grant mutation denies the old capture; it is
+not evidence of a production grant reconciliation workflow.
+
 Receive/execute grants, target-local enrollment, effect reconciliation,
 authenticated byte transport and same-session target activation remain open.
 

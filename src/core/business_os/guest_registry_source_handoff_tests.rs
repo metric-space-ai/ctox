@@ -99,21 +99,44 @@ pub(super) fn assert_native_source_handoff_enrollment(
         gate.authorize(&request).unwrap_err().reason_code,
         "grant_missing"
     );
+    let captured_epoch: i64 = registry
+        .with_policy(|tx| {
+            Ok(tx.query_row(
+                "SELECT capability_epoch FROM business_users WHERE user_id='owner'",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
     registry.with_policy(|tx| {
         tx.execute(
             "INSERT INTO business_permission_grants
             (grant_id,subject_type,subject_id,permission,scope_type,scope_id,active,created_by,created_at_ms,updated_at_ms)
-            VALUES ('native-handoff-grant','user','owner','session.handoff.disclose','session_handoff',?1,1,'owner',1,1)",
-            [&first.binding_id],
+            VALUES ('native-handoff-grant','user','owner',?1,'session_handoff',?2,1,'owner',1,1)",
+            rusqlite::params![
+                super::super::super::policy::BusinessOsPermission::SessionHandoffDisclose.as_str(),
+                first.binding_id,
+            ],
         )?;
         Ok(())
     }).unwrap();
-    // The permission spelling comes from the production enum, not a client.
-    registry.with_policy(|tx| {
-        tx.execute("UPDATE business_permission_grants SET permission=?1 WHERE grant_id='native-handoff-grant'",
-            [super::super::super::policy::BusinessOsPermission::SessionHandoffDisclose.as_str()])?;
-        Ok(())
-    }).unwrap();
+    assert_eq!(
+        gate.authorize(&request).unwrap_err().reason_code,
+        "source_authority_changed",
+        "grant mutation bumps the principal epoch and cannot authorize an old capture"
+    );
+    // Restore this isolated fixture's captured epoch to test allowed/audit paths
+    // independently. Production never restores epochs: grant provisioning must
+    // precede capture or use an explicit native reconciliation workflow.
+    registry
+        .with_policy(|tx| {
+            tx.execute(
+                "UPDATE business_users SET capability_epoch=?1 WHERE user_id='owner'",
+                [captured_epoch],
+            )?;
+            Ok(())
+        })
+        .unwrap();
     registry
         .with_policy(|tx| {
             enrollment::validate_source_decision(root, tx, &config, &identity, &request)
