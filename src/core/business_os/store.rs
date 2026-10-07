@@ -202,7 +202,7 @@ const DEFAULT_TURN_EDGE_URL: &str = "https://ctox.dev/turn-ice";
 const BUSINESS_OS_TURN_TTL_SECS: i64 = 3600;
 const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
 const BUSINESS_OS_APP_QUEUE_PROMPT_MAX_CHARS: usize = 24_000;
-const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
+const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 32_000;
 const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
 const BUSINESS_USER_PROFILE_MAX_FIELDS: usize = 64;
 const BUSINESS_USER_PROFILE_KEY_MAX_CHARS: usize = 80;
@@ -26965,8 +26965,52 @@ fn business_chat_attachment_prompt_manifest(
     output
 }
 
+/// Long free-text values repeated verbatim under another key are shown once.
+/// A lead research payload carried `research_instructions` and an identical
+/// `research_instructions_default` (about 5k chars each); together with the
+/// preview limit that pushed `source_policy` past the cut, so the agent never
+/// saw most of its adapters (on-prem tenant, 07.10.2026).
+const PROMPT_PREVIEW_DEDUPE_MIN_CHARS: usize = 400;
+
+fn dedupe_repeated_long_strings(value: &Value) -> Value {
+    fn walk(value: &Value, path: &str, seen: &mut HashMap<String, String>) -> Value {
+        match value {
+            Value::String(text) if text.chars().count() >= PROMPT_PREVIEW_DEDUPE_MIN_CHARS => {
+                if let Some(first) = seen.get(text) {
+                    Value::String(format!("(identical to {first})"))
+                } else {
+                    seen.insert(text.clone(), path.to_string());
+                    value.clone()
+                }
+            }
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(key, child)| {
+                        let child_path = if path.is_empty() {
+                            key.clone()
+                        } else {
+                            format!("{path}.{key}")
+                        };
+                        (key.clone(), walk(child, &child_path, seen))
+                    })
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, child)| walk(child, &format!("{path}[{index}]"), seen))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+    walk(value, "", &mut HashMap::new())
+}
+
 fn prompt_json_preview(value: &Value, max_chars: usize) -> String {
-    let raw = serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string());
+    let value = dedupe_repeated_long_strings(value);
+    let raw = serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string());
     if raw.chars().count() <= max_chars {
         return raw;
     }
@@ -30712,6 +30756,21 @@ pub(super) mod tests {
             Ok(())
         })?;
         Ok(())
+    }
+
+    #[test]
+    fn prompt_preview_shows_repeated_long_text_once() {
+        let instructions = "Recherchiere jedes Feld mit Beleg. ".repeat(40);
+        let payload = json!({
+            "research_instructions": instructions,
+            "research_instructions_default": instructions,
+            "source_policy": {"sources": [{"target_key": "northdata-de"}]},
+        });
+        let preview = prompt_json_preview(&payload, 32_000);
+        assert_eq!(preview.matches("Recherchiere jedes Feld").count(), 40);
+        assert!(preview.contains("(identical to research_instructions)"));
+        assert!(preview.contains("northdata-de"));
+        assert!(!preview.contains("truncated"));
     }
 
     #[test]
