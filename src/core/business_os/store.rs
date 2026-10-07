@@ -18574,6 +18574,112 @@ pub(super) fn check_webrtc_collection_permission(
     if token.trim().is_empty() {
         return Ok(false);
     }
+    let cache_key = webrtc_collection_authority_cache_key(root, token, collection, permission);
+    if let Some(allowed) = webrtc_collection_authority_cached(&cache_key) {
+        return Ok(allowed);
+    }
+    // The issuer fence is a process-wide try_lock: a browser opening the app
+    // asks for ~50 collections at once, and every fetch that lost the race
+    // failed as "authority unavailable" (THESEN 07.10.2026: the whole Outbound
+    // app stayed empty). Wait a bounded moment for the fence instead.
+    let deadline = Instant::now() + WEBRTC_COLLECTION_AUTHORITY_WAIT;
+    let mut attempt = 0_u32;
+    loop {
+        match check_webrtc_collection_permission_once(root, token, collection, permission) {
+            Ok(allowed) => {
+                webrtc_collection_authority_remember(cache_key, allowed);
+                return Ok(allowed);
+            }
+            Err(error)
+                if webrtc_collection_authority_error_is_transient(&error)
+                    && Instant::now() < deadline =>
+            {
+                attempt = attempt.saturating_add(1);
+                std::thread::sleep(Duration::from_millis(5 + u64::from(attempt.min(8)) * 5));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+const WEBRTC_COLLECTION_AUTHORITY_WAIT: Duration = Duration::from_secs(2);
+/// A decision (never the signing secret) is reused this long. Role, grant or
+/// epoch changes therefore take effect within this window.
+const WEBRTC_COLLECTION_AUTHORITY_CACHE_TTL: Duration = Duration::from_secs(10);
+const WEBRTC_COLLECTION_AUTHORITY_CACHE_MAX: usize = 4096;
+
+fn webrtc_collection_authority_cache() -> &'static Mutex<HashMap<String, (bool, Instant)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (bool, Instant)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn webrtc_collection_authority_cache_key(
+    root: &Path,
+    token: &str,
+    collection: &str,
+    permission: BusinessOsPermission,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(root.to_string_lossy().as_bytes());
+    hasher.update([0]);
+    hasher.update(token.as_bytes());
+    hasher.update([0]);
+    hasher.update(collection.trim().as_bytes());
+    hasher.update([0]);
+    hasher.update(format!("{permission:?}").as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn webrtc_collection_authority_cached(key: &str) -> Option<bool> {
+    let cache = webrtc_collection_authority_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(key)
+        .filter(|(_, at)| at.elapsed() < WEBRTC_COLLECTION_AUTHORITY_CACHE_TTL)
+        .map(|(allowed, _)| *allowed)
+}
+
+fn webrtc_collection_authority_remember(key: String, allowed: bool) {
+    let mut cache = webrtc_collection_authority_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= WEBRTC_COLLECTION_AUTHORITY_CACHE_MAX {
+        cache.retain(|_, (_, at)| at.elapsed() < WEBRTC_COLLECTION_AUTHORITY_CACHE_TTL);
+        if cache.len() >= WEBRTC_COLLECTION_AUTHORITY_CACHE_MAX {
+            cache.clear();
+        }
+    }
+    cache.insert(key, (allowed, Instant::now()));
+}
+
+/// Contention on the issuer fence or a briefly busy SQLite writer; not a
+/// missing, oversized or conflicting key.
+fn webrtc_collection_authority_error_is_transient(error: &anyhow::Error) -> bool {
+    if error
+        .chain()
+        .any(|cause| cause.to_string() == "secret master-key authority is unavailable")
+    {
+        return true;
+    }
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(failure, _))
+                if matches!(
+                    failure.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                )
+        )
+    })
+}
+
+fn check_webrtc_collection_permission_once(
+    root: &Path,
+    token: &str,
+    collection: &str,
+    permission: BusinessOsPermission,
+) -> anyhow::Result<bool> {
     with_store_connection(root, |_| Ok(())).context("webrtc authority store bootstrap")?;
     with_current_webrtc_capability_signer(root, |secret| {
         with_store_connection(root, |conn| {
@@ -30602,6 +30708,63 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn collection_authority_waits_for_a_briefly_held_issuer_fence() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "authority-wait-owner", "chef")?;
+        let (token, _) = issue_business_os_capability_token(
+            root.path(),
+            "authority-wait-owner",
+            now_ms() as i64,
+        )?;
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let holder_root = root.path().to_path_buf();
+        let holder = std::thread::spawn(move || {
+            with_current_webrtc_capability_signer(&holder_root, |_secret| {
+                held_tx.send(()).ok();
+                std::thread::sleep(Duration::from_millis(300));
+                Ok(())
+            })
+        });
+        held_rx.recv()?;
+        let collections = ["leads", "imports", "adapters", "business_commands"];
+        // Several collections of one page load, all while the fence is held.
+        let checks = collections
+            .into_iter()
+            .map(|collection| {
+                let root = root.path().to_path_buf();
+                let token = token.clone();
+                std::thread::spawn(move || {
+                    check_webrtc_collection_permission(
+                        &root,
+                        &token,
+                        collection,
+                        BusinessOsPermission::DataRead,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let decisions = checks
+            .into_iter()
+            .map(|check| check.join().expect("check thread"))
+            .collect::<anyhow::Result<Vec<bool>>>()?;
+        holder.join().expect("holder thread")?;
+        // Same decisions as an uncontended, uncached read.
+        for (collection, decision) in collections.into_iter().zip(decisions) {
+            assert_eq!(
+                decision,
+                check_webrtc_collection_permission_once(
+                    root.path(),
+                    &token,
+                    collection,
+                    BusinessOsPermission::DataRead,
+                )?,
+                "{collection}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn collection_authority_diagnostic_tracks_a_real_busy_issuer_without_denial(
     ) -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
@@ -30621,8 +30784,16 @@ pub(super) mod tests {
         };
         assert!(check()?);
         with_current_webrtc_capability_signer(root.path(), |_secret| {
-            let error =
-                check().expect_err("the held non-recursive issuer fence must remain unavailable");
+            // A recent decision is reused while the fence is held ...
+            assert!(check()?);
+            // ... and an uncached read still reports the busy issuer.
+            let error = check_webrtc_collection_permission_once(
+                root.path(),
+                &token,
+                "business_commands",
+                BusinessOsPermission::DataRead,
+            )
+            .expect_err("the held non-recursive issuer fence must remain unavailable");
             let diagnostic = webrtc_collection_authority_diagnostic(&error);
             assert_eq!(diagnostic["phase"], "current_signer");
             assert_eq!(diagnostic["code"], "master_key_busy");
