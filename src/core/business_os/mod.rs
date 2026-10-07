@@ -152,6 +152,8 @@ pub(crate) use rxdb_peer::sync_knowledge_tables;
 pub use rxdb_peer::{ensure_native_peer, native_peer_maintenance_health, restart_native_peer};
 pub use server::serve_business_os;
 pub use server::BusinessOsServeOptions;
+#[cfg(unix)]
+pub(crate) mod session_handoff_enrollment;
 pub use session_handoff_gate::native_session_handoff_gate;
 pub use session_handoff_gate::NativeSessionHandoffGate;
 

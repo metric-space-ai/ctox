@@ -14,7 +14,7 @@
 //! not a retained fence for later asynchronous protected-byte publication.
 //!
 //! What this adapter deliberately does not do: it does not fabricate a
-//! binding (enrollment is a separate authorized act), it does not infer
+//! binding (the local operator enrolls from an actual source capture), it does not infer
 //! account or workspace entitlement from a reachable model route or a sole
 //! configured account, and it does not consume checkpoint bytes. The
 //! operational transfer consumer that must call `SessionHandoffTransfer` is
@@ -208,12 +208,67 @@ impl NativeSessionHandoffGate {
                     rusqlite::TransactionBehavior::Immediate,
                 )
                 .map_err(|_| deny("store_unavailable"))?;
-                apply(&tx, identity)
+                let decision = apply(&tx, identity);
+                tx.commit().map_err(|_| deny("policy_audit_unavailable"))?;
+                decision
             })();
             Ok(decision)
         })
         .map_err(|_| deny("identity_unavailable"))?
     }
+}
+
+fn audit_decision(
+    conn: &Connection,
+    request: &SessionHandoffGateRequest,
+    identity: &SigningIdentity,
+    decision: &Result<SessionHandoffPermit, SessionHandoffDenial>,
+) -> Result<(), SessionHandoffDenial> {
+    let binding = load_binding(conn, &request.binding_digest)
+        .map_err(|_| deny("policy_audit_unavailable"))?;
+    // Record only durable binding identifiers. Untrusted request fields may
+    // contain arbitrary data; never echo them, a nonce or reusable credentials.
+    let record_id = binding
+        .as_ref()
+        .map(|b| b.binding_id.as_str())
+        .unwrap_or("unknown_binding");
+    let principal = binding.as_ref().map(|b| match request.phase {
+        SessionHandoffPhase::Disclose => b.source_actor_user_id.as_str(),
+        SessionHandoffPhase::Receive | SessionHandoffPhase::Resume => {
+            b.target_principal_user_id.as_str()
+        }
+    });
+    let event_type = if decision.is_ok() {
+        "business_os.session_handoff.allowed"
+    } else {
+        "business_os.session_handoff.denied"
+    };
+    let reason = decision
+        .as_ref()
+        .err()
+        .map(|d| d.reason_code.as_str())
+        .unwrap_or("allowed");
+    super::store::insert_business_event(
+        conn,
+        "business_session_handoff_bindings",
+        record_id,
+        event_type,
+        serde_json::json!({
+            "version": 1, "event_type": event_type,
+            "phase": request.phase, "reason_code": reason,
+            "bound_principal_id": principal,
+            "issuer_identity": identity.public_identity(),
+            "binding_digest": binding.as_ref().map(|_| request.binding_digest.as_str()),
+            "binding_revision": binding.as_ref().map(|b| b.revision),
+            "job_id": binding.as_ref().map(|b| b.job_id.as_str()),
+            "session_id": binding.as_ref().map(|b| b.session_id.as_str()),
+            "scope_id": binding.as_ref().map(|b| b.scope_id.as_str()),
+            "checkpoint_digest": binding.as_ref().map(|b| b.checkpoint_digest.as_str()),
+            "principal_epoch": decision.as_ref().ok().map(|p| p.principal_epoch),
+        }),
+        now_ms() as i64,
+    )
+    .map_err(|_| deny("policy_audit_unavailable"))
 }
 
 impl SessionHandoffGate for NativeSessionHandoffGate {
@@ -224,7 +279,29 @@ impl SessionHandoffGate for NativeSessionHandoffGate {
         // Do not initialize/migrate stores or let separate reads straddle
         // revocation. The signature is made before either fence is released.
         self.with_current_authority(|conn, identity| {
-            self.authorize_with_conn(conn, request, identity)
+            let decision = (|| {
+                if request.phase == SessionHandoffPhase::Disclose {
+                    #[cfg(unix)]
+                    {
+                        let config = crate::sync_host::handoff_configuration(&self.root)
+                            .map_err(|_| deny("host_unavailable"))?;
+                        super::session_handoff_enrollment::validate_source_decision(
+                            &self.root, conn, &config, identity, request,
+                        )
+                        .map_err(|_| deny("source_authority_changed"))?;
+                    }
+                    #[cfg(not(unix))]
+                    return Err(deny("source_authority_unavailable"));
+                }
+                self.authorize_with_conn(conn, request, identity)
+            })();
+            if let Err(audit_denial) = audit_decision(conn, request, identity, &decision) {
+                // An allowed decision can never escape an audit failure. If
+                // authority was already unavailable, preserve that denial:
+                // absent/blank stores cannot also persist their own failure.
+                return Err(decision.err().unwrap_or(audit_denial));
+            }
+            decision
         })
     }
 }
@@ -336,6 +413,11 @@ mod tests {
                 model_route_id TEXT NOT NULL,
                 gateway_account_id TEXT NOT NULL,
                 model_id TEXT NOT NULL
+            );
+            CREATE TABLE business_events (
+                event_id TEXT PRIMARY KEY, collection TEXT NOT NULL,
+                record_id TEXT NOT NULL, command_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL, observed_at_ms INTEGER NOT NULL
             );
             CREATE TABLE business_permission_grants (
                 active INTEGER, permission TEXT, scope_type TEXT, scope_id TEXT,
@@ -449,11 +531,22 @@ mod tests {
         fixture
             .conn
             .execute(
-                "UPDATE business_session_handoff_bindings SET source_identity=?1",
+                "UPDATE business_session_handoff_bindings SET side='target',
+                 target_identity=?1,target_principal_user_id='alice'",
                 [identity.public_identity()],
             )
             .unwrap();
-        let mut request = request(&fixture, SessionHandoffPhase::Disclose);
+        // These minimal fixtures isolate issuer/store fencing on the Receive
+        // phase. Disclosure provenance is exercised through the actual Core
+        // capture regression in guest_registry_source_handoff_tests.
+        fixture
+            .conn
+            .execute(
+                "UPDATE business_permission_grants SET permission=?1",
+                [BusinessOsPermission::SessionHandoffReceive.as_str()],
+            )
+            .unwrap();
+        let mut request = request(&fixture, SessionHandoffPhase::Receive);
         request.issuer_identity = identity.public_identity();
         let path = business_os_store_path(root.path());
         fixture
@@ -551,7 +644,7 @@ mod tests {
         fixture
             .writer
             .execute(
-                "UPDATE business_session_handoff_bindings SET source_identity=?1, revision=4",
+                "UPDATE business_session_handoff_bindings SET target_identity=?1, revision=4",
                 [rotated.public_identity()],
             )
             .unwrap();

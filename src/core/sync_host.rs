@@ -56,6 +56,13 @@ pub(crate) fn with_current_signing_identity<T>(
     }
 }
 
+#[cfg(unix)]
+pub(crate) fn handoff_configuration(
+    root: &std::path::Path,
+) -> anyhow::Result<ctox_sync::host_config::HostConfiguration> {
+    unix::configuration(root)
+}
+
 #[cfg(not(unix))]
 pub fn handle_command(_: &std::path::Path, _: &[String]) -> anyhow::Result<()> {
     anyhow::bail!("native Sync hosting requires a certified local listener on this platform")

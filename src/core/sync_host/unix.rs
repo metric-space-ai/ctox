@@ -38,7 +38,7 @@ fn load_config(root: &Path) -> Result<Option<HostConfiguration>> {
     connection.busy_timeout(Duration::from_secs(2))?;
     Ok(host_config::load(&connection)?)
 }
-fn configuration(root: &Path) -> Result<HostConfiguration> {
+pub(super) fn configuration(root: &Path) -> Result<HostConfiguration> {
     load_config(root)?.context("native Sync host is not configured")
 }
 pub(super) fn decode_key(encoded: &[u8]) -> Result<SigningIdentity> {
@@ -175,6 +175,20 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             crate::secrets::write_secret_record(&root, SECRET_SCOPE, &transport_name(&config), &serde_json::to_string(&value)?, Some("Native CTOX Sync transport".into()), serde_json::json!({"source":"native-sync-host"}))?;
             print(serde_json::json!({"stored": true, "activation": "signaling-on-next-reconnect-ice-on-next-start"}))
         },
+        ["handoff-enroll-source"] => {
+            let _lease = HostDirectoryLock::acquire(&directory(&root))?;
+            let config = configuration(&root)?;
+            let enrollment = input()?;
+            with_current_key(&root, |identity| {
+                print(crate::business_os::session_handoff_enrollment::enroll_source(
+                    &root, &config, identity, &enrollment,
+                )?)
+            })
+        },
+        ["handoff-revoke", binding] => {
+            let revoked = crate::business_os::session_handoff_enrollment::revoke_binding(&root, binding)?;
+            print(serde_json::json!({"revoked": revoked}))
+        },
         ["status"] => runtime::status(&root),
         ["configure-guests"] => {
             guests::configure(&root, &input()?)?;
@@ -193,7 +207,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
         }, |started, _authority, _guests| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
-        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
+        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-revoke <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
     }
 }
 
