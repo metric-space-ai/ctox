@@ -27623,7 +27623,8 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         CREATE TABLE IF NOT EXISTS business_native_source_handoff_authorizations (
             binding_id TEXT PRIMARY KEY REFERENCES business_native_source_handoff_bindings(binding_id),
             binding_revision INTEGER NOT NULL CHECK(binding_revision > 1),
-            source_json TEXT NOT NULL
+            source_json TEXT NOT NULL,
+            policy_snapshot_json TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS business_module_releases (

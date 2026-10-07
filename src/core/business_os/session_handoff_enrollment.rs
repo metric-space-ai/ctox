@@ -308,7 +308,8 @@ pub(crate) fn validate_source_decision(
                 root,
                 policy,
                 &input.capture_id,
-            )?,
+            )?
+            .0,
             serde_json::from_str::<SourceHandoffFacts>(&json)?,
             revision,
         ),
@@ -390,11 +391,12 @@ pub(crate) fn reauthorize_source_with_conn(
         input.capture_id == original.capture_id,
         "capture provenance differs"
     );
-    let current = super::guest_registry::source_handoff::resolve_reauthorized_source(
-        root,
-        policy,
-        &input.capture_id,
-    )?;
+    let (current, current_policy) =
+        super::guest_registry::source_handoff::resolve_reauthorized_source(
+            root,
+            policy,
+            &input.capture_id,
+        )?;
     historical_matches(&current, &original)?;
     let issuer = identity.public_identity();
     let target = target_identity(config, identity, &current, &input)?;
@@ -403,12 +405,20 @@ pub(crate) fn reauthorize_source_with_conn(
         binding == format!("handoff_{original_hash}"),
         "original handoff identity changed"
     );
-    let latest: Option<(i64,String)> = policy.query_row(
-        "SELECT binding_revision,source_json FROM business_native_source_handoff_authorizations WHERE binding_id=?1",
-        [binding], |r| Ok((r.get(0)?,r.get(1)?)),
+    let latest: Option<(i64,String,String)> = policy.query_row(
+        "SELECT binding_revision,source_json,policy_snapshot_json FROM business_native_source_handoff_authorizations WHERE binding_id=?1",
+        [binding], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
     ).optional()?;
     let (prior, revision) = match latest {
-        Some((revision, json)) => (serde_json::from_str::<SourceHandoffFacts>(&json)?, revision),
+        Some((revision, json, snapshot)) => {
+            let prior: SourceHandoffFacts = serde_json::from_str(&json)?;
+            super::guest_registry::source_handoff::validate_policy_advance(
+                &serde_json::from_str(&snapshot)?,
+                &prior.policy_revision,
+                &current_policy,
+            )?;
+            (prior, revision)
+        }
         None => (original, 1),
     };
     let prior_hash = digest(&prior, &input, &issuer, target)?;
@@ -461,9 +471,9 @@ pub(crate) fn reauthorize_source_with_conn(
         ensure!(changed == 1, "handoff authorization changed");
         policy.execute(
             "INSERT INTO business_native_source_handoff_authorizations
-             (binding_id,binding_revision,source_json) VALUES (?1,?2,?3)
-             ON CONFLICT(binding_id) DO UPDATE SET binding_revision=excluded.binding_revision,source_json=excluded.source_json",
-            params![binding,next,serde_json::to_string(&current)?],
+             (binding_id,binding_revision,source_json,policy_snapshot_json) VALUES (?1,?2,?3,?4)
+             ON CONFLICT(binding_id) DO UPDATE SET binding_revision=excluded.binding_revision,source_json=excluded.source_json,policy_snapshot_json=excluded.policy_snapshot_json",
+            params![binding,next,serde_json::to_string(&current)?,serde_json::to_string(&current_policy)?],
         )?;
         super::store::insert_business_event(
             policy,

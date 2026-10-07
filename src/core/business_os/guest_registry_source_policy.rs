@@ -60,8 +60,16 @@ pub(super) fn validate_reauthorization(
         .optional()?
         .context("capture has no native policy attestation; recapture")?;
     let captured: serde_json::Value = serde_json::from_str(&json)?;
+    validate_advance(&captured, captured_revision, current)
+}
+
+pub(super) fn validate_advance(
+    captured: &serde_json::Value,
+    captured_revision: &str,
+    current: &serde_json::Value,
+) -> Result<()> {
     ensure!(
-        revision(&captured)? == captured_revision,
+        revision(captured)? == captured_revision,
         "capture policy attestation changed"
     );
     let normalize = |value: &serde_json::Value| -> Result<serde_json::Value> {
@@ -118,7 +126,7 @@ pub(super) fn validate_reauthorization(
         Ok(serde_json::Value::Array(values))
     };
     ensure!(
-        normalize(&captured)? == normalize(current)?,
+        normalize(captured)? == normalize(current)?,
         "native capture scope changed; recapture"
     );
     for (index, epoch) in [(6, "current_epoch"), (7, "currentEpoch")] {

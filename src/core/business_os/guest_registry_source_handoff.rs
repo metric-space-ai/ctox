@@ -29,7 +29,7 @@ pub(crate) fn resolve_source_handoff(
     policy: &Connection,
     capture_id: &str,
 ) -> Result<SourceHandoffFacts> {
-    resolve(root, policy, capture_id, false)
+    resolve(root, policy, capture_id, false).map(|(facts, _)| facts)
 }
 
 /// Only explicit native reauthorization may bind a historical capture to a
@@ -38,8 +38,16 @@ pub(crate) fn resolve_reauthorized_source(
     root: &Path,
     policy: &Connection,
     capture_id: &str,
-) -> Result<SourceHandoffFacts> {
+) -> Result<(SourceHandoffFacts, serde_json::Value)> {
     resolve(root, policy, capture_id, true)
+}
+
+pub(crate) fn validate_policy_advance(
+    prior: &serde_json::Value,
+    revision: &str,
+    current: &serde_json::Value,
+) -> Result<()> {
+    source_policy::validate_advance(prior, revision, current)
 }
 
 fn resolve(
@@ -47,7 +55,7 @@ fn resolve(
     policy: &Connection,
     capture_id: &str,
     reauthorized: bool,
-) -> Result<SourceHandoffFacts> {
+) -> Result<(SourceHandoffFacts, serde_json::Value)> {
     ensure!(identifier(capture_id), "invalid native capture ID");
     let row = policy
         .query_row(
@@ -176,18 +184,21 @@ fn resolve(
         private_directory(&store_path)? == store_identity,
         "native source store replaced"
     );
-    Ok(SourceHandoffFacts {
-        capture_id: capture_id.into(),
-        source_instance_id: row.7,
-        owner_user_id: row.3,
-        project_id: row.5,
-        worker_profile_id: row.4,
-        policy_revision,
-        spec,
-        ownership,
-        checkpoint_digest: row.12,
-        checkpoint_sequence: u64::try_from(row.13)?,
-        source_working_copy_id: row.14,
-        workspace_revision: workspace.revision,
-    })
+    Ok((
+        SourceHandoffFacts {
+            capture_id: capture_id.into(),
+            source_instance_id: row.7,
+            owner_user_id: row.3,
+            project_id: row.5,
+            worker_profile_id: row.4,
+            policy_revision,
+            spec,
+            ownership,
+            checkpoint_digest: row.12,
+            checkpoint_sequence: u64::try_from(row.13)?,
+            source_working_copy_id: row.14,
+            workspace_revision: workspace.revision,
+        },
+        current_policy,
+    ))
 }

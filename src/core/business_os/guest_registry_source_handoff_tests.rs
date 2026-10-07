@@ -344,6 +344,31 @@ pub(super) fn assert_native_source_handoff_enrollment(
         gate.authorize(&request).is_err(),
         "old binding digest cannot mint after renewal"
     );
+    registry
+        .with_policy(|tx| {
+            tx.execute(
+                "UPDATE business_native_guest_provider_assignments SET revision=revision-1
+            WHERE owner_user_id='owner' AND worker_profile_id=?1",
+                [&profile],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        renew().unwrap_err().to_string(),
+        "native assignment epoch or revision regressed",
+        "a later renewal cannot roll back the most recent provider revision"
+    );
+    registry
+        .with_policy(|tx| {
+            tx.execute(
+                "UPDATE business_native_guest_provider_assignments SET revision=revision+1
+            WHERE owner_user_id='owner' AND worker_profile_id=?1",
+                [&profile],
+            )?;
+            Ok(())
+        })
+        .unwrap();
     request.binding_digest = renewed.binding_digest.clone();
     crate::sync_host::handle_command(
         root,

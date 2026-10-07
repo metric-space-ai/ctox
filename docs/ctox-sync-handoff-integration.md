@@ -135,8 +135,10 @@ lowers epochs nor creates grants or assignments.
 
 The stable binding ID retains its exact grant scope. A successful renewal
 changes the binding digest and increments its revision atomically with the
-private current-source authorization and audit event. Old digests cannot
-mint permits; exact retry leaves the digest/revision/audit unchanged.
+private current-source authorization, policy snapshot and audit event. A
+later renewal must also preserve scope and advance monotonically from this
+last authorization. Old digests cannot mint permits; exact retry leaves the
+digest/revision/audit unchanged.
 The production disclosure gate re-resolves this current authorization on
 every call. Revoked bindings cannot be renewed. The actual stopped Core
 regression now follows grant mutation, current assignment provisioning and
