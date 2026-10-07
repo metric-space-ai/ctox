@@ -23,15 +23,27 @@ python3 scripts/prepare-installed-sync-tenant.py \
   --host gpu3 --workjet-revision <actual-installed-version-and-source>
 ```
 
-Use one owned, named Playwright CLI session and its existing browser. `run-code`
-imports the runner from this repository and calls:
+The advanced host runner needs filesystem/process access. Playwright CLI's
+`run-code` only evaluates a function expression and does not provide imports;
+use the standalone Playwright library launcher for this unit, without a test
+framework or a shared browser. The package is pinned to1.64.0 inside the gate's
+temporary directory; gpu3's existing `/home/metricspace/.local/bin/node` is20.20.1.
+Its ordinary SSH `node` is12 and must not be used for the browser controller.
+Install the package only during admission (ignore lifecycle scripts and use
+the existing `/usr/bin/google-chrome`); no system installation or browser download.
+
+Inside that admitted unit:
 
 ```
-const {runAcceptance} = await import('file://<checkout>/scripts/installed-sync-acceptance.mjs');
-await runAcceptance(page.context().browser(), '<private-parent>/runner.private.json');
+PATH=/home/metricspace/.local/bin:$PATH npm install \
+  --prefix "$TMPDIR/playwright-tools" --ignore-scripts --no-audit --no-fund \
+  --save-exact playwright@1.64.0
+/home/metricspace/.local/bin/node scripts/run-installed-sync-browser.mjs \
+  <private-parent>/runner.private.json \
+  "$TMPDIR/playwright-tools/node_modules/playwright"
 ```
 
-The callback creates two separate Chromium contexts. It opens **installed**
+The owned browser launcher creates two separate Chromium contexts. It opens **installed**
 canonical DB, desktop schema and sync modules from the native static server.
 Collections travel only over authenticated WebRTC. Native-issued browser
 invitations stay in0600 private host files and browser memory; neither stdout,
@@ -76,8 +88,8 @@ The collection's production conflict policy is used unchanged.
 
 All child groups are owned and bounded. The unit closes its contexts and peer /
 static server on completion/failure; it never targets an externally provided PID.
-The1800s deadline also closes contexts. Close the named Playwright CLI session
-in the outer unit's finally/trap. Keep invitation files private; do not upload
+The1800s measurement deadline also closes contexts. The3000s host launcher
+deadline/termination handler stops only its native and browser groups. Keep invitation files private; do not upload
 private CLI logs or browser storage snapshots.
 
 Copy only sanitized goal receipts, screenshots and process cleanup evidence into

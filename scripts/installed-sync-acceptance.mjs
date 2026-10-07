@@ -1,4 +1,4 @@
-/** Installed WebRTC acceptance. Called from an admitted, owned Playwright CLI session.
+/** Installed WebRTC acceptance. Called from an admitted, owned Playwright browser.
  * No credentials, customer roots, HTTP record transport, or production sync edits.
  */
 import { readFileSync, writeFileSync, mkdirSync, realpathSync, statSync } from 'node:fs';
@@ -45,15 +45,27 @@ export function validateConfig(config, configPath) {
   return { ...config, root, binary, acceptanceBase: base };
 }
 
+const nativeControllers = new Set();
+let stopping = false;
+export async function stopOwnedAcceptance() {
+  stopping = true;
+  await Promise.all([...nativeControllers].map(controller => controller.close()));
+}
 class OwnedNative {
   constructor(config, output) {
     this.config = config; this.output = output; this.children = new Set(); this.peer = null;
-    this.env = { ...process.env, CTOX_ROOT: config.root, CTOX_STATE_ROOT: join(config.root, 'runtime'),
+    const home = join(config.root, 'runtime', 'acceptance-home');
+    mkdirSync(home, { recursive: true, mode: 0o700 });
+    const inherited = Object.fromEntries(['PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'CARGO_TARGET_DIR',
+      'XDG_CACHE_HOME', 'npm_config_cache'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
+    this.env = { ...inherited, HOME: home, CTOX_ROOT: config.root, CTOX_STATE_ROOT: join(config.root, 'runtime'),
       CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2' };
     this.processes = [];
+    nativeControllers.add(this);
   }
   save() { writeFileSync(join(this.output, 'owned-processes.json'), JSON.stringify(this.processes, null, 2)); }
   async cli(args, secret = false, timeout = 60000) {
+    invariant(!stopping, 'Acceptance unit is stopping; no new native command allowed');
     const child = spawn(this.config.binary, args, { cwd: this.config.root, env: this.env, detached: true,
       stdio: ['ignore', 'pipe', 'pipe'] });
     this.children.add(child);
@@ -73,6 +85,7 @@ class OwnedNative {
       await this.stop(child); this.save(); }
   }
   start(kind, args) {
+    invariant(!stopping, 'Acceptance unit is stopping; no new native process allowed');
     const child = spawn(this.config.binary, args, { cwd: this.config.root, env: this.env,
       stdio: 'ignore', detached: true });
     this.children.add(child);
@@ -122,7 +135,10 @@ class OwnedNative {
       invariant(code === 0, 'Isolated native read-only readback failed'); return JSON.parse(body);
     } finally { clearTimeout(timer); }
   }
-  async close() { for (const child of [...this.children]) await this.stop(child); }
+  async close() {
+    for (const child of [...this.children]) await this.stop(child);
+    nativeControllers.delete(this);
+  }
 }
 
 /** Goal23 component evidence only. The installed three-component health remains a separate criterion. */
@@ -297,7 +313,7 @@ async function metrics(page) {
   });
 }
 
-/** A CLI run-code callback passes its OWN browser; two contexts keep separate IndexedDB caches. */
+/** The admitted host launcher passes its OWN browser; two contexts keep separate IndexedDB caches. */
 export async function runAcceptance(browser, configPath) {
   const config = validateConfig(JSON.parse(readFileSync(configPath)), configPath);
   const output = resolve(config.output); invariant(inside(config.acceptanceBase, output), 'Evidence escaped owned staging');
@@ -306,7 +322,7 @@ export async function runAcceptance(browser, configPath) {
   const started = performance.now();
   const deadline = setTimeout(() => {
     for (const context of contexts) void context.close();
-    void native.close();
+    void stopOwnedAcceptance();
   }, 1800000);
   const origin = `http://127.0.0.1:${config.port}`;
   const revisions = { workjet: config.workjetRevision ?? null, native: config.source,

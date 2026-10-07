@@ -73,7 +73,11 @@ def prepare(producer_path, acceptance_base, port, host, workjet_revision):
         assert sha(binary) == producer['native_binary_sha256']
         provenance = json.loads((root / 'build-provenance.json').read_text())
         assert provenance['source'] == SOURCE and provenance['native_binary_sha256'] == sha(binary)
-        env = {**os.environ, 'CTOX_ROOT': str(root), 'CTOX_STATE_ROOT': str(root / 'runtime'),
+        home = root / 'runtime/acceptance-home'
+        home.mkdir(parents=True, mode=0o700)
+        inherited = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL', 'TMPDIR',
+                     'CARGO_TARGET_DIR', 'XDG_CACHE_HOME', 'npm_config_cache') if key in os.environ}
+        env = {**inherited, 'HOME': str(home), 'CTOX_ROOT': str(root), 'CTOX_STATE_ROOT': str(root / 'runtime'),
                'CARGO_BUILD_JOBS': '2', 'RUST_TEST_THREADS': '2'}
         version = subprocess.run([str(binary), 'version'], cwd=root, env=env,
                                  capture_output=True, text=True, timeout=30, check=True)
