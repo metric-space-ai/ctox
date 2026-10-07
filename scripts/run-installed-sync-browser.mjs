@@ -9,6 +9,7 @@ import { validateConfig, measureShellRollback, runAcceptance, stopOwnedAcceptanc
 const [configPath, playwrightRoot] = process.argv.slice(2);
 if (!configPath || !playwrightRoot || !process.env.TMPDIR || !process.env.CARGO_TARGET_DIR)
   throw new Error('Use the admitted GPU launcher with private config and task-local Playwright1.64.0');
+process.umask(0o077); // All browser/profile/native child outputs remain owner-private.
 const config = validateConfig(JSON.parse(readFileSync(configPath)), configPath);
 const tools = realpathSync(playwrightRoot), temporary = realpathSync(process.env.TMPDIR);
 if (!tools.startsWith(temporary + '/') || JSON.parse(readFileSync(join(tools, 'package.json'))).version !== '1.64.0')

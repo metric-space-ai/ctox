@@ -116,6 +116,8 @@ class OwnedNative {
   }
   async invite(client) {
     const file = join(this.config.acceptanceBase, `invite-${client}-${randomUUID()}.private.json`);
+    // Native fs::write preserves an existing mode, but does not itself create0600.
+    writeFileSync(file, '', { mode: 0o600, flag: 'wx' });
     await this.cli(['business-os', 'desktop', 'invite', '--display-name', 'DevOps isolated acceptance',
       '--user', 'devops-isolated-sync-owner', '--user-display-name', 'Isolated acceptance owner',
       '--role', 'chef', '--ttl-hours', '1', '--format', 'json', '--output', file, '--root', this.config.root], true);

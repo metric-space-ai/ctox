@@ -49,7 +49,8 @@ PATH=/home/metricspace/.local/bin:$PATH npm install \
 The owned browser launcher creates two separate Chromium contexts. It opens **installed**
 canonical DB, desktop schema and sync modules from the native static server.
 Collections travel only over authenticated WebRTC. Native-issued browser
-invitations stay in0600 private host files and browser memory; neither stdout,
+invitations are exclusively precreated with0600 before the native writer fills
+them, and remain in private host files and browser memory; neither stdout,
 receipts nor browser URLs contain them. Evidence uses a direct local cached
 read and a mode=ro native SQLite readback, not an HTTP record bridge. CLI-generated
 identities belong only to this synthetic tenant.
