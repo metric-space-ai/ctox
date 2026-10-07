@@ -37,8 +37,11 @@ real-time performance. `open_stream` accepts mono PCM16 at 16 kHz, retains decod
 KV for one utterance, and exposes partial snapshots before `finish`. The causal
 encoder currently recomputes the bounded prefix every 320 ms; this is not an
 incremental encoder cache. Utterances are capped at 15 seconds and concurrent
-streams are rejected while one owns the decoder. Actual transcript parity and
-sentence-end latency remain unverified until measured with real weights.
+streams are rejected while one owns the decoder. A pinned real-audio fixture on
+an RTX A4500 produced matching batch/stream transcripts, but the initial release
+candidate took3429ms from fixture end to final text. That exceeds the1500ms
+meeting target and does not establish microphone/VAD or installed gateway latency.
+
 
 ## Direct streaming measurement
 
