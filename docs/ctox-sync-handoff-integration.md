@@ -39,6 +39,40 @@ The approved second-host path uses GPU3 with KVM and GPU4 with explicitly
 selected TCG. This option enables native configuration; it does not prove
 guest restoration, target session continuation or measured desktop performance.
 
+
+## Native operator guest enrollment
+
+A configured foreground Sync host now retains its native guest registry and
+attaches frame sources to its exact already-running native peer. Provisioning
+uses its private Unix control socket, not HTTP, renderer-supplied host paths,
+or a second Sync/Raft store.
+
+The operator first runs `ctox sync configure-guests` with typed public JSON on
+stdin: version 1, the canonical `computerId` of this host, and a nonempty
+`requiredCapabilities` list matching the intended execution requirements.
+These requirements are configuration, not newly issued capabilities. The
+configuration is stored in the existing SQLite runtime store and takes effect
+on the next host start. Absent configuration leaves guest enrollment disabled;
+an unreadable or invalid configured store fails host startup.
+
+`ctox sync guest-enroll <project-id> <thread-id> <worker-profile-id>` sends an
+existing opaque Business OS session on stdin to that running host. The native
+owner checks the local process UID and bounded frame, then resolves the
+unrevoked/unexpired session, active principal, canonical project, chat, worker
+profile and assigned computer in the same authoritative policy transaction.
+Only the host creates the private import directory, guest and controller IDs.
+The response contains identifiers, not paths, checkpoint payloads or execution
+permission. Repeating the same current enrollment returns the retained
+assignment, so a lost response does not create a second controller. Revoked or
+replaced assignments fail closed and require reconciliation.
+
+Registrations belong to this daemon lifetime. Restart does not resurrect a
+live provider/process from a persisted claim; abandoned import directories
+need explicit reconciliation. The provider turn producer, source/target
+handoff binding enrollment, protected checkpoint transport and original-session
+target resume are subsequent production connections under #183. Enrollment
+alone does not start QEMU or establish two-host restoration.
+
 ## Native producer ownership before the capture transition
 
 Source inspection at CTOX `5f2d52c362c628b0eea673c7eda8fe60d6e9be70`

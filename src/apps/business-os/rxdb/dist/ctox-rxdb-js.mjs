@@ -11859,6 +11859,9 @@ var CtoxWebRtcReplicationState = class {
       if (this.cancelled) return;
       activePeerId = response.peerId || activePeerId;
       const result = response.result;
+      if (replicationErrorResult(result)) {
+        throw replicationErrorResultError(result, this.collection.name, "pull");
+      }
       if (!result || typeof result !== "object" || !Array.isArray(result.documents)) {
         const error = new Error(`masterChangesSince returned no documents array for ${this.collection.name}`);
         error.code = "ctox_replication_invalid_master_changes_result";
@@ -13040,12 +13043,13 @@ function missingMasterHandlerResult(collection, direction) {
     message: `no master handler registered for ${collection || "unknown collection"}`
   };
 }
-function replicationErrorResultError(result, collection) {
+function replicationErrorResultError(result, collection, direction = "push") {
   const message = String(result?.message || result?.code || "replication request failed");
-  const error = new Error(`masterWrite failed for ${collection}: ${message}`);
+  const method = direction === "pull" ? "masterChangesSince" : "masterWrite";
+  const error = new Error(`${method} failed for ${collection}: ${message}`);
   error.code = String(result?.code || "RC_WEBRTC_PEER");
   error.phase = "replication-io";
-  error.direction = "push";
+  error.direction = direction;
   error.collection = collection;
   return error;
 }

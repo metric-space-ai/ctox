@@ -17,6 +17,8 @@ use std::{
     time::Duration,
 };
 
+#[path = "guests.rs"]
+pub(crate) mod guests;
 #[path = "runtime.rs"]
 mod runtime;
 const SECRET_SCOPE: &str = super::SIGNING_IDENTITY_SECRET_KEY.0;
@@ -174,20 +176,30 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             print(serde_json::json!({"stored": true, "activation": "signaling-on-next-reconnect-ice-on-next-start"}))
         },
         ["status"] => runtime::status(&root),
+        ["configure-guests"] => {
+            guests::configure(&root, &input()?)?;
+            print(serde_json::json!({"configured": true, "activation": "next-host-start"}))
+        },
+        ["guest-enroll", project, thread, profile] => guests::enroll(&root, &[project, thread, profile], &input()?),
         ["run"] => runtime::run(&root, async {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
-        }, |started, _authority| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
-        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | status | run"),
+        }, |started, _authority, _guests| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
+        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | configure-guests (public JSON on stdin) | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
     }
 }
 
 pub struct ServiceHost {
     authority: Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
+    guest_registry: Option<Arc<crate::business_os::NativeGuestRegistry>>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<thread::JoinHandle<()>>,
 }
 impl ServiceHost {
+    /// Borrow only the registry attached to this live host's native peer.
+    pub(crate) fn guest_registry(&self) -> Option<Arc<crate::business_os::NativeGuestRegistry>> {
+        self.guest_registry.clone()
+    }
     /// The host remains the lifecycle owner; cloning this handle cannot keep
     /// a stopped listener/discovery or revoked quorum owner authorized.
     pub(crate) fn execution_authority(
@@ -223,9 +235,9 @@ pub fn start_if_configured(root: &Path) -> Result<Option<ServiceHost>> {
                     let _ = stopped.await;
                     Ok(())
                 },
-                move |_, authority| {
+                move |_, authority, guest_registry| {
                     ready
-                        .send(Ok(authority))
+                        .send(Ok((authority, guest_registry)))
                         .map_err(|_| anyhow::anyhow!("native Sync service startup receiver closed"))
                 },
             );
@@ -236,8 +248,9 @@ pub fn start_if_configured(root: &Path) -> Result<Option<ServiceHost>> {
             }
         })?;
     match started.recv() {
-        Ok(Ok(authority)) => Ok(Some(ServiceHost {
+        Ok(Ok((authority, guest_registry))) => Ok(Some(ServiceHost {
             authority,
+            guest_registry,
             stop: Some(stop),
             task: Some(task),
         })),
@@ -260,13 +273,19 @@ struct Descriptor {
     node_id: u64,
     scope_id: String,
     ipc_endpoint: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guest_endpoint: Option<PathBuf>,
 }
 struct DescriptorGuard {
     path: PathBuf,
     inode: (u64, u64),
 }
 impl DescriptorGuard {
-    fn publish(root: &Path, started: &HostStarted) -> Result<Self> {
+    fn publish(
+        root: &Path,
+        started: &HostStarted,
+        guest_endpoint: Option<PathBuf>,
+    ) -> Result<Self> {
         let path = directory(root).join("listener.json");
         let mut file = tempfile::NamedTempFile::new_in(directory(root))?;
         serde_json::to_writer(
@@ -276,6 +295,7 @@ impl DescriptorGuard {
                 node_id: started.node_id,
                 scope_id: started.scope_id.clone(),
                 ipc_endpoint: started.ipc_endpoint.clone(),
+                guest_endpoint,
             },
         )?;
         file.as_file_mut().flush()?;

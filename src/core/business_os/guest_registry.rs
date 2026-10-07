@@ -214,7 +214,7 @@ use ctox_sync::guest_restore::{
     GuestImportReceipt, GuestLiveEndpoint, GuestProcessEffect, GuestReadinessOwner,
     GuestReadyObservation, GuestRestoreDestination, GuestRestoreOwner,
 };
-use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -483,6 +483,116 @@ impl NativeGuestRegistry {
         worker_profile_id: &str,
         import_parent: &Path,
     ) -> Result<NativeGuestAssignment> {
+        self.with_policy(|tx| {
+            self.enroll_in_policy(
+                tx,
+                session,
+                project_id,
+                thread_id,
+                worker_profile_id,
+                import_parent,
+            )
+        })
+    }
+
+    /// Resolve the real opaque session and its live principal in the same policy
+    /// transaction as enrollment. No role, owner, path or computer comes from a
+    /// client claim; the computer is pinned by the native host's configuration.
+    pub(crate) fn enroll_from_cookie_token(
+        &self,
+        token: &str,
+        computer_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        worker_profile_id: &str,
+        import_parent: &Path,
+    ) -> Result<NativeGuestAssignment> {
+        use base64::Engine;
+        ensure!(
+            !token.is_empty() && token.len() <= 512,
+            "invalid native enrollment session"
+        );
+        let hash = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(Sha256::digest(token.as_bytes()));
+        self.with_policy(|tx| {
+            let user = tx
+                .query_row(
+                    "SELECT u.user_id, u.display_name, u.role FROM business_sessions s
+                 JOIN business_users u ON u.user_id = s.user_id
+                 WHERE s.token_hash = ?1 AND s.revoked = 0 AND s.expires_at_ms > ?2
+                 AND u.active = 1",
+                    rusqlite::params![hash, super::store::now_ms() as i64],
+                    |row| {
+                        Ok(super::session::BusinessOsSessionUser {
+                            id: row.get(0)?,
+                            display_name: row.get(1)?,
+                            role: row.get(2)?,
+                            is_admin: false,
+                        })
+                    },
+                )
+                .optional()?
+                .context("native enrollment session is unavailable")?;
+            let profile =
+                super::worker_profile_bindings::require_active(tx, &user.id, worker_profile_id)?;
+            ensure!(
+                profile["computer_id"].as_str() == Some(computer_id),
+                "worker is assigned to another native computer"
+            );
+            let session = BusinessOsSession {
+                ok: true,
+                authenticated: true,
+                auth_required: true,
+                user: Some(user),
+                login_url: None,
+                reason: None,
+            };
+            // A lost IPC response must not orphan a registration. Return the
+            // same current assignment on retry, never rebind or revive it.
+            for retained in self
+                .guests
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native guest registry poisoned"))?
+                .values()
+            {
+                let entry = retained
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+                let d = &entry.assignment.destination;
+                if Some(d.human_owner_id.as_str()) == session_user_id(&session)
+                    && d.project_id == project_id
+                    && d.thread_id == thread_id
+                    && d.worker_profile_id == worker_profile_id
+                {
+                    ensure!(
+                        !entry.revoked
+                            && private_directory(&d.import_parent)? == entry.import_identity,
+                        "retained native enrollment is unavailable"
+                    );
+                    validate_policy(tx, d)?;
+                    return Ok(entry.assignment.clone());
+                }
+            }
+            self.enroll_in_policy(
+                tx,
+                &session,
+                project_id,
+                thread_id,
+                worker_profile_id,
+                import_parent,
+            )
+        })
+    }
+
+    fn enroll_in_policy(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        session: &BusinessOsSession,
+        project_id: &str,
+        thread_id: &str,
+        worker_profile_id: &str,
+        import_parent: &Path,
+    ) -> Result<NativeGuestAssignment> {
         ensure!(
             session.ok && session.authenticated,
             "guest enrollment requires an authenticated human"
@@ -510,53 +620,50 @@ impl NativeGuestRegistry {
             },
             scope_id: self.authority.scope_id().to_owned(),
         };
-        self.with_policy(|tx| {
-            validate_policy(tx, &assignment.destination)?;
-            let mut entries = self
-                .guests
+        validate_policy(tx, &assignment.destination)?;
+        let mut entries = self
+            .guests
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native guest registry poisoned"))?;
+        ensure!(entries.len() < 64, "native guest registry capacity reached");
+        // Never silently rebind an old process/import or existing assignment.
+        for entry in entries.values() {
+            let entry = entry
                 .lock()
-                .map_err(|_| anyhow::anyhow!("native guest registry poisoned"))?;
-            ensure!(entries.len() < 64, "native guest registry capacity reached");
-            // Never silently rebind an old process/import or existing assignment.
-            for entry in entries.values() {
-                let entry = entry
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
-                let d = &entry.assignment.destination;
-                ensure!(
-                    d.human_owner_id != human_owner_id
-                        || d.project_id != project_id
-                        || d.thread_id != thread_id
-                        || d.worker_profile_id != worker_profile_id,
-                    "guest assignment already retained; reconcile it before enrolling another"
-                );
-                ensure!(
-                    d.import_parent != import_parent,
-                    "guest import parent is already retained"
-                );
-            }
-            entries.insert(
-                assignment.destination.guest_id.clone(),
-                Arc::new(Mutex::new(Registration {
-                    assignment: assignment.clone(),
-                    import_identity,
-                    revoked: false,
-                    execution: None,
-                    provider: None,
-                    imported: None,
-                    imported_identity: None,
-                    publication: PublicationState::Virgin,
-                    process_effect: None,
-                    registered_process: None,
-                    frame: None,
-                    #[cfg(target_os = "linux")]
-                    stopped_status: None,
-                    #[cfg(target_os = "linux")]
-                    desktop: None,
-                })),
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+            let d = &entry.assignment.destination;
+            ensure!(
+                d.human_owner_id != human_owner_id
+                    || d.project_id != project_id
+                    || d.thread_id != thread_id
+                    || d.worker_profile_id != worker_profile_id,
+                "guest assignment already retained; reconcile it before enrolling another"
             );
-            Ok(())
-        })?;
+            ensure!(
+                d.import_parent != import_parent,
+                "guest import parent is already retained"
+            );
+        }
+        entries.insert(
+            assignment.destination.guest_id.clone(),
+            Arc::new(Mutex::new(Registration {
+                assignment: assignment.clone(),
+                import_identity,
+                revoked: false,
+                execution: None,
+                provider: None,
+                imported: None,
+                imported_identity: None,
+                publication: PublicationState::Virgin,
+                process_effect: None,
+                registered_process: None,
+                frame: None,
+                #[cfg(target_os = "linux")]
+                stopped_status: None,
+                #[cfg(target_os = "linux")]
+                desktop: None,
+            })),
+        );
         Ok(assignment)
     }
 

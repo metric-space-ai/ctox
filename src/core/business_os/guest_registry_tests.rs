@@ -8,6 +8,160 @@ use ctox_sync::authority::{Job, Receipt, Request, WorkerMembership};
 use serde_json::json;
 use std::{future::Future, pin::Pin};
 
+fn enrollment_control_fixture() -> (tempfile::TempDir, Arc<NativeGuestRegistry>, PathBuf, String) {
+    let (root, registry, assignment) = fixture();
+    // The component fixture's virgin enrollment has no provider/process. Start
+    // the production control test before the first authenticated registration.
+    registry.guests.lock().unwrap().clear();
+    let conn = super::super::store::open_store(root.path()).unwrap();
+    conn.execute(
+        "INSERT INTO business_users
+        (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+        VALUES ('owner', 'Owner', 'user', 1, 1, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let token =
+        super::super::store::create_business_session(root.path(), "owner", "user", "Owner", 3600)
+            .unwrap();
+    (root, registry, assignment.destination.import_parent, token)
+}
+
+async fn enrollment_control_request(
+    registry: Arc<NativeGuestRegistry>,
+    imports: PathBuf,
+    computer: &str,
+    request: serde_json::Value,
+    before_payload: impl FnOnce(),
+) -> serde_json::Value {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+    let computer = computer.to_owned();
+    let task = tokio::spawn(async move {
+        crate::sync_host::serve_native_guest_enrollment(
+            server,
+            &registry,
+            &computer,
+            &imports,
+            || true,
+        )
+        .await
+    });
+    let bytes = serde_json::to_vec(&request).unwrap();
+    client.write_u32(bytes.len() as u32).await.unwrap();
+    before_payload();
+    client.write_all(&bytes).await.unwrap();
+    let size = client.read_u32().await.unwrap() as usize;
+    let mut response = vec![0; size];
+    client.read_exact(&mut response).await.unwrap();
+    task.await.unwrap().unwrap();
+    serde_json::from_slice(&response).unwrap()
+}
+
+#[tokio::test]
+async fn native_enrollment_control_uses_real_session_and_retries_same_assignment() {
+    let (_root, registry, imports, token) = enrollment_control_fixture();
+    let request = json!({"sessionToken": token, "projectId":"project",
+        "threadId":"thread", "workerProfileId":"profile"});
+    let first = enrollment_control_request(
+        registry.clone(),
+        imports.clone(),
+        "computer",
+        request.clone(),
+        || {},
+    )
+    .await;
+    assert_eq!(first["status"], "enrolled");
+    assert!(first["guest_id"].as_str().unwrap().starts_with("guest_"));
+    assert_eq!(first["generation"], 1);
+    assert!(first.get("import_parent").is_none());
+    let second = enrollment_control_request(
+        registry.clone(),
+        imports.clone(),
+        "computer",
+        request,
+        || {},
+    )
+    .await;
+    assert_eq!(first, second);
+    assert_eq!(registry.guests.lock().unwrap().len(), 1);
+    assert_eq!(std::fs::read_dir(imports).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn native_enrollment_control_denies_revoked_expired_inactive_foreign_and_wrong_host() {
+    for denial in ["revoked", "expired", "inactive", "foreign", "wrong_host"] {
+        let (root, registry, imports, token) = enrollment_control_fixture();
+        let request = json!({"sessionToken": token, "projectId": if denial == "foreign" {"other"} else {"project"},
+            "threadId":"thread", "workerProfileId":"profile"});
+        let result = enrollment_control_request(
+            registry.clone(),
+            imports.clone(),
+            if denial == "wrong_host" {
+                "other_computer"
+            } else {
+                "computer"
+            },
+            request,
+            || {
+                // Revoke after the handler has begun reading the frame and
+                // before its payload can complete: authority is resolved anew.
+                let conn = super::super::store::open_store(root.path()).unwrap();
+                match denial {
+                    "revoked" => {
+                        conn.execute("UPDATE business_sessions SET revoked=1", [])
+                            .unwrap();
+                    }
+                    "expired" => {
+                        conn.execute("UPDATE business_sessions SET expires_at_ms=1", [])
+                            .unwrap();
+                    }
+                    "inactive" => {
+                        conn.execute(
+                            "UPDATE business_users SET active=0 WHERE user_id='owner'",
+                            [],
+                        )
+                        .unwrap();
+                    }
+                    _ => (),
+                }
+            },
+        )
+        .await;
+        assert_eq!(result, json!({"status":"denied"}), "{denial}");
+        assert!(registry.guests.lock().unwrap().is_empty(), "{denial}");
+        assert_eq!(std::fs::read_dir(imports).unwrap().count(), 0, "{denial}");
+    }
+}
+
+#[tokio::test]
+async fn native_enrollment_control_rejects_client_paths_and_stopped_host_before_enrollment() {
+    use tokio::io::AsyncWriteExt;
+    for stopped in [false, true] {
+        let (_root, registry, imports, token) = enrollment_control_fixture();
+        let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+        let mut request = json!({"sessionToken": token, "projectId":"project",
+            "threadId":"thread", "workerProfileId":"profile"});
+        if !stopped {
+            request["importParent"] = json!("/client/path");
+        }
+        let bytes = serde_json::to_vec(&request).unwrap();
+        client.write_u32(bytes.len() as u32).await.unwrap();
+        client.write_all(&bytes).await.unwrap();
+        assert!(crate::sync_host::serve_native_guest_enrollment(
+            server,
+            &registry,
+            "computer",
+            &imports,
+            || !stopped
+        )
+        .await
+        .is_err());
+        assert!(registry.guests.lock().unwrap().is_empty());
+        assert_eq!(std::fs::read_dir(imports).unwrap().count(), 0);
+    }
+}
 #[test]
 fn native_prepared_overlay_accepts_private_helper_layout_and_rejects_foreign_aliases() {
     use std::os::unix::fs::{symlink, PermissionsExt};
