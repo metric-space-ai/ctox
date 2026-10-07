@@ -105,7 +105,9 @@ fn main() {
     }
     if cuda {
         let obj = out.join("voxtral_tts_cuda.o");
-        run(Command::new(nvcc)
+        run(Command::new(resolve_executable(&nvcc))
+            .arg("-I")
+            .arg(toolkit.as_ref().unwrap().join("include"))
             .args(["-O3", "-DUSE_CUDA", "-Xcompiler", "-fPIC", "-arch"])
             .arg(format!(
                 "sm_{}",
