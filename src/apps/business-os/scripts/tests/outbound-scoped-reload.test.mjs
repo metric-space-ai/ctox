@@ -161,7 +161,7 @@ try {
       selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
       researchPolicyLoaded: true, researchPolicy: 'saved', researchPolicyDraft: 'unsaved',
       syncPending: false, syncError: '', syncWaitingCollections: new Set(),
-      collectionReadErrors: new Map(),
+      collectionReadErrors: new Map(), collectionsEverLoaded: new Set(),
     });
     return { reads, existingLead };
   }
@@ -210,8 +210,11 @@ try {
     assert.equal(state.leadListRows, null, 'a rejected query is never an empty list');
     assert.deepEqual([...state.collectionReadErrors.keys()], ['leads']);
     hooks.renderSyncLine();
+    assert.equal(line.className, 'is-syncing', 'a never-loaded collection is still starting up');
+    state.collectionReadErrors.get('leads').since -= 61_000;
+    hooks.renderSyncLine();
     assert.match(line.innerHTML, /Leads konnten nicht geladen werden/);
-    assert.equal(line.className, 'is-error', 'read failure takes priority over the sync spinner');
+    assert.equal(line.className, 'is-error', 'after the grace period the read failure takes priority over the sync spinner');
     failed = false;
     await hooks.reload(['leads']);
     assert.equal(state.collectionReadErrors.size, 0);
@@ -235,6 +238,12 @@ try {
     assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
     assert.match(leadBody.innerHTML, /Leads werden geladen/);
     await assert.rejects(hooks.reload(['leads', 'imports']), error => error.code === 'OUTBOUND_COLLECTION_READ_FAILED' && /remote request token timeout/.test(error.details.leads));
+    render();
+    // A collection that never loaded is still starting: loading, not an error.
+    assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
+    assert.match(leadBody.innerHTML, /Leads werden geladen/);
+    // After the grace period the same failure is shown as an error.
+    state.collectionReadErrors.get('leads').since -= 61_000;
     render();
     assert.match(campaignBody.innerHTML, /Kampagnen konnten nicht geladen werden/);
     assert.match(leadBody.innerHTML, /Leads konnten nicht geladen werden/);

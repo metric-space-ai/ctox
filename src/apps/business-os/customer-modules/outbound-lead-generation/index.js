@@ -634,6 +634,7 @@ export async function mount(ctx) {
   state.syncError = '';
   state.syncMessage = navigator.onLine === false ? 'Keine Netzwerkverbindung' : 'Daten werden verbunden';
   state.collectionReadErrors = new Map();
+  state.collectionsEverLoaded = new Set();
   state.syncWaitingCollections = new Set(REPLICATED_COLLECTIONS);
   const handleOffline = () => {
     state.syncPending = false;
@@ -1629,11 +1630,13 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
     if (outcome.status === 'fulfilled') {
       results.push(outcome.value);
       readErrors.delete(key);
+      (state.collectionsEverLoaded ||= new Set()).add(key);
     } else {
       // Keep the last complete data, but never present a rejected read as
       // empty/successful. One failed collection must not discard healthy reads.
       applied.set(key, lauf);
-      readErrors.set(key, readErrorEntry(readErrors.get(key), outcome.reason));
+      readErrors.set(key, readErrorEntry(readErrors.get(key), outcome.reason, Date.now(),
+        { neverLoaded: !state.collectionsEverLoaded?.has(key) }));
       failures.push(key);
     }
   }

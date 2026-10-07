@@ -19,8 +19,10 @@ export function isTransientReadError(reason) {
 }
 
 // The entry for a failed read; a continuing failure keeps its first timestamp.
-export function readErrorEntry(previous, reason, now = Date.now()) {
-  const transient = isTransientReadError(reason);
+// A collection that never loaded in this session is still starting up: its
+// first failures are transient whatever the cause, until the grace period ends.
+export function readErrorEntry(previous, reason, now = Date.now(), { neverLoaded = false } = {}) {
+  const transient = neverLoaded || isTransientReadError(reason);
   return {
     message: String(reason?.message || reason),
     transient,
