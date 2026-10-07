@@ -1086,6 +1086,28 @@ Internal artifact review gate:\n\
 - do not inspect CTOX source code or infer private table schemas for ordinary file-artifact review unless the artifact itself points there as the necessary evidence\n\
 "
     };
+    // Lead research writebacks are already validated server-side (field_status
+    // contract, source and quote rules, gap closure). The generic gate made the
+    // reviewer load mission, continuity, queue and communication state with
+    // raw sqlite3 for every lead: 41% of all model calls on an on-prem tenant
+    // (07.10.2026). Review what matters for this task type instead.
+    let lead_research_review_work = if bound_skill == "outbound-lead-generation-research"
+        || (task_prompt.contains("[outbound-lead-generation]")
+            && task_prompt.contains("leadgen-lead-research-"))
+    {
+        "\
+Outbound lead research completion gate (replaces required review work steps 1-6 for this task type; the server already enforced the writeback contract):\n\
+- read the lead's stored result once: `sqlite3 -readonly <state>/business-os-rxdb.sqlite3 \"select json_extract(data,'$.research_status'), json_extract(data,'$.field_status') from ctox_business_os__outbound_lead_generation_leads__v0 where id='<lead_id>'\"` (lead id is in the task prompt, e.g. [lead_abc]); do not query other tables or the core database\n\
+- compare the worker's final answer against that field_status: counts of verified / no_match / action_required fields, named persons and e-mails must match; FAIL on a claimed value that is not stored\n\
+- spot-check at most three verified fields: the quote must name the value; open the source URL with ctox_web_read only if the quote is ambiguous\n\
+- quality: a verified register field (name, address, management, revenue, employees, WZ code) backed by a single source without a `single source:` reason is a finding (rework), not a FAIL by itself\n\
+- no_match is acceptable only with attempts listing the sources asked; a field left open after a source failure must be action_required\n\
+- finish within about ten tool calls; do not inspect queue, mission, continuity, communication or meeting state for this task\n\
+"
+    } else {
+        ""
+    };
+
     let systematic_research_review_work = if bound_skill == "systematic-research" {
         "\
 Systematic-research completion gate:\n\
@@ -1160,6 +1182,7 @@ Use the runtime DB path and workspace root above as the primary grounding points
 {external_chat_specific_work}\
 {artifact_review_work}\
 {systematic_research_review_work}\
+{lead_research_review_work}\
 \n\
 If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the current task is explicitly establishing them.\n\
 \n\
@@ -1207,6 +1230,7 @@ DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the curren
         commitment_backing = commitment_backing,
         deterministic_evidence = deterministic_evidence,
         systematic_research_review_work = systematic_research_review_work,
+        lead_research_review_work = lead_research_review_work,
         external_chat_specific_work = external_chat_specific_work,
     )
 }
@@ -2281,6 +2305,26 @@ mod tests {
         let english = assess_review_requirement(&request, "Done and verified.");
         let german = assess_review_requirement(&request, "Erledigt und geprüft.");
         assert_eq!(english, german);
+    }
+
+    #[test]
+    fn lead_research_review_gets_the_focused_gate_and_others_do_not() {
+        let lead = CompletionReviewRequest {
+            source_label: "queue".to_string(),
+            bound_skill: Some("outbound-lead-generation-research".to_string()),
+            task_prompt: "[outbound-lead-generation] Starte eine Outbound Neurecherche für X GmbH [lead_abc] (Auftrag leadgen-lead-research-1)".to_string(),
+            ..CompletionReviewRequest::default()
+        };
+        let rendered = build_review_prompt(&lead, &["durable_queue_or_ticket_work".to_string()]);
+        assert!(rendered.contains("Outbound lead research completion gate"));
+        assert!(rendered.contains("ctox_business_os__outbound_lead_generation_leads__v0"));
+        let other = CompletionReviewRequest {
+            source_label: "queue".to_string(),
+            task_prompt: "Write the quarterly summary".to_string(),
+            ..CompletionReviewRequest::default()
+        };
+        let rendered = build_review_prompt(&other, &["durable_queue_or_ticket_work".to_string()]);
+        assert!(!rendered.contains("Outbound lead research completion gate"));
     }
 
     #[test]
