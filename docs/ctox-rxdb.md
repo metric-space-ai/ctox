@@ -333,15 +333,17 @@ denied request IDs stay denied; a new takeover needs a new request and permit.
 This path requires the original owner; unavailable-owner recovery is unresolved.
 No automatic backfill or inferred permission is authorized.
 
-Cutover remains blocked on the native policy adapter, authenticated transport
-wiring, authoritative binding/account/workspace resolution, post-await revocation
-fencing, and actual checkpoint transfer/resume integration. Added grant,
-migration, permit, cancellation and restored-state regressions are source-only
-and have not been compiled or executed. State serialization tests are not Raft
-disk-snapshot restart tests. Acceptance still requires the real native policy
-store and authenticated transport, pre-byte and mid-transfer revocation tests,
-restoration of populated stores, independent-host durability, and real provider
-continuation. No production-readiness or rollout claim follows from these edits.
+The production native adapter and source/target enrollment now resolve the
+actual principal, capture, provider assignment, workspace and enrolled peer.
+The configured native host installs a signed, connection-challenge-bound phase
+RPC with guarded response publication; see the integration boundary above.
+Checkpoint byte transfer, retained provider-account guards, cross-store/file
+mutation coordination and original-session target activation remain open.
+Earlier focused enrollment/adapter checks have run on gpu3; their receipts do
+not establish product acceptance. State serialization tests are not Raft
+disk-snapshot restart tests. Acceptance still requires restoration of populated
+stores, independent-host durability, real protected transfer and provider
+continuation. No production-readiness or rollout claim follows from phase RPC.
 
 ### Native transfer response publication
 

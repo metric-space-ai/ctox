@@ -26,6 +26,44 @@ feature into a privileged native transfer; introduce the native lifecycle with
 its own explicit authorization and retire superseded execution paths only after
 its acceptance evidence exists.
 
+## Live native handoff phase RPC
+
+The configured native Sync host now registers
+`ctox.sync.session_handoff.authorize.v1` on its existing control-only
+RxDB/WebRTC pool. It creates no HTTP data path, second peer, Business OS
+capability token, permission grant or guest. Unconfigured/unknown bindings
+fail closed.
+
+The generated `SessionHandoffWireRequest` carries a probe or authorization
+request. Both are signed Ed25519 envelopes scoped to the pinned issuer,
+audience, exact generated request and fresh correlation nonce. A probe is
+authorized against the actual current native gate and the binding's opposite
+instance key before issuing a fresh 128-bit receiver challenge. This challenge
+belongs to that exact accepted connection, sender, request, principal epoch
+and binding revision. Authorization must sign it on the same connection;
+consumption is one-use. A shared signaling label, role or copied signed packet
+does not establish possession on a replacement connection. The bounded ledger
+holds at most 64 live challenges and expires them after at most 60 seconds.
+
+Replies are signed under the current encrypted native issuer. Native control
+registration requires a control-only native pool and a mandatory publication
+guard. It never grants public/pre-session access. Both room handshakes and the
+exact current connection are checked at every physical response poll. The
+native guard re-resolves source/target provenance and policy, holds the issuer,
+policy transaction and host lifecycle fences through that bounded poll, and
+rejects revoked/changed epochs, consumed/replaced challenges, expiry and host
+retirement. No transaction or mutex survives Pending or an await. Rejected
+setup returns the fixed auxiliary failure code, never an arbitrary private
+error. Successful setup commits its identifier-only native policy audit;
+publication rechecks do not append audit events per poll.
+
+This is a production receiver for phase decisions. Checkpoint byte streaming,
+a retained provider-account fence, coordination with mutations in other native
+stores/files, effect reconciliation and original-session Core activation are
+still required. These phase replies are not a durable-copy receipt or permission
+to stream later without current authority. Native store/guard tests and signed
+wire tests do not establish independent-host restoration or product acceptance.
+
 ## Native guest acceleration selection
 
 The native lifecycle owner can explicitly select KVM or single-threaded QEMU

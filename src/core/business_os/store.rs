@@ -11893,6 +11893,14 @@ fn pull_rxdb_collection_table_records(
     Ok(None)
 }
 
+/// One outbound lead document as stored in the Business OS RxDB store.
+pub(crate) fn load_outbound_lead_document(
+    root: &Path,
+    lead_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    load_rxdb_collection_record(root, "outbound_lead_generation_leads", lead_id)
+}
+
 pub(super) fn load_rxdb_collection_record(
     root: &Path,
     collection: &str,
