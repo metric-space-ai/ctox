@@ -25,7 +25,7 @@ import {
   WebGLRenderer,
 } from "../three/three.module.min.js";
 import { RoundedBoxGeometry } from "../three/RoundedBoxGeometry.js";
-import { createAppPackageTexture, resolvePackagePalette } from "./box-art.mjs";
+import { createAppPackageTexture, resolvePackagePalette } from "./box-art.mjs?v=20261007-shell-v2-appstore-reopen-perf";
 
 function damp(current, target, smoothing, delta) {
   return MathUtils.lerp(current, target, 1 - Math.exp(-smoothing * delta));
@@ -65,8 +65,10 @@ function createRetailBox(app, index, locale) {
     screenshots: app.screenshots,
     locale,
   };
-  const frontTexture = createAppPackageTexture(template, "front");
-  const spineTexture = createAppPackageTexture(template, "spine");
+  // Shelf faces occupy a few hundred pixels. Reserve full cover resolution
+  // for the selected case instead of rasterizing it for the whole catalogue.
+  const frontTexture = createAppPackageTexture(template, "front", { scale: 0.5 });
+  const spineTexture = createAppPackageTexture(template, "spine", { scale: 0.5 });
   const dark = new Color(palette.background).multiplyScalar(0.54);
   const sideMaterial = new MeshPhysicalMaterial({
     color: dark,
@@ -86,10 +88,19 @@ function createRetailBox(app, index, locale) {
   });
 
   const group = new Group();
+  let detailArtwork = false;
   group.userData = {
     id: app.id,
     index,
     materials: [sideMaterial, spineMaterial, frontMaterial],
+    setDetailArtwork(detail) {
+      if (detailArtwork === detail) return;
+      detailArtwork = detail;
+      const oldTexture = frontMaterial.map;
+      frontMaterial.map = createAppPackageTexture(template, "front", { scale: detail ? 1.5 : 0.5 });
+      frontMaterial.needsUpdate = true;
+      oldTexture.dispose();
+    },
   };
 
   // Retail software boxes vary slightly in footprint and depth, like a real shelf.
@@ -315,12 +326,14 @@ export function createStoreShelf(canvas, {
     const key = String(id);
     if (!appData.some((app) => app.id === key)) return;
     selectedId = key;
+    cases.forEach((item) => item.userData.setDetailArtwork(item.userData.id === key));
     setHover(null);
   };
 
   const deselect = () => {
     if (destroyed) return;
     selectedId = null;
+    cases.forEach((item) => item.userData.setDetailArtwork(false));
     setHover(null);
     updateScroll(true);
   };
@@ -344,6 +357,7 @@ export function createStoreShelf(canvas, {
     appData = normalizeApps(nextApps);
     cases = appData.map((app, index) => {
       const retailBox = createRetailBox(app, index, language);
+      retailBox.userData.setDetailArtwork(app.id === selectedId);
       retailBox.position.set(0, 2.4 - index * 1.58, 0);
       retailBox.rotation.x = -1.2;
       retailBox.scale.set(1.52, 0.56, 1);

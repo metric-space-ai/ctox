@@ -616,11 +616,15 @@ function createArtworkCanvas(width, height) {
  *
  * @param {{id:string,title:string,category:string,description:string,accent:string,background:string,heroArtwork?:string,screenshots?:string[],platform?:string,edition?:string,featureLine?:string,locale?:'de'|'en'}} template
  * @param {'front'|'back'|'spine'} panel
+ * @param {{scale?:number}} options Raster scale; shelf thumbnails use 0.5, detail keeps 1.5.
  * @returns {CanvasTexture}
  */
-export function createAppPackageTexture(template, panel) {
+export function createAppPackageTexture(template, panel, { scale = TEXTURE_SCALE } = {}) {
   if (!["front", "back", "spine"].includes(panel)) {
     throw new TypeError(`Unknown package panel: ${panel}`);
+  }
+  if (!Number.isFinite(scale) || scale < 0.5 || scale > TEXTURE_SCALE) {
+    throw new RangeError("Package texture scale must be between 0.5 and 1.5");
   }
   const normalized = {
     ...template,
@@ -633,7 +637,7 @@ export function createAppPackageTexture(template, panel) {
   };
   const designWidth = panel === "spine" ? SPINE_WIDTH : WIDTH;
   const designHeight = panel === "spine" ? SPINE_HEIGHT : HEIGHT;
-  const canvas = createArtworkCanvas(designWidth * TEXTURE_SCALE, designHeight * TEXTURE_SCALE);
+  const canvas = createArtworkCanvas(designWidth * scale, designHeight * scale);
   const context = canvas.getContext("2d");
   const texture = new CanvasTexture(canvas);
   texture.colorSpace = SRGBColorSpace;
@@ -651,7 +655,7 @@ export function createAppPackageTexture(template, panel) {
     if (disposed) return;
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(TEXTURE_SCALE, 0, 0, TEXTURE_SCALE, 0, 0);
+    context.setTransform(scale, 0, 0, scale, 0, 0);
     if (panel === "front") drawFront(context, normalized, images);
     else if (panel === "back") drawBack(context, normalized, images);
     else drawSpine(context, normalized, designWidth, designHeight);

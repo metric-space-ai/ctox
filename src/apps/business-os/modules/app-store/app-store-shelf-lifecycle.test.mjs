@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const source = readFileSync(process.env.CTOX_APP_STORE_MOUNT_SOURCE || new URL('./index.js', import.meta.url), 'utf8');
 const mount = source.slice(source.indexOf('export async function mount(ctx) {'), source.indexOf('\nfunction ensureStylesheet()')).replace(/^export /, '');
 const shelf = source.slice(source.indexOf('async function ensureShelf() {'), source.indexOf('\nfunction renderCatalogBody('))
-  .replace("import('../../vendor/store-shelf/store-shelf.mjs')", 'loadShelfModule()');
+  .replace(/import\(['"]\.\.\/\.\.\/vendor\/store-shelf\/store-shelf\.mjs(?:\?[^'"]+)?['"]\)/, 'loadShelfModule()');
 const code = (mount + '\n' + shelf).replaceAll('import.meta.url', "'https://fixture.invalid/modules/app-store/index.js'");
 
 function deferred() {
