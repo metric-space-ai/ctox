@@ -7139,7 +7139,10 @@ mod tests {
                 params![table, "json_extract(data, '$.contact_id')"],
                 |row| row.get(0),
             )?;
-            assert!(indexes > 0, "{collection} index must precede read snapshots");
+            assert!(
+                indexes > 0,
+                "{collection} index must precede read snapshots"
+            );
         }
         Ok(())
     }
@@ -7220,8 +7223,11 @@ mod tests {
         person["key"] = serde_json::json!("person");
         person["entity"] = serde_json::json!("person");
         assert!(
-            outbound_sellify_lookup(unavailable.path(), &serde_json::json!({"batch":[valid,person]}))
-                .is_err(),
+            outbound_sellify_lookup(
+                unavailable.path(),
+                &serde_json::json!({"batch":[valid,person]})
+            )
+            .is_err(),
             "missing second collection must not return a successful partial batch"
         );
         Ok(())
