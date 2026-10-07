@@ -20,6 +20,10 @@ mod desktop;
 #[cfg(target_os = "linux")]
 mod image;
 #[cfg(target_os = "linux")]
+mod memory_chunks;
+#[cfg(target_os = "linux")]
+pub(super) use memory_chunks::{load_memory_chunks, store_memory_chunks};
+#[cfg(target_os = "linux")]
 mod qemu;
 mod qmp;
 mod startup;

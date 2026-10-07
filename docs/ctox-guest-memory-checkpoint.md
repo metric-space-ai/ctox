@@ -32,11 +32,21 @@ mutable files, wrong lengths and wrong hashes. Cancellation or failure retires
 the attempt without releasing the child; stop/reap and effect reconciliation
 remain mandatory. No failed migration is automatically replayed.
 
+`store_memory_chunks` streams the native readonly RAM descriptor into the existing
+CheckpointStore as ordered8MiB blobs plus bounded native-guest-memory.json.
+It verifies the full source length/hash and returns provider entries for the
+same protected checkpoint manifest. `load_memory_chunks` consumes that manifest's
+exact memory entries, rejects missing/extra/duplicate paths and wrong order,
+verifies every CAS blob and the full reconstructed hash, then fsyncs and makes
+the private staging descriptor readonly. Partial reconstruction is never a
+completed memory state. These helpers do not issue an import or execution grant.
+
 The native checkpoint owner still needs to bind immutable base hash, writable
 overlay contents, portable hardware profile, original guest and service identity,
-and source execution history into its protected manifest. RAM must be split into
-ordered bounded blobs (for example8MiB) for the existing64MiB/blob and1GiB total
-transport bounds. Only a verified complete protected target import may supply
+and source execution history into its protected manifest. The chunk helpers
+preserve the existing64MiB/blob limit; the enclosing manifest still must fit
+the1GiB total including Core, workspace and disk artifacts. Only a verified
+complete protected target import may supply
 these native descriptors. Transport/admission limits are not raised here.
 
 The actual QEMU roundtrip regression proves a memory stream can be exported,
