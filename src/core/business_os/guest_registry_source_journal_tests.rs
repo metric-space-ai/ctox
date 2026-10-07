@@ -407,6 +407,21 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
     let (mut spec, ownership) = source_spec();
     spec.session_id = state.session_id().to_string();
     spec.model_id = configuration.model.clone();
+    let native_policy_revision = registry
+        .with_policy(|tx| {
+            super::super::accounts::configure_in_transaction(
+                tx,
+                "computer",
+                &[super::super::accounts::ProviderAssignmentInput {
+                    owner_user_id: "owner".into(),
+                    worker_profile_id: "profile".into(),
+                    gateway_account_id: spec.gateway_account_id.clone(),
+                    model_id: spec.model_id.clone(),
+                }],
+            )?;
+            super::super::validate_policy(tx, &assignment.destination)
+        })
+        .unwrap();
     let (store, store_root, _) =
         super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
     let (receipt, artifact) = registry
@@ -418,7 +433,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
                 &assignment.destination,
                 &spec,
                 &ownership,
-                "fixture-policy",
+                &native_policy_revision,
                 &journal_bytes,
             )?;
             let artifact = super::super::source_journal::persist_session_state(
@@ -449,6 +464,13 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
             )
         })
         .unwrap();
+    super::source_handoff_tests::assert_native_source_handoff_enrollment(
+        root.path(),
+        &registry,
+        &receipt,
+        &spec,
+        &ownership,
+    );
     let manifest = store.load(&checkpoint.digest).unwrap();
     assert_eq!(manifest.session.session_id, spec.session_id);
     assert_eq!(manifest.session.gateway_account_id, spec.gateway_account_id);

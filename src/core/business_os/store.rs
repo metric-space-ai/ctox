@@ -27676,6 +27676,13 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_business_session_handoff_bindings_session
             ON business_session_handoff_bindings(job_id, session_id, state);
 
+        CREATE TABLE IF NOT EXISTS business_native_source_handoff_bindings (
+            binding_id TEXT PRIMARY KEY REFERENCES business_session_handoff_bindings(binding_id),
+            capture_id TEXT NOT NULL REFERENCES business_native_source_checkpoints(capture_id),
+            source_json TEXT NOT NULL,
+            input_json TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS business_module_releases (
             version_id TEXT PRIMARY KEY,
             module_id TEXT NOT NULL,
