@@ -407,6 +407,11 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
     let (mut spec, ownership) = source_spec();
     spec.session_id = state.session_id().to_string();
     spec.model_id = configuration.model.clone();
+    let effects = super::super::source_effects::SourceEffects::fixture(
+        &spec,
+        &ownership,
+        BTreeSet::from(["actual-open-process-effect".into()]),
+    );
     let native_policy_revision = registry
         .with_policy(|tx| {
             super::super::accounts::configure_in_transaction(
@@ -461,6 +466,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
                 &configuration,
                 &state,
                 &journal_bytes,
+                &effects,
             )
         })
         .unwrap();
@@ -470,11 +476,11 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
     assert_eq!(manifest.session.gateway_account_id, spec.gateway_account_id);
     assert_eq!(manifest.history.len(), 1);
     assert_eq!(manifest.history[0].sha256, receipt.journal_sha256);
-    assert_eq!(manifest.provider_state.len(), 3);
+    assert_eq!(manifest.provider_state.len(), 4);
     assert_eq!(
         manifest.pending_effects.len(),
-        1,
-        "external effects remain unresolved"
+        2,
+        "the actual open quorum effect and unknown external effects remain unresolved"
     );
     assert!(manifest.workspace_state.index_patch.size_bytes > 0);
     assert!(manifest.workspace_state.worktree_patch.size_bytes > 0);
@@ -500,6 +506,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
                 &configuration,
                 &state,
                 &journal_bytes,
+                &effects,
             )
         })
         .unwrap();
@@ -532,6 +539,23 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
         .find(|e| e.path == "native-session-state.json")
         .unwrap();
     assert_eq!(read_blob(&captured_state.artifact), state.as_bytes());
+    let effect_state = manifest
+        .provider_state
+        .iter()
+        .find(|entry| entry.path == "native-effect-state.json")
+        .unwrap();
+    let observed: serde_json::Value =
+        serde_json::from_slice(&read_blob(&effect_state.artifact)).unwrap();
+    assert_eq!(
+        observed["observedPendingEffects"],
+        json!(["actual-open-process-effect"])
+    );
+    assert_eq!(observed["externalEffects"], "unknown");
+    assert_eq!(observed["reconciled"], false);
+    assert!(manifest
+        .pending_effects
+        .iter()
+        .any(|effect| effect.effect_id == "actual-open-process-effect"));
     let captured_bundle = manifest
         .provider_state
         .iter()
@@ -590,6 +614,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
                 &wrong_configuration,
                 &state,
                 &journal_bytes,
+                &effects,
             )
         })
         .is_err());
@@ -608,6 +633,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
                     &configuration,
                     &state,
                     &journal_bytes,
+                    &effects,
                 )
             })
             .is_err(),
@@ -643,6 +669,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
                     &configuration,
                     &state,
                     &journal_bytes,
+                    &effects,
                 )
             })
             .is_err(),

@@ -7,7 +7,7 @@ use super::*;
 use ctox_sync::{
     capture::{CaptureEntry, CaptureRequest},
     checkpoint::CheckpointStore,
-    contracts::{PendingEffect, SessionManifest, WorkspaceEntryKind},
+    contracts::{SessionManifest, WorkspaceEntryKind},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -28,6 +28,7 @@ pub(super) fn persist(
     configuration: &ctox_core::ThreadConfigSnapshot,
     state: &ctox_core::NativeSessionState,
     journal: &[u8],
+    effects: &source_effects::SourceEffects,
 ) -> Result<NativeSourceCheckpointReceipt> {
     let workspace = workspaces::require(policy, destination, &configuration.cwd)?;
     ensure!(
@@ -36,6 +37,8 @@ pub(super) fn persist(
     );
     source_journal::validate_session_state(spec, state)?;
     let configuration_bytes = source_journal::core_configuration_bytes(spec, configuration)?;
+    let effect_bytes = effects.bytes(spec, ownership)?;
+    let pending_effects = effects.pending(&receipt.capture_id)?;
     ensure!(
         receipt.job_id == spec.job_id
             && receipt.session_id == spec.session_id
@@ -124,15 +127,17 @@ pub(super) fn persist(
                             bytes: repository,
                             executable: false,
                         },
+                        CaptureEntry {
+                            path: "native-effect-state.json".into(),
+                            kind: WorkspaceEntryKind::File,
+                            bytes: effect_bytes,
+                            executable: false,
+                        },
                     ],
                     // A successful reply is not proof of externally reconciled effects.
                     // Keep this checkpoint dirty until a separate authoritative
                     // reconciliation proves which effects completed.
-                    pending_effects: vec![PendingEffect {
-                        effect_id: format!("native-effects-{}", receipt.capture_id),
-                        idempotency_key: None,
-                        description: "Native turn external effects require reconciliation".into(),
-                    }],
+                    pending_effects,
                 })
                 .await
         })
