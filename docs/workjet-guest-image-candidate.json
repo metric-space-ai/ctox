@@ -182,6 +182,21 @@
     }
   },
   "isolated_checkpoint_probe": {
+    "portable_clock_repair": {
+      "status": "pending_postmerge_image_build",
+      "clocksource": "acpi_pm",
+      "kernel_parameter_reference": "https://www.kernel.org/doc/html/v6.8/admin-guide/kernel-parameters.html",
+      "setup_sha256": "1d25bb32499f4754fb007a06ef015d7438219a23ad908320d8fcca6a0fee730d",
+      "source_base_sha256": "2ae4513a1ec913ba21d66bbcbe3c5a88a56824b7415c7f2ec1c1b8d2d9c89667",
+      "retained_native_sha256": "113b92756e094c8bdaf7ce120dbc76d57d1a4891b0548a9df6610723cdf35f3c",
+      "ordinary_retry_run": "o04-guest-observation-retry-20261007T073845Z",
+      "ordinary_retry_status": "failed",
+      "ordinary_retry_result": "Two correlated native capture failures, then a transport timeout; owned target QEMU 876192 reaped. No ordinary continuation pass.",
+      "kernel_evidence": "Recovered stopped-target logs show source TSC calibration 2495.957 MHz, a 40 ms watchdog skew at 06:24:56 UTC and fallback to HPET before the source checkpoint.",
+      "causality": "Clock instability is observed; whether the portable ACPI PM timer fixes TCG capture latency remains for actual postmerge image/restore validation.",
+      "clocksource_verification_disabled": false,
+      "product_enrollment_p2p_restore_accepted": false
+    },
     "status": "real_two_host_component_passed_with_bounded_settle",
     "source_capture": {
       "receipt_run": "o04-guest-checkpoint-component-20261007T055534Z",
@@ -244,6 +259,13 @@
       "diagnostic_actual_shutdown_wait_seconds": 115.50935082207434,
       "diagnostic_graceful_powerdown": true,
       "diagnostic_owned_qemu_reaped": true,
+      "plain_cli_capture_failure_after_settle": {
+        "receipt_run": "o04-guest-shutdown-pr345-20261007T070106Z",
+        "source_commit": "61139a65840f0a8a9247d55bbcc8642ec6cb90c7",
+        "status": "failed",
+        "error": "The native first capture still returned a framed failure after the bounded 30-second restore settle; no ordinary CLI pass claimed.",
+        "next_observation_policy": "Restored TCG only: at most three read-only observe_session attempts, two-second gaps, fresh correlated request IDs. Record each framed failure; never retry input, a timeout/EOF, invalid correlation or malformed PNG."
+      },
       "next_plain_cli_shutdown_timeout_seconds": 180,
       "next_action": "After the shutdown-margin follow-up merges, rerun the ordinary CLI without a diagnostic override. Production enrollment, protected P2P and distributed owner fencing remain unaccepted."
     },
