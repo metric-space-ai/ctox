@@ -13,7 +13,8 @@ import {
 test('knowledge table replication pulls one byte-bounded document at a time', () => {
   assert.equal(batchSizeFor('knowledge_tables'), 1);
   assert.equal(batchSizeFor('desktop_file_chunks'), 6);
-  assert.equal(batchSizeFor('research_runs'), 20);
+  // The shipped small-document contract requests 100 rows; native byte limits remain authoritative.
+  assert.equal(batchSizeFor('research_runs'), 100);
 });
 
 test('collection readiness normalization accepts only canonical states', () => {

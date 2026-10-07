@@ -1293,6 +1293,11 @@ identity to avoid a full collection re-pull; a checkpoint is not permission to
 serve a cached control-plane query window. Its membership gate remains closed
 until the current digest is known and matches, or a newly authorized fetch
 re-stamps the window.
+Native `masterChangesSince` failures returned as replication-scope `ctoxError`
+values preserve their native error code and pull direction. They do not become
+successful empty results or advance the pull checkpoint/first-pull readiness.
+Malformed success replies still reject separately. A preserved native error
+identifies the failing request; it does not establish the underlying tenant cause.
 If replication cancellation detaches the demand loader, control-plane `find`,
 `findOne`, `count`, and live subscriptions return no cached lifecycle rows.
 For `find` and `findOne` with a nonempty `requireRevision`, a missing loader

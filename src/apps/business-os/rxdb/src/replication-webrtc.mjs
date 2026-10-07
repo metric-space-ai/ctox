@@ -1755,6 +1755,11 @@ class CtoxWebRtcReplicationState {
       if (this.cancelled) return;
       activePeerId = response.peerId || activePeerId;
       const result = response.result;
+      // Native replication errors are result values, not transport rejections.
+      // Preserve their code before validating the successful document shape.
+      if (replicationErrorResult(result)) {
+        throw replicationErrorResultError(result, this.collection.name, 'pull');
+      }
       // An absent or malformed master reply is not an empty collection. Leave
       // the pull checkpoint and first-pull readiness untouched for retry.
       if (!result || typeof result !== 'object' || !Array.isArray(result.documents)) {
@@ -3151,12 +3156,13 @@ function missingMasterHandlerResult(collection, direction) {
   };
 }
 
-function replicationErrorResultError(result, collection) {
+function replicationErrorResultError(result, collection, direction = 'push') {
   const message = String(result?.message || result?.code || 'replication request failed');
-  const error = new Error(`masterWrite failed for ${collection}: ${message}`);
+  const method = direction === 'pull' ? 'masterChangesSince' : 'masterWrite';
+  const error = new Error(`${method} failed for ${collection}: ${message}`);
   error.code = String(result?.code || 'RC_WEBRTC_PEER');
   error.phase = 'replication-io';
-  error.direction = 'push';
+  error.direction = direction;
   error.collection = collection;
   return error;
 }
