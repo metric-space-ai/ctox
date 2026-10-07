@@ -14,6 +14,8 @@ mod supervisor;
 mod supervisor_turns;
 #[path = "weekly_report_tests.rs"]
 mod weekly_reports;
+#[path = "jour_fixe_preparation_tests.rs"]
+mod jour_fixe_preparation;
 
 fn command(kind: &str, id: &str, payload: Value) -> BusinessCommand {
     BusinessCommand {

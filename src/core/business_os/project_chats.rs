@@ -18,6 +18,7 @@ mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
 pub(in crate::business_os) mod supervisor_turns;
 mod weekly_reports;
+pub(in crate::business_os) mod jour_fixe_preparation;
 pub(super) use privacy::{
     command_access_check, document_visible_from_connections, document_visible_to_actor,
     has_restricted_reference, VisibilityReadContext,
@@ -67,6 +68,7 @@ struct ChatPayload {
 
 pub(super) fn is_command(command_type: &str) -> bool {
     supervisor_turns::is_command(command_type)
+        || command_type == "ctox.workjet.jour_fixe.meeting.read"
         || matches!(
             command_type,
             "ctox.workjet.project.chat.ensure"

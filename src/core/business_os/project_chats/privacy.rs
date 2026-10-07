@@ -67,7 +67,7 @@ fn project_command(collection: &str, document: &Value) -> bool {
     }) || document
         .get("command_type")
         .and_then(Value::as_str)
-        .is_some_and(|kind| is_command(kind) && kind.starts_with("ctox.workjet.project."))
+        .is_some_and(|kind| is_command(kind) && (kind.starts_with("ctox.workjet.project.") || kind.starts_with("ctox.workjet.jour_fixe.")))
 }
 
 // These existing projections form a bounded chain: run/event → queue →
