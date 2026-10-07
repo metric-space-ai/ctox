@@ -36,3 +36,12 @@ an unresponsive command's total deadline. Fixtures create temporary test keys,
 listen on loopback only and terminate their owned sessions; they never use NAS
 keys. Storage SFTP/SMB acceptance belongs to the Transfer PR; it is not implied
 by this independent exec transport.
+
+The native business_os::build_ssh binding resolves an owner/computer-bound
+Build grant and saves its endpoint fingerprint. Resume rejects a changed saved
+fingerprint; every later short operation re-enters the current grant/credential
+fence before constructing borrowed SSH options. Its nonblocking Linux capacity
+probe uses the prototype's slot-N.lock files, canonical lane path and granted
+disk floor. Native time stamps the observation; the runner still obtains the
+actual lease. Two native tests cover resumed binding/rotation/disable before a
+protocol callback and denial of wrong-owner or storage-only endpoint use.
