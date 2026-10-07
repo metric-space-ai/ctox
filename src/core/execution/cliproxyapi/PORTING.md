@@ -11,7 +11,10 @@
   No request can name the selected auth identity or mutate shared executor state.
   Prepared public-handler guards cover parallel session isolation, stable
   continuation on the same account,401 refresh/replay and quota-triggered stream
-  failover. Execution evidence belongs to the follow-up PR; this change alone
+  failover. The Responses translator also preserves scalar input as user text,
+  matching v8.0.16; the parallel guard found that this valid prompt shape was
+  previously dropped. Empty, whitespace and Unicode text have a mode-matrix guard.
+  Execution evidence belongs to the follow-up PR; this change alone
   does not bind production usage observers, promote the candidate, or establish
   installed/live-provider acceptance.
 - Current v8.0.15 Chat/Completions candidate now dispatches through the actual
