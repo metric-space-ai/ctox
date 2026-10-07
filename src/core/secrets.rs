@@ -248,12 +248,14 @@ fn with_secret_values_authority<T>(
     );
     let master = master_key_guard(root);
     // Report only after every actual issuer/SQLite guard has released.
-    let timing = publication.then(|| crate::authority_fence_metrics::FenceTiming::new(
-        crate::authority_fence_metrics::Category::IssuerPublication,
-    ));
-    let issuer_timing = timing.as_ref().map(|timing| timing.stage(
-        crate::authority_fence_metrics::Stage::Issuer,
-    ));
+    let timing = publication.then(|| {
+        crate::authority_fence_metrics::FenceTiming::new(
+            crate::authority_fence_metrics::Category::IssuerPublication,
+        )
+    });
+    let issuer_timing = timing
+        .as_ref()
+        .map(|timing| timing.stage(crate::authority_fence_metrics::Stage::Issuer));
     let _master = if publication {
         Some(
             master
@@ -263,7 +265,9 @@ fn with_secret_values_authority<T>(
     } else {
         None
     };
-    if let Some(timing) = &issuer_timing { timing.acquired(); }
+    if let Some(timing) = &issuer_timing {
+        timing.acquired();
+    }
     let flags = if publication {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
     } else {
@@ -271,9 +275,9 @@ fn with_secret_values_authority<T>(
     };
     let conn = Connection::open_with_flags(resolve_db_path(root), flags)?;
     conn.busy_timeout(std::time::Duration::ZERO)?;
-    let sqlite_timing = timing.as_ref().map(|timing| timing.stage(
-        crate::authority_fence_metrics::Stage::EncryptedStore,
-    ));
+    let sqlite_timing = timing
+        .as_ref()
+        .map(|timing| timing.stage(crate::authority_fence_metrics::Stage::EncryptedStore));
     let tx = rusqlite::Transaction::new_unchecked(
         &conn,
         if publication {
@@ -282,7 +286,9 @@ fn with_secret_values_authority<T>(
             rusqlite::TransactionBehavior::Deferred
         },
     )?;
-    if let Some(timing) = &sqlite_timing { timing.acquired(); }
+    if let Some(timing) = &sqlite_timing {
+        timing.acquired();
+    }
     // This file is reread, rather than treating a formerly valid key as current.
     // Bound its read independently of an accidentally replaced large file.
     let mut raw = Zeroizing::new(String::new());
@@ -372,7 +378,9 @@ fn with_secret_values_authority<T>(
         .map(|value| value.as_slice())
         .collect::<Vec<_>>();
     let result = apply(&borrowed, &fingerprint);
-    if let Some(timing) = &timing { timing.finish(result.is_ok()); }
+    if let Some(timing) = &timing {
+        timing.finish(result.is_ok());
+    }
     result
 }
 

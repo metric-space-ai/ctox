@@ -1870,7 +1870,8 @@ bounds. An absent stage was not acquired; zero microseconds is an actual
 sub-microsecond hold, not an acquisition failure. Two snapshots with the same
 daemon PID/source give count deltas over their monotonic `process_elapsed_us`
 interval. Means come from total/count deltas; percentiles are bucket-bound
-ranges. Category counts overlap (issuer encloses native publication) and must
+ranges. The reported maximum is process-lifetime, not an exact window maximum.
+Category counts overlap (issuer encloses native publication) and must
 not be summed. These are neither admission decisions nor completion receipts.
 No actor, token, key, document or state-root value is logged. Historical slow-only
 samples cannot establish complete acquisition frequency. Issue #380 tracks

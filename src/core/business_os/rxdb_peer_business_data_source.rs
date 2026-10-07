@@ -245,13 +245,13 @@ impl NativeBusinessDataPolicy {
     ) -> io::Result<T> {
         self.allowed(collection, scope)?;
         // This outer report drops after the issuer callback fully releases.
-        let timing = publication.then(|| crate::authority_fence_metrics::FenceTiming::new(
-            if access == Access::Read {
+        let timing = publication.then(|| {
+            crate::authority_fence_metrics::FenceTiming::new(if access == Access::Read {
                 crate::authority_fence_metrics::Category::NativeReadPublication
             } else {
                 crate::authority_fence_metrics::Category::NativeWritePublication
-            },
-        ));
+            })
+        });
         let read = |signer: &[u8]| {
             // No CREATE flag, schema preparation or cached credentials. Only
             // publication enters issuer -> Core -> policy -> projection fences.
@@ -273,23 +273,29 @@ impl NativeBusinessDataPolicy {
                 Ok(conn)
             };
             let mut core = open(crate::paths::core_db(&self.root))?;
-            let core_timing = timing.as_ref().map(|timing| timing.stage(
-                crate::authority_fence_metrics::Stage::Core,
-            ));
+            let core_timing = timing
+                .as_ref()
+                .map(|timing| timing.stage(crate::authority_fence_metrics::Stage::Core));
             let core = core.transaction_with_behavior(behavior)?;
-            if let Some(timing) = &core_timing { timing.acquired(); }
+            if let Some(timing) = &core_timing {
+                timing.acquired();
+            }
             let mut policy = open(store::business_os_store_path(&self.root))?;
-            let policy_timing = timing.as_ref().map(|timing| timing.stage(
-                crate::authority_fence_metrics::Stage::Policy,
-            ));
+            let policy_timing = timing
+                .as_ref()
+                .map(|timing| timing.stage(crate::authority_fence_metrics::Stage::Policy));
             let policy = policy.transaction_with_behavior(behavior)?;
-            if let Some(timing) = &policy_timing { timing.acquired(); }
+            if let Some(timing) = &policy_timing {
+                timing.acquired();
+            }
             let mut projection = open(store::rxdb_store_path(&self.root))?;
-            let projection_timing = timing.as_ref().map(|timing| timing.stage(
-                crate::authority_fence_metrics::Stage::Projection,
-            ));
+            let projection_timing = timing
+                .as_ref()
+                .map(|timing| timing.stage(crate::authority_fence_metrics::Stage::Projection));
             let projection = projection.transaction_with_behavior(behavior)?;
-            if let Some(timing) = &projection_timing { timing.acquired(); }
+            if let Some(timing) = &projection_timing {
+                timing.acquired();
+            }
             let at_ms = chrono::Utc::now().timestamp_millis();
             let claims = store::verified_webrtc_capability_claims_from_connection(
                 &policy,
@@ -339,7 +345,9 @@ impl NativeBusinessDataPolicy {
         } else {
             store::with_webrtc_capability_signer_snapshot(&self.root, read)
         };
-        if let Some(timing) = &timing { timing.finish(result.is_ok()); }
+        if let Some(timing) = &timing {
+            timing.finish(result.is_ok());
+        }
         result.map_err(|_| {
             io::Error::new(
                 io::ErrorKind::PermissionDenied,
