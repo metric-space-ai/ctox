@@ -1859,12 +1859,22 @@ rechecks role/epoch, grants, parent visibility, fields and exact command-owner
 receipts, and holds them through the single bounded transport poll. A rotation
 or ownership change after preparation therefore prevents publication.
 
-Slow final fences (at least 2 ms) emit fixed, secrets-free timing fields at
-most once per 15 seconds: `issuer_hold_us` and native `elapsed_us`,
-`core_hold_us`, `policy_hold_us`, `projection_hold_us`. A null store hold means
-acquisition failed before that fence was held. These times cover acquisition
-through reader release; they are neither an admission decision nor a durable
-completion receipt. No actor, token, key, document or state-root value is logged.
+The fixed `[business-os] authority fence metrics:` diagnostic emits cumulative
+process-lifetime counters at most once per 15 seconds, after all measured
+locks release. It measures issuer publication separately from native read and
+write publication. Every completed attempt is counted, including fast holds and
+failures before acquisition; unfinished attempts are not included. Each actually
+acquired issuer/encrypted-store/Core/policy/projection fence has count, total and
+maximum microseconds plus noncumulative histogram buckets with inclusive upper
+bounds. An absent stage was not acquired; zero microseconds is an actual
+sub-microsecond hold, not an acquisition failure. Two snapshots with the same
+daemon PID/source give count deltas over their monotonic `process_elapsed_us`
+interval. Means come from total/count deltas; percentiles are bucket-bound
+ranges. Category counts overlap (issuer encloses native publication) and must
+not be summed. These are neither admission decisions nor completion receipts.
+No actor, token, key, document or state-root value is logged. Historical slow-only
+samples cannot establish complete acquisition frequency. Issue #380 tracks
+installed WELSCH/THESEN measurement and acceptance.
 
 Failed native reads of the current actor role/epoch or collection
 grants propagate as unavailable authority rather than invalid credentials;

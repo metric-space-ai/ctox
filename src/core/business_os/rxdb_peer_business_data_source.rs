@@ -244,10 +244,17 @@ impl NativeBusinessDataPolicy {
         apply: impl FnOnce(&NativeReadAuthority<'_>) -> anyhow::Result<T>,
     ) -> io::Result<T> {
         self.allowed(collection, scope)?;
+        // This outer report drops after the issuer callback fully releases.
+        let timing = publication.then(|| crate::authority_fence_metrics::FenceTiming::new(
+            if access == Access::Read {
+                crate::authority_fence_metrics::Category::NativeReadPublication
+            } else {
+                crate::authority_fence_metrics::Category::NativeWritePublication
+            },
+        ));
         let read = |signer: &[u8]| {
             // No CREATE flag, schema preparation or cached credentials. Only
             // publication enters issuer -> Core -> policy -> projection fences.
-            let mut timing = publication.then(NativePublicationFenceTiming::new);
             let behavior = if publication {
                 rusqlite::TransactionBehavior::Immediate
             } else {
@@ -266,20 +273,23 @@ impl NativeBusinessDataPolicy {
                 Ok(conn)
             };
             let mut core = open(crate::paths::core_db(&self.root))?;
+            let core_timing = timing.as_ref().map(|timing| timing.stage(
+                crate::authority_fence_metrics::Stage::Core,
+            ));
             let core = core.transaction_with_behavior(behavior)?;
-            if let Some(timing) = &mut timing {
-                timing.core = Some(std::time::Instant::now());
-            }
+            if let Some(timing) = &core_timing { timing.acquired(); }
             let mut policy = open(store::business_os_store_path(&self.root))?;
+            let policy_timing = timing.as_ref().map(|timing| timing.stage(
+                crate::authority_fence_metrics::Stage::Policy,
+            ));
             let policy = policy.transaction_with_behavior(behavior)?;
-            if let Some(timing) = &mut timing {
-                timing.policy = Some(std::time::Instant::now());
-            }
+            if let Some(timing) = &policy_timing { timing.acquired(); }
             let mut projection = open(store::rxdb_store_path(&self.root))?;
+            let projection_timing = timing.as_ref().map(|timing| timing.stage(
+                crate::authority_fence_metrics::Stage::Projection,
+            ));
             let projection = projection.transaction_with_behavior(behavior)?;
-            if let Some(timing) = &mut timing {
-                timing.projection = Some(std::time::Instant::now());
-            }
+            if let Some(timing) = &projection_timing { timing.acquired(); }
             let at_ms = chrono::Utc::now().timestamp_millis();
             let claims = store::verified_webrtc_capability_claims_from_connection(
                 &policy,
@@ -329,65 +339,13 @@ impl NativeBusinessDataPolicy {
         } else {
             store::with_webrtc_capability_signer_snapshot(&self.root, read)
         };
+        if let Some(timing) = &timing { timing.finish(result.is_ok()); }
         result.map_err(|_| {
             io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "native read authority unavailable",
             )
         })
-    }
-}
-
-// Holds no authority itself. Drop runs after the SQLite transactions and
-// reports only fixed timing fields, at most once per 15 seconds.
-struct NativePublicationFenceTiming {
-    started: std::time::Instant,
-    core: Option<std::time::Instant>,
-    policy: Option<std::time::Instant>,
-    projection: Option<std::time::Instant>,
-}
-
-impl NativePublicationFenceTiming {
-    fn new() -> Self {
-        Self {
-            started: std::time::Instant::now(),
-            core: None,
-            policy: None,
-            projection: None,
-        }
-    }
-}
-
-impl Drop for NativePublicationFenceTiming {
-    fn drop(&mut self) {
-        let elapsed = self.started.elapsed();
-        if elapsed < std::time::Duration::from_millis(2) {
-            return;
-        }
-        static LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-        let at = chrono::Utc::now().timestamp_millis();
-        let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
-        if at.saturating_sub(last) >= 15_000
-            && LAST
-                .compare_exchange(
-                    last,
-                    at,
-                    std::sync::atomic::Ordering::Relaxed,
-                    std::sync::atomic::Ordering::Relaxed,
-                )
-                .is_ok()
-        {
-            let held = |since: Option<std::time::Instant>| since.map(|at| at.elapsed().as_micros());
-            eprintln!(
-                "[business-os] native publication fence timing: {}",
-                json!({
-                    "elapsed_us": elapsed.as_micros(),
-                    "core_hold_us": held(self.core),
-                    "policy_hold_us": held(self.policy),
-                    "projection_hold_us": held(self.projection),
-                })
-            );
-        }
     }
 }
 

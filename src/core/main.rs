@@ -37,6 +37,7 @@ mod native_transfer_routing;
 mod paths;
 mod persistence;
 mod report;
+mod authority_fence_metrics;
 mod secrets;
 mod service;
 mod skill_store;
