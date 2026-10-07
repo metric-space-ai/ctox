@@ -109,3 +109,100 @@ fn native_guest_profile_reassignment_denies_current_command_callback() {
         .is_err());
     assert!(!published);
 }
+
+#[test]
+fn native_guest_provider_assignment_is_exact_and_revocation_fences_publication() {
+    let (root, registry, assignment) = fixture();
+    let (mut worker, facts, _) = worker_store(root.path());
+    let destination = &assignment.destination;
+    let policy = super::super::super::store::open_store(root.path()).unwrap();
+    let contract = facts.checkpoint_contract.as_ref().unwrap();
+    super::super::accounts::validate_provider(&policy, destination, &facts.model_id, contract)
+        .unwrap();
+    let before = super::super::accounts::require_assignment(&policy, destination).unwrap();
+    let mut foreign = contract.clone();
+    foreign.gateway_account_id = "foreign-account".into();
+    assert!(super::super::accounts::validate_provider(
+        &policy,
+        destination,
+        &facts.model_id,
+        &foreign
+    )
+    .is_err());
+    assert!(super::super::accounts::validate_provider(
+        &policy,
+        destination,
+        "foreign-model",
+        contract
+    )
+    .is_err());
+    super::super::accounts::revoke_provider_assignment(root.path(), "owner", "profile").unwrap();
+    let tx = worker.transaction().unwrap();
+    let resolver = NativeGuestAdmissionResolver {
+        registry: registry.clone(),
+        guest_id: destination.guest_id.clone(),
+    };
+    let mut published = false;
+    assert!(resolver
+        .with_current_destination(&tx, root.path(), &facts, None, &mut |_| {
+            published = true;
+            Ok(())
+        },)
+        .is_err());
+    assert!(!published);
+    drop(tx);
+    super::super::accounts::configure_provider_assignments(
+        root.path(),
+        "computer",
+        &[super::super::accounts::ProviderAssignmentInput {
+            owner_user_id: "owner".into(),
+            worker_profile_id: "profile".into(),
+            gateway_account_id: "fixture".into(),
+            model_id: "model".into(),
+        }],
+    )
+    .unwrap();
+    let after = super::super::accounts::require_assignment(&policy, destination).unwrap();
+    assert!(after["revision"].as_i64().unwrap() > before["revision"].as_i64().unwrap());
+}
+
+#[test]
+fn native_guest_provider_configuration_rolls_back_and_owner_epoch_fences_publication() {
+    let (root, registry, assignment) = fixture();
+    let (mut worker, facts, _) = worker_store(root.path());
+    assert!(super::super::accounts::configure_provider_assignments(
+        root.path(),
+        "foreign-computer",
+        &[super::super::accounts::ProviderAssignmentInput {
+            owner_user_id: "owner".into(),
+            worker_profile_id: "profile".into(),
+            gateway_account_id: "foreign-account".into(),
+            model_id: "model".into(),
+        },]
+    )
+    .is_err());
+    let policy = super::super::super::store::open_store(root.path()).unwrap();
+    let assigned =
+        super::super::accounts::require_assignment(&policy, &assignment.destination).unwrap();
+    assert_eq!(assigned["gateway_account_id"], "fixture");
+    // ctox-allow-direct-state-write: isolated canonical principal revocation
+    policy
+        .execute(
+            "UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id='owner'",
+            [],
+        )
+        .unwrap();
+    let tx = worker.transaction().unwrap();
+    let resolver = NativeGuestAdmissionResolver {
+        registry,
+        guest_id: assignment.destination.guest_id,
+    };
+    let mut published = false;
+    assert!(resolver
+        .with_current_destination(&tx, root.path(), &facts, None, &mut |_| {
+            published = true;
+            Ok(())
+        },)
+        .is_err());
+    assert!(!published);
+}

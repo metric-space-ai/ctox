@@ -345,7 +345,7 @@ fn worker_store(root: &Path) -> (Connection, NativeProviderFacts, String) {
         "owner",
         "Owner",
         "admin",
-        super::super::store::now_ms(),
+        super::super::store::now_ms() as i64,
     )
     .unwrap();
     super::super::store::accept_rxdb_business_command_with_origin(
@@ -403,6 +403,17 @@ fn worker_store(root: &Path) -> (Connection, NativeProviderFacts, String) {
     .unwrap();
     let context =
         super::super::mcp_channel::verify_internal_command_session_token(root, &token).unwrap();
+    super::accounts::configure_provider_assignments(
+        root,
+        "computer",
+        &[super::accounts::ProviderAssignmentInput {
+            owner_user_id: "owner".into(),
+            worker_profile_id: "profile".into(),
+            gateway_account_id: "fixture".into(),
+            model_id: "model".into(),
+        }],
+    )
+    .unwrap();
     let attempt = conn
         .query_row(
             "SELECT attempt FROM communication_routing_state WHERE message_key=?1",
@@ -424,9 +435,9 @@ fn worker_store(root: &Path) -> (Connection, NativeProviderFacts, String) {
             api_provider_id: None,
             command_provenance: Some(context),
             checkpoint_contract: Some(crate::channels::NativeProviderCheckpointContract {
-                harness: "fixture".into(),
-                harness_version: "fixture".into(),
-                model_route_id: "fixture".into(),
+                harness: ctox_core::native_harness_name().into(),
+                harness_version: ctox_core::native_harness_version().into(),
+                model_route_id: "openai".into(),
                 gateway_account_id: "fixture".into(),
             }),
         },

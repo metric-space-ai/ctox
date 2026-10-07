@@ -27178,6 +27178,22 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_business_permission_grants_scope
             ON business_permission_grants(permission, scope_type, scope_id, active);
 
+        CREATE TABLE IF NOT EXISTS business_native_guest_provider_assignments (
+            owner_user_id TEXT NOT NULL,
+            worker_profile_id TEXT NOT NULL,
+            computer_id TEXT NOT NULL,
+            gateway_account_id TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            model_route_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            harness_version TEXT NOT NULL,
+            principal_epoch INTEGER NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('active', 'revoked')),
+            revision INTEGER NOT NULL CHECK(revision > 0),
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY(owner_user_id, worker_profile_id)
+        );
+
         CREATE TABLE IF NOT EXISTS business_session_handoff_bindings (
             binding_id TEXT PRIMARY KEY,
             binding_digest TEXT NOT NULL,

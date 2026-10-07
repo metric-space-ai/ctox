@@ -14,6 +14,14 @@ pub(crate) struct NativeProviderCheckpointBinding {
     auth: std::sync::Arc<ctox_core::AuthManager>,
 }
 impl NativeProviderCheckpointBinding {
+    pub(crate) fn with_current_contract<T>(
+        &self,
+        check: impl FnOnce(&NativeProviderCheckpointContract) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let _account = self.auth.current_runtime_account_guard()?;
+        check(&self.contract)
+    }
+
     pub(crate) fn from_pinned_auth(
         auth: std::sync::Arc<ctox_core::AuthManager>,
         model_route_id: &str,

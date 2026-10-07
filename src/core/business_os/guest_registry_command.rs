@@ -131,6 +131,7 @@ impl NativeGuestRegistry {
                     "native guest command has ambiguous enrollment"
                 );
                 self.admission_destination(policy, &entry)?;
+                super::accounts::require_assignment(policy, d)?;
                 ensure!(
                     entry.execution.is_none(),
                     "native guest already owns an execution; reconcile before another session"

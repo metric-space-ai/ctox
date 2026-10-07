@@ -55,6 +55,16 @@ configuration is stored in the existing SQLite runtime store and takes effect
 on the next host start. Absent configuration leaves guest enrollment disabled;
 an unreadable or invalid configured store fails host startup.
 
+The same local operator may include `providerAssignments`, a list of explicit
+`ownerUserId`, `workerProfileId`, `gatewayAccountId` and `modelId` mappings.
+These grants are stored in the authoritative Business OS policy store. A
+current credential or sole available account does not create a grant. The
+owner must be active and the profile assigned to this host. Missing assignments
+permit registration only. Enrollment and command-session requests cannot issue
+grants. `ctox sync revoke-guest-provider <owner-id> <profile-id>` revokes the
+mapping; host restart does not restore it. Reconfiguration creates a new policy
+revision, so revocation followed by regrant cannot replay an old admission.
+
 `ctox sync guest-enroll <project-id> <thread-id> <worker-profile-id>` sends an
 existing opaque Business OS session on stdin to that running host. The native
 owner checks the local process UID and bounded frame, then resolves the
@@ -95,7 +105,10 @@ The producer uses the existing durable account-bound native factory. It checks
 the exact host-owned transport and command assignment before and after startup,
 then installs the registry's native admission owner. It does not create or
 clone another Sync peer. Native mode still requires its pinned direct ChatGPT
-account and existing selected model; it cannot substitute a proxy, local model,
+account and existing selected model, both matching the explicit owner/profile
+assignment before client startup and again after the startup await. Held policy
+checks fence later effects after account assignment or principal epoch changes.
+It cannot substitute a proxy, local model,
 external executor or worker-profile route. Unenrolled tasks and canonical
 external-executor commands retain their existing execution owners. Tasks that
 have no existing signed Business OS MCP scope do not acquire one from guest

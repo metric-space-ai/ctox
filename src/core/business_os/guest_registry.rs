@@ -5,6 +5,8 @@
 //! registers a guest. Provider, policy and controller guards remain held through
 //! synchronous publication; a receipt or cached readiness is never authority.
 
+#[path = "guest_registry_accounts.rs"]
+pub(crate) mod accounts;
 #[path = "guest_registry_command.rs"]
 mod command;
 #[path = "guest_registry_frames.rs"]
@@ -98,6 +100,15 @@ fn validate_provider(
         "native guest command task differs from the actual worker lease"
     );
     command::validate_command(worker, policy, provenance, destination)?;
+    accounts::validate_provider(
+        policy,
+        destination,
+        &facts.model_id,
+        facts
+            .checkpoint_contract
+            .as_ref()
+            .context("native provider contract missing")?,
+    )?;
     Ok(())
 }
 impl NativeGuestAdmissionOwner for NativeGuestAdmissionResolver {
@@ -976,10 +987,17 @@ fn validate_policy(conn: &Connection, destination: &GuestRestoreDestination) -> 
             && thread["archived_at_ms"].as_i64().unwrap_or(0) == 0,
         "guest thread is closed, archived or foreign"
     );
+    let provider_assignment = accounts::snapshot(conn, destination)?;
     Ok(format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&(
-            project, profile, computer, member, chat, thread
+            project,
+            profile,
+            computer,
+            member,
+            chat,
+            thread,
+            provider_assignment
         ))?)
     ))
 }

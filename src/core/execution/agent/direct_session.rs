@@ -876,6 +876,9 @@ pub(crate) fn turn_runtime_error_class(error: &anyhow::Error) -> Option<TurnRunt
         .map(TurnRuntimeError::class)
 }
 
+type NativeGuestProviderAuthorization =
+    dyn Fn(&str, &crate::channels::NativeProviderCheckpointContract) -> Result<()> + Send + Sync;
+
 /// Holds a running InProcessAppServerClient + thread. Normal service work keeps
 /// one instance across slices and resumes its rollout after restart. Isolated
 /// reviewer/summarizer/special-profile callers still create bounded instances.
@@ -1103,6 +1106,18 @@ impl PersistentSession {
             .unwrap_or(BUSINESS_OS_MCP_DEFAULT_ADDR);
         let token = crate::business_os::mcp_channel::mcp_operator_auth_token(root)?;
         let config = business_os_mcp_thread_config(addr, &token, command_session_token)?;
+        let account_registry = Arc::clone(&registry);
+        let account_guest = guest_id.to_owned();
+        let account_context = context.clone();
+        let account_authority: Arc<NativeGuestProviderAuthorization> =
+            Arc::new(move |model, contract| {
+                account_registry.authorize_provider_start(
+                    &account_guest,
+                    &account_context,
+                    model,
+                    contract,
+                )
+            });
         let mut session = Self::start_with_native_mode(
             root,
             settings,
@@ -1114,7 +1129,7 @@ impl PersistentSession {
             Some(config),
             false,
             false,
-            true,
+            Some(account_authority),
         )?;
         let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
             root,
@@ -1327,7 +1342,7 @@ impl PersistentSession {
             thread_config,
             read_only_sandbox,
             persistent_worker,
-            false,
+            None,
         )
     }
 
@@ -1343,7 +1358,7 @@ impl PersistentSession {
         thread_config: Option<HashMap<String, JsonValue>>,
         read_only_sandbox: bool,
         persistent_worker: bool,
-        native_guest: bool,
+        native_guest_authorization: Option<Arc<NativeGuestProviderAuthorization>>,
     ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1364,7 +1379,7 @@ impl PersistentSession {
                 thread_config.as_ref(),
                 read_only_sandbox,
                 persistent_worker,
-                native_guest,
+                native_guest_authorization.as_deref(),
             )
             .await
         });
@@ -1748,7 +1763,7 @@ impl PersistentSession {
         thread_config: Option<&HashMap<String, JsonValue>>,
         read_only_sandbox: bool,
         persistent_worker: bool,
-        native_guest: bool,
+        native_guest_authorization: Option<&NativeGuestProviderAuthorization>,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -1761,6 +1776,7 @@ impl PersistentSession {
         Option<crate::channels::NativeProviderCheckpointBinding>,
         Option<Arc<ctox_core::CodexThread>>,
     )> {
+        let native_guest = native_guest_authorization.is_some();
         let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
         let runtime_local_preset = resolved_runtime
             .as_ref()
@@ -2031,6 +2047,11 @@ impl PersistentSession {
         } else {
             None
         };
+        if let (Some(binding), Some(authorize)) =
+            (&native_checkpoint_binding, native_guest_authorization)
+        {
+            binding.with_current_contract(|contract| authorize(&model, contract))?;
+        }
         let config = Arc::new(config);
         let session_source = SessionSource::Exec;
         let thread_manager = Arc::new(ThreadManager::new(
@@ -2082,6 +2103,11 @@ impl PersistentSession {
         };
         let timeouts = production_session_control_timeouts();
         let thread_id = bind_session_thread(&client, &mut seq, &spec, &timeouts).await?;
+        if let (Some(binding), Some(authorize)) =
+            (&native_checkpoint_binding, native_guest_authorization)
+        {
+            binding.with_current_contract(|contract| authorize(&model, contract))?;
+        }
         let native_capture_thread = if native_guest {
             let actual_id = ctox_protocol::ThreadId::from_string(&thread_id)
                 .context("native producer returned an invalid thread identity")?;
