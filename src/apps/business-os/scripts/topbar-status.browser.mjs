@@ -37,10 +37,15 @@ function populate(names = ['Sellify', 'Outbound', 'Mail', 'Crew']) {
     button.className = 'module-tab';
     button.dataset.target = String(index);
     button.setAttribute('aria-current', index === 1 ? 'page' : 'false');
+    if (index === 1) button.dataset.running = 'focused';
+    const icon = document.createElement('span');
+    icon.className = 'module-tab-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = name[0];
     const label = document.createElement('span');
     label.className = 'module-tab-label';
     label.textContent = name;
-    button.append(label);
+    button.append(icon, label);
     if (index === 2) {
       const count = document.createElement('span');
       count.className = 'module-tab-count';
@@ -60,14 +65,15 @@ function populate(names = ['Sellify', 'Outbound', 'Mail', 'Crew']) {
   setTopbarAppItems(tabs, buttons);
 }
 populate();
-renderCollectionFreshnessWarning(document.querySelector('[data-collection-freshness-warning]'), {
+const confirmedOptions = () => ({
   compact: true, collections: ['catalogue'], diagnostics: {
     mode: 'webrtc', collections: { catalogue: { frameTransport: {
       collectionFreshnessState: 'live', lastSuccessfulPullAtMs: Date.now()
     }}}
   }
 });
-window.topbarFixture = { populate, originals, launched };
+renderCollectionFreshnessWarning(document.querySelector('[data-collection-freshness-warning]'), confirmedOptions());
+window.topbarFixture = { populate, originals, launched, confirmedOptions };
 `;
 const html = `<!doctype html><html lang="de" data-theme="dark" data-shell-style="ctox">
 <head><meta charset="utf-8"><base href="/"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -119,14 +125,18 @@ try {
       const account = document.querySelector('[data-open-account]').getBoundingClientRect();
       const tabs = [...document.querySelectorAll('[data-module-tabs] > .module-tab')].map((node) => {
         const label = node.querySelector('.module-tab-label');
-        return { title: label.textContent, width: label.getBoundingClientRect().width, content: label.scrollWidth, right: node.getBoundingClientRect().right };
+        const icon = node.querySelector('.module-tab-icon');
+        return { title: label.textContent, width: label.getBoundingClientRect().width, content: label.scrollWidth, right: node.getBoundingClientRect().right, iconWidth: icon.getBoundingClientRect().width, iconHeight: icon.getBoundingClientRect().height };
       });
       return { height: header.height, navRight: nav.right, accountLeft: account.left, tabs, overflow: document.documentElement.scrollWidth - innerWidth };
     });
     assert.equal(geometry.height, 48, 'Existing outer Shell-V2 topbar height');
     assert(geometry.overflow <= 1, 'No page overflow');
     assert(geometry.navRight <= geometry.accountLeft, 'App row cannot cover account action');
-    for (const tab of geometry.tabs) assert(tab.width + 1 >= tab.content, 'Full label: ' + tab.title);
+    for (const tab of geometry.tabs) {
+      assert(tab.width + 1 >= tab.content, 'Full label: ' + tab.title);
+      assert(tab.iconWidth >= 17 && tab.iconHeight >= 17, 'App symbol is visible: ' + tab.title);
+    }
     await page.screenshot({ path: path.join(output, 'topbar-' + width + '.png') });
     results.push({ width, ...geometry });
   }
@@ -156,6 +166,20 @@ try {
   await page.evaluate(() => window.topbarFixture.populate());
   await page.waitForFunction(() => document.querySelectorAll('[data-module-tabs] > .module-tab').length === 4);
   assert(await page.evaluate(() => window.topbarFixture.originals.every((button) => button.isConnected)), 'Same buttons remain reachable after resize');
+  await context.setOffline(true);
+  await page.waitForFunction(() => document.querySelector('[data-collection-freshness-warning]').dataset.syncState === 'offline');
+  assert.match(await page.locator('[data-collection-freshness-warning]').getAttribute('title'), /Offline/);
+  assert.equal(await page.locator('[data-sync-state-label]').textContent(), '', 'First 30s remain a dot');
+  await page.screenshot({ path: path.join(output, 'topbar-offline.png') });
+  await context.setOffline(false);
+  await page.waitForFunction(() => document.querySelector('[data-collection-freshness-warning]').dataset.syncState === 'syncing');
+  await page.evaluate(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    const { renderCollectionFreshnessWarning } = await import('/shared/collection-freshness.js');
+    renderCollectionFreshnessWarning(document.querySelector('[data-collection-freshness-warning]'), window.topbarFixture.confirmedOptions());
+  });
+  await page.waitForFunction(() => document.querySelector('[data-collection-freshness-warning]').dataset.syncState === 'healthy');
+  results.push({ browserOfflineEvent: true, reconnectRequiresFreshPull: true });
   await page.locator('[data-shell-instance-toggle]').first().click();
   await page.waitForSelector('[data-shell-release-panel]', { state: 'visible' });
   assert.equal(await page.locator('[data-shell-instance-toggle]').first().getAttribute('aria-expanded'), 'true');

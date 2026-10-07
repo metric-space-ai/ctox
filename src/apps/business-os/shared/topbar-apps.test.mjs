@@ -60,15 +60,22 @@ test('the compact label uses the selected language', () => {
   assert.equal(compactFreshnessPresentation({ collections: ['catalogue'], diagnostics: diagnostics('catching-up'), language: 'en', nowMs: 130_000 }, 100_000).label, 'Unconfirmed');
 });
 
-function warningFixture() {
+function warningFixture(online = true) {
   const label = { textContent: '' };
-  let dispose;
+  const listeners = new Map();
+  const view = {
+    navigator: { onLine: online },
+    addEventListener: (name, listener) => listeners.set(name, listener),
+    removeEventListener: (name) => listeners.delete(name),
+  };
   return {
-    label, cleanup: () => dispose?.(),
+    label, cleanup: () => listeners.get('pagehide')?.(),
+    event: (name) => listeners.get(name)?.({ type: name }),
+    hasListener: (name) => listeners.has(name),
     warning: {
       dataset: {}, hidden: false, title: '', setAttribute() {},
       querySelector: () => label,
-      ownerDocument: { defaultView: { addEventListener: (_name, listener) => { dispose = listener; } } },
+      ownerDocument: { defaultView: view },
     },
   };
 }
@@ -101,4 +108,78 @@ test('confirmation cancels a pending late warning', (t) => {
   assert.equal(fixture.warning.dataset.syncState, 'healthy');
   assert.equal(fixture.label.textContent, '');
   fixture.cleanup();
+});
+
+test('real browser connectivity events invalidate old confirmation until a new pull arrives', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100_000 });
+  const fixture = warningFixture();
+  const options = { collections: ['catalogue'], compact: true, diagnostics: diagnostics('live', 100_000) };
+  renderCollectionFreshnessWarning(fixture.warning, options);
+  assert.equal(fixture.warning.dataset.syncState, 'healthy');
+  fixture.event('offline');
+  assert.equal(fixture.warning.dataset.syncState, 'offline');
+  assert.equal(fixture.label.textContent, '');
+  t.mock.timers.tick(29_999);
+  assert.equal(fixture.label.textContent, '');
+  t.mock.timers.tick(1);
+  assert.equal(fixture.label.textContent, 'Stand unbestätigt');
+  fixture.event('online');
+  assert.equal(fixture.warning.dataset.syncState, 'unconfirmed');
+  renderCollectionFreshnessWarning(fixture.warning, options);
+  assert.equal(fixture.warning.dataset.syncState, 'unconfirmed', 'Repeated stale diagnostics cannot restore green');
+  t.mock.timers.tick(1);
+  renderCollectionFreshnessWarning(fixture.warning, { ...options, diagnostics: diagnostics('live', 130_001) });
+  assert.equal(fixture.warning.dataset.syncState, 'healthy');
+  assert.equal(fixture.label.textContent, '');
+  fixture.cleanup();
+});
+
+test('a silent live snapshot expires and then gives the full 30s unconfirmed interval', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100_000 });
+  const fixture = warningFixture();
+  renderCollectionFreshnessWarning(fixture.warning, {
+    collections: ['catalogue'], compact: true, diagnostics: diagnostics('live', 100_000),
+  });
+  t.mock.timers.tick(120_000);
+  assert.equal(fixture.warning.dataset.syncState, 'healthy');
+  t.mock.timers.tick(1);
+  assert.equal(fixture.warning.dataset.syncState, 'syncing');
+  assert.equal(fixture.label.textContent, '');
+  t.mock.timers.tick(29_999);
+  assert.equal(fixture.label.textContent, '');
+  t.mock.timers.tick(1);
+  assert.equal(fixture.warning.dataset.syncState, 'unconfirmed');
+  assert.equal(fixture.label.textContent, 'Stand unbestätigt');
+  fixture.cleanup();
+});
+
+test('an initially offline view cannot reuse a recent live snapshot', () => {
+  const fixture = warningFixture(false);
+  renderCollectionFreshnessWarning(fixture.warning, {
+    collections: ['catalogue'], compact: true, diagnostics: diagnostics('live', Date.now()),
+  });
+  assert.equal(fixture.warning.dataset.syncState, 'offline');
+  assert.match(fixture.warning.title, /Offline/);
+  fixture.cleanup();
+});
+
+test('page hide removes connectivity listeners and all scheduled freshness work', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100_000 });
+  const fixture = warningFixture();
+  renderCollectionFreshnessWarning(fixture.warning, {
+    collections: ['catalogue'], compact: true, diagnostics: diagnostics('catching-up'),
+  });
+  fixture.cleanup();
+  assert.equal(fixture.hasListener('offline'), false);
+  assert.equal(fixture.hasListener('online'), false);
+  fixture.event('offline');
+  t.mock.timers.tick(30_001);
+  assert.equal(fixture.warning.dataset.syncState, 'syncing');
+  assert.equal(fixture.label.textContent, '');
+});
+
+test('offline state does not invent remote pulls for local, disabled or empty collections', () => {
+  assert.equal(compactFreshnessPresentation({ collections: ['catalogue'], diagnostics: diagnostics('live', 100_000, false), online: false }).pending, false);
+  assert.equal(compactFreshnessPresentation({ collections: ['catalogue'], diagnostics: { mode: 'local' }, online: false }).pending, false);
+  assert.equal(compactFreshnessPresentation({ online: false }).state, 'idle');
 });
