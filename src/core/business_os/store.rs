@@ -32909,7 +32909,7 @@ pub(super) mod tests {
         let (token, _) = issue_business_os_capability_token(root, actor, now_ms() as i64)?;
         accept_rxdb_business_command_with_origin(
             root,
-            json!({
+            serde_json::json!({
                 "id":id, "command_id":id, "module":"ctox",
                 "command_type":"ctox.business_os.user.upsert", "record_id":target,
                 "payload":{"id":target, "display_name":"Updated profile", "role":role, "active":active},
@@ -32927,7 +32927,10 @@ pub(super) mod tests {
         let conn = open_store(root.path())?;
         conn.execute(
             "UPDATE business_users SET profile_json=?2 WHERE user_id=?1",
-            params!["profile-admin", json!({"language":"de"}).to_string()],
+            params![
+                "profile-admin",
+                serde_json::json!({"language":"de"}).to_string()
+            ],
         )?;
         let before: (String, bool, i64, String) = conn.query_row(
             "SELECT role, active, capability_epoch, profile_json FROM business_users WHERE user_id='profile-admin'", [],
