@@ -35,6 +35,9 @@ use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rx_query_helper::{normalize_mango_query, prepare_query};
 use crate::types::MangoQuery;
 
+use super::collection_authority::authorize_collection_for_peer;
+#[cfg(test)]
+use super::collection_authority::COLLECTION_AUTHORITY_ATTEMPTS;
 use super::protocol_contract_generated::{
     CTOX_QUERY_DEFAULT_WINDOW_LIMIT, CTOX_QUERY_MAX_BYTES_PER_CHUNK,
     CTOX_QUERY_MAX_DOCUMENTS_PER_CHUNK, CTOX_QUERY_MAX_RUNTIME_MS,
@@ -128,28 +131,6 @@ pub const QUERY_FETCH_ERROR_REMOTE: &str = "REMOTE_ERROR";
 
 const QUERY_FETCH_STREAM_UNSUPPORTED_STORAGE_CODE: &str = "SQLITE_QUERY_STREAM_UNSUPPORTED";
 const QUERY_FETCH_STREAM_UNSUPPORTED_DISPATCH_CODE: &str = "QUERY_FETCH_STREAM_UNSUPPORTED";
-
-const COLLECTION_AUTHORITY_ATTEMPTS: usize = 8;
-const COLLECTION_AUTHORITY_RETRY_DELAY: Duration = Duration::from_millis(10);
-
-async fn authorize_demand_query<H: WebRTCConnectionHandler>(
-    handler: &H,
-    peer: &H::Peer,
-    collection: &str,
-) -> RxResult<bool> {
-    for attempt in 0..COLLECTION_AUTHORITY_ATTEMPTS {
-        match handler.collection_authorization_for_peer(peer, collection) {
-            Err(error)
-                if error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE"
-                    && attempt + 1 < COLLECTION_AUTHORITY_ATTEMPTS =>
-            {
-                tokio::time::sleep(COLLECTION_AUTHORITY_RETRY_DELAY).await;
-            }
-            result => return result,
-        }
-    }
-    unreachable!("bounded authority loop always returns on its final attempt")
-}
 
 /// Shared in-flight request core for query and file fetch handlers. Keys are
 /// peer-scoped so identical browser request IDs cannot cancel each other.
@@ -617,7 +598,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
     };
 
     let authorized = if registry.check_authorized(&peer_identity, &request.collection_name) {
-        match authorize_demand_query(handler.as_ref(), &peer, &request.collection_name).await {
+        match authorize_collection_for_peer(handler.as_ref(), &peer, &request.collection_name).await {
             Ok(authorized) => authorized,
             Err(error) => {
                 let retryable = error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE";

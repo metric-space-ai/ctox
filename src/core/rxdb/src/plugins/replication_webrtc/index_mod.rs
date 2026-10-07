@@ -1758,21 +1758,10 @@ where
                                 .clone()
                                 .or_else(|| representative_task.as_ref().map(|collection| collection.name.clone()))
                                 .unwrap_or_default();
-                            if !handler_task
-                                .is_collection_authorized_for_peer(&item.peer, &target_name)
-                            {
-                                // #12c: deny pull/write of a collection this peer's
-                                // role may not read (server-authoritative).
-                                replication_error_result(
-                                    "RC_WEBRTC_PEER",
-                                    "replication-io",
-                                    "unknown",
-                                    serde_json::json!({
-                                        "collection": target_name,
-                                        "message": "peer is not authorized for collection",
-                                    }),
-                                    Vec::new(),
-                                )
+                            if let Some(error) = master_collection_authorization_error(
+                                handler_task.as_ref(), &item.peer, &target_name, method,
+                            ).await {
+                                error
                             } else if method == "masterWrite"
                                 && !handler_task.is_collection_write_authorized_for_peer(
                                     &item.peer,
@@ -3199,6 +3188,61 @@ async fn call_master_method(
     }
 }
 
+async fn master_collection_authorization_error<H: WebRTCConnectionHandler>(
+    handler: &H,
+    peer: &H::Peer,
+    collection: &str,
+    method: &str,
+) -> Option<Value> {
+    let (code, message, retryable) =
+        match super::collection_authority::authorize_collection_for_peer(handler, peer, collection)
+            .await
+        {
+            Ok(true) => return None,
+            Ok(false) => ("RC_WEBRTC_PEER", "peer is not authorized for collection", false),
+            Err(error) => {
+                // Authority errors can contain private store/credential details.
+                // Publish and log only the stable code and routing collection.
+                let retryable = error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE";
+                return Some(collection_authorization_error_result(
+                    collection, method, error.code(), "native collection authority check failed",
+                    retryable,
+                ));
+            }
+        };
+    Some(collection_authorization_error_result(
+        collection, method, code, message, retryable,
+    ))
+}
+
+fn collection_authorization_error_result(
+    collection: &str,
+    method: &str,
+    code: &str,
+    message: &str,
+    retryable: bool,
+) -> Value {
+    tracing::warn!(
+        target: "ctox_rxdb::plugins::replication_webrtc",
+        collection, method, code, retryable,
+        "collection request admission failed",
+    );
+    let direction = match method {
+        "masterChangesSince" => "pull",
+        "masterWrite" => "push",
+        _ => "unknown",
+    };
+    replication_error_result(
+        code, "replication-io", direction,
+        serde_json::json!({
+            "collection": collection,
+            "message": message,
+            "retryable": retryable,
+        }),
+        Vec::new(),
+    )
+}
+
 fn replication_error_result(
     code: &str,
     phase: &str,
@@ -4141,6 +4185,9 @@ mod tests {
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
     struct MockPeer(String, u64);
 
+    type MockCollectionAuthority =
+        dyn Fn(&MockPeer, &str) -> crate::rx_error::RxResult<bool> + Send + Sync;
+
     struct MockHandler {
         role: NativePeerRole,
         local_provider: PlMutex<Option<super::super::LocalSessionProvider<MockPeer>>>,
@@ -4154,6 +4201,8 @@ mod tests {
         sent: StdArc<PlMutex<Vec<WebRTCWireFrame>>>,
         sent_subject: crate::rxjs_compat::RxSubject<WebRTCWireFrame>,
         closed_peers: StdArc<PlMutex<Vec<String>>>,
+        collection_authority: PlMutex<Option<StdArc<MockCollectionAuthority>>>,
+        collection_authority_checks: AtomicU64,
     }
 
     impl MockHandler {
@@ -4175,6 +4224,8 @@ mod tests {
                 sent: StdArc::new(PlMutex::new(Vec::new())),
                 sent_subject: crate::rxjs_compat::RxSubject::new(),
                 closed_peers: StdArc::new(PlMutex::new(Vec::new())),
+                collection_authority: PlMutex::new(None),
+                collection_authority_checks: AtomicU64::new(0),
             })
         }
 
@@ -4224,6 +4275,26 @@ mod tests {
             self.capabilities.lock().get(peer).cloned()
         }
 
+        fn is_collection_authorized_for_peer(&self, peer: &MockPeer, collection: &str) -> bool {
+            self.collection_authorization_for_peer(peer, collection).unwrap_or(false)
+        }
+
+        fn collection_authorization_for_peer(
+            &self,
+            peer: &MockPeer,
+            collection: &str,
+        ) -> crate::rx_error::RxResult<bool> {
+            self.collection_authority_checks.fetch_add(1, Ordering::SeqCst);
+            if !self.is_peer_current(peer) {
+                return Ok(false);
+            }
+            let authority = self.collection_authority.lock().clone();
+            match authority {
+                Some(check) => check(peer, collection),
+                None => Ok(true),
+            }
+        }
+
         // This fixture has no private document fields.
         fn document_fields_for_peer(&self, _: &Self::Peer, _: &str) -> Option<Vec<String>> {
             None
@@ -4264,6 +4335,10 @@ mod tests {
         fn connection_identity(&self, peer: &MockPeer) -> String {
             format!("{}@{}", peer.0, peer.1)
         }
+    }
+
+    mod collection_authority_tests {
+        include!("collection_authority_tests.rs");
     }
 
     mod local_session_tests {

@@ -31,6 +31,7 @@
 //! daemon peer and keeps browser-side `simple-peer` inside the upstream JS
 //! bundle.
 
+mod collection_authority;
 pub mod connection_handler_rs;
 pub mod file_fetch_client;
 pub mod file_fetch_handler;
