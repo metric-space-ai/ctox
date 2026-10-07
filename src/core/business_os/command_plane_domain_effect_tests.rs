@@ -59,9 +59,13 @@ fn project_projection_table(conn: &Connection) -> anyhow::Result<String> {
     let mut statement = conn.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'ctox_business_os__workjet_projects__v%'",
     )?;
-    let tables = statement.query_map([], |row| row.get::<_, String>(0))?
+    let tables = statement
+        .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    anyhow::ensure!(tables.len() == 1, "expected one current project fixture table: {tables:?}");
+    anyhow::ensure!(
+        tables.len() == 1,
+        "expected one current project fixture table: {tables:?}"
+    );
     Ok(tables.into_iter().next().unwrap())
 }
 
@@ -86,7 +90,8 @@ fn domain_receipt_replay_recovers_current_source_without_reapplying() -> anyhow:
     let table = project_projection_table(&rxdb)?;
     rxdb.execute_batch(&format!(
         "CREATE TRIGGER refuse_domain_projection BEFORE INSERT ON {table}
-         BEGIN SELECT RAISE(ABORT, 'domain projection unavailable'); END;"))?;
+         BEGIN SELECT RAISE(ABORT, 'domain projection unavailable'); END;"
+    ))?;
     assert!(accept_rxdb_business_command(root.path(), document(&command)).is_err());
     assert_eq!(
         channels::business_command_projection(root.path(), "cmd-domain-recovery")?
