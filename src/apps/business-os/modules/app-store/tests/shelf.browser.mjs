@@ -14,6 +14,11 @@ mkdirSync(output, { recursive: true });
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE_PATH
   ? pathToFileURL(path.join(process.env.PLAYWRIGHT_MODULE_PATH, 'index.mjs')).href : 'playwright');
 const oldSource = process.env.CTOX_APP_STORE_MOUNT_SOURCE;
+const artworkArg = process.argv.indexOf('--artwork-source-dir');
+const artworkSource = artworkArg < 0 ? null : path.resolve(process.argv[artworkArg + 1]);
+const countArg = process.argv.indexOf('--catalogue-size');
+const catalogueSize = countArg < 0 ? 3 : Number(process.argv[countArg + 1]);
+assert.ok(Number.isInteger(catalogueSize) && catalogueSize >= 3 && catalogueSize <= 48, 'catalogue-size must be 3..48');
 const html = `<!doctype html><html lang="de" data-theme="dark" data-shell-style="ctox">
 <meta charset="utf-8"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css">
 <style>body{margin:0;background:#0b0e13}#open{position:absolute;right:8px;top:8px}
@@ -26,14 +31,19 @@ const catalog = { modules: [], templates: [], marketplace: [
   { id:'fixture-mail', title:'Offline Mail', category:'Business', description:'Cached mail', version:'1.0.0', download_url:'/fixture-unused.zip', status:'installed' },
   { id:'fixture-notes', title:'Offline Notes', category:'Business', description:'Cached notes', version:'1.0.0', download_url:'/fixture-unused.zip', status:'installed' },
 ]};
+while (catalog.marketplace.length < ${catalogueSize}) {
+  const index = catalog.marketplace.length;
+  catalog.marketplace.push({ ...catalog.marketplace[index % 3], id:'fixture-extra-'+index, title:'Cached App '+index });
+}
 let cleanup, frame;
 document.querySelector('#open').onclick = async () => {
   window.openStarted = performance.now();
+  window.fixtureArtwork = [];
   frame = document.createElement('section');
   frame.className = 'shell-window is-focused';
   frame.dataset.shellContract = 'v2';
   frame.dataset.shellWindowChrome = 'shared-v2';
-  frame.innerHTML = '<header class="shell-window-header"></header><div class="shell-window-controls"><button id="close" aria-label="Schließen">×</button></div><div class="shell-window-content"><div class="module-root shell-window-module-root"><main class="module-content app-store"></main></div></div>';
+  frame.innerHTML = '<header class="shell-window-header"></header><div class="shell-window-controls"><button id="close" aria-label="Schließen">×</button></div><div class="shell-window-content"><div class="module-root shell-window-module-root"><main class="module-content"></main></div></div>';
   document.querySelector('#desktop').append(frame);
   frame.querySelector('#close').onclick = () => { cleanup?.(); frame.remove(); };
   cleanup = await mount({
@@ -53,8 +63,10 @@ const mime = { '.js':'text/javascript', '.mjs':'text/javascript', '.css':'text/c
 const server = http.createServer((req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
   if (pathname === '/') { res.setHeader('content-type', 'text/html'); return res.end(html); }
-  const file = path.resolve(root, '.' + pathname);
-  if (!file.startsWith(root + path.sep)) { res.writeHead(403); return res.end(); }
+  const file = artworkSource && /^\/vendor\/store-shelf\/(?:store-shelf|box-art)\.mjs$/.test(pathname)
+    ? path.join(artworkSource, path.basename(pathname))
+    : path.resolve(root, '.' + pathname);
+  if (!file.startsWith(root + path.sep) && !(artworkSource && file.startsWith(artworkSource + path.sep))) { res.writeHead(403); return res.end(); }
   try {
     res.setHeader('content-type', mime[path.extname(file)] || 'application/octet-stream');
     res.end(readFileSync(oldSource && pathname === '/modules/app-store/index.js' ? oldSource : file));
@@ -74,6 +86,14 @@ try {
   // Shadows are black; non-black opaque pixels demonstrate actual box art,
   // rather than an accessible name attached to an empty canvas.
   await page.addInitScript(() => {
+    window.fixtureArtwork = [];
+    const Canvas = globalThis.OffscreenCanvas;
+    if (Canvas) globalThis.OffscreenCanvas = class extends Canvas {
+      constructor(width, height) {
+        super(width, height);
+        window.fixtureArtwork.push({ width, height });
+      }
+    };
     const original = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(type, options) {
       const gl = original.call(this, type, /^webgl/.test(type)
@@ -110,18 +130,20 @@ try {
   const reopened = await page.evaluate(() => ({
     milliseconds:performance.now()-window.openStarted, pixels:window.boxPixels(),
     freshCanvas:window.firstCanvas !== document.querySelector('[data-shelf-canvas]'),
+    rawArtworkBytes:window.fixtureArtwork.reduce((sum, image) => sum + image.width * image.height * 4, 0),
   }));
   assert.equal(reopened.freshCanvas, true);
+  assert.ok(reopened.rawArtworkBytes <= 80 * 1024 ** 2, JSON.stringify(reopened));
   assert.ok(reopened.milliseconds < 1000, JSON.stringify(reopened));
   await page.screenshot({path:path.join(output,'reopened.png')});
   await context.setOffline(true);
   await page.getByRole('button', {name:'Als Liste anzeigen', exact:true}).click();
-  assert.equal(await page.locator('[data-apps-grid] [data-app-id]').count(), 3);
+  assert.equal(await page.locator('[data-apps-grid] [data-app-id]').count(), catalogueSize);
   assert.equal(await page.locator('[data-apps-grid]').getByText('Offline Calendar', {exact:true}).count(), 1);
   await page.screenshot({path:path.join(output,'offline.png')});
   assert.deepEqual(pageErrors, []);
-  writeFileSync(path.join(output,'result.json'),JSON.stringify({first,reopened,offlineCachedItems:3,pageErrors},null,2)+'\n');
-  console.log('SHELF_BROWSER_PASS ' + JSON.stringify({first,reopened,offlineCachedItems:3}));
+  writeFileSync(path.join(output,'result.json'),JSON.stringify({first,reopened,offlineCachedItems:catalogueSize,pageErrors},null,2)+'\n');
+  console.log('SHELF_BROWSER_PASS ' + JSON.stringify({first,reopened,offlineCachedItems:catalogueSize}));
 } catch (error) {
   await page?.screenshot({path:path.join(output,'failure.png')});
   const surface = await page?.evaluate(() => {
