@@ -8706,7 +8706,13 @@ function createQueryDemandLoader({
               bumpStatus(status, "queryFetchSuccessCount");
               if (status) status.lastQueryFetchMs = clock() - startedAt;
               v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
-              if (projected) onQueryWindowChanged?.({ fingerprint, documentIds });
+              if (projected) {
+                onQueryWindowChanged?.({
+                  fingerprint,
+                  documentIds,
+                  changes: documentRevisionChanges(documents, storageCollection.primaryPath)
+                });
+              }
               return projected ? documents.filter((document2) => document2._deleted !== true) : authoritativeFetchedDocuments(documents, documentIds);
             } catch (error) {
               if (isQueryCancelledError(error)) {
@@ -8832,18 +8838,24 @@ function createQueryDemandLoader({
       }
       return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
     },
+    // Remote writes carry the changed documents. Consumers learn which rows
+    // changed (and their new revision) even when no cached window references
+    // them yet — a new row must reach a list that never saw it.
     async invalidateDocuments(changedDocuments = []) {
       if (!changedDocuments.length) return 0;
+      const changes = documentRevisionChanges(changedDocuments, storageCollection?.primaryPath || "id");
+      let count = 0;
       if (typeof sidecar.invalidateQueryWindowsForChanges === "function") {
-        const count = await sidecar.invalidateQueryWindowsForChanges(
+        count = await sidecar.invalidateQueryWindowsForChanges(
           collectionName,
           changedDocuments,
           storageCollection?.primaryPath || "id"
         );
-        if (count) onQueryWindowChanged?.();
-        return count;
+      } else {
+        count = await invalidateByScanningQueryWindows(sidecar, collectionName, changes.map((change) => change.id));
       }
-      return this.invalidateDocumentChange(changedDocuments.map(extractId).filter(Boolean));
+      onQueryWindowChanged?.({ changes });
+      return count;
     },
     // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
     // fetches and removes any partially-materialized documents from the
@@ -9074,6 +9086,19 @@ async function materializeChunks(storageCollection, documents, replicationOrigin
 async function touchSidecarAccess(sidecar, collectionName, documentIds) {
   if (!documentIds?.length) return;
   await sidecar.touchDocuments(collectionName, documentIds);
+}
+function documentRevisionChanges(documents = [], primaryPath = "id") {
+  const changes = [];
+  for (const document2 of documents || []) {
+    const id = extractQueryId(document2, primaryPath);
+    if (!id) continue;
+    changes.push({
+      id: String(id),
+      rev: typeof document2?._rev === "string" ? document2._rev : "",
+      deleted: document2?._deleted === true
+    });
+  }
+  return changes;
 }
 function extractId(doc) {
   if (!doc || typeof doc !== "object") return null;
@@ -11772,6 +11797,12 @@ var CtoxWebRtcReplicationState = class {
   onMasterChange(detail = null) {
     if (this.cancelled) return;
     this.masterChange$.next(detail);
+    if (!this.pull) {
+      const documents = Array.isArray(detail?.result?.documents) ? detail.result.documents : [];
+      if (documents.length) void this.invalidateDemandCacheForRemoteWrite(documents);
+      else if (detail?.result === "RESYNC") this.collection.notifyQueryWindowChange?.();
+      return;
+    }
     this.pullFromRemotePeers().catch((error) => {
       this.error$.next(error);
       this.schedulePullRetry();
@@ -12607,7 +12638,7 @@ var CtoxWebRtcReplicationState = class {
       // handshake, so a same-session role/grant change takes effect at the
       // next control-plane read without rebuilding the loader.
       readPermissionDigest: () => this.readPermissionDigest || "",
-      onQueryWindowChanged: () => this.collection.notifyQueryWindowChange?.()
+      onQueryWindowChanged: (change) => this.collection.notifyQueryWindowChange?.(change)
     }) : null;
     if (typeof this.collection.setDemandLoader === "function") {
       this.collection.setDemandLoader(this.demandLoader);
@@ -14072,8 +14103,8 @@ var CtoxRxCollection = class {
     this.queryWindowListeners.add(listener);
     return () => this.queryWindowListeners.delete(listener);
   }
-  notifyQueryWindowChange() {
-    for (const listener of this.queryWindowListeners) listener();
+  notifyQueryWindowChange(change = null) {
+    for (const listener of this.queryWindowListeners) listener(change);
   }
   async insert(doc) {
     const normalized = normalizeDoc(doc, this.schema.primaryPath);
@@ -14213,22 +14244,43 @@ var CtoxRxCollection = class {
   // Notify consumers that re-run their own bounded query without first
   // materializing a collection snapshot. Payload and permission authority
   // remain with that query, including projected query-window refreshes.
+  //
+  // The event names the changed rows as `changes: [{ id, rev, deleted }]` when
+  // every trigger in the debounce window identified them (local writes,
+  // pushed remote writes, refreshed query windows). Otherwise `changes` is
+  // absent and the consumer re-runs its query, as before.
   subscribeInvalidations(listener) {
     let active = true;
     let pendingTimer = null;
+    let pendingChanges = /* @__PURE__ */ new Map();
+    let pendingUnknown = false;
     const registry = getActiveCollectionRegistry();
     registry.subscriptionStarted(this.name);
     const schedule = () => {
       if (!active || pendingTimer != null) return;
       pendingTimer = setTimeout(() => {
         pendingTimer = null;
-        if (active) listener({ collectionName: this.name, invalidated: true });
+        if (!active) return;
+        const changes = pendingUnknown ? null : [...pendingChanges.values()];
+        pendingChanges = /* @__PURE__ */ new Map();
+        pendingUnknown = false;
+        listener(changes ? { collectionName: this.name, invalidated: true, changes } : { collectionName: this.name, invalidated: true });
       }, OBSERVABLE_DEBOUNCE_MS);
     };
-    const unsubscribe = this.observe(schedule);
-    const unsubscribeLoader = this.subscribeDemandLoaderChange(schedule, true);
-    const unsubscribeWindow = this.subscribeQueryWindowChange(schedule);
-    schedule();
+    const note = (changes) => {
+      if (Array.isArray(changes)) {
+        for (const change of changes) if (change?.id) pendingChanges.set(String(change.id), change);
+      } else {
+        pendingUnknown = true;
+      }
+      schedule();
+    };
+    const unsubscribe = this.observe((event) => note(storageEventChanges(event)));
+    const unsubscribeLoader = this.subscribeDemandLoaderChange(() => note(null), true);
+    const unsubscribeWindow = this.subscribeQueryWindowChange((change) => note(
+      Array.isArray(change?.changes) ? change.changes : null
+    ));
+    note(null);
     return {
       unsubscribe: () => {
         if (!active) return;
@@ -15095,6 +15147,19 @@ var ctoxRxdbTestInternals = {
   normalizeSort: normalizeSort2,
   sortDocuments
 };
+function storageEventChanges(event) {
+  const success = event?.success;
+  if (!success || typeof success !== "object") return null;
+  const changes = [];
+  for (const [id, doc] of Object.entries(success)) {
+    changes.push({
+      id: String(id),
+      rev: typeof doc?._rev === "string" ? doc._rev : "",
+      deleted: doc?._deleted === true
+    });
+  }
+  return changes;
+}
 
 // src/apps/business-os/rxdb/src/advanced-status-bridge.mjs
 function buildBusinessOsAdvancedStatus({

@@ -251,8 +251,8 @@ class CtoxRxCollection {
     return () => this.queryWindowListeners.delete(listener);
   }
 
-  notifyQueryWindowChange() {
-    for (const listener of this.queryWindowListeners) listener();
+  notifyQueryWindowChange(change = null) {
+    for (const listener of this.queryWindowListeners) listener(change);
   }
 
   async insert(doc) {
@@ -414,22 +414,45 @@ class CtoxRxCollection {
   // Notify consumers that re-run their own bounded query without first
   // materializing a collection snapshot. Payload and permission authority
   // remain with that query, including projected query-window refreshes.
+  //
+  // The event names the changed rows as `changes: [{ id, rev, deleted }]` when
+  // every trigger in the debounce window identified them (local writes,
+  // pushed remote writes, refreshed query windows). Otherwise `changes` is
+  // absent and the consumer re-runs its query, as before.
   subscribeInvalidations(listener) {
     let active = true;
     let pendingTimer = null;
+    let pendingChanges = new Map();
+    let pendingUnknown = false;
     const registry = getActiveCollectionRegistry();
     registry.subscriptionStarted(this.name);
     const schedule = () => {
       if (!active || pendingTimer != null) return;
       pendingTimer = setTimeout(() => {
         pendingTimer = null;
-        if (active) listener({ collectionName: this.name, invalidated: true });
+        if (!active) return;
+        const changes = pendingUnknown ? null : [...pendingChanges.values()];
+        pendingChanges = new Map();
+        pendingUnknown = false;
+        listener(changes
+          ? { collectionName: this.name, invalidated: true, changes }
+          : { collectionName: this.name, invalidated: true });
       }, OBSERVABLE_DEBOUNCE_MS);
     };
-    const unsubscribe = this.observe(schedule);
-    const unsubscribeLoader = this.subscribeDemandLoaderChange(schedule, true);
-    const unsubscribeWindow = this.subscribeQueryWindowChange(schedule);
-    schedule();
+    const note = (changes) => {
+      if (Array.isArray(changes)) {
+        for (const change of changes) if (change?.id) pendingChanges.set(String(change.id), change);
+      } else {
+        pendingUnknown = true;
+      }
+      schedule();
+    };
+    const unsubscribe = this.observe((event) => note(storageEventChanges(event)));
+    const unsubscribeLoader = this.subscribeDemandLoaderChange(() => note(null), true);
+    const unsubscribeWindow = this.subscribeQueryWindowChange((change) => note(
+      Array.isArray(change?.changes) ? change.changes : null,
+    ));
+    note(null);
     return {
       unsubscribe: () => {
         if (!active) return;
@@ -1415,3 +1438,20 @@ export const ctoxRxdbTestInternals = {
   normalizeSort,
   sortDocuments,
 };
+
+// Storage change events carry the written documents (`success`: id -> stored
+// document). External events from other tabs carry only ids, without
+// revisions, and stay unidentified.
+function storageEventChanges(event) {
+  const success = event?.success;
+  if (!success || typeof success !== 'object') return null;
+  const changes = [];
+  for (const [id, doc] of Object.entries(success)) {
+    changes.push({
+      id: String(id),
+      rev: typeof doc?._rev === 'string' ? doc._rev : '',
+      deleted: doc?._deleted === true,
+    });
+  }
+  return changes;
+}

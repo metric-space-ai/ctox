@@ -402,7 +402,16 @@ export function createQueryDemandLoader({
           bumpStatus(status, 'queryFetchSuccessCount');
           if (status) status.lastQueryFetchMs = clock() - startedAt;
           v15Log('fetch:ok', { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
-          if (projected) onQueryWindowChanged?.({ fingerprint, documentIds });
+          // Carry each row's revision: a consumer that already holds these
+          // revisions (it just read them) can tell a refreshed window from a
+          // real change instead of re-reading the whole collection.
+          if (projected) {
+            onQueryWindowChanged?.({
+              fingerprint,
+              documentIds,
+              changes: documentRevisionChanges(documents, storageCollection.primaryPath),
+            });
+          }
           return projected ? documents.filter((document) => document._deleted !== true)
             : authoritativeFetchedDocuments(documents, documentIds);
         } catch (error) {
@@ -589,18 +598,24 @@ export function createQueryDemandLoader({
       return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
     },
 
+    // Remote writes carry the changed documents. Consumers learn which rows
+    // changed (and their new revision) even when no cached window references
+    // them yet — a new row must reach a list that never saw it.
     async invalidateDocuments(changedDocuments = []) {
       if (!changedDocuments.length) return 0;
+      const changes = documentRevisionChanges(changedDocuments, storageCollection?.primaryPath || 'id');
+      let count = 0;
       if (typeof sidecar.invalidateQueryWindowsForChanges === 'function') {
-        const count = await sidecar.invalidateQueryWindowsForChanges(
+        count = await sidecar.invalidateQueryWindowsForChanges(
           collectionName,
           changedDocuments,
           storageCollection?.primaryPath || 'id',
         );
-        if (count) onQueryWindowChanged?.();
-        return count;
+      } else {
+        count = await invalidateByScanningQueryWindows(sidecar, collectionName, changes.map(change => change.id));
       }
-      return this.invalidateDocumentChange(changedDocuments.map(extractId).filter(Boolean));
+      onQueryWindowChanged?.({ changes });
+      return count;
     },
 
     // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
@@ -869,6 +884,20 @@ async function materializeChunks(storageCollection, documents, replicationOrigin
 async function touchSidecarAccess(sidecar, collectionName, documentIds) {
   if (!documentIds?.length) return;
   await sidecar.touchDocuments(collectionName, documentIds);
+}
+
+export function documentRevisionChanges(documents = [], primaryPath = 'id') {
+  const changes = [];
+  for (const document of documents || []) {
+    const id = extractQueryId(document, primaryPath);
+    if (!id) continue;
+    changes.push({
+      id: String(id),
+      rev: typeof document?._rev === 'string' ? document._rev : '',
+      deleted: document?._deleted === true,
+    });
+  }
+  return changes;
 }
 
 function extractId(doc) {
