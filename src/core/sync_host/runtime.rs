@@ -127,7 +127,7 @@ where
             stop,
             |ready, authority, peer| {
                 handoff_host = Some(
-                    crate::business_os::NativeHandoffHost::start(root, peer.pool())
+                    crate::business_os::NativeHandoffHost::start(root, peer.pool().clone())
                         .map_err(io::Error::other)?,
                 );
                 guest_host = guests::Host::start(root, ipc.path(), authority.clone(), peer)

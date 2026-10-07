@@ -132,7 +132,7 @@ fn native_handoff_transport_rejects_unsigned_foreign_and_changed_request_without
             .reason_code,
         "peer_not_bound"
     );
-    assert!(server.ledger.lock().pending.is_empty());
+    assert!(server.ledger.lock().unwrap().pending.is_empty());
     let (challenge, _) = probe(&f, &server, ("p", 1));
     let mut changed = f.request.clone();
     changed.checkpoint_sequence += 1;
@@ -148,7 +148,7 @@ fn native_handoff_transport_rejects_unsigned_foreign_and_changed_request_without
         .clone()
         .answer(("p", 1), vec![signed.envelope])
         .is_err());
-    assert!(!server.ledger.lock().pending[&("p", 1)].used);
+    assert!(!server.ledger.lock().unwrap().pending[&("p", 1)].used);
 }
 #[test]
 fn native_handoff_transport_rechecks_policy_between_pending_physical_polls() {
@@ -172,7 +172,7 @@ fn native_handoff_transport_rechecks_policy_between_pending_physical_polls() {
                     "policy mutation fence must cover the physical poll"
                 );
                 assert!(
-                    server.ledger.try_lock().is_none(),
+                    server.ledger.try_lock().is_err(),
                     "host retirement fence escaped poll"
                 );
                 polls += 1; // Simulated zero-byte Pending.
@@ -241,6 +241,7 @@ fn native_handoff_transport_new_probe_retires_old_response_and_bounds_expiry() {
     server
         .ledger
         .lock()
+        .unwrap()
         .pending
         .get_mut(&("p", 1))
         .unwrap()

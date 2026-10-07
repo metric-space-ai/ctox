@@ -10,7 +10,6 @@ use ctox_sync::authority::auth::handoff_wire::{
 use ctox_sync::contracts::{
     SessionHandoffWireReply, SessionHandoffWireRequest, CTOX_SYNC_SESSION_HANDOFF_METHOD,
 };
-use parking_lot::Mutex;
 use rxdb::plugins::replication_webrtc::{
     index_mod::{GuardedAuxiliaryRequestHandler, GuardedAuxiliaryResponse},
     RxWebRTCReplicationPool, WebRTCConnectionHandler, WebRTCPublicationGuard,
@@ -19,6 +18,7 @@ use rxdb::rx_error::{new_rx_error, RxResult};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::{Mutex, MutexGuard};
 
 const MAX_CHALLENGES: usize = 64;
 #[derive(Clone)]
@@ -44,7 +44,11 @@ pub(crate) struct NativeHandoffHost<P> {
 }
 impl<P> Drop for NativeHandoffHost<P> {
     fn drop(&mut self) {
-        let mut ledger = self.server.ledger.lock();
+        let mut ledger = self
+            .server
+            .ledger
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         ledger.alive = false;
         ledger.pending.clear();
     }
@@ -58,7 +62,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> NativeHandoffHost<P> {
         let server = Arc::new(Server {
             gate: NativeSessionHandoffGate {
                 root: root.into(),
-                issuer_identity: config.identity()?,
+                issuer_identity: config.identity()?.to_owned(),
                 permit_ttl_ms: PERMIT_TTL_MS,
             },
             scope: config.scope_id,
@@ -99,6 +103,10 @@ fn currency_matches(original: &SessionHandoffPermit, current: &SessionHandoffPer
         && original.expires_at_ms > now_ms() as u64
 }
 impl<P: Clone + Eq + Hash + Send + Sync + 'static> Server<P> {
+    fn lock_ledger(&self) -> Result<MutexGuard<'_, Ledger<P>>, SessionHandoffDenial> {
+        self.ledger.lock().map_err(|_| deny("host_unavailable"))
+    }
+
     fn authorize_peer(
         &self,
         conn: &Connection,
@@ -167,7 +175,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Server<P> {
                     used: false,
                 };
                 {
-                    let mut ledger = self.ledger.lock();
+                    let mut ledger = self.lock_ledger()?;
                     if !ledger.alive {
                         return Err(deny("host_retired"));
                     }
@@ -194,7 +202,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Server<P> {
             SessionHandoffWireRequest::Authorize { request, challenge } => {
                 let (bound, result) = self.gate.with_current_authority(|conn, identity| {
                     let permit = self.authorize_peer(conn, identity, &verified, true)?;
-                    let mut ledger = self.ledger.lock();
+                    let mut ledger = self.lock_ledger()?;
                     if !ledger.alive {
                         return Err(deny("host_retired"));
                     }
@@ -249,7 +257,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> WebRTCPublicationGuard for Pu
                 if !currency_matches(&self.challenge.permit, &permit) {
                     return Err(deny("authority_changed"));
                 }
-                let ledger = self.server.ledger.lock();
+                let ledger = self.server.lock_ledger()?;
                 let current = ledger
                     .pending
                     .get(&self.peer)
