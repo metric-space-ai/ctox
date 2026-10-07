@@ -4557,7 +4557,15 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         changed = true;
         chatChanged = true;
       }
-      const orphanedTracking = !commandDoc && !taskDoc && isActiveTrackingStatus(message.status) && trackingMessageAgeMs(message) > 10 * 60 * 1000;
+      // Only a lookup that ran and found nothing proves an orphan. Under load
+      // demand reads time out (QUERY_COLLECTOR_TIMEOUT); treating that as
+      // "gone" marked running research tasks as failed and stopped tracking
+      // them (large research run, 07.10.2026).
+      const lookupsSucceeded = !commandDocs.lookupFailed
+        && !taskDocs.lookupFailed
+        && !taskDocsByCommand.lookupFailed;
+      const orphanedTracking = lookupsSucceeded
+        && !commandDoc && !taskDoc && isActiveTrackingStatus(message.status) && trackingMessageAgeMs(message) > 10 * 60 * 1000;
       const nextStatus = orphanedTracking ? 'failed' : preferredTrackingStatus(commandDoc, taskDoc, message.status);
       const nextProgress = taskDoc?.execution_progress
         || taskDoc?.executionProgress
@@ -4746,10 +4754,19 @@ async function findDocsByIds(collection, ids) {
       return byId;
     } catch {}
   }
-  if (typeof collection.findOne !== 'function') return byId;
+  if (typeof collection.findOne !== 'function') {
+    byId.lookupFailed = true;
+    return byId;
+  }
   await Promise.all(unique.map(async (id) => {
-    const doc = await findDoc(collection, id);
-    if (doc?.id) byId.set(String(doc.id), doc);
+    try {
+      const doc = await collection.findOne(id).exec();
+      const json = doc?.toJSON?.() || null;
+      if (json?.id) byId.set(String(json.id), json);
+    } catch {
+      // A failed read is not evidence that the document is gone.
+      byId.lookupFailed = true;
+    }
   }));
   return byId;
 }
@@ -4769,18 +4786,10 @@ async function findQueueDocsByCommandIds(collection, commandIds) {
       const commandId = String(json?.command_id || json?.commandId || '').trim();
       if (commandId && !byCommandId.has(commandId)) byCommandId.set(commandId, json);
     }
-  } catch {}
-  return byCommandId;
-}
-
-async function findDoc(collection, id) {
-  if (!id) return null;
-  try {
-    const doc = await collection.findOne(id).exec();
-    return doc?.toJSON?.() || null;
   } catch {
-    return null;
+    byCommandId.lookupFailed = true;
   }
+  return byCommandId;
 }
 
 function preferredTrackingStatus(commandDoc, taskDoc, currentStatus = '') {

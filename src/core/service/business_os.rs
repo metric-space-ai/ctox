@@ -2023,6 +2023,44 @@ fn run_business_os_web_stack_auth_assist_login(
     run_business_os_web_stack_auth_assist_login_with_continuation(root, args, None, false)
 }
 
+/// Automatic sign-in for a credential-protected research source whose stored
+/// session expired: CTOX fills the stored credential in its own browser (and
+/// completes an e-mail one-time code from the connected mailbox). Same identity
+/// rules as the `auth-assist-login` CLI; no relaxed trust.
+pub(crate) fn auto_reauthorize_web_stack_source(
+    root: &Path,
+    source_id: &str,
+    credential_ref: &str,
+    login_url: &str,
+    task_id: &str,
+    owner_user_id: Option<&str>,
+    timeout_ms: u64,
+) -> anyhow::Result<serde_json::Value> {
+    let mut args = vec![
+        "auth-assist-login".to_string(),
+        "--source-id".to_string(),
+        source_id.to_string(),
+        "--credential-ref".to_string(),
+        credential_ref.to_string(),
+        "--target-url".to_string(),
+        login_url.to_string(),
+        "--timeout-ms".to_string(),
+        timeout_ms.to_string(),
+    ];
+    if !task_id.trim().is_empty() {
+        args.push("--task-id".to_string());
+        args.push(task_id.to_string());
+    }
+    if let Some(owner) = owner_user_id
+        .map(str::trim)
+        .filter(|owner| !owner.is_empty())
+    {
+        args.push("--owner-user-id".to_string());
+        args.push(owner.to_string());
+    }
+    run_business_os_web_stack_auth_assist_login_with_continuation(root, &args, None, false)
+}
+
 pub(crate) fn run_business_os_web_stack_authenticated_automation(
     root: &Path,
     args: &[String],

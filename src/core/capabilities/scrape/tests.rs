@@ -3560,3 +3560,37 @@ CTOX_ACCOUNT_FIXTURE
         let _ = fs::remove_dir_all(&fx.root);
     }
 }
+
+#[test]
+fn automatic_reauthorization_cools_down_only_after_a_recent_failure() {
+    use serde_json::json;
+    let now = 10_000_000_i64;
+    assert!(!super::reauth::auto_reauth_in_cooldown(None, now));
+    assert!(super::reauth::auto_reauth_in_cooldown(
+        Some(&json!({"ok": false, "attempted_at_ms": now - 60_000})),
+        now
+    ));
+    assert!(!super::reauth::auto_reauth_in_cooldown(
+        Some(&json!({"ok": false, "attempted_at_ms": now - 31 * 60_000})),
+        now
+    ));
+    assert!(!super::reauth::auto_reauth_in_cooldown(
+        Some(&json!({"ok": true, "attempted_at_ms": now - 1_000})),
+        now
+    ));
+}
+
+#[test]
+fn automatic_reauthorization_needs_a_stored_credential_reference() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    // No credential_ref: nothing to sign in with, the human handoff stays the path.
+    assert!(super::reauth::attempt_automatic_reauthorization(
+        dir.path(),
+        "run-1",
+        None,
+        None,
+        &json!({"source_id": "companyhouse", "login_url": "https://example.com/login"}),
+    )
+    .is_none());
+}
