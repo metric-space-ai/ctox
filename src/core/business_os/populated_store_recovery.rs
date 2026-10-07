@@ -23,6 +23,7 @@ use super::rxdb_peer::{
     migrate_additive_native_rxdb_collection_versions, repair_stale_rxdb_collection_schema_versions,
     rxdb_collection_version_table_name, sqlite_quote_identifier, sqlite_table_exists,
 };
+use super::sqlite_file_digest::{sqlite_file_sha256, sqlite_path_sha256};
 use super::store::{now_ms, rxdb_store_path, RXDB_STORE_FILE};
 use anyhow::{anyhow, Context};
 use base64::Engine;
@@ -310,45 +311,7 @@ fn sqlite_store_inventory(database_path: &Path) -> anyhow::Result<Value> {
     }
     let conn = open_rxdb_sqlite(database_path)
         .with_context(|| format!("open native RxDB store {}", database_path.display()))?;
-    let mut statement = conn.prepare(
-        "SELECT name FROM sqlite_master
-         WHERE type = 'table' AND name LIKE 'ctox_business_os__%'
-         ORDER BY name ASC",
-    )?;
-    let names = statement
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut tables = BTreeMap::new();
-    let mut digest = Sha256::new();
-    for table in names {
-        if table.contains("___rxdb_internal__") {
-            continue;
-        }
-        let documents = inventory_rows(&conn, &table)?;
-        digest.update(table.as_bytes());
-        digest.update([0]);
-        for document in &documents {
-            digest.update(document.to_string().as_bytes());
-            digest.update([0]);
-        }
-        tables.insert(
-            table,
-            json!({
-                "row_count": documents.len(),
-                "documents": documents
-            }),
-        );
-    }
-    let (bytes, file_sha) = file_sha256(database_path)?;
-    Ok(json!({
-        "ok": true,
-        "present": true,
-        "database_path": database_path.display().to_string(),
-        "bytes": bytes,
-        "file_sha256": file_sha,
-        "tables": tables,
-        "inventory_sha256": hex_sha256(digest.finalize().as_slice())
-    }))
+    sqlite_store_inventory_on(&conn, database_path)
 }
 
 fn inventory_rows(conn: &Connection, table: &str) -> anyhow::Result<Vec<Value>> {
@@ -1085,16 +1048,18 @@ pub fn restore_native_rxdb_immutable_backup(root: &Path, backup: &Path) -> anyho
         anyhow::bail!("{reason}");
     }
     let live_path = rxdb_store_path(root);
-    let (backup_bytes, backup_sha256) = file_sha256(backup)?;
+    let (backup_bytes, backup_sha256) = sqlite_path_sha256(backup)?;
     if let Some(conn) = guard.exclusive.as_ref() {
         // wal_checkpoint cannot run inside BEGIN EXCLUSIVE; end the transaction
         // first. locking_mode=EXCLUSIVE keeps other connections out until drop.
         conn.execute_batch("ROLLBACK;")
             .context("end exclusive restore transaction before WAL checkpoint")?;
+        // A failed physical read cannot prove checkpointing stale WAL is safe.
         let live_already_matches_backup = live_path.is_file()
-            && file_sha256(&live_path)
-                .ok()
-                .is_some_and(|(_, sha)| sha == backup_sha256);
+            && sqlite_file_sha256(conn)
+                .context("verify live physical image before restore checkpoint")?
+                .1
+                == backup_sha256;
         // Leftover live-named WAL must not be merged into an already-published
         // backup image. Skipping PRAGMA wal_checkpoint is not enough: bundled
         // SQLite may still checkpoint on last-connection close. Enable
@@ -1157,7 +1122,7 @@ fn refuse_restore(
         .get("sha256")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let (_bytes, backup_sha256) = file_sha256(backup)?;
+    let (_bytes, backup_sha256) = sqlite_path_sha256(backup)?;
     if recorded_backup != backup_sha256 {
         return Ok(Some(format!(
             "refusing native RxDB restore: backup identity does not match pinned provenance (pinned {recorded_backup}, backup {backup_sha256})"
@@ -1252,7 +1217,7 @@ fn sqlite_store_inventory_on(conn: &Connection, database_path: &Path) -> anyhow:
             }),
         );
     }
-    let (bytes, file_sha) = file_sha256(database_path)?;
+    let (bytes, file_sha) = sqlite_file_sha256(conn)?;
     Ok(json!({
         "ok": true,
         "present": true,
@@ -1272,7 +1237,7 @@ fn replace_sqlite_store(live_path: &Path, backup: &Path) -> anyhow::Result<()> {
     let preserved = live_path.with_extension("sqlite3.pre-restore");
     let live_sidecars = sqlite_sidecar_paths(live_path);
     let preserved_sidecars = sqlite_sidecar_paths(&preserved);
-    let (_backup_bytes, backup_sha256) = file_sha256(backup)?;
+    let (_backup_bytes, backup_sha256) = sqlite_path_sha256(backup)?;
 
     if live_path.is_file() && preserved.is_file() {
         let (_bytes, live_sha) = file_sha256(live_path)?;
@@ -1747,6 +1712,182 @@ mod tests {
         let root = tempfile::tempdir()?;
         fs::create_dir_all(root.path().join("runtime"))?;
         Ok(root)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn another_process_can_lock_sqlite_main(path: &Path) -> anyhow::Result<bool> {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = CString::new(path.as_os_str().as_bytes())?;
+        // SQLite's Unix VFS retains a read lock in this main-file region in WAL
+        // mode. A child process's write lock tests the kernel, not SQLite's
+        // same-process connection bookkeeping.
+        let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+        lock.l_type = libc::F_WRLCK as _;
+        lock.l_whence = libc::SEEK_SET as _;
+        lock.l_start = 0x4000_0002;
+        lock.l_len = 510;
+        // SAFETY: everything the child needs is prepared before fork. In the
+        // child we use only async-signal-safe syscalls and _exit: no allocator,
+        // Rust destructors, SQLite, or inherited test-runtime locks.
+        let child = unsafe { libc::fork() };
+        anyhow::ensure!(
+            child >= 0,
+            "fork lock probe: {}",
+            io::Error::last_os_error()
+        );
+        if child == 0 {
+            unsafe {
+                let fd = libc::open(path.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC);
+                if fd < 0 {
+                    libc::_exit(2);
+                }
+                let result = libc::fcntl(fd, libc::F_SETLK, &lock);
+                let error = *libc::__errno_location();
+                libc::close(fd);
+                libc::_exit(if result == 0 {
+                    0
+                } else if error == libc::EAGAIN || error == libc::EACCES {
+                    1
+                } else {
+                    2
+                });
+            }
+        }
+        let mut status = 0;
+        loop {
+            let result = unsafe { libc::waitpid(child, &mut status, 0) };
+            if result == child {
+                break;
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::EINTR) {
+                return Err(error).context("wait for SQLite lock probe");
+            }
+        }
+        anyhow::ensure!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) <= 1,
+            "SQLite lock probe failed: status {status}"
+        );
+        Ok(libc::WEXITSTATUS(status) == 0)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wal_inventory_fixture() -> anyhow::Result<(tempfile::TempDir, PathBuf, (u64, String))> {
+        let root = fixture_root()?;
+        materialize_supported_historical_rxdb_fixture(root.path())?;
+        let path = rxdb_store_path(root.path());
+        let conn = open_rxdb_sqlite(&path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        drop(conn);
+        // This raw digest is safe only here: no SQLite connection is open yet.
+        let digest = file_sha256(&path)?;
+        Ok((root, path, digest))
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn live_inventory_preserves_other_sqlite_connections_kernel_locks() -> anyhow::Result<()> {
+        let (root, path, expected) = wal_inventory_fixture()?;
+        let owner = open_rxdb_sqlite(&path)?;
+        owner.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        assert!(
+            !another_process_can_lock_sqlite_main(&path)?,
+            "fixture must hold a real kernel lock"
+        );
+
+        // Exercise the production startup inventory, including opening and
+        // closing its own connection while the daemon's writer remains alive.
+        let inventory = native_rxdb_store_inventory(root.path())?;
+        assert!(
+            !another_process_can_lock_sqlite_main(&path)?,
+            "inventory must retain the daemon's main-file locks"
+        );
+        assert_eq!(inventory["bytes"], json!(expected.0));
+        assert_eq!(inventory["file_sha256"], json!(expected.1));
+        drop(owner);
+        assert!(
+            another_process_can_lock_sqlite_main(&path)?,
+            "closed fixture must release its locks"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn exclusive_inventory_and_digest_retain_restore_kernel_locks() -> anyhow::Result<()> {
+        let (_root, path, expected) = wal_inventory_fixture()?;
+        let exclusive = open_rxdb_sqlite(&path)?;
+        exclusive.execute_batch("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE;")?;
+        assert!(
+            !another_process_can_lock_sqlite_main(&path)?,
+            "restore must start exclusively locked"
+        );
+
+        // This is the inventory used by refuse_restore under its existing
+        // exclusive connection, followed by the physical-byte equality check
+        // after ROLLBACK while locking_mode=EXCLUSIVE remains in force.
+        let inventory = sqlite_store_inventory_on(&exclusive, &path)?;
+        assert!(
+            !another_process_can_lock_sqlite_main(&path)?,
+            "restore inventory must keep exclusive kernel locks"
+        );
+        assert_eq!(inventory["file_sha256"], json!(expected.1));
+        exclusive.execute_batch("ROLLBACK;")?;
+        assert_eq!(sqlite_file_sha256(&exclusive)?, expected);
+        assert_eq!(sqlite_path_sha256(&path)?, expected);
+        assert!(
+            !another_process_can_lock_sqlite_main(&path)?,
+            "restore digest must keep exclusive kernel locks"
+        );
+        drop(exclusive);
+        assert!(another_process_can_lock_sqlite_main(&path)?);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn rejected_backup_alias_preserves_exclusive_restore_kernel_locks() -> anyhow::Result<()> {
+        let (root, path, _) = wal_inventory_fixture()?;
+        backup_native_rxdb_immutable_store(root.path(), None)?;
+        let writer = open_rxdb_sqlite(&path)?;
+        writer.execute_batch(
+            "CREATE TABLE not_in_backup (id INTEGER PRIMARY KEY);
+             INSERT INTO not_in_backup VALUES (1);
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )?;
+        drop(writer);
+
+        let alias = root.path().join("backup-alias.sqlite3");
+        fs::hard_link(&path, &alias)?;
+        let guard = acquire_exclusive_native_rxdb_writer(root.path())?;
+        assert!(!another_process_can_lock_sqlite_main(&path)?);
+        // A caller can pass the live pathname or a different hardlink as backup.
+        // Identity refusal must not drop the live guard's kernel locks before
+        // the caller unwinds; the old raw backup hash did exactly that.
+        for backup in [&path, &alias] {
+            let refusal = refuse_restore(root.path(), backup, guard.exclusive.as_ref())?
+                .context("changed live image must not match the pinned backup")?;
+            assert!(refusal.contains("backup identity does not match pinned provenance"));
+            assert!(
+                !another_process_can_lock_sqlite_main(&path)?,
+                "rejected backup digest must retain the live restore lock"
+            );
+        }
+        drop(guard);
+        assert!(another_process_can_lock_sqlite_main(&path)?);
+        Ok(())
+    }
+
+    #[test]
+    fn physical_sqlite_digest_refuses_an_unavailable_main_file() -> anyhow::Result<()> {
+        let memory = Connection::open_in_memory()?;
+        let error = sqlite_file_sha256(&memory).expect_err("no file-backed VFS");
+        assert!(error.to_string().contains("SQLite main"));
+        Ok(())
     }
 
     #[test]

@@ -77,6 +77,7 @@ mod session;
 mod session_handoff_gate;
 mod shell_assets;
 pub mod shell_update;
+mod sqlite_file_digest;
 pub mod store;
 mod store_appsec_commands;
 mod store_ats_commands;
