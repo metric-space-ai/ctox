@@ -40,6 +40,10 @@ incremental encoder cache. Utterances are capped at 15 seconds and concurrent
 streams are rejected while one owns the decoder. Actual transcript parity and
 sentence-end latency remain unverified until measured with real weights.
 
+## Direct streaming measurement
+
+`cargo run --release --features cuda --example stream_benchmark -- cuda <model.gguf> <audio.wav>` compares whole-file and paced 20 ms streaming transcription on the same warm model. It records snapshots, capture backlog, finish compute time and batch/stream parity. This operator fixture does not certify the installed meeting, gateway transport or microphone/VAD sentence-end latency. Keep its JSON separate from installed acceptance.
+
 ## Online Sample Harness
 
 The ignored integration test `tests/online_samples.rs` downloads three small
