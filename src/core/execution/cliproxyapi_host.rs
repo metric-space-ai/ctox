@@ -3885,6 +3885,17 @@ mod tests {
 
     use super::*;
 
+    // The daemon owns one active instance per process. Fixtures that publish
+    // its process-wide listener status must retain that slot until their Pi
+    // turn and capability assertions finish; otherwise a parallel root can
+    // replace Ready with its own status between the two observations.
+    fn instance_status_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static SLOT: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        SLOT.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     struct HostAlphaSearchProbe {
         authority: Arc<CtoxCodexAlphaSearchAuthority>,
         saw_typed_credentials: AtomicBool,
@@ -4258,6 +4269,7 @@ mod tests {
 
     #[test]
     fn ready_kimi_route_is_published_as_provider_model_capability() {
+        let _listener_guard = instance_status_test_guard();
         use ctox_cliproxyapi::internal::auth::kimi::{
             KimiAuthBundle, KimiTokenData, KimiTokenStorage, SecretString as KimiSecretString,
         };
@@ -4482,6 +4494,7 @@ mod tests {
 
     #[test]
     fn ready_persisted_provider_becomes_a_public_model_route() {
+        let _listener_guard = instance_status_test_guard();
         let root = tempfile::tempdir().unwrap();
         for (name, value) in [
             ("persisted-claude-access", "access-token-do-not-store"),
@@ -4512,6 +4525,7 @@ mod tests {
 
     #[test]
     fn empty_subscription_model_list_uses_provider_catalog_not_ctox_main_model() {
+        let _listener_guard = instance_status_test_guard();
         let root = tempfile::tempdir().unwrap();
         for (name, value) in [
             ("persisted-claude-access", "access-token-do-not-store"),
@@ -4686,6 +4700,7 @@ mod tests {
 
     #[test]
     fn management_runtime_source_projects_only_public_typed_facts() {
+        let _listener_guard = instance_status_test_guard();
         use ctox_cliproxyapi::internal::api::server_management::{
             ManagementRuntimePhase, ManagementRuntimeStatusSource as _,
         };
@@ -5379,6 +5394,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn codex_subscription_preset_drives_real_pi_edit_through_native_transport() {
+        let _listener_guard = instance_status_test_guard();
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         if std::process::Command::new("node")
@@ -5635,6 +5651,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn claude_subscription_preset_drives_real_pi_edit_through_format_bridge() {
+        let _listener_guard = instance_status_test_guard();
         if std::process::Command::new("node")
             .arg("--version")
             .stdout(std::process::Stdio::null())
@@ -5773,6 +5790,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn antigravity_subscription_preset_drives_real_pi_edit_through_format_bridge() {
+        let _listener_guard = instance_status_test_guard();
         if std::process::Command::new("node")
             .arg("--version")
             .stdout(std::process::Stdio::null())
@@ -5898,6 +5916,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn kimi_subscription_preset_drives_real_pi_edit_through_format_bridge() {
+        let _listener_guard = instance_status_test_guard();
         use ctox_cliproxyapi::internal::auth::kimi::{
             KimiAuthBundle, KimiTokenData, KimiTokenStorage, SecretString as KimiSecretString,
         };
