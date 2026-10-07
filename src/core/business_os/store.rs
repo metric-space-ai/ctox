@@ -18609,10 +18609,10 @@ fn webrtc_collection_authority_diagnostic(error: &anyhow::Error) -> Value {
         "current_signer"
     };
     if let Some(rusqlite::Error::SqliteFailure(code, _)) = error.downcast_ref::<rusqlite::Error>() {
-        return json!({"phase": phase, "kind": "sqlite", "code": format!("{:?}", code.code), "extended_code": code.extended_code});
+        return serde_json::json!({"phase": phase, "kind": "sqlite", "code": format!("{:?}", code.code), "extended_code": code.extended_code});
     }
     if let Some(io) = error.downcast_ref::<std::io::Error>() {
-        return json!({"phase": phase, "kind": "io", "code": format!("{:?}", io.kind())});
+        return serde_json::json!({"phase": phase, "kind": "io", "code": format!("{:?}", io.kind())});
     }
     let known = [
         (
@@ -18639,7 +18639,7 @@ fn webrtc_collection_authority_diagnostic(error: &anyhow::Error) -> Value {
         .find(|(message, _)| contexts.iter().any(|s| s == message))
         .map(|(_, code)| *code)
         .unwrap_or("opaque_error");
-    json!({"phase": phase, "kind": "authority", "code": code})
+    serde_json::json!({"phase": phase, "kind": "authority", "code": code})
 }
 
 pub(super) fn log_webrtc_collection_authority_error(collection: &str, error: &anyhow::Error) {
@@ -18662,7 +18662,7 @@ pub(super) fn log_webrtc_collection_authority_error(collection: &str, error: &an
     }
     eprintln!(
         "[business-os] native collection authority unavailable: {}",
-        json!({
+        serde_json::json!({
             "collection": collection, "diagnostic": webrtc_collection_authority_diagnostic(error)
         })
     );
