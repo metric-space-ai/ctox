@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createDemandLoadingTransport } from '../dist/ctox-rxdb-js.mjs';
-import { CLIENT_QUERY_QUEUE_LIMIT } from '../src/demand-loading-transport.mjs';
+import { CLIENT_QUERY_QUEUE_LIMIT, CLIENT_QUERY_STREAM_LIMIT } from '../src/demand-loading-transport.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -93,8 +93,8 @@ assert.equal(full.transport.diagnostics().queuedQueryRequests, 0);
 // Waiting entries cannot block already-ready entries after active slots free.
 const busy = actor('busy', true, false);
 const notReady = actor('not-ready');
-const active = Array.from({ length: 6 }, (_, n) => busy.transport.requestQueryFetch(envelope('active-' + n)));
-await until(() => busy.sent.length === 6);
+const active = Array.from({ length: CLIENT_QUERY_STREAM_LIMIT }, (_, n) => busy.transport.requestQueryFetch(envelope('active-' + n)));
+await until(() => busy.sent.length === CLIENT_QUERY_STREAM_LIMIT);
 const behind = notReady.transport.requestQueryFetch(envelope('still-waiting')).catch(error => error);
 const lostAuthorization = actor('lost-authorization', true);
 const lostPending = lostAuthorization.transport.requestQueryFetch(envelope('was-ready'));
@@ -105,7 +105,7 @@ await until(() => busy.sent.includes('eligible'));
 assert.equal(notReady.sent.length, 0);
 assert.equal(lostAuthorization.sent.length, 0, 'queued admission must recheck current authorization');
 lostAuthorization.authorize();
-assert(metrics.every(active => active <= 6), 'queue handoff must never over-admit native streams');
+assert(metrics.every(active => active <= CLIENT_QUERY_STREAM_LIMIT), 'queue handoff must never over-admit native streams');
 for (const id of [...busy.sent]) await busy.complete(id);
 await Promise.all([...active, eligible, lostPending]);
 notReady.transport.abortPeerRequests('not-ready', 'test-close');
