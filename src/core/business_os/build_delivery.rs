@@ -48,7 +48,6 @@ struct Entry {
 struct Manifest<'a> {
     schema: &'static str,
     source_id: &'a str,
-    worker_checkout: bool,
     head: &'a str,
     repository: Option<&'a str>,
     base: Option<&'a str>,
@@ -266,7 +265,6 @@ fn package_inner(
     fs::remove_file(names)?;
     let manifest = Manifest {
         schema,
-        worker_checkout: worker_base.is_some(),
         source_id: &source_id,
         head: &source.head_revision,
         repository: source.public_base.as_ref().map(|b| b.repository.as_str()),
@@ -331,7 +329,6 @@ raw=(incoming/"manifest.json").read_bytes()
 manifest=json.loads(raw)
 require(manifest["schema"] in ("ctox.build-delivery.v1","ctox.worker-source.v1"), "unknown manifest")
 worker=manifest["schema"]=="ctox.worker-source.v1"
-require(manifest.get("worker_checkout",False)==worker, "source mode differs")
 git_checkout=worker or manifest["repository"] is not None
 if git_checkout:
     for revision in [manifest["base"],manifest["head"]]:
