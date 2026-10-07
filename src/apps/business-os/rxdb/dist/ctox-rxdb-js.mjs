@@ -7221,7 +7221,8 @@ var CLIENT_FILE_COLLECTOR_LIMIT = 8;
 var CLIENT_ROWS_COLLECTOR_LIMIT = 8;
 var DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES = 8 * 1024 * 1024;
 var QUERY_STREAM_LIMIT_RETRY_MS = 160;
-var QUERY_STREAM_LIMIT_RETRIES = 6;
+var QUERY_STREAM_LIMIT_RETRY_MAX_MS = 800;
+var QUERY_STREAM_LIMIT_RETRIES = 20;
 var QUERY_RATE_LIMIT_RETRY_MS = 100;
 var QUERY_RATE_LIMIT_RETRIES = 16;
 var QUERY_PEER_RETRY_MS = 250;
@@ -7577,8 +7578,8 @@ function createDemandLoadingTransport({
           throw error;
         }
         attempt += 1;
-        const retryDelayMs = peerUnavailable || ackTimeout ? QUERY_PEER_RETRY_MS : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS;
-        await delay4(retryDelayMs * attempt);
+        const retryDelayMs = peerUnavailable || ackTimeout ? QUERY_PEER_RETRY_MS * attempt : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS * attempt : Math.min(QUERY_STREAM_LIMIT_RETRY_MS * attempt, QUERY_STREAM_LIMIT_RETRY_MAX_MS);
+        await delay4(retryDelayMs);
       }
     }
   }
@@ -9023,7 +9024,7 @@ function v15Log(event, fields) {
     }
     return;
   }
-  if (globalThis?.console?.debug) {
+  if (globalThis?.__CTOX_V15_DEBUG__ === true && globalThis?.console?.debug) {
     globalThis.console.debug("[V1.5]", event, fields);
   }
 }

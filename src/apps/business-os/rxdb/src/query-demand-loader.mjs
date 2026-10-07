@@ -924,7 +924,9 @@ function v15Log(event, fields) {
     try { v15LogSink(event, fields); } catch {}
     return;
   }
-  if (globalThis?.console?.debug) {
+  // Thousands of these per page load cost real main-thread time (thesen
+  // 07.10.2026: >3000 in 10 s). Diagnostics opt in explicitly.
+  if (globalThis?.__CTOX_V15_DEBUG__ === true && globalThis?.console?.debug) {
     globalThis.console.debug('[V1.5]', event, fields);
   }
 }

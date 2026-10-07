@@ -22,8 +22,16 @@ export const CLIENT_ROWS_COLLECTOR_LIMIT = 8;
 // legit stream stays far under this; the cap only bites a hostile/buggy peer
 // that keeps pushing chunks to grow slot.chunks unbounded before the timeout.
 export const DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES = 8 * 1024 * 1024;
+// The native peer frees a stream slot only after it has sent the final chunk,
+// and a locally cancelled stream keeps its server slot until the peer notices.
+// A start burst therefore meets STREAM_LIMIT_EXCEEDED although the browser
+// keeps under the limit. Six retries (~3.4 s) pushed the failure into the
+// apps' own backoff (2, 4, 8 … s), so Outbound needed ~20 s on thesen
+// (07.10.2026) for queries that answer in under 1.5 s. Wait for a slot with
+// short, capped pauses for up to ~14 s instead.
 const QUERY_STREAM_LIMIT_RETRY_MS = 160;
-const QUERY_STREAM_LIMIT_RETRIES = 6;
+const QUERY_STREAM_LIMIT_RETRY_MAX_MS = 800;
+const QUERY_STREAM_LIMIT_RETRIES = 20;
 const QUERY_RATE_LIMIT_RETRY_MS = 100;
 const QUERY_RATE_LIMIT_RETRIES = 16;
 const QUERY_PEER_RETRY_MS = 250;
@@ -387,11 +395,11 @@ export function createDemandLoadingTransport({
         }
         attempt += 1;
         const retryDelayMs = peerUnavailable || ackTimeout
-          ? QUERY_PEER_RETRY_MS
+          ? QUERY_PEER_RETRY_MS * attempt
           : rateLimited
-            ? QUERY_RATE_LIMIT_RETRY_MS
-            : QUERY_STREAM_LIMIT_RETRY_MS;
-        await delay(retryDelayMs * attempt);
+            ? QUERY_RATE_LIMIT_RETRY_MS * attempt
+            : Math.min(QUERY_STREAM_LIMIT_RETRY_MS * attempt, QUERY_STREAM_LIMIT_RETRY_MAX_MS);
+        await delay(retryDelayMs);
       }
     }
   }
