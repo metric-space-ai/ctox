@@ -15,7 +15,7 @@
 
   "copyTypes": ["SyncHostTiming"],
   "defaultTypes": ["ExecutionPeer"],
-  "sensitiveTypes": ["SyncHostTransport", "SyncHostIceServer"],
+  "sensitiveTypes": ["SyncHostTransport", "SyncHostIceServer", "SessionHandoffWireReply"],
   "types": {
     "ExecutionPeer": {
       "identity": "string",
@@ -177,11 +177,13 @@
   "unions": {
     "SessionHandoffWireRequest": {
       "probe": { "request": "SessionHandoffRequest" },
-      "authorize": { "request": "SessionHandoffRequest", "challenge": "string" }
+      "authorize": { "request": "SessionHandoffRequest", "challenge": "string" },
+      "fetch": { "request": "SessionHandoffRequest", "challenge": "string", "receivePermit": "SessionHandoffPermit", "artifact": "optional:ArtifactRef", "offset": "u64" }
     },
     "SessionHandoffWireReply": {
       "challenge": { "challenge": "string" },
-      "authorized": { "permit": "SessionHandoffPermit" }
+      "authorized": { "permit": "SessionHandoffPermit" },
+      "chunk": { "permit": "SessionHandoffPermit", "artifact": "optional:ArtifactRef", "offset": "u64", "sizeBytes": "u64", "hex": "string" }
     },
     "SyncHostMember": {
       "voter": { "nodeId": "u64" },

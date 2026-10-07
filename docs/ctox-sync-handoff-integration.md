@@ -13,11 +13,11 @@ acceptance evidence or a replacement for the full portability requirement.
 | Workjet `WorkjetMailboxDelivery.ts::acceptHandoff` | Dispatches `thread.create` with a new thread ID, host model settings, null branch and null worktree. | This is a new contextual conversation, not continuation of the captured provider session. |
 | Workjet `apps/server/src/workjet/sync/WorkjetSyncIpc.ts::requestSyncAuthority` | Typed private IPC client; current calls are in its test file. | No production execution owner invokes checkpoint protection or takeover through it. |
 | CTOX `src/core/sync/src/native_execution.rs::activate` | Starts the private authority listener and supervises authenticated peer-route discovery. | Does not capture, stream, restore or resume a checkpoint. |
-| CTOX `src/core/sync/src/capture.rs::CheckpointStore::capture` | Captures Git plus caller-supplied history/provider artifacts; requires the caller to establish quiescence. | The configured native queue owner now supplies its stopped Core journal/state and explicitly assigned Git working copy. Target transport, effect reconciliation and original-session resume remain open. |
+| CTOX `src/core/sync/src/capture.rs::CheckpointStore::capture` | Captures Git plus caller-supplied history/provider artifacts; requires the caller to establish quiescence. | The configured native queue owner now supplies its stopped Core journal/state and explicitly assigned Git working copy. The protected native copy path now transfers it to target storage; effect reconciliation and original-session resume remain open. |
 | CTOX `src/core/business_os/workjet_transfer_git.rs` | CLI pack/apply helpers reconstruct a working copy. | They are not called by the native session handoff lifecycle and do not establish account/principal permission. |
 | CTOX `src/core/sync/src/authority/handoff.rs` | Verifies signed gate results and discards old evidence during revalidation. | The production gate adapter now exists (see below); transfer invocations remain absent — no production consumer calls `SessionHandoffTransfer`. |
-| CTOX `business_session_handoff_bindings` | Migration creates binding fields and indexes; a production reader now exists. | The local operator enrolls the actual native source capture and a source-signed offer against target-local policy; protected transfer remains open. |
-| CTOX `src/core/business_os/session_handoff_gate.rs` | Production `SessionHandoffGate`: per call re-reads the active binding by digest, matches side/phase, job, session, scope, checkpoint, ownership generation, harness/model-route/account/model against the row, requires this instance's enrolled identity for the side, resolves the principal's current role and capability epoch from `business_users`, demands the exact `session_handoff` grant on the binding, then mints a 60s signed permit. | Source disclosure additionally re-resolves the capture, full producer contract, native policy/workspace and enrolled destination peer. It is not yet invoked by a protected checkpoint sender/receiver. |
+| CTOX `business_session_handoff_bindings` | Migration creates binding fields and indexes; a production reader now exists. | The local operator enrolls the actual native source capture and a source-signed offer against target-local policy; the guarded native copy command now transfers it; Core resume remains open. |
+| CTOX `src/core/business_os/session_handoff_gate.rs` | Production `SessionHandoffGate`: per call re-reads the active binding by digest, matches side/phase, job, session, scope, checkpoint, ownership generation, harness/model-route/account/model against the row, requires this instance's enrolled identity for the side, resolves the principal's current role and capability epoch from `business_users`, demands the exact `session_handoff` grant on the binding, then mints a 60s signed permit. | Source disclosure additionally re-resolves the capture, full producer contract, native policy/workspace and enrolled destination peer. The protected copy path invokes it on source reads and target ingestion; target Core activation remains open. |
 
 The older Workjet snapshot module records an August decision to transfer only
 a context brief. That behavior must not be relabeled as satisfying the current
@@ -57,12 +57,66 @@ setup returns the fixed auxiliary failure code, never an arbitrary private
 error. Successful setup commits its identifier-only native policy audit;
 publication rechecks do not append audit events per poll.
 
-This is a production receiver for phase decisions. Checkpoint byte streaming,
-a retained provider-account fence, coordination with mutations in other native
-stores/files, effect reconciliation and original-session Core activation are
-still required. These phase replies are not a durable-copy receipt or permission
-to stream later without current authority. Native store/guard tests and signed
-wire tests do not establish independent-host restoration or product acceptance.
+The production copy connection below consumes bounded checkpoint bytes with
+retained account and policy guards. Phase replies alone are not a durable-copy
+receipt or permission to stream later. Cross-store/file mutation coordination,
+effect reconciliation and original-session Core activation remain open.
+Native store/guard tests and signed wire tests do not establish independent-host
+restoration or product acceptance.
+
+## Protected native checkpoint copy
+
+The running target host exposes a same-UID private operator command,
+`ctox sync handoff-copy <binding-digest> <source-route>`. The route is only a
+routing hint: the stored source offer pins the signing key, logical session,
+checkpoint, account and ownership generation. The command uses the host's
+existing admitted native peer. It does not start a second peer or move data
+through HTTP or the local control socket.
+
+Each at-most-8KiB block obtains a new exact-connection source challenge. The
+target signs its current Receive decision into the Fetch request; the source
+verifies that decision's signature, nonce, binding, checkpoint and expiry, then
+resolves its own current Disclose grant before reading. A challenge is consumed
+once even if reading or signing fails. Manifest requests and artifact/offset
+requests are distinct; only artifacts named in that exact immutable manifest
+can be read. Signed replies correlate the range and declared length.
+
+The native Core credential store is resolved using the assigned workspace's
+current Core configuration. Direct account-bound native OpenAI is required,
+as in the existing native producer; unavailable/foreign accounts or replacement
+provider endpoints deny. The account manager is retained and checks its current
+credential source through source physical response polls and target ingestion
+callbacks. Local issuer, policy, host retirement and pool cancellation fences
+cover their respective callbacks and release before awaits. Target epochs and
+binding revisions remain pinned throughout the operation.
+
+The target stages privately and verifies complete artifact hashes before
+publishing immutable blobs. It validates the manifest digest and full producer
+contract, then validates all contents and portable journals and fsyncs the copy
+before replying `copied:true,resumed:false`. A truncated, corrupt, timed-out or
+cancelled transfer yields no successful copy response. The temporary staging
+directory is dropped. Already verified immutable blobs may remain after a failed
+copy; their presence alone permits neither a receipt nor execution.
+The native source's enrollment still verifies full contents; repeated physical
+policy checks use the manifest hash/identity instead of rehashing every blob
+for every block. Receive and durable-copy checks retain full verification.
+
+The operation is bounded to one local copy, 60 seconds, 4096 distinct artifacts,
+1GiB total, 8MiB manifest and 64MiB per blob. Each exchange has a 15-second bound.
+Local client disconnect retires the operation's shared publication fence;
+queued blocking work checks it before writing. A fresh operation is needed
+after expiry/failure; this is not an automatic retry or general crash recovery.
+
+This connects production checkpoint sending and local durable ingestion.
+It creates no Raft DATA receipt, ownership transfer, clean-effect witness or
+Core activation. Original-session target reconstruction/resume remains open.
+Remote policy revocation cannot atomically recall already authorized bytes:
+the source sees a signed target Receive decision valid for at most 60 seconds,
+while the honest target rechecks its own current grant before each request and
+write. Independently replaced stores/workspace/credential files are rechecked
+but do not share an atomic cross-process mutation guard. Native fixture tests
+do not establish independent-host networking, installed acceptance, transfer
+throughput, VM portability or external-effect reconciliation.
 
 ## Native guest acceleration selection
 
@@ -118,9 +172,8 @@ Registrations belong to this daemon lifetime. Restart does not resurrect a
 live provider/process from a persisted claim; abandoned import directories
 need explicit reconciliation. The first-turn producer connection is described
 below. Source/target handoff bindings now have separate native operator enrollment.
-Protected checkpoint transport and original-session target resume remain
-production connections under #183. Enrollment alone does not
-start QEMU or establish two-host restoration.
+Original-session target resume remains open under #183. Enrollment alone does
+not start QEMU or establish two-host restoration.
 
 ## Native source handoff binding enrollment
 
@@ -150,7 +203,7 @@ or clean-effect witnesses. The production disclosure gate requires the exact
 separate disclosure grant and re-resolves the current source facts, full
 capability set, ownership node/generation and destination peer before signing.
 Provider assignment is checked here; a currently held credential/account guard
-and a physical publication fence still belong to the future transfer owner.
+and a physical publication fence are held by the native copy path above.
 A permit is not permission to stream later without those retained guards.
 Enrollment, revocation and every gate decision use the existing Business OS
 event store. Decisions commit their identifier-only audit under the same held

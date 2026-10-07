@@ -443,6 +443,11 @@ pub(crate) fn assert_actual_source_target_enrollment(
     request.phase = SessionHandoffPhase::Receive;
     request.nonce = "target-fresh-decision".into();
     assert!(gate.authorize(&request).is_ok());
+    crate::business_os::session_handoff_gate::transport::assert_native_checkpoint_path(
+        source_root,
+        target_root,
+        &request,
+    );
     request.phase = SessionHandoffPhase::Resume;
     assert!(gate.authorize(&request).is_ok());
     let workspace = target_root.join("target-native-workspace");

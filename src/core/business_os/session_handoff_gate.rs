@@ -18,8 +18,8 @@
 //! it does not infer
 //! account or workspace entitlement from a reachable model route or a sole
 //! configured account, and it does not consume checkpoint bytes. The
-//! native phase RPC is installed by the live Sync host; the protected byte
-//! consumer remains absent. See `docs/ctox-sync-handoff-integration.md`.
+//! native RPC and protected checkpoint consumer are installed by the live Sync
+//! host. Core resume remains separately gated. See `docs/ctox-sync-handoff-integration.md`.
 
 #[cfg(unix)]
 #[path = "session_handoff_transport.rs"]
