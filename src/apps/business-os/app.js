@@ -1,17 +1,17 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-appstore-reopen-perf';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261007-shell-v2-workjet-project-config';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261007-shell-v2-workjet-project-config';
+import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-workjet-project-config';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-workjet-project-config';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-workjet-project-config';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-workjet-project-config';
+import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-workjet-project-config';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261007-shell-v2-appstore-reopen-perf';
+} from './shared/app-lifecycle.js?v=20261007-shell-v2-workjet-project-config';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -20,20 +20,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261007-shell-v2-appstore-reopen-perf';
+} from './shared/permissions.js?v=20261007-shell-v2-workjet-project-config';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261007-shell-v2-appstore-reopen-perf';
+} from './shared/branding.js?v=20261007-shell-v2-workjet-project-config';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261007-shell-v2-workjet-project-config';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261007-shell-v2-appstore-reopen-perf';
+} from './shared/presentation.js?v=20261007-shell-v2-workjet-project-config';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -44,9 +44,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { createDocumentsFacade } from './shared/documents.js?v=20261007-shell-v2-appstore-reopen-perf';
+} from './shared/shell-permissions-ui.js?v=20261007-shell-v2-workjet-project-config';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261007-shell-v2-workjet-project-config';
+import { createDocumentsFacade } from './shared/documents.js?v=20261007-shell-v2-workjet-project-config';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -54,16 +54,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261007-shell-v2-appstore-reopen-perf';
+} from './shared/maintenance-state.js?v=20261007-shell-v2-workjet-project-config';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261007-shell-v2-appstore-reopen-perf';
+} from './shared/workspace-session.js?v=20261007-shell-v2-workjet-project-config';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261007-shell-v2-appstore-reopen-perf';
+} from './shared/taskbar-pins.js?v=20261007-shell-v2-workjet-project-config';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -71,10 +71,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261007-shell-v2-appstore-reopen-perf';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261007-shell-v2-workjet-project-config';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261007-shell-v2-appstore-reopen-perf';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261007-shell-v2-workjet-project-config';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261007-shell-v2-workjet-project-config';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -82,8 +82,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261007-shell-v2-appstore-reopen-perf';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261007-shell-v2-appstore-reopen-perf';
+} from './shared/startup-deadlines.js?v=20261007-shell-v2-workjet-project-config';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261007-shell-v2-workjet-project-config';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -101,7 +101,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261007-shell-v2-appstore-reopen-perf';
+const APP_BUILD = '20261007-shell-v2-workjet-project-config';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13739,7 +13739,11 @@ async function workjetProjectControl(request = {}) {
   }
 
   if (action === 'project.list') {
-    assertWorkjetProjectPayloadKeys(request, new Set(['action']));
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'includeConfiguration']));
+    if (Object.hasOwn(request, 'includeConfiguration') && typeof request.includeConfiguration !== 'boolean') {
+      throw new Error('Invalid Workjet project includeConfiguration.');
+    }
+    const includeConfiguration = request.includeConfiguration === true;
     const commandId = `cmd_workjet_project_list_${newId()}`;
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
@@ -13805,6 +13809,7 @@ async function workjetProjectControl(request = {}) {
       WORKJET_PROJECT_CONTROL_MAX_RESULTS,
       workingCopies,
       projectDocs,
+      { includeConfiguration },
     );
     assertCurrentIdentity();
     if (projects.length !== count) {
@@ -13813,6 +13818,45 @@ async function workjetProjectControl(request = {}) {
       });
     }
     return { action: 'project.list', projects, count, truncated: false };
+  }
+
+  if (action === 'project.configure') {
+    assertWorkjetProjectPayloadKeys(request, new Set([
+      'action', 'commandId', 'projectId', 'title',
+      'description', 'repoUrl', 'publicUrl', 'info', 'jourFixe',
+    ]));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const title = boundedWorkjetProjectText(request.title, 'title', 256);
+    const payload = { project_id: projectId, name: title, ...boundedWorkjetProjectMetadata(request) };
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the configuration was delivered.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: 'ctox.workjet.project.upsert',
+      record_id: projectId,
+      payload,
+      client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentIdentity();
+    const nativeProject = receipt?.result?.project;
+    if (receipt?.command_id !== commandId || receipt.status !== 'completed' || receipt.ok !== true
+      || receipt.target_record_id !== projectId || receipt.result?.ok !== true
+      || receipt.result?.collection !== 'workjet_projects'
+      || nativeProject?.id !== projectId || nativeProject?.name !== title
+      || nativeProject?.owner_user_id !== ownerUserId) {
+      throw new Error('Workjet project configuration returned an uncorrelated or unsuccessful receipt.');
+    }
+    const project = boundedWorkjetProjectResult(nativeProject, { includeConfiguration: true });
+    if (!project) throw new Error('Workjet project configuration returned no native project.');
+    return { action, commandId, project };
   }
 
   if (action === 'project.create') {
@@ -13976,7 +14020,7 @@ async function readWorkjetProjectListRows(bridge, query, requireRevision, deadli
   return rows;
 }
 
-async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null) {
+async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null, { includeConfiguration = false } = {}) {
   const collection = state.db?.collection?.('workjet_projects');
   const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId } },
@@ -13984,7 +14028,7 @@ async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = 
   }).exec();
   const projects = docs
     .map((doc) => {
-      const project = boundedWorkjetProjectResult(doc?.toJSON?.() || doc);
+      const project = boundedWorkjetProjectResult(doc?.toJSON?.() || doc, { includeConfiguration });
       if (!project) return null;
       return Object.freeze({
         ...project,
@@ -14133,7 +14177,7 @@ async function workjetProjectChildCommandId(parentCommandId, kind) {
   return `cmd_workjet_${kind.replaceAll('-', '_')}_${hex}`;
 }
 
-function boundedWorkjetProjectResult(value) {
+function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {}) {
   if (!value || typeof value !== 'object' || value._deleted === true || value.is_deleted === true) {
     return null;
   }
@@ -14145,7 +14189,77 @@ function boundedWorkjetProjectResult(value) {
   if (Number.isFinite(createdAtMs) && createdAtMs >= 0) {
     result.createdAt = new Date(createdAtMs).toISOString();
   }
+  if (!includeConfiguration) return Object.freeze(result);
+  const metadata = boundedWorkjetProjectMetadata({
+    ...(Object.hasOwn(value, 'description') ? { description: value.description } : {}),
+    ...(Object.hasOwn(value, 'repo_url') ? { repoUrl: value.repo_url } : {}),
+    ...(Object.hasOwn(value, 'public_url') ? { publicUrl: value.public_url } : {}),
+    ...(Object.hasOwn(value, 'info') ? { info: value.info } : {}),
+    ...(Object.hasOwn(value, 'jour_fixe') ? { jourFixe: value.jour_fixe } : {}),
+  });
+  for (const [nativeKey, key] of [
+    ['description', 'description'], ['repo_url', 'repoUrl'], ['public_url', 'publicUrl'],
+    ['info', 'info'], ['jour_fixe', 'jourFixe'],
+  ]) {
+    if (Object.hasOwn(metadata, nativeKey)) result[key] = metadata[nativeKey];
+  }
   return Object.freeze(result);
+}
+
+function boundedWorkjetProjectMetadata(request) {
+  const result = {};
+  for (const [key, nativeKey] of [
+    ['description', 'description'], ['repoUrl', 'repo_url'], ['publicUrl', 'public_url'],
+    ['info', 'info'], ['jourFixe', 'jour_fixe'],
+  ]) {
+    if (!Object.hasOwn(request, key)) continue;
+    const value = request[key];
+    if (value === null) { result[nativeKey] = null; continue; }
+    if (key === 'info') {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('Invalid Workjet project info.');
+      }
+      assertWorkjetProjectPayloadKeys(value, new Set(['description', 'goal', 'phase', 'status']));
+      const info = {};
+      for (const [field, limit] of [['description', 4096], ['goal', 4096], ['phase', 128], ['status', 128]]) {
+        if (Object.hasOwn(value, field) && value[field] !== null) {
+          const text = value[field];
+          const multiline = field === 'description' || field === 'goal';
+          if (typeof text !== 'string' || [...text.trim()].length > limit
+            || (multiline ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u : /[\u0000-\u001f\u007f]/u).test(text)) {
+            throw new Error(`Invalid Workjet project info.${field}.`);
+          }
+          info[field] = text.trim();
+        }
+      }
+      result[nativeKey] = Object.freeze(info);
+    } else if (key === 'jourFixe') {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('Invalid Workjet project jourFixe.');
+      }
+      assertWorkjetProjectPayloadKeys(value, new Set(['weekday', 'time', 'timezone']));
+      const time = boundedWorkjetProjectText(value.time, 'jourFixe.time', 5);
+      const timezone = Object.hasOwn(value, 'timezone')
+        ? boundedWorkjetProjectText(value.timezone, 'jourFixe.timezone', 128) : 'Europe/Berlin';
+      if (!Number.isInteger(value.weekday) || value.weekday < 1 || value.weekday > 7
+        || !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time)) {
+        throw new Error('Invalid Workjet project jourFixe weekday or time.');
+      }
+      // The native typed handler validates the IANA zone and owns scheduling.
+      result[nativeKey] = Object.freeze({ weekday: value.weekday, time, timezone });
+    } else {
+      const text = boundedWorkjetProjectText(value, key, key === 'description' ? 4096 : 2048,
+        { allowEmpty: key === 'description' });
+      if (key !== 'description') {
+        const url = new URL(text);
+        if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) {
+          throw new Error(`Invalid Workjet project ${key}.`);
+        }
+      }
+      result[nativeKey] = text;
+    }
+  }
+  return result;
 }
 
 function boundedWorkjetProjectText(value, field, maxLength, { allowEmpty = false } = {}) {

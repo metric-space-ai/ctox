@@ -4,7 +4,7 @@
 //! decision. Production policy and checkpoint-stream wiring remain required.
 use super::auth::session_handoff::verify_fresh_session_handoff_permit;
 pub use crate::contracts::SessionHandoffRequest as SessionHandoffGateRequest;
-use crate::contracts::{SessionHandoffPermit, SessionHandoffPhase};
+use crate::contracts::SessionHandoffPermit;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt;
 use std::sync::Arc;

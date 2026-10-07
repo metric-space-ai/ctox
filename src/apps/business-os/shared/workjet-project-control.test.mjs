@@ -20,7 +20,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 4);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 5);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -217,6 +217,114 @@ test('Workjet project create/list is idempotent across optional copies and compu
   );
 });
 
+function projectConfigurationFixture(changeReceipt = () => {}) {
+  const commands = [];
+  const state = {
+    session: { id: 'owner-1' },
+    db: { collection: () => ({}) },
+    sync: { async startCollection() { return {}; } },
+    commandBus: {
+      async dispatch(command) {
+        commands.push(command);
+        const project = {
+          id: command.payload.project_id, name: command.payload.name,
+          owner_user_id: 'owner-1', status: 'active', created_at_ms: 1_700_000_000_000,
+        };
+        for (const field of ['description', 'repo_url', 'public_url', 'info', 'jour_fixe']) {
+          if (Object.hasOwn(command.payload, field) && command.payload[field] !== null) {
+            project[field] = command.payload[field];
+          }
+        }
+        const receipt = {
+          command_id: command.id, target_record_id: command.payload.project_id,
+          status: 'completed', ok: true,
+          result: { ok: true, collection: 'workjet_projects', project },
+        };
+        changeReceipt(receipt, state);
+        return receipt;
+      },
+    },
+  };
+  const context = { state, actorContext: (session) => ({ id: session.id }), URL };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return {
+    commands,
+    invoke: async (request) => JSON.parse(JSON.stringify(await context.invoke(request))),
+  };
+}
+
+function projectConfigurationRequest(extra = {}) {
+  return {
+    action: 'project.configure', commandId: 'project-config-1',
+    projectId: 'project-1', title: 'CTOX', ...extra,
+  };
+}
+
+test('project configuration forwards bounded metadata and returns native fields to Workjet', async () => {
+  const fixture = projectConfigurationFixture();
+  const result = await fixture.invoke(projectConfigurationRequest({
+    repoUrl: 'https://github.com/metric-space-ai/ctox', publicUrl: 'https://ctox.dev',
+    info: { description: 'Durable work', goal: 'All projects usable\nPersist after reopen', phase: 'delivery', status: 'active' },
+    jourFixe: { weekday: 3, time: '09:30' },
+  }));
+  const command = JSON.parse(JSON.stringify(fixture.commands[0]));
+  assert.equal(command.command_type, 'ctox.workjet.project.upsert');
+  assert.equal(command.record_id, 'project-1');
+  assert.equal(command.client_context.actor.id, 'owner-1');
+  assert.deepEqual(command.payload, {
+    project_id: 'project-1', name: 'CTOX',
+    repo_url: 'https://github.com/metric-space-ai/ctox', public_url: 'https://ctox.dev',
+    info: { description: 'Durable work', goal: 'All projects usable\nPersist after reopen', phase: 'delivery', status: 'active' },
+    jour_fixe: { weekday: 3, time: '09:30', timezone: 'Europe/Berlin' },
+  });
+  assert.equal(result.action, 'project.configure');
+  assert.equal(result.project.repoUrl, command.payload.repo_url);
+  assert.equal(result.project.publicUrl, command.payload.public_url);
+  assert.deepEqual(result.project.info, command.payload.info);
+  assert.deepEqual(result.project.jourFixe, command.payload.jour_fixe);
+  assert.equal('ownerUserId' in result.project, false);
+});
+
+test('configuration preserves omission versus explicit null at the command boundary', async () => {
+  const omitted = projectConfigurationFixture();
+  await omitted.invoke(projectConfigurationRequest());
+  assert.deepEqual(Object.keys(omitted.commands[0].payload).sort(), ['name', 'project_id']);
+  const cleared = projectConfigurationFixture();
+  await cleared.invoke(projectConfigurationRequest({ repoUrl: null, publicUrl: null, info: null, jourFixe: null }));
+  for (const key of ['repo_url', 'public_url', 'info', 'jour_fixe']) {
+    assert.equal(cleared.commands[0].payload[key], null);
+  }
+});
+
+test('project configuration rejects forged authority and invalid metadata before dispatch', async () => {
+  for (const extra of [
+    { ownerUserId: 'foreign' }, { owner_user_id: 'foreign' }, { archived: false },
+    { repoUrl: 'https://user:password@example.org/project' }, { publicUrl: 'javascript:alert(1)' },
+    { info: { administrator: true } }, { jourFixe: { weekday: 0, time: '09:30' } },
+    { jourFixe: { weekday: 3, time: '24:00' } }, { jourFixe: { weekday: 3, time: '09:30', owner: 'foreign' } },
+  ]) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest(extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('project configuration rejects wrong receipts, foreign projects and session replacement', async () => {
+  for (const mutate of [
+    (receipt) => { receipt.command_id = 'other-command'; },
+    (receipt) => { receipt.target_record_id = 'other-project'; },
+    (receipt) => { receipt.result.collection = 'other-collection'; },
+    (receipt) => { receipt.result.project.owner_user_id = 'foreign'; },
+    (receipt) => { receipt.result.project.id = 'other-project'; },
+    (receipt) => { receipt.result.project.name = 'other-title'; },
+    (receipt) => { receipt.status = 'failed'; },
+    (receipt, state) => { state.session = { id: 'owner-1' }; },
+  ]) {
+    const fixture = projectConfigurationFixture(mutate);
+    await assert.rejects(fixture.invoke(projectConfigurationRequest()), /uncorrelated|session changed/);
+  }
+});
+
 function nativeProjectListFixture({ start, dispatch, exec } = {}) {
   const starts = [];
   const commands = [];
@@ -270,11 +378,39 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
   };
   let sequence = 0;
   const context = { state, actorContext: (session) => ({ id: session.id }),
-    newId: () => `list-${++sequence}`, AbortController, setTimeout, clearTimeout };
+    newId: () => `list-${++sequence}`, AbortController, URL, setTimeout, clearTimeout };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return { state, context, starts, commands, reads, rows, peers,
-    invoke: async () => JSON.parse(JSON.stringify(await context.invoke({ action: 'project.list' }))) };
+    invoke: async (request = {}) => JSON.parse(JSON.stringify(await context.invoke({ action: 'project.list', ...request }))) };
 }
+
+test('project list preserves the strict legacy shape until configuration is explicitly requested', async () => {
+  const fixture = nativeProjectListFixture();
+  Object.assign(fixture.rows.workjet_projects[0], {
+    created_at_ms: 1_700_000_000_000,
+    description: 'Native description', repo_url: 'https://example.test/repo',
+    public_url: 'https://example.test', info: { goal: 'Saved native goal' },
+    jour_fixe: { weekday: 1, time: '09:00', timezone: 'Europe/Berlin' },
+  });
+  const legacy = await fixture.invoke();
+  assert.deepEqual(Object.keys(legacy.projects[0]).sort(), ['createdAt', 'id', 'title', 'workingCopies']);
+  assert.deepEqual(await fixture.invoke({ includeConfiguration: false }), legacy);
+  const enhanced = await fixture.invoke({ includeConfiguration: true });
+  assert.equal(enhanced.projects[0].repoUrl, 'https://example.test/repo');
+  assert.equal(enhanced.projects[0].publicUrl, 'https://example.test');
+  assert.deepEqual(enhanced.projects[0].info, { goal: 'Saved native goal' });
+  assert.deepEqual(enhanced.projects[0].jourFixe, { weekday: 1, time: '09:00', timezone: 'Europe/Berlin' });
+  assert.deepEqual(enhanced.projects[0].workingCopies, legacy.projects[0].workingCopies);
+  assert.ok(fixture.commands.every(({ command }) => !Object.hasOwn(command.payload, 'includeConfiguration')));
+});
+
+test('project list rejects malformed configuration negotiation before native dispatch', async () => {
+  const fixture = nativeProjectListFixture();
+  for (const value of ['true', 1, null, {}]) {
+    await assert.rejects(fixture.invoke({ includeConfiguration: value }), /includeConfiguration/);
+  }
+  assert.equal(fixture.commands.length, 0);
+});
 
 test('project list starts all bridges concurrently and skips historical command replication', async () => {
   const waiting = [];
