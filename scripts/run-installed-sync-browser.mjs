@@ -8,18 +8,22 @@ import { validateConfig, measureShellRollback, runAcceptance, stopOwnedAcceptanc
 
 const [configPath, playwrightRoot] = process.argv.slice(2);
 if (!configPath || !playwrightRoot || !process.env.TMPDIR || !process.env.CARGO_TARGET_DIR)
-  throw new Error('Use the admitted GPU launcher with private config and task-local Playwright1.64.0');
+  throw new Error('Use the admitted GPU launcher with private config and the verified shared Playwright1.60.0/Chromium cache');
 process.umask(0o077); // All browser/profile/native child outputs remain owner-private.
 const config = validateConfig(JSON.parse(readFileSync(configPath)), configPath);
-const tools = realpathSync(playwrightRoot), temporary = realpathSync(process.env.TMPDIR);
-if (!tools.startsWith(temporary + '/') || JSON.parse(readFileSync(join(tools, 'package.json'))).version !== '1.64.0')
-  throw new Error('Pinned Playwright package must be installed inside the gate TMPDIR');
+const tools = realpathSync(playwrightRoot);
+const sharedTools = '/mnt/nvme1/build-lane/deps/shell-browser-collection-auth/node_modules/playwright';
+const sharedBrowsers = '/mnt/nvme1/build-lane/deps/shell-browser-collection-auth/browsers';
+if (tools !== realpathSync(sharedTools)
+  || JSON.parse(readFileSync(join(tools, 'package.json'))).version !== '1.60.0'
+  || realpathSync(process.env.PLAYWRIGHT_BROWSERS_PATH || '') !== realpathSync(sharedBrowsers))
+  throw new Error('Reuse the exact verified Playwright1.60.0 package and matching shared Chromium cache');
 const { chromium } = await import(pathToFileURL(join(tools, 'index.mjs')).href);
 const out = join(config.acceptanceBase, `browser-controller-${Date.now()}-${process.pid}`); mkdirSync(out, { mode: 0o700 });
 const receipt = { owner: config.owner, source: config.source, host: config.host,
   launcherPid: process.pid, startedAt: new Date().toISOString(),
   stop: 'first uncaught failure or3000s; own browser group and native groups only',
-  playwright: '1.64.0', maximumClientWorkers: 2, terminal: false, pass: false };
+  playwright: '1.60.0', maximumClientWorkers: 2, terminal: false, pass: false };
 const save = () => writeFileSync(join(out, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
 let server, browser, browserPid, browserPgid;
 const stop = async () => {
@@ -55,9 +59,10 @@ try {
     .filter(key => process.env[key]).map(key => [key, process.env[key]]));
   Object.assign(browserEnv, { HOME: browserHome, XDG_CONFIG_HOME: join(browserHome, 'config'),
     XDG_DATA_HOME: join(browserHome, 'data'), XDG_CACHE_HOME: join(browserHome, 'cache') });
-  // The distro launcher rewrites standard descriptors via shell subprocesses and host HOME.
-  // Use its verified existing real binary with a private minimal environment; no download.
-  server = await chromium.launchServer({ executablePath: '/opt/google/chrome/chrome', headless: true,
+  // Reuse the matched package/browser that passed Shell's real Chromium checks.
+  // System Chrome146 SIGTRAP startup did not measure sync; no fresh browser download.
+  receipt.browserExecutable = chromium.executablePath(); save();
+  server = await chromium.launchServer({ executablePath: chromium.executablePath(), headless: true,
     env: browserEnv, args: ['--enable-logging=stderr'] });
   receipt.phase = 'browser-group-check'; save();
   browserPid = server.process().pid;

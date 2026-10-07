@@ -26,24 +26,27 @@ python3 scripts/prepare-installed-sync-tenant.py \
 The advanced host runner needs filesystem/process access. Playwright CLI's
 `run-code` only evaluates a function expression and does not provide imports;
 use the standalone Playwright library launcher for this unit, without a test
-framework or a shared browser. The package is pinned to1.64.0 inside the gate's
-temporary directory; gpu3's existing `/home/metricspace/.local/bin/node` is20.20.1.
-Its ordinary SSH `node` is12 and must not be used for the browser controller.
-Install the package only during admission (ignore lifecycle scripts and use
-the existing `/opt/google/chrome/chrome` with private HOME/config/cache and a minimal environment); no system installation or browser download. The public wrapper rewrites standard descriptors through shell
-subprocesses and uses the host HOME; the direct installed binary preserves the
-controller's descriptor ownership. SIGTRAP startup failures remain separate
-from sync findings until actual measurements run.
+framework or a shared browser. Reuse the **matched existing** Playwright1.60.0
+package and Chromium148 cache that passed Shell's real fixtures:
 
-Inside that admitted unit:
+- package: `/mnt/nvme1/build-lane/deps/shell-browser-collection-auth/node_modules/playwright`
+- `PLAYWRIGHT_BROWSERS_PATH`: `/mnt/nvme1/build-lane/deps/shell-browser-collection-auth/browsers`
+- Node: `/mnt/nvme1/build-lane/cache/node-v24.13.1-linux-x64/bin/node`
+
+The controller verifies those exact real paths and package version, then uses
+`chromium.executablePath()` from that package. It creates its own browser and
+private HOME/config/cache. The shared dependency cache is read-only; no new npm
+installation, browser download, global profile or system Chrome substitution.
+The earlier Playwright1.64/systemChrome146 SIGTRAP failures remain preserved as
+launcher/environment evidence, not sync findings.
+
+Inside the admitted unit:
 
 ```
-PATH=/home/metricspace/.local/bin:$PATH npm install \
-  --prefix "$TMPDIR/playwright-tools" --ignore-scripts --no-audit --no-fund \
-  --save-exact playwright@1.64.0
-/home/metricspace/.local/bin/node scripts/run-installed-sync-browser.mjs \
-  <private-parent>/runner.private.json \
-  "$TMPDIR/playwright-tools/node_modules/playwright"
+export PLAYWRIGHT_BROWSERS_PATH=/mnt/nvme1/build-lane/deps/shell-browser-collection-auth/browsers
+/mnt/nvme1/build-lane/cache/node-v24.13.1-linux-x64/bin/node \
+  scripts/run-installed-sync-browser.mjs <private-parent>/runner.private.json \
+  /mnt/nvme1/build-lane/deps/shell-browser-collection-auth/node_modules/playwright
 ```
 
 The owned browser launcher creates two separate Chromium contexts. It opens **installed**
