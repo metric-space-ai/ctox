@@ -164,6 +164,7 @@ fn legacy_schedule_rows_migrate_without_changing_utc_or_identity() -> Result<()>
 fn unchanged_schedule_ensure_preserves_due_deadline_and_run_history() -> Result<()> {
     let root = TestRoot::new();
     let first = ensure_task_with_calendar(&root.0, request(), berlin(120))?;
+    let prior_run = emit_task_now(&root.0, &first.task_id)?;
     let conn = open_schedule_db(&root.0)?;
     let due_at = now_utc() - Duration::minutes(1);
     let due_text = due_at.to_rfc3339();
@@ -183,6 +184,12 @@ fn unchanged_schedule_ensure_preserves_due_deadline_and_run_history() -> Result<
     assert_eq!(kept.updated_at, due.updated_at);
     assert_eq!(kept.created_at, due.created_at);
     assert_eq!(list_due_tasks(&conn, &now_utc())?.len(), 1);
+    let retained_runs: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM scheduled_task_runs WHERE task_id=?1 AND run_id=?2",
+        params![first.task_id, prior_run.run_id],
+        |row| row.get(0),
+    )?;
+    assert_eq!(retained_runs, 1);
 
     // A real appointment change still calculates a new deadline without
     // deleting its previous run timestamp or creating another task.
