@@ -88,3 +88,39 @@ A real ctox.dev test appointment must prepare a deck automatically, play its
 audio, deliver a clicked comment to that same supervisor, persist a spoken
 sentence, and save the owner-confirmed list as the durable goal referenced by
 the next preparation. Source fixtures and merges alone do not prove those steps.
+
+## Project configuration and weekly-report schedule
+
+`ctox.workjet.project.upsert` also accepts `info.summary` (bounded to 4096
+characters); legacy `info.description` and `info.status` remain compatible.
+Missing fields preserve values, explicit null clears the whole info/appointment.
+The native and browser `workjet_projects` v2 schemas and complete identity
+migration chain retain prior ownership, revisions, deleted rows and configuration.
+Both sides consume the project configuration corpus next to the wire fixtures.
+
+Before a native schedule tick, committed active projects with a registered
+supervisor UUID and an active, permitted native owner are reconciled into one
+weekly schedule each. The configured IANA zone and local appointment time feed
+the existing calendar. The native `supervisor.turn.submit` command invokes the
+existing Threads producer, so the report is a durable task/message in that same
+supervisor chat. An occurrence ID is stable across retries, including a crash
+between command acceptance and the schedule receipt. No browser timer, guessed
+thread identity, new provider grant or external effect is introduced.
+
+Unchanged deadlines and operator pauses survive reconciliation. Archive, deletion,
+cleared appointment or lost native binding/owner authority disables the schedule.
+Restoring configuration does not silently reverse that pause; the explicit native
+`ctox schedule resume --task-id <id>` command re-enables it. Dispatch rechecks the
+current project, registered thread, appointment and owner policy. Historical runs
+remain retained. The test path is scoped to one task:
+
+```sh
+ctox schedule tick --task-id <id> --at <RFC3339-test-time>
+```
+
+Use an isolated test root; this is an operator action and actually admits the
+report when due. Omitting `--task-id` with a test time is rejected. It uses the
+normal native command/receipt/queue path, without running the model in tests.
+This slice supplies the requested weekly report at the appointment. T−2 h deck
+preparation, the common JourFix skill/tools, meeting persistence and confirmed-goal
+installation remain the meeting-runtime follow-up described above.

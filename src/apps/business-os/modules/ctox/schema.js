@@ -567,7 +567,7 @@ export const collections = {
   },
   workjet_projects: {
 
-    version: 1,
+    version: 2,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -579,6 +579,7 @@ export const collections = {
       info: {
         type: 'object',
         properties: {
+          summary: { type: 'string', maxLength: 4096 },
           description: { type: 'string', maxLength: 4096 },
           goal: { type: 'string', maxLength: 4096 },
           phase: { type: 'string', maxLength: 128 },
@@ -812,7 +813,8 @@ export const collections = {
 export const migrationStrategies = {
   // Optional configuration fields leave existing project identity and state intact.
   workjet_projects: {
-    1: (oldDoc) => oldDoc
+    1: (oldDoc) => oldDoc,
+    2: (oldDoc) => oldDoc
   },
   workjet_computers: {
     1: (oldDoc) => ({
