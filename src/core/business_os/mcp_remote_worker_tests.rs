@@ -118,6 +118,14 @@ fn computer_count(root: &Path) -> anyhow::Result<usize> {
 fn remote_worker_target_enrollment_issues_one_real_native_computer_and_projection(
 ) -> anyhow::Result<()> {
     let root = fixture()?;
+    std::fs::create_dir_all(root.path().join("runtime"))?;
+    let projection = rusqlite::Connection::open(store::rxdb_store_path(root.path()))?;
+    projection.execute_batch(
+        "CREATE TABLE ctox_business_os__workjet_computers__v0 (
+        id TEXT PRIMARY KEY NOT NULL, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0,
+        lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL);",
+    )?;
+    drop(projection);
     let enroll = enrollment();
     let enrolled = call(root.path(), "owner", enroll.clone())?;
     let id = enrolled["target"]["targetComputerId"].as_str().unwrap();
