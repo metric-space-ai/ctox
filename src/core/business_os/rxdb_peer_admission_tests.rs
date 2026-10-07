@@ -87,3 +87,178 @@ fn current_revocation_and_store_failure_are_enforced_before_session_admission() 
     );
     Ok(())
 }
+
+#[test]
+fn owner_browser_can_write_commands_but_foreign_peer_and_command_cannot() -> anyhow::Result<()> {
+    use crate::business_os::policy::BusinessOsPermission;
+
+    let root = tempfile::tempdir()?;
+    let foreign_root = tempfile::tempdir()?;
+    let at_ms = now_ms() as i64;
+    let (owner_token, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner-browser",
+        "Owner",
+        "chef",
+        at_ms,
+    )?;
+    // A foreign issuer cannot acquire authority by claiming the same actor/role.
+    let (foreign_token, _) = store::issue_business_os_capability_token_for_managed_user(
+        foreign_root.path(),
+        "owner-browser",
+        "Owner",
+        "chef",
+        at_ms,
+    )?;
+    for (token, expected) in [
+        (&owner_token, WebRTCPeerSessionValidation::Accept),
+        (&foreign_token, WebRTCPeerSessionValidation::Reject),
+    ] {
+        let protocol = serde_json::json!({
+            "peerSession": {"sessionId": "owner-peer", "capabilityToken": token}
+        });
+        assert_eq!(
+            validate_device_bound_peer_session(root.path(), &protocol, None),
+            expected
+        );
+        let allowed = expected == WebRTCPeerSessionValidation::Accept;
+        assert_eq!(
+            store::check_webrtc_collection_permission(
+                root.path(),
+                token,
+                "business_commands",
+                BusinessOsPermission::DataRead,
+            )?,
+            allowed
+        );
+        assert_eq!(
+            threads::may_accept_peer_write(root.path(), token, "business_commands"),
+            allowed
+        );
+        let command = serde_json::json!({"client_context": {"capability_token": token}});
+        assert_eq!(
+            threads::may_accept_peer_document_write(
+                root.path(),
+                token,
+                "business_commands",
+                &command,
+            ),
+            allowed
+        );
+    }
+    let foreign_command = serde_json::json!({
+        "client_context": {"capability_token": foreign_token}
+    });
+    assert!(!threads::may_accept_peer_document_write(
+        root.path(),
+        &owner_token,
+        "business_commands",
+        &foreign_command,
+    ));
+    for collection in ["ctox_queue_tasks", "workjet_projects"] {
+        assert!(!threads::may_accept_peer_write(
+            root.path(),
+            &owner_token,
+            collection
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn interrupted_actor_lookup_is_unavailable_then_recovers_without_widening_policy(
+) -> anyhow::Result<()> {
+    use crate::business_os::policy::BusinessOsPermission;
+
+    let root = tempfile::tempdir()?;
+    let at_ms = now_ms() as i64;
+    let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner-browser",
+        "Owner",
+        "chef",
+        at_ms,
+    )?;
+    let conn = store::open_store(root.path())?;
+    store::with_current_webrtc_capability_signer(root.path(), |secret| {
+        let check = || {
+            store::check_webrtc_collection_permission_from_connection(
+                &conn,
+                &token,
+                secret,
+                "business_commands",
+                BusinessOsPermission::DataRead,
+                at_ms,
+            )
+        };
+        assert!(check()?);
+        // Interrupt the real role/epoch SELECT, not a mocked authorization hook.
+        conn.progress_handler(1, Some(|| true));
+        let failure =
+            check().expect_err("interrupted native lookup must not become a policy denial");
+        assert!(failure.to_string().contains("interrupted"));
+        assert!(
+            !store::webrtc_capability_allows_collection_permission_from_connection(
+                &conn,
+                &token,
+                secret,
+                "business_commands",
+                BusinessOsPermission::DataRead,
+                at_ms,
+            )
+        );
+        conn.progress_handler(0, None::<fn() -> bool>);
+        assert!(check()?);
+        assert!(!store::check_webrtc_collection_permission_from_connection(
+            &conn,
+            "foreign-or-invalid",
+            secret,
+            "business_commands",
+            BusinessOsPermission::DataRead,
+            at_ms,
+        )?);
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn current_owner_epoch_role_and_active_state_remain_definitive_denials() -> anyhow::Result<()> {
+    use crate::business_os::policy::BusinessOsPermission;
+
+    for change in [
+        "UPDATE business_users SET capability_epoch = capability_epoch + 1 WHERE user_id = ?1",
+        "UPDATE business_users SET role = 'viewer' WHERE user_id = ?1",
+        "UPDATE business_users SET active = 0 WHERE user_id = ?1",
+    ] {
+        let root = tempfile::tempdir()?;
+        let at_ms = now_ms() as i64;
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "owner-browser",
+            "Owner",
+            "chef",
+            at_ms,
+        )?;
+        let conn = store::open_store(root.path())?;
+        store::with_current_webrtc_capability_signer(root.path(), |secret| {
+            let check = |when| {
+                store::check_webrtc_collection_permission_from_connection(
+                    &conn,
+                    &token,
+                    secret,
+                    "business_commands",
+                    BusinessOsPermission::DataRead,
+                    when,
+                )
+            };
+            assert!(check(at_ms)?);
+            // Ordinary Owner tokens do not inherit the paired-device expiry exception.
+            assert!(!check(at_ms + 13 * 60 * 60 * 1000)?);
+            conn.execute(change, ["owner-browser"])?;
+            assert!(!check(at_ms)?);
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
