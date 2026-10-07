@@ -10,6 +10,8 @@ use std::{future::Future, pin::Pin};
 
 #[path = "guest_registry_command_tests.rs"]
 mod command_tests;
+#[path = "guest_registry_source_journal_tests.rs"]
+mod source_journal_tests;
 
 fn enrollment_control_fixture() -> (tempfile::TempDir, Arc<NativeGuestRegistry>, PathBuf, String) {
     let (root, registry, assignment) = fixture();

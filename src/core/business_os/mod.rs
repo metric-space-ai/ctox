@@ -30,7 +30,9 @@ pub(crate) use guest_registry::accounts::{
     configure_provider_assignments, revoke_provider_assignment, ProviderAssignmentInput,
 };
 #[cfg(unix)]
-pub(crate) use guest_registry::{NativeGuestAssignment, NativeGuestExecution, NativeGuestRegistry};
+pub(crate) use guest_registry::{
+    NativeGuestAssignment, NativeGuestExecution, NativeGuestRegistry, NativeSourceJournalReceipt,
+};
 mod guest_runtime;
 pub(crate) use guest_runtime::run_native_guest_desktop;
 pub(crate) mod harness_cockpit;

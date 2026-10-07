@@ -120,6 +120,42 @@ start a replacement provider session without lifecycle reconciliation.
 Source/target handoff enrollment, complete artifact capture, authorized
 checkpoint transport and continuation of the original session remain open.
 
+## Queue-owned source journal publication
+
+The actual queue turn owner now consumes its native producer after a successful
+reply, before persisting the successful worker-attempt/assistant marker and
+before the service can retire its lease. Both the ordinary context path and
+the plain-prompt path invoke checked native quiescence. A failed or ambiguous
+shutdown, missing journal, stale command/account/policy/lease or invalid journal
+rejects that completion; it cannot fall back to a fresh session.
+
+The retired Core journal reader and exact capture-only provider owner publish
+the original validated bytes through the shared Sync kernel's content-addressed
+`CheckpointStore`, under a host-created private source directory. The native
+policy table `business_native_source_journals` stores the authority binding,
+artifact reference and private store location, not another journal payload.
+Renderer/model requests cannot supply that location. Publication holds the actual worker,
+account, policy and guest-controller guards. It binds the source instance,
+canonical owner/profile/project/chat, actual job/provider session, ownership
+generation and admission policy revision. A retry returns the same receipt only
+for identical bytes and bindings; conflicting input requires reconciliation.
+Receipts and progress events contain identifiers/hashes, never journal payloads.
+
+Native capture retires model execution. If the existing continuity mechanism
+requests another turn, its durable refresh demand remains pending rather than
+invoking this retired producer or creating a replacement. Ordinary producers
+and externally supplied sessions retain their existing owners.
+
+This is durable private journal input, not a complete checkpoint or a disclosure,
+receive or execution grant. No provider-state blob is fabricated from journal
+syntax. Workspace/files/attachments, provider continuation, external effects,
+authorized source/target binding enrollment and protected transport remain
+required. Artifact fsync, the policy transaction and assistant/worker store have
+separate commits: failed metadata publication can leave a private orphan blob;
+a later authority or reply-persistence failure can leave private journal
+input without a successful worker marker and needs reconciliation. Installed
+model/VM/two-host acceptance remains separate from the source storage regressions.
+
 ## Native producer lifetime
 
 The production first-turn connection preserves three separate owners:
