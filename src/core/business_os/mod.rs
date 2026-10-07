@@ -58,6 +58,7 @@ mod person_research_command;
 mod person_research_gap_closure;
 pub mod policy;
 mod populated_store_recovery;
+mod workjet_identity;
 mod project_chats;
 mod project_crew;
 pub(crate) use project_crew::project_crew_member_for_task;
