@@ -26,6 +26,8 @@ use time::format_description::well_known::Rfc3339;
 pub const PORTABLE_CODEX_JOURNAL_FORMAT: &str = "ctox-codex-rollout-jsonl";
 /// Version of the strict validation contract in this crate.
 pub const PORTABLE_CODEX_JOURNAL_VERSION: u32 = 1;
+/// Native CTOX writer identity; native manifests also bind version and route.
+pub const PORTABLE_CTOX_HARNESS: &str = "ctox-core";
 
 /// Upper bounds enforced before any journal record is decoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

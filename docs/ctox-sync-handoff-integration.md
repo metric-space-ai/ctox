@@ -117,6 +117,11 @@ at most two packing workers; every Git command is bounded and the complete
 capture has a ninety-second deadline and the existing per-blob budget.
 Private metadata links the exact capture and workspace revision to the
 immutable manifest. A conflicting retry cannot replace it.
+The shared checkpoint validator accepts the canonical native CTOX Core writer in
+addition to legacy Codex journals. Native journal metadata must match the
+manifest's writer version and model route on capture, publication and load;
+identity, syntax, limits and unsupported-harness checks remain in force.
+
 
 Ordinary enrolled chats without a native workspace assignment remain explicitly
 journal-only and emit a checkpoint-unavailable reason. Their working-copy

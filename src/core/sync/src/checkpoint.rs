@@ -4,7 +4,7 @@ use crate::contracts::{
 };
 use ctox_protocol::portable_journal::{
     artifact_ref_for, validate_portable_journal, PortableArtifactRef, PortableJournalExpectation,
-    PortableJournalFormat, PortableJournalLimits,
+    PortableJournalFormat, PortableJournalLimits, ValidatedPortableJournal, PORTABLE_CTOX_HARNESS,
 };
 use ctox_protocol::ThreadId;
 use sha2::{Digest, Sha256};
@@ -25,6 +25,30 @@ const PORTABLE_JOURNAL_LIMITS: PortableJournalLimits = PortableJournalLimits {
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
+fn validate_native_journal_binding(
+    session: &SessionManifest,
+    journal: &ValidatedPortableJournal,
+) -> io::Result<()> {
+    if session.harness != PORTABLE_CTOX_HARNESS {
+        return Ok(());
+    }
+    let metadata = journal
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ctox_protocol::protocol::RolloutItem::SessionMeta(metadata) => Some(&metadata.meta),
+            _ => None,
+        })
+        .ok_or_else(|| invalid("native portable journal metadata missing"))?;
+    if metadata.cli_version != session.harness_version
+        || metadata.model_provider.as_deref() != Some(session.model_route_id.as_str())
+    {
+        return Err(invalid(
+            "native portable journal writer version or route differs from manifest",
+        ));
+    }
+    Ok(())
+}
 fn portable_journal_expectation(
     session: &SessionManifest,
     transport_version: u32,
@@ -43,7 +67,7 @@ pub(crate) fn validate_capture_journal(
     session: &SessionManifest,
     journal_bytes: &[u8],
 ) -> io::Result<PortableArtifactRef> {
-    if session.harness != "codex" {
+    if session.harness != "codex" && session.harness != PORTABLE_CTOX_HARNESS {
         return Err(invalid("unsupported portable session harness"));
     }
     if journal_bytes.len() as u64 > PORTABLE_JOURNAL_LIMITS.max_bytes {
@@ -51,13 +75,14 @@ pub(crate) fn validate_capture_journal(
     }
     let artifact = artifact_ref_for(journal_bytes);
     let expected = portable_journal_expectation(session, 2)?;
-    validate_portable_journal(
+    let validated = validate_portable_journal(
         journal_bytes,
         &artifact,
         &expected,
         &PORTABLE_JOURNAL_LIMITS,
     )
     .map_err(|_| invalid("invalid portable execution journal"))?;
+    validate_native_journal_binding(session, &validated)?;
     Ok(artifact)
 }
 fn hash_valid(hash: &str) -> bool {
@@ -221,7 +246,8 @@ impl CheckpointStore {
     }
     /// Bind every checkpoint history artifact to strict portable journal syntax.
     fn validate_portable_history(&self, manifest: &CheckpointManifest) -> io::Result<()> {
-        if manifest.session.harness != "codex" {
+        if manifest.session.harness != "codex" && manifest.session.harness != PORTABLE_CTOX_HARNESS
+        {
             return Err(invalid("unsupported portable session harness"));
         }
         let expected = portable_journal_expectation(&manifest.session, manifest.version)?;
@@ -240,13 +266,14 @@ impl CheckpointStore {
                 sha256: artifact.sha256.clone(),
                 size_bytes: artifact.size_bytes,
             };
-            validate_portable_journal(
+            let validated = validate_portable_journal(
                 &journal,
                 &expected_artifact,
                 &expected,
                 &PORTABLE_JOURNAL_LIMITS,
             )
             .map_err(|_| invalid("invalid portable execution journal"))?;
+            validate_native_journal_binding(&manifest.session, &validated)?;
         }
         Ok(())
     }

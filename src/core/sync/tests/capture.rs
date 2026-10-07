@@ -133,6 +133,58 @@ async fn capture_records_git_deltas_untracked_files_and_deletions() {
 }
 
 #[tokio::test]
+async fn capture_native_ctox_journal_binds_writer_version_route_and_rejects_foreign_harness() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("native-workspace");
+    fs::create_dir(&workspace).unwrap();
+    git(&workspace, &["init", "-q"]);
+    git(
+        &workspace,
+        &["config", "user.email", "native@example.invalid"],
+    );
+    git(&workspace, &["config", "user.name", "Native fixture"]);
+    fs::write(workspace.join("file.txt"), "native base\n").unwrap();
+    git(&workspace, &["add", "file.txt"]);
+    git(&workspace, &["commit", "-qm", "native base"]);
+    let store = CheckpointStore::open(root.path().join("store"), 1024 * 1024).unwrap();
+    let mut valid = request(&workspace);
+    valid.session.harness = ctox_protocol::portable_journal::PORTABLE_CTOX_HARNESS.into();
+    valid.session.harness_version = "1.0.0".into();
+    valid.session.model_route_id = "test-provider".into();
+    let captured = store.capture(valid).await.unwrap();
+    assert_eq!(store.load(&captured.digest).unwrap(), captured.manifest);
+    for mutation in ["version", "route", "harness", "identity", "truncated"] {
+        let mut invalid = request(&workspace);
+        invalid.session = captured.manifest.session.clone();
+        match mutation {
+            "version" => invalid.session.harness_version = "foreign-version".into(),
+            "route" => invalid.session.model_route_id = "foreign-route".into(),
+            "harness" => invalid.session.harness = "foreign-core".into(),
+            "identity" => {
+                invalid.session.session_id = "22222222-2222-2222-2222-222222222222".into()
+            }
+            "truncated" => {
+                invalid.history[0].pop();
+            }
+            _ => unreachable!(),
+        }
+        assert!(store.capture(invalid).await.is_err(), "{mutation}");
+    }
+    // Stored native history has the same checks; publishing a manifest cannot
+    // bypass version/route validation after a valid original capture.
+    for mutation in ["version", "route", "harness"] {
+        let mut invalid = captured.manifest.clone();
+        match mutation {
+            "version" => invalid.session.harness_version = "foreign-version".into(),
+            "route" => invalid.session.model_route_id = "foreign-route".into(),
+            "harness" => invalid.session.harness = "foreign-core".into(),
+            _ => unreachable!(),
+        }
+        assert!(store.publish(&invalid).is_err(), "{mutation}");
+    }
+}
+
+#[tokio::test]
 async fn capture_fails_closed_outside_a_git_workspace() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
