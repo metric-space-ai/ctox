@@ -224,6 +224,9 @@ fn prompt_revisions_survive_clear_and_never_reuse_a_removed_identity() -> anyhow
 #[test]
 fn foreign_actor_and_foreign_signed_peer_cannot_read_or_configure() -> anyhow::Result<()> {
     let root = fixture()?;
+    let saved = configure(root.path(), "private", 0,
+        json!([{ "kpi_id":"private", "prompt":"Private project metric" }]))?;
+    assert_eq!(saved["status"], "completed");
     rejected(read(root.path(), FOREIGN, "foreign-read"));
     rejected(send(
         root.path(),
@@ -348,5 +351,26 @@ fn failed_state_write_rolls_back_prompt_watermark_and_domain_receipt() -> anyhow
     assert_eq!(saved["status"], "completed");
     assert_eq!(saved["result"]["kpis"]["revision"], 2);
     assert_eq!(saved["result"]["kpis"]["items"][0]["prompt"]["revision"], 2);
+    Ok(())
+}
+
+#[test]
+fn forged_read_fields_or_mismatched_record_routing_do_not_expose_state() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let saved = configure(root.path(), "private", 0,
+        json!([{ "kpi_id":"k", "prompt":"Private project metric" }]))?;
+    assert_eq!(saved["status"], "completed");
+    rejected(send(root.path(), OWNER, "forged-read", "ctox.workjet.project.kpis.read",
+        json!({"project_id":"project-1", "owner_user_id":OWNER})));
+    for kind in ["ctox.workjet.project.kpis.read", "ctox.workjet.project.kpis.configure"] {
+        let body = if kind.ends_with(".read") { json!({"project_id":"project-1"}) }
+            else { configuration("wrong-route", 1, json!([])) };
+        rejected(command_plane::accept_rxdb_business_command(root.path(), json!({
+            "id":format!("wrong-route-{kind}"), "module":"ctox", "command_type":kind,
+            "record_id":"another-project", "payload":body,
+            "client_context":{"actor":{"id":OWNER, "role":"chef"}}
+        })));
+    }
+    assert_eq!(read(root.path(), OWNER, "after-forgery")?["result"], saved["result"]);
     Ok(())
 }
