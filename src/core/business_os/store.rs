@@ -18552,7 +18552,13 @@ pub(super) fn webrtc_capability_allows_collection_permission(
     collection: &str,
     permission: BusinessOsPermission,
 ) -> bool {
-    check_webrtc_collection_permission(root, token, collection, permission).unwrap_or(false)
+    match check_webrtc_collection_permission(root, token, collection, permission) {
+        Ok(allowed) => allowed,
+        Err(error) => {
+            log_webrtc_collection_authority_error(collection, &error);
+            false
+        }
+    }
 }
 
 /// Missing/invalid credentials are policy denials. Issuer/store unavailability
@@ -18568,7 +18574,8 @@ pub(super) fn check_webrtc_collection_permission(
     if token.trim().is_empty() {
         return Ok(false);
     }
-    with_store_connection(root, |_| Ok(()))?;
+    with_store_connection(root, |_| Ok(()))
+        .context("webrtc authority store bootstrap")?;
     with_current_webrtc_capability_signer(root, |secret| {
         with_store_connection(root, |conn| {
             check_webrtc_collection_permission_from_connection(
@@ -18580,7 +18587,85 @@ pub(super) fn check_webrtc_collection_permission(
                 now_ms() as i64,
             )
         })
+        .context("webrtc authority policy store")
     })
+    .context("webrtc authority current signer")
+}
+
+/// Fixed diagnostic vocabulary only: never emit tokens, secret values, SQL
+/// messages, actor records, or an arbitrary underlying error body.
+fn webrtc_collection_authority_diagnostic(error: &anyhow::Error) -> Value {
+    let contexts = error.chain().map(ToString::to_string).collect::<Vec<_>>();
+    let phase = if contexts.iter().any(|s| s == "webrtc authority store bootstrap") {
+        "store_bootstrap"
+    } else if contexts.iter().any(|s| s == "webrtc authority policy store") {
+        "policy_store"
+    } else {
+        "current_signer"
+    };
+    if let Some(rusqlite::Error::SqliteFailure(code, _)) = error.downcast_ref::<rusqlite::Error>() {
+        return json!({"phase": phase, "kind": "sqlite", "code": format!("{:?}", code.code), "extended_code": code.extended_code});
+    }
+    if let Some(io) = error.downcast_ref::<std::io::Error>() {
+        return json!({"phase": phase, "kind": "io", "code": format!("{:?}", io.kind())});
+    }
+    let known = [
+        ("secret master-key authority is unavailable", "master_key_busy"),
+        ("secret master-key file is oversized", "master_key_oversized"),
+        ("secret master key conflicts with the embedded legacy key", "master_key_embedded_conflict"),
+        ("secret master key conflicts with the legacy runtime key", "master_key_legacy_conflict"),
+        ("current secret not found", "issuer_missing"),
+        ("current capability signing secret is empty", "issuer_empty"),
+    ];
+    let code = known.iter().find(|(message, _)| contexts.iter().any(|s| s == message))
+        .map(|(_, code)| *code).unwrap_or("opaque_error");
+    json!({"phase": phase, "kind": "authority", "code": code})
+}
+
+pub(super) fn log_webrtc_collection_authority_error(collection: &str, error: &anyhow::Error) {
+    // A provider retry storm must not turn permission diagnostics into another
+    // load source. One bounded record per 15 seconds; no authorization changes.
+    static LAST_LOG_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let at = u64::try_from(now_ms()).unwrap_or(u64::MAX);
+    let last = LAST_LOG_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if at.saturating_sub(last) < 15_000 || LAST_LOG_MS.compare_exchange(last, at,
+        std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed).is_err() {
+        return;
+    }
+    eprintln!("[business-os] native collection authority unavailable: {}", json!({
+        "collection": collection, "diagnostic": webrtc_collection_authority_diagnostic(error)
+    }));
+}
+
+#[cfg(test)]
+mod collection_authority_diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn authority_diagnostic_keeps_sqlite_stage_and_redacts_arbitrary_messages() {
+        let error = anyhow::Error::new(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("private-token-and-record-must-not-leak".into()),
+        )).context("webrtc authority policy store").context("webrtc authority current signer");
+        let diagnostic = webrtc_collection_authority_diagnostic(&error);
+        assert_eq!(diagnostic["phase"], "policy_store");
+        assert_eq!(diagnostic["extended_code"], rusqlite::ffi::SQLITE_BUSY);
+        assert!(!diagnostic.to_string().contains("private-token"));
+        let opaque = anyhow::anyhow!("private-secret-must-not-leak").context("webrtc authority current signer");
+        assert_eq!(webrtc_collection_authority_diagnostic(&opaque)["code"], "opaque_error");
+        assert!(!webrtc_collection_authority_diagnostic(&opaque).to_string().contains("private-secret"));
+    }
+
+    #[test]
+    fn authority_diagnostic_distinguishes_store_io_and_missing_issuer() {
+        let io = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            .context("webrtc authority store bootstrap");
+        let diagnostic = webrtc_collection_authority_diagnostic(&io);
+        assert_eq!(diagnostic["phase"], "store_bootstrap");
+        assert_eq!(diagnostic["code"], "PermissionDenied");
+        let issuer = anyhow::anyhow!("current secret not found").context("webrtc authority current signer");
+        assert_eq!(webrtc_collection_authority_diagnostic(&issuer)["code"], "issuer_missing");
+    }
 }
 
 pub(super) fn capability_allows_workspace_permission(
