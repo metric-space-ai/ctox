@@ -13,6 +13,8 @@ await mkdir(output, { recursive: true });
 const index = await readFile(path.join(root, 'index.html'), 'utf8');
 const header = index.match(/<header class="topbar">[\s\S]*?<\/header>/)?.[0];
 assert(header, 'The fixture uses the real shell topbar DOM');
+const windowLayer = index.match(/<div class="shell-window-layer"[^>]*>/)?.[0];
+assert(windowLayer, 'Include the real window layer that can intercept menu clicks');
 const styles = index.match(/<link[^>]*rel="stylesheet"[^>]*>/g)?.join('\n') || '';
 const fixtureScript = `
 import {setTopbarAppItems, installTopbarAvatar} from '/shared/topbar-apps.js';
@@ -68,15 +70,19 @@ renderCollectionFreshnessWarning(document.querySelector('[data-collection-freshn
 window.topbarFixture = { populate, originals, launched };
 `;
 const html = `<!doctype html><html lang="de" data-theme="dark" data-shell-style="ctox">
-<head><base href="/"><meta name="viewport" content="width=device-width,initial-scale=1">
+<head><meta charset="utf-8"><base href="/"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="ctox-shell-version" content="0.1.0"><meta name="ctox-shell-source-commit" content="0000000000000000000000000000000000000000">
 ${styles}</head><body data-module-shell="full"><div class="app-shell">${header}
-<div style="min-height:0;background:var(--bg)"></div></div><script type="module">${fixtureScript}</script></body></html>`;
+<div style="min-height:0;background:var(--bg)"></div></div>
+${windowLayer}<section class="shell-window" style="left:0;top:48px;width:100%;height:calc(100% - 48px)">
+<main style="flex:1;background:var(--bg)">Open workspace window</main></section></div>
+<div class="drawer-backdrop" hidden data-fixture-modal></div>
+<script type="module">${fixtureScript}</script></body></html>`;
 const server = createServer(async (request, response) => {
   const pathname = new URL(request.url, 'http://fixture.invalid').pathname;
   try {
     if (pathname === '/') {
-      response.writeHead(200, { 'Content-Type': 'text/html' });
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       response.end(html);
       return;
     }
@@ -166,10 +172,45 @@ try {
   await page.waitForSelector('[data-shell-release-panel]', { state: 'visible' });
   const recoveryBox = await page.locator('[data-shell-release-panel]').boundingBox();
   assert(recoveryBox.x >= 7 && recoveryBox.x + recoveryBox.width <= 391, 'Recovery menu stays within phone viewport: ' + JSON.stringify(recoveryBox));
+  await page.getByText('Veröffentlicht', { exact: true }).waitFor({ state: 'visible' });
+  await page.getByText('Kompatibilität', { exact: true }).waitFor({ state: 'visible' });
   await page.screenshot({ path: path.join(output, 'topbar-phone-recovery.png') });
+  await page.keyboard.press('Escape');
+  for (const width of [1000, 390]) {
+    await page.setViewportSize({ width, height: 700 });
+    for (const loading of [false, true]) {
+      await page.evaluate((loading) => {
+        if (loading) document.body.dataset.moduleLoading = 'startup';
+        else delete document.body.dataset.moduleLoading;
+        window.topbarFixture.populate(['Crew', 'Tickets', 'Dokumente', 'Tabellen',
+          'Explorer', 'Knowledge', 'App Store', 'Web Research', 'Kalender']);
+      }, loading);
+      await page.waitForSelector('.module-overflow-trigger', { state: 'visible' });
+      const overflow = page.locator('.module-overflow-trigger');
+      await overflow.click();
+      await page.getByRole('button', { name: 'App Store', exact: true }).click();
+      assert.equal(await page.evaluate(() => window.topbarFixture.launched.at(-1)),
+        'App Store', 'Pointer launch reaches overflow over a real open window');
+      assert.equal(await page.locator('.module-overflow').getAttribute('open'), null);
+      await page.locator('[data-shell-recovery-pill]').click();
+      const diagnostic = page.getByRole('button', { name: 'Sync-Diagnose öffnen', exact: true });
+      await diagnostic.click();
+      await page.keyboard.press('Escape');
+      await page.evaluate(() => document.querySelector('[data-fixture-modal]').hidden = false);
+      const drawerOwnsPointer = await page.locator('[data-shell-recovery-pill]').evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        return Boolean(document.elementFromPoint(box.x + box.width / 2,
+          box.y + box.height / 2)?.closest('[data-fixture-modal]'));
+      });
+      assert(drawerOwnsPointer, 'Modal drawers remain above the topbar');
+      await page.evaluate(() => document.querySelector('[data-fixture-modal]').hidden = true);
+      results.push({ width, loading, openWindowPointerLaunch: true, recoveryAction: true,
+        modalRetainsPointer: true });
+    }
+  }
   assert.deepEqual(pageErrors, []);
   await writeFile(path.join(output, 'result.json'), JSON.stringify({ fixture: 'Actual source topbar DOM/CSS + production controllers; no installed acceptance claim', results, keyboard: true, launchesPreserved: true, recoveryMenu: true, pageErrors }, null, 2));
-  console.log('TOPBAR_BROWSER_CHECKS_PASS widths1440/1000/390 full names, overflow, launch, keyboard, recovery');
+  console.log('TOPBAR_BROWSER_CHECKS_PASS widths1440/1000/390 full names, overflow, pointer launch over open windows/loading, keyboard, recovery, modal priority');
 } finally {
   await context.close();
   await browser.close();
