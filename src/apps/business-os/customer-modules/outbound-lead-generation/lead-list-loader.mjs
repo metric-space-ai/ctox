@@ -98,13 +98,14 @@ export async function loadFullLeadRows(collection, ids, { batchSize = 8, signal 
 }
 
 /** Acquire the Shell's native query authority, never a follower/local fallback. */
-export async function withLeadQueryAuthority(sync, work, { timeoutMs = 15000, isCurrent = () => true } = {}) {
-  if (typeof sync?.leaseCollection !== 'function') throw error('CTOX stellt keinen aktuellen Lead-Lesekanal bereit.', 'LEAD_QUERY_AUTHORITY_MISSING');
+export async function withLeadQueryAuthority(sync, work, { timeoutMs = 15000, isCurrent = () => true,
+  collectionName = 'outbound_lead_generation_leads' } = {}) {
+  if (typeof sync?.leaseCollection !== 'function') throw error('CTOX stellt keinen aktuellen Lesekanal bereit.', 'LEAD_QUERY_AUTHORITY_MISSING');
   const deadline = Date.now() + timeoutMs;
   const controller = new AbortController();
   let closed = false, lease = null, timer = null;
   const acquisition = Promise.resolve().then(() => sync.leaseCollection(
-    'outbound_lead_generation_leads', 'outbound-lead-query', { forceDirect: true },
+    collectionName, 'outbound-collection-query', { forceDirect: true },
   ));
   // A timed-out acquisition may settle later; it still belongs to this caller.
   void acquisition.then(late => {
@@ -116,7 +117,7 @@ export async function withLeadQueryAuthority(sync, work, { timeoutMs = 15000, is
     if (!bridge?.state && bridge?.ready) bridge = await bridge.ready;
     const replication = bridge?.state;
     if (typeof replication?.awaitQueryReady !== 'function') {
-      throw error('Der aktuelle CTOX-Kanal ist noch nicht für Lead-Abfragen bereit.', 'LEAD_QUERY_AUTHORITY_MISSING');
+      throw error('Der aktuelle CTOX-Kanal ist noch nicht für Datenabfragen bereit.', 'LEAD_QUERY_AUTHORITY_MISSING');
     }
     await replication.awaitQueryReady(Math.max(1, deadline - Date.now()));
     const generation = replication.collectionQueryGenerationToken?.(replication.activeRemotePeerId);
@@ -137,7 +138,7 @@ export async function withLeadQueryAuthority(sync, work, { timeoutMs = 15000, is
       new Promise((_, reject) => {
         timer = setTimeout(() => {
           controller.abort();
-          reject(error('Lead-Daten konnten nicht rechtzeitig aus CTOX geladen werden.', 'LEAD_QUERY_TIMEOUT'));
+          reject(error('Daten konnten nicht rechtzeitig aus CTOX geladen werden.', 'LEAD_QUERY_TIMEOUT'));
         }, Math.max(1, deadline - Date.now()));
       }),
     ]);
