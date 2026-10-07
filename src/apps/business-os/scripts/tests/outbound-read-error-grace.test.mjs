@@ -29,3 +29,10 @@ test('a real failure shows at once', () => {
   const errors = new Map([['leads', readErrorEntry(undefined, coded('LEAD_DETAIL_INVALID'), 5)]]);
   assert.deepEqual(visibleReadErrorKeys(errors, 5), ['leads']);
 });
+
+test('any failure of a never-loaded collection is a startup failure', () => {
+  const entry = readErrorEntry(undefined, coded('LEAD_DETAIL_INVALID'), 10, { neverLoaded: true });
+  assert.equal(entry.transient, true);
+  assert.deepEqual(visibleReadErrorKeys(new Map([['leads', entry]]), 10 + 1000), []);
+  assert.deepEqual(visibleReadErrorKeys(new Map([['leads', entry]]), 10 + READ_ERROR_GRACE_MS), ['leads']);
+});
