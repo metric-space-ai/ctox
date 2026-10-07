@@ -1,0 +1,38 @@
+name: CTOX pinned engine integration
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 2
+      RUST_TEST_THREADS: 1
+      CARGO_TARGET_DIR: ${{ github.workspace }}/ctox-transfer-target
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: aea4d55e3ce0bcd1b5dd9e4832e3888c070b9504
+          path: engine
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: metric-space-ai/ctox
+          ref: c8279d35358500ec9d20cb329d83d1a272d048f5
+          path: adapter
+          sparse-checkout: src/core/transfers
+      - name: Test the pinned private engine without publishing its source
+        run: cargo test --locked --manifest-path engine/Cargo.toml --test ctox_bounds --test ctox_multisource -j 2 -- --test-threads=1
+      - name: Bind adapter to the exact checked-out dependency
+        shell: python
+        run: |
+          import pathlib
+          path = pathlib.Path('adapter/src/core/transfers/Cargo.toml')
+          text = path.read_text()
+          pin = 'aria2-rust = { git = "https://github.com/mkh-welsch/aria2-rust", rev = "aea4d55e3ce0bcd1b5dd9e4832e3888c070b9504" }'
+          assert text.count(pin) == 1
+          engine = pathlib.Path('engine').resolve().as_posix()
+          path.write_text(text.replace(pin, 'aria2-rust = { path = "' + engine + '" }') + '\n[workspace]\n')
+      - name: Actual HTTP to durable CTOX receipt tests
+        run: cargo test --manifest-path adapter/src/core/transfers/Cargo.toml -j 2 -- --test-threads=1

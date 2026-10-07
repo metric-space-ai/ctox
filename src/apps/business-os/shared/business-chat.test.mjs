@@ -3755,3 +3755,37 @@ test('a member seat opens and reuses a conversation with that member', async () 
   assert.equal(chatAddressedMemberId({ crew_member_id: 'crew-lumi', messages: [{ role: 'user', text: 'x', commandId: 'cmd_1' }] }), '');
   assert.equal(chatAddressedMemberId({ messages: [] }), '', 'a chat with the whole crew names nobody');
 });
+
+test('business chat tracking does not orphan a running task when the lookup fails', async () => {
+  const failing = {
+    find() { return { exec: async () => { throw new Error('QUERY_COLLECTOR_TIMEOUT: terminal frame missing'); } }; },
+    findOne() { return { exec: async () => { throw new Error('QUERY_COLLECTOR_TIMEOUT: terminal frame missing'); } }; },
+  };
+  const oldMessage = {
+    id: 'message-old',
+    commandId: 'cmd-running',
+    status: 'running',
+    createdAt: Date.now() - 30 * 60 * 1000,
+    text: 'Starte eine Outbound Nachrecherche',
+  };
+  const state = { chats: [{ id: 'chat-1', messages: [oldMessage] }] };
+
+  await __businessChatTestInternals.syncTrackedMessages({
+    state,
+    db: { raw: { business_commands: failing, ctox_queue_tasks: failing } },
+  });
+
+  assert.equal(oldMessage.status, 'running', 'a failed read must not mark the task failed');
+  assert.notEqual(oldMessage.trackable, false, 'tracking continues after a failed read');
+  assert.doesNotMatch(oldMessage.text, /kein gespeicherter Arbeitsstand/);
+
+  const empty = {
+    find() { return { exec: async () => [] }; },
+    findOne() { return { exec: async () => null }; },
+  };
+  await __businessChatTestInternals.syncTrackedMessages({
+    state,
+    db: { raw: { business_commands: empty, ctox_queue_tasks: empty } },
+  });
+  assert.equal(oldMessage.status, 'failed', 'a successful lookup without the task still marks it orphaned');
+});

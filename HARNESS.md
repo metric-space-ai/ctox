@@ -132,6 +132,13 @@ persistence requires a durable plan, but incomplete plans may enter review so
 blocked work can retain honest pending steps. Only validated completion with
 all model-owned steps completed may reach terminal success and 100 percent.
 
+Business OS chat workers prepare their final response and complete that model-owned
+plan step through `update_plan` before returning it. Chat publication, completion
+review and queue acknowledgement remain service effects after the turn, not
+model-owned plan steps. A saved writeback receipt cannot complete a different
+open step, and unfinished research or a failed writeback remains incomplete.
+
+
 `task_execution_plan_revisions` is the authoritative plan history. Status-only
 updates rewrite the current revision, while changed labels, count, or order
 create a new revision and retain the old one as execution evidence.
@@ -171,6 +178,17 @@ steps, review state, deduplicated thinking/tool totals, and update time. The
 older harness-flow stream remains an audit and observability projection, not
 the persistence authority.
 
+
+## Priority system queue admission
+
+Runnable urgent/high system tasks are selected before ordinary queue-pressure
+containment and before app validation/recovery work. Selection filters priorities
+before its bounded result window; older normal batches cannot hide them.
+A leased app does not reserve an otherwise free serial slot. App builds are
+excluded from this priority path, and pause, deferred times, working hours,
+runtime cooldown, active workers and dispatch reservations still fence admission.
+Canonical metadata is checked again under the lease write lock. Each dispatch
+reserves the existing serial slot; it does not increase worker capacity.
 
 ## Checked embedded-runtime shutdown
 

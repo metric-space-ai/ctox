@@ -682,6 +682,46 @@ struct QueryDocumentsRequest {
     skip_plus_limit: usize,
 }
 
+/// Compiled queries slower than this are reported (rate-limited) with their
+/// SQL text, so the expensive ones can be indexed. Under a research run on an
+/// on-prem host the peer spent most of its CPU in SQLite JSON parsing of
+/// compiled queries without a way to tell which ones (07.10.2026).
+const SLOW_COMPILED_QUERY: std::time::Duration = std::time::Duration::from_millis(50);
+static SLOW_COMPILED_QUERY_LOG_WINDOW: std::sync::Mutex<(Option<std::time::Instant>, u32)> =
+    std::sync::Mutex::new((None, 0));
+
+fn log_slow_compiled_query(
+    collection_name: &str,
+    sql: &str,
+    elapsed: std::time::Duration,
+    result: &RxResult<Vec<Value>>,
+) {
+    if elapsed < SLOW_COMPILED_QUERY {
+        return;
+    }
+    let mut window = SLOW_COMPILED_QUERY_LOG_WINDOW
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let now = std::time::Instant::now();
+    if window
+        .0
+        .is_none_or(|start| now.duration_since(start) > std::time::Duration::from_secs(60))
+    {
+        *window = (Some(now), 0);
+    }
+    if window.1 >= 20 {
+        return;
+    }
+    window.1 += 1;
+    let rows = result.as_ref().map(|rows| rows.len()).unwrap_or(0);
+    let sql: String = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    eprintln!(
+        "[rxdb] slow compiled query collection={collection_name} ms={} rows={rows} sql={}",
+        elapsed.as_millis(),
+        sql.chars().take(600).collect::<String>()
+    );
+}
+
 fn execute_query_documents(
     conn: &rusqlite::Connection,
     request: QueryDocumentsRequest,
@@ -714,7 +754,10 @@ fn execute_query_documents(
     }
 
     if let Some(compiled) = compiled_sql {
-        return query_documents_with_compiled_sql(conn, &compiled);
+        let started = std::time::Instant::now();
+        let result = query_documents_with_compiled_sql(conn, &compiled);
+        log_slow_compiled_query(collection_name, &compiled.sql, started.elapsed(), &result);
+        return result;
     }
 
     SQLITE_QUERY_FALLBACK_CALLS.fetch_add(1, Ordering::Relaxed);

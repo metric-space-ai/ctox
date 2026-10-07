@@ -264,6 +264,122 @@ pub(super) fn session_expiry_reauthorization(
 /// Business OS web-stack mechanism (the same enqueue the adapter scripts and
 /// the `ctox business-os web-stack auth-assist-request` CLI use). Lossy by
 /// design: a handoff failure is reported in the run error, never fatal.
+/// How long a failed automatic sign-in blocks the next attempt for the same
+/// source. A wrong or locked credential must not be retried by every research
+/// agent that hits the login wall.
+const AUTO_REAUTH_FAILURE_COOLDOWN_MS: i64 = 30 * 60 * 1000;
+const AUTO_REAUTH_TIMEOUT_MS: u64 = 240_000;
+
+fn auto_reauth_state_path(root: &Path, source_id: &str) -> std::path::PathBuf {
+    let safe: String = source_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    root.join("runtime/scraping/auto-reauth")
+        .join(format!("{safe}.json"))
+}
+
+/// Whether an earlier failed attempt still blocks a new one.
+pub(super) fn auto_reauth_in_cooldown(state: Option<&Value>, now_ms: i64) -> bool {
+    let Some(state) = state else { return false };
+    if state.get("ok").and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    state
+        .get("attempted_at_ms")
+        .and_then(Value::as_i64)
+        .is_some_and(|at| now_ms.saturating_sub(at) < AUTO_REAUTH_FAILURE_COOLDOWN_MS)
+}
+
+/// Try CTOX's own stored-credential sign-in before handing the login wall to
+/// a human. Research agents saw `authorization_required` with a usable
+/// `credential_ref` and skipped the source instead of signing in (D&B Hoovers:
+/// 16 of 16 runs on 06.10.2026, zero sign-in attempts). One attempt at a time
+/// per source across processes (file lock); a failure cools down for 30 min.
+/// Returns the sign-in result when an attempt ran.
+pub(super) fn attempt_automatic_reauthorization(
+    root: &Path,
+    run_id: &str,
+    thread_key: Option<&str>,
+    owner_user_id: Option<&str>,
+    reauthorization: &Value,
+) -> Option<Value> {
+    let source_id = reauthorization.get("source_id")?.as_str()?.to_string();
+    let login_url = reauthorization.get("login_url")?.as_str()?.to_string();
+    let credential_ref = reauthorization
+        .get("credential_ref")
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("ctox-secret://"))?
+        .to_string();
+    let state_path = auto_reauth_state_path(root, &source_id);
+    fs::create_dir_all(state_path.parent()?).ok()?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(state_path.with_extension("lock"))
+        .ok()?;
+    // Another process is signing in to this source right now: let it finish
+    // and leave this run's result to the normal handoff path.
+    if lock.try_lock().is_err() {
+        return Some(
+            json!({"ok": false, "skipped": "sign_in_in_progress", "source_id": source_id}),
+        );
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default();
+    let previous = fs::read(&state_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    if auto_reauth_in_cooldown(previous.as_ref(), now_ms) {
+        return Some(
+            json!({"ok": false, "skipped": "cooldown_after_failure", "source_id": source_id}),
+        );
+    }
+    let task_id = thread_key.unwrap_or(run_id).to_string();
+    let outcome = crate::service::business_os::auto_reauthorize_web_stack_source(
+        root,
+        &source_id,
+        &credential_ref,
+        &login_url,
+        &task_id,
+        owner_user_id,
+        AUTO_REAUTH_TIMEOUT_MS,
+    );
+    let (ok, detail) = match &outcome {
+        Ok(value) => (
+            value.get("ok").and_then(Value::as_bool) == Some(true),
+            value.get("status").cloned().unwrap_or(Value::Null),
+        ),
+        Err(err) => (
+            false,
+            json!(format!("{err:#}").chars().take(300).collect::<String>()),
+        ),
+    };
+    let state = json!({
+        "source_id": source_id,
+        "ok": ok,
+        "attempted_at_ms": now_ms,
+        "run_id": run_id,
+        "detail": detail,
+        "secret_value_in_payload": false,
+    });
+    let _ = fs::write(
+        &state_path,
+        serde_json::to_vec_pretty(&state).unwrap_or_default(),
+    );
+    eprintln!("scrape execute: automatic sign-in for {source_id}: ok={ok}");
+    Some(state)
+}
+
 pub(super) fn emit_reauthorization_handoff(
     root: &Path,
     run_id: &str,

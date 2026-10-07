@@ -91,6 +91,7 @@ pub(super) async fn business_commands_source_stamp(
     root: &Path,
 ) -> anyhow::Result<BusinessCommandsSourceStamp> {
     let root = root.to_path_buf();
+    ensure_business_commands_intake_index(&root).await;
     let query_root = root.clone();
     let table = rxdb_peer_intake_reader::read(
         &root,
@@ -99,6 +100,80 @@ pub(super) async fn business_commands_source_stamp(
     )
     .await?;
     Ok(BusinessCommandsSourceStamp { table })
+}
+
+/// The intake stamp's domain-recovery probe filters live commands by
+/// `command_type` (see `rxdb_peer_domain_recovery::retry_predicate`). The
+/// RxDB schema has no index leading with that field after `deleted`, so every
+/// intake read JSON-parsed all live commands: 94-123 ms per read on an
+/// on-prem host while a research run kept the intake busy (07.10.2026), with
+/// the index 0.05 ms. Created once per store through a short-lived writable
+/// connection; the intake readers themselves stay read-only.
+pub(super) const BUSINESS_COMMANDS_COMMAND_TYPE_INDEX_SUFFIX: &str =
+    "_ctox_deleted_command_type_idx";
+
+fn business_commands_intake_index_ready() -> &'static std::sync::Mutex<HashSet<PathBuf>> {
+    static READY: std::sync::OnceLock<std::sync::Mutex<HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    READY.get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+}
+
+async fn ensure_business_commands_intake_index(root: &Path) {
+    let path = store::rxdb_store_path(root);
+    if business_commands_intake_index_ready()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .contains(&path)
+    {
+        return;
+    }
+    let task_path = path.clone();
+    let ensured =
+        tokio::task::spawn_blocking(move || ensure_business_commands_intake_index_sync(&task_path))
+            .await;
+    match ensured {
+        Ok(Ok(true)) => {
+            business_commands_intake_index_ready()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(path);
+        }
+        Ok(Ok(false)) => {}
+        Ok(Err(error)) => {
+            eprintln!("[business-os] business_commands intake index not ensured yet: {error:#}");
+        }
+        Err(error) => {
+            eprintln!("[business-os] business_commands intake index task failed: {error}");
+        }
+    }
+}
+
+/// Returns `true` once the index exists (or the table is absent for good).
+pub(super) fn ensure_business_commands_intake_index_sync(path: &Path) -> anyhow::Result<bool> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let conn =
+        Connection::open(path).with_context(|| format!("open RxDB store {}", path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    let Some(table) = latest_rxdb_collection_table(&conn, "business_commands")? else {
+        return Ok(false);
+    };
+    if !sqlite_table_has_column(&conn, &table, "deleted")? {
+        return Ok(true);
+    }
+    let index = sqlite_quote_identifier(&format!(
+        "{table}{BUSINESS_COMMANDS_COMMAND_TYPE_INDEX_SUFFIX}"
+    ));
+    conn.execute(
+        &format!(
+            "CREATE INDEX IF NOT EXISTS {index} ON {} (deleted, json_extract(data, '$.command_type'))",
+            sqlite_quote_identifier(&table)
+        ),
+        [],
+    )
+    .with_context(|| format!("create business_commands command_type index on {table}"))?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -1581,5 +1656,52 @@ mod tests {
 
         assert_eq!(union, legacy);
         assert_eq!(union.0, 14);
+    }
+}
+
+#[cfg(test)]
+mod business_commands_intake_index_tests {
+    use super::*;
+
+    #[test]
+    fn domain_recovery_probe_uses_the_command_type_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("business-os-rxdb.sqlite3");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE "ctox_business_os__business_commands__v2" (
+                id TEXT PRIMARY KEY, data TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0
+            );
+            CREATE INDEX "ctox_business_os__business_commands__v2_json__deleted__status__id_idx"
+              ON "ctox_business_os__business_commands__v2"("deleted", json_extract(data, '$.status'), "id");
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        assert!(ensure_business_commands_intake_index_sync(&path).unwrap());
+        // Idempotent.
+        assert!(ensure_business_commands_intake_index_sync(&path).unwrap());
+
+        let conn = Connection::open(&path).unwrap();
+        let plan: Vec<String> = conn
+            .prepare(
+                r#"EXPLAIN QUERY PLAN SELECT EXISTS(SELECT 1 FROM "ctox_business_os__business_commands__v2"
+                   WHERE deleted = 0
+                     AND +json_extract(data, '$.status') IN ('accepted', 'completed', 'failed')
+                     AND json_extract(data, '$.command_type') IN ('ctox.workjet.project.upsert'))"#,
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|step| step.contains(BUSINESS_COMMANDS_COMMAND_TYPE_INDEX_SUFFIX)),
+            "probe must use the command_type index: {plan:?}"
+        );
     }
 }

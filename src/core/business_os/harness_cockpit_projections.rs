@@ -991,10 +991,16 @@ fn project_events_since(
         }
         for task in tasks {
             cursor = task.clone();
+            // Incremental passes only project events inserted after the
+            // cursor. Re-upserting the task's latest 200 events on every pass
+            // cost ~40 % of a core and fed every rewrite back into browser
+            // replication while research agents emitted tool events each
+            // second (07.10.2026). Replay passes (no cursor) still rebuild.
             let mut statement = conn.prepare(
                 "SELECT event_id, event_kind, title, attempt_index, metadata_json, created_at
                  FROM ctox_harness_flow_events
                  WHERE message_key=?1
+                   AND rowid > ?2
                    AND COALESCE(json_extract(metadata_json,'$.cockpit_eligible'),1)=1
                    AND event_kind IN (
                        'worker.turn_started','worker.tool_started','worker.tool_completed',
@@ -1005,7 +1011,7 @@ fn project_events_since(
                  ORDER BY created_at DESC, event_id DESC LIMIT 200",
             )?;
             let events = statement
-                .query_map([&task], |r| {
+                .query_map(params![&task, since.unwrap_or(0)], |r| {
                     Ok((
                         r.get::<_, String>(0)?,
                         r.get::<_, String>(1)?,

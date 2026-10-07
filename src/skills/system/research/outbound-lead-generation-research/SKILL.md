@@ -162,7 +162,8 @@ ctox business-os web-stack authenticated-automation --source-id <id> --target-ur
 
 Unblocking with continuation, in this order:
 
-0. **Automatic sign-in first.** When a scrape or capture returns `authorization_required` / `session_expired_*` and its `reauthorization` names a `credential_ref`, run `auth-assist-login --source-id <source_id> --credential-ref <credential_ref> --target-url <login_url> --task-id <your command id> --timeout-ms 240000` yourself. CTOX fills the stored credential in its own browser (you never see or type the value) and completes an e-mail one-time code on its own (D&B/Okta "Send me an email": the code mail arrives in the connected mailbox). Then rerun the same `ctox scrape execute` / `source-capture`. An expired session is routine, not a reason to stop: do this in the same turn before reporting the source as unreachable. Only when `auth-assist-login` itself fails (MFA push, captcha, locked account) go on with step 1.
+0. **The adapter run signs in for you.** `ctox scrape execute` now tries CTOX's own stored-credential sign-in itself when a source answers `authorization_required` with a `credential_ref`, and reports it in `result.auto_reauthorization`. If `auto_reauthorization.ok` is `true`, rerun the same target at once: the session is fresh. If it is `skipped: sign_in_in_progress`, another run is signing in; rerun the target a minute later. Only if it reports a failure continue below.
+0a. **Automatic sign-in first.** When a scrape or capture returns `authorization_required` / `session_expired_*` and its `reauthorization` names a `credential_ref`, run `auth-assist-login --source-id <source_id> --credential-ref <credential_ref> --target-url <login_url> --task-id <your command id> --timeout-ms 240000` yourself. CTOX fills the stored credential in its own browser (you never see or type the value) and completes an e-mail one-time code on its own (D&B/Okta "Send me an email": the code mail arrives in the connected mailbox). Then rerun the same `ctox scrape execute` / `source-capture`. An expired session is routine, not a reason to stop: do this in the same turn before reporting the source as unreachable. Only when `auth-assist-login` itself fails (MFA push, captcha, locked account) go on with step 1.
 1. `auth-assist-request --source-id <id> --task-id <your command id>` — opens the owner's streamed browser on that source and returns the browser `session_id`; the human signs in or solves the challenge in the stream.
 2. `auth-assist-status --session-id <id>` — poll until the session reports authenticated; do not proceed on a pending session.
 3. Continue **in the same session**: `ctox web browser-automation --session-id <id> --script-file <path>` for your own navigation and extraction, `source-capture --source-id <id> --session-id <id> --company <name>` for the built-in extractors of dnbhoovers.com, leadfeeder.com, rocketreach.com and xing.com, `context-capture --session-id <id>` / `context-extract --session-id <id>` for a page the human positioned for you.
@@ -340,7 +341,30 @@ The human is not always at the keyboard, and your turn is bounded. The system th
 | Your turn budget runs out | `field_status.json` is your checkpoint; the follow-up turn continues from it. Better a complete writeback with honest `no_match` than a half one. |
 | You found nothing at all for a field | `no_match` — but only with the documented search and two reads. `no_match` without evidence is a false statement, not a result. |
 
-## 10. Stop conditions
+## 10. Finishing the task (each rule below failed a live run)
+
+The daemon judges the turn from durable state, not from your intent. A run whose research and
+writeback were fine still failed for each of these reasons (research run 07.10.2026):
+
+- **No separate reporting step in the plan.** Do not plan a step such as "Abschlussmeldung an den
+  Owner" or "Bericht schreiben". The chat message is part of the last writeback step. A plan that
+  ends with an open reporting step is "incomplete (7/8 steps)" and the task fails although the lead
+  is fully written.
+- **Close the plan before you answer.** After the last `execute_writeback` returned `accepted` or
+  `completed`, call `update_plan` once with **every** step `completed`, then write the chat message.
+- **Always end with a chat message.** Never end the turn on a tool call; a turn without a final
+  assistant message is rejected ("turn completed without assistant message").
+- **Count, don't estimate.** The numbers in your message (verified / no_match / action_required /
+  unsupported, persons) are counted from the `field_status` entries and `person_records` you sent
+  in the accepted writeback parts. The reviewer compares them with the stored lead; "16 verified"
+  for a lead that stores 24 is rejected as a false report. If you did not keep the counts, say
+  "Writeback accepted" and list the persons, without numbers.
+- **Every part carries `field_status`.** A part without `field_status` is rejected as an invalid
+  payload, and a part in which no field is verified and none carries a source or a documented
+  attempt is rejected as evidence-free. Send only parts that contain at least one verified field
+  with its source, or `no_match` entries with their `attempts`.
+
+## 11. Stop conditions
 
 - One turn is bounded; keep `field_status.json` current so a follow-up continues instead of restarting.
 - Never fabricate a value, a person, an e-mail address or a source. An empty verified field is better than a plausible one.

@@ -290,8 +290,45 @@ impl GuestDriver for X11GuestDriver {
                 "guest input lies outside the current display"
             );
         }
-        let (args, text) = input_arguments(input);
-        self.run("/usr/bin/xdotool", &args, text, 1024).await?;
+        if let GuestInput::Type { text } = input {
+            // xdotool type silently skips LF/CR/Tab on the guest keymap.
+            // Send those as explicit keys; retain stdin for all literal text.
+            // One deadline bounds the whole input, including every helper.
+            tokio::time::timeout(EFFECT_TIMEOUT, async {
+                let mut start = 0;
+                let mut chars = text.char_indices().peekable();
+                while let Some((index, ch)) = chars.next() {
+                    let key = match ch {
+                        '\n' | '\r' => GuestKey::Enter,
+                        '\t' => GuestKey::Tab,
+                        _ => continue,
+                    };
+                    if start < index {
+                        let (args, _) = input_arguments(input);
+                        self.run("/usr/bin/xdotool", &args, Some(&text[start..index]), 1024)
+                            .await?;
+                    }
+                    start = index + ch.len_utf8();
+                    if ch == '\r' && chars.peek().is_some_and(|(_, next)| *next == '\n') {
+                        let (index, ch) = chars.next().expect("peeked LF");
+                        start = index + ch.len_utf8();
+                    }
+                    let (args, _) = input_arguments(&GuestInput::Key { key });
+                    self.run("/usr/bin/xdotool", &args, None, 1024).await?;
+                }
+                if start < text.len() {
+                    let (args, _) = input_arguments(input);
+                    self.run("/usr/bin/xdotool", &args, Some(&text[start..]), 1024)
+                        .await?;
+                }
+                Ok::<(), anyhow::Error>(())
+            })
+            .await
+            .context("guest text operation timed out")??;
+        } else {
+            let (args, text) = input_arguments(input);
+            self.run("/usr/bin/xdotool", &args, text, 1024).await?;
+        }
         Ok(())
     }
 }
@@ -351,14 +388,32 @@ mod tests {
                 let pointer = std::str::from_utf8(&pointer)?;
                 assert!(pointer.lines().any(|line| line == "X=12"));
                 assert!(pointer.lines().any(|line| line == "Y=14"));
-                driver.input(&GuestInput::Type { text: "hi".into() }).await?;
+                driver.input(&GuestInput::Type { text: "hi\n\r\n\tk".into() }).await?;
                 let mut observed = BufReader::new(events.stdout.take().context("xev event pipe")?);
                 tokio::time::timeout(EFFECT_TIMEOUT, async {
-                    loop {
+                    let mut press = false;
+                    let mut keys = Vec::new();
+                    while keys.len() < 6 {
                         let mut line = String::new();
                         ensure!(observed.read_line(&mut line).await? > 0, "xev exited before keyboard receipt");
-                        if line.contains("keysym 0x68, h") { break; }
+                        if line.starts_with("KeyPress event") {
+                            press = true;
+                        } else if line.starts_with("KeyRelease event") {
+                            press = false;
+                        } else if press && line.contains("keysym") {
+                            let key = line.split("keysym ").nth(1).context("xev keysym")?;
+                            keys.push(key.trim_end().to_owned());
+                            press = false;
+                        }
                     }
+                    assert_eq!(keys, [
+                        "0x68, h), same_screen YES,",
+                        "0x69, i), same_screen YES,",
+                        "0xff0d, Return), same_screen YES,",
+                        "0xff0d, Return), same_screen YES,",
+                        "0xff09, Tab), same_screen YES,",
+                        "0x6b, k), same_screen YES,",
+                    ]);
                     Ok::<(), anyhow::Error>(())
                 }).await??;
                 assert!(driver.input(&GuestInput::Click { x: 800, y: 0, button: MouseButton::Left }).await.is_err());

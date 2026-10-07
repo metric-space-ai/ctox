@@ -10541,7 +10541,7 @@ fn assurance_conversation_id_for_job(root: &Path, job: &QueuedPrompt) -> i64 {
 
 fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
     format!(
-        "{}\n\nBusiness OS chat execution rules:\n- Your user-facing answer is shown to a non-technical business user inside a small chat bubble; CTOX removes the reserved ctox-crew metadata block first. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- If the user asks you to create, export, save, or convert a file, write that file inside the current workspace root only. CTOX will publish every workspace file to Business OS Files after the task completes.\n- For created files, name each file in the final answer and tell the user it is available in Files. CSV exports are also published as editable records in Spreadsheets. Do not mention server-local absolute paths.\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, internal file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Never write Business OS SQLite files or RxDB tables directly. If the canonical command context contains an explicit `writeback_contract`, fulfill only that bounded contract through the policy-gated Business OS MCP or an allowed typed Business OS command, then verify the readback. For mechanism=business_command and command_type=outbound.lead.research_writeback, call business_os.execute_writeback with record_id and payload (field_status and result); the server supplies the originating research_command_id. CLI, shell, terminal, SQLite and direct SQL cannot satisfy that contract. A failed tool result or missing successful receipt means the research task failed; retain the research artifacts. Without an explicit contract, do not mutate Business OS records.\n- Do not update queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
+        "{}\n\nBusiness OS chat execution rules:\n- Your user-facing answer is shown to a non-technical business user inside a small chat bubble; CTOX removes the reserved ctox-crew metadata block first. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- If the user asks you to create, export, save, or convert a file, write that file inside the current workspace root only. CTOX will publish every workspace file to Business OS Files after the task completes.\n- For created files, name each file in the final answer and tell the user it is available in Files. CSV exports are also published as editable records in Spreadsheets. Do not mention server-local absolute paths.\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, internal file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Never write Business OS SQLite files or RxDB tables directly. If the canonical command context contains an explicit `writeback_contract`, fulfill only that bounded contract through the policy-gated Business OS MCP or an allowed typed Business OS command, then verify the readback. For mechanism=business_command and command_type=outbound.lead.research_writeback, call business_os.execute_writeback with record_id and payload (field_status and result); the server supplies the originating research_command_id. CLI, shell, terminal, SQLite and direct SQL cannot satisfy that contract. A failed tool result or missing successful receipt means the research task failed; retain the research artifacts. Without an explicit contract, do not mutate Business OS records.\n- Do not update queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- Execution-plan steps describe model-owned work. CTOX owns chat publication, completion review and queue acknowledgement after the turn; do not leave an in_progress step waiting for those service effects. If the plan includes a final response step, prepare that response, mark that model-owned step completed with update_plan, then return the response. A saved writeback receipt does not complete other open steps. Never mark unfinished research or a failed writeback completed.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
         job.prompt
     )
 }
@@ -16942,6 +16942,21 @@ fn system_time_to_unix_nanos(time: SystemTime) -> u128 {
 }
 
 fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+    route_external_messages_with_priority_dispatch(root, state, |prompt| {
+        enqueue_prompt(
+            root,
+            state,
+            prompt,
+            "Queued priority system task for active handling".to_string(),
+        );
+    })
+}
+
+fn route_external_messages_with_priority_dispatch(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    dispatch_priority: impl FnOnce(QueuedPrompt),
+) -> Result<()> {
     // The channel router runs on its own timer. It may not repair, lease, or
     // reprioritize external work while a worker is still inside a full
     // reasoning/tool/review loop; arbitration belongs after that loop ends.
@@ -16970,9 +16985,6 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     if should_skip_idle_channel_router_preflight(root) {
         return Ok(());
     }
-    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
-        push_event(state, format!("Ticket reconciliation failed: {err}"));
-    }
     let settings = live_service_settings(root);
     match crate::mission::approval_nag::process_inbound_approval_replies(root, &settings) {
         Ok(processed) if processed > 0 => push_event(
@@ -16989,6 +17001,18 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 clip_text(&err.to_string(), 180)
             ),
         ),
+    }
+    // Preserve founder precedence; admit one priority system task before containment.
+    if highest_leasable_inbound_rank(root, &settings) < FOUNDER_INBOUND_DISPATCH_RANK {
+        if let Some(prompt) =
+            maybe_lease_priority_system_queue_prompt_for_idle_dispatch(root, state)?
+        {
+            dispatch_priority(prompt);
+            return Ok(());
+        }
+    }
+    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
+        push_event(state, format!("Ticket reconciliation failed: {err}"));
     }
     if queue_pressure_active(root, state) {
         match repair_stalled_founder_communications(root, state, &settings) {
@@ -17657,7 +17681,10 @@ fn durable_queue_dispatch_blocked_locked(
     shared: &SharedState,
     guard: DurableQueueDispatchGuard,
 ) -> bool {
-    if shared.busy || shared.app_recovery_active || shared.durable_queue_lease_in_progress {
+    if serial_prompt_admission_is_busy(shared)
+        || shared.app_recovery_active
+        || shared.durable_queue_lease_in_progress
+    {
         return true;
     }
     match guard {
@@ -29200,6 +29227,210 @@ Business OS command:
             suggested_skill_from_message(&message).as_deref(),
             Some("owner-communication")
         );
+    }
+
+    fn priority_system_dispatch_test_task(
+        root: &Path,
+        title: &str,
+        priority: &str,
+        metadata: Option<Value>,
+    ) -> channels::QueueTaskView {
+        channels::create_queue_task(
+            root,
+            channels::QueueTaskCreateRequest {
+                title: title.to_string(),
+                prompt: format!("Handle {title}."),
+                thread_key: format!("system/priority/{title}"),
+                workspace_root: Some(root.display().to_string()),
+                priority: priority.to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: metadata,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn priority_system_router_uses_one_free_slot_under_pressure_and_app_lease() -> anyhow::Result<()>
+    {
+        for priority in ["urgent", "high"] {
+            let root = temp_root(&format!("priority-system-pressure-{priority}"));
+            let app_metadata =
+                business_os_app_queue_metadata("quality", "ctox.business_os.app.create");
+            let active_app =
+                priority_system_dispatch_test_task(&root, "active-app", "high", Some(app_metadata));
+            channels::lease_queue_task(&root, &active_app.message_key, "app-worker")?;
+            let waiting_app = priority_system_dispatch_test_task(
+                &root,
+                "waiting-app",
+                "urgent",
+                Some(business_os_app_queue_metadata(
+                    "waiting-quality",
+                    "ctox.business_os.app.create",
+                )),
+            );
+            for index in 0..QUEUE_PRESSURE_GUARD_THRESHOLD + 1 {
+                let normal = priority_system_dispatch_test_task(
+                    &root,
+                    &format!("normal-{index}"),
+                    "normal",
+                    None,
+                );
+                Connection::open(crate::paths::core_db(&root))?.execute(
+                    "UPDATE communication_messages SET external_created_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+                    [&normal.message_key],
+                )?;
+            }
+            let deferred = priority_system_dispatch_test_task(
+                &root,
+                "deferred",
+                "urgent",
+                Some(json!({"not_before": "2999-01-01T00:00:00Z"})),
+            );
+            let chosen =
+                priority_system_dispatch_test_task(&root, "runnable-system", priority, None);
+            let state = Arc::new(Mutex::new(SharedState::default()));
+            assert!(queue_pressure_active(&root, &state));
+            assert!(
+                channels::list_queue_tasks(&root, &["pending".to_string()], 16)?
+                    .iter()
+                    .all(|task| task.message_key != chosen.message_key)
+            );
+            let mut dispatched = Vec::new();
+            // Exercise the actual router body, replacing only its worker launch:
+            // no provider/model call, while real selection, lease and admission run.
+            route_external_messages_with_priority_dispatch(&root, &state, |prompt| {
+                activate_prompt_dispatch_locked(
+                    &mut lock_shared_state(&state),
+                    &prompt,
+                    "test dispatch".to_string(),
+                );
+                dispatched.push(prompt);
+            })?;
+            assert_eq!(dispatched.len(), 1, "priority task was hidden by pressure");
+            assert_eq!(
+                dispatched[0].leased_message_keys,
+                vec![chosen.message_key.clone()]
+            );
+            assert_eq!(route_status_for(&root, &chosen.message_key), "leased");
+            assert_eq!(route_status_for(&root, &active_app.message_key), "leased");
+            assert_eq!(route_status_for(&root, &waiting_app.message_key), "pending");
+            assert_eq!(route_status_for(&root, &deferred.message_key), "pending");
+            route_external_messages_with_priority_dispatch(&root, &state, |_| {
+                panic!("a second serial task must not dispatch");
+            })?;
+            assert_eq!(
+                channels::count_queue_tasks(&root, &["leased".to_string()])?,
+                2
+            );
+            std::fs::remove_dir_all(root)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn priority_system_idle_dispatch_precedes_old_normal_batch_with_app_lease() -> anyhow::Result<()>
+    {
+        let root = temp_root("priority-system-idle-app-lease");
+        let app = priority_system_dispatch_test_task(
+            &root,
+            "leased-app",
+            "urgent",
+            Some(business_os_app_queue_metadata(
+                "quality",
+                "ctox.business_os.app.create",
+            )),
+        );
+        channels::lease_queue_task(&root, &app.message_key, "app-worker")?;
+        for index in 0..17 {
+            let normal = priority_system_dispatch_test_task(
+                &root,
+                &format!("old-normal-{index}"),
+                "normal",
+                None,
+            );
+            Connection::open(crate::paths::core_db(&root))?.execute(
+                "UPDATE communication_messages SET external_created_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+                [&normal.message_key],
+            )?;
+        }
+        let priority = priority_system_dispatch_test_task(&root, "priority", "high", None);
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let prompt = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)?
+            .expect("priority system work must use the free main slot");
+        assert_eq!(
+            prompt.leased_message_keys,
+            vec![priority.message_key.clone()]
+        );
+        assert_eq!(route_status_for(&root, &app.message_key), "leased");
+        assert_eq!(route_status_for(&root, &priority.message_key), "leased");
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn priority_system_dispatch_retains_busy_and_lease_guards() -> anyhow::Result<()> {
+        let root = temp_root("priority-system-guards");
+        let task = priority_system_dispatch_test_task(&root, "system", "urgent", None);
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        for guard in 0..4 {
+            {
+                let mut shared = lock_shared_state(&state);
+                shared.busy = guard == 0;
+                shared.worker_active_count = usize::from(guard == 1);
+                shared.serial_prompt_starting = guard == 2;
+                shared.durable_queue_lease_in_progress = guard == 3;
+            }
+            assert!(
+                maybe_lease_priority_system_queue_prompt_for_idle_dispatch(&root, &state)?
+                    .is_none()
+            );
+            assert_eq!(route_status_for(&root, &task.message_key), "pending");
+        }
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.durable_queue_lease_in_progress = false;
+        }
+        let first =
+            begin_durable_queue_lease_attempt(&root, &state, DurableQueueDispatchGuard::StrictIdle)
+                .unwrap();
+        assert!(
+            maybe_lease_priority_system_queue_prompt_for_idle_dispatch(&root, &state)?.is_none()
+        );
+        drop(first);
+        let selected = channels::list_pending_priority_system_queue_tasks(&root, 64)?;
+        assert_eq!(selected.len(), 1);
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                priority: Some("normal".to_string()),
+                ..Default::default()
+            },
+        )?;
+        let error = channels::lease_queue_task_if(
+            &root,
+            &selected[0].message_key,
+            CHANNEL_ROUTER_LEASE_OWNER,
+            priority_system_queue_task_is_eligible,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("no longer matches dispatch selection"));
+        assert_eq!(route_status_for(&root, &task.message_key), "pending");
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)?
+                .unwrap()
+                .attempt,
+            0
+        );
+        assert!(
+            maybe_lease_priority_system_queue_prompt_for_idle_dispatch(&root, &state)?.is_none()
+        );
+        std::fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
