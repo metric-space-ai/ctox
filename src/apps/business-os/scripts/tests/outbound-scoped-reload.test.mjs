@@ -156,6 +156,7 @@ try {
       recipientEligibilityReady: new Set(['lead_a']), selectedDetailLoadingKey: '', selectedDetailRequestedKey: '',
       fullLeadReadSequence: 0, fullLeadAppliedSequence: new Map(),
       collectionBindingGeneration: 1, leadHydrationBindingGeneration: 1, reloadAngewendetJeSammlung: new Map(),
+      uiMounted: true,
       sourceToggleIntent: new Map(), pendingLeadPatches: new Map(),
       selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
       researchPolicyLoaded: true, researchPolicy: 'saved', researchPolicyDraft: 'unsaved',
@@ -278,18 +279,22 @@ try {
   });
   await test('selected detail reads coalesce live changes and hydrate the latest selection once', async () => {
     const blocked = deferred(), latest = deferred(); const ids = [];
+    const firstStarted = deferred(), latestStarted = deferred();
     setup({ leads: query => {
       ids.push(query.selector.id.$in);
+      (ids.length === 1 ? firstStarted : latestStarted).resolve();
       return ids.length === 1 ? blocked.promise : latest.promise;
     } });
     state.leads = []; state.leadListRows = [{ id: 'a', _rev: '1-a' }, { id: 'b', _rev: '1-b' }];
     state.selectedLeadId = 'a'; state.recipientEligibilityReady = new Set(['a', 'b']);
     const first = hooks.loadSelectedLeadDetails();
+    await firstStarted.promise;
     for (let i = 0; i < 10; i++) await hooks.loadSelectedLeadDetails();
     state.selectedLeadId = 'b'; await hooks.loadSelectedLeadDetails();
     assert.deepEqual(ids, [['a']], 'no overlapping full reads');
     blocked.resolve([{ toJSON: () => ({ id: 'a', _rev: '1-a', contacts: [] }) }]);
     await first;
+    await latestStarted.promise;
     assert.deepEqual(ids, [['a'], ['b']], 'latest selection is read after the first finishes');
     latest.resolve([{ toJSON: () => ({ id: 'b', _rev: '1-b', contacts: [], evidence: [{ quote: 'latest' }] }) }]);
     await new Promise(resolve => setImmediate(resolve));
@@ -424,5 +429,11 @@ try {
     }
   });
 } finally {
+  const state = (await import(pathToFileURL(join(fixture, 'modules', 'olg', 'index.js')).href)).__leadgenOutboundTestHooks.testState();
+  state.uiMounted = false;
+  state.selectedLeadId = '';
+  state.collectionBindingGeneration++;
+  for (const timer of state.sperrpruefungNeu?.values?.() || []) clearTimeout(timer);
+  state.sperrpruefungNeu?.clear?.();
   rmSync(fixture, { recursive: true, force: true });
 }
