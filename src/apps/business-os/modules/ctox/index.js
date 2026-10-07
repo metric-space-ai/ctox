@@ -1,11 +1,19 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
+<<<<<<< HEAD
 import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20261007-shell-v2-workjet-supervisor-binding';
+=======
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20261007-query-startup-coalescing';
+>>>>>>> origin/main
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
 import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
+<<<<<<< HEAD
 import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261007-shell-v2-workjet-supervisor-binding';
+=======
+import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261007-query-startup-coalescing';
+>>>>>>> origin/main
 
 const FLOW_WIDTH = 1760;
 const FLOW_HEIGHT = 1050;
@@ -31,7 +39,11 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
+<<<<<<< HEAD
 const CTOX_STYLE_BUILD = '20261007-shell-v2-workjet-supervisor-binding';
+=======
+const CTOX_STYLE_BUILD = '20261007-query-startup-coalescing';
+>>>>>>> origin/main
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
