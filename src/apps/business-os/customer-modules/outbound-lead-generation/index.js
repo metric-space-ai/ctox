@@ -26,7 +26,7 @@ function showBusinessConfirm(message, options = {}) { return shellConfirm(messag
 function showBusinessPrompt(message, options = {}) { return shellPrompt(message, { host: eigenesDialogZiel(), ...options }); }
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCollectionReloader } from './collection-reloader.mjs';
-import { loadLeadRevisionChanges } from './lead-revision-loader.mjs';
+import { loadLeadList, loadFullLeadRows, leadListRow } from './lead-list-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 
@@ -521,6 +521,10 @@ const state = {
   adapters: [],
   imports: [],
   leads: [],
+  // Only full records enter leads. The list has its own read-only DTOs.
+  leadListRows: null,
+  fullLeadReadSequence: 0,
+  fullLeadAppliedSequence: new Map(),
   selectedLeadId: '',
   activeContactTabs: new Map(),
   // Eigene Aenderungen, bis die Datenbank sie zurueckliefert (siehe patchLead).
@@ -819,7 +823,7 @@ async function synchronizeInitialData() {
   const sourceContractChanged = await pflegeSchritt('seed-sources', () => seedSources());
   bootSchritt('reload');
   await pflegeSchritt('reload-0', () => reload());
-  if (!state.leads.length) planeLeerNachladen();
+  if (!listLeads().length) planeLeerNachladen();
   // Reparatur- und Abgleichsroutinen schreiben ganze Datensaetze. Auf einem
   // noch nicht live abgeglichenen Stand schrieben sie alte Staende zurueck
   // (needs_review -> failed, CH -> DE; 25.09.2026). Sie laufen deshalb nur,
@@ -1363,17 +1367,12 @@ function bindCollections() {
     collections: state.collections,
     reload: (keys) => reload(keys),
     afterReload: (keys) => {
-      if (keys.length === 1 && keys[0] === 'leads' && state.lastLeadReloadChanged === false && state.leads.length) return;
+      if (keys.length === 1 && keys[0] === 'leads' && state.lastLeadReloadChanged === false && listLeads().length) return;
       render();
       if (!keys.includes('leads')) return;
-      if (state.leads.length) state.nachladenFehlschlaege = 0;
+      if (listLeads().length) state.nachladenFehlschlaege = 0;
       else planeLeerNachladen();
-      const lead = selectedLead();
-      if (lead && !state.recipientEligibilityReady.has(lead.id)) {
-        refreshLeadRecipientEligibility(lead)
-          .then(() => { if (state.selectedLeadId === lead.id && state.collectionReloader) renderDetail(); })
-          .catch(() => {});
-      }
+      void loadSelectedLeadDetails();
     },
     onError: (error) => {
       render();
@@ -1598,11 +1597,11 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   const collections = state.collections;
   const requested = [...new Set(keys)].filter((key) => collections[key]);
   let leadChanges = null;
-  const previousLeads = state.leadHydrationBindingGeneration === bindingGeneration ? state.leads : [];
+  const previousLeads = state.leadHydrationBindingGeneration === bindingGeneration ? listLeads() : [];
   const results = await Promise.all(requested.map(async (key) => {
     const collection = collections[key];
     if (key === 'leads') {
-      leadChanges = await loadLeadRevisionChanges(collection, previousLeads);
+      leadChanges = await loadLeadList(collection, previousLeads);
       return [key, leadChanges.rows];
     }
     const docs = await collection.find().exec();
@@ -1662,11 +1661,12 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
     .filter((item) => item.id !== LEGACY_RESEARCH_POLICY_IMPORT_ID)
     .sort((a, b) => b.updated_at_ms - a.updated_at_ms);
   if (fresh.has('leads')) {
+    const sameBinding = state.leadHydrationBindingGeneration === bindingGeneration;
     state.leadHydrationBindingGeneration = bindingGeneration;
     state.lastLeadReloadChanged = Boolean(leadChanges.changedIds.size || leadChanges.removedIds.size);
-    state.leads = applyPendingLeadPatches(leads.map((lead) => (
-      leadChanges.changedIds.has(lead.id) ? normalizeLeadRecipientShape(lead) : lead
-    ))).sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+    state.leadListRows = leads.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+    const revisions = new Map(leads.map(lead => [lead.id, lead._rev]));
+    state.leads = sameBinding ? state.leads.filter(lead => revisions.get(lead.id) === lead._rev) : [];
     if (state.lastLeadReloadChanged) invalidateChangedRecipientEligibility(state.leads);
   }
   if (!fresh.has('leads') && !fresh.has('imports')) return;
@@ -1675,7 +1675,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   if (nachImport && (Date.now() > nachImport.bis || campaigns.some((campaign) => campaign.name === nachImport.titel))) {
     if (Date.now() <= nachImport.bis) {
       state.selectedCampaign = nachImport.titel;
-      state.selectedLeadId = campaignLeads(nachImport.titel)[0]?.id || '';
+      state.selectedLeadId = campaignListLeads(nachImport.titel)[0]?.id || '';
     }
     state.kampagneNachImport = null;
   }
@@ -1686,13 +1686,115 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   if (!state.selectedCampaign || !campaigns.some((campaign) => campaign.name === state.selectedCampaign)) {
     state.selectedCampaign = campaigns[0]?.name || '';
   }
-  const selectedCampaignLeads = campaignLeads(state.selectedCampaign);
+  const selectedCampaignLeads = campaignListLeads(state.selectedCampaign);
   const campaignLeadIds = new Set(selectedCampaignLeads.map((lead) => lead.id));
   state.selectedLeadIds = new Set(
     [...state.selectedLeadIds].filter((id) => campaignLeadIds.has(id)),
   );
   if (!selectedCampaignLeads.some((lead) => lead.id === state.selectedLeadId)) {
     state.selectedLeadId = selectedCampaignLeads[0]?.id || '';
+  }
+  void loadSelectedLeadDetails();
+}
+
+function listLeads() { return state.leadListRows || state.leads; }
+function campaignListLeads(campaign) { return listLeads().filter(lead => leadKampagnen(lead).includes(campaign)); }
+
+async function ensureFullLeads(ids, { fresh = false } = {}) {
+  const generation = state.collectionBindingGeneration;
+  const requested = [...new Set(ids.filter(Boolean))];
+  const summaries = new Map(listLeads().map(row => [row.id, row]));
+  const cached = new Map(state.leads.map(row => [row.id, row]));
+  const missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
+  if (!missing.length) return requested.map(id => cached.get(id));
+  const sequence = ++state.fullLeadReadSequence;
+  const rows = await loadFullLeadRows(state.collections.leads, missing);
+  if (generation !== state.collectionBindingGeneration || state.uiMounted === false) {
+    throw new Error('Die CTOX-Verbindung hat sich geändert. Bitte die Aktion erneut versuchen.');
+  }
+  const currentSummaries = new Map(listLeads().map(row => [row.id, row]));
+  for (const row of rows) {
+    if (summaries.get(row.id)?._rev !== currentSummaries.get(row.id)?._rev
+      && row._rev !== currentSummaries.get(row.id)?._rev) {
+      throw new Error('Der Lead wurde während des Ladens aktualisiert. Bitte die Aktion erneut versuchen.');
+    }
+  }
+  const current = new Map(state.leads.map(row => [row.id, row]));
+  for (const row of rows) {
+    if (sequence < (state.fullLeadAppliedSequence.get(row.id) || 0)) continue;
+    state.fullLeadAppliedSequence.set(row.id, sequence);
+    const full = normalizeLeadRecipientShape(row);
+    current.set(row.id, full);
+    if (state.leadListRows) {
+      const index = state.leadListRows.findIndex(entry => entry.id === row.id);
+      if (index >= 0) state.leadListRows[index] = leadListRow(full);
+    }
+  }
+  state.leads = applyPendingLeadPatches([...current.values()]);
+  return requested.map(id => state.leads.find(row => row.id === id));
+}
+
+async function loadSelectedLeadDetails() {
+  const id = state.selectedLeadId;
+  if (!id || !listLeads().some(row => row.id === id)) return;
+  const generation = state.collectionBindingGeneration;
+  const key = `${generation}:${id}:${listLeads().find(row => row.id === id)?._rev}`;
+  state.selectedDetailRequestedKey = key;
+  // Selected-lead revisions can change every second during research. Keep one
+  // detail read in flight and coalesce changes instead of piling up full reads.
+  if (state.selectedDetailLoadingKey) return;
+  state.selectedDetailLoadingKey = key;
+  try {
+    await ensureFullLeads([id]);
+    if (state.selectedLeadId !== id || generation !== state.collectionBindingGeneration) return;
+    state.selectedDetailError = '';
+    renderDetail();
+    const lead = selectedLead();
+    if (lead && !state.recipientEligibilityReady.has(id)) {
+      void refreshLeadRecipientEligibility(lead)
+        .then(() => { if (state.selectedLeadId === id && generation === state.collectionBindingGeneration) renderDetail(); })
+        .catch(() => {});
+    }
+  } catch (error) {
+    if (state.selectedLeadId === id && generation === state.collectionBindingGeneration) {
+      state.selectedDetailError = String(error?.message || error);
+      renderDetail();
+    }
+  } finally {
+    if (state.selectedDetailLoadingKey === key) state.selectedDetailLoadingKey = '';
+    if (state.selectedDetailRequestedKey !== key && state.uiMounted !== false) void loadSelectedLeadDetails();
+  }
+}
+
+const FULL_SELECTION_ACTIONS = new Set(['reset-selection-research', 'research-selection',
+  'move-selection-campaign', 'research-selection-new', 'research-selection-followup', 'export-selection-xlsx']);
+const FULL_CAMPAIGN_ACTIONS = new Set(['rename-campaign', 'delete-campaign', 'research-campaign',
+  'research-campaign-gaps', 'check-campaign-remarks', 'export-campaign-xlsx', 'recheck-sellify']);
+const FULL_SINGLE_ACTIONS = new Set(['research-lead', 'research-lead-new', 'research-lead-followup',
+  'research-lead-gaps', 'cancel-research', 'validate-lead', 'edit-lead', 'save-lead-editor',
+  'approve-field', 'release-empty-field', 'unrelease-empty-field', 'toggle-contact-recipient',
+  'export-lead-xlsx', 'sellify-update-only', 'sellify-update-campaign']);
+async function prepareFullLeadAction(action, id, campaign) {
+  let ids = [];
+  if (FULL_SELECTION_ACTIONS.has(action)) ids = [...state.selectedLeadIds];
+  else if (FULL_CAMPAIGN_ACTIONS.has(action)) ids = campaignListLeads(campaign).map(row => row.id);
+  else if (FULL_SINGLE_ACTIONS.has(action)) ids = [id || state.selectedLeadId].filter(Boolean);
+  if (!ids.length) return;
+  const previousNotice = state.notice;
+  const notice = `Vollständige Leads werden geladen (${ids.length}) …`;
+  state.notice = notice;
+  renderCenter();
+  try {
+    await ensureFullLeads(ids, { fresh: !action.startsWith('export-') });
+    if (FULL_SELECTION_ACTIONS.has(action) && (ids.length !== state.selectedLeadIds.size || ids.some(id => !state.selectedLeadIds.has(id)))) {
+      throw new Error('Die Auswahl hat sich während des Ladens geändert. Bitte die Aktion erneut ausführen.');
+    }
+    if (FULL_SINGLE_ACTIONS.has(action) && !id && ids[0] !== state.selectedLeadId) {
+      throw new Error('Der ausgewählte Lead hat sich geändert. Bitte die Aktion erneut ausführen.');
+    }
+  } finally {
+    if (state.notice === notice) state.notice = previousNotice;
+    renderCenter();
   }
 }
 
@@ -1871,7 +1973,7 @@ function leadKampagnen(lead) {
 }
 function campaignRows() {
   const counts = new Map();
-  for (const lead of state.leads) {
+  for (const lead of listLeads()) {
     for (const name of leadKampagnen(lead)) counts.set(name, (counts.get(name) || 0) + 1);
   }
   return [...counts.entries()]
@@ -2798,7 +2900,7 @@ function renderCenter() {
   const leads = angezeigteLeads();
   const campaignProgress = campaignResearchProgress(
     state.selectedCampaign,
-    state.leads,
+    listLeads(),
     state.campaignRuns.get(state.selectedCampaign),
   );
   const campaignAction = campaignProgress.trackingTaskId ? 'track-task' : 'research-campaign';
@@ -2808,7 +2910,7 @@ function renderCenter() {
   const selectedVisibleCount = selectedVisibleLeadCount(leads);
   const selectedCount = state.selectedLeadIds.size;
   const selectedRun = state.campaignRuns.get(state.selectedCampaign);
-  const selectedActionable = campaignLeads(state.selectedCampaign)
+  const selectedActionable = campaignListLeads(state.selectedCampaign)
     .filter((lead) => state.selectedLeadIds.has(lead.id)
       && lead.validation_status !== 'validated'
       && (!['queued', 'running'].includes(lead.research_status)
@@ -2831,17 +2933,21 @@ function renderCenter() {
           ${icon(campaignProgress.trackingTaskId ? 'external' : 'search')}<span>${escapeHtml(campaignProgress.trackingTaskId ? 'Task öffnen' : `Alle recherchieren (${campaignProgress.actionable})`)}</span>
         </button>
         ${(() => {
-          const mitLuecken = leads.filter((lead) => hatRechercheErgebnis(lead) && !researchInFlight(lead) && !researchSubmissionPending(lead) && offeneRecherchefelder(lead).length);
+          const fullById = new Map(state.leads.map(lead => [lead.id, lead]));
+          const mitLuecken = leads.filter((lead) => hatRechercheErgebnis(lead) && !researchInFlight(lead) && !researchSubmissionPending(lead)
+            && (!fullById.has(lead.id) || offeneRecherchefelder(fullById.get(lead.id)).length));
+          const alleDetailsBekannt = leads.every(lead => fullById.has(lead.id));
           return mitLuecken.length
-            ? `<button class="ctox-button" data-action="research-campaign-gaps" data-campaign="${escapeHtml(state.selectedCampaign)}" data-lead-ids="${escapeHtml(mitLuecken.map((lead) => lead.id).join(','))}" title="${escapeHtml(`Bei ${mitLuecken.length} bereits recherchierten Leads nur die noch nicht belegten Felder erneut recherchieren`)}">${icon('search')}<span>Lücken schließen (${mitLuecken.length})</span></button>`
+            ? `<button class="ctox-button" data-action="research-campaign-gaps" data-campaign="${escapeHtml(state.selectedCampaign)}" data-lead-ids="${escapeHtml(mitLuecken.map((lead) => lead.id).join(','))}" title="Noch offene Felder anhand der vollständigen Leads prüfen und recherchieren">${icon('search')}<span>Lücken schließen${alleDetailsBekannt ? ` (${mitLuecken.length})` : ''}</span></button>`
             : '';
         })()}
         ${(() => {
           if (!state.selectedCampaign || !leads.length) return '';
           const lauf = state.kampagnenVermerkLauf;
           if (lauf) return `<button class="ctox-button" disabled>${icon('search')}<span>Vermerke laden ${lauf.done}/${lauf.total}</span></button>`;
-          const geprueft = leads.filter(vermerkPruefungErledigt).length;
-          return `<button class="ctox-button" data-action="check-campaign-remarks" data-campaign="${escapeHtml(state.selectedCampaign)}" title="${escapeHtml('Sellify-Freitextvermerke aller Leads dieser Kampagne vom CTOX-Agenten auf Kontaktsperren prüfen lassen')}">${icon('check')}<span>Sellify-Vermerke (${geprueft}/${leads.length})</span></button>`;
+          const geprueft = state.leads.filter(lead => leads.some(row => row.id === lead.id) && vermerkPruefungErledigt(lead)).length;
+          const alleBekannt = leads.every(row => state.leads.some(lead => lead.id === row.id));
+          return `<button class="ctox-button" data-action="check-campaign-remarks" data-campaign="${escapeHtml(state.selectedCampaign)}" title="${escapeHtml('Sellify-Freitextvermerke aller Leads dieser Kampagne vom CTOX-Agenten auf Kontaktsperren prüfen lassen')}">${icon('check')}<span>Sellify-Vermerke${alleBekannt ? ` (${geprueft}/${leads.length})` : ' prüfen'}</span></button>`;
         })()}
         <button class="ctox-pane-icon" data-action="export-campaign-xlsx" data-campaign="${escapeHtml(state.selectedCampaign)}"
           title="${escapeHtml(tr('exportCampaignXlsxTitle', 'Kampagne als Excel-Datei herunterladen'))}" aria-label="${escapeHtml(tr('exportCampaignXlsxTitle', 'Kampagne als Excel-Datei herunterladen'))}"
@@ -2931,7 +3037,7 @@ function renderCenter() {
   // Leere Liste unterscheiden: gar nichts importiert vs. Suche/Filter treffen
   // nichts (vorher immer "Noch keine Leads importiert", Klicktest-Befund P2 V6).
   const filterAktiv = Boolean(String(state.search || '').trim()) || (state.leadStatusFilter?.size || 0) > 0;
-  const leerText = filterAktiv && campaignLeads(state.selectedCampaign).length
+  const leerText = filterAktiv && campaignListLeads(state.selectedCampaign).length
     ? 'Keine Leads passen zu Suche oder Filter.'
     : datenLadenNoch()
       ? 'Leads werden geladen …'
@@ -2983,13 +3089,19 @@ function renderUnvollstaendigerImport(campaign) {
   const job = unvollstaendigerImport(campaign);
   if (!job) return '';
   const erwartet = Number(job.payload?.expected_lead_count || 0);
-  const vorhanden = campaignLeads(campaign).length;
+  const vorhanden = campaignListLeads(campaign).length;
   return `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status">
     <span>${escapeHtml(`Import unvollständig: ${vorhanden} von ${erwartet} Firmen übernommen`)}</span>
     <button class="ctox-button" data-action="resume-import" data-import-id="${escapeHtml(job.id)}">Fortsetzen</button>
   </div>`;
 }
 function renderCampaignRecipientExclusions(campaign) {
+  const cached = new Set(state.leads.map(lead => lead.id));
+  const missing = campaignListLeads(campaign).filter(lead => !cached.has(lead.id)).length;
+  const notice = missing ? `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status"><span>Kontaktdaten von ${missing} Leads werden erst bei Auswahl oder Prüfung geladen.</span><button class="ctox-button" data-action="recheck-sellify">Kontakte prüfen</button></div>` : '';
+  return notice + renderLoadedCampaignRecipientExclusions(campaign);
+}
+function renderLoadedCampaignRecipientExclusions(campaign) {
   const rows = campaignRecipientExclusions(campaign);
   if (!rows.length) return '';
   // Owner-Befund 03.09.: Das Feld nannte einen Systemzustand und keine
@@ -3153,11 +3265,14 @@ function renderDetail() {
   if (!lead) {
     // Waehrend eines Sync-Ticks ist die Lead-Liste kurz leer. Solange eine
     // Auswahl existiert und die Spalte Inhalt zeigt, bleibt sie stehen.
-    if (state.selectedLeadId && body.childElementCount) return;
-    title.textContent = '—';
+    const summary = listLeads().find(row => row.id === state.selectedLeadId);
+    title.textContent = summary?.name || '—';
     if (actions) actions.innerHTML = '';
     if (tabsHost) tabsHost.innerHTML = '';
-    body.innerHTML = `<div class="leadgen-empty">${tr('selectLead', 'Lead auswählen.')}</div>`;
+    body.innerHTML = `<div class="leadgen-empty" role="status">${escapeHtml(summary
+      ? state.selectedDetailError || 'Details und Belege werden geladen …'
+      : tr('selectLead', 'Lead auswählen.'))}${summary && state.selectedDetailError
+        ? `<button class="ctox-button" data-action="select-lead" data-id="${escapeHtml(summary.id)}">Details erneut laden</button>` : ''}</div>`;
     return;
   }
   const scrollTop = body.scrollTop;
@@ -3413,6 +3528,7 @@ async function handleClick(event) {
   if (!trigger) return;
   const action = trigger.dataset.action;
   const id = trigger.dataset.id || trigger.closest('[data-source-id]')?.dataset.sourceId || '';
+  await prepareFullLeadAction(action, id, trigger.dataset.campaign || state.selectedCampaign);
   if (action === 'retry-sync') {
     await retryInitialSync();
     return;
@@ -3465,7 +3581,7 @@ async function handleClick(event) {
     state.selectedCampaign = trigger.dataset.campaign || '';
     state.selectedLeadIds.clear();
     state.selectionAnchorId = '';
-    const first = state.leads.find((lead) => leadKampagnen(lead).includes(state.selectedCampaign));
+    const first = listLeads().find((lead) => leadKampagnen(lead).includes(state.selectedCampaign));
     renderCampaigns();
     selectLeadAndRefreshEligibility(first?.id || '');
   }
@@ -3785,13 +3901,10 @@ function handleKeydown(event) {
 
 function selectLeadAndRefreshEligibility(id) {
   state.selectedLeadId = id || '';
+  state.selectedDetailError = '';
   renderCenter();
   renderDetail();
-  const lead = state.leads.find((entry) => entry.id === id);
-  if (!lead || state.recipientEligibilityReady.has(id)) return;
-  refreshLeadRecipientEligibility(lead)
-    .then(() => { if (state.selectedLeadId === id) renderDetail(); })
-    .catch(() => {});
+  void loadSelectedLeadDetails();
 }
 
 // EINE Definition von "sichtbar" fuer Tabelle, Kopf-Checkbox und
@@ -3803,7 +3916,7 @@ function selectLeadAndRefreshEligibility(id) {
 function angezeigteLeads() {
   const needle = state.search.trim().toLowerCase();
   const statusFilter = state.leadStatusFilter;
-  const leads = state.leads.filter((lead) => {
+  const leads = listLeads().filter((lead) => {
     // Auch zusaetzliche Kampagnen-Mitglieder zeigen: die Liste zaehlte 55
     // Firmen, die Tabelle zeigte nur die 29 eigenen (26.09.2026).
     return (!state.selectedCampaign || leadKampagnen(lead).includes(state.selectedCampaign))
@@ -3897,6 +4010,7 @@ function sellifyBekanntOhneAbfrage(lead) {
 }
 
 async function startSelectionResearch(variant = 'followup') {
+  await ensureFullLeads([...state.selectedLeadIds]);
   // Owner-Befund 04.09.2026: 19 Leads angehakt, Knopf meldet "Bitte mindestens
   // einen Lead auswaehlen". Ursache: die Auswahl wurde zusaetzlich gegen
   // `state.selectedCampaign` geschnitten. Nach einer Kampagnen-Umbenennung
@@ -4082,6 +4196,7 @@ async function befehlAmServer(commandId) {
 
 async function startCampaignResearch(campaignName) {
   const campaign = String(campaignName || '').trim();
+  await ensureFullLeads(campaignListLeads(campaign).map((lead) => lead.id));
   const leads = campaignLeads(campaign);
   return startScopedResearch(campaign, leads, {
     scope: 'campaign',
@@ -5281,6 +5396,8 @@ async function verarbeiteFreitextAntworten() {
 // CTOX-Agenten anfordern. Seriell, damit die Sellify-Abfragen die App nicht
 // verstopfen (siehe refreshAllRecipientEligibility).
 async function pruefeKampagnenVermerke(campaign) {
+  if (state.kampagnenVermerkLauf) return;
+  await ensureFullLeads(campaignListLeads(campaign).map((lead) => lead.id));
   const leads = campaignLeads(campaign);
   if (!leads.length || state.kampagnenVermerkLauf) return;
   state.kampagnenVermerkLauf = { campaign, done: 0, total: leads.length };
@@ -8867,9 +8984,7 @@ function sellifyLaenderkennung(firma) {
 async function korrigiereSellifyImportlaender() {
   // Laufende Recherchen bleiben unberuehrt; alle anderen bekommen nur das
   // richtige Land (die Recherche selbst hatte CH bereits erkannt).
-  const alleLeads = state.leads.length
-    ? state.leads
-    : (await state.collections.leads.find({ selector: { country: 'DE' } }).exec()).map((doc) => doc.toJSON?.() || doc);
+  const alleLeads = listLeads();
   const kandidaten = alleLeads.filter((lead) => String(lead.country || '') === 'DE'
     && lead.payload?.imported_row?.sellify_contact_id
     && !['queued', 'running', 'requested'].includes(String(lead.research_status || '')));
@@ -8896,9 +9011,11 @@ async function korrigiereSellifyImportlaender() {
   }
   if (globalThis.__olgLaenderkorrektur) globalThis.__olgLaenderkorrektur.laender = Object.fromEntries(laender);
   let korrigiert = 0;
-  for (const lead of kandidaten) {
-    const land = laender.get(String(lead.payload.imported_row.sellify_contact_id));
+  for (const summary of kandidaten) {
+    const land = laender.get(String(summary.payload.imported_row.sellify_contact_id));
     if (!land || land === 'DE') continue;
+    const [lead] = await ensureFullLeads([summary.id]);
+    if (['queued', 'running', 'requested'].includes(String(lead.research_status || ''))) continue;
     const nieGesendet = lead.research_status === 'failed' && !hatRechercheErgebnis(lead)
       && auftragNichtZugestellt(lead.payload?.research_error || lead.research_error || '');
     await patchLead(lead.id, {
@@ -9021,7 +9138,7 @@ async function importiereSellifyKampagne(kampagnenName) {
     clearInterval(uhr);
     await reload();
     if (Number(ergebnis?.lead_count || 0) > 0) {
-      if (campaignLeads(titel).length) state.selectedCampaign = titel;
+      if (campaignListLeads(titel).length) state.selectedCampaign = titel;
       else state.kampagneNachImport = { titel, bis: Date.now() + 120_000 };
       render();
       zeigeHinweis(`Import „${name}“ fertig: ${ergebnis?.lead_count} Firmen aus ${rows.length} Kontakten in ${Math.round((Date.now() - start) / 1000)} s.`
@@ -9141,13 +9258,13 @@ async function openImporter(defaultTitle = '') {
           const titel = String(payload?.title || '').trim();
           // Stehen die neuen Leads beim ersten Nachladen noch nicht bereit,
           // holt reloadAusfuehren die Auswahl nach (Nachtest P2 FX-1).
-          if (titel && !campaignLeads(titel).length) state.kampagneNachImport = { titel, bis: Date.now() + 120_000 };
-          if (titel && campaignLeads(titel).length) {
+          if (titel && !campaignListLeads(titel).length) state.kampagneNachImport = { titel, bis: Date.now() + 120_000 };
+          if (titel && campaignListLeads(titel).length) {
             state.selectedCampaign = titel;
             // Die Detailspalte zeigte sonst weiter einen Lead der vorigen
             // Kampagne (Klicktest P1 #7, P3 FX-01).
-            const auswahlInKampagne = campaignLeads(titel).some((lead) => lead.id === state.selectedLeadId);
-            if (!auswahlInKampagne) state.selectedLeadId = campaignLeads(titel)[0]?.id || '';
+            const auswahlInKampagne = campaignListLeads(titel).some((lead) => lead.id === state.selectedLeadId);
+            if (!auswahlInKampagne) state.selectedLeadId = campaignListLeads(titel)[0]?.id || '';
           }
           render();
         } catch (fehler) {
@@ -9291,8 +9408,8 @@ async function importPreview(payload) {
   // Wie importPayload: ueber ID ODER Name + Domain in der Zielkampagne
   // (Nachtest P1 IMP-07d: Vorschau "2 gueltige", Import "1 vorhanden aktualisiert").
   const vorhandene = analysis.validRows
-    .map((row) => state.leads.find((lead) => lead.id === row.id)
-      || state.leads.find((lead) => String(lead.campaign || '').trim() === zielKampagne
+    .map((row) => listLeads().find((lead) => lead.id === row.id)
+      || listLeads().find((lead) => String(lead.campaign || '').trim() === zielKampagne
         && String(lead.name || '').trim().toLowerCase() === String(row.name || '').trim().toLowerCase()
         && String(lead.domain || '').trim().toLowerCase() === String(row.domain || domainFromUrl(row.website) || '').trim().toLowerCase()))
     .filter(Boolean);
@@ -9304,7 +9421,7 @@ async function importPreview(payload) {
     ...analysis.invalid.map((item) => ({ kind: 'error', text: `Zeile ${item.rowNumber}: ${item.problems.join('; ')}.` })),
     ...(analysis.hinweise || []).map((item) => ({ kind: 'warning', text: `Zeile ${item.rowNumber}: ${item.text}.` })),
   ];
-  const zielLeads = zielKampagne ? campaignLeads(zielKampagne).length : 0;
+  const zielLeads = zielKampagne ? campaignListLeads(zielKampagne).length : 0;
   if (zielKampagne.startsWith('Sellify:')) {
     items.unshift({ kind: 'error', text: `„${zielKampagne}“ ist eine Sellify-Kampagne und nimmt keine Datei-Importe auf. Bitte oben einen eigenen Titel eintragen.` });
   } else if (zielLeads) {
@@ -9372,7 +9489,8 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
   // Firma) und legte jeden einzeln an; eine haengende Einzelabfrage liess den
   // Import bei 21 von 29 Firmen stehen (Kundeninstanz 25.09.2026). Neue Leads werden
   // gesammelt und blockweise angelegt, mit Fortschrittsmeldung.
-  const bekannteIds = new Set(state.leads.map((lead) => lead.id));
+  const identityRows = listLeads();
+  const bekannteIds = new Set(identityRows.map((lead) => lead.id));
   const neueLeads = [];
   const neueLeadIds = new Set();
   const gesamt = normalizedRows.length;
@@ -9389,7 +9507,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
     if (bekannteIds.has(id)) vorabIds.add(id);
     const name = String(row.name || '').trim().toLowerCase();
     const domain = String(row.domain || domainFromUrl(row.website) || '').trim().toLowerCase();
-    const gleich = state.leads.find((lead) => String(lead.campaign || '').trim() === zielKampagne
+    const gleich = identityRows.find((lead) => String(lead.campaign || '').trim() === zielKampagne
       && String(lead.name || '').trim().toLowerCase() === name
       && String(lead.domain || '').trim().toLowerCase() === domain);
     if (gleich) vorabIds.add(gleich.id);
@@ -9405,9 +9523,9 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
     // Kampagnenpruefung aus der geladenen Liste; die Datenbank wird nur gefragt,
     // wenn der Lead in DIESER Kampagne aktualisiert werden muss (mit Frist).
     // Eine haengende Einzelabfrage liess Importe auf "importing" stehen.
-    const bekannt = bekannteIds.has(id) ? state.leads.find((lead) => lead.id === id) : null;
-    let existing = bekannt && String(bekannt.campaign || '').trim() !== zielKampagne ? bekannt : null;
-    if (bekannt && !existing) {
+    const bekannt = bekannteIds.has(id);
+    let existing = null;
+    if (bekannt) {
       existing = await holeDoc(id);
       // Vorhandener Lead nicht ladbar: NIE neu anlegen (das ueberschriebe seine
       // Recherche), sondern auslassen und nennen.
@@ -9419,7 +9537,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
     if (!existing) {
       const name = String(row.name || '').trim().toLowerCase();
       const domain = String(row.domain || domainFromUrl(row.website) || '').trim().toLowerCase();
-      const gleich = state.leads.find((lead) => String(lead.campaign || '').trim() === zielKampagne
+      const gleich = identityRows.find((lead) => String(lead.campaign || '').trim() === zielKampagne
         && String(lead.name || '').trim().toLowerCase() === name
         && String(lead.domain || '').trim().toLowerCase() === domain);
       if (gleich) {
@@ -9567,7 +9685,7 @@ function unvollstaendigerImport(campaignName) {
   const spaeterFertig = jobs.some((job) => job?.status === 'imported'
     && Number(job.created_at_ms || 0) > Number(offen.created_at_ms || 0));
   if (spaeterFertig) return null;
-  if (campaignLeads(name).length >= Number(offen.payload?.expected_lead_count || 0)) return null;
+  if (campaignListLeads(name).length >= Number(offen.payload?.expected_lead_count || 0)) return null;
   return offen;
 }
 async function setzeImportFort(importId) {
@@ -9673,6 +9791,8 @@ function offeneRecherchefelder(lead) {
 // nur die sichtbaren, nie stillschweigend die ganze Kampagne (28.09.2026).
 async function schliesseKampagnenLuecken(kampagne, sichtbareIds = '') {
   const auswahl = new Set(String(sichtbareIds || '').split(',').filter(Boolean));
+  await ensureFullLeads(campaignListLeads(kampagne)
+    .filter((lead) => !auswahl.size || auswahl.has(lead.id)).map((lead) => lead.id));
   const leads = campaignLeads(kampagne).filter((lead) => (!auswahl.size || auswahl.has(lead.id))
     && hatRechercheErgebnis(lead)
     && !researchInFlight(lead) && !researchSubmissionPending(lead) && offeneRecherchefelder(lead).length);
@@ -12431,7 +12551,7 @@ async function cancelResearch(id) {
   const kampagne = String(aktuell.campaign || lead.campaign || '').trim();
   const lauf = state.campaignRuns.get(kampagne);
   if (lauf && ['queued', 'running'].includes(String(lauf.status || ''))
-    && !campaignLeads(kampagne).some((entry) => researchInFlight(entry))) {
+    && !campaignListLeads(kampagne).some((entry) => researchInFlight(entry))) {
     Object.assign(lauf, { status: 'cancelled', finishedAtMs: Date.now() });
   }
   zeigeHinweis('Recherche abgebrochen.');
@@ -13615,6 +13735,10 @@ function icon(name) {
 }
 
 export const __leadgenOutboundTestHooks = {
+  listLeads,
+  ensureFullLeads,
+  loadSelectedLeadDetails,
+  prepareFullLeadAction,
   renderOptionalFieldSettings,
   saveOptionalFields,
   handleClick,
