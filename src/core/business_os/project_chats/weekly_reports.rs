@@ -27,7 +27,9 @@ fn name(route: &ReportRoute) -> String {
     )
 }
 
-pub(super) fn request(route: &ReportRoute) -> anyhow::Result<(ScheduleEnsureRequest, ScheduleCalendar)> {
+pub(super) fn request(
+    route: &ReportRoute,
+) -> anyhow::Result<(ScheduleEnsureRequest, ScheduleCalendar)> {
     let weekday = route.jour_fixe["weekday"]
         .as_u64()
         .context("report has no weekday")?;
@@ -132,7 +134,8 @@ pub(crate) fn reconcile_project_reports(root: &Path) -> anyhow::Result<()> {
             Ok((request, calendar)) => {
                 desired.insert(request.name.clone());
                 schedule::ensure_task_with_calendar_preserving_pause(root, request, calendar)?;
-                desired_preparations.insert(super::jour_fixe_preparation::ensure_schedule(root, &route)?);
+                desired_preparations
+                    .insert(super::jour_fixe_preparation::ensure_schedule(root, &route)?);
             }
             // A storage failure is unknown authority, not a durable revocation.
             Err(error)
@@ -149,7 +152,10 @@ pub(crate) fn reconcile_project_reports(root: &Path) -> anyhow::Result<()> {
         if task.name.starts_with(PREFIX) && task.enabled && !desired.contains(&task.name) {
             schedule::set_task_enabled(root, &task.task_id, false)?;
         }
-        if task.name.starts_with(super::jour_fixe_preparation::PREFIX) && task.enabled && !desired_preparations.contains(&task.name) {
+        if task.name.starts_with(super::jour_fixe_preparation::PREFIX)
+            && task.enabled
+            && !desired_preparations.contains(&task.name)
+        {
             schedule::set_task_enabled(root, &task.task_id, false)?;
         }
     }

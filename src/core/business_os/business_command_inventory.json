@@ -82,6 +82,7 @@
     "ctox.workjet.computer.endpoint.upsert",
     "ctox.workjet.computer.list",
     "ctox.workjet.computer.unassign",
+    "ctox.workjet.jour_fixe.meeting.read",
     "ctox.workjet.project.chat.create",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.list",

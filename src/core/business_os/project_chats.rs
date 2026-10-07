@@ -14,11 +14,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+pub(in crate::business_os) mod jour_fixe_preparation;
 mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
 pub(in crate::business_os) mod supervisor_turns;
 mod weekly_reports;
-pub(in crate::business_os) mod jour_fixe_preparation;
 pub(super) use privacy::{
     command_access_check, document_visible_from_connections, document_visible_to_actor,
     has_restricted_reference, VisibilityReadContext,

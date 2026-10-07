@@ -1270,7 +1270,10 @@ impl CentralCommandPolicyRequirement {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataRead,
             ))
-        } else if matches!(command_type, "ctox.workjet.project.supervisor.turn.watch" | "ctox.workjet.jour_fixe.meeting.read") {
+        } else if matches!(
+            command_type,
+            "ctox.workjet.project.supervisor.turn.watch" | "ctox.workjet.jour_fixe.meeting.read"
+        ) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataRead,
             ))
@@ -1708,10 +1711,15 @@ fn dispatch_business_command(
         }
         "ctox.workjet.jour_fixe.meeting.read" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
-            let owner = session_user_id(session).context("meeting read requires authenticated user")?;
+            let owner =
+                session_user_id(session).context("meeting read requires authenticated user")?;
             match super::project_chats::jour_fixe_preparation::read(root, command, owner) {
                 Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
-                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(None, serde_json::json!({"ok":false,"error":error.to_string()}), error)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
+                )),
             }
         }
         "ctox.workjet.project.supervisor.turn.submit"

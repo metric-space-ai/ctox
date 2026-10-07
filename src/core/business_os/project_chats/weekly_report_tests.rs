@@ -46,7 +46,10 @@ fn patch_project(root: &Path, patch: impl FnOnce(&mut Value)) -> anyhow::Result<
 }
 fn task(root: &Path) -> anyhow::Result<schedule::ScheduledTaskView> {
     crate::business_os::reconcile_project_reports(root)?;
-    let tasks: Vec<_> = schedule::list_tasks(root)?.into_iter().filter(|task| task.name.starts_with("workjet-weekly-report:")).collect();
+    let tasks: Vec<_> = schedule::list_tasks(root)?
+        .into_iter()
+        .filter(|task| task.name.starts_with("workjet-weekly-report:"))
+        .collect();
     assert_eq!(tasks.len(), 1);
     Ok(tasks.into_iter().next().unwrap())
 }

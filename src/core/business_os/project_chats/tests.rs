@@ -6,6 +6,8 @@ use crate::business_os::{mcp_channel, store, threads, worker_profile_bindings};
 use std::sync::{Arc, Barrier};
 use tempfile::{tempdir, TempDir};
 
+#[path = "jour_fixe_preparation_tests.rs"]
+mod jour_fixe_preparation;
 #[path = "recovery_tests.rs"]
 mod recovery;
 #[path = "supervisor_tests.rs"]
@@ -14,8 +16,6 @@ mod supervisor;
 mod supervisor_turns;
 #[path = "weekly_report_tests.rs"]
 mod weekly_reports;
-#[path = "jour_fixe_preparation_tests.rs"]
-mod jour_fixe_preparation;
 
 fn command(kind: &str, id: &str, payload: Value) -> BusinessCommand {
     BusinessCommand {
