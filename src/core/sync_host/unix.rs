@@ -185,6 +185,15 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
                 )?)
             })
         },
+        ["handoff-reauthorize-source", binding] => {
+            let _lease = HostDirectoryLock::acquire(&directory(&root))?;
+            let config = configuration(&root)?;
+            super::with_current_signing_identity(&root, |identity| {
+                print(serde_json::to_value(crate::business_os::session_handoff_enrollment::reauthorize_source(
+                    &root, &config, identity, binding,
+                )?)?)
+            })
+        },
         ["handoff-revoke", binding] => {
             let revoked = crate::business_os::session_handoff_enrollment::revoke_binding(&root, binding)?;
             print(serde_json::json!({"revoked": revoked}))
@@ -207,7 +216,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
         }, |started, _authority, _guests| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
-        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-revoke <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
+        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
     }
 }
 

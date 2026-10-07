@@ -15,6 +15,8 @@ mod source_checkpoint;
 pub(crate) mod source_handoff;
 #[path = "guest_registry_source_journal.rs"]
 mod source_journal;
+#[path = "guest_registry_source_policy.rs"]
+mod source_policy;
 #[path = "guest_registry_workspaces.rs"]
 pub(crate) mod workspaces;
 pub(crate) use source_journal::NativeSourceJournalReceipt;
@@ -939,7 +941,10 @@ impl NativeGuestRegistry {
     }
 }
 
-fn validate_policy(conn: &Connection, destination: &GuestRestoreDestination) -> Result<String> {
+fn policy_snapshot(
+    conn: &Connection,
+    destination: &GuestRestoreDestination,
+) -> Result<serde_json::Value> {
     let project = super::project_chats::owned_project(
         conn,
         &destination.project_id,
@@ -1000,19 +1005,20 @@ fn validate_policy(conn: &Connection, destination: &GuestRestoreDestination) -> 
     );
     let provider_assignment = accounts::snapshot(conn, destination)?;
     let workspace_assignment = workspaces::snapshot(conn, destination)?;
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&(
-            project,
-            profile,
-            computer,
-            member,
-            chat,
-            thread,
-            provider_assignment,
-            workspace_assignment
-        ))?)
-    ))
+    Ok(serde_json::to_value((
+        project,
+        profile,
+        computer,
+        member,
+        chat,
+        thread,
+        provider_assignment,
+        workspace_assignment,
+    ))?)
+}
+
+fn validate_policy(conn: &Connection, destination: &GuestRestoreDestination) -> Result<String> {
+    source_policy::revision(&policy_snapshot(conn, destination)?)
 }
 
 impl NativeGuestExecution {

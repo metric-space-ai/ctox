@@ -75,7 +75,14 @@ root={root}
 run={run}
 source={source}
 target={target}
-mkdir -p -- "$root/runs/{task_id}" "$root/run" "$root/wait" "$target"
+tracking="$root/run/native-{task_id}-{run_id}"
+mkdir -p -- "$root/run" "$root/wait"
+# Publish the target's live-run metadata before a concurrent prototype GC can
+# consider it idle. The detached child closes its inherited GC lock immediately.
+exec 8>"$root/gc.lock"
+flock -w 10 8 || exit 75
+mkdir -p -- "$root/runs/{task_id}" "$target"
+touch -- "$target"
 # An existing run is never relaunched or overwritten.
 mkdir -- "$run" || exit 73
 cat > "$run/job.sh" <<'{delimiter}'
@@ -86,9 +93,13 @@ run={run}
 root={root}
 source={source}
 target={target}
+tracking="$root/run/native-{task_id}-{run_id}"
+exec 8>&-
 finish() {{
     rc=$?
     trap - EXIT
+    touch -- "$target" || true
+    rm -f -- "$tracking.pid" "$tracking.meta"
     exec 9>&-
     [[ -z "${{ticket:-}}" ]] || rm -f -- "$ticket"
     timeout --kill-after=2s 10s rm -rf -- "$run/tmp" || true
@@ -135,10 +146,14 @@ export MAKEFLAGS='-j{jobs}'
 timeout --signal=TERM --kill-after=10s "$remaining"s {command}
 {delimiter}
 chmod 700 "$run/job.sh"
+printf 'run=%s owner=%s task=%s target=%s source=%s started=%s\n' \
+    'native-{task_id}-{run_id}' {owner} '{task_id}' '{source_id}' '{source_id}' \
+    "$(date -u +%FT%TZ)" > "$tracking.meta"
 # setsid detaches the session; all descriptors are redirected before returning.
 nohup setsid bash "$run/job.sh" </dev/null >"$run/log" 2>&1 &
 printf '%s\n' "$!" > "$run/pid"
-printf '%s\n' "$!" > "$root/run/native-{task_id}-{run_id}.pid"
+printf '%s\n' "$!" > "$tracking.pid"
+exec 8>&-
 printf '%s\n' "$run"
 "#,
         owner = quote(owner_id)?,
@@ -236,6 +251,104 @@ mod tests {
             .status()
             .unwrap();
         assert_eq!(status.code(), Some(73));
+    }
+
+    #[test]
+    fn prototype_gc_preserves_active_native_target_and_reclaims_finished_target() {
+        let (_dir, grant) = fixture();
+        let job = plan(
+            &grant,
+            "fixture",
+            "task",
+            "gc",
+            "source",
+            &[
+                "bash".into(),
+                "-c".into(),
+                "while [[ ! -e \"$1/release\" ]]; do sleep 0.05; done".into(),
+                "fixture".into(),
+                grant.lane_root.clone(),
+            ],
+            10,
+        )
+        .unwrap();
+        fs::create_dir_all(&job.source_dir).unwrap();
+        launch(&job);
+        wait_file(&format!("{}/slot", job.run_dir));
+        let artifact = format!("{}/compiled.rlib", job.target_dir);
+        fs::write(&artifact, "compiled").unwrap();
+        // Match the shared lane-gc.sh's exact metadata/PID liveness convention.
+        let gc = r#"set -eu
+exec 9>"$1/gc.lock"; flock 9
+t="${2##*/}"
+alive=0
+for p in "$1"/run/*.pid; do
+    [ -e "$p" ] || continue
+    m="${p%.pid}.meta"
+    if grep -q -e "task=$t " -e "target=$t " "$m" 2>/dev/null && kill -0 "$(cat "$p")" 2>/dev/null; then alive=1; break; fi
+done
+if [ "$alive" = 0 ]; then rm -rf -- "$2"; fi
+"#;
+        let collect = |target: &str| {
+            assert!(Command::new("bash")
+                .args(["-c", gc, "fixture", &grant.lane_root, target])
+                .status()
+                .unwrap()
+                .success());
+        };
+        let inactive = format!("{}/target/inactive", grant.lane_root);
+        fs::create_dir_all(&inactive).unwrap();
+        collect(&inactive);
+        assert!(!std::path::Path::new(&inactive).exists());
+        collect(&job.target_dir);
+        assert_eq!(fs::read_to_string(&artifact).unwrap(), "compiled");
+        fs::write(format!("{}/release", grant.lane_root), "release").unwrap();
+        assert_eq!(wait_file(&format!("{}/exit", job.run_dir)).trim(), "0");
+        collect(&job.target_dir);
+        assert!(!std::path::Path::new(&job.target_dir).exists());
+    }
+
+    #[test]
+    fn prototype_gc_lock_serializes_native_target_registration() {
+        let (_dir, grant) = fixture();
+        fs::create_dir_all(&grant.lane_root).unwrap();
+        let marker = format!("{}/gc-holder-ready", grant.lane_root);
+        let mut holder = Command::new("bash")
+            .arg("-c")
+            .arg("exec 9>\"$1/gc.lock\"; flock 9; printf ready > \"$2\"; read -r release")
+            .arg("fixture")
+            .arg(&grant.lane_root)
+            .arg(&marker)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        wait_file(&marker);
+        let job = plan(
+            &grant,
+            "fixture",
+            "task",
+            "gc-lock",
+            "source",
+            &["true".into()],
+            10,
+        )
+        .unwrap();
+        fs::create_dir_all(&job.source_dir).unwrap();
+        std::thread::scope(|scope| {
+            let launcher = scope.spawn(|| launch(&job));
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(!std::path::Path::new(&job.target_dir).exists());
+            use std::io::Write;
+            holder
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"release\n")
+                .unwrap();
+            assert!(holder.wait().unwrap().success());
+            launcher.join().unwrap();
+        });
+        assert_eq!(wait_file(&format!("{}/exit", job.run_dir)).trim(), "0");
     }
 
     #[test]

@@ -119,14 +119,33 @@ issuer/policy transaction; failure to persist the audit denies the permit.
 Request payloads, nonces, journal text and reusable credentials are excluded.
 
 Creating or changing a permission grant increments the principal capability
-epoch. A grant added after this source capture therefore invalidates its
-captured policy and cannot enable disclosure. This preparation does not
-reset epochs or reauthorize provider/workspace assignments. A production
-grant-before-capture intent or explicit native capture-policy reconciliation
-is still needed before a protected transfer consumer can use the enrollment.
-The allowed/audit regression seeds an aligned isolated fixture epoch after
-first proving that the real grant mutation denies the old capture; it is
-not evidence of a production grant reconciliation workflow.
+epoch, invalidating the original capture policy. The complete native capture
+now retains its immutable policy snapshot in the private native store, hashed
+against the captured policy revision. After the exact disclosure grant and
+separate explicit current provider/workspace regrants, the trusted operator
+may run `ctox sync handoff-reauthorize-source <binding-id>`.
+
+Reauthorization compares that actual capture snapshot with current policy.
+Only monotonic epochs, assignment revisions and provider timestamp changes
+are eligible. Role/active state, project/chat/profile/computer records,
+account/model, working-copy record/path/device/inode, producer contract,
+checkpoint and both peer identities must remain the same. Missing historical
+proof or a changed scope requires a fresh capture. The command neither
+lowers epochs nor creates grants or assignments.
+
+The stable binding ID retains its exact grant scope. A successful renewal
+changes the binding digest and increments its revision atomically with the
+private current-source authorization, policy snapshot and audit event. A
+later renewal must also preserve scope and advance monotonically from this
+last authorization. Old digests cannot mint permits; exact retry leaves the
+digest/revision/audit unchanged.
+The production disclosure gate re-resolves this current authorization on
+every call. Revoked bindings cannot be renewed. The actual stopped Core
+regression now follows grant mutation, current assignment provisioning and
+native renewal with a strictly increasing principal epoch.
+
+This is source policy reauthorization. Current credential/physical-byte
+guards, target enrollment and same-session target activation remain open.
 
 Receive/execute grants, target-local enrollment, effect reconciliation,
 authenticated byte transport and same-session target activation remain open.
