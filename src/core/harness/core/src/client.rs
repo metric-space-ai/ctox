@@ -246,6 +246,8 @@ struct LastResponse {
 #[derive(Debug, Default)]
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
+    // One imported completed chain may be used on its first fresh connection.
+    native_reconnect_pending: bool,
     last_request: Option<ResponsesApiRequest>,
     last_response: Option<LastResponse>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
@@ -362,6 +364,45 @@ impl ModelClient {
             "transportConnection": "reconnect-required",
             "turnRoutingToken": "not-transferable"
         }))
+    }
+
+    /// Restore completed continuity into a fresh target-local client only.
+    pub(crate) fn import_native_continuation(
+        &self,
+        imported: &crate::native_session_state::NativeModelContinuation,
+    ) -> std::io::Result<()> {
+        imported.validate(self.state.conversation_id)?;
+        if self.state.provider.wire_api != imported.wire_api
+            || self.state.responses_websockets_enabled_by_feature != imported.websockets_enabled
+        {
+            return Err(std::io::Error::other(
+                "native target model transport differs",
+            ));
+        }
+        let mut cached = self
+            .state
+            .cached_websocket_session
+            .lock()
+            .map_err(|_| std::io::Error::other("native model client state unavailable"))?;
+        if cached.connection.is_some()
+            || cached.last_request.is_some()
+            || cached.last_response.is_some()
+            || cached.last_response_rx.is_some()
+        {
+            return Err(std::io::Error::other(
+                "native target model client is not fresh",
+            ));
+        }
+        cached.last_request = imported.last_request.clone();
+        cached.last_response = imported.last_response.as_ref().map(|r| LastResponse {
+            response_id: r.response_id.clone(),
+            items_added: r.items_added.clone(),
+        });
+        cached.native_reconnect_pending = cached.last_response.is_some();
+        self.state
+            .disable_websockets
+            .store(imported.http_fallback, Ordering::Relaxed);
+        Ok(())
     }
 
     fn take_cached_websocket_session(&self) -> WebsocketSession {
@@ -844,6 +885,7 @@ fn required_initial_tool_notice(
 impl ModelClientSession {
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
+        self.websocket_session.native_reconnect_pending = false;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response = None;
         self.websocket_session.last_response_rx = None;
@@ -1205,9 +1247,11 @@ impl ModelClientSession {
         };
 
         if needs_new {
-            self.websocket_session.last_request = None;
-            self.websocket_session.last_response = None;
-            self.websocket_session.last_response_rx = None;
+            if !self.websocket_session.native_reconnect_pending {
+                self.websocket_session.last_request = None;
+                self.websocket_session.last_response = None;
+                self.websocket_session.last_response_rx = None;
+            }
             let turn_state = options
                 .turn_state
                 .clone()
@@ -1234,6 +1278,7 @@ impl ModelClientSession {
                 }
             };
             self.websocket_session.connection = Some(new_conn);
+            self.websocket_session.native_reconnect_pending = false;
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ false);
         } else {

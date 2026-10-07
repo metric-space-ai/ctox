@@ -90,7 +90,7 @@ pub enum ResponseEvent {
     ModelsEtag(String),
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Reasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
@@ -100,14 +100,14 @@ pub struct Reasoning {
     pub exclude: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Default, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TextFormatType {
     #[default]
     JsonSchema,
 }
 
-#[derive(Debug, Serialize, Default, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
 pub struct TextFormat {
     /// Format type used by the OpenAI text controls.
     pub r#type: TextFormatType,
@@ -121,7 +121,7 @@ pub struct TextFormat {
 
 /// Controls the `text` field for the Responses API, combining verbosity and
 /// optional JSON schema output formatting.
-#[derive(Debug, Serialize, Default, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
 pub struct TextControls {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verbosity: Option<OpenAiVerbosity>,
@@ -129,7 +129,7 @@ pub struct TextControls {
     pub format: Option<TextFormat>,
 }
 
-#[derive(Debug, Serialize, Default, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum OpenAiVerbosity {
     Low,
@@ -157,7 +157,7 @@ fn parallel_tool_calls_disabled(value: &bool) -> bool {
     !*value
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ResponsesApiRequest {
     pub model: String,
     pub instructions: String,
@@ -166,7 +166,7 @@ pub struct ResponsesApiRequest {
     pub input: Vec<ResponseItem>,
     pub tools: Vec<serde_json::Value>,
     pub tool_choice: String,
-    #[serde(skip_serializing_if = "parallel_tool_calls_disabled")]
+    #[serde(default, skip_serializing_if = "parallel_tool_calls_disabled")]
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -149,6 +149,7 @@ pub struct ThreadManager {
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    creation: std::sync::Mutex<ThreadCreationState>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -159,6 +160,25 @@ pub(crate) struct ThreadManagerState {
     session_source: SessionSource,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
+}
+
+#[derive(Default)]
+struct ThreadCreationState {
+    normal_in_flight: u32,
+    native_claimed: bool,
+}
+
+// Retain only a reservation across awaits, never the mutex. Cancellation and
+// failed ordinary startup release their count; a native manager is one-use.
+struct ThreadCreationGuard<'a>(&'a std::sync::Mutex<ThreadCreationState>);
+impl Drop for ThreadCreationGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.normal_in_flight -= 1;
+    }
 }
 
 impl ThreadManager {
@@ -186,6 +206,7 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                creation: std::sync::Mutex::new(ThreadCreationState::default()),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new_with_provider(
                     codex_home,
@@ -247,6 +268,7 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                creation: std::sync::Mutex::new(ThreadCreationState::default()),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider_for_tests(
                     codex_home,
@@ -402,6 +424,74 @@ impl ThreadManager {
             parent_trace,
         ))
         .await
+    }
+
+    /// Restore protected native context on a fresh target manager before its
+    /// first turn. The native owner must separately establish current account,
+    /// workspace, policy, clean effects and quorum ownership. This is not a
+    /// renderer RPC and neither history nor this Rust object grants authority.
+    pub async fn resume_thread_from_native_checkpoint(
+        &self,
+        config: Config,
+        rollout_path: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        native_state: crate::NativeSessionState,
+    ) -> CodexResult<NewThread> {
+        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        native_state
+            .validate_target(&config, &initial_history)
+            .map_err(|_| {
+                CodexErr::Fatal("native target identity or configuration differs".into())
+            })?;
+        let threads = self.state.threads.read().await;
+        if !threads.is_empty() {
+            return Err(CodexErr::Fatal(
+                "native import requires a fresh target manager".into(),
+            ));
+        }
+        {
+            let mut creation = self
+                .state
+                .creation
+                .lock()
+                .map_err(|_| CodexErr::Fatal("thread creation state unavailable".into()))?;
+            if creation.native_claimed || creation.normal_in_flight != 0 {
+                return Err(CodexErr::Fatal(
+                    "native target manager is already in use".into(),
+                ));
+            }
+            creation.native_claimed = true;
+        }
+        drop(threads);
+        let watch_registration = self
+            .state
+            .file_watcher
+            .register_config(&config, self.state.skills_manager.as_ref());
+        let CodexSpawnOk {
+            codex, thread_id, ..
+        } = Box::pin(Codex::spawn(CodexSpawnArgs {
+            config,
+            auth_manager,
+            models_manager: self.state.models_manager.clone(),
+            skills_manager: self.state.skills_manager.clone(),
+            plugins_manager: self.state.plugins_manager.clone(),
+            mcp_manager: self.state.mcp_manager.clone(),
+            file_watcher: self.state.file_watcher.clone(),
+            conversation_history: initial_history,
+            native_state: Some(native_state),
+            session_source: self.state.session_source.clone(),
+            agent_control: self.agent_control(),
+            dynamic_tools: Vec::new(),
+            persist_extended_history: true,
+            metrics_service_name: None,
+            inherited_shell_snapshot: None,
+            parent_trace: None,
+            user_shell_override: None,
+        }))
+        .await?;
+        self.state
+            .finalize_thread_spawn(codex, thread_id, watch_registration)
+            .await
     }
 
     pub async fn resume_thread_with_history(
@@ -734,6 +824,20 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
+        let _creation = {
+            let mut creation = self
+                .creation
+                .lock()
+                .map_err(|_| CodexErr::Fatal("thread creation state unavailable".into()))?;
+            if creation.native_claimed {
+                return Err(CodexErr::Fatal("native target manager is reserved".into()));
+            }
+            creation.normal_in_flight = creation
+                .normal_in_flight
+                .checked_add(1)
+                .ok_or_else(|| CodexErr::Fatal("thread creation capacity exceeded".into()))?;
+            ThreadCreationGuard(&self.creation)
+        };
         let watch_registration = self
             .file_watcher
             .register_config(&config, self.skills_manager.as_ref());
@@ -748,6 +852,7 @@ impl ThreadManagerState {
             mcp_manager: Arc::clone(&self.mcp_manager),
             file_watcher: Arc::clone(&self.file_watcher),
             conversation_history: initial_history,
+            native_state: None,
             session_source,
             agent_control,
             dynamic_tools,

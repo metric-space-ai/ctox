@@ -444,6 +444,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         mcp_manager,
         file_watcher,
         conversation_history: InitialHistory::New,
+        native_state: None,
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),
         )),

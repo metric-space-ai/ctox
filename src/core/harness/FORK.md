@@ -13,6 +13,28 @@ Fork policy:
 - This tree is integrated directly into CTOX and is not treated as a package dependency.
 - Local modifications inside this subtree belong to the CTOX fork state unless explicitly documented otherwise.
 - CTOX must not auto-clone, auto-fetch, or auto-update this subtree from upstream.
+## 2026-10 Original-session checkpoint import
+
+`ThreadManager::resume_thread_from_native_checkpoint` restores the captured
+Core state into a fresh manager and the original thread identity. Its strict,
+bounded decoder binds the harness version, session, model, provider and
+reconnect markers. A private mutable copy of the original rollout is required;
+the immutable checkpoint is never used as the target recorder file.
+
+The import restores compacted history, reference context, token accounting,
+previous-turn state, instructions, tools and completed provider continuity
+before exposing the submission loop. The first new WebSocket connection keeps
+the imported completed request/response pair; ordinary reconnects still reset
+it. Credentials, socket, turn routing token, cwd, dependency environment and
+approval authority are recreated locally. A one-use manager reservation rejects
+concurrent ordinary creation and another native import. Import submits no turn.
+
+The decoder is not an execution permit or a clean-effect receipt. The native
+owner must independently revalidate account, policy, workspace and quorum
+ownership before activation. Target workspace preparation now decodes the
+protected Core artifact before staging, but does not activate Core. The actual
+Core/next-turn fixture mocks only the model endpoint; installed two-host
+continuation and authoritative effect reconciliation remain open.
 
 
 ## 2026-10 User-agent platform discovery
@@ -61,7 +83,7 @@ This change does not implement queue-claim cancellation or publication fencing.
 
 The retained Core thread can export private state only after successful
 submission-loop termination and checked recorder shutdown, with no active
-turn. The sealed Rust object has no wire/deserialization constructor. It
+turn. The sealed Rust object uses a strict checkpoint decoder for target import. It
 contains the actual compacted ContextManager history, reference context and
 token usage, previous-turn settings, session instructions/tools and the
 ModelClient's actual completed request/response continuity. A foreign client
