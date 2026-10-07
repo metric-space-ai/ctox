@@ -1,5 +1,5 @@
-use ctox_voxtral_4b_tts_2603::model::names;
 use ctox_voxtral_4b_tts_2603::safetensors::SafeTensors;
+use ctox_voxtral_4b_tts_2603::speech::required_tensors;
 use ctox_voxtral_4b_tts_2603::tensor::DType;
 
 fn main() {
@@ -36,7 +36,7 @@ fn main() {
         .filter(|t| t.dtype == DType::F32)
         .count();
     println!("dtype counts: BF16={bf16}, F32={f32n}");
-    for key in [names::TOK_EMBEDDINGS, names::ADAPTER_L0, names::ADAPTER_L1] {
+    for key in required_tensors() {
         match st.find(key) {
             Some(t) => println!("{key}: {:?} {:?}", t.dtype, t.shape),
             None => println!("{key}: missing"),
