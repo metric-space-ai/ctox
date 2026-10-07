@@ -20,9 +20,27 @@ To select the existing Mistral account, an authorized native handler saves:
 SpeechRuntimeConfig {
     synthesis: SpeechBackend::Mistral,
     transcription: SpeechBackend::Mistral,
-    voice_id: None, // or an existing approved preset/saved voice
+    voice_id: Some("<approved saved voice ID>".into()),
 }.save(root)?;
 ```
+
+A local operator with authority over the CTOX runtime root can also run
+`ctox runtime speech-configure <speech-config.json>` with the same typed fields:
+
+```json
+{"synthesis":"mistral","transcription":"mistral","voice_id":"<approved saved voice ID>"}
+```
+
+The entire document (at most4096bytes) is parsed and validated before persistence.
+Unknown fields, credential values and invalid backend names are rejected. This
+command neither writes credentials nor starts paid inference. Remote meeting
+handlers still require their existing Owner/Admin authorization before saving.
+
+Mistral TTS in this adapter requires a saved voice ID, in configuration or on the
+request. Missing voice returns `MissingVoice` before any provider request; the
+adapter does not upload reference audio or assume a default voice. Speech status
+reports voice configuration and credential presence separately, neither proves
+that the provider accepted a call.
 
 Mistral credentials resolve through the existing encrypted
 `CTOX_MISTRAL_API_KEY` / `MISTRAL_API_KEY` runtime path. The config and status

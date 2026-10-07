@@ -63,6 +63,59 @@ fn typed_configuration_persists_and_rejects_unknown_fields() {
     assert!(invalid.save(root.path()).is_err());
 }
 
+#[test]
+fn configure_file_validates_before_replacing_existing_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("speech-config.json");
+    let original = SpeechRuntimeConfig {
+        synthesis: SpeechBackend::Mistral,
+        transcription: SpeechBackend::Mistral,
+        voice_id: Some("approved-voice".into()),
+    };
+    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+    let status = configure_from_file(root.path(), &path).unwrap();
+    assert_eq!(status.config, original);
+    assert!(status.mistral_voice_configured);
+    assert!(status.streaming_stt_selected);
+    for invalid in [
+        r#"{"synthesis":"mistyped","transcription":"runtime","voice_id":null}"#,
+        r#"{"synthesis":"runtime","transcription":"runtime","api_key":"not-a-secret"}"#,
+        r#"{"synthesis":"runtime","transcription":"runtime","voice_id":" "}"#,
+        "{}",
+    ] {
+        std::fs::write(&path, invalid).unwrap();
+        assert!(configure_from_file(root.path(), &path).is_err());
+        assert_eq!(SpeechRuntimeConfig::load(root.path()).unwrap(), original);
+    }
+    std::fs::write(&path, vec![b' '; 4097]).unwrap();
+    assert!(configure_from_file(root.path(), &path).is_err());
+    assert_eq!(SpeechRuntimeConfig::load(root.path()).unwrap(), original);
+}
+
+#[test]
+fn missing_saved_voice_fails_before_provider_transport() {
+    let root = tempfile::tempdir().unwrap();
+    let gateway = SpeechGateway {
+        root: root.path().to_owned(),
+        config: SpeechRuntimeConfig {
+            synthesis: SpeechBackend::Mistral,
+            transcription: SpeechBackend::Mistral,
+            voice_id: None,
+        },
+    };
+    assert!(!gateway.status().mistral_voice_configured);
+    assert_eq!(
+        gateway
+            .synthesize(&SpeechRequest {
+                text: "Hi".into(),
+                format: SpeechAudioFormat::Wav,
+                voice_id: None,
+            })
+            .err(),
+        Some(SpeechError::MissingVoice)
+    );
+}
+
 #[tokio::test]
 async fn unavailable_streaming_fails_before_transport() {
     let root = tempfile::tempdir().unwrap();
