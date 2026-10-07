@@ -246,6 +246,38 @@ fn native_core_import_preserves_original_session_context_and_next_response_chain
                 .is_err());
             assert_eq!(std::fs::read(&target_journal).unwrap(), journal_bytes);
         }
+        let mut foreign_journal = Vec::new();
+        let mut changed = false;
+        for line in std::str::from_utf8(&journal_bytes).unwrap().lines() {
+            let mut record: ctox_protocol::protocol::RolloutLine =
+                serde_json::from_str(line).unwrap();
+            if let ctox_protocol::protocol::RolloutItem::SessionMeta(meta) = &mut record.item {
+                meta.meta.id = ctox_protocol::ThreadId::new();
+                changed = true;
+            }
+            serde_json::to_writer(&mut foreign_journal, &record).unwrap();
+            foreign_journal.push(b'\n');
+        }
+        assert!(
+            changed,
+            "real journal must contain original session metadata"
+        );
+        let foreign_path = root.path().join("target-home/foreign.jsonl");
+        std::fs::write(&foreign_path, &foreign_journal).unwrap();
+        let (foreign_manager, foreign_auth) = manager(&target_config);
+        assert!(
+            foreign_manager
+                .resume_thread_from_native_checkpoint(
+                    target_config.clone(),
+                    foreign_path.clone(),
+                    foreign_auth,
+                    imported(),
+                )
+                .await
+                .is_err(),
+            "foreign rollout cannot acquire original Core state"
+        );
+        assert_eq!(std::fs::read(&foreign_path).unwrap(), foreign_journal);
         // Both real import calls race for the same original session. Exactly
         // one may expose a thread; the loser must never create another recorder.
         let (first, second) = tokio::time::timeout(Duration::from_secs(20), async {
