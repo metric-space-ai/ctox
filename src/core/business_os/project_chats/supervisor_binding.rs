@@ -7,7 +7,7 @@ use super::*;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 
-pub(super) const CONTRACT: &str = "ctox.workjet.supervisor_binding.v1";
+pub(in crate::business_os) const CONTRACT: &str = "ctox.workjet.supervisor_binding.v1";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
