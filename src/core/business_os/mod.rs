@@ -4,10 +4,10 @@
 mod app_runtime;
 mod ats_gates;
 mod backup_restore;
-pub(crate) mod build_ssh;
 mod browser_control;
 mod browser_runtime;
 pub mod build_lane_runner;
+pub(crate) mod build_ssh;
 mod capability;
 mod command_plane;
 mod contact_email_validation;
