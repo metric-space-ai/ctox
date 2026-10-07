@@ -107,7 +107,14 @@ and `additionalProperties: false`. Native typed settings and the agentless flag
 are retained in the authoritative record but excluded from that projection;
 capability names continue to replicate over the existing WebRTC data plane.
 There is no schema version/hash change or HTTP data bridge in this increment.
-The expanded UI schema and editing workflow are coordinated with Main after
+The Workjet guest command bridge accepts optional `capabilityConfig` and `agentless`
+on `computer.assign`, translating them to the existing native command fields.
+It confirms typed grants using the correlated, successful native command receipt,
+including the current owner and exact canonical descriptor set. Legacy clients
+still omit these fields and preserve existing grants. Endpoint upsert/disable
+uses the same RxDB/WebRTC command plane and accepts SecretStore references only;
+its response exposes the confirmed binding, never credential values. The expanded
+Workjet UI contract and editing workflow are coordinated with Main after
 Workjet 0.0.35 is installed. Native registered endpoint resolution now uses the
 owner-bound registry and a frozen per-job authority fingerprint. Native
 capability_epoch is excluded from the v1 projection along with typed settings.

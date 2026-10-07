@@ -13296,6 +13296,8 @@ async function workjetComputerControl(request = {}) {
       'displayName',
       'hostingMode',
       'capabilities',
+      'capabilityConfig',
+      'agentless',
       'selfHostedColocation',
       'colocationConfirmation',
     ]));
@@ -13331,7 +13333,14 @@ async function workjetComputerControl(request = {}) {
     if (colocationConfirmation !== undefined) {
       payload.colocation_confirmation = colocationConfirmation;
     }
-    await state.commandBus.dispatch({
+    if (request.capabilityConfig !== undefined) {
+      payload.capability_config = boundedWorkjetOperationalCapabilities(request.capabilityConfig);
+    }
+    if (request.agentless !== undefined) {
+      if (typeof request.agentless !== 'boolean') throw new Error('Invalid Workjet agentless flag.');
+      payload.agentless = request.agentless;
+    }
+    const receipt = await state.commandBus.dispatch({
       id: commandId,
       command_id: commandId,
       module: 'ctox',
@@ -13343,6 +13352,21 @@ async function workjetComputerControl(request = {}) {
         actor: actorContext(state.session),
       },
     }, { until: 'terminal', timeoutMs: WORKJET_COMPUTER_CONTROL_TIMEOUT_MS });
+    // Typed grants are confirmed by their correlated native receipt, never by an old projection.
+    if (payload.capability_config !== undefined || payload.agentless !== undefined) {
+      const native = completedWorkjetComputerResult(receipt, commandId)?.computer;
+      if (!native || native.id !== computerId || native.owner_user_id !== ownerUserId
+        || native.status !== 'assigned'
+        || (payload.agentless !== undefined && native.agentless !== payload.agentless)
+        || (payload.capability_config !== undefined
+          && JSON.stringify(boundedWorkjetOperationalCapabilities(native.capability_config))
+            !== JSON.stringify(payload.capability_config))) {
+        throw new Error('Workjet capability grant was not confirmed by the native command.');
+      }
+      const confirmed = boundedWorkjetComputerResult(native);
+      if (!confirmed) throw new Error('Invalid native Workjet capability result.');
+      return { action: 'computer.assign', computer: confirmed };
+    }
     const computer = await waitForProjectedWorkjetComputer(
       computerId,
       ownerUserId,
@@ -13351,6 +13375,41 @@ async function workjetComputerControl(request = {}) {
       WORKJET_COMPUTER_CONTROL_TIMEOUT_MS,
     );
     return { action: 'computer.assign', computer };
+  }
+
+  if (action === 'computer.endpoint.upsert' || action === 'computer.endpoint.disable') {
+    const upsert = action === 'computer.endpoint.upsert';
+    assertWorkjetComputerPayloadKeys(request, new Set(upsert
+      ? ['action', 'commandId', 'computerId', 'endpointRef', 'connection']
+      : ['action', 'commandId', 'endpointRef']));
+    const commandId = boundedWorkjetComputerText(request.commandId, 'commandId', 128);
+    const endpointRef = boundedWorkjetComputerText(request.endpointRef, 'endpointRef', 128);
+    const payload = { endpoint_ref: endpointRef };
+    if (upsert) {
+      payload.computer_id = boundedWorkjetComputerText(request.computerId, 'computerId', 160);
+      payload.connection = boundedWorkjetComputerEndpoint(request.connection);
+    }
+    const receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: upsert
+        ? 'ctox.workjet.computer.endpoint.upsert'
+        : 'ctox.workjet.computer.endpoint.disable',
+      record_id: endpointRef,
+      payload,
+      client_context: {
+        source: 'workjet-computer-control',
+        actor: actorContext(state.session),
+      },
+    }, { until: 'terminal', timeoutMs: WORKJET_COMPUTER_CONTROL_TIMEOUT_MS });
+    const endpoint = completedWorkjetComputerResult(receipt, commandId)?.endpoint;
+    if (!endpoint || endpoint.id !== endpointRef || endpoint.owner_user_id !== ownerUserId
+      || endpoint.enabled !== upsert
+      || (upsert && endpoint.computer_id !== payload.computer_id)) {
+      throw new Error('Workjet endpoint change was not confirmed by the native command.');
+    }
+    return { action, endpointRef, computerId: endpoint.computer_id, enabled: endpoint.enabled };
   }
 
   if (action === 'computer.unassign') {
@@ -13380,6 +13439,115 @@ async function workjetComputerControl(request = {}) {
   }
 
   throw new Error(`Unsupported Workjet computer control action: ${action}`);
+}
+
+function completedWorkjetComputerResult(receipt, commandId) {
+  if (receipt?.ok !== true || receipt.status !== 'completed' || receipt.command_id !== commandId
+    || receipt.result?.ok !== true) {
+    throw new Error('Workjet computer command did not complete successfully.');
+  }
+  return receipt.result;
+}
+
+function workjetComputerInteger(value, label, max) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) {
+    throw new Error(`Invalid Workjet computer ${label}.`);
+  }
+  return value;
+}
+
+function boundedWorkjetOperationalCapabilities(value) {
+  if (!Array.isArray(value) || value.length > 3) {
+    throw new Error('Invalid Workjet operational capabilities.');
+  }
+  const kinds = new Set();
+  const capabilities = value.map((descriptor) => {
+    if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) {
+      throw new Error('Invalid Workjet operational capability.');
+    }
+    const kind = descriptor.kind;
+    if (kinds.has(kind)) throw new Error('Duplicate Workjet operational capability.');
+    kinds.add(kind);
+    const text = (key, max = 128) => boundedWorkjetComputerText(descriptor[key], key, max);
+    const integer = (key, max) => workjetComputerInteger(descriptor[key], key, max);
+    if (kind === 'build') {
+      assertWorkjetComputerPayloadKeys(descriptor, new Set([
+        'kind', 'ssh_endpoint_ref', 'slots', 'jobs', 'lane_root', 'disk_floor_gib', 'toolchains',
+      ]));
+      if (!Array.isArray(descriptor.toolchains) || descriptor.toolchains.length < 1
+        || descriptor.toolchains.length > 16) throw new Error('Invalid Workjet build toolchains.');
+      return { kind, ssh_endpoint_ref: text('ssh_endpoint_ref'),
+        slots: integer('slots', 32), jobs: integer('jobs', 64), lane_root: text('lane_root', 4096),
+        disk_floor_gib: integer('disk_floor_gib', 4294967295),
+        toolchains: [...new Set(descriptor.toolchains.map((tool) =>
+          boundedWorkjetComputerText(tool, 'toolchain', 128)))].sort() };
+    }
+    if (kind === 'storage') {
+      assertWorkjetComputerPayloadKeys(descriptor, new Set([
+        'kind', 'endpoint_ref', 'protocol', 'root', 'quota_gib', 'purposes',
+      ]));
+      if (!['ssh', 'smb', 'nfs'].includes(descriptor.protocol)
+        || !Array.isArray(descriptor.purposes) || descriptor.purposes.length < 1
+        || descriptor.purposes.length > 3
+        || descriptor.purposes.some((purpose) => !['artifacts', 'backups', 'exchange'].includes(purpose))) {
+        throw new Error('Invalid Workjet storage protocol or purposes.');
+      }
+      return { kind, endpoint_ref: text('endpoint_ref'), protocol: descriptor.protocol,
+        root: text('root', 4096), quota_gib: descriptor.quota_gib === null ? null
+          : integer('quota_gib', Number.MAX_SAFE_INTEGER),
+        purposes: [...new Set(descriptor.purposes)].sort() };
+    }
+    if (kind === 'gpu') {
+      assertWorkjetComputerPayloadKeys(descriptor, new Set(['kind', 'model', 'vram_gib']));
+      return { kind, model: text('model', 256), vram_gib: integer('vram_gib', 4294967295) };
+    }
+    throw new Error('Unsupported Workjet operational capability.');
+  });
+  return capabilities.sort((left, right) => left.kind.localeCompare(right.kind));
+}
+
+function boundedWorkjetComputerEndpoint(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Workjet computer endpoint.');
+  }
+  const protocol = value.protocol;
+  const ssh = protocol === 'ssh';
+  if (!ssh && protocol !== 'smb') throw new Error('Unsupported Workjet endpoint protocol.');
+  assertWorkjetComputerPayloadKeys(value, new Set(ssh
+    ? ['protocol', 'host', 'port', 'username', 'root', 'host_key_sha256',
+      'host_key_algorithm', 'private_key', 'passphrase']
+    : ['protocol', 'host', 'port', 'username', 'root', 'share', 'password']));
+  const reference = (candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error('Workjet credentials must reference the native Secret Store.');
+    }
+    assertWorkjetComputerPayloadKeys(candidate, new Set(['scope', 'name']));
+    return {
+      scope: boundedWorkjetComputerText(candidate.scope, 'credential scope', 128),
+      name: boundedWorkjetComputerText(candidate.name, 'credential name', 128),
+    };
+  };
+  const connection = { protocol,
+    host: boundedWorkjetComputerText(value.host, 'host', 253),
+    port: workjetComputerInteger(value.port, 'port', 65535),
+    username: boundedWorkjetComputerText(value.username, 'username', 256),
+    root: boundedWorkjetComputerText(value.root, 'root', 4096) };
+  if (ssh) {
+    connection.host_key_sha256 = boundedWorkjetComputerText(value.host_key_sha256, 'host key', 80);
+    connection.private_key = reference(value.private_key);
+    connection.passphrase = value.passphrase == null ? null : reference(value.passphrase);
+    if (value.host_key_algorithm != null) {
+      if (!['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384',
+        'ecdsa-sha2-nistp521', 'rsa-sha2-256', 'rsa-sha2-512'].includes(value.host_key_algorithm)) {
+        throw new Error('Unsupported Workjet SSH host-key algorithm.');
+      }
+      connection.host_key_algorithm = value.host_key_algorithm;
+    }
+  } else {
+    connection.share = boundedWorkjetComputerText(value.share, 'share', 128);
+    connection.password = reference(value.password);
+  }
+  return connection;
 }
 
 async function requireWorkjetComputerDataPlane() {
