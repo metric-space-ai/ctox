@@ -741,6 +741,7 @@ dependencies = [
  "anyhow",
  "aria2-rust",
  "fs2",
+ "picky-krb",
  "rusqlite",
  "russh",
  "russh-sftp",
