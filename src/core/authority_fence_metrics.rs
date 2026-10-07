@@ -194,13 +194,12 @@ static STATISTICS: OnceLock<Mutex<Statistics>> = OnceLock::new();
 /// The daemon heartbeat carries this value to external status readers; a CLI
 /// process must never substitute its own empty aggregate for the daemon's.
 pub(crate) fn snapshot() -> serde_json::Value {
-    let elapsed = PROCESS_STARTED.get().map(Instant::elapsed).unwrap_or_default();
     match STATISTICS.get() {
         Some(statistics) => statistics
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .snapshot(elapsed),
-        None => Statistics::default().snapshot(elapsed),
+            .snapshot(PROCESS_STARTED.get().map(Instant::elapsed).unwrap_or_default()),
+        None => Statistics::default().snapshot(Duration::ZERO),
     }
 }
 
