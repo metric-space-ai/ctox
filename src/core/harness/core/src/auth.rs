@@ -1066,19 +1066,22 @@ mod native_account_binding_tests {
     use super::*;
 
     fn account(id: &str) -> CodexAuth {
+        use base64::Engine as _;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "https://api.openai.com/auth": {"chatgpt_account_id": id}
+            }))
+            .unwrap(),
+        );
+        // Storage serializes raw_jwt and parses it again on load. This token
+        // exercises that format, with no usable credential or real signature.
+        let jwt = format!("e30.{payload}.test-placeholder");
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         if let CodexAuth::Chatgpt(inner) = &auth {
-            inner
-                .state
-                .auth_dot_json
-                .lock()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .tokens
-                .as_mut()
-                .unwrap()
-                .account_id = Some(id.to_owned());
+            let mut state = inner.state.auth_dot_json.lock().unwrap();
+            let tokens = state.as_mut().unwrap().tokens.as_mut().unwrap();
+            tokens.account_id = Some(id.to_owned());
+            tokens.id_token = parse_chatgpt_jwt_claims(&jwt).unwrap();
         }
         auth
     }
