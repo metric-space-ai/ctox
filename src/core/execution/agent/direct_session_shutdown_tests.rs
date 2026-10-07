@@ -169,3 +169,58 @@ fn persistent_native_capture_rejects_ordinary_and_ambiguous_sources() {
             .expect("denied capture still drains its actual owned runtime");
     }
 }
+
+#[test]
+fn persistent_capture_callback_runs_after_checked_shutdown_before_runtime_drain() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut session, stopped) = fixture(home.path());
+    let result = session
+        .shutdown_inner_with("capturing final state", |runtime| {
+            assert!(matches!(
+                stopped.try_recv(),
+                Err(std_mpsc::TryRecvError::Empty)
+            ));
+            runtime.block_on(async {
+                tokio::task::yield_now().await;
+                Ok("final-state")
+            })
+        })
+        .unwrap();
+    assert_eq!(result, Some("final-state"));
+    stopped
+        .recv_timeout(Duration::from_secs(1))
+        .expect("capture runtime drained");
+}
+
+#[test]
+fn persistent_capture_callback_never_runs_after_failed_client_shutdown() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut session, stopped) = fixture(home.path());
+    session.client.take().unwrap().abort_now();
+    let mut called = false;
+    let result = session.shutdown_inner_with("denied final state", |_| {
+        called = true;
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert!(!called);
+    stopped
+        .recv_timeout(Duration::from_secs(1))
+        .expect("failed capture runtime drained");
+}
+
+#[test]
+fn persistent_capture_failure_still_drains_the_owned_runtime() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut session, stopped) = fixture(home.path());
+    let result = session.shutdown_inner_with("failed final state", |_| {
+        Err::<(), _>(anyhow::anyhow!("fixture final-state export failure"))
+    });
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("final-state export failure"));
+    stopped
+        .recv_timeout(Duration::from_secs(1))
+        .expect("failed export runtime drained");
+}

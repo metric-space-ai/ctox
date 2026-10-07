@@ -3116,6 +3116,20 @@ async fn gc_settled_business_commands(database: &Arc<RxDatabase>) -> anyhow::Res
                 "status": { "$in": ["completed", "failed", "cancelled", "canceled", "blocked"] },
                 "updated_at_ms": { "$lt": cutoff }
             })),
+            // Without this sort the query ordered by (status, id), SQLite took
+            // the (deleted, status, id) index and filtered every settled row's
+            // updated_at_ms: ~96 ms per pass, every few seconds under research
+            // load (1618 passes in 85 min, 07.10.2026). Sorting by status and
+            // then updated_at_ms makes it a range scan on the existing
+            // (deleted, status, updated_at_ms, id) index.
+            sort: Some(vec![
+                [("status".to_string(), "asc".to_string())]
+                    .into_iter()
+                    .collect(),
+                [("updated_at_ms".to_string(), "asc".to_string())]
+                    .into_iter()
+                    .collect(),
+            ]),
             limit: Some(BUSINESS_COMMAND_GC_LIMIT),
             ..Default::default()
         }))
@@ -4247,6 +4261,70 @@ mod tests {
             browser_runtime_maintenance_sleep(u32::MAX),
             Duration::from_secs(BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS)
         );
+    }
+
+    #[tokio::test]
+    async fn settled_business_command_gc_removes_only_old_settled_commands() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database = open_test_database(root.path().join("business-command-gc.sqlite3"))
+            .await
+            .expect("open test database");
+        database
+            .add_collections(HashMap::from([(
+                "business_commands".to_string(),
+                RxCollectionCreator {
+                    schema: business_os_schema("business_commands", "id"),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]))
+            .await
+            .expect("add business_commands collection");
+        let commands = database
+            .collection("business_commands")
+            .expect("business_commands collection");
+        let recent = now_ms() as u64;
+        for (id, status, updated_at_ms) in [
+            ("old_completed", "completed", 1_u64),
+            ("old_failed", "failed", 2_u64),
+            ("old_running", "running", 1_u64),
+            ("recent_completed", "completed", recent),
+        ] {
+            commands
+                .incremental_upsert(json!({
+                    "id": id,
+                    "command_id": id,
+                    "module": "ctox",
+                    "command_type": "ctox.test",
+                    "status": status,
+                    "created_at_ms": updated_at_ms,
+                    "updated_at_ms": updated_at_ms,
+                    "payload": {},
+                }))
+                .await
+                .expect("insert business command");
+        }
+
+        let removed = gc_settled_business_commands(&database)
+            .await
+            .expect("collect settled business commands");
+
+        assert_eq!(removed, 2);
+        let remaining = commands
+            .find(None)
+            .expect("query remaining commands")
+            .exec(false)
+            .await
+            .expect("exec remaining commands");
+        let mut ids = remaining
+            .as_array()
+            .expect("remaining rows")
+            .iter()
+            .filter_map(|row| row.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, vec!["old_running", "recent_completed"]);
     }
 
     #[tokio::test]

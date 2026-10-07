@@ -3562,7 +3562,7 @@ CTOX_ACCOUNT_FIXTURE
 }
 
 #[test]
-fn automatic_reauthorization_cools_down_only_after_a_recent_failure() {
+fn automatic_reauthorization_cools_down_after_every_recent_attempt() {
     use serde_json::json;
     let now = 10_000_000_i64;
     assert!(!super::reauth::auto_reauth_in_cooldown(None, now));
@@ -3574,8 +3574,14 @@ fn automatic_reauthorization_cools_down_only_after_a_recent_failure() {
         Some(&json!({"ok": false, "attempted_at_ms": now - 31 * 60_000})),
         now
     ));
-    assert!(!super::reauth::auto_reauth_in_cooldown(
+    // A reported success that left the run behind the wall must not repeat
+    // the stored sign-in on every run.
+    assert!(super::reauth::auto_reauth_in_cooldown(
         Some(&json!({"ok": true, "attempted_at_ms": now - 1_000})),
+        now
+    ));
+    assert!(!super::reauth::auto_reauth_in_cooldown(
+        Some(&json!({"ok": true, "attempted_at_ms": now - 16 * 60_000})),
         now
     ));
 }

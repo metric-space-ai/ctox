@@ -2266,13 +2266,24 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
     // the research on a human (owner 22.09.2026: "der research agent soll
     // moeglichst autonom arbeiten").
     let mut email_otp = serde_json::Value::Null;
-    if automation_ok
-        && !login_ok
+    // A stale app cookie can draw the signed-in dashboard while the identity
+    // provider still wants a second factor: the login reads as authenticated
+    // and only the capture lands on the challenge (D&B after the move to a new
+    // egress IP: dashboard on app.dnbhoovers.com, search redirected to
+    // sso.dnb.com "E-Mail senden", 06./07.10.2026). Treat that wall like a
+    // second factor on the login itself.
+    let continuation_hit_login_wall = login_ok
+        && continuation_source.is_some()
+        && login_result
+            .pointer("/post_auth_result/status")
+            .and_then(serde_json::Value::as_str)
+            == Some("auth_required");
+    let mfa_challenge = !login_ok
         && login_result
             .get("login_state")
             .and_then(serde_json::Value::as_str)
-            == Some("mfa_required")
-    {
+            == Some("mfa_required");
+    if automation_ok && (mfa_challenge || continuation_hit_login_wall) {
         if let Some(recipe) = web_stack_email_otp_recipe(&source_id) {
             email_otp = complete_web_stack_login_with_email_otp(
                 root,
@@ -5831,7 +5842,7 @@ if (state.trigger_label && !state.otp_field_present) {
 }
 // Okta sends a link and a code; the code field only appears after
 // "Enter a code from the email instead".
-const codeInstead = page.locator('a, button').filter({ hasText: /(enter a (verification )?code|code (from the email )?instead|code eingeben)/i }).first();
+const codeInstead = page.locator('a, button').filter({ hasText: /(enter a (verification )?code|code (from the email )?instead|code eingeben|code aus (der )?e-?mail|stattdessen.{0,40}code)/i }).first();
 if (await codeInstead.count()) {
   await codeInstead.click({ timeout: 5000 }).catch(() => null);
   await page.waitForTimeout(1500);

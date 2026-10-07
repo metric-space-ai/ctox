@@ -429,9 +429,10 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             // declared research workspace. Opening the global CLI ledger
             // first is both unnecessary and forbidden from a worker sandbox.
             "web" => return true,
-            // The bounded foreground transfer worker owns its durable queue.
-            // Do not retain a separate CLI ledger connection for its lifetime.
-            "transfer" if args.get(1).map(String::as_str) == Some("run") => {
+            // Transfer status is read-only and must remain usable while the
+            // queue has a writer. The foreground worker owns its durable queue.
+            // Neither operation needs startup migrations or CLI ledger writes.
+            "transfer" if matches!(args.get(1).map(String::as_str), Some("run" | "status")) => {
                 return true;
             }
             // Knowledge commands are routed to the daemon-owned IPC handler
@@ -825,6 +826,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("office") => business_os::office_cli::handle_command(&args[1..]),
         Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),
         Some("transfer") => transfers_cli::handle(root, &args[1..]),
+        Some("build-job") => business_os::build_jobs::handle_cli(root, &args[1..]),
         Some("workjet-transfer") => {
             let outcome = business_os::execute_workjet_transfer_git_cli(&args[1..])?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);

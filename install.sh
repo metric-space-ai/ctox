@@ -714,6 +714,9 @@ configure_cuda_env() {
   [[ -n "$cv" ]] && export CUDARC_CUDA_VERSION="$cv"
   local cc; cc="$(detect_cuda_compute_cap || true)"
   [[ -n "$cc" ]] && export CUDA_COMPUTE_CAP="$cc"
+  # Compute capability is optional on hosts with a toolkit but no visible GPU.
+  # Do not let that probe terminate the installer under set -e.
+  return 0
 }
 
 # ── Flash-Attention feature picker ──────────────────────────────────────────

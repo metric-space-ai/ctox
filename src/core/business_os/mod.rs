@@ -6,7 +6,12 @@ mod ats_gates;
 mod backup_restore;
 mod browser_control;
 mod browser_runtime;
+pub mod build_job_store;
+pub(crate) mod build_jobs;
 pub mod build_lane_runner;
+pub(crate) mod build_profile;
+pub(crate) mod build_remote;
+pub(crate) mod build_ssh;
 mod capability;
 mod command_plane;
 mod contact_email_validation;
@@ -21,7 +26,13 @@ mod guest_commands;
 #[cfg(unix)]
 mod guest_registry;
 #[cfg(unix)]
-pub(crate) use guest_registry::{NativeGuestAssignment, NativeGuestExecution, NativeGuestRegistry};
+pub(crate) use guest_registry::accounts::{
+    configure_provider_assignments, revoke_provider_assignment, ProviderAssignmentInput,
+};
+#[cfg(unix)]
+pub(crate) use guest_registry::{
+    NativeGuestAssignment, NativeGuestExecution, NativeGuestRegistry, NativeSourceJournalReceipt,
+};
 mod guest_runtime;
 pub(crate) use guest_runtime::run_native_guest_desktop;
 pub(crate) mod harness_cockpit;

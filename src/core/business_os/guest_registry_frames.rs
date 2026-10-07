@@ -268,6 +268,9 @@ impl NativeGuestRegistry {
         *attached = Some(Arc::downgrade(transport));
         Ok(())
     }
+    pub(crate) fn require_live_transport(&self) -> Result<()> {
+        self.current_transport().map(|_| ())
+    }
     fn current_transport(&self) -> Result<Arc<Pool>> {
         let pool = self
             .frame_transport

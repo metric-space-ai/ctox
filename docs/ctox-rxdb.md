@@ -1293,6 +1293,11 @@ identity to avoid a full collection re-pull; a checkpoint is not permission to
 serve a cached control-plane query window. Its membership gate remains closed
 until the current digest is known and matches, or a newly authorized fetch
 re-stamps the window.
+Native `masterChangesSince` failures returned as replication-scope `ctoxError`
+values preserve their native error code and pull direction. They do not become
+successful empty results or advance the pull checkpoint/first-pull readiness.
+Malformed success replies still reject separately. A preserved native error
+identifies the failing request; it does not establish the underlying tenant cause.
 If replication cancellation detaches the demand loader, control-plane `find`,
 `findOne`, `count`, and live subscriptions return no cached lifecycle rows.
 For `find` and `findOne` with a nonempty `requireRevision`, a missing loader
@@ -1810,7 +1815,16 @@ Demand-query admission distinguishes a verified collection-policy denial from
 an unavailable authority lookup. Only `COLLECTION_AUTHORITY_UNAVAILABLE` is
 retried inside that bounded admission window; invalid credentials and replaced
 peer/token generations remain immediate denials. The existing issuer fence is
-retained, and boolean replication paths still deny unavailable authority.
+retained. Ordinary `masterChangesSince` and `masterWrite` admission now uses
+the same bounded typed check. An exhausted availability error returns a
+replication-scope `ctoxError` with `COLLECTION_AUTHORITY_UNAVAILABLE`,
+`retryable: true`, and the correct pull/push direction; other authority
+errors remain terminal. A verified denial still returns `RC_WEBRTC_PEER`
+immediately. Neither failed admission returns rows or an acknowledged
+checkpoint/write result. Native diagnostics include collection, method,
+code, retryability and current-peer/capability-presence booleans, without
+authority error parameters or credentials. Presence is diagnostic metadata,
+not proof that a capability is valid or a replacement authorization decision.
 
 Adding a code is safe on this path: `routeFileError`
 (`demand-loading-transport.mjs`) carries `code` and `retryable` through without

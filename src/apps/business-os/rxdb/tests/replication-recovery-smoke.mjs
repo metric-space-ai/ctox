@@ -353,6 +353,34 @@ for (const [label, reply] of [['missing', undefined], ['null', null], ['array', 
   await state.cancel();
 }
 
+// --- 2c.0 native pull errors retain their identity and cannot certify sync ---
+for (const code of ['RC_PULL', 'RC_WEBRTC_PEER']) {
+  const state = await makeState(`masterchanges-native-${code}`);
+  const checkpoint = { lwt: 50, id: 'previous' };
+  state.pullCheckpointsByPeer.set('p1', checkpoint);
+  let writes = 0;
+  state.collection.storageCollection.bulkWrite = async () => { writes += 1; };
+  state.shared.peer = { request: async () => ({
+    type: 'ctoxError', scope: 'replication', rxdb: true,
+    code, phase: 'replication-pull', direction: 'pull',
+    message: 'native pull failed',
+    // Even an erroneous documents field must not turn a native error into success.
+    documents: [], checkpoint: { lwt: 99, id: 'unconfirmed' },
+  }) };
+  let rejected = null;
+  try { await state.pullFromPeer('p1'); } catch (error) { rejected = error; }
+  assert(rejected?.code === code, `${code}: preserve the native pull error code`);
+  assert(rejected?.direction === 'pull' && rejected.collection === state.collection.name,
+    `${code}: identify the failed pull and collection`);
+  assert(rejected?.message.startsWith('masterChangesSince failed'),
+    `${code}: do not present a pull as a push or malformed success`);
+  assert(state.pullCheckpointsByPeer.get('p1') === checkpoint,
+    `${code}: preserve the previously confirmed checkpoint`);
+  assert(!state.firstPullCompletedAtMs && !state.pullFresh && writes === 0,
+    `${code}: native failure cannot certify empty sync or write documents`);
+  await state.cancel();
+}
+
 // --- 2c.1 a temporarily missing collection handler cannot fake an ACK ----
 {
   const SharedRoomPeer = replicationWebRtcTestInternals.getSharedRoomPeerClass();

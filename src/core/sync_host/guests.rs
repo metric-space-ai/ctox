@@ -24,6 +24,9 @@ pub(super) struct Configuration {
     version: u32,
     computer_id: String,
     required_capabilities: BTreeSet<String>,
+    /// Explicit privileged local-operator grants; enrollment cannot mint them.
+    #[serde(default)]
+    provider_assignments: Vec<crate::business_os::ProviderAssignmentInput>,
 }
 impl Configuration {
     fn validate(&self) -> Result<()> {
@@ -39,7 +42,8 @@ impl Configuration {
                 && valid(&self.computer_id)
                 && !self.required_capabilities.is_empty()
                 && self.required_capabilities.len() <= 32
-                && self.required_capabilities.iter().all(|c| valid(c)),
+                && self.required_capabilities.iter().all(|c| valid(c))
+                && self.provider_assignments.len() <= 64,
             "invalid native guest host configuration"
         );
         Ok(())
@@ -54,6 +58,11 @@ pub(super) fn configure(root: &Path, input: &str) -> Result<()> {
         root,
         CONFIG_KEY,
         &serde_json::to_string(&value)?,
+    )?;
+    crate::business_os::configure_provider_assignments(
+        root,
+        &value.computer_id,
+        &value.provider_assignments,
     )
 }
 fn load(root: &Path) -> Result<Option<Configuration>> {

@@ -26,6 +26,11 @@ on:
       - "src/scripts/check-office-skill-gating.mjs"
       - ".github/workflows/office-skill-gating.yml"
 
+concurrency:
+  group: office-skill-gating-${{ github.event.pull_request.number || github.ref }}
+  # A new push supersedes a PR head; main keeps its running build and only the newest pending one.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   gating:
     runs-on: ubuntu-latest

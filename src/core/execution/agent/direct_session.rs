@@ -876,6 +876,9 @@ pub(crate) fn turn_runtime_error_class(error: &anyhow::Error) -> Option<TurnRunt
         .map(TurnRuntimeError::class)
 }
 
+type NativeGuestProviderAuthorization =
+    dyn Fn(&str, &crate::channels::NativeProviderCheckpointContract) -> Result<()> + Send + Sync;
+
 /// Holds a running InProcessAppServerClient + thread. Normal service work keeps
 /// one instance across slices and resumes its rollout after restart. Isolated
 /// reviewer/summarizer/special-profile callers still create bounded instances.
@@ -933,6 +936,7 @@ pub(crate) struct PersistentSession {
 pub(crate) struct NativeSessionCapture {
     source: crate::channels::NativeProviderCaptureOwner,
     journal: ctox_core::NativeJournalReader,
+    configuration: Option<ctox_core::ThreadConfigSnapshot>,
     execution: crate::business_os::NativeGuestExecution,
     thread_id: String,
     root: PathBuf,
@@ -991,6 +995,23 @@ impl NativeSessionCapture {
             let validated = validate_portable_journal(&bytes, &artifact, &expected, &limits)?;
             Ok((bytes, validated))
         })
+    }
+
+    /// Persist private source input before the service retires the worker lease.
+    /// The receipt grants no disclosure, target receipt or provider resume.
+    pub(crate) fn persist_source_journal(
+        self,
+    ) -> Result<crate::business_os::NativeSourceJournalReceipt> {
+        self.verify_command_authority()?;
+        let receipt = self.execution.persist_source_journal(
+            &self.source,
+            &self.journal,
+            self.configuration
+                .as_ref()
+                .context("native capture has no final Core configuration")?,
+        )?;
+        self.verify_command_authority()?;
+        Ok(receipt)
     }
 
     fn verify_command_authority(&self) -> Result<()> {
@@ -1087,18 +1108,34 @@ impl PersistentSession {
         persona: Option<&str>,
         registry: std::sync::Arc<crate::business_os::NativeGuestRegistry>,
         guest_id: &str,
-        guest_peer: &ctox_sync::native::NativeSyncSession,
     ) -> Result<Self> {
         let context = crate::business_os::mcp_channel::verify_internal_command_session_token(
             root,
             command_session_token,
         )?;
+        anyhow::ensure!(
+            registry.select_command_context(root, &context)?.as_deref() == Some(guest_id),
+            "native guest differs from the current command assignment"
+        );
+        registry.require_live_transport()?;
         let addr = settings
             .get(BUSINESS_OS_MCP_ADDR_KEY)
             .map(String::as_str)
             .unwrap_or(BUSINESS_OS_MCP_DEFAULT_ADDR);
         let token = crate::business_os::mcp_channel::mcp_operator_auth_token(root)?;
         let config = business_os_mcp_thread_config(addr, &token, command_session_token)?;
+        let account_registry = Arc::clone(&registry);
+        let account_guest = guest_id.to_owned();
+        let account_context = context.clone();
+        let account_authority: Arc<NativeGuestProviderAuthorization> =
+            Arc::new(move |model, contract| {
+                account_registry.authorize_provider_start(
+                    &account_guest,
+                    &account_context,
+                    model,
+                    contract,
+                )
+            });
         let mut session = Self::start_with_native_mode(
             root,
             settings,
@@ -1110,7 +1147,7 @@ impl PersistentSession {
             Some(config),
             false,
             false,
-            true,
+            Some(account_authority),
         )?;
         let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
             root,
@@ -1120,12 +1157,16 @@ impl PersistentSession {
             current == context,
             "native guest command authority changed during startup"
         );
+        anyhow::ensure!(
+            registry.select_command_context(root, &current)?.as_deref() == Some(guest_id),
+            "native guest command assignment changed during startup"
+        );
+        registry.require_live_transport()?;
         session.native_command_context = Some(current);
         session.native_command_session_token = Some(command_session_token.to_owned());
         session.require_native_provider_admission(registry.admission(guest_id)?)?;
-        // Install the guarded source on the retained native peer, before any
-        // model turn can observe a guest. Wire claims cannot create this owner.
-        registry.attach_frame_transport(guest_peer)?;
+        // The service host already owns the guarded source on its exact peer.
+        // Cloning this registry does not prolong a stopped native transport.
         session.native_guest_registry = Some((registry, guest_id.to_owned()));
         Ok(session)
     }
@@ -1319,7 +1360,7 @@ impl PersistentSession {
             thread_config,
             read_only_sandbox,
             persistent_worker,
-            false,
+            None,
         )
     }
 
@@ -1335,7 +1376,7 @@ impl PersistentSession {
         thread_config: Option<HashMap<String, JsonValue>>,
         read_only_sandbox: bool,
         persistent_worker: bool,
-        native_guest: bool,
+        native_guest_authorization: Option<Arc<NativeGuestProviderAuthorization>>,
     ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1356,7 +1397,7 @@ impl PersistentSession {
                 thread_config.as_ref(),
                 read_only_sandbox,
                 persistent_worker,
-                native_guest,
+                native_guest_authorization.as_deref(),
             )
             .await
         });
@@ -1649,6 +1690,11 @@ impl PersistentSession {
         Ok(())
     }
 
+    #[cfg(unix)]
+    pub(crate) fn is_native_guest(&self) -> bool {
+        self.native_guest_registry.is_some()
+    }
+
     /// Consume the actual native producer. No capture authority escapes a
     /// failed/forced teardown, stale worker/account/policy, or ambiguous turn.
     /// This does not export artifacts or certify provider continuation.
@@ -1690,14 +1736,15 @@ impl PersistentSession {
                 .context("actual native journal could not be retained")
             });
         let journal = match journal {
-            Ok(journal) => journal,
+            Ok(retained) => retained,
             Err(error) => {
                 let _ = self.shutdown_inner("failed native journal retention");
                 return Err(error);
             }
         };
-        let capture = NativeSessionCapture {
+        let mut capture = NativeSessionCapture {
             journal,
+            configuration: None,
             source: self
                 .native_capture_owner
                 .take()
@@ -1718,9 +1765,19 @@ impl PersistentSession {
                 .context("native capture has no verified command context")?,
         };
         let before = capture.with_current(|_, _| Ok(()));
-        let shutdown = self.shutdown_inner("quiescing native capture");
+        let shutdown = self.shutdown_inner_with("quiescing native capture", |runtime| {
+            runtime.block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS),
+                    actual_thread.config_snapshot(),
+                )
+                .await
+                .context("final native configuration capture timed out")
+            })
+        });
         before?;
-        shutdown?;
+        capture.configuration =
+            Some(shutdown?.context("native configuration has no shutdown owner")?);
         capture.with_current(|_, _| Ok(()))?;
         // Writer receipt alone cannot certify identity, syntax or bounded size.
         // A malformed/missing/changed journal never returns a capture owner.
@@ -1740,7 +1797,7 @@ impl PersistentSession {
         thread_config: Option<&HashMap<String, JsonValue>>,
         read_only_sandbox: bool,
         persistent_worker: bool,
-        native_guest: bool,
+        native_guest_authorization: Option<&NativeGuestProviderAuthorization>,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -1753,6 +1810,7 @@ impl PersistentSession {
         Option<crate::channels::NativeProviderCheckpointBinding>,
         Option<Arc<ctox_core::CodexThread>>,
     )> {
+        let native_guest = native_guest_authorization.is_some();
         let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
         let runtime_local_preset = resolved_runtime
             .as_ref()
@@ -2023,6 +2081,11 @@ impl PersistentSession {
         } else {
             None
         };
+        if let (Some(binding), Some(authorize)) =
+            (&native_checkpoint_binding, native_guest_authorization)
+        {
+            binding.with_current_contract(|contract| authorize(&model, contract))?;
+        }
         let config = Arc::new(config);
         let session_source = SessionSource::Exec;
         let thread_manager = Arc::new(ThreadManager::new(
@@ -2074,6 +2137,11 @@ impl PersistentSession {
         };
         let timeouts = production_session_control_timeouts();
         let thread_id = bind_session_thread(&client, &mut seq, &spec, &timeouts).await?;
+        if let (Some(binding), Some(authorize)) =
+            (&native_checkpoint_binding, native_guest_authorization)
+        {
+            binding.with_current_contract(|contract| authorize(&model, contract))?;
+        }
         let native_capture_thread = if native_guest {
             let actual_id = ctox_protocol::ThreadId::from_string(&thread_id)
                 .context("native producer returned an invalid thread identity")?;
@@ -3789,6 +3857,16 @@ impl Drop for PersistentSession {
 
 impl PersistentSession {
     fn shutdown_inner(&mut self, action: &str) -> Result<()> {
+        self.shutdown_inner_with(action, |_| Ok(())).map(|_| ())
+    }
+
+    /// A capture callback runs only after checked client shutdown, while the
+    /// exact owned runtime can still read final state from its retained Core thread.
+    fn shutdown_inner_with<T>(
+        &mut self,
+        action: &str,
+        after_shutdown: impl FnOnce(&tokio::runtime::Runtime) -> Result<T>,
+    ) -> Result<Option<T>> {
         // Take both owners before any branch. An orphaned client must still
         // be aborted, even when its runtime is absent.
         let client = self.client.take();
@@ -3797,7 +3875,7 @@ impl PersistentSession {
                 client.abort_now();
                 anyhow::bail!("persistent session runtime ownership is missing");
             }
-            return Ok(());
+            return Ok(None);
         };
         let tid = &self.thread_id;
         eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
@@ -3834,11 +3912,12 @@ impl PersistentSession {
                 "persistent session client ownership is missing"
             )),
         };
+        let result = result.and_then(|()| after_shutdown(&runtime).map(Some));
         // Cleanup always finishes its bounded runtime drain before returning
-        // the original client result. Runtime teardown cannot replace an error.
+        // the original client/capture result. Runtime teardown cannot replace an error.
         runtime.shutdown_timeout(Duration::from_secs(2));
         match &result {
-            Ok(()) => {
+            Ok(_) => {
                 eprintln!("[ctox direct-session] persistent session shut down thread_id={tid}")
             }
             Err(err) => eprintln!(

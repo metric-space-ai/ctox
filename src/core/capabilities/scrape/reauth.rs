@@ -268,6 +268,7 @@ pub(super) fn session_expiry_reauthorization(
 /// source. A wrong or locked credential must not be retried by every research
 /// agent that hits the login wall.
 const AUTO_REAUTH_FAILURE_COOLDOWN_MS: i64 = 30 * 60 * 1000;
+const AUTO_REAUTH_SUCCESS_COOLDOWN_MS: i64 = 15 * 60 * 1000;
 const AUTO_REAUTH_TIMEOUT_MS: u64 = 240_000;
 
 fn auto_reauth_state_path(root: &Path, source_id: &str) -> std::path::PathBuf {
@@ -288,13 +289,18 @@ fn auto_reauth_state_path(root: &Path, source_id: &str) -> std::path::PathBuf {
 /// Whether an earlier failed attempt still blocks a new one.
 pub(super) fn auto_reauth_in_cooldown(state: Option<&Value>, now_ms: i64) -> bool {
     let Some(state) = state else { return false };
-    if state.get("ok").and_then(Value::as_bool) == Some(true) {
-        return false;
-    }
+    // A sign-in that reported success but left the run behind the login wall
+    // must not repeat on every run: D&B saw eleven stored-credential sign-ins
+    // in one hour (07.10.2026), which risks locking the account.
+    let cooldown_ms = if state.get("ok").and_then(Value::as_bool) == Some(true) {
+        AUTO_REAUTH_SUCCESS_COOLDOWN_MS
+    } else {
+        AUTO_REAUTH_FAILURE_COOLDOWN_MS
+    };
     state
         .get("attempted_at_ms")
         .and_then(Value::as_i64)
-        .is_some_and(|at| now_ms.saturating_sub(at) < AUTO_REAUTH_FAILURE_COOLDOWN_MS)
+        .is_some_and(|at| now_ms.saturating_sub(at) < cooldown_ms)
 }
 
 /// Try CTOX's own stored-credential sign-in before handing the login wall to
@@ -340,9 +346,7 @@ pub(super) fn attempt_automatic_reauthorization(
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
     if auto_reauth_in_cooldown(previous.as_ref(), now_ms) {
-        return Some(
-            json!({"ok": false, "skipped": "cooldown_after_failure", "source_id": source_id}),
-        );
+        return Some(json!({"ok": false, "skipped": "cooldown", "source_id": source_id}));
     }
     let task_id = thread_key.unwrap_or(run_id).to_string();
     let outcome = crate::service::business_os::auto_reauthorize_web_stack_source(

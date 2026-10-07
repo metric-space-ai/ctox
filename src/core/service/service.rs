@@ -989,6 +989,8 @@ struct SharedState {
     last_reply_chars: Option<usize>,
     last_progress_epoch_secs: u64,
     worker_session: Arc<WorkerSessionSlot>,
+    #[cfg(unix)]
+    native_guest_registry: Option<Arc<crate::business_os::NativeGuestRegistry>>,
 }
 
 impl Default for SharedState {
@@ -1015,6 +1017,8 @@ impl Default for SharedState {
             last_reply_chars: None,
             last_progress_epoch_secs: current_epoch_secs(),
             worker_session: Arc::new(WorkerSessionSlot::default()),
+            #[cfg(unix)]
+            native_guest_registry: None,
         }
     }
 }
@@ -1599,7 +1603,12 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     let listen_addr = service_listen_addr(root);
     write_pid_file(root, std::process::id())?;
     let _ = write_service_performance_status_artifact(root);
-    let state = Arc::new(Mutex::new(SharedState::default()));
+    let initial_state = SharedState {
+        #[cfg(unix)]
+        native_guest_registry: _sync_host.as_ref().and_then(|host| host.guest_registry()),
+        ..SharedState::default()
+    };
+    let state = Arc::new(Mutex::new(initial_state));
     publish_cockpit_worker_state(root, &lock_shared_state(&state));
     run_boot_state_invariant_check(root, &state);
     run_boot_auto_submitted_reclassifier(root, &state);
@@ -6915,6 +6924,11 @@ fn start_prompt_worker(
                             return Ok(reply);
                         }
                     }
+                    #[cfg(unix)]
+                    {
+                        session_options.native_guest_registry =
+                            lock_shared_state(&state).native_guest_registry.clone();
+                    }
                     if queue_job_reuses_persistent_session(&session_options) {
                         let session_slot = {
                             let shared = lock_shared_state(&state);
@@ -11737,6 +11751,8 @@ fn chat_turn_session_options_for_queue_job(
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
             queue_turn_lease: None,
+            #[cfg(unix)]
+            native_guest_registry: None,
             crew_persona: None,
             crew_memory_block: None,
         };
@@ -11762,6 +11778,8 @@ fn chat_turn_session_options_for_queue_job(
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
             queue_turn_lease: None,
+            #[cfg(unix)]
+            native_guest_registry: None,
             crew_persona: None,
             crew_memory_block: None,
         };
@@ -11780,6 +11798,8 @@ fn chat_turn_session_options_for_queue_job(
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
             queue_turn_lease: None,
+            #[cfg(unix)]
+            native_guest_registry: None,
             crew_persona: None,
             crew_memory_block: None,
         };

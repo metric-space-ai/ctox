@@ -11697,6 +11697,32 @@ pub fn pull_mcp_app_collection_records(
     }))
 }
 
+/// Resolve correlation metadata only. The command's normal status reader and
+/// permission checks remain authoritative; this never dispatches or retries it.
+pub(super) fn find_business_command_ids_for_mcp_request(
+    root: &Path,
+    request_id: &str,
+    actor: &str,
+    workspace: &str,
+) -> anyhow::Result<Vec<String>> {
+    with_store_connection(root, |conn| {
+        let mut statement = conn.prepare(
+            "SELECT command_id FROM business_commands
+             WHERE json_extract(CASE WHEN json_valid(client_context_json)
+                        THEN client_context_json ELSE '{}' END, '$.request_id') = ?1
+               AND json_extract(CASE WHEN json_valid(client_context_json)
+                        THEN client_context_json ELSE '{}' END, '$.mcp_actor') = ?2
+               AND json_extract(CASE WHEN json_valid(client_context_json)
+                        THEN client_context_json ELSE '{}' END, '$.workspace') = ?3
+             ORDER BY command_id LIMIT 2",
+        )?;
+        let rows = statement.query_map(params![request_id, actor, workspace], |row| {
+            row.get::<_, String>(0)
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+}
+
 pub fn pull_business_command_status_record(
     root: &Path,
     command_id: &str,
@@ -12010,14 +12036,13 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
     Ok(Some((id, record)))
 }
 
-/// Required lookup surface: missing/unreadable storage is not an empty query.
-/// Keep every probe on the same read transaction instead of checking readiness
-/// and then reopening through optional helpers which may silently return empty.
-pub(super) fn required_rxdb_collection_read_connection(
+/// Prepare optional indexes before batch callers hold any read transactions.
+/// In rollback-journal stores, an earlier reader would block later index DDL.
+pub(super) fn prepare_rxdb_collection_lookup_indexes(
     root: &Path,
     collection: &str,
     lookup_fields: &[&str],
-) -> anyhow::Result<(Connection, String)> {
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         is_safe_rxdb_collection_name(collection),
         "invalid collection name"
@@ -12051,6 +12076,19 @@ pub(super) fn required_rxdb_collection_read_connection(
             }
         }
     }
+    Ok(())
+}
+
+/// Required lookup surface: missing/unreadable storage is not an empty query.
+/// Keep every data probe on the same read transaction. Batch callers prepare
+/// all indexes first, then pass no fields here to avoid DDL under a read lock.
+pub(super) fn required_rxdb_collection_read_connection(
+    root: &Path,
+    collection: &str,
+    lookup_fields: &[&str],
+) -> anyhow::Result<(Connection, String)> {
+    prepare_rxdb_collection_lookup_indexes(root, collection, lookup_fields)?;
+    let path = rxdb_store_path(root);
     let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .context("required lookup store is unavailable")?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
@@ -27177,6 +27215,55 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             ON business_permission_grants(subject_type, subject_id, active);
         CREATE INDEX IF NOT EXISTS idx_business_permission_grants_scope
             ON business_permission_grants(permission, scope_type, scope_id, active);
+
+        CREATE TABLE IF NOT EXISTS business_native_guest_provider_assignments (
+            owner_user_id TEXT NOT NULL,
+            worker_profile_id TEXT NOT NULL,
+            computer_id TEXT NOT NULL,
+            gateway_account_id TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            model_route_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            harness_version TEXT NOT NULL,
+            principal_epoch INTEGER NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('active', 'revoked')),
+            revision INTEGER NOT NULL CHECK(revision > 0),
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY(owner_user_id, worker_profile_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS business_native_source_journals (
+            capture_id TEXT PRIMARY KEY,
+            guest_id TEXT NOT NULL,
+            controller_id TEXT NOT NULL,
+            controller_generation INTEGER NOT NULL CHECK(controller_generation > 0),
+            owner_user_id TEXT NOT NULL,
+            worker_profile_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            source_instance_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            ownership_generation INTEGER NOT NULL CHECK(ownership_generation > 0),
+            spec_json TEXT NOT NULL,
+            ownership_json TEXT NOT NULL,
+            policy_revision TEXT NOT NULL,
+            journal_format TEXT NOT NULL,
+            journal_version INTEGER NOT NULL,
+            journal_sha256 TEXT NOT NULL,
+            journal_size_bytes INTEGER NOT NULL CHECK(journal_size_bytes > 0 AND journal_size_bytes <= 67108864),
+            journal_record_count INTEGER NOT NULL CHECK(journal_record_count > 0 AND journal_record_count <= 100000),
+            artifact_store_path TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            UNIQUE(job_id, session_id, ownership_generation)
+        );
+
+        CREATE TABLE IF NOT EXISTS business_native_source_core_configurations (
+            capture_id TEXT PRIMARY KEY REFERENCES business_native_source_journals(capture_id),
+            format_version INTEGER NOT NULL CHECK(format_version = 1),
+            artifact_sha256 TEXT NOT NULL,
+            artifact_size_bytes INTEGER NOT NULL CHECK(artifact_size_bytes > 0 AND artifact_size_bytes <= 65536)
+        );
 
         CREATE TABLE IF NOT EXISTS business_session_handoff_bindings (
             binding_id TEXT PRIMARY KEY,

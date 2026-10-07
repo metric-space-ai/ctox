@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: rxdb-frame-liveness-${{ github.event.pull_request.number || github.ref }}
+  # A new push supersedes a PR head; main keeps its running build and only the newest pending one.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   transport:
     runs-on: ubuntu-24.04-arm

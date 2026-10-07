@@ -38,7 +38,7 @@ export function leadListRow(full) {
   return result;
 }
 
-export async function loadLeadList(collection, previousRows = [], { pageSize = 200 } = {}) {
+export async function loadLeadList(collection, previousRows = [], { pageSize = 200, signal } = {}) {
   const previous = new Map(previousRows.map(row => [row.id, row]));
   const rows = [];
   const seen = new Set();
@@ -49,7 +49,7 @@ export async function loadLeadList(collection, previousRows = [], { pageSize = 2
       selector: cursor ? { id: { $gt: cursor } } : {},
       sort: [{ id: 'asc' }], limit: pageSize,
       projection: [...LEAD_LIST_PROJECTION], requireRevision: `${read}:${page}`,
-    }).exec();
+    }).exec({ signal });
     if (!docs.length) {
       const changedIds = new Set(rows.filter(row => previous.get(row.id)?._rev !== row._rev).map(row => row.id));
       return { rows, changedIds, removedIds: new Set([...previous.keys()].filter(id => !seen.has(id))) };
@@ -73,7 +73,7 @@ export async function loadLeadList(collection, previousRows = [], { pageSize = 2
   throw error('Die Lead-Liste überschreitet das Seitenlimit.', 'LEAD_LIST_PAGE_LIMIT');
 }
 
-export async function loadFullLeadRows(collection, ids, { batchSize = 8 } = {}) {
+export async function loadFullLeadRows(collection, ids, { batchSize = 8, signal } = {}) {
   const requested = [...new Set(ids.filter(id => typeof id === 'string' && id))];
   const rows = [];
   const read = token();
@@ -82,7 +82,7 @@ export async function loadFullLeadRows(collection, ids, { batchSize = 8 } = {}) 
     const docs = await collection.find({
       selector: { id: { $in: batch } }, sort: [{ id: 'asc' }], limit: batch.length,
       requireRevision: `${read}:full:${offset}`,
-    }).exec();
+    }).exec({ signal });
     const found = new Set();
     for (const doc of docs) {
       const row = json(doc);
@@ -95,4 +95,57 @@ export async function loadFullLeadRows(collection, ids, { batchSize = 8 } = {}) 
   }
   // All requested full rows must arrive before callers can publish or act.
   return rows;
+}
+
+/** Acquire the Shell's native query authority, never a follower/local fallback. */
+export async function withLeadQueryAuthority(sync, work, { timeoutMs = 15000, isCurrent = () => true,
+  collectionName = 'outbound_lead_generation_leads' } = {}) {
+  if (typeof sync?.leaseCollection !== 'function') throw error('CTOX stellt keinen aktuellen Lesekanal bereit.', 'LEAD_QUERY_AUTHORITY_MISSING');
+  const deadline = Date.now() + timeoutMs;
+  const controller = new AbortController();
+  let closed = false, lease = null, timer = null;
+  const acquisition = Promise.resolve().then(() => sync.leaseCollection(
+    collectionName, 'outbound-collection-query', { forceDirect: true },
+  ));
+  // A timed-out acquisition may settle later; it still belongs to this caller.
+  void acquisition.then(late => {
+    if (closed) return late?.release?.();
+  }).catch(() => {});
+  const run = async () => {
+    lease = await acquisition;
+    let bridge = lease?.bridge;
+    if (!bridge?.state && bridge?.ready) bridge = await bridge.ready;
+    const replication = bridge?.state;
+    if (typeof replication?.awaitQueryReady !== 'function') {
+      throw error('Der aktuelle CTOX-Kanal ist noch nicht für Datenabfragen bereit.', 'LEAD_QUERY_AUTHORITY_MISSING');
+    }
+    await replication.awaitQueryReady(Math.max(1, deadline - Date.now()));
+    const generation = replication.collectionQueryGenerationToken?.(replication.activeRemotePeerId);
+    const assertCurrent = () => {
+      if (closed || !isCurrent() || replication.cancelled || lease.bridge?.state !== replication
+        || !generation || replication.collectionQueryGenerationToken?.(replication.activeRemotePeerId) !== generation) {
+        throw error('Die CTOX-Verbindung hat sich während des Ladens geändert.', 'LEAD_QUERY_GENERATION_CHANGED');
+      }
+    };
+    assertCurrent();
+    const result = await work(controller.signal);
+    assertCurrent();
+    return result;
+  };
+  try {
+    return await Promise.race([
+      run(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(error('Daten konnten nicht rechtzeitig aus CTOX geladen werden.', 'LEAD_QUERY_TIMEOUT'));
+        }, Math.max(1, deadline - Date.now()));
+      }),
+    ]);
+  } finally {
+    closed = true;
+    if (timer !== null) clearTimeout(timer);
+    controller.abort();
+    if (lease) await lease.release().catch(() => {});
+  }
 }

@@ -1618,9 +1618,8 @@ fn outbound_sellify_campaign_name_groups(
     }))
 }
 
-pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::Result<Value> {
-    let entity = outbound_required_string(payload, &["entity"])?;
-    let (collection, allowed_fields): (&str, &[&str]) = match entity.as_str() {
+fn sellify_lookup_spec(entity: &str) -> anyhow::Result<(&'static str, &'static [&'static str])> {
+    Ok(match entity {
         "company" => (
             "sellify_companies",
             &[
@@ -1663,7 +1662,15 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             ],
         ),
         _ => anyhow::bail!("entity must be company, person or campaign"),
-    };
+    })
+}
+
+pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::Result<Value> {
+    if payload.get("batch").is_some() {
+        return outbound_sellify_batch_lookup(root, payload);
+    }
+    let entity = outbound_required_string(payload, &["entity"])?;
+    let (collection, allowed_fields) = sellify_lookup_spec(&entity)?;
     // A completed-empty CRM receipt requires an actual readable collection.
     // Optional store readers deliberately tolerate absent projections elsewhere;
     // they must not stand in for a successful Sellify research query here.
@@ -1706,6 +1713,28 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
         .and_then(Value::as_u64)
         .unwrap_or(25)
         .clamp(1, limit_cap) as usize;
+    outbound_sellify_lookup_in_snapshot(
+        &lookup_conn,
+        &lookup_table,
+        &entity,
+        allowed_fields,
+        payload,
+        limit,
+        false,
+    )
+}
+
+fn outbound_sellify_lookup_in_snapshot(
+    lookup_conn: &Connection,
+    lookup_table: &str,
+    entity: &str,
+    allowed_fields: &[&str],
+    payload: &Value,
+    limit: usize,
+    complete_probe: bool,
+) -> anyhow::Result<Value> {
+    let group_by_name =
+        entity == "campaign" && payload.get("group_by").and_then(Value::as_str) == Some("name");
     if group_by_name {
         return outbound_sellify_campaign_name_groups(
             &lookup_conn,
@@ -1769,7 +1798,11 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
                 field,
                 expected,
                 false,
-                limit.saturating_sub(records.len()),
+                if complete_probe {
+                    limit
+                } else {
+                    limit.saturating_sub(records.len())
+                },
             )? {
                 if seen.insert(id) {
                     records.push(record);
@@ -1808,7 +1841,11 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
                 field,
                 needle,
                 true,
-                limit.saturating_sub(records.len()),
+                if complete_probe {
+                    limit
+                } else {
+                    limit.saturating_sub(records.len())
+                },
             )? {
                 if seen.insert(id) {
                     records.push(record);
@@ -1839,6 +1876,205 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
         "entity": entity,
         "records": records,
     }))
+}
+
+/// Bounded, read-only CRM probes through the existing policy-gated lookup action.
+/// Each collection is opened once and kept in one required read snapshot for
+/// the whole batch. This creates no agent/queue tasks and writes no lead data.
+fn outbound_sellify_batch_lookup(root: &Path, payload: &Value) -> anyhow::Result<Value> {
+    let requests = payload
+        .get("batch")
+        .and_then(Value::as_array)
+        .context("Sellify batch must be an array")?;
+    anyhow::ensure!(
+        !requests.is_empty() && requests.len() <= 50,
+        "Sellify batch must contain 1 to 50 requests"
+    );
+    let mut keys = BTreeSet::new();
+    let mut indexed_fields: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut total_selectors = 0;
+    let mut fuzzy_selectors = 0;
+    // Validate every request before opening any collection or returning data.
+    for request in requests {
+        let key = outbound_required_string(request, &["key"])?;
+        anyhow::ensure!(
+            key.len() <= 160 && keys.insert(key),
+            "invalid or duplicate Sellify batch key"
+        );
+        let entity = outbound_required_string(request, &["entity"])?;
+        anyhow::ensure!(
+            matches!(entity.as_str(), "company" | "person"),
+            "Sellify batch entity must be company or person"
+        );
+        anyhow::ensure!(
+            request.get("batch").is_none()
+                && request.get("group_by").is_none()
+                && request.get("ids").is_none(),
+            "nested batches, groups and internal record IDs are not supported in a Sellify batch"
+        );
+        let (_, allowed_fields) = sellify_lookup_spec(&entity)?;
+        let mut criteria = 0;
+        for selector_key in ["selectors", "fuzzy_selectors"] {
+            let Some(selectors) = request.get(selector_key) else {
+                continue;
+            };
+            let selectors = selectors
+                .as_array()
+                .context("Sellify selectors must be an array")?;
+            anyhow::ensure!(selectors.len() <= 16, "too many Sellify batch selectors");
+            for selector in selectors {
+                let field = outbound_required_string(selector, &["field"])?;
+                let value = outbound_required_string(selector, &["value"])?;
+                anyhow::ensure!(
+                    allowed_fields.contains(&field.as_str()) && value.len() <= 512,
+                    "unsupported Sellify batch selector"
+                );
+                anyhow::ensure!(
+                    selector_key != "fuzzy_selectors" || value.len() >= 2,
+                    "Sellify fuzzy batch selector is too short to execute"
+                );
+                indexed_fields
+                    .entry(entity.clone())
+                    .or_default()
+                    .insert(field);
+                criteria += 1;
+                total_selectors += 1;
+                fuzzy_selectors += usize::from(selector_key == "fuzzy_selectors");
+                anyhow::ensure!(
+                    total_selectors <= 200 && fuzzy_selectors <= 8,
+                    "Sellify batch exceeds the 200-selector/8-fuzzy-probe budget; split the batch"
+                );
+            }
+        }
+        anyhow::ensure!(
+            criteria > 0,
+            "Sellify batch request requires a nonempty selector"
+        );
+        let fields = request
+            .get("fields")
+            .and_then(Value::as_array)
+            .context("Sellify batch requires explicit output fields")?;
+        anyhow::ensure!(
+            !fields.is_empty() && fields.len() <= 32,
+            "Sellify batch needs 1 to 32 output fields"
+        );
+        for field in fields {
+            let field = field
+                .as_str()
+                .context("Sellify output field must be a string")?;
+            anyhow::ensure!(
+                field.len() <= 160
+                    && field.split('.').all(|part| !part.is_empty()
+                        && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')),
+                "invalid Sellify output field path"
+            );
+        }
+        if let Some(limit) = request.get("limit") {
+            anyhow::ensure!(
+                limit
+                    .as_u64()
+                    .is_some_and(|limit| (1..=50).contains(&limit)),
+                "Sellify batch limit must be 1 to 50"
+            );
+        }
+    }
+    // Prepare every collection's indexes before any required read snapshot.
+    // An earlier read transaction can block index DDL on rollback-journal DBs.
+    for (entity, fields) in &indexed_fields {
+        let (collection, _) = sellify_lookup_spec(entity)?;
+        let fields = fields.iter().map(String::as_str).collect::<Vec<_>>();
+        super::store::prepare_rxdb_collection_lookup_indexes(root, collection, &fields)?;
+    }
+    let mut snapshots = BTreeMap::new();
+    for entity in indexed_fields.keys() {
+        let (collection, _) = sellify_lookup_spec(entity)?;
+        snapshots.insert(
+            entity.clone(),
+            super::store::required_rxdb_collection_read_connection(root, collection, &[])?,
+        );
+    }
+    let mut results = Vec::with_capacity(requests.len());
+    for request in requests {
+        let entity = outbound_required_string(request, &["entity"])?;
+        let key = outbound_required_string(request, &["key"])?;
+        let (_, allowed_fields) = sellify_lookup_spec(&entity)?;
+        let (connection, table) = snapshots
+            .get(&entity)
+            .context("missing Sellify batch snapshot")?;
+        let limit = request.get("limit").and_then(Value::as_u64).unwrap_or(25) as usize;
+        // Read one extra record: a capped/ambiguous probe must never mean empty
+        // or complete and must not silently lose contacts at the boundary.
+        let mut query = request.clone();
+        query
+            .as_object_mut()
+            .context("Sellify request must be an object")?
+            .remove("fields");
+        let response = outbound_sellify_lookup_in_snapshot(
+            connection,
+            table,
+            &entity,
+            allowed_fields,
+            &query,
+            limit + 1,
+            true,
+        )?;
+        let records = response
+            .get("records")
+            .and_then(Value::as_array)
+            .context("missing Sellify records")?;
+        let fields = request["fields"]
+            .as_array()
+            .context("missing Sellify output fields")?;
+        let projected = records
+            .iter()
+            .take(limit)
+            .map(|record| sellify_project_batch_record(record, fields))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        results.push(serde_json::json!({"key":key, "entity":entity, "records":projected, "complete":records.len() <= limit}));
+    }
+    let response = serde_json::json!({"ok":true, "schema":"ctox.outbound.sellify_lookup_batch.v1", "results":results});
+    anyhow::ensure!(
+        serde_json::to_vec(&response)?.len() <= 1_048_576,
+        "Sellify batch exceeds the 1 MiB response budget; reduce the batch or output fields"
+    );
+    Ok(response)
+}
+
+fn sellify_project_batch_record(record: &Value, fields: &[Value]) -> anyhow::Result<Value> {
+    let mut result = serde_json::Map::new();
+    for key in ["id", "_deleted", "is_deleted"] {
+        if let Some(value) = record.get(key) {
+            result.insert(key.to_string(), value.clone());
+        }
+    }
+    for field in fields {
+        let path = field.as_str().context("Sellify field must be a string")?;
+        let parts = path.split('.').collect::<Vec<_>>();
+        let mut source = record;
+        let mut present = true;
+        for part in &parts {
+            match source.get(*part) {
+                Some(value) => source = value,
+                None => {
+                    present = false;
+                    break;
+                }
+            }
+        }
+        if !present {
+            continue;
+        }
+        let mut target = &mut result;
+        for part in &parts[..parts.len() - 1] {
+            target = target
+                .entry((*part).to_string())
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .context("overlapping Sellify output field paths")?;
+        }
+        target.insert(parts[parts.len() - 1].to_string(), source.clone());
+    }
+    Ok(Value::Object(result))
 }
 
 pub(super) fn is_outbound_adapter_reconciliation_command(command: &BusinessCommand) -> bool {
@@ -6801,6 +7037,217 @@ mod tests {
             plan.contains("lookup_contact_idx"),
             "lookup must retain expression index: {plan}"
         );
+        Ok(())
+    }
+
+    fn sellify_batch_fixture(root: &Path) -> anyhow::Result<()> {
+        for collection in ["sellify_companies", "sellify_people"] {
+            super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                root, collection,
+            )?;
+        }
+        let conn = Connection::open(super::super::store::rxdb_store_path(root))?;
+        for (collection, id, record) in [
+            (
+                "sellify_companies",
+                "company-a",
+                serde_json::json!({"contact_id":"1", "name":"Firma A", "payload":{"sql":{"note":"KONTAKTSPERRE", "large":"unused".repeat(1000)}}}),
+            ),
+            (
+                "sellify_companies",
+                "company-b",
+                serde_json::json!({"contact_id":"2", "name":"Firma B"}),
+            ),
+            (
+                "sellify_people",
+                "person-a",
+                serde_json::json!({"person_id":"10", "contact_id":"1", "name":"Kontakt A", "_deleted":false}),
+            ),
+            (
+                "sellify_people",
+                "person-b",
+                serde_json::json!({"person_id":"11", "contact_id":"1", "name":"Kontakt B", "_deleted":false}),
+            ),
+        ] {
+            conn.execute(&format!("INSERT INTO ctox_business_os__{collection}__v0 (id,data,deleted,lastWriteTime) VALUES (?1,?2,0,1)"), params![id, record.to_string()])?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_batch_keeps_each_probe_bound_and_projects_nested_fields() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        sellify_batch_fixture(root)?;
+        let result = outbound_sellify_lookup(
+            root,
+            &serde_json::json!({"batch":[
+                {"key":"lead-a/company", "entity":"company", "selectors":[{"field":"contact_id","value":"1"}], "fields":["contact_id","name","payload.sql.note"]},
+                {"key":"lead-b/company", "entity":"company", "selectors":[{"field":"contact_id","value":"2"}], "fields":["name"]},
+                {"key":"lead-a/people", "entity":"person", "selectors":[{"field":"contact_id","value":"1"}], "fields":["person_id","name"]},
+                {"key":"lead-missing/company", "entity":"company", "selectors":[{"field":"contact_id","value":"none"}], "fields":["name"]}
+            ]}),
+        )?;
+        assert_eq!(result["schema"], "ctox.outbound.sellify_lookup_batch.v1");
+        let rows = result["results"].as_array().context("results")?;
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0]["key"], "lead-a/company");
+        assert_eq!(
+            rows[0]["records"][0]["payload"]["sql"],
+            serde_json::json!({"note":"KONTAKTSPERRE"})
+        );
+        assert_eq!(rows[1]["records"][0]["name"], "Firma B");
+        assert_eq!(rows[2]["records"].as_array().context("people")?.len(), 2);
+        assert_eq!(rows[2]["records"][0]["_deleted"], false);
+        assert!(rows.iter().all(|row| row["complete"] == true));
+        assert_eq!(rows[3]["records"], serde_json::json!([]));
+        assert!(result.get("queue_task_id").is_none());
+        let legacy = outbound_sellify_lookup(
+            root,
+            &serde_json::json!({"entity":"company", "selectors":[{"field":"contact_id","value":"1"}], "fields":["name"]}),
+        )?;
+        assert_eq!(legacy["records"][0]["name"], "Firma A");
+        assert!(
+            legacy.get("schema").is_none(),
+            "single-lookup shape is unchanged"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_batch_prepares_both_indexes_before_read_snapshots() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        sellify_batch_fixture(temp.path())?;
+        let db = super::super::store::rxdb_store_path(temp.path());
+        {
+            let conn = Connection::open(&db)?;
+            conn.pragma_update(None, "journal_mode", "DELETE")?;
+        }
+        let result = outbound_sellify_lookup(
+            temp.path(),
+            &serde_json::json!({"batch":[
+                {"key":"company", "entity":"company", "selectors":[{"field":"contact_id","value":"1"}], "fields":["name"]},
+                {"key":"people", "entity":"person", "selectors":[{"field":"contact_id","value":"1"}], "fields":["name"]}
+            ]}),
+        )?;
+        assert_eq!(result["results"][1]["records"].as_array().unwrap().len(), 2);
+        let conn = Connection::open(&db)?;
+        for collection in ["sellify_companies", "sellify_people"] {
+            let table = format!("ctox_business_os__{collection}__v0");
+            let indexes: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND instr(sql, ?2)>0",
+                params![table, "json_extract(data, '$.contact_id')"],
+                |row| row.get(0),
+            )?;
+            assert!(
+                indexes > 0,
+                "{collection} index must precede read snapshots"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_batch_limit_detects_overlapping_selectors_without_a_false_complete(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        sellify_batch_fixture(root)?;
+        let result = outbound_sellify_lookup(
+            root,
+            &serde_json::json!({"batch":[
+                {"key":"contacts", "entity":"person", "limit":1, "selectors":[{"field":"person_id","value":"11"},{"field":"contact_id","value":"1"}], "fields":["person_id"]},
+                {"key":"exact-boundary", "entity":"person", "limit":2, "selectors":[{"field":"contact_id","value":"1"}], "fields":["person_id"]}
+            ]}),
+        )?;
+        assert_eq!(result["results"][0]["complete"], false);
+        assert_eq!(
+            result["results"][0]["records"]
+                .as_array()
+                .context("records")?
+                .len(),
+            1
+        );
+        assert_eq!(result["results"][1]["complete"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_batch_rejects_invalid_requests_and_unavailable_stores_before_returning_data(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let valid = serde_json::json!({"key":"a", "entity":"company", "selectors":[{"field":"contact_id","value":"1"}], "fields":["name"]});
+        assert!(
+            outbound_sellify_lookup(temp.path(), &serde_json::json!({"batch":[valid.clone()]}))
+                .is_err(),
+            "missing store is not completed empty"
+        );
+        sellify_batch_fixture(temp.path())?;
+        let over_requests = (0..51)
+            .map(|index| {
+                let mut request = valid.clone();
+                request["key"] = serde_json::json!(format!("lead-{index}"));
+                request
+            })
+            .collect::<Vec<_>>();
+        let over_selectors = (0..30)
+            .map(|index| {
+                serde_json::json!({
+                    "key":format!("lead-{index}"), "entity":"company",
+                    "selectors":vec![serde_json::json!({"field":"contact_id","value":"1"});8],
+                    "fields":["name"]
+                })
+            })
+            .collect::<Vec<_>>();
+        for invalid in [
+            serde_json::json!({"batch":[]}),
+            serde_json::json!({"batch":[{"key":"a","entity":"company","fuzzy_selectors":[{"field":"name","value":"A"}],"fields":["name"]}]}),
+            serde_json::json!({"batch":over_requests}),
+            serde_json::json!({"batch":over_selectors}),
+            serde_json::json!({"batch":[{"key":"a","entity":"company","fuzzy_selectors":vec![serde_json::json!({"field":"name","value":"Firma"});9],"fields":["name"]}]}),
+            serde_json::json!({"batch":[valid.clone(),valid.clone()]}),
+            serde_json::json!({"batch":[{"key":"a","entity":"company","selectors":[],"fields":["name"]}]}),
+            serde_json::json!({"batch":[{"key":"a","entity":"company","selectors":[{"field":"unsupported","value":"1"}],"fields":["name"]}]}),
+            serde_json::json!({"batch":[{"key":"a","entity":"company","selectors":[{"field":"contact_id","value":"1"}]}]}),
+            serde_json::json!({"batch":[{"key":"a","entity":"company","limit":0,"selectors":[{"field":"contact_id","value":"1"}],"fields":["name"]}]}),
+            serde_json::json!({"batch":[{"key":"a","entity":"company","ids":["internal-id"],"selectors":[{"field":"contact_id","value":"1"}],"fields":["name"]}]}),
+        ] {
+            assert!(outbound_sellify_lookup(temp.path(), &invalid).is_err());
+        }
+        let unavailable = tempdir()?;
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            unavailable.path(),
+            "sellify_companies",
+        )?;
+        let mut person = valid.clone();
+        person["key"] = serde_json::json!("person");
+        person["entity"] = serde_json::json!("person");
+        assert!(
+            outbound_sellify_lookup(
+                unavailable.path(),
+                &serde_json::json!({"batch":[valid,person]})
+            )
+            .is_err(),
+            "missing second collection must not return a successful partial batch"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_batch_enforces_the_response_budget() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        sellify_batch_fixture(root)?;
+        let conn = Connection::open(super::super::store::rxdb_store_path(root))?;
+        conn.execute(
+            "UPDATE ctox_business_os__sellify_companies__v0 SET data=?1 WHERE id='company-a'",
+            [serde_json::json!({"contact_id":"1", "name":"large".repeat(250_000)}).to_string()],
+        )?;
+        let result = outbound_sellify_lookup(
+            root,
+            &serde_json::json!({"batch":[{"key":"a","entity":"company","selectors":[{"field":"contact_id","value":"1"}],"fields":["name"]}]}),
+        );
+        assert!(result.unwrap_err().to_string().contains("1 MiB"));
         Ok(())
     }
 
