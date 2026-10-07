@@ -268,6 +268,57 @@ fn native_source_journal_rejects_symlinked_or_public_artifact_directories() {
 #[test]
 fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_capture() {
     let (root, registry, assignment) = fixture();
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let model_url = format!("http://{}/v1", server.server_addr());
+    let model = std::thread::spawn(move || {
+        for _ in 0..4 {
+            let mut request = server
+                .recv_timeout(Duration::from_secs(30))
+                .unwrap()
+                .expect("bounded fixture model request");
+            if request.method() != &tiny_http::Method::Post
+                || !request.url().ends_with("/responses")
+            {
+                request
+                    .respond(tiny_http::Response::from_string("{\"models\":[]}"))
+                    .unwrap();
+                continue;
+            }
+            use std::io::Read;
+            let mut input = String::new();
+            request
+                .as_reader()
+                .take(2 * 1024 * 1024)
+                .read_to_string(&mut input)
+                .unwrap();
+            let events = [
+                json!({"type":"response.created","response":{"id":"fixture-completed-response"}}),
+                json!({"type":"response.output_item.done","item":{
+                    "type":"message","role":"assistant","id":"fixture-message",
+                    "content":[{"type":"output_text","text":"actual fixture reply"}]
+                }}),
+                json!({"type":"response.completed","response":{"id":"fixture-completed-response",
+                    "usage":{"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}
+                }}),
+            ];
+            let body = events
+                .iter()
+                .map(|event| {
+                    format!(
+                        "event: {}\ndata: {}\n\n",
+                        event["type"].as_str().unwrap(),
+                        event
+                    )
+                })
+                .collect::<String>();
+            let response = tiny_http::Response::from_string(body).with_header(
+                tiny_http::Header::from_bytes("Content-Type", "text/event-stream").unwrap(),
+            );
+            request.respond(response).unwrap();
+            return input;
+        }
+        panic!("fixture did not receive the model request");
+    });
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -277,6 +328,16 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
         std::fs::create_dir(&home).unwrap();
         let mut config = ctox_core::config::ConfigBuilder::default().codex_home(home.clone()).build().await.unwrap();
         config.cwd = assignment.destination.import_parent.clone();
+        config.model = Some("gpt-5.1".into());
+        config.model_provider = ctox_core::ModelProviderInfo::create_openai_provider(Some(model_url));
+        config.model_provider.requires_openai_auth = false;
+        config.model_provider.supports_websockets = false;
+        config.model_provider.env_key = None;
+        config.model_provider.http_headers = None;
+        config.model_provider.env_http_headers = None;
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(0);
+        config.model_providers.insert("openai".into(), config.model_provider.clone());
         let auth = Arc::new(ctox_core::AuthManager::new(home, false, config.cli_auth_credentials_store_mode));
         let manager = ctox_core::ThreadManager::new(
             &config, auth, ctox_protocol::protocol::SessionSource::Exec,
@@ -284,6 +345,23 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
         );
         let started = tokio::time::timeout(Duration::from_secs(15), manager.start_thread(config)).await.unwrap().unwrap();
         assert!(started.thread.capture_native_state().await.is_err());
+        assert!(started.thread.retain_native_journal().await.is_err(), "unmaterialized journal remains rejected");
+        let turn = started.thread.submit(ctox_protocol::protocol::Op::UserInput {
+            items: vec![ctox_protocol::user_input::UserInput::Text {
+                text: "capture original fixture turn".into(), text_elements: Vec::new()
+            }],
+            final_output_json_schema: None,
+            required_initial_tool: None,
+        }).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let event = started.thread.next_event().await.unwrap();
+                if event.id == turn && matches!(event.msg, ctox_protocol::protocol::EventMsg::TurnComplete(_)) {
+                    break;
+                }
+                assert!(!matches!(event.msg, ctox_protocol::protocol::EventMsg::Error(_)), "fixture model turn failed");
+            }
+        }).await.expect("bounded completed model fixture turn");
         let journal = started.thread.retain_native_journal().await.unwrap();
         tokio::time::timeout(Duration::from_secs(10), started.thread.shutdown_and_wait()).await.unwrap().unwrap();
         let (configuration, state) = started.thread.capture_native_state().await.unwrap();
@@ -291,6 +369,16 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
         let journal_bytes = journal.read_bytes(64 * 1024 * 1024).unwrap();
         (configuration, state, journal_bytes)
     });
+    let request = model.join().unwrap();
+    assert!(request.contains("capture original fixture turn"));
+    let captured: serde_json::Value = serde_json::from_slice(state.as_bytes()).unwrap();
+    assert_eq!(
+        captured["provider"]["lastResponse"]["responseId"],
+        "fixture-completed-response"
+    );
+    assert!(captured["history"]
+        .to_string()
+        .contains("actual fixture reply"));
     let (mut spec, ownership) = source_spec();
     spec.session_id = state.session_id().to_string();
     spec.model_id = configuration.model.clone();
