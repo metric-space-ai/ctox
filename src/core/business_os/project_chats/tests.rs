@@ -137,6 +137,7 @@ fn mcp_context(actor: &str, role: &str) -> mcp_channel::McpChannelRequestContext
         confirmation_state: mcp_channel::McpConfirmationState::NotRequired,
         trusted_role: Some(role.into()),
         trusted_role_source: Some("test_authenticated_gateway".into()),
+        trusted_managed_read_scope: None,
     }
 }
 
