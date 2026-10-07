@@ -365,8 +365,9 @@ async fn reconstruct_bundle_rejects_foreign_corrupt_and_pending_artifacts() {
     });
     let blocked = store.capture(pending).await.unwrap();
     let target = root.path().join("reconstructed");
-    let foreign = store
-        .ingest_bytes(b"not declared in this manifest")
+    let foreign = blob(b"not declared in this manifest");
+    store
+        .ingest_blob(&foreign, Cursor::new(b"not declared in this manifest"))
         .unwrap();
     assert!(store
         .reconstruct_workspace_from_bundle(&captured.digest, &foreign, &target)
