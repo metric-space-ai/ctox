@@ -47,6 +47,7 @@ fn supervisor_binding_rejects_foreign_archived_forged_and_non_uuid_requests() ->
         ("foreign", json!({"project_id":"project", "thread_id":THREAD}), false),
         ("owner", json!({"project_id":"missing", "thread_id":THREAD}), false),
         ("owner", json!({"project_id":"project", "thread_id":"made-up-session"}), false),
+        ("owner", json!({"project_id":"project", "thread_id":"00000000-0000-0000-0000-000000000000"}), false),
         ("owner", json!({"project_id":"project", "thread_id":THREAD, "owner_user_id":"foreign"}), false),
         ("owner", json!({"project_id":"project", "thread_id":THREAD, "thread_key":"foreign-route"}), false),
         ("owner", json!({"project_id":"project", "thread_id":THREAD}), true),
