@@ -32908,7 +32908,7 @@ pub(super) mod tests {
         )?;
         assert_eq!(
             result["status"], "completed",
-            "signed Admin's own unchanged authority is not a role grant: {result}"
+            "signed Admin's own unchanged authority is not a role grant"
         );
         let after: (String, bool, i64, String) = conn.query_row(
             "SELECT role, active, capability_epoch, profile_json FROM business_users WHERE user_id='profile-admin'", [],
