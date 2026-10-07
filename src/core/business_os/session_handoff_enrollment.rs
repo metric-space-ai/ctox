@@ -27,13 +27,14 @@ pub(crate) struct SourceHandoffEnrollment {
     pub target_working_copy_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SourceHandoffEnrollmentReceipt {
     pub binding_id: String,
     pub binding_digest: String,
     pub checkpoint_digest: String,
     pub checkpoint_sequence: u64,
+    pub binding_revision: i64,
 }
 
 pub(crate) fn revoke_binding(root: &Path, binding: &str) -> Result<bool> {
@@ -132,10 +133,11 @@ fn binding_matches(
     input: &SourceHandoffEnrollment,
     source_identity: &str,
     target_identity: &str,
+    revision: i64,
 ) -> Result<bool> {
     Ok(policy.query_row(
         "SELECT EXISTS(SELECT 1 FROM business_session_handoff_bindings
-        WHERE binding_id=?1 AND binding_digest=?2 AND revision=1 AND state='active' AND side='source'
+        WHERE binding_id=?1 AND binding_digest=?2 AND revision=?24 AND state='active' AND side='source'
         AND job_id=?3 AND session_id=?4 AND scope_id=?5 AND checkpoint_digest=?6
         AND checkpoint_sequence=?7 AND ownership_generation=?8 AND source_instance_id=?9
         AND source_identity=?10 AND source_actor_user_id=?11 AND target_instance_id=?12
@@ -150,7 +152,7 @@ fn binding_matches(
             input.repository_id,input.target_working_copy_id,source.spec.model_route_id,
             source.spec.gateway_account_id,source.spec.model_route_id,source.spec.model_id,
             serde_json::to_string(&source.spec.required_capabilities)?,
-            source.spec.harness,source.spec.harness_version],
+            source.spec.harness,source.spec.harness_version,revision],
         |r| r.get(0),
     )?)
 }
@@ -223,7 +225,7 @@ pub(crate) fn enroll_source_with_conn(
         ],
     )?;
     ensure!(
-        binding_matches(policy, &id, &hash, &source, input, &issuer, target)?,
+        binding_matches(policy, &id, &hash, &source, input, &issuer, target, 1)?,
         "native handoff binding revoked or conflicts; reconcile"
     );
     let source_json = serde_json::to_string(&source)?;
@@ -266,6 +268,7 @@ pub(crate) fn enroll_source_with_conn(
         binding_digest: hash,
         checkpoint_digest: source.checkpoint_digest,
         checkpoint_sequence: source.checkpoint_sequence,
+        binding_revision: 1,
     })
 }
 
@@ -295,20 +298,213 @@ pub(crate) fn validate_source_decision(
         input.capture_id == stored.capture_id,
         "native capture provenance mismatched"
     );
-    let source = resolve_source_handoff(root, policy, &input.capture_id)?;
-    ensure!(source == stored, "native source authority changed");
+    let authorization: Option<(i64,String)> = policy.query_row(
+        "SELECT binding_revision,source_json FROM business_native_source_handoff_authorizations WHERE binding_id=?1",
+        [&row.0], |row| Ok((row.get(0)?,row.get(1)?)),
+    ).optional()?;
+    let (source, expected, revision) = match authorization {
+        Some((revision, json)) => (
+            super::guest_registry::source_handoff::resolve_reauthorized_source(
+                root,
+                policy,
+                &input.capture_id,
+            )?
+            .0,
+            serde_json::from_str::<SourceHandoffFacts>(&json)?,
+            revision,
+        ),
+        None => (
+            resolve_source_handoff(root, policy, &input.capture_id)?,
+            stored.clone(),
+            1,
+        ),
+    };
+    ensure!(source == expected, "native source authority changed");
+    historical_matches(&source, &stored)?;
     let issuer = identity.public_identity();
     let target = target_identity(config, identity, &source, &input)?;
     let hash = digest(&source, &input, &issuer, target)?;
+    let original_hash = digest(&stored, &input, &issuer, target)?;
     ensure!(
         hash == request.binding_digest
-            && row.0 == format!("handoff_{hash}")
+            && row.0 == format!("handoff_{original_hash}")
             && request.spec == source.spec
             && request.ownership == source.ownership
             && request.checkpoint_digest == source.checkpoint_digest
             && request.checkpoint_sequence == source.checkpoint_sequence
-            && binding_matches(policy, &row.0, &hash, &source, &input, &issuer, target)?,
+            && binding_matches(policy, &row.0, &hash, &source, &input, &issuer, target, revision)?,
         "native source handoff binding mismatched"
     );
     Ok(())
+}
+
+fn historical_matches(current: &SourceHandoffFacts, captured: &SourceHandoffFacts) -> Result<()> {
+    let mut historical = current.clone();
+    historical.policy_revision = captured.policy_revision.clone();
+    historical.workspace_revision = captured.workspace_revision;
+    ensure!(
+        historical == *captured,
+        "capture producer, checkpoint or native scope changed"
+    );
+    Ok(())
+}
+
+/// Explicit trusted operator action after separate current provider/workspace
+/// regrants. Never issues grants, lowers epochs, changes targets or resumes Core.
+pub(crate) fn reauthorize_source(
+    root: &Path,
+    config: &HostConfiguration,
+    identity: &SigningIdentity,
+    binding: &str,
+) -> Result<SourceHandoffEnrollmentReceipt> {
+    ensure!(
+        !binding.is_empty() && binding.len() <= 128,
+        "invalid handoff binding"
+    );
+    let mut policy = open_store(root)?;
+    let tx = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let result = reauthorize_source_with_conn(root, &tx, config, identity, binding)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+pub(crate) fn reauthorize_source_with_conn(
+    root: &Path,
+    policy: &Connection,
+    config: &HostConfiguration,
+    identity: &SigningIdentity,
+    binding: &str,
+) -> Result<SourceHandoffEnrollmentReceipt> {
+    let (json, input_json): (String, String) = policy
+        .query_row(
+            "SELECT n.source_json,n.input_json FROM business_native_source_handoff_bindings n
+         JOIN business_session_handoff_bindings b ON b.binding_id=n.binding_id
+         WHERE n.binding_id=?1 AND b.state='active' AND b.side='source'",
+            [binding],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+        .context("handoff source absent or revoked")?;
+    let original: SourceHandoffFacts = serde_json::from_str(&json)?;
+    let input: SourceHandoffEnrollment = serde_json::from_str(&input_json)?;
+    ensure!(
+        input.capture_id == original.capture_id,
+        "capture provenance differs"
+    );
+    let (current, current_policy) =
+        super::guest_registry::source_handoff::resolve_reauthorized_source(
+            root,
+            policy,
+            &input.capture_id,
+        )?;
+    historical_matches(&current, &original)?;
+    let issuer = identity.public_identity();
+    let target = target_identity(config, identity, &current, &input)?;
+    let original_hash = digest(&original, &input, &issuer, target)?;
+    ensure!(
+        binding == format!("handoff_{original_hash}"),
+        "original handoff identity changed"
+    );
+    let latest: Option<(i64,String,String)> = policy.query_row(
+        "SELECT binding_revision,source_json,policy_snapshot_json FROM business_native_source_handoff_authorizations WHERE binding_id=?1",
+        [binding], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+    ).optional()?;
+    let (prior, revision) = match latest {
+        Some((revision, json, snapshot)) => {
+            let prior: SourceHandoffFacts = serde_json::from_str(&json)?;
+            super::guest_registry::source_handoff::validate_policy_advance(
+                &serde_json::from_str(&snapshot)?,
+                &prior.policy_revision,
+                &current_policy,
+            )?;
+            (prior, revision)
+        }
+        None => (original, 1),
+    };
+    let prior_hash = digest(&prior, &input, &issuer, target)?;
+    ensure!(
+        binding_matches(
+            policy,
+            binding,
+            &prior_hash,
+            &prior,
+            &input,
+            &issuer,
+            target,
+            revision
+        )?,
+        "handoff binding conflicts or was revoked"
+    );
+    let role: String = policy.query_row(
+        "SELECT role FROM business_users WHERE user_id=?1 AND active=1",
+        [&current.owner_user_id],
+        |r| r.get(0),
+    )?;
+    let actor = super::policy::BusinessOsActor::new(Some(current.owner_user_id.clone()), &role);
+    let scope = super::policy::BusinessOsScope {
+        scope_type: super::policy::BusinessOsScopeType::SessionHandoff,
+        scope_id: Some(binding.into()),
+        assigned_to_actor: false,
+        owned_by_actor: false,
+    };
+    ensure!(
+        super::store_policy::active_permission_grant_allows(
+            policy,
+            &actor,
+            super::policy::BusinessOsPermission::SessionHandoffDisclose,
+            &scope,
+        )?,
+        "exact source disclosure grant required"
+    );
+    let hash = digest(&current, &input, &issuer, target)?;
+    let next_revision = if current == prior {
+        revision
+    } else {
+        let next = revision
+            .checked_add(1)
+            .context("handoff revision exhausted")?;
+        let changed = policy.execute(
+            "UPDATE business_session_handoff_bindings SET binding_digest=?1,revision=?2,updated_at_ms=?3
+             WHERE binding_id=?4 AND state='active' AND revision=?5 AND binding_digest=?6",
+            params![hash,next,i64::try_from(now_ms())?,binding,revision,prior_hash],
+        )?;
+        ensure!(changed == 1, "handoff authorization changed");
+        policy.execute(
+            "INSERT INTO business_native_source_handoff_authorizations
+             (binding_id,binding_revision,source_json,policy_snapshot_json) VALUES (?1,?2,?3,?4)
+             ON CONFLICT(binding_id) DO UPDATE SET binding_revision=excluded.binding_revision,source_json=excluded.source_json,policy_snapshot_json=excluded.policy_snapshot_json",
+            params![binding,next,serde_json::to_string(&current)?,serde_json::to_string(&current_policy)?],
+        )?;
+        super::store::insert_business_event(
+            policy,
+            "business_session_handoff_bindings",
+            binding,
+            "business_os.session_handoff.reauthorized",
+            serde_json::json!({"version":1,"binding_digest":hash,"binding_revision":next,
+                "source_principal_id":current.owner_user_id,"capture_id":current.capture_id,
+                "checkpoint_digest":current.checkpoint_digest}),
+            i64::try_from(now_ms())?,
+        )?;
+        next
+    };
+    ensure!(
+        binding_matches(
+            policy,
+            binding,
+            &hash,
+            &current,
+            &input,
+            &issuer,
+            target,
+            next_revision
+        )?,
+        "reauthorized handoff binding differs"
+    );
+    Ok(SourceHandoffEnrollmentReceipt {
+        binding_id: binding.into(),
+        binding_digest: hash,
+        binding_revision: next_revision,
+        checkpoint_digest: current.checkpoint_digest,
+        checkpoint_sequence: current.checkpoint_sequence,
+    })
 }

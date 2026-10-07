@@ -84,7 +84,7 @@ pub(super) fn assert_native_source_handoff_enrollment(
     assert_eq!(first.binding_id, repeated.binding_id);
     assert_eq!(first.binding_digest, repeated.binding_digest);
     let gate = super::super::super::native_session_handoff_gate(root).unwrap();
-    let request = SessionHandoffGateRequest {
+    let mut request = SessionHandoffGateRequest {
         issuer_identity: identity.public_identity(),
         phase: SessionHandoffPhase::Disclose,
         binding_digest: first.binding_digest.clone(),
@@ -125,18 +125,286 @@ pub(super) fn assert_native_source_handoff_enrollment(
         "source_authority_changed",
         "grant mutation bumps the principal epoch and cannot authorize an old capture"
     );
-    // Restore this isolated fixture's captured epoch to test allowed/audit paths
-    // independently. Production never restores epochs: grant provisioning must
-    // precede capture or use an explicit native reconciliation workflow.
+    assert!(
+        crate::sync_host::with_current_signing_identity(root, |key| {
+            enrollment::reauthorize_source(root, &config, key, &first.binding_id)
+        })
+        .is_err(),
+        "stale provider/workspace assignments cannot be renewed implicitly"
+    );
+    let (computer,copy,workspace,profile,project): (String,String,String,String,String) = registry.with_policy(|tx| {
+        Ok(tx.query_row(
+            "SELECT p.computer_id,w.working_copy_id,w.native_workspace,j.worker_profile_id,j.project_id
+             FROM business_native_source_journals j
+             JOIN business_native_guest_provider_assignments p
+             ON p.owner_user_id=j.owner_user_id AND p.worker_profile_id=j.worker_profile_id
+             JOIN business_native_guest_workspace_assignments w
+             ON w.owner_user_id=j.owner_user_id AND w.worker_profile_id=j.worker_profile_id AND w.project_id=j.project_id
+             WHERE j.capture_id=?1",
+            [&receipt.capture_id],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)),
+        )?)
+    }).unwrap();
+    let regrant = || {
+        crate::business_os::configure_native_guest_assignments(
+            root,
+            &computer,
+            &[crate::business_os::ProviderAssignmentInput {
+                owner_user_id: "owner".into(),
+                worker_profile_id: profile.clone(),
+                gateway_account_id: spec.gateway_account_id.clone(),
+                model_id: spec.model_id.clone(),
+            }],
+            &[crate::business_os::WorkspaceAssignmentInput {
+                owner_user_id: "owner".into(),
+                worker_profile_id: profile.clone(),
+                project_id: project.clone(),
+                working_copy_id: copy.clone(),
+                native_workspace: workspace.clone().into(),
+            }],
+        )
+        .unwrap()
+    };
+    regrant();
+    let role: String = registry
+        .with_policy(|tx| {
+            Ok(tx.query_row(
+                "SELECT role FROM business_users WHERE user_id='owner'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    let foreign_role = if role == "user" { "admin" } else { "user" };
     registry
         .with_policy(|tx| {
             tx.execute(
-                "UPDATE business_users SET capability_epoch=?1 WHERE user_id='owner'",
-                [captured_epoch],
+                "UPDATE business_users SET role=?1 WHERE user_id='owner'",
+                [foreign_role],
             )?;
             Ok(())
         })
         .unwrap();
+    regrant();
+    assert!(
+        crate::sync_host::with_current_signing_identity(root, |key| {
+            enrollment::reauthorize_source(root, &config, key, &first.binding_id)
+        })
+        .is_err(),
+        "current grants cannot mask a changed native role"
+    );
+    registry
+        .with_policy(|tx| {
+            tx.execute(
+                "UPDATE business_users SET role=?1 WHERE user_id='owner'",
+                [&role],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    regrant();
+    let renew = || {
+        crate::sync_host::with_current_signing_identity(root, |key| {
+            enrollment::reauthorize_source(root, &config, key, &first.binding_id)
+        })
+    };
+    let snapshot: String = registry
+        .with_policy(|tx| {
+            Ok(tx.query_row(
+            "SELECT snapshot_json FROM business_native_source_policy_snapshots WHERE capture_id=?1",
+            [&receipt.capture_id], |r| r.get(0),
+        )?)
+        })
+        .unwrap();
+    registry.with_policy(|tx| {
+        tx.execute("UPDATE business_native_source_policy_snapshots SET snapshot_json='[]' WHERE capture_id=?1",
+            [&receipt.capture_id])?;
+        Ok(())
+    }).unwrap();
+    assert!(
+        renew().is_err(),
+        "historical policy proof cannot be fabricated"
+    );
+    registry.with_policy(|tx| {
+        tx.execute("UPDATE business_native_source_policy_snapshots SET snapshot_json=?1 WHERE capture_id=?2",
+            rusqlite::params![snapshot,receipt.capture_id])?;
+        tx.execute("UPDATE business_permission_grants SET active=0 WHERE grant_id='native-handoff-grant'",[])?;
+        Ok(())
+    }).unwrap();
+    regrant();
+    assert_eq!(
+        renew().unwrap_err().to_string(),
+        "exact source disclosure grant required"
+    );
+    registry.with_policy(|tx| {
+        tx.execute("UPDATE business_permission_grants SET active=1 WHERE grant_id='native-handoff-grant'",[])?;
+        Ok(())
+    }).unwrap();
+    regrant();
+    crate::business_os::configure_native_guest_assignments(
+        root,
+        &computer,
+        &[crate::business_os::ProviderAssignmentInput {
+            owner_user_id: "owner".into(),
+            worker_profile_id: profile.clone(),
+            gateway_account_id: "foreign-native-account".into(),
+            model_id: spec.model_id.clone(),
+        }],
+        &[crate::business_os::WorkspaceAssignmentInput {
+            owner_user_id: "owner".into(),
+            worker_profile_id: profile.clone(),
+            project_id: project.clone(),
+            working_copy_id: copy.clone(),
+            native_workspace: workspace.clone().into(),
+        }],
+    )
+    .unwrap();
+    assert!(
+        renew().is_err(),
+        "current regrant cannot move the capture to another account"
+    );
+    regrant();
+    let foreign_workspace = tempfile::tempdir_in(root).unwrap();
+    std::fs::set_permissions(
+        foreign_workspace.path(),
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+    )
+    .unwrap();
+    crate::business_os::configure_native_guest_assignments(
+        root,
+        &computer,
+        &[crate::business_os::ProviderAssignmentInput {
+            owner_user_id: "owner".into(),
+            worker_profile_id: profile.clone(),
+            gateway_account_id: spec.gateway_account_id.clone(),
+            model_id: spec.model_id.clone(),
+        }],
+        &[crate::business_os::WorkspaceAssignmentInput {
+            owner_user_id: "owner".into(),
+            worker_profile_id: profile.clone(),
+            project_id: project.clone(),
+            working_copy_id: copy.clone(),
+            native_workspace: std::fs::canonicalize(foreign_workspace.path()).unwrap(),
+        }],
+    )
+    .unwrap();
+    assert!(
+        renew().is_err(),
+        "same working-copy label cannot substitute a different native directory"
+    );
+    regrant();
+    registry
+        .with_policy(|tx| {
+            tx.execute_batch(
+                "CREATE TRIGGER fail_source_renewal BEFORE INSERT ON business_events
+            WHEN NEW.command_type='business_os.session_handoff.reauthorized'
+            BEGIN SELECT RAISE(ABORT,'renewal audit fixture failure'); END;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        renew().is_err(),
+        "failed renewal audit cannot commit a new authorization"
+    );
+    registry.with_policy(|tx| {
+        tx.execute_batch("DROP TRIGGER fail_source_renewal")?;
+        let revision: i64 = tx.query_row(
+            "SELECT revision FROM business_session_handoff_bindings WHERE binding_id=?1",
+            [&first.binding_id],|r| r.get(0),
+        )?;
+        assert_eq!(revision,1,"failed audit rolls back binding revision");
+        let count: i64 = tx.query_row(
+            "SELECT count(*) FROM business_native_source_handoff_authorizations WHERE binding_id=?1",
+            [&first.binding_id],|r| r.get(0),
+        )?;
+        assert_eq!(count,0,"failed audit rolls back authorization provenance");
+        Ok(())
+    }).unwrap();
+    let original_digest = request.binding_digest.clone();
+    let renewed = crate::sync_host::with_current_signing_identity(root, |key| {
+        enrollment::reauthorize_source(root, &config, key, &first.binding_id)
+    })
+    .unwrap();
+    assert_eq!(renewed.binding_id, first.binding_id);
+    assert_eq!(renewed.binding_revision, 2);
+    assert_ne!(renewed.binding_digest, original_digest);
+    registry.with_policy(|tx| {
+        let (captured, assigned, authorized): (i64,i64,i64) = tx.query_row(
+            "SELECT c.workspace_revision,w.revision,json_extract(a.source_json,'$.workspaceRevision')
+             FROM business_native_source_checkpoints c
+             JOIN business_native_source_journals j ON j.capture_id=c.capture_id
+             JOIN business_native_guest_workspace_assignments w
+             ON w.owner_user_id=j.owner_user_id AND w.worker_profile_id=j.worker_profile_id AND w.project_id=j.project_id
+             JOIN business_native_source_handoff_authorizations a ON a.binding_id=?2
+             WHERE c.capture_id=?1",
+            rusqlite::params![receipt.capture_id,first.binding_id],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+        )?;
+        assert!(assigned > captured,"explicit workspace regrants advance their revision");
+        assert_eq!(authorized,assigned,"renewed binding records the current workspace revision");
+        Ok(())
+    }).unwrap();
+    assert!(
+        gate.authorize(&request).is_err(),
+        "old binding digest cannot mint after renewal"
+    );
+    registry
+        .with_policy(|tx| {
+            tx.execute(
+                "UPDATE business_native_guest_provider_assignments SET revision=revision-1
+            WHERE owner_user_id='owner' AND worker_profile_id=?1",
+                [&profile],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        renew().unwrap_err().to_string(),
+        "native assignment epoch or revision regressed",
+        "a later renewal cannot roll back the most recent provider revision"
+    );
+    registry
+        .with_policy(|tx| {
+            tx.execute(
+                "UPDATE business_native_guest_provider_assignments SET revision=revision+1
+            WHERE owner_user_id='owner' AND worker_profile_id=?1",
+                [&profile],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    request.binding_digest = renewed.binding_digest.clone();
+    crate::sync_host::handle_command(
+        root,
+        &[
+            "handoff-reauthorize-source".into(),
+            first.binding_id.clone(),
+        ],
+    )
+    .unwrap();
+    let retry = crate::sync_host::with_current_signing_identity(root, |key| {
+        enrollment::reauthorize_source(root, &config, key, &first.binding_id)
+    })
+    .unwrap();
+    assert_eq!(
+        retry.binding_revision, 2,
+        "reauthorization retry is idempotent"
+    );
+    assert_eq!(retry.binding_digest, renewed.binding_digest);
+    let current_epoch: i64 = registry
+        .with_policy(|tx| {
+            Ok(tx.query_row(
+                "SELECT capability_epoch FROM business_users WHERE user_id='owner'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert!(
+        current_epoch > captured_epoch,
+        "production never lowers the principal epoch"
+    );
     registry
         .with_policy(|tx| {
             enrollment::validate_source_decision(root, tx, &config, &identity, &request)
@@ -321,6 +589,14 @@ pub(super) fn assert_native_source_handoff_enrollment(
             .filter(|(kind, _)| kind == "business_os.session_handoff.revoked")
             .count(),
         1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(kind, _)| kind == "business_os.session_handoff.reauthorized")
+            .count(),
+        1,
+        "retry and failed renewal audit cannot create duplicate committed events"
     );
     assert!(events
         .iter()

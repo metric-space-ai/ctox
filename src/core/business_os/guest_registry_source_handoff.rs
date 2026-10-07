@@ -4,7 +4,7 @@
 //! Resolve only an immutable capture published by the stopped native owner.
 use super::*;
 
-#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SourceHandoffFacts {
     pub capture_id: String,
@@ -29,6 +29,33 @@ pub(crate) fn resolve_source_handoff(
     policy: &Connection,
     capture_id: &str,
 ) -> Result<SourceHandoffFacts> {
+    resolve(root, policy, capture_id, false).map(|(facts, _)| facts)
+}
+
+/// Only explicit native reauthorization may bind a historical capture to a
+/// fresh policy revision. The gate also demands its durable authorization row.
+pub(crate) fn resolve_reauthorized_source(
+    root: &Path,
+    policy: &Connection,
+    capture_id: &str,
+) -> Result<(SourceHandoffFacts, serde_json::Value)> {
+    resolve(root, policy, capture_id, true)
+}
+
+pub(crate) fn validate_policy_advance(
+    prior: &serde_json::Value,
+    revision: &str,
+    current: &serde_json::Value,
+) -> Result<()> {
+    source_policy::validate_advance(prior, revision, current)
+}
+
+fn resolve(
+    root: &Path,
+    policy: &Connection,
+    capture_id: &str,
+    reauthorized: bool,
+) -> Result<(SourceHandoffFacts, serde_json::Value)> {
     ensure!(identifier(capture_id), "invalid native capture ID");
     let row = policy
         .query_row(
@@ -92,10 +119,16 @@ pub(crate) fn resolve_source_handoff(
         thread_id: row.6,
         import_parent: parent.into(),
     };
-    ensure!(
-        validate_policy(policy, &d)? == row.10,
-        "native source policy changed since capture; reconcile"
-    );
+    let current_policy = policy_snapshot(policy, &d)?;
+    let policy_revision = source_policy::revision(&current_policy)?;
+    if reauthorized {
+        source_policy::validate_reauthorization(policy, capture_id, &row.10, &current_policy)?;
+    } else {
+        ensure!(
+            policy_revision == row.10,
+            "native source policy changed since capture; reconcile"
+        );
+    }
     let spec: ExecutionSpec = serde_json::from_str(&row.8)?;
     let ownership: Ownership = serde_json::from_str(&row.9)?;
     ensure!(
@@ -124,7 +157,12 @@ pub(crate) fn resolve_source_handoff(
     );
     let workspace = workspaces::require(policy, &d, &path)?;
     ensure!(
-        workspace.working_copy_id == row.14 && workspace.revision == u64::try_from(row.15)?,
+        workspace.working_copy_id == row.14
+            && if reauthorized {
+                workspace.revision >= u64::try_from(row.15)?
+            } else {
+                workspace.revision == u64::try_from(row.15)?
+            },
         "native source workspace assignment changed"
     );
     let store = ctox_sync::checkpoint::CheckpointStore::open(store_path.clone(), 64 * 1024 * 1024)?;
@@ -146,18 +184,21 @@ pub(crate) fn resolve_source_handoff(
         private_directory(&store_path)? == store_identity,
         "native source store replaced"
     );
-    Ok(SourceHandoffFacts {
-        capture_id: capture_id.into(),
-        source_instance_id: row.7,
-        owner_user_id: row.3,
-        project_id: row.5,
-        worker_profile_id: row.4,
-        policy_revision: row.10,
-        spec,
-        ownership,
-        checkpoint_digest: row.12,
-        checkpoint_sequence: u64::try_from(row.13)?,
-        source_working_copy_id: row.14,
-        workspace_revision: u64::try_from(row.15)?,
-    })
+    Ok((
+        SourceHandoffFacts {
+            capture_id: capture_id.into(),
+            source_instance_id: row.7,
+            owner_user_id: row.3,
+            project_id: row.5,
+            worker_profile_id: row.4,
+            policy_revision,
+            spec,
+            ownership,
+            checkpoint_digest: row.12,
+            checkpoint_sequence: u64::try_from(row.13)?,
+            source_working_copy_id: row.14,
+            workspace_revision: workspace.revision,
+        },
+        current_policy,
+    ))
 }

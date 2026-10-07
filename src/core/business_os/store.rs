@@ -27642,6 +27642,17 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             input_json TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS business_native_source_policy_snapshots (
+            capture_id TEXT PRIMARY KEY REFERENCES business_native_source_journals(capture_id),
+            snapshot_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS business_native_source_handoff_authorizations (
+            binding_id TEXT PRIMARY KEY REFERENCES business_native_source_handoff_bindings(binding_id),
+            binding_revision INTEGER NOT NULL CHECK(binding_revision > 1),
+            source_json TEXT NOT NULL,
+            policy_snapshot_json TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS business_module_releases (
             version_id TEXT PRIMARY KEY,
             module_id TEXT NOT NULL,
