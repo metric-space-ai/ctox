@@ -29,6 +29,20 @@ pub(crate) fn configure_provider_assignments(
     );
     let mut conn = super::super::store::open_store(root)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    configure_in_transaction(&tx, computer, assignments)?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub(super) fn configure_in_transaction(
+    tx: &Connection,
+    computer: &str,
+    assignments: &[ProviderAssignmentInput],
+) -> Result<()> {
+    ensure!(
+        identifier(computer) && assignments.len() <= 64,
+        "invalid provider assignment configuration"
+    );
     tx.execute("UPDATE business_native_guest_provider_assignments SET state='revoked',revision=revision+1 WHERE computer_id=?1", [computer])?;
     let mut seen = BTreeSet::new();
     for assignment in assignments {
@@ -82,7 +96,6 @@ pub(crate) fn configure_provider_assignments(
             ],
         )?;
     }
-    tx.commit()?;
     Ok(())
 }
 

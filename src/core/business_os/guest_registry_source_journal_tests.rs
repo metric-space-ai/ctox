@@ -268,6 +268,31 @@ fn native_source_journal_rejects_symlinked_or_public_artifact_directories() {
 #[test]
 fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_capture() {
     let (root, registry, assignment) = fixture();
+    let workspace = super::workspace_tests::grant_workspace(root.path(), &assignment);
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(&workspace)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "fixture Git failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.name", "Native capture fixture"]);
+    git(&["config", "user.email", "capture@example.invalid"]);
+    std::fs::write(workspace.join("tracked.txt"), "base\n").unwrap();
+    std::fs::write(workspace.join("removed.txt"), "removed\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "unpublished native base"]);
+    std::fs::write(workspace.join("tracked.txt"), "staged\n").unwrap();
+    git(&["add", "tracked.txt"]);
+    std::fs::write(workspace.join("tracked.txt"), "unstaged\n").unwrap();
+    git(&["rm", "-q", "removed.txt"]);
+    std::fs::write(workspace.join("untracked.bin"), b"required\0bytes").unwrap();
     let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
     let model_url = format!("http://{}/v1", server.server_addr());
     let model = std::thread::spawn(move || {
@@ -327,7 +352,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
         let home = root.path().join("isolated-core-home");
         std::fs::create_dir(&home).unwrap();
         let mut config = ctox_core::config::ConfigBuilder::default().codex_home(home.clone()).build().await.unwrap();
-        config.cwd = assignment.destination.import_parent.clone();
+        config.cwd = workspace.clone();
         config.model = Some("gpt-5.1".into());
         config.model_provider = ctox_core::ModelProviderInfo::create_openai_provider(Some(model_url));
         config.model_provider.requires_openai_auth = false;
@@ -408,6 +433,171 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
         })
         .unwrap();
     assert_eq!(artifact, repeated);
+    let checkpoint = registry
+        .with_policy(|tx| {
+            super::super::source_checkpoint::persist(
+                tx,
+                &store,
+                &store_root,
+                &assignment.destination,
+                &spec,
+                &ownership,
+                &receipt,
+                &configuration,
+                &state,
+                &journal_bytes,
+            )
+        })
+        .unwrap();
+    let manifest = store.load(&checkpoint.digest).unwrap();
+    assert_eq!(manifest.session.session_id, spec.session_id);
+    assert_eq!(manifest.session.gateway_account_id, spec.gateway_account_id);
+    assert_eq!(manifest.history.len(), 1);
+    assert_eq!(manifest.history[0].sha256, receipt.journal_sha256);
+    assert_eq!(manifest.provider_state.len(), 3);
+    assert_eq!(
+        manifest.pending_effects.len(),
+        1,
+        "external effects remain unresolved"
+    );
+    assert!(manifest.workspace_state.index_patch.size_bytes > 0);
+    assert!(manifest.workspace_state.worktree_patch.size_bytes > 0);
+    assert!(manifest
+        .workspace_state
+        .deleted_paths
+        .contains("removed.txt"));
+    assert!(manifest
+        .workspace_state
+        .required_untracked
+        .iter()
+        .any(|e| e.path == "untracked.bin"));
+    let same = registry
+        .with_policy(|tx| {
+            super::super::source_checkpoint::persist(
+                tx,
+                &store,
+                &store_root,
+                &assignment.destination,
+                &spec,
+                &ownership,
+                &receipt,
+                &configuration,
+                &state,
+                &journal_bytes,
+            )
+        })
+        .unwrap();
+    assert_eq!(checkpoint, same);
+    let restored = root.path().join("protected-source-copy");
+    store.restore(&checkpoint.digest, &restored).unwrap();
+    assert_eq!(
+        std::fs::read(restored.join("workspace/untracked.bin")).unwrap(),
+        b"required\0bytes"
+    );
+    assert_eq!(
+        std::fs::read(restored.join("provider/native-session-state.json")).unwrap(),
+        state.as_bytes()
+    );
+    let bundle = restored.join("provider/native-workspace.bundle");
+    let offline = root.path().join("offline-repository");
+    let cloned = std::process::Command::new("git")
+        .args(["clone", "--bare", "--quiet"])
+        .arg(&bundle)
+        .arg(&offline)
+        .output()
+        .unwrap();
+    assert!(
+        cloned.status.success(),
+        "actual HEAD bundle must work without the source repository"
+    );
+    let object = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&offline)
+        .args([
+            "cat-file",
+            "-e",
+            &format!("{}^{{commit}}", manifest.workspace_state.base_commit),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        object.status.success(),
+        "unpublished base objects were retained"
+    );
+    assert!(
+        runtime
+            .block_on(store.reconstruct_workspace(
+                &checkpoint.digest,
+                &offline,
+                &root.path().join("forbidden-resume")
+            ))
+            .is_err(),
+        "unknown effects must stop reconstruction"
+    );
+    let mut wrong_configuration = configuration.clone();
+    wrong_configuration.cwd = root.path().into();
+    assert!(registry
+        .with_policy(|tx| {
+            super::super::source_checkpoint::persist(
+                tx,
+                &store,
+                &store_root,
+                &assignment.destination,
+                &spec,
+                &ownership,
+                &receipt,
+                &wrong_configuration,
+                &state,
+                &journal_bytes,
+            )
+        })
+        .is_err());
+    std::fs::write(workspace.join("tracked.txt"), "late conflicting change\n").unwrap();
+    assert!(
+        registry
+            .with_policy(|tx| {
+                super::super::source_checkpoint::persist(
+                    tx,
+                    &store,
+                    &store_root,
+                    &assignment.destination,
+                    &spec,
+                    &ownership,
+                    &receipt,
+                    &configuration,
+                    &state,
+                    &journal_bytes,
+                )
+            })
+            .is_err(),
+        "exact retry cannot replace the first checkpoint"
+    );
+    super::super::workspaces::revoke_workspace_assignment(
+        root.path(),
+        "owner",
+        "profile",
+        "project",
+    )
+    .unwrap();
+    assert!(
+        registry
+            .with_policy(|tx| {
+                super::super::source_checkpoint::persist(
+                    tx,
+                    &store,
+                    &store_root,
+                    &assignment.destination,
+                    &spec,
+                    &ownership,
+                    &receipt,
+                    &configuration,
+                    &state,
+                    &journal_bytes,
+                )
+            })
+            .is_err(),
+        "revocation denies subsequent protected source capture"
+    );
     let mut foreign = spec.clone();
     foreign.session_id = uuid::Uuid::new_v4().to_string();
     assert!(registry

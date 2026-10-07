@@ -185,11 +185,15 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             print(serde_json::json!({"revoked": true}))
         },
         ["guest-enroll", project, thread, profile] => guests::enroll(&root, &[project, thread, profile], &input()?),
+        ["revoke-guest-workspace", owner, profile, project] => {
+            crate::business_os::revoke_workspace_assignment(&root, owner, profile, project)?;
+            print(serde_json::json!({"revoked": true}))
+        },
         ["run"] => runtime::run(&root, async {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
         }, |started, _authority, _guests| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
-        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
+        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
     }
 }
 

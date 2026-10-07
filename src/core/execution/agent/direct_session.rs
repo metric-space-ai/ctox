@@ -2467,6 +2467,7 @@ impl PersistentSession {
             }
             // Observation handle only. Actual guest operations independently
             // revalidate provider/account/policy/controller and quorum ownership.
+            execution.verify_turn_workspace(cwd)?;
             *native_guest_execution = Some(execution);
         }
         // Only the explicitly native-admitted guest lane forbids isolated

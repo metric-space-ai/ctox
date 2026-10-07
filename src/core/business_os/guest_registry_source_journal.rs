@@ -18,6 +18,8 @@ pub(crate) struct NativeSourceJournalReceipt {
     pub session_id: String,
     pub journal_sha256: String,
     pub journal_size_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<source_checkpoint::NativeSourceCheckpointReceipt>,
 }
 
 pub(super) fn source_store(
@@ -177,6 +179,7 @@ pub(super) fn persist(
         session_id: spec.session_id.clone(),
         journal_sha256: stored.1,
         journal_size_bytes: u64::try_from(stored.2)?,
+        checkpoint: None,
     })
 }
 
@@ -370,7 +373,7 @@ impl NativeGuestExecution {
                 let bytes = journal.read_bytes(PortableJournalLimits::default().max_bytes)?;
                 let (store, store_root, store_identity) =
                     source_store(&entry.assignment.destination.import_parent)?;
-                let receipt = persist(
+                let mut receipt = persist(
                     policy,
                     &store,
                     &store_root,
@@ -388,10 +391,29 @@ impl NativeGuestExecution {
                     configuration,
                 )?;
                 persist_session_state(policy, &store, &self.binding.spec, &receipt, session_state)?;
+                // Provisioning without an explicit native workspace remains
+                // journal-only and cannot become a portable checkpoint.
+                if workspaces::snapshot(policy, &entry.assignment.destination)?.is_some() {
+                    receipt.checkpoint = Some(source_checkpoint::persist(
+                        policy,
+                        &store,
+                        &store_root,
+                        &entry.assignment.destination,
+                        &self.binding.spec,
+                        &self.binding.ownership,
+                        &receipt,
+                        configuration,
+                        session_state,
+                        &bytes,
+                    )?);
+                }
                 ensure!(
                     private_directory(&store_root)? == store_identity,
                     "native source artifact store changed; reconcile"
                 );
+                // Only the actual stopped Core owner reaches this point.
+                // Immutable checkpoint publication ends its working-copy lease.
+                entry.workspace_lease.take();
                 Ok(receipt)
             })
         })

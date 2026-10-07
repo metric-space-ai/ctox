@@ -12,6 +12,8 @@ use std::{future::Future, pin::Pin};
 mod command_tests;
 #[path = "guest_registry_source_journal_tests.rs"]
 mod source_journal_tests;
+#[path = "guest_registry_workspace_tests.rs"]
+mod workspace_tests;
 
 fn enrollment_control_fixture() -> (tempfile::TempDir, Arc<NativeGuestRegistry>, PathBuf, String) {
     let (root, registry, assignment) = fixture();

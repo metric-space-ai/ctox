@@ -27272,6 +27272,25 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             PRIMARY KEY(owner_user_id, worker_profile_id)
         );
 
+        CREATE TABLE IF NOT EXISTS business_native_guest_workspace_assignments (
+            owner_user_id TEXT NOT NULL,
+            worker_profile_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            computer_id TEXT NOT NULL,
+            working_copy_id TEXT NOT NULL,
+            native_workspace TEXT NOT NULL,
+            workspace_device INTEGER NOT NULL,
+            workspace_inode INTEGER NOT NULL,
+            principal_epoch INTEGER NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('active', 'revoked')),
+            revision INTEGER NOT NULL CHECK(revision > 0),
+            PRIMARY KEY(owner_user_id, worker_profile_id, project_id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_native_workspace_active_owner
+            ON business_native_guest_workspace_assignments(computer_id,workspace_device,workspace_inode)
+            WHERE state='active';
+
         CREATE TABLE IF NOT EXISTS business_native_source_journals (
             capture_id TEXT PRIMARY KEY,
             guest_id TEXT NOT NULL,
@@ -27310,6 +27329,14 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             format_version INTEGER NOT NULL CHECK(format_version = 1),
             artifact_sha256 TEXT NOT NULL,
             artifact_size_bytes INTEGER NOT NULL CHECK(artifact_size_bytes > 0 AND artifact_size_bytes <= 67108864)
+        );
+
+        CREATE TABLE IF NOT EXISTS business_native_source_checkpoints (
+            capture_id TEXT PRIMARY KEY REFERENCES business_native_source_journals(capture_id),
+            checkpoint_digest TEXT NOT NULL,
+            checkpoint_sequence INTEGER NOT NULL CHECK(checkpoint_sequence > 0),
+            working_copy_id TEXT NOT NULL,
+            workspace_revision INTEGER NOT NULL CHECK(workspace_revision > 0)
         );
 
         CREATE TABLE IF NOT EXISTS business_session_handoff_bindings (

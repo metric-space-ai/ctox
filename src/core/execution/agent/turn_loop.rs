@@ -782,6 +782,14 @@ fn persist_owned_native_journal(
             "native-source-journal-persisted capture={} session={} sha256={}",
             receipt.capture_id, receipt.session_id, receipt.journal_sha256
         ));
+        if let Some(checkpoint) = receipt.checkpoint {
+            emit(&format!(
+                "native-source-checkpoint-persisted digest={} sequence={}",
+                checkpoint.digest, checkpoint.sequence
+            ));
+        } else {
+            emit("native-source-checkpoint-unavailable reason=workspace-not-assigned");
+        }
         return Ok(true);
     }
     Ok(false)
