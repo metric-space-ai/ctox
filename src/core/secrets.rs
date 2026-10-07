@@ -349,6 +349,13 @@ fn with_secret_values_authority<T>(
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(&revisions)?)
     );
+    if !publication {
+        // Preparation needs the decrypted tuple, not a retained encrypted-store
+        // read lock. Also permits rotation on legacy DELETE-journal stores.
+        drop(legacy);
+        drop(tx);
+        drop(conn);
+    }
     let borrowed = values
         .iter()
         .map(|value| value.as_slice())
