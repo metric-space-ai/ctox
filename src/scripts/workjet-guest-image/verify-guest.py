@@ -14,6 +14,13 @@ import subprocess
 import time
 import uuid
 
+# pc >= 5.2 always creates KVM's nonportable clock device, even when its
+# CPU feature is hidden. Use a common versioned device set and userspace IRQ
+# chip before the source boots; never strip a section from saved VM state.
+# ref: qemu v6.2.0 hw/i386/pc_piix.c, hw/i386/kvm/clock.c
+CHECKPOINT_MACHINE = "pc-i440fx-5.1"
+CHECKPOINT_CPU = "qemu64-v1,kvm=off,kvmclock=off,svm=off"
+
 def digest(path):
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -92,8 +99,9 @@ def main():
                 or source.get("acceleration") != "kvm"
                 or source.get("owned_qemu_reaped") is not True
                 or source.get("source_qmp_quit_exit") != 0
-                or source.get("machine") != "pc-i440fx-6.2"
-                or source.get("cpu") != "qemu64-v1"
+                or source.get("machine") != CHECKPOINT_MACHINE
+                or source.get("cpu") != CHECKPOINT_CPU
+                or source.get("irqchip") != "userspace"
                 or source.get("vcpus") != 2):
             raise ValueError("source is not a completed, reaped compatible component checkpoint")
         for name, limit in [("root.qcow2", 9 * 1024**3), ("vm-state.bin", 5 * 1024**3)]:
@@ -116,7 +124,7 @@ def main():
     # Keep KVM's two vCPUs; explicit software emulation uses one.
     checkpoint_mode = args.checkpoint or source is not None
     vcpus = 2 if checkpoint_mode else (1 if args.accel == "tcg" else 2)
-    machine = "pc-i440fx-6.2" if checkpoint_mode else "pc"
+    machine = CHECKPOINT_MACHINE if checkpoint_mode else "pc"
     # The actual TCG cold boot can exceed six minutes even with both
     # mandatory boot mounts healthy. Keep finite accelerator-specific
     # lifetime limits and always reap the owned child.
@@ -135,7 +143,7 @@ def main():
                    probe_timeout_seconds=probe_timeout,
                    product_enrollment_p2p_restore_accepted=False, assertions=[])
     if checkpoint_mode:
-        receipt.update(machine=machine, cpu="qemu64-v1",
+        receipt.update(machine=machine, cpu=CHECKPOINT_CPU, irqchip="userspace",
                        checkpoint_scope="isolated VM RAM/devices/disk only; no native enrollment, protected P2P or distributed owner fence",
                        source_receipt_sha256=args.source_receipt_sha256)
     def interrupted(number, _frame):
@@ -173,7 +181,7 @@ def main():
                                           xauthority="/run/ctox-desktop/Xauthority")))
         qmp_listener, guest_listener = listener("qmp.sock"), listener("guest.sock")
         command = ["/usr/bin/qemu-system-x86_64", "-machine", machine, "-accel",
-                   "kvm" if args.accel == "kvm" else "tcg,thread=single",
+                   ("kvm,kernel-irqchip=off" if checkpoint_mode else "kvm") if args.accel == "kvm" else "tcg,thread=single",
                    "-m", "4096", "-smp", str(vcpus), "-fw_cfg",
                    "name=opt/org.ctox/guest-startup,file=" + str(startup),
                    "-nodefaults", "-no-user-config", "-display", "none",
@@ -191,7 +199,7 @@ def main():
                    "socket,id=guestctl,path=" + str(out / "guest.sock") + ",server=off",
                    "-device", "virtserialport,chardev=guestctl,name=org.ctox.guest.desktop"]
         if checkpoint_mode:
-            command += ["-cpu", "qemu64-v1"]
+            command += ["-cpu", CHECKPOINT_CPU]
         if source:
             command += ["-incoming", "defer"]
         logs = (out / "qemu.stderr").open("wb")

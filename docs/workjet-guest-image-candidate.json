@@ -184,8 +184,11 @@
   "isolated_checkpoint_probe": {
     "status": "implementation_pending_real_two_host_run",
     "entry": "src/scripts/workjet-guest-image/verify-guest.py --checkpoint / --restore-from",
-    "machine": "pc-i440fx-6.2",
-    "cpu": "qemu64-v1",
+    "machine": "pc-i440fx-5.1",
+    "cpu": "qemu64-v1,kvm=off,kvmclock=off,svm=off",
+    "source_kernel_irqchip": "off",
+    "compatibility_failure": "Actual QEMU6.2 KVM-to-TCG FD migration with pc-i440fx-6.2 failed on the target: Unknown savevm section or instance kvmclock. Keep the failed053941 receipt; the shared machine/CPU name alone was insufficient.",
+    "compatibility_repair": "Configure the source before boot with pc-i440fx-5.1, hidden KVM clock/features and userspace IRQ devices. Preserve every checkpoint section and restore with the identical machine/CPU/vCPU topology; no stream rewriting or TCG-to-KVM fallback.",
     "vcpus": 2,
     "memory_mib": 4096,
     "scope": "Capture paused VM RAM/devices and disk, quit/reap the source, hash-bind the exact artifacts and source receipt, restore paused under explicit TCG, then require the original guest/session identity. Operator SSH custody is a component probe, not the production enrollment/protected P2P/epoch fence.",
