@@ -489,16 +489,41 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
         .unwrap();
     assert_eq!(checkpoint, same);
     let restored = root.path().join("protected-source-copy");
-    store.restore(&checkpoint.digest, &restored).unwrap();
-    assert_eq!(
-        std::fs::read(restored.join("workspace/untracked.bin")).unwrap(),
-        b"required\0bytes"
+    assert!(
+        store.restore(&checkpoint.digest, &restored).is_err(),
+        "unknown effects must also stop artifact restoration"
     );
-    assert_eq!(
-        std::fs::read(restored.join("provider/native-session-state.json")).unwrap(),
-        state.as_bytes()
-    );
-    let bundle = restored.join("provider/native-workspace.bundle");
+    assert!(!restored.exists());
+    let read_blob = |artifact: &ctox_sync::contracts::ArtifactRef| {
+        let mut bytes = Vec::new();
+        store
+            .open_blob(artifact)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        bytes
+    };
+    let untracked = manifest
+        .workspace_state
+        .required_untracked
+        .iter()
+        .find(|e| e.path == "untracked.bin")
+        .unwrap();
+    assert_eq!(read_blob(&untracked.artifact), b"required\0bytes");
+    let captured_state = manifest
+        .provider_state
+        .iter()
+        .find(|e| e.path == "native-session-state.json")
+        .unwrap();
+    assert_eq!(read_blob(&captured_state.artifact), state.as_bytes());
+    let captured_bundle = manifest
+        .provider_state
+        .iter()
+        .find(|e| e.path == "native-workspace.bundle")
+        .unwrap();
+    // Source-owner artifact inspection, not a target activation bypass.
+    let bundle = root.path().join("protected-source-repository.bundle");
+    std::fs::write(&bundle, read_blob(&captured_bundle.artifact)).unwrap();
     let offline = root.path().join("offline-repository");
     let cloned = std::process::Command::new("git")
         .args(["clone", "--bare", "--quiet"])
