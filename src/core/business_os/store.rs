@@ -11697,6 +11697,32 @@ pub fn pull_mcp_app_collection_records(
     }))
 }
 
+/// Resolve correlation metadata only. The command's normal status reader and
+/// permission checks remain authoritative; this never dispatches or retries it.
+pub(super) fn find_business_command_ids_for_mcp_request(
+    root: &Path,
+    request_id: &str,
+    actor: &str,
+    workspace: &str,
+) -> anyhow::Result<Vec<String>> {
+    with_store_connection(root, |conn| {
+        let mut statement = conn.prepare(
+            "SELECT command_id FROM business_commands
+             WHERE json_extract(CASE WHEN json_valid(client_context_json)
+                        THEN client_context_json ELSE '{}' END, '$.request_id') = ?1
+               AND json_extract(CASE WHEN json_valid(client_context_json)
+                        THEN client_context_json ELSE '{}' END, '$.mcp_actor') = ?2
+               AND json_extract(CASE WHEN json_valid(client_context_json)
+                        THEN client_context_json ELSE '{}' END, '$.workspace') = ?3
+             ORDER BY command_id LIMIT 2",
+        )?;
+        let rows = statement.query_map(params![request_id, actor, workspace], |row| {
+            row.get::<_, String>(0)
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+}
+
 pub fn pull_business_command_status_record(
     root: &Path,
     command_id: &str,

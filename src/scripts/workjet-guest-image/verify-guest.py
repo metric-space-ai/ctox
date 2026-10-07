@@ -70,9 +70,11 @@ def main():
     # Multiple guest CPUs contend on the single TCG execution thread.
     # Keep KVM's two vCPUs; explicit software emulation uses one.
     vcpus = 1 if args.accel == "tcg" else 2
-    # Explicit software emulation needs longer cold-boot/shutdown windows.
-    # The whole probe still has one 600s deadline and always reaps its child.
-    boot_timeout = 360 if args.accel == "tcg" else 120
+    # The actual TCG cold boot can exceed six minutes even with both
+    # mandatory boot mounts healthy. Keep finite accelerator-specific
+    # lifetime limits and always reap the owned child.
+    probe_timeout = 1200 if args.accel == "tcg" else 600
+    boot_timeout = 900 if args.accel == "tcg" else 120
     desktop_settle = 30 if args.accel == "tcg" else 10
     shutdown_timeout = 120 if args.accel == "tcg" else 45
     guest_id = "o04-" + args.accel + "-" + str(uuid.uuid4())
@@ -83,6 +85,7 @@ def main():
                    base_sha256=args.sha256, started=time.time(),
                    boot_timeout_seconds=boot_timeout, desktop_settle_seconds=desktop_settle,
                    shutdown_timeout_seconds=shutdown_timeout,
+                   probe_timeout_seconds=probe_timeout,
                    product_enrollment_p2p_restore_accepted=False, assertions=[])
     def interrupted(number, _frame):
         raise TimeoutError("component probe interrupted or deadline reached: " + str(number))
@@ -132,8 +135,9 @@ def main():
         logs = (out / "qemu.stderr").open("wb")
         proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=logs, env={})
-        signal.alarm(600)
-        receipt.update(pid=proc.pid, argv=command, stop_condition="maximum 600 seconds; always reap owned QEMU")
+        signal.alarm(probe_timeout)
+        receipt.update(pid=proc.pid, argv=command,
+                       stop_condition=f"maximum {probe_timeout} seconds; always reap owned QEMU")
         save()
         accepted = []
         for l in [qmp_listener, guest_listener]:
