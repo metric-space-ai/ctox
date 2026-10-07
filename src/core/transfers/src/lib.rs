@@ -22,6 +22,7 @@ use tokio::sync::watch;
 
 mod peer;
 pub use peer::{PeerAccountBinding, PeerRangeSource, PeerSource};
+pub mod ssh_exec;
 mod storage;
 pub mod storage_smb;
 pub mod storage_ssh;
