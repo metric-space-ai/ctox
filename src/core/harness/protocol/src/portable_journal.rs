@@ -102,6 +102,8 @@ pub struct ValidatedPortableJournal {
     pub format_version: u32,
     pub artifact: PortableArtifactRef,
     pub session_id: ThreadId,
+    /// Strictly validated initial metadata, kept separate from replay items.
+    pub metadata: SessionMetaLine,
     pub record_count: usize,
     pub limits: PortableJournalLimits,
     pub provider_continuation: ProviderContinuationState,
@@ -307,6 +309,7 @@ pub fn validate_portable_journal(
             size_bytes: artifact.size_bytes,
         },
         session_id: session_meta.meta.id,
+        metadata: session_meta,
         record_count,
         limits: *limits,
         provider_continuation: ProviderContinuationState::Unresolved,

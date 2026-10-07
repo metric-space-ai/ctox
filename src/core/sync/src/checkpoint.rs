@@ -32,14 +32,7 @@ fn validate_native_journal_binding(
     if session.harness != PORTABLE_CTOX_HARNESS {
         return Ok(());
     }
-    let metadata = journal
-        .items
-        .iter()
-        .find_map(|item| match item {
-            ctox_protocol::protocol::RolloutItem::SessionMeta(metadata) => Some(&metadata.meta),
-            _ => None,
-        })
-        .ok_or_else(|| invalid("native portable journal metadata missing"))?;
+    let metadata = &journal.metadata.meta;
     if metadata.cli_version != session.harness_version
         || metadata.model_provider.as_deref() != Some(session.model_route_id.as_str())
     {
