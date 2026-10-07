@@ -1520,7 +1520,13 @@ the tested boundaries and outstanding production onboarding.
   `migration_strategies` from the same `collections.schema.json` used by the
   browser. It executes the supported declarative operations, verifies every
   source envelope in the target version, and only then permits stale-table
-  cleanup. A missing strategy is tolerated only when the old source table is
+  cleanup. Packaged cockpit collections opt into the same native mechanism:
+  `business_commands`, `ctox_queue_tasks`, `ctox_runs`, `workjet_computers` and
+  `workjet_projects`. Their JSON schemas and every intermediate strategy must
+  agree with `schema.js` and the native contract. The project v0→v1 identity
+  step preserves owners, configuration, revisions, timestamps and tombstones;
+  optional project configuration fields do not invent defaults. A missing
+  strategy is tolerated only when the old source table is
   absent or empty; persisted old rows make bring-up fail closed. The browser
   half deliberately does NOT run `migrationStrategies` (`addCollections`
   ignores the field); the browser copy is treated as a replica — the
