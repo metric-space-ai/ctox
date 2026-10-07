@@ -2,7 +2,7 @@
 use ctox_transfers::ssh_exec::{exec, SshExecOptions};
 use russh::{
     keys::{decode_secret_key, HashAlg, PublicKey},
-    server, Channel, ChannelId, ChannelOpenHandle,
+    server, Channel, ChannelId,
 };
 use std::{
     sync::{
@@ -46,10 +46,10 @@ impl server::Handler for Handler {
     async fn channel_open_session(
         &mut self,
         _: Channel<server::Msg>,
-        reply: ChannelOpenHandle,
-        session: &mut server::Session,
+        reply: server::ChannelOpenHandle,
+        _session: &mut server::Session,
     ) -> anyhow::Result<()> {
-        reply.accept(session)?;
+        reply.accept().await;
         Ok(())
     }
     async fn exec_request(
