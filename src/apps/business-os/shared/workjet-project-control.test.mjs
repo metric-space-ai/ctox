@@ -20,7 +20,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 6);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 7);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -885,4 +885,105 @@ test('supervisor registration rejects fabricated input and uncorrelated native r
   ]) {
     await assert.rejects(supervisorBindingFixture(mutate).invoke(supervisorBindingRequest()));
   }
+});
+
+
+const nativeTurnId = 'cmd_74c4a208-7b2d-4b5e-a83d-f2f012d4c5a9';
+function supervisorTurnFixture(change = () => {}) {
+  const commands = [];
+  const state = {
+    session: { id: 'owner-1' }, db: { collection: name => name === 'business_commands' ? {} : null },
+    sync: { async startCollection(name) { assert.equal(name, 'business_commands'); } },
+    commandBus: { async dispatch(command, options) {
+      commands.push({ command, options });
+      const cancelled = command.command_type.endsWith('.cancel');
+      const receipt = {
+        command_id: command.id, ok: true, status: 'completed', target_record_id: 'project-1',
+        payload: command.payload,
+        result: {
+          ok: true, contract: 'ctox.workjet.supervisor_turn.v1',
+          binding: { project_id: 'project-1', thread_id: supervisorThread, thread_key: `business-os/threads/${supervisorThread}` },
+          message_id: 'workjet_supervisor_message_1',
+          turn: {
+            command_id: nativeTurnId, task_id: 'queue:system::supervisor-turn',
+            thread_id: supervisorThread, thread_key: `business-os/threads/${supervisorThread}`,
+            execution_phase: cancelled ? 'terminal' : 'queued', status: cancelled ? 'cancelled' : 'queued',
+            queue_status: cancelled ? 'cancelled' : 'pending', attempt: 0,
+            terminal: cancelled, result: {}, result_truncated: false, error_code: null, error_message: null,
+          },
+          cancellation: { command_id: 'workjet_project_cancel_1', side_effects_may_have_started: false,
+            worker_interrupt_acknowledged: false },
+        },
+      };
+      change(receipt, state);
+      return receipt;
+    } },
+  };
+  const context = { state, actorContext: session => ({ id: session.id }), URL };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
+}
+function supervisorTurnRequest(action, extra = {}) {
+  return {
+    action: `project.supervisor.turn.${action}`, commandId: `${action}-1`, projectId: 'project-1', threadId: supervisorThread,
+    ...(action === 'submit' ? { goal: 'Prepare the project report' } : { targetCommandId: nativeTurnId }),
+    ...(action === 'cancel' ? { reason: 'Cancelled in Workjet' } : {}), ...extra,
+  };
+}
+
+test('supervisor submit watch cancel use the native control plane on the same CodeThread', async () => {
+  for (const action of ['submit', 'watch', 'cancel']) {
+    const fixture = supervisorTurnFixture();
+    const result = await fixture.invoke(supervisorTurnRequest(action));
+    const { command, options } = fixture.commands[0];
+    assert.equal(command.command_type, `ctox.workjet.project.supervisor.turn.${action}`);
+    assert.equal(command.client_context.actor.id, 'owner-1');
+    assert.equal(options.until, 'terminal');
+    assert.equal(options.sync_queue_tasks, false);
+    assert.equal(result.binding.threadId, supervisorThread);
+    assert.equal(result.binding.threadKey, `business-os/threads/${supervisorThread}`);
+    assert.equal(result.turn.commandId, nativeTurnId);
+    if (action === 'submit') {
+      assert.equal(result.messageId, 'workjet_supervisor_message_1');
+      assert.equal(command.payload.goal, 'Prepare the project report');
+    } else assert.equal(command.payload.target_command_id, nativeTurnId);
+    if (action === 'cancel') assert.equal(result.cancellation.workerInterruptAcknowledged, false);
+  }
+});
+
+test('supervisor controls refuse forged owner routes and unsupported execution parameters', async () => {
+  for (const extra of [
+    { ownerUserId: 'foreign' }, { threadKey: 'invented-route' }, { computerId: 'foreign' },
+    { externalExecutor: {} }, { riskClass: 'external' }, { threadId: '00000000-0000-0000-0000-000000000000' },
+    { goal: 'x'.repeat(4097) }, { goal: ' ' },
+  ]) {
+    const fixture = supervisorTurnFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest('submit', extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('supervisor turn results reject foreign identities queue links and changed sessions', async () => {
+  for (const change of [
+    receipt => { receipt.command_id = 'foreign'; },
+    receipt => { receipt.target_record_id = 'foreign'; },
+    receipt => { receipt.result.binding.project_id = 'foreign'; },
+    receipt => { receipt.result.turn.thread_key = 'foreign'; },
+    receipt => { receipt.result.turn.command_id = 'foreign'; },
+    receipt => { receipt.result.turn.task_id = ''; },
+    receipt => { receipt.result.turn.attempt = -1; },
+    receipt => { receipt.result.turn.terminal = true; },
+    receipt => { receipt.result.contract = 'foreign'; },
+    receipt => { receipt.payload = { ...receipt.payload, target_command_id: 'foreign' }; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(supervisorTurnFixture(change).invoke(supervisorTurnRequest('watch')));
+});
+
+test('supervisor cancellation never pretends a running worker acknowledged interruption', async () => {
+  for (const change of [
+    receipt => { receipt.result.turn.status = 'completed'; },
+    receipt => { receipt.result.cancellation.worker_interrupt_acknowledged = true; },
+    receipt => { receipt.result.cancellation.side_effects_may_have_started = null; },
+    receipt => { receipt.result.cancellation.command_id = ''; },
+  ]) await assert.rejects(supervisorTurnFixture(change).invoke(supervisorTurnRequest('cancel')));
 });

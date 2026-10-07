@@ -13688,7 +13688,9 @@ async function workjetProjectControl(request = {}) {
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
-  const acquisition = action === 'project.supervisor.bind'
+  const supervisorActions = ['project.supervisor.bind', 'project.supervisor.turn.submit',
+    'project.supervisor.turn.watch', 'project.supervisor.turn.cancel'];
+  const acquisition = supervisorActions.includes(action)
     ? requireWorkjetSupervisorDataPlane() : requireWorkjetProjectDataPlane();
   const { projectBridge, workingCopyBridge } = listDeadline
     ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
@@ -13737,6 +13739,90 @@ async function workjetProjectControl(request = {}) {
       throw new Error('Workjet project command did not return a private chat id.');
     }
     return { action, commandId, projectId, workerProfileId, chatId };
+  }
+
+  if (['project.supervisor.turn.submit', 'project.supervisor.turn.watch',
+    'project.supervisor.turn.cancel'].includes(action)) {
+    const submitting = action === 'project.supervisor.turn.submit';
+    const cancelling = action === 'project.supervisor.turn.cancel';
+    const allowedKeys = new Set(['action', 'commandId', 'projectId', 'threadId']);
+    if (submitting) allowedKeys.add('goal');
+    else allowedKeys.add('targetCommandId');
+    if (cancelling) allowedKeys.add('reason');
+    assertWorkjetProjectPayloadKeys(request, allowedKeys);
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const threadId = boundedWorkjetProjectText(request.threadId, 'threadId', 36);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(threadId)
+      || threadId === '00000000-0000-0000-0000-000000000000') {
+      throw new TypeError('Workjet supervisor threadId must be its existing lowercase CodeThread UUID.');
+    }
+    const payload = { project_id: projectId, thread_id: threadId };
+    if (submitting) payload.goal = boundedWorkjetProjectText(request.goal, 'goal', 4096);
+    else payload.target_command_id = boundedWorkjetProjectText(request.targetCommandId, 'targetCommandId', 256);
+    if (cancelling) payload.reason = boundedWorkjetProjectText(request.reason, 'reason', 512);
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the supervisor turn was delivered.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox', record_id: projectId,
+      command_type: {
+        'project.supervisor.turn.submit': 'ctox.workjet.project.supervisor.turn.submit',
+        'project.supervisor.turn.watch': 'ctox.workjet.project.supervisor.turn.watch',
+        'project.supervisor.turn.cancel': 'ctox.workjet.project.supervisor.turn.cancel',
+      }[action], payload,
+      client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentIdentity();
+    const contract = 'ctox.workjet.supervisor_turn.v1';
+    const binding = receipt?.result?.binding;
+    const turn = receipt?.result?.turn;
+    const threadKey = `business-os/threads/${threadId}`;
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId || receipt.result?.ok !== true
+      || receipt.result?.contract !== contract
+      || Object.entries(payload).some(([key, value]) => receipt.payload?.[key] !== value)
+      || binding?.project_id !== projectId || binding?.thread_id !== threadId
+      || binding?.thread_key !== threadKey || turn?.thread_id !== threadId
+      || turn?.thread_key !== threadKey || typeof turn?.command_id !== 'string'
+      || !turn.command_id || turn.command_id.length > 256
+      || (!submitting && turn.command_id !== payload.target_command_id)
+      || typeof turn.task_id !== 'string' || !turn.task_id || turn.task_id.length > 256
+      || typeof turn.execution_phase !== 'string' || !turn.execution_phase
+      || typeof turn.status !== 'string' || !turn.status || typeof turn.queue_status !== 'string'
+      || !Number.isSafeInteger(turn.attempt) || turn.attempt < 0
+      || typeof turn.terminal !== 'boolean' || turn.terminal !== (turn.execution_phase === 'terminal')
+      || typeof turn.result_truncated !== 'boolean') {
+      throw new Error('Workjet supervisor turn returned an uncorrelated or invalid native receipt.');
+    }
+    const result = {
+      action, commandId, projectId, contract,
+      binding: { contract: 'ctox.workjet.supervisor_binding.v1', projectId, threadId, threadKey },
+      turn: {
+        commandId: turn.command_id, taskId: turn.task_id, threadId, threadKey,
+        executionPhase: turn.execution_phase, status: turn.status, queueStatus: turn.queue_status,
+        attempt: turn.attempt, terminal: turn.terminal, result: turn.result,
+        resultTruncated: turn.result_truncated, errorCode: turn.error_code, errorMessage: turn.error_message,
+      },
+    };
+    if (submitting) result.messageId = boundedWorkjetProjectText(receipt.result.message_id, 'native messageId', 256);
+    if (cancelling) {
+      const cancellation = receipt.result.cancellation;
+      if (turn.status !== 'cancelled' || typeof cancellation?.side_effects_may_have_started !== 'boolean'
+        || cancellation.worker_interrupt_acknowledged !== false) {
+        throw new Error('Workjet supervisor cancellation has no matching native acknowledgement.');
+      }
+      result.cancellation = {
+        commandId: boundedWorkjetProjectText(cancellation.command_id, 'native cancellation commandId', 256),
+        sideEffectsMayHaveStarted: cancellation.side_effects_may_have_started,
+        workerInterruptAcknowledged: false,
+      };
+    }
+    return result;
   }
 
   if (action === 'project.supervisor.bind') {
