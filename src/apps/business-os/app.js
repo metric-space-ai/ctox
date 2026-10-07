@@ -14276,7 +14276,10 @@ async function listProjectedWorkjetWorkingCopies(ownerUserId, nativeDocs = null)
     limit: WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES,
   }).exec();
   return docs
-    .map((doc) => boundedWorkjetWorkingCopyResult(doc?.toJSON?.() || doc))
+    .map((doc) => {
+      const value = doc?.toJSON?.() || doc;
+      return value?.owner_user_id === ownerUserId ? boundedWorkjetWorkingCopyResult(value) : null;
+    })
     .filter(Boolean)
     .sort((left, right) => left.id.localeCompare(right.id));
 }
