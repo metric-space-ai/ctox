@@ -5,7 +5,7 @@
 //! The caller authorizes the endpoint and owns bounded upload/execution. No host
 //! table, credential, SSH connection or build admission is provided here.
 
-use super::build_source::CapturedBuildSource;
+use super::build_source::{CapturedBuildSource, CapturedWorkerSource};
 use super::computer_capabilities::{validate_capabilities, BuildCapability, ComputerCapability};
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -48,6 +48,7 @@ struct Entry {
 struct Manifest<'a> {
     schema: &'static str,
     source_id: &'a str,
+    worker_checkout: bool,
     head: &'a str,
     repository: Option<&'a str>,
     base: Option<&'a str>,
@@ -93,6 +94,44 @@ pub fn package(
     run_id: &str,
     toolchain_fingerprint: &str,
 ) -> Result<BuildSourceDelivery> {
+    package_inner(
+        grant,
+        source,
+        staging_root,
+        run_id,
+        toolchain_fingerprint,
+        None,
+    )
+}
+
+/// Reconstruct an isolated run-owned Git checkout, without dispatching a model
+/// or authorizing a foreign parent. A unique run ID is required per worker; the
+/// caller owns writes, bounded execution and disposal after preparation.
+pub fn package_worker(
+    grant: &BuildCapability,
+    source: &CapturedWorkerSource,
+    staging_root: &Path,
+    run_id: &str,
+    toolchain_fingerprint: &str,
+) -> Result<BuildSourceDelivery> {
+    package_inner(
+        grant,
+        &source.source,
+        staging_root,
+        run_id,
+        toolchain_fingerprint,
+        Some(&source.base_revision),
+    )
+}
+
+fn package_inner(
+    grant: &BuildCapability,
+    source: &CapturedBuildSource,
+    staging_root: &Path,
+    run_id: &str,
+    toolchain_fingerprint: &str,
+    worker_base: Option<&str>,
+) -> Result<BuildSourceDelivery> {
     validate_capabilities(&mut vec![ComputerCapability::Build(grant.clone())], false)?;
     anyhow::ensure!(
         !run_id.is_empty()
@@ -121,13 +160,30 @@ pub fn package(
             "invalid anonymous GitHub base"
         );
     }
-    let source_id = format!(
-        "{:x}",
-        Sha256::digest(format!(
-            "ctox.build-delivery.v1:{}:{}",
-            source.source_id, toolchain_fingerprint
-        ))
-    );
+    if let Some(base) = worker_base {
+        anyhow::ensure!(hex(base, 40), "invalid worker base");
+        anyhow::ensure!(
+            source.public_base.is_some() || source.bundle.is_some(),
+            "private worker bundle absent"
+        );
+    }
+    let schema = if worker_base.is_some() {
+        "ctox.worker-source.v1"
+    } else {
+        "ctox.build-delivery.v1"
+    };
+    let identity_input = if let Some(base) = worker_base {
+        format!(
+            "{schema}:{}:{toolchain_fingerprint}:{base}",
+            source.source_id
+        )
+    } else {
+        format!(
+            "ctox.build-delivery.v1:{}:{toolchain_fingerprint}",
+            source.source_id
+        )
+    };
+    let source_id = format!("{:x}", Sha256::digest(identity_input));
     let tree = source.tree();
     let staging_root = staging_root.canonicalize()?;
     anyhow::ensure!(
@@ -209,11 +265,12 @@ pub fn package(
     anyhow::ensure!(status.success(), "source archive creation failed");
     fs::remove_file(names)?;
     let manifest = Manifest {
-        schema: "ctox.build-delivery.v1",
+        schema,
+        worker_checkout: worker_base.is_some(),
         source_id: &source_id,
         head: &source.head_revision,
         repository: source.public_base.as_ref().map(|b| b.repository.as_str()),
-        base: source.public_base.as_ref().map(|b| b.revision.as_str()),
+        base: worker_base.or_else(|| source.public_base.as_ref().map(|b| b.revision.as_str())),
         entries: &entries,
         uploaded: &uploaded,
         deleted: &source.deleted_paths,
@@ -238,7 +295,11 @@ pub fn package(
             remote_name: "commits.bundle",
         });
     }
-    let source_dir = format!("{}/sources/{source_id}", grant.lane_root);
+    let source_dir = if worker_base.is_some() {
+        format!("{}/worker-sources/{source_id}-{run_id}", grant.lane_root)
+    } else {
+        format!("{}/sources/{source_id}", grant.lane_root)
+    };
     let incoming_dir = format!("{}/incoming/{run_id}", grant.lane_root);
     let mut prepare_script = format!(
         "#!/bin/bash\nset -eu\numask 077\ntimeout --signal=TERM --kill-after=10s 900s python3 - {} {} {} <<'CTOX_SOURCE_PY'\n",
@@ -268,7 +329,19 @@ incoming=root/"incoming"/run
 require(incoming.resolve(strict=True)==incoming and incoming.is_dir(), "unsafe incoming directory")
 raw=(incoming/"manifest.json").read_bytes()
 manifest=json.loads(raw)
-require(manifest["schema"]=="ctox.build-delivery.v1", "unknown manifest")
+require(manifest["schema"] in ("ctox.build-delivery.v1","ctox.worker-source.v1"), "unknown manifest")
+worker=manifest["schema"]=="ctox.worker-source.v1"
+require(manifest.get("worker_checkout",False)==worker, "source mode differs")
+git_checkout=worker or manifest["repository"] is not None
+if git_checkout:
+    for revision in [manifest["base"],manifest["head"]]:
+        require(isinstance(revision,str) and len(revision)==40 and all(c in "0123456789abcdef" for c in revision), "invalid revision")
+environment={k:v for k,v in os.environ.items() if not k.startswith("GIT_") and k!="SSH_AUTH_SOCK"}
+environment.update(GIT_CONFIG_NOSYSTEM="1",GIT_CONFIG_GLOBAL="/dev/null",GIT_TERMINAL_PROMPT="0")
+def git(*args,directory,check=True,capture=False):
+    return subprocess.run(["git","-c","credential.helper=","-c","core.hooksPath=/dev/null","-C",str(directory),*args],
+        env=environment,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE if capture else None,
+        stderr=None if check else subprocess.DEVNULL,check=check,timeout=300)
 identity=manifest["source_id"]
 require(len(identity)==64 and all(c in "0123456789abcdef" for c in identity), "invalid identity")
 def safe(name):
@@ -283,19 +356,20 @@ require(set(manifest["uploaded"])<=entries.keys(), "unknown upload")
 def owned_directory(path):
     if not path.exists(): path.mkdir(mode=0o700)
     require(path.resolve(strict=True)==path and path.is_dir(), "unsafe lane directory")
-sources=root/"sources"
-prepared=root/"prepared"
+sources=root/("worker-sources" if worker else "sources")
+prepared=root/("worker-prepared" if worker else "prepared")
+publication=identity+"-"+run if worker else identity
 owned_directory(sources)
 owned_directory(prepared)
 locks=root/"source-locks"
 owned_directory(locks)
-lock_path=locks/(identity+".lock")
+lock_path=locks/(publication+".lock")
 require(not lock_path.is_symlink(), "unsafe source lock")
 publication_lock=lock_path.open("a")
 try: fcntl.flock(publication_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 except BlockingIOError: sys.exit(75)
-destination=sources/identity
-marker=prepared/(identity+".json")
+destination=sources/publication
+marker=prepared/(publication+".json")
 def file_path(base,name,create=False):
     parts=safe(name)
     parent=base
@@ -306,9 +380,14 @@ def file_path(base,name,create=False):
     return parent/parts[-1]
 def verify(base):
     require(base.resolve(strict=True)==base and base.is_dir(), "unsafe published source")
+    if git_checkout:
+        require((base/".git").is_dir() and not (base/".git").is_symlink(), "unsafe Git directory")
+        require(git("rev-parse","HEAD",directory=base,capture=True).stdout.decode().strip()==manifest["head"], "Git HEAD differs")
+        git("merge-base","--is-ancestor",manifest["base"],manifest["head"],directory=base)
+        require(not (base/".git"/"objects"/"info"/"alternates").exists(), "Git objects are not independent")
     seen=set()
     for directory,dirs,files in os.walk(base,followlinks=False):
-        if pathlib.Path(directory)==base and manifest["repository"] is not None:
+        if pathlib.Path(directory)==base and git_checkout:
             dirs[:]=[d for d in dirs if d!=".git"]
         for d in dirs[:]:
             path=pathlib.Path(directory)/d
@@ -340,12 +419,6 @@ if manifest["repository"] is not None:
     require(len(parts)==2 and all(p and p not in (".","..") and all(c.isascii() and (c.isalnum() or c in "-_.") for c in p) for p in parts), "unsafe public repository")
     for revision in [manifest["base"],manifest["head"]]:
         require(len(revision)==40 and all(c in "0123456789abcdef" for c in revision), "invalid public revision")
-    environment={k:v for k,v in os.environ.items() if not k.startswith("GIT_") and k!="SSH_AUTH_SOCK"}
-    environment.update(GIT_CONFIG_NOSYSTEM="1",GIT_CONFIG_GLOBAL="/dev/null",GIT_TERMINAL_PROMPT="0")
-    def git(*args,directory=stage,check=True):
-        return subprocess.run(["git","-c","credential.helper=","-c","core.hooksPath=/dev/null","-C",str(directory),*args],
-            env=environment,stdin=subprocess.DEVNULL,stderr=None if check else subprocess.DEVNULL,
-            check=check,timeout=300)
     mirrors=root/"git-mirrors"
     owned_directory(mirrors)
     mirror_key=hashlib.sha256(manifest["repository"].encode()).hexdigest()
@@ -364,13 +437,21 @@ if manifest["repository"] is not None:
         git("update-ref",reference,manifest["base"],directory=mirror)
         git("symbolic-ref","HEAD",reference,directory=mirror)
         # Independent objects survive mirror cleanup; no alternates or hardlinks.
-        git("clone","-q","--no-checkout","--no-hardlinks",str(mirror),str(stage),directory=mirrors)
+        git("clone","-q","--template=","--no-checkout","--no-hardlinks",str(mirror),str(stage),directory=mirrors)
+        git("remote","remove","origin",directory=stage)
     bundle=incoming/"commits.bundle"
     if manifest["head"]!=manifest["base"]:
         require(bundle.is_file() and not bundle.is_symlink(), "commit bundle absent")
-        git("bundle","unbundle",str(bundle))
-    git("checkout","-q","--detach",manifest["head"])
-for name in manifest["deleted"] if manifest["repository"] is not None else []:
+        git("bundle","unbundle",str(bundle),directory=stage)
+    git("checkout","-q","--detach",manifest["head"],directory=stage)
+elif worker:
+    bundle=incoming/"commits.bundle"
+    require(bundle.is_file() and not bundle.is_symlink(), "private worker bundle absent")
+    git("init","-q","--template=",directory=stage)
+    git("bundle","verify",str(bundle),directory=stage)
+    git("bundle","unbundle",str(bundle),directory=stage)
+    git("checkout","-q","--detach",manifest["head"],directory=stage)
+for name in manifest["deleted"] if git_checkout else []:
     path=file_path(stage,name)
     if path.exists() or path.is_symlink():
         require(not path.is_dir() or path.is_symlink(), "deletion is a directory")
@@ -420,7 +501,7 @@ print("SOURCE_PREPARED",identity)
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use crate::business_os::build_source::{capture, PublicGithubBase};
+    use crate::business_os::build_source::{capture, capture_worker, PublicGithubBase};
     use std::os::unix::fs::{symlink, PermissionsExt};
 
     fn git(root: &Path, args: &[&str]) -> String {
@@ -533,6 +614,116 @@ mod tests {
     }
 
     #[test]
+    fn worker_private_git_reconstruction_is_isolated_and_exports_no_local_authority() {
+        let (_temp, root, staging, grant) = fixture();
+        let base = git(&root, &["rev-parse", "HEAD"]);
+        fs::write(root.join("committed-later"), "private local commit").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-qm", "local"]);
+        let head = git(&root, &["rev-parse", "HEAD"]);
+        // Capture a linked worktree: never copy its .git pointer or shared config.
+        let linked = staging.parent().unwrap().join("linked");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                linked.to_str().unwrap(),
+                &head,
+            ],
+        );
+        git(
+            &root,
+            &["config", "credential.helper", "SOURCE-CREDENTIAL-SENTINEL"],
+        );
+        git(
+            &root,
+            &[
+                "config",
+                "remote.origin.url",
+                "https://user:SOURCE-TOKEN@example.invalid/private",
+            ],
+        );
+        fs::write(
+            root.join(".git/hooks/post-checkout"),
+            "SOURCE-HOOK-SENTINEL",
+        )
+        .unwrap();
+        fs::remove_file(linked.join("old-parent/deleted")).unwrap();
+        git(&linked, &["add", "-u"]); // staged deletion must survive ls-files removal
+        fs::write(linked.join("tracked"), "dirty private bytes").unwrap();
+        fs::set_permissions(linked.join("tracked"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(linked.join("untracked"), "new bytes").unwrap();
+        fs::write(linked.join("ignored"), "private ignored secret").unwrap();
+        symlink("untracked", linked.join("link")).unwrap();
+        let snapshot = capture_worker(&linked, &staging, &base, None).unwrap();
+        assert_eq!(snapshot.base_revision(), base);
+        assert_eq!(snapshot.source().head_revision, head);
+        let first =
+            package_worker(&grant, &snapshot, &staging, "worker_one", &"a".repeat(64)).unwrap();
+        let second =
+            package_worker(&grant, &snapshot, &staging, "worker_two", &"a".repeat(64)).unwrap();
+        assert_ne!(first.source_dir, second.source_dir);
+        drop(snapshot);
+        for delivery in [&first, &second] {
+            upload(delivery);
+            let result = prepare(delivery);
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let target = Path::new(&delivery.source_dir);
+            assert_eq!(git(target, &["rev-parse", "HEAD"]), head);
+            assert_eq!(
+                git(target, &["rev-parse", &format!("{base}^{{commit}}")]),
+                base
+            );
+            assert_eq!(
+                fs::read(target.join("tracked")).unwrap(),
+                b"dirty private bytes"
+            );
+            assert_eq!(fs::read(target.join("untracked")).unwrap(), b"new bytes");
+            assert_eq!(
+                fs::read_link(target.join("link")).unwrap(),
+                PathBuf::from("untracked")
+            );
+            assert!(!target.join("old-parent/deleted").exists());
+            assert!(!target.join("ignored").exists());
+            assert!(
+                fs::metadata(target.join("tracked"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o111
+                    != 0
+            );
+            let config = fs::read_to_string(target.join(".git/config")).unwrap();
+            assert!(!config.contains("SOURCE-"));
+            assert!(git(target, &["remote"]).is_empty());
+            assert!(!target.join(".git/hooks/post-checkout").exists());
+            assert!(!target.join(".git/objects/info/alternates").exists());
+            assert!(prepare(delivery).status.success());
+        }
+        fs::write(
+            Path::new(&first.source_dir).join("tracked"),
+            "worker one edits",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(Path::new(&second.source_dir).join("tracked")).unwrap(),
+            b"dirty private bytes"
+        );
+        assert_eq!(
+            fs::read(linked.join("tracked")).unwrap(),
+            b"dirty private bytes"
+        );
+        assert!(!prepare(&first).status.success());
+    }
+
+    #[test]
     fn corrupted_archive_never_publishes_a_source() {
         let (_temp, root, staging, grant) = fixture();
         let snapshot = capture(&root, &staging, None).unwrap();
@@ -634,5 +825,31 @@ mod tests {
         );
         assert_eq!(fs::read(target.join("dirty")).unwrap(), b"dirty bytes");
         assert!(target.join(".git").is_dir());
+        let worker = capture_worker(
+            &root,
+            &staging,
+            &snapshot.public_base.as_ref().unwrap().revision,
+            snapshot.public_base.clone(),
+        )
+        .unwrap();
+        let delivery =
+            package_worker(&grant, &worker, &staging, "public_worker", &"a".repeat(64)).unwrap();
+        upload(&delivery);
+        let result = prepare(&delivery);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let target = Path::new(&delivery.source_dir);
+        assert_eq!(git(target, &["rev-parse", "HEAD"]), snapshot.head_revision);
+        assert_eq!(fs::read(target.join("dirty")).unwrap(), b"dirty bytes");
+        assert!(git(target, &["remote"]).is_empty());
+        assert!(!target.join(".git/hooks/post-checkout").exists());
+        fs::remove_dir_all(&mirror).unwrap();
+        assert_eq!(
+            git(target, &["show", "HEAD:committed-later"]),
+            "local commit"
+        );
     }
 }
