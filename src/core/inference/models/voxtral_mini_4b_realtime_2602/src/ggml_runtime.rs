@@ -122,6 +122,7 @@ struct GgmlSession {
     mel_filters_cpu: Vec<f32>,
     mel_plan: audio::MelSpectrogramPlan,
     time_emb_cpu: Vec<f32>,
+    decoder_diagnostics: crate::stt::DecoderDiagnostics,
 }
 
 struct MetaContext {
@@ -207,8 +208,14 @@ impl GgmlVoxtralRuntime {
         }
     }
 
+    pub fn decoder_diagnostics(&self) -> crate::stt::DecoderDiagnostics {
+        self.ctx.decoder_diagnostics.clone()
+    }
+
     pub fn start_stream(&mut self) {
+        self.ctx.decoder_diagnostics = Default::default();
         unsafe { self.ctx.clear_kv_cache() };
+
         self.stream_decoder = Some(StreamDecoder {
             position: (VOX_N_LEFT_PAD_TOKENS + VOX_N_DELAY_TOKENS) as i32,
             token: VOX_TOKEN_STREAMING_PAD,
@@ -602,6 +609,7 @@ impl GgmlSession {
             mel_filters_cpu: Vec::new(),
             mel_plan: audio::MelSpectrogramPlan::default(),
             time_emb_cpu: compute_time_embedding(VOX_N_DELAY_TOKENS as f32, VOX_DEC_DIM),
+            decoder_diagnostics: Default::default(),
         };
         unsafe {
             ctx.allocate_persistent()?;
@@ -1101,13 +1109,32 @@ impl GgmlSession {
                 ));
             }
 
+            let stage = Instant::now();
             let meta = MetaContext::new(GGML_DEFAULT_GRAPH_SIZE * 4)?;
             let gf = self.build_decoder_step_graph(model, meta.ctx, position, audio_pos);
+            self.decoder_diagnostics.graph_build_us += stage.elapsed().as_micros() as u64;
+            let stage = Instant::now();
             ffi::ggml_backend_sched_reset(self.sched_dec_step);
+
             if !ffi::ggml_backend_sched_alloc_graph(self.sched_dec_step, gf) {
                 return Err(Error::Runtime(
                     "decoder step graph allocation failed".into(),
                 ));
+            }
+            self.decoder_diagnostics.graph_allocate_us += stage.elapsed().as_micros() as u64;
+            if self.has_accel && self.decoder_diagnostics.steps == 0 {
+                for index in 0..ffi::ggml_graph_n_nodes(gf) {
+                    let node = ffi::ggml_graph_node(gf, index);
+                    let backend =
+                        ffi::ggml_backend_sched_get_tensor_backend(self.sched_dec_step, node);
+                    if !backend.is_null() && backend == self.backend_cpu {
+                        *self
+                            .decoder_diagnostics
+                            .host_scheduled_ops
+                            .entry((*node).op)
+                            .or_default() += 1;
+                    }
+                }
             }
 
             let tok_t = graph_tensor(gf, "token_id");
@@ -1138,18 +1165,24 @@ impl GgmlSession {
                 );
             }
 
+            let stage = Instant::now();
             check_status(
                 ffi::ggml_backend_sched_graph_compute(self.sched_dec_step, gf),
                 "decoder step graph compute",
             )?;
+            self.decoder_diagnostics.compute_us += stage.elapsed().as_micros() as u64;
+            let stage = Instant::now();
             ffi::ggml_backend_tensor_get(
                 self.decoder_logits,
                 logits_out.as_mut_ptr() as *mut c_void,
                 0,
                 VOX_VOCAB_SIZE * std::mem::size_of::<f32>(),
             );
+            self.decoder_diagnostics.readback_us += stage.elapsed().as_micros() as u64;
+            self.decoder_diagnostics.steps += 1;
             self.kv_used += 1;
             ffi::ggml_backend_sched_reset(self.sched_dec_step);
+
             Ok(())
         }
     }

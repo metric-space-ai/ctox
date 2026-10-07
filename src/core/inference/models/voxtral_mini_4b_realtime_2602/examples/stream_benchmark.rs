@@ -85,6 +85,8 @@ fn main() -> Result<()> {
     let final_text = stream.finish()?;
     let finish_compute_ms = finish_mark.elapsed().as_millis();
     let stream_wall_ms = started.elapsed().as_millis();
+    let decoder = stream.decoder_diagnostics();
+
     let audio_ms = (wav.samples.len() as u64) * 1000 / 16_000;
     let proof = json!({
         "backend":backend.label(), "model":model.config().model, "audio_path":args[2],
@@ -92,6 +94,12 @@ fn main() -> Result<()> {
         "stream_wall_ms":stream_wall_ms, "audio_file_end_to_final_ms":stream_wall_ms.saturating_sub(audio_ms as u128),
         "finish_compute_ms":finish_compute_ms, "max_capture_backlog_ms":max_capture_backlog_ms,
         "partial_snapshots":partials, "final_text":final_text,
+        "decoder_diagnostics": {
+            "steps":decoder.steps, "graph_build_us":decoder.graph_build_us,
+            "graph_allocate_us":decoder.graph_allocate_us, "compute_us":decoder.compute_us,
+            "readback_us":decoder.readback_us, "host_scheduled_ops":decoder.host_scheduled_ops
+        },
+
         "batch_stream_normalized_parity":normalized(&batch.text) == normalized(&final_text),
         "through_gateway":false, "installed_meeting_acceptance":false,
         "timing_boundary":"end of the paced fixture, including any trailing silence; not microphone/VAD sentence-end"

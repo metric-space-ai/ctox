@@ -40,6 +40,19 @@ pub struct VoxtralSttArtifactInspection {
     pub missing_required_tensors: Vec<String>,
 }
 
+/// Measured decoder stages for one utterance; these are compute diagnostics,
+/// not microphone-to-transcript or installed gateway latency.
+#[derive(Debug, Clone, Default)]
+pub struct DecoderDiagnostics {
+    pub steps: u64,
+    pub graph_build_us: u64,
+    pub graph_allocate_us: u64,
+    pub compute_us: u64,
+    pub readback_us: u64,
+    /// First-step graph operations actually assigned to the host scheduler.
+    pub host_scheduled_ops: std::collections::BTreeMap<i32, u64>,
+}
+
 pub struct VoxtralSttModel {
     config: VoxtralSttConfig,
     backend: VoxtralSttBackend,
@@ -118,6 +131,15 @@ impl VoxtralSttStream<'_> {
         }
         self.finished = true;
         self.runtime.stream_samples(&self.samples, true)
+    }
+
+    pub fn decoder_diagnostics(&self) -> DecoderDiagnostics {
+        #[cfg(not(ctox_ggml_unavailable))]
+        {
+            self.runtime.runtime.decoder_diagnostics()
+        }
+        #[cfg(ctox_ggml_unavailable)]
+        DecoderDiagnostics::default()
     }
 
     pub fn audio_duration_ms(&self) -> u64 {
