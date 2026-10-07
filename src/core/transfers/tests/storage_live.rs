@@ -95,6 +95,13 @@ async fn real_storage_pause_restart_upload_download_and_no_replace() {
         .stage_storage_upload(&source, &upload.sha256, upload.size)
         .unwrap();
     store.enqueue(upload.clone()).unwrap();
+    // Surface protocol failures before the durable worker deliberately redacts them.
+    let mut probe = live.connect(&upload).unwrap();
+    assert_eq!(probe.length("protocol-probe.bin").unwrap(), None);
+    probe.create("protocol-probe.bin").unwrap();
+    probe.write("protocol-probe.bin", 0, b"probe").unwrap();
+    assert_eq!(probe.read("protocol-probe.bin", 0, 5).unwrap(), b"probe");
+    probe.close().unwrap();
     let worker = store.worker_with_sources(None, Some(live.clone())).unwrap();
     worker.run_next(&AtomicBool::new(false)).await.unwrap();
     let paused = store.get(&upload.id).unwrap();
