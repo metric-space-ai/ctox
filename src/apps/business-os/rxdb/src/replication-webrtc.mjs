@@ -1521,6 +1521,17 @@ class CtoxWebRtcReplicationState {
     // Preserve the permission-filtered master payload for bounded consumers.
     // Legacy/resync callers pass null and retain the exact-query fallback.
     this.masterChange$.next(detail);
+    // A demand-only collection has no pull stream, so its pushed master
+    // changes were dropped here and its apps only saw remote writes by
+    // re-reading whole collections (thesen 07.10.2026: the Outbound lead list
+    // was re-paged every second). Invalidate the demand cache with the pushed
+    // documents instead; subscribers receive the changed ids and revisions.
+    if (!this.pull) {
+      const documents = Array.isArray(detail?.result?.documents) ? detail.result.documents : [];
+      if (documents.length) void this.invalidateDemandCacheForRemoteWrite(documents);
+      else if (detail?.result === 'RESYNC') this.collection.notifyQueryWindowChange?.();
+      return;
+    }
     this.pullFromRemotePeers().catch((error) => {
       this.error$.next(error);
       this.schedulePullRetry();
@@ -2499,7 +2510,7 @@ class CtoxWebRtcReplicationState {
       // handshake, so a same-session role/grant change takes effect at the
       // next control-plane read without rebuilding the loader.
       readPermissionDigest: () => this.readPermissionDigest || '',
-      onQueryWindowChanged: () => this.collection.notifyQueryWindowChange?.(),
+      onQueryWindowChanged: (change) => this.collection.notifyQueryWindowChange?.(change),
     }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
       this.collection.setDemandLoader(this.demandLoader);

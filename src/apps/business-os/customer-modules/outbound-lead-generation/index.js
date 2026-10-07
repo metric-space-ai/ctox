@@ -1374,7 +1374,7 @@ function bindCollections() {
     // native peer. Background changes may show up to 5 s later; user actions
     // reload explicitly and are not throttled.
     intervalMs: 5000,
-    reload: (keys) => reload(keys),
+    reload: (keys, changesByKey) => reload(keys, changesByKey),
     afterReload: (keys) => {
       if (keys.length === 1 && keys[0] === 'leads' && state.lastLeadReloadChanged === false && listLeads().length) return;
       render();
@@ -1561,9 +1561,9 @@ function researchPolicyRecord(
 
 // Explicit action reads may overlap. Results are ordered per collection so
 // an older response cannot overwrite newer data or suppress unrelated data.
-function reload(keys = Object.keys(state.collections)) {
+function reload(keys = Object.keys(state.collections), changesByKey = null) {
   const lauf = (state.reloadLauf = (state.reloadLauf || 0) + 1);
-  const promise = reloadAusfuehren(lauf, keys, state.collectionBindingGeneration);
+  const promise = reloadAusfuehren(lauf, keys, state.collectionBindingGeneration, changesByKey);
   state.reloadPromise = promise;
   return promise;
 }
@@ -1625,7 +1625,41 @@ function sharedLeadListLoad(collection, previousLeads, bindingGeneration) {
   return promise;
 }
 
-async function reloadAusfuehren(lauf, keys, bindingGeneration) {
+// The sync layer names the changed leads with their revision. Rows whose
+// revision the list already holds are refreshed windows of our own reads, not
+// changes; only the rest is fetched and patched into the list. Without names,
+// or for many changes, the full paged list is read as before.
+const LEAD_DELTA_MAX_ROWS = 100;
+async function loadLeadDelta(collection, changes, bindingGeneration) {
+  const current = new Map(listLeads().map(row => [row.id, row]));
+  const removed = new Set();
+  const fetchIds = [];
+  for (const change of changes.values()) {
+    const row = current.get(change.id);
+    if (change.deleted) {
+      if (row) removed.add(change.id);
+      continue;
+    }
+    if (!row || !change.rev || row._rev !== change.rev) fetchIds.push(change.id);
+  }
+  if (fetchIds.length > LEAD_DELTA_MAX_ROWS) return null;
+  const fetched = fetchIds.length
+    ? await withLeadQueryAuthority(state.ctx.sync,
+      signal => loadFullLeadRows(collection, fetchIds, { signal }), {
+        isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
+      })
+    : [];
+  const changedIds = new Set();
+  for (const full of fetched) {
+    const row = leadListRow(full);
+    if (current.get(full.id)?._rev !== row._rev) changedIds.add(full.id);
+    current.set(full.id, row);
+  }
+  for (const id of removed) current.delete(id);
+  return { rows: [...current.values()], changedIds, removedIds: removed };
+}
+
+async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = null) {
   const collections = state.collections;
   const requested = [...new Set(keys)].filter((key) => collections[key]);
   let leadChanges = null;
@@ -1633,7 +1667,17 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   const outcomes = await Promise.allSettled(requested.map(async (key) => {
     const collection = collections[key];
     if (key === 'leads') {
-      leadChanges = await sharedLeadListLoad(collection, previousLeads, bindingGeneration);
+      const changes = changesByKey?.get?.('leads');
+      const canPatch = changes instanceof Map && state.leadListRows
+        && state.leadHydrationBindingGeneration === bindingGeneration;
+      if (canPatch) {
+        try {
+          leadChanges = await loadLeadDelta(collection, changes, bindingGeneration);
+        } catch {
+          leadChanges = null; // e.g. a row vanished meanwhile: read the full list
+        }
+      }
+      if (!leadChanges) leadChanges = await sharedLeadListLoad(collection, previousLeads, bindingGeneration);
       return [key, leadChanges.rows];
     }
     const collectionName = `outbound_lead_generation_${key === 'researchPolicies' ? 'research_policies' : key}`;

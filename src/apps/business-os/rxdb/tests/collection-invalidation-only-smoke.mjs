@@ -73,13 +73,22 @@ for (const mode of ['direct', 'control-plane', 'maintenance-scope', 'permission-
     for (let i=0; i<5; i++) for (const observer of observers) observer({success:{a:{...row, _rev:String(i+2)+'-a'}}});
     await wait();
     assert.equal(hints.length, 2, mode + ': burst store changes must coalesce to one hint');
+    assert.deepEqual(hints[1].changes, [{id:'a', rev:'6-a', deleted:false}],
+      mode + ': a store hint names the changed row and its latest revision, never its fields');
     collection.notifyQueryWindowChange();
     await wait();
     assert.equal(hints.length, 3, mode + ': projected-window changes must invalidate without canonical writes');
     collection.setDemandLoader({...loader});
     await wait();
     assert.equal(hints.length, 4, mode + ': loader replacement must invalidate every collection');
-    assert(hints.every(event => Object.keys(event).sort().join(',') === 'collectionName,invalidated'));
+    // Hints carry no snapshot or document fields: at most the changed ids with
+    // revision and deletion mark, and none when a trigger did not name rows.
+    assert(hints.every(event => ['collectionName,invalidated', 'changes,collectionName,invalidated']
+      .includes(Object.keys(event).sort().join(','))));
+    assert(hints.every(event => (event.changes || []).every(change =>
+      Object.keys(change).sort().join(',') === 'deleted,id,rev')));
+    assert.equal(hints[2].changes, undefined, mode + ': an unnamed window change carries no changes');
+    assert.equal(hints[3].changes, undefined, mode + ': a loader replacement carries no changes');
     assert.deepEqual(Object.values(reads), [0,0,0,0,0,0], mode + ': changes must make zero find/exec/storage/demand reads');
     subscription.unsubscribe();
     subscription.unsubscribe();
