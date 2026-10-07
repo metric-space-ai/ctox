@@ -721,12 +721,27 @@ fn step(root: &Path, actor: &Actor, job_id: &str) -> Result<Outcome> {
     }
 }
 
+fn cli_input_path(args: &[String]) -> Result<&Path> {
+    const USAGE: &str = "usage: ctox build-job --input <private-json-file> [--root <bundle-root>]";
+    let mut input = None;
+    let mut seen_root = false;
+    let mut cursor = 0;
+    while cursor < args.len() {
+        let value = args.get(cursor + 1).context(USAGE)?;
+        ensure!(!value.is_empty() && !value.starts_with("--"), "{USAGE}");
+        match args[cursor].as_str() {
+            "--input" if input.is_none() => input = Some(Path::new(value)),
+            // main has already validated and resolved the global root.
+            "--root" if !seen_root => seen_root = true,
+            _ => anyhow::bail!("{USAGE}"),
+        }
+        cursor += 2;
+    }
+    input.context(USAGE)
+}
+
 pub(crate) fn handle_cli(root: &Path, args: &[String]) -> Result<()> {
-    ensure!(
-        args.len() == 2 && args[0] == "--input",
-        "usage: ctox build-job --input <private-json-file>"
-    );
-    let path = Path::new(&args[1]);
+    let path = cli_input_path(args)?;
     let metadata = fs::symlink_metadata(path)?;
     ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() <= 1024 * 1024,
@@ -808,6 +823,65 @@ pub(crate) fn handle_cli(root: &Path, args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn global_root_option_reaches_native_auth_without_relaxing_input() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let input = directory.path().join("request.json");
+        fs::write(
+            &input,
+            br#"{"capability_token":"invalid","request":{"action":"list","after_job_id":null}}"#,
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&input, fs::Permissions::from_mode(0o600))?;
+        }
+        let path = input.to_string_lossy().into_owned();
+        let root = directory.path().to_string_lossy().into_owned();
+        for args in [
+            vec!["--input".into(), path.clone()],
+            vec![
+                "--input".into(),
+                path.clone(),
+                "--root".into(),
+                root.clone(),
+            ],
+            vec![
+                "--root".into(),
+                root.clone(),
+                "--input".into(),
+                path.clone(),
+            ],
+        ] {
+            let error = handle_cli(directory.path(), &args).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("current unbound native owner capability required"));
+        }
+        for args in [
+            vec![
+                "--input".into(),
+                path.clone(),
+                "--unknown".into(),
+                "value".into(),
+            ],
+            vec![
+                "--input".into(),
+                path.clone(),
+                "--input".into(),
+                path.clone(),
+            ],
+            vec!["--input".into(), path.clone(), "--root".into()],
+            vec!["--root".into(), root.clone(), "--root".into(), root],
+        ] {
+            assert!(handle_cli(directory.path(), &args)
+                .unwrap_err()
+                .to_string()
+                .contains("usage: ctox build-job"));
+        }
+        Ok(())
+    }
+
     fn admission(directory: &Path, bytes: &[u8]) -> Admission {
         let program = "/usr/bin/fixture".to_owned();
         Admission {
