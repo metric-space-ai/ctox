@@ -18,6 +18,7 @@
 //! - Per-peer fork `RxReplicationState`s are owned by `PeerState` so cancel
 //!   propagates on `remove_peer`.
 
+use super::collection_authority::authorize_collection_for_peer;
 use super::{protocol_contract_generated, NativePeerRole};
 
 use std::collections::{HashMap, HashSet};
@@ -3195,43 +3196,26 @@ async fn master_collection_authorization_error<H: WebRTCConnectionHandler>(
     method: &str,
 ) -> Option<Value> {
     let (code, message, retryable) =
-        match super::collection_authority::authorize_collection_for_peer(handler, peer, collection)
-            .await
-        {
+        match authorize_collection_for_peer(handler, peer, collection).await {
             Ok(true) => return None,
             Ok(false) => (
-                "RC_WEBRTC_PEER",
+                "RC_WEBRTC_PEER".to_string(),
                 "peer is not authorized for collection",
                 false,
             ),
-            Err(error) => {
-                // Authority errors can contain private store/credential details.
-                // Publish and log only the stable code and routing collection.
-                let retryable = error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE";
-                return Some(collection_authorization_error_result(
-                    collection,
-                    method,
-                    error.code(),
-                    "native collection authority check failed",
-                    retryable,
-                ));
-            }
+            Err(error) => (
+                error.code().to_string(),
+                "native collection authority check failed",
+                error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE",
+            ),
         };
-    Some(collection_authorization_error_result(
-        collection, method, code, message, retryable,
-    ))
-}
-
-fn collection_authorization_error_result(
-    collection: &str,
-    method: &str,
-    code: &str,
-    message: &str,
-    retryable: bool,
-) -> Value {
+    // Authority errors can contain private store/credential details. Log only
+    // stable routing/classification and presence booleans, never the token.
     tracing::warn!(
         target: "ctox_rxdb::plugins::replication_webrtc",
         collection, method, code, retryable,
+        peer_current = handler.is_peer_current(peer),
+        capability_present = handler.peer_capability_token(peer).is_some(),
         "collection request admission failed",
     );
     let direction = match method {
@@ -3239,8 +3223,8 @@ fn collection_authorization_error_result(
         "masterWrite" => "push",
         _ => "unknown",
     };
-    replication_error_result(
-        code,
+    Some(replication_error_result(
+        &code,
         "replication-io",
         direction,
         serde_json::json!({
@@ -3249,7 +3233,7 @@ fn collection_authorization_error_result(
             "retryable": retryable,
         }),
         Vec::new(),
-    )
+    ))
 }
 
 fn replication_error_result(

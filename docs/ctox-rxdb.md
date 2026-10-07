@@ -1821,8 +1821,10 @@ replication-scope `ctoxError` with `COLLECTION_AUTHORITY_UNAVAILABLE`,
 `retryable: true`, and the correct pull/push direction; other authority
 errors remain terminal. A verified denial still returns `RC_WEBRTC_PEER`
 immediately. Neither failed admission returns rows or an acknowledged
-checkpoint/write result. Native diagnostics include only collection, method,
-code and retryability, without authority error parameters or credentials.
+checkpoint/write result. Native diagnostics include collection, method,
+code, retryability and current-peer/capability-presence booleans, without
+authority error parameters or credentials. Presence is diagnostic metadata,
+not proof that a capability is valid or a replacement authorization decision.
 
 Adding a code is safe on this path: `routeFileError`
 (`demand-loading-transport.mjs`) carries `code` and `retryable` through without
