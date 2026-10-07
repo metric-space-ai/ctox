@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261007-shell-v2-workjet-supervisor-turn-control';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261007-shell-v2-topbar-menu-layer';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
