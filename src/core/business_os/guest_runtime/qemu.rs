@@ -23,6 +23,9 @@ use tokio::process::{Child, Command};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
+mod migration;
+pub(in crate::business_os) use migration::QemuMemoryState;
+
 /// Resolved by the native image/lifecycle owner, never deserialized from a
 /// renderer or model request. Image provenance and host admission belong there.
 pub(in crate::business_os) struct PreparedQemuGuest {
@@ -54,6 +57,7 @@ pub(super) struct QemuProcess {
     guest_channel: Option<GuestChannel<UnixStream>>,
     // Dropped after the child. Only the private monitor directory is disposable.
     runtime: TempDir,
+    migration: migration::MigrationPhase,
 }
 
 pub(super) fn regular_file(path: &Path) -> Result<std::fs::Metadata> {
@@ -219,6 +223,16 @@ impl QemuProcess {
     /// Creates the owner synchronously, before the first cancellable await.
     /// A successful return proves only process creation; call connect_monitor.
     pub(super) fn spawn_paused(config: &PreparedQemuGuest, guest_id: &str) -> Result<Self> {
+        Self::spawn(config, guest_id, false)
+    }
+
+    /// Restore starts with no guest instructions executed. The native caller
+    /// still needs a verified protected import and current execution authority.
+    pub(super) fn spawn_incoming(config: &PreparedQemuGuest, guest_id: &str) -> Result<Self> {
+        Self::spawn(config, guest_id, true)
+    }
+
+    fn spawn(config: &PreparedQemuGuest, guest_id: &str, incoming: bool) -> Result<Self> {
         ensure!(identifier(guest_id), "guest identity is invalid");
         ensure!(
             config.runtime_parent.is_absolute(),
@@ -251,6 +265,9 @@ impl QemuProcess {
         startup.sync_all()?;
         drop(startup);
         let mut command = prepare_command(config, &socket, &guest_socket, &startup_path)?;
+        if incoming {
+            command.args(["-incoming", "defer"]);
+        }
         let listener = UnixListener::bind(&socket)
             .map_err(|_| anyhow!("private QEMU monitor could not be bound"))?;
         let guest_listener = UnixListener::bind(&guest_socket)
@@ -267,6 +284,11 @@ impl QemuProcess {
             guest_listener: Some(guest_listener),
             guest_channel: None,
             runtime,
+            migration: if incoming {
+                migration::MigrationPhase::Incoming
+            } else {
+                migration::MigrationPhase::Fresh
+            },
         })
     }
 
@@ -308,7 +330,12 @@ impl QemuProcess {
             let mut monitor = QmpClient::negotiate(stream, Duration::from_secs(5)).await?;
             let status = monitor.query_status().await?;
             ensure!(
-                !status.running && matches!(status.status.as_str(), "prelaunch" | "paused"),
+                !status.running
+                    && if self.migration == migration::MigrationPhase::Incoming {
+                        status.status == "inmigrate"
+                    } else {
+                        matches!(status.status.as_str(), "prelaunch" | "paused")
+                    },
                 "QEMU did not start paused"
             );
             Ok::<_, anyhow::Error>((monitor, status))
@@ -370,6 +397,13 @@ impl QemuProcess {
 
     /// Each input/effect call must remain inside the native authority fence.
     pub(super) async fn resume(&mut self) -> Result<()> {
+        ensure!(
+            matches!(
+                self.migration,
+                migration::MigrationPhase::Fresh | migration::MigrationPhase::Restored
+            ),
+            "QEMU migration is incomplete, retired or uncertain"
+        );
         Ok(self.monitor()?.resume().await?)
     }
 

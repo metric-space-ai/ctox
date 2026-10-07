@@ -407,3 +407,146 @@ async fn cancellation_retires_guest_channel_handshake_but_keeps_child_owned() ->
     stopped?;
     Ok(())
 }
+
+#[tokio::test]
+async fn real_memory_export_and_incoming_restore_stay_paused_until_explicit_resume() -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = tempfile::tempdir()?;
+    let input = config(root.path())?;
+    real_disk(&input).await?;
+    let path = root.path().join("memory.state");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    let mut file = tokio::fs::File::from_std(file);
+    let mut source = QemuProcess::spawn_paused(&input, "isolated-memory-guest")?;
+    let mut target: Option<QemuProcess> = None;
+    eprintln!(
+        "owned memory source pid={} stop=test-finally; no guest OS",
+        source.pid()
+    );
+    let result = tokio::time::timeout(Duration::from_secs(60), async {
+        source.connect_monitor().await?;
+        source.resume().await?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        source.pause().await?;
+        let memory = source.save_memory(&mut file).await?;
+        ensure!(memory.bytes > 0 && memory.sha256.len() == 64);
+        ensure!(std::fs::metadata(&path)?.permissions().mode() & 0o777 == 0o400);
+        ensure!(
+            source.resume().await.is_err(),
+            "exported source could execute again"
+        );
+        ensure!(source.status().await?.status == "postmigrate");
+        source.stop().await?;
+        ensure!(
+            source.child.try_wait()?.is_some(),
+            "source disk writer was not reaped"
+        );
+
+        target = Some(QemuProcess::spawn_incoming(
+            &input,
+            "isolated-memory-guest",
+        )?);
+        let target = target.as_mut().unwrap();
+        eprintln!(
+            "owned memory target pid={} stop=test-finally; no guest OS",
+            target.pid()
+        );
+        target.connect_monitor().await?;
+        ensure!(
+            target.resume().await.is_err(),
+            "incomplete incoming guest executed"
+        );
+        let mut saved = tokio::fs::File::open(&path).await?;
+        target.restore_memory(&mut saved, &memory).await?;
+        let status = target.status().await?;
+        ensure!(
+            !status.running && status.status == "paused",
+            "restore automatically executed"
+        );
+        ensure!(
+            target.restore_memory(&mut saved, &memory).await.is_err(),
+            "restore replayed"
+        );
+        target.resume().await?;
+        ensure!(
+            target.status().await?.running,
+            "explicit native resume failed"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    let target_stopped = match target.as_mut() {
+        Some(target) => target.stop().await.map(|_| ()),
+        None => Ok(()),
+    };
+    let source_stopped = source.stop().await;
+    target_stopped?;
+    source_stopped?;
+    result.context("actual memory roundtrip deadline")??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn corrupt_memory_retires_incoming_attempt_without_executing_or_releasing_child() -> Result<()>
+{
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = tempfile::tempdir()?;
+    let input = config(root.path())?;
+    real_disk(&input).await?;
+    let path = root.path().join("corrupt.state");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    std::io::Write::write_all(&mut file, b"corrupted stream")?;
+    file.sync_all()?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o400))?;
+    drop(file);
+    let mut saved = tokio::fs::File::open(&path).await?;
+    let expected = QemuMemoryState {
+        bytes: 16,
+        sha256: "0".repeat(64),
+    };
+    let mut target = QemuProcess::spawn_incoming(&input, "isolated-corrupt-memory")?;
+    eprintln!(
+        "owned corrupt-memory target pid={} stop=test-finally",
+        target.pid()
+    );
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        target.connect_monitor().await?;
+        ensure!(
+            target.restore_memory(&mut saved, &expected).await.is_err(),
+            "corrupt input accepted"
+        );
+        ensure!(
+            target.restore_memory(&mut saved, &expected).await.is_err(),
+            "failed incoming attempt retried"
+        );
+        ensure!(target.resume().await.is_err(), "failed restore executed");
+        let status = target.status().await?;
+        ensure!(
+            !status.running && status.status == "inmigrate",
+            "corrupt stream reached QEMU"
+        );
+        ensure!(
+            target.child.try_wait()?.is_none(),
+            "failed restore lost child ownership"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    let stopped = target.stop().await;
+    stopped?;
+    result.context("corrupt-memory deadline")??;
+    ensure!(
+        target.child.try_wait()?.is_some(),
+        "failed target was not reaped"
+    );
+    Ok(())
+}

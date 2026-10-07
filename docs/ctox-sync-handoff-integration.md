@@ -558,6 +558,14 @@ a later authority or reply-persistence failure can leave private journal
 input without a successful worker marker and needs reconciliation. Installed
 model/VM/two-host acceptance remains separate from the source storage regressions.
 
+## Native paused QEMU memory
+
+The retained Linux guest owner now has separate paused memory export, incoming
+load and explicit activation primitives. Their limits and required caller-owned
+production authority/disk/checkpoint connections are described in
+[Native paused QEMU memory checkpoint](ctox-guest-memory-checkpoint.md).
+They do not establish installed guest or two-host acceptance.
+
 ## Native producer lifetime
 
 The production first-turn connection preserves three separate owners:

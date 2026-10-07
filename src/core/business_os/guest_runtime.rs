@@ -29,7 +29,7 @@ pub(super) use channel::run_guest_desktop_effects;
 #[cfg(target_os = "linux")]
 pub(super) use desktop::RetainedQemuDesktop;
 #[cfg(target_os = "linux")]
-pub(super) use qemu::{PreparedQemuGuest, QemuAcceleration};
+pub(super) use qemu::{PreparedQemuGuest, QemuAcceleration, QemuMemoryState};
 pub(crate) use startup::run_native_guest_desktop;
 pub(super) use x11::{X11GuestConfig, X11GuestDriver};
 
