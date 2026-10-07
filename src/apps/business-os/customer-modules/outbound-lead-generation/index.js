@@ -1732,7 +1732,10 @@ async function loadSelectedLeadDetails() {
   if (!id || !listLeads().some(row => row.id === id)) return;
   const generation = state.collectionBindingGeneration;
   const key = `${generation}:${id}:${listLeads().find(row => row.id === id)?._rev}`;
-  if (state.selectedDetailLoadingKey === key) return;
+  state.selectedDetailRequestedKey = key;
+  // Selected-lead revisions can change every second during research. Keep one
+  // detail read in flight and coalesce changes instead of piling up full reads.
+  if (state.selectedDetailLoadingKey) return;
   state.selectedDetailLoadingKey = key;
   try {
     await ensureFullLeads([id]);
@@ -1741,8 +1744,9 @@ async function loadSelectedLeadDetails() {
     renderDetail();
     const lead = selectedLead();
     if (lead && !state.recipientEligibilityReady.has(id)) {
-      await refreshLeadRecipientEligibility(lead);
-      if (state.selectedLeadId === id) renderDetail();
+      void refreshLeadRecipientEligibility(lead)
+        .then(() => { if (state.selectedLeadId === id && generation === state.collectionBindingGeneration) renderDetail(); })
+        .catch(() => {});
     }
   } catch (error) {
     if (state.selectedLeadId === id && generation === state.collectionBindingGeneration) {
@@ -1751,6 +1755,7 @@ async function loadSelectedLeadDetails() {
     }
   } finally {
     if (state.selectedDetailLoadingKey === key) state.selectedDetailLoadingKey = '';
+    if (state.selectedDetailRequestedKey !== key && state.uiMounted !== false) void loadSelectedLeadDetails();
   }
 }
 
@@ -3258,7 +3263,8 @@ function renderDetail() {
     if (tabsHost) tabsHost.innerHTML = '';
     body.innerHTML = `<div class="leadgen-empty" role="status">${escapeHtml(summary
       ? state.selectedDetailError || 'Details und Belege werden geladen …'
-      : tr('selectLead', 'Lead auswählen.'))}</div>`;
+      : tr('selectLead', 'Lead auswählen.'))}${summary && state.selectedDetailError
+        ? `<button class="ctox-button" data-action="select-lead" data-id="${escapeHtml(summary.id)}">Details erneut laden</button>` : ''}</div>`;
     return;
   }
   const scrollTop = body.scrollTop;
