@@ -25,13 +25,15 @@ fn prompted_kpis_agree_on_evidence_revision_and_missing_source() {
 #[test]
 fn prompted_kpis_roundtrip_keeps_source_computation_and_freshness() {
     let fixture = fixture();
-    let project: contract::ProjectKpis =
-        serde_json::from_value(fixture["valid_cases"][0]["value"].clone()).unwrap();
+    let case = fixture["valid_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["type"] == "ProjectKpis")
+        .expect("ProjectKpis roundtrip fixture");
+    let project: contract::ProjectKpis = serde_json::from_value(case["value"].clone()).unwrap();
     project.validate().unwrap();
-    assert_eq!(
-        serde_json::to_value(project).unwrap(),
-        fixture["valid_cases"][0]["value"]
-    );
+    assert_eq!(serde_json::to_value(project).unwrap(), case["value"]);
     for case in fixture["valid_cases"].as_array().unwrap() {
         if case["type"] == "KpiSnapshot" {
             let snapshot: contract::KpiSnapshot =
