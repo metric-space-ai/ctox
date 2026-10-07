@@ -1,16 +1,90 @@
 #!/bin/sh
 # Origin: CTOX; License: AGPL-3.0-only
-# PROPOSED image customization payload, not executed on a host or live guest.
+# Image customization payload; never execute on a host or live guest.
 # Run only inside the stopped private image through the reviewed virt-customize
 # recipe after actual image/build/host approval. The marker identifies the copy;
 # it is NOT an approval token or an execution/controller permit.
 set -eu
 [ "$(uname -s)" = Linux ]
 [ "$(uname -m)" = x86_64 ]
-[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-b3745d911-v5 ]
 [ -x /usr/local/bin/ctox ]
 . /etc/os-release
 [ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ]
+
+configure_boot() {
+    # TCG cold boots can discover the mandatory boot devices after systemd's
+    # default device deadline. Keep both mounts required, with a finite bound.
+    python3 - <<'PY'
+import os
+import pathlib
+import tempfile
+
+path = pathlib.Path('/etc/fstab')
+lines = path.read_text().splitlines(keepends=True)
+mounts = {'/boot': 0, '/boot/efi': 0}
+for i, line in enumerate(lines):
+    if not line.strip() or line.lstrip().startswith('#'):
+        continue
+    fields = line.split()
+    if len(fields) < 4 or fields[1] not in mounts:
+        continue
+    mounts[fields[1]] += 1
+    options = fields[3].split(',')
+    if 'nofail' in options or 'noauto' in options:
+        raise SystemExit('boot mounts must remain mandatory')
+    options = [option for option in options
+               if not option.startswith('x-systemd.device-timeout=')]
+    fields[3] = ','.join(options + ['x-systemd.device-timeout=300s'])
+    lines[i] = '\t'.join(fields) + '\n'
+if any(count != 1 for count in mounts.values()):
+    raise SystemExit('exactly one /boot and /boot/efi mount required')
+mode = path.stat().st_mode & 0o777
+fd, temporary = tempfile.mkstemp(prefix='.ctox-fstab-', dir=path.parent)
+try:
+    with os.fdopen(fd, 'w') as stream:
+        stream.writelines(lines)
+        stream.flush()
+        os.fchmod(stream.fileno(), mode)
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+# Kernel framebuffer repainting is costly under single-thread TCG. Preserve
+# other arguments and keep Xorg's real graphical VT intact.
+grub = pathlib.Path('/etc/default/grub.d/99-ctox-serial-console.cfg')
+grub.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+grub.write_text('''ctox_without_console() {
+    set -f
+    for ctox_argument in $1; do
+        case "$ctox_argument" in
+            console=*) : ;;
+            *) printf '%s ' "$ctox_argument" ;;
+        esac
+    done
+}
+GRUB_CMDLINE_LINUX_DEFAULT=$(ctox_without_console "$GRUB_CMDLINE_LINUX_DEFAULT")
+ctox_linux=$(ctox_without_console "$GRUB_CMDLINE_LINUX")
+GRUB_CMDLINE_LINUX="$ctox_linux console=ttyS0,115200n8"
+unset ctox_linux
+unset -f ctox_without_console
+''')
+grub.chmod(0o644)
+PY
+    update-grub
+}
+
+if [ "${1-}" = --boot-only ]; then
+    [ "$#" -eq 1 ]
+    [ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-555140a08-v7 ]
+    [ "$(id -u ctox-desktop)" = 1500 ]
+    [ ! -e /etc/ctox/guest-startup.json ]
+    configure_boot
+    rm /etc/ctox-image-build.marker
+    exit 0
+fi
+[ "$#" -eq 0 ]
+[ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-b3745d911-v5 ]
 export DEBIAN_FRONTEND=noninteractive
 cat > /etc/apt/sources.list.d/ubuntu.sources <<'APT'
 Types: deb
@@ -203,7 +277,7 @@ systemctl enable ctox-xorg.service ctox-desktop.service ctox-guest-desktop.servi
 # this stopped appliance disk; retain UUID-based Linux boot configuration.
 test -d /usr/lib/grub/i386-pc
 grub-install --target=i386-pc --recheck /dev/sda
-update-grub
+configure_boot
 install -d -m 0755 /usr/local/share/ctox-image
 dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /usr/local/share/ctox-image/packages.tsv
 sha256sum /usr/local/bin/ctox > /usr/local/share/ctox-image/native-binary.sha256
