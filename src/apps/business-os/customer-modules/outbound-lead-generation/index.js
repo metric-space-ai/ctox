@@ -1608,7 +1608,10 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
         });
       return [key, leadChanges.rows];
     }
-    const docs = await collection.find().exec();
+    const collectionName = `outbound_lead_generation_${key === 'researchPolicies' ? 'research_policies' : key}`;
+    const docs = await withLeadQueryAuthority(state.ctx.sync,
+      signal => collection.find().exec({ signal }), { collectionName,
+        isCurrent: () => state.collectionBindingGeneration === bindingGeneration });
     return [key, docs.map((doc) => doc.toJSON())];
   }));
   // Unmount or a recovered collection handle invalidates the old read. Order

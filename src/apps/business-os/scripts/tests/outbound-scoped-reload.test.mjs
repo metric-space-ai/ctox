@@ -143,7 +143,7 @@ try {
     Object.assign(state, {
       ctx: { host: { querySelector: () => null }, sync: {
         leaseCollection: async (name, reason, options) => {
-          assert.equal(name, 'outbound_lead_generation_leads');
+          assert.ok(['sources', 'adapters', 'imports', 'research_policies', 'leads'].some(key => name === `outbound_lead_generation_${key}`));
           assert.equal(options.forceDirect, true);
           const replication = {
             awaitQueryReady: async () => 'native-generation',
@@ -217,6 +217,22 @@ try {
     assert.equal(state.collectionReadErrors.size, 0);
     hooks.renderSyncLine();
     assert.equal(line.className, 'is-syncing', 'current success clears only its own failure');
+  });
+  await test('a hung non-lead query times out without discarding current lead results', async () => {
+    let signal;
+    setup({ adapters: async () => new Promise(() => {}) });
+    const originalFind = state.collections.adapters.find;
+    state.collections.adapters.find = query => {
+      const request = originalFind(query);
+      return { exec: options => { signal = options.signal; return request.exec(options); } };
+    };
+    await assert.rejects(hooks.reload(['leads', 'adapters']), error => {
+      assert.deepEqual(error.failedKeys, ['adapters']); return true;
+    });
+    assert.equal(signal.aborted, true, 'timed-out collection query is cancelled');
+    assert.equal(state.leadListRows.length, 1, 'healthy lead query survives the other collection timeout');
+    assert.deepEqual([...state.collectionReadErrors.keys()], ['adapters']);
+    assert.match(state.collectionReadErrors.get('adapters'), /nicht rechtzeitig/);
   });
   await test('an older rejected read cannot invalidate a newer successful collection read', async () => {
     const blocked = deferred(); let reads = 0;
