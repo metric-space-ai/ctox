@@ -22,16 +22,42 @@ fn collection_permission_distinguishes_issuer_contention_from_invalid_credential
     };
     assert!(check()?);
     store::with_current_webrtc_capability_signer(root.path(), |_| {
-        assert!(check().is_err());
-        assert!(!store::webrtc_capability_allows_collection_permission(
-            root.path(),
-            &token,
-            "business_commands",
-            crate::business_os::policy::BusinessOsPermission::DataRead,
-        ));
+        // A valid preparatory read no longer needs the publication mutex.
+        assert!(check()?);
+        // Publication still cannot reenter the non-recursive issuer fence.
+        assert!(store::with_current_webrtc_capability_signer(root.path(), |_| Ok(())).is_err());
         Ok(())
     })?;
     assert!(check()?);
+    // Genuine unavailable authority remains an error, not an invalid-token
+    // denial. Use a fresh collection so the existing short decision cache
+    // cannot hide the missing protected key during this isolated check.
+    let key = root
+        .path()
+        .join("runtime")
+        .join(crate::secrets::SECRET_MASTER_KEY_FILE);
+    let held_key = key.with_extension("fixture-held");
+    std::fs::rename(&key, &held_key)?;
+    assert!(store::check_webrtc_collection_permission(
+        root.path(),
+        &token,
+        "ctox_queue_tasks",
+        crate::business_os::policy::BusinessOsPermission::DataRead,
+    )
+    .is_err());
+    assert!(!store::webrtc_capability_allows_collection_permission(
+        root.path(),
+        &token,
+        "ctox_queue_tasks",
+        crate::business_os::policy::BusinessOsPermission::DataRead,
+    ));
+    std::fs::rename(&held_key, &key)?;
+    assert!(store::check_webrtc_collection_permission(
+        root.path(),
+        &token,
+        "ctox_queue_tasks",
+        crate::business_os::policy::BusinessOsPermission::DataRead,
+    )?);
     assert!(!store::check_webrtc_collection_permission(
         root.path(),
         "invalid",
