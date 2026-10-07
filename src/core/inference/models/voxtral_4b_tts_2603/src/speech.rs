@@ -1,4 +1,3 @@
-use crate::model::names;
 use crate::safetensors::SafeTensors;
 use crate::{Error, Result};
 use std::path::{Path, PathBuf};
@@ -16,7 +15,7 @@ pub enum VoxtralTtsBackend {
 impl VoxtralTtsBackend {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Cpu => "cpu-rust-reference",
+            Self::Cpu => "cpu-vendored-voxtral-graph",
             Self::Metal => "metal-vendored-kernels",
             Self::Cuda => "cuda-vendored-kernels",
             Self::Wgsl => "wgsl-vendored-kernels",
@@ -55,6 +54,7 @@ pub struct VoxtralTtsModel {
     config: VoxtralTtsConfig,
     backend: VoxtralTtsBackend,
     inspection: Option<VoxtralTtsArtifactInspection>,
+    session: Option<std::sync::Arc<crate::native_graph::NativeSession>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +77,7 @@ impl VoxtralTtsModel {
             config,
             backend,
             inspection: None,
+            session: None,
         }
     }
 
@@ -88,10 +89,20 @@ impl VoxtralTtsModel {
                 inspection.missing_required_tensors.join(", ")
             )));
         }
+        if !crate::native_graph::available(backend == VoxtralTtsBackend::Cuda)
+            || !matches!(backend, VoxtralTtsBackend::Cpu | VoxtralTtsBackend::Cuda)
+            || (backend == VoxtralTtsBackend::Cpu && cfg!(voxtral_cuda))
+        {
+            return Err(Error::Unsupported(
+                "requested native Voxtral graph backend was not compiled",
+            ));
+        }
+        let session = crate::native_graph::load(&inspection.root)?;
         Ok(Self {
             config: VoxtralTtsConfig::default(),
             backend,
             inspection: Some(inspection),
+            session: Some(session),
         })
     }
 
@@ -104,11 +115,19 @@ impl VoxtralTtsModel {
     }
 
     pub fn artifacts_loaded(&self) -> bool {
-        self.inspection.is_some()
+        self.session.is_some()
     }
 
     pub fn inspection(&self) -> Option<&VoxtralTtsArtifactInspection> {
         self.inspection.as_ref()
+    }
+
+    pub fn graph_wired(&self) -> bool {
+        matches!(
+            self.backend,
+            VoxtralTtsBackend::Cpu | VoxtralTtsBackend::Cuda
+        ) && crate::native_graph::available(self.backend == VoxtralTtsBackend::Cuda)
+            && (self.backend != VoxtralTtsBackend::Cpu || !cfg!(voxtral_cuda))
     }
 
     pub fn synthesize(&self, request: &SpeechRequest<'_>) -> Result<SpeechResponse> {
@@ -120,10 +139,45 @@ impl VoxtralTtsModel {
                 "native Voxtral TTS currently accepts wav output only",
             ));
         }
-        let _ = request.voice;
-        Err(Error::Unsupported(
-            "native Voxtral TTS text-to-audio graph is not wired yet",
-        ))
+        if request.input.len() > 4096 {
+            return Err(Error::InvalidFormat(
+                "speech input exceeds 4096-byte turn limit",
+            ));
+        }
+        if !self.graph_wired() {
+            return Err(Error::Unsupported(
+                "requested native Voxtral graph backend was not compiled",
+            ));
+        }
+        let inspection = self.inspection.as_ref().ok_or(Error::Unsupported(
+            "native Voxtral artifacts are not loaded",
+        ))?;
+        let voice = request.voice.unwrap_or("neutral_female");
+        if !PRESET_VOICES.contains(&voice) {
+            return Err(Error::Unsupported("unknown native Voxtral preset voice"));
+        }
+        if !inspection
+            .root
+            .join("voice_embedding")
+            .join(format!("{voice}.pt"))
+            .is_file()
+        {
+            return Err(Error::InvalidFormat(
+                "requested preset voice artifact is missing",
+            ));
+        }
+        let audio = self
+            .session
+            .as_ref()
+            .ok_or(Error::Unsupported(
+                "native Voxtral artifacts are not loaded",
+            ))?
+            .synthesize(request.input, voice)?;
+        Ok(SpeechResponse {
+            model: self.config.model.clone(),
+            audio,
+            response_format: "wav".into(),
+        })
     }
 }
 
@@ -134,6 +188,9 @@ pub fn inspect_model_dir(model_dir: impl AsRef<Path>) -> Result<VoxtralTtsArtifa
         return Err(Error::InvalidFormat(
             "expected consolidated.safetensors in model_dir",
         ));
+    }
+    if !root.join("tekken.json").is_file() {
+        return Err(Error::InvalidFormat("expected tekken.json in model_dir"));
     }
     let weights = SafeTensors::open(&weights_path)?;
     let missing_required_tensors = required_tensors()
@@ -151,7 +208,12 @@ pub fn inspect_model_dir(model_dir: impl AsRef<Path>) -> Result<VoxtralTtsArtifa
 }
 
 pub fn required_tensors() -> Vec<&'static str> {
-    vec![names::TOK_EMBEDDINGS, names::ADAPTER_L0, names::ADAPTER_L1]
+    vec![
+        "mm_audio_embeddings.tok_embeddings.weight",
+        "layers.0.attention.wq.weight",
+        "acoustic_transformer.input_projection.weight",
+        "acoustic_transformer.semantic_codebook_output.weight",
+    ]
 }
 
 #[cfg(test)]
@@ -176,6 +238,29 @@ mod tests {
                 response_format: "wav",
             })
             .expect_err("native TTS must not return fake audio");
-        assert!(err.to_string().contains("not wired"));
+        assert!(err.to_string().contains("not loaded") || err.to_string().contains("not compiled"));
     }
 }
+
+const PRESET_VOICES: &[&str] = &[
+    "casual_female",
+    "casual_male",
+    "cheerful_female",
+    "neutral_female",
+    "neutral_male",
+    "fr_female",
+    "fr_male",
+    "de_female",
+    "de_male",
+    "es_female",
+    "es_male",
+    "it_female",
+    "it_male",
+    "pt_female",
+    "pt_male",
+    "nl_female",
+    "nl_male",
+    "ar_male",
+    "hi_female",
+    "hi_male",
+];

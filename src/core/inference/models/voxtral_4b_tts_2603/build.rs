@@ -1,131 +1,97 @@
-use std::env;
-use std::path::PathBuf;
-use std::process::Command;
-
+use std::{env, path::PathBuf, process::Command};
+fn run(cmd: &mut Command) {
+    let status = cmd.status().expect("native Voxtral compiler unavailable");
+    assert!(
+        status.success(),
+        "native Voxtral compilation failed: {status}"
+    );
+}
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(voxtral_native)");
+    println!("cargo:rustc-check-cfg=cfg(voxtral_cuda)");
+    println!("cargo:rerun-if-changed=vendor/voxtral-tts.c");
     println!("cargo:rerun-if-env-changed=NVCC");
     println!("cargo:rerun-if-env-changed=CTOX_CUDA_SM");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_TTS_BUILD_CUDA");
-    println!("cargo:rerun-if-env-changed=CTOX_CUDA_HOME");
-
-    match env::var("CARGO_CFG_TARGET_OS").unwrap_or_default().as_str() {
-        "linux" => build_cuda_if_available(),
-        "macos" => {
-            println!("cargo:rerun-if-changed=vendor/metal/kernels/ctox_voxtral_tts_glue.metal");
-            println!(
-                "cargo:warning=ctox-voxtral-4b-tts-2603: Metal shader is vendored; metallib build is not wired yet"
-            );
-        }
-        _ => {}
-    }
-}
-
-fn build_cuda_if_available() {
-    let enabled = env::var("CTOX_VOXTRAL_TTS_BUILD_CUDA")
-        .map(|value| {
-            !matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "no"
-            )
-        })
-        .unwrap_or(true);
-    if !enabled {
-        println!(
-            "cargo:warning=ctox-voxtral-4b-tts-2603: CUDA build disabled by CTOX_VOXTRAL_TTS_BUILD_CUDA"
-        );
+    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if os != "linux" && os != "macos" {
         return;
     }
-
-    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let src = manifest.join("vendor/cuda/kernels/ctox_voxtral_tts_glue.cu");
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    let obj = out_dir.join("ctox_voxtral_tts_glue.o");
-    let lib = out_dir.join("libctox_voxtral_tts_glue.a");
-
-    println!("cargo:rerun-if-changed={}", src.display());
-    if !src.is_file() {
-        println!(
-            "cargo:warning=ctox-voxtral-4b-tts-2603: missing CUDA glue source {}",
-            src.display()
-        );
-        return;
-    }
-
-    let nvcc = env::var("NVCC").unwrap_or_else(|_| "nvcc".to_string());
-    let sm = env::var("CTOX_CUDA_SM").unwrap_or_else(|_| "86".to_string());
-    let status = Command::new(&nvcc)
-        .args([
-            "--compile",
-            "-arch",
-            &format!("sm_{sm}"),
-            "-std=c++17",
-            "-O3",
-            "-Xcompiler",
-            "-fPIC",
-            "-o",
-        ])
-        .arg(&obj)
-        .arg(&src)
-        .status();
-
-    match status {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            println!(
-                "cargo:warning=ctox-voxtral-4b-tts-2603: nvcc failed for CUDA glue: exit {status}"
-            );
-            return;
-        }
-        Err(err) => {
-            println!(
-                "cargo:warning=ctox-voxtral-4b-tts-2603: nvcc unavailable ({err}); skipping CUDA glue archive"
-            );
-            return;
-        }
-    }
-
-    let ar = env::var("AR").unwrap_or_else(|_| "ar".to_string());
-    let status = Command::new(&ar).args(["rcs"]).arg(&lib).arg(&obj).status();
-    match status {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            println!(
-                "cargo:warning=ctox-voxtral-4b-tts-2603: ar failed for CUDA glue archive: exit {status}"
-            );
-            return;
-        }
-        Err(err) => {
-            println!(
-                "cargo:warning=ctox-voxtral-4b-tts-2603: ar unavailable ({err}); skipping CUDA glue archive"
-            );
-            return;
-        }
-    }
-
-    println!(
-        "cargo:rustc-env=CTOX_VOXTRAL_TTS_CUDA_ARCHIVE={}",
-        lib.display()
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let src =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("vendor/voxtral-tts.c");
+    let nvcc = env::var("NVCC").unwrap_or_else(|_| "nvcc".into());
+    let requested = env::var_os("CARGO_FEATURE_CUDA").is_some();
+    let disabled = matches!(
+        env::var("CTOX_VOXTRAL_TTS_BUILD_CUDA").as_deref(),
+        Ok("0" | "false" | "no")
     );
-    println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=ctox_voxtral_tts_glue");
-    if let Some(cuda_lib_dir) = cuda_lib_dir() {
-        println!("cargo:rustc-link-search=native={}", cuda_lib_dir.display());
+    let cuda = requested
+        && os == "linux"
+        && !disabled
+        && Command::new(&nvcc)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success());
+    assert!(
+        !requested || cuda,
+        "CUDA feature requested but nvcc unavailable or disabled"
+    );
+    let mut objects = Vec::new();
+    for name in [
+        "voxtral_tts",
+        "voxtral_tts_safetensors",
+        "voxtral_tts_kernels",
+        "voxtral_tts_llm",
+        "voxtral_tts_acoustic",
+        "voxtral_tts_codec",
+        "voxtral_tts_voice",
+        "voxtral_tts_wav",
+        "voxtral_tts_tokenizer",
+        "ctox_bridge",
+    ] {
+        let obj = out.join(format!("{name}.o"));
+        let mut cc = Command::new(env::var("CC").unwrap_or_else(|_| "cc".into()));
+        cc.args(["-O3", "-std=c11", "-D_GNU_SOURCE", "-fPIC", "-c"]);
+        if cuda {
+            cc.arg("-DUSE_CUDA");
+        }
+        if os == "macos" {
+            cc.arg("-DUSE_BLAS");
+        }
+        cc.arg(src.join(format!("{name}.c"))).arg("-o").arg(&obj);
+        run(&mut cc);
+        objects.push(obj);
     }
-    println!("cargo:rustc-link-lib=dylib=cudart");
-    println!("cargo:rustc-link-lib=dylib=stdc++");
-}
-
-fn cuda_lib_dir() -> Option<PathBuf> {
-    env::var("CTOX_CUDA_HOME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .map(|path| path.join("lib64"))
-        .filter(|path| path.is_dir())
-        .or_else(|| {
-            ["/usr/local/cuda/lib64", "/usr/lib/x86_64-linux-gnu"]
-                .into_iter()
-                .map(PathBuf::from)
-                .find(|path| path.join("libcudart.so").exists())
-        })
+    if cuda {
+        let obj = out.join("voxtral_tts_cuda.o");
+        run(Command::new(nvcc)
+            .args(["-O3", "-DUSE_CUDA", "-Xcompiler", "-fPIC", "-arch"])
+            .arg(format!(
+                "sm_{}",
+                env::var("CTOX_CUDA_SM").unwrap_or_else(|_| "86".into())
+            ))
+            .arg("-c")
+            .arg(src.join("voxtral_tts_cuda.cu"))
+            .arg("-o")
+            .arg(&obj));
+        objects.push(obj);
+        println!("cargo:rustc-cfg=voxtral_cuda");
+        let cuda_home = env::var("CTOX_CUDA_HOME").unwrap_or_else(|_| "/usr/local/cuda".into());
+        println!("cargo:rustc-link-search=native={cuda_home}/lib64");
+        for lib in ["cublas", "cudart", "stdc++"] {
+            println!("cargo:rustc-link-lib={lib}");
+        }
+    }
+    run(Command::new(env::var("AR").unwrap_or_else(|_| "ar".into()))
+        .arg("rcs")
+        .arg(out.join("libvoxtral_native.a"))
+        .args(objects));
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=voxtral_native");
+    println!("cargo:rustc-link-lib=m");
+    if os == "macos" {
+        println!("cargo:rustc-link-lib=framework=Accelerate");
+    }
+    println!("cargo:rustc-cfg=voxtral_native");
 }

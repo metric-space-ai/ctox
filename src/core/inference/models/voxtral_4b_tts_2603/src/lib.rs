@@ -25,6 +25,7 @@ pub mod decoder;
 pub mod encoder;
 pub mod kernels;
 pub mod model;
+mod native_graph;
 pub mod speech;
 pub mod stream;
 pub mod tokenizer;
