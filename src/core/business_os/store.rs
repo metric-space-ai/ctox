@@ -18243,6 +18243,26 @@ pub(super) fn with_current_webrtc_capability_signer<T>(
     )
 }
 
+/// Preparatory read only. The current publication guard still owns the issuer
+/// fence and revalidates this snapshot before transmitting data.
+pub(super) fn with_webrtc_capability_signer_snapshot<T>(
+    root: &Path,
+    apply: impl FnOnce(&[u8]) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    crate::secrets::with_secret_value_snapshot(
+        root,
+        CAPABILITY_SECRET_SCOPE,
+        CAPABILITY_SECRET_NAME,
+        |secret| {
+            anyhow::ensure!(
+                !std::str::from_utf8(secret)?.trim().is_empty(),
+                "current capability signing secret is empty"
+            );
+            apply(secret)
+        },
+    )
+}
+
 /// One issuer/record tuple; never reenter its non-recursive store fence.
 pub(super) fn with_current_webrtc_capability_secrets<T>(
     root: &Path,
@@ -18361,7 +18381,9 @@ pub(super) fn verified_webrtc_capability_claims(
 /// Revalidate through the caller's already-held policy transaction, without
 /// reopening stores, initializing schemas or looking up a signing key.
 /// The native caller must hold current issuer authority for signing_secret;
-/// cached bytes alone cannot prove a key has not rotated. at_ms is native time.
+/// cached bytes alone cannot prove a key has not rotated. Preparatory snapshot
+/// callers must revalidate under that issuer fence before publication.
+/// at_ms is native time.
 pub(super) fn verified_webrtc_capability_claims_from_connection(
     conn: &Connection,
     token: &str,
@@ -18578,10 +18600,9 @@ pub(super) fn check_webrtc_collection_permission(
     if let Some(allowed) = webrtc_collection_authority_cached(&cache_key) {
         return Ok(allowed);
     }
-    // The issuer fence is a process-wide try_lock: a browser opening the app
-    // asks for ~50 collections at once, and every fetch that lost the race
-    // failed as "authority unavailable" (THESEN 07.10.2026: the whole Outbound
-    // app stayed empty). Wait a bounded moment for the fence instead.
+    // Preparatory checks use read-only snapshots instead of serializing ~50
+    // collection fetches behind the issuer publication fence. Retain the
+    // bounded retry for transient SQLite reader/schema availability.
     let deadline = Instant::now() + WEBRTC_COLLECTION_AUTHORITY_WAIT;
     let mut attempt = 0_u32;
     loop {
@@ -18681,17 +18702,22 @@ fn check_webrtc_collection_permission_once(
     permission: BusinessOsPermission,
 ) -> anyhow::Result<bool> {
     with_store_connection(root, |_| Ok(())).context("webrtc authority store bootstrap")?;
-    with_current_webrtc_capability_signer(root, |secret| {
-        with_store_connection(root, |conn| {
-            check_webrtc_collection_permission_from_connection(
-                conn,
-                token,
-                secret,
-                collection,
-                permission,
-                now_ms() as i64,
-            )
-        })
+    with_webrtc_capability_signer_snapshot(root, |secret| {
+        let mut conn = Connection::open_with_flags(
+            business_os_store_path(root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .context("webrtc authority policy store")?;
+        conn.busy_timeout(Duration::ZERO)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        check_webrtc_collection_permission_from_connection(
+            &tx,
+            token,
+            secret,
+            collection,
+            permission,
+            now_ms() as i64,
+        )
         .context("webrtc authority policy store")
     })
     .context("webrtc authority current signer")
@@ -30793,14 +30819,16 @@ pub(super) mod tests {
         with_current_webrtc_capability_signer(root.path(), |_secret| {
             // A recent decision is reused while the fence is held ...
             assert!(check()?);
-            // ... and an uncached read still reports the busy issuer.
-            let error = check_webrtc_collection_permission_once(
+            // ... and an uncached preparatory snapshot no longer needs it.
+            assert!(check_webrtc_collection_permission_once(
                 root.path(),
                 &token,
                 "business_commands",
                 BusinessOsPermission::DataRead,
-            )
-            .expect_err("the held non-recursive issuer fence must remain unavailable");
+            )?);
+            // Final publication still cannot reenter a held issuer fence.
+            let error = with_current_webrtc_capability_signer(root.path(), |_| Ok(()))
+                .expect_err("the held non-recursive issuer fence must remain unavailable");
             let diagnostic = webrtc_collection_authority_diagnostic(&error);
             assert_eq!(diagnostic["phase"], "current_signer");
             assert_eq!(diagnostic["code"], "master_key_busy");
