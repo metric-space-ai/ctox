@@ -18602,7 +18602,7 @@ pub(super) fn check_webrtc_collection_permission(
     }
 }
 
-const WEBRTC_COLLECTION_AUTHORITY_WAIT: Duration = Duration::from_secs(2);
+const WEBRTC_COLLECTION_AUTHORITY_WAIT: Duration = Duration::from_secs(5);
 /// A decision (never the signing secret) is reused this long. Role, grant or
 /// epoch changes therefore take effect within this window.
 const WEBRTC_COLLECTION_AUTHORITY_CACHE_TTL: Duration = Duration::from_secs(10);
