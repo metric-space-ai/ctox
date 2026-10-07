@@ -46,12 +46,12 @@ export function validateSupervisorExecutionValue(type, value) {
   if (type.startsWith('Vec<')) { if (!Array.isArray(value)) throw new Error('expected array'); for (const item of value) validateSupervisorExecutionValue(type.slice(4,-1),item); return value; }
   const definition = SUPERVISOR_EXECUTION_TYPES[type];
   if (!definition || !value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid observer object');
-  for (const key of Object.keys(value)) if (!(key in definition.fields)) throw new Error('unknown field '+key);
+  for (const key of Object.keys(value)) if (!Object.hasOwn(definition.fields,key)) throw new Error('unknown field '+key);
   for (const [key, rule] of Object.entries(definition.fields)) {
     const field=value[key];
     if (field === undefined || field === null) { if (rule.optional) continue; throw new Error('missing '+key); }
     validateSupervisorExecutionValue(rule.type,field);
-    if (rule.type === 'String' && rule.min_chars && !field.trim()) throw new Error('blank '+key);
+    if (rule.type === 'String' && rule.min_chars && /^[\p{White_Space}]*$/u.test(field)) throw new Error('blank '+key);
     const expressions={min_chars:()=>Array.from(field).length,max_chars:()=>Array.from(field).length,max_items:()=>field.length,minimum:()=>field,maximum:()=>field};
     for (const [bound,expression] of Object.entries(expressions)) if (rule[bound] !== undefined && (bound.startsWith('max') ? expression()>rule[bound] : expression()<rule[bound])) throw new Error('bound '+key);
   }

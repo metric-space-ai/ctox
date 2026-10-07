@@ -41,6 +41,16 @@ Example follow-up request addition:
                     "limit": 25}}
 ```
 
+The Shell's `workjetProjectControl` bridge accepts the outer camelCase
+`executionPage` only for `project.supervisor.turn.watch`. Inside that object,
+`attempt_id`, `cursor.after_sequence`, `cursor.after_event_id`, and `limit` use
+the shared fixture's native names. It translates to `payload.execution_page`
+and adds outer `executionContract` / `executionPage` only for that explicit
+request; the returned page retains the fixture's snake_case fields. The bridge
+validates both directions and correlates the page command/task/attempt and
+continuation cursor with the native receipt. Legacy callers still receive only
+`action`, `commandId`, `projectId`, `contract`, `binding`, and `turn`.
+
 This is a typed native control command transported over the existing authorized
 Business OS WebRTC/RxDB command/result lane, not an HTTP business-data endpoint.
 Current native owner identity, the registered supervisor, admitted envelope and

@@ -1,18 +1,19 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261007-shell-v2-recovery-details';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261007-shell-v2-recovery-details';
-import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-recovery-details';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-recovery-details';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-recovery-details';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261007-shell-v2-recovery-details';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-recovery-details';
-import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-recovery-details';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-supervisor-execution';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v2-supervisor-execution';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v2-supervisor-execution';
+import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v2-supervisor-execution';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-shell-v2-supervisor-execution';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-shell-v2-supervisor-execution';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-shell-v2-supervisor-execution';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-shell-v2-supervisor-execution';
+import { createAppActions } from './shared/app-actions.js?v=20261008-shell-v2-supervisor-execution';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261007-shell-v2-recovery-details';
+} from './shared/app-lifecycle.js?v=20261008-shell-v2-supervisor-execution';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -21,20 +22,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261007-shell-v2-recovery-details';
+} from './shared/permissions.js?v=20261008-shell-v2-supervisor-execution';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261007-shell-v2-recovery-details';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261007-shell-v2-recovery-details';
+} from './shared/branding.js?v=20261008-shell-v2-supervisor-execution';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-shell-v2-supervisor-execution';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261007-shell-v2-recovery-details';
+} from './shared/presentation.js?v=20261008-shell-v2-supervisor-execution';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -45,9 +46,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261007-shell-v2-recovery-details';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261007-shell-v2-recovery-details';
-import { createDocumentsFacade } from './shared/documents.js?v=20261007-shell-v2-recovery-details';
+} from './shared/shell-permissions-ui.js?v=20261008-shell-v2-supervisor-execution';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-shell-v2-supervisor-execution';
+import { createDocumentsFacade } from './shared/documents.js?v=20261008-shell-v2-supervisor-execution';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -55,16 +56,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261007-shell-v2-recovery-details';
+} from './shared/maintenance-state.js?v=20261008-shell-v2-supervisor-execution';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261007-shell-v2-recovery-details';
+} from './shared/workspace-session.js?v=20261008-shell-v2-supervisor-execution';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261007-shell-v2-recovery-details';
+} from './shared/taskbar-pins.js?v=20261008-shell-v2-supervisor-execution';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -72,10 +73,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261007-shell-v2-recovery-details';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-shell-v2-supervisor-execution';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261007-shell-v2-recovery-details';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261007-shell-v2-recovery-details';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-shell-v2-supervisor-execution';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-shell-v2-supervisor-execution';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -83,8 +84,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261007-shell-v2-recovery-details';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261007-shell-v2-recovery-details';
+} from './shared/startup-deadlines.js?v=20261008-shell-v2-supervisor-execution';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-shell-v2-supervisor-execution';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -102,7 +103,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261007-shell-v2-recovery-details';
+const APP_BUILD = '20261008-shell-v2-supervisor-execution';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13683,6 +13684,17 @@ const WORKJET_PROJECT_CONTROL_MAX_RESULTS = 100;
 const WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES = 500;
 const WORKJET_PROJECT_CONTROL_TIMEOUT_MS = 30_000;
 
+function boundedWorkjetExecutionRequest(value) {
+  validateSupervisorExecutionValue('ExecutionPageRequest', value);
+  return {
+    ...(value.attempt_id == null ? {} : { attempt_id: value.attempt_id }),
+    ...(value.cursor == null ? {} : { cursor: {
+      after_sequence: value.cursor.after_sequence, after_event_id: value.cursor.after_event_id,
+    } }),
+    ...(value.limit == null ? {} : { limit: value.limit }),
+  };
+}
+
 async function workjetProjectControl(request = {}) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) {
     throw new TypeError('Workjet project control request must be an object.');
@@ -13755,6 +13767,8 @@ async function workjetProjectControl(request = {}) {
     if (submitting) allowedKeys.add('goal');
     else allowedKeys.add('targetCommandId');
     if (cancelling) allowedKeys.add('reason');
+    const observing = action === 'project.supervisor.turn.watch' && request.executionPage !== undefined;
+    if (action === 'project.supervisor.turn.watch') allowedKeys.add('executionPage');
     assertWorkjetProjectPayloadKeys(request, allowedKeys);
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
     const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
@@ -13767,6 +13781,7 @@ async function workjetProjectControl(request = {}) {
     if (submitting) payload.goal = boundedWorkjetProjectText(request.goal, 'goal', 4096);
     else payload.target_command_id = boundedWorkjetProjectText(request.targetCommandId, 'targetCommandId', 256);
     if (cancelling) payload.reason = boundedWorkjetProjectText(request.reason, 'reason', 512);
+    if (observing) payload.execution_page = boundedWorkjetExecutionRequest(request.executionPage);
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
         || actorContext(state.session).id !== ownerUserId) {
@@ -13791,7 +13806,9 @@ async function workjetProjectControl(request = {}) {
     if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
       || receipt.target_record_id !== projectId || receipt.result?.ok !== true
       || receipt.result?.contract !== contract
-      || Object.entries(payload).some(([key, value]) => receipt.payload?.[key] !== value)
+      || Object.entries(payload).some(([key, value]) => key === 'execution_page'
+        ? JSON.stringify(boundedWorkjetExecutionRequest(receipt.payload?.[key])) !== JSON.stringify(value)
+        : receipt.payload?.[key] !== value)
       || binding?.project_id !== projectId || binding?.thread_id !== threadId
       || binding?.thread_key !== threadKey || turn?.thread_id !== threadId
       || turn?.thread_key !== threadKey || typeof turn?.command_id !== 'string'
@@ -13815,6 +13832,33 @@ async function workjetProjectControl(request = {}) {
         resultTruncated: turn.result_truncated, errorCode: turn.error_code, errorMessage: turn.error_message,
       },
     };
+    if (observing) {
+      const page = receipt.result.execution_page;
+      validateSupervisorExecutionValue('ExecutionPage', page);
+      if (receipt.result.execution_contract !== SUPERVISOR_EXECUTION_SCHEMA
+        || page.command_id !== turn.command_id || page.task_id !== turn.task_id
+        || (payload.execution_page.attempt_id !== undefined
+          && page.attempt?.attempt_id !== payload.execution_page.attempt_id)) {
+        throw new Error('Workjet execution page does not match the authorized supervisor turn.');
+      }
+      let sequence = payload.execution_page.cursor?.after_sequence ?? 0;
+      for (const event of page.events) {
+        if (event.sequence <= sequence) throw new Error('Workjet execution events are not in native insertion order.');
+        sequence = event.sequence;
+      }
+      const last = page.events.at(-1);
+      const expectedCursor = last
+        ? { after_sequence: last.sequence, after_event_id: last.id } : payload.execution_page.cursor;
+      const cursorMatches = expectedCursor
+        ? page.next_cursor?.after_sequence === expectedCursor.after_sequence
+          && page.next_cursor?.after_event_id === expectedCursor.after_event_id
+        : page.next_cursor == null;
+      if (!cursorMatches || (page.has_more && !last) || (last && !page.attempt)) {
+        throw new Error('Workjet execution page has an unmatched continuation cursor.');
+      }
+      result.executionContract = SUPERVISOR_EXECUTION_SCHEMA;
+      result.executionPage = JSON.parse(JSON.stringify(page));
+    }
     if (submitting) result.messageId = boundedWorkjetProjectText(receipt.result.message_id, 'native messageId', 256);
     if (cancelling) {
       const cancellation = receipt.result.cancellation;
