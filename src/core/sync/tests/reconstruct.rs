@@ -311,6 +311,86 @@ async fn reconstruct_roundtrips_staged_unstaged_binary_deletion_and_untracked() 
     assert!(workspace.join("later.txt").is_file());
 }
 
+// This explicit clean fixture is a kernel contract test, not a claim that a
+// production Core capture has reconciled its external effects.
+#[tokio::test]
+async fn reconstruct_bundle_survives_source_removal_and_restores_exact_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = prepared_workspace(root.path());
+    let before = snapshot(&workspace);
+    let store = CheckpointStore::open(root.path().join("store"), 1024 * 1024).unwrap();
+    let bytes = store.capture_git_bundle(&workspace).await.unwrap();
+    let bundle = blob(&bytes);
+    let mut input = request(&workspace);
+    input.provider_state.push(CaptureEntry {
+        path: "native-workspace.bundle".into(),
+        kind: WorkspaceEntryKind::File,
+        bytes,
+        executable: false,
+    });
+    let captured = store.capture(input).await.unwrap();
+    assert!(captured.manifest.pending_effects.is_empty());
+    fs::remove_dir_all(&workspace).unwrap();
+    let target = root.path().join("reconstructed");
+    store
+        .reconstruct_workspace_from_bundle(&captured.digest, &bundle, &target)
+        .await
+        .unwrap();
+    assert_eq!(snapshot(&target), before);
+}
+
+#[tokio::test]
+async fn reconstruct_bundle_rejects_foreign_corrupt_and_pending_artifacts() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = prepared_workspace(root.path());
+    let store = CheckpointStore::open(root.path().join("store"), 1024 * 1024).unwrap();
+    let bytes = store.capture_git_bundle(&workspace).await.unwrap();
+    let bundle = blob(&bytes);
+    let input = || {
+        let mut input = request(&workspace);
+        input.provider_state.push(CaptureEntry {
+            path: "native-workspace.bundle".into(),
+            kind: WorkspaceEntryKind::File,
+            bytes: bytes.clone(),
+            executable: false,
+        });
+        input
+    };
+    let captured = store.capture(input()).await.unwrap();
+    let mut pending = input();
+    pending.pending_effects.push(PendingEffect {
+        effect_id: "unconfirmed".into(),
+        idempotency_key: None,
+        description: "external action remains unreconciled".into(),
+    });
+    let blocked = store.capture(pending).await.unwrap();
+    let target = root.path().join("reconstructed");
+    let foreign = blob(b"not declared in this manifest");
+    store
+        .ingest_blob(&foreign, Cursor::new(b"not declared in this manifest"))
+        .unwrap();
+    assert!(store
+        .reconstruct_workspace_from_bundle(&captured.digest, &foreign, &target)
+        .await
+        .is_err());
+    assert!(!target.exists());
+    assert!(store
+        .reconstruct_workspace_from_bundle(&blocked.digest, &bundle, &target)
+        .await
+        .is_err());
+    assert!(!target.exists());
+    fs::write(
+        root.path().join("store/blobs").join(&bundle.sha256),
+        b"corrupt bundle",
+    )
+    .unwrap();
+    assert!(store
+        .reconstruct_workspace_from_bundle(&captured.digest, &bundle, &target)
+        .await
+        .is_err());
+    assert!(!target.exists());
+}
+
 #[tokio::test]
 async fn reconstruct_rejects_missing_or_wrong_base_without_substituting_head() {
     let root = tempfile::tempdir().unwrap();
