@@ -437,6 +437,38 @@ fn remote_worker_requires_typed_build_capability_and_fences_its_removal() -> any
 }
 
 #[test]
+fn remote_worker_receipt_preserves_only_typed_account_reference() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let permit = issue(root.path())?;
+    assert_eq!(permit["binding"], serde_json::to_value(binding())?);
+    // Other MCP tools/records do not gain an exemption by mimicking our schema.
+    let generic = redact_mcp_response(json!({
+        "credentialRef": {"environmentId":"source-env","accountId":"account-1"},
+        "password":"test-secret", "nested":{"token":"test-token"}
+    }));
+    assert_eq!(generic["credentialRef"], REDACTED_MCP_VALUE);
+    assert_eq!(generic["password"], REDACTED_MCP_VALUE);
+    assert_eq!(generic["nested"]["token"], REDACTED_MCP_VALUE);
+    for pointer in ["/binding/credentialRef", "/binding", ""] {
+        let mut injected = permit.clone();
+        let object = injected
+            .pointer_mut(pointer)
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        object.insert("secret".to_owned(), json!("test-secret"));
+        assert!(
+            redact_receipt(injected).is_err(),
+            "unknown secret field {pointer}"
+        );
+    }
+    let mut wrong_contract = permit;
+    wrong_contract["contract"] = json!("untrusted");
+    assert!(redact_receipt(wrong_contract).is_err());
+    Ok(())
+}
+
+#[test]
 fn remote_worker_real_mcp_issue_claim_retry_and_revalidate() -> anyhow::Result<()> {
     let root = fixture()?;
     let permit = issue(root.path())?;

@@ -115,6 +115,20 @@ struct Receipt {
     renewal_sequence: u64,
 }
 
+/// Preserve only the typed, secret-free account locator in our own receipt.
+/// Generic records (including similarly named objects) retain normal redaction.
+pub(super) fn redact_receipt(value: Value) -> anyhow::Result<Value> {
+    let receipt: Receipt = serde_json::from_value(value)?;
+    anyhow::ensure!(
+        receipt.contract == CONTRACT,
+        "unexpected worker receipt contract"
+    );
+    let account_ref = serde_json::to_value(&receipt.binding.credential_ref)?;
+    let mut result = redact_mcp_response(serde_json::to_value(receipt)?);
+    result["binding"]["credentialRef"] = account_ref;
+    Ok(result)
+}
+
 pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(TOOL,
         "Issue, claim, revalidate, renew or revoke one source-native remote Workjet leaf-worker admission. Requires the current authenticated source Owner/Admin, owned active project and assigned computer. Revalidation returns through the source; the target receives no Owner bearer or model secret. Model references bind scope but do not replace the source gateway's current account grant.",
