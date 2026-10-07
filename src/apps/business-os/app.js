@@ -13594,12 +13594,12 @@ async function workjetProjectControl(request = {}) {
     const count = receipt.result.count;
     if (!Number.isSafeInteger(count) || count < 0 || count > WORKJET_PROJECT_CONTROL_MAX_RESULTS
       || typeof receipt.result.truncated !== 'boolean') {
-      throw Object.assign(new Error('Workjet project list has no valid native completeness outcome.'), {
+      throw Object.assign(new Error('Workjet could not confirm the complete project list.'), {
         code: 'WORKJET_PROJECT_LIST_UNCONFIRMED', retryable: false,
       });
     }
     if (receipt.result.truncated) {
-      throw Object.assign(new Error('Workjet native project list exceeds the supported complete window.'), {
+      throw Object.assign(new Error('Workjet project list exceeds the supported complete window.'), {
         code: 'WORKJET_PROJECT_LIST_INCOMPLETE', retryable: false,
       });
     }
@@ -13629,7 +13629,7 @@ async function workjetProjectControl(request = {}) {
     );
     assertCurrentIdentity();
     if (projects.length !== count) {
-      throw Object.assign(new Error('Workjet project projection does not match the confirmed native count.'), {
+      throw Object.assign(new Error('Workjet project projection does not match the confirmed project count.'), {
         code: 'WORKJET_PROJECT_LIST_INCOMPLETE', retryable: true,
       });
     }
