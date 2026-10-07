@@ -216,7 +216,13 @@ for name in sorted(assets):
     if not path.is_file(): raise RuntimeError("compiler asset is not a regular file")
     key=str(path)
     if key not in digests:
-        with path.open("rb") as stream: digests[key]=hashlib.file_digest(stream,"sha256").hexdigest()
+        digest=hashlib.sha256()
+        with path.open("rb") as stream:
+            while True:
+                block=stream.read(64*1024)
+                if not block: break
+                digest.update(block)
+        digests[key]=digest.hexdigest()
     rows.append([name,key,digests[key]])
 if not any("libclang." in row[0] for row in rows): raise RuntimeError("profile has no libclang")
 payload={"profile":profile,"versions":versions,"assets":rows}
