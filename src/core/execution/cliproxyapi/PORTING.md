@@ -5,6 +5,18 @@
 - Upstream: `a88197f845c979132c8978ea223c6af05cc81536`
 - Track A, accepted v7.2.116 standalone Rust-port release: **COMPLETE**
 - Current v8.0.16 update and promotion: **INCOMPLETE**
+- The direct Claude Responses route now creates native caller context below
+  the actual account selection on every unary/stream failover attempt. Original
+  payload and case-insensitive session/agent/client headers remain request-local.
+  No request can name the selected auth identity or mutate shared executor state.
+  Prepared public-handler guards cover parallel session isolation, stable
+  continuation on the same account,401 refresh/replay and quota-triggered stream
+  failover. The Responses translator also preserves scalar input as user text,
+  matching v8.0.16; the parallel guard found that this valid prompt shape was
+  previously dropped. Empty, whitespace and Unicode text have a mode-matrix guard.
+  Execution evidence belongs to the follow-up PR; this change alone
+  does not bind production usage observers, promote the candidate, or establish
+  installed/live-provider acceptance.
 - Current v8.0.15 Chat/Completions candidate now dispatches through the actual
   provider HTTP listener to the existing Responses-shaped account owner.
   Request-local translation preserves provider/header selection, session/cache

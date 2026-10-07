@@ -86,6 +86,11 @@ fn convert_openai_responses_request_to_claude_impl(
         }
     }
 
+    // ref: internal/translator/claude/openai/responses/claude_openai-responses_request.go:267-275 @ a2976eb8a303f11b4ea5177bce9f9ff752634dfc
+    if let Some(text) = root.get("input").and_then(Value::as_str) {
+        messages.push(json!({"role":"user", "content":text}));
+    }
+
     for item in root
         .get("input")
         .and_then(Value::as_array)
@@ -869,6 +874,21 @@ mod tests {
             *byte = index as u8;
         }
         general_purpose::URL_SAFE.encode(payload)
+    }
+
+    #[test]
+    fn preserves_scalar_input_as_user_text_in_all_response_modes() {
+        for text in ["", "  request-a\n東京  ", "request-b \"quoted\""] {
+            for stream in [false, true] {
+                for compat in [false, true] {
+                    let input = json!({"input":text, "instructions":"system authority"});
+                    let output = history_convert("claude-test", &input, stream, compat);
+                    assert_eq!(output["messages"], json!([{"role":"user", "content":text}]));
+                    assert_eq!(output["stream"], stream);
+                    assert_eq!(output["system"][0]["text"], "system authority");
+                }
+            }
+        }
     }
 
     #[test]

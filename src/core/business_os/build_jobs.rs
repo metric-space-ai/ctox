@@ -332,6 +332,7 @@ fn submit(
         "native build selection supports at most sixteen computers per invocation"
     );
     let mut observations = Vec::new();
+    let mut rejected_candidates = Vec::new();
     let mut bindings = std::collections::BTreeMap::new();
     for computer in &computers {
         if computer.agentless || computer_id.is_some_and(|id| id != computer.computer_id) {
@@ -352,11 +353,27 @@ fn submit(
             usage: EndpointUse::Build,
         };
         // One connection attempt per candidate. Failed observations are not retried.
-        if let Ok(remote) = BuildRemote::bind(root, request, &job_id) {
-            if let Ok(observation) = remote.binding().availability() {
+        let remote = match BuildRemote::bind(root, request, &job_id) {
+            Ok(remote) => remote,
+            Err(error) => {
+                rejected_candidates.push(format!(
+                    "{}: endpoint binding: {}",
+                    computer.computer_id,
+                    error.to_string().chars().take(160).collect::<String>()
+                ));
+                continue;
+            }
+        };
+        match remote.binding().availability() {
+            Ok(observation) => {
                 observations.push(observation);
                 bindings.insert(computer.computer_id.clone(), (remote, profile));
             }
+            Err(error) => rejected_candidates.push(format!(
+                "{}: capacity probe: {}",
+                computer.computer_id,
+                error.to_string().chars().take(160).collect::<String>()
+            )),
         }
     }
     let target = computer_capabilities::select_build_target(
@@ -365,7 +382,16 @@ fn submit(
         toolchain,
         i64::try_from(super::store::now_ms())?,
     )?
-    .context("no available registered build computer with this compiler profile")?;
+    .with_context(|| {
+        if rejected_candidates.is_empty() {
+            "no available registered build computer with this compiler profile".to_owned()
+        } else {
+            format!(
+                "no available registered build computer with this compiler profile; rejected candidates: {}",
+                rejected_candidates.join("; ")
+            )
+        }
+    })?;
     let (remote, profile) = bindings
         .remove(&target.computer_id)
         .context("selected build binding disappeared")?;

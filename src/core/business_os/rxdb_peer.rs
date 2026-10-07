@@ -3048,7 +3048,8 @@ async fn run_native_peer(
                                 collection,
                                 crate::business_os::policy::BusinessOsPermission::DataRead,
                             )
-                            .map_err(|_| {
+                            .map_err(|error| {
+                                store::log_webrtc_collection_authority_error(collection, &error);
                                 rxdb::rx_error::RxError::Standard {
                                     code: "COLLECTION_AUTHORITY_UNAVAILABLE".into(),
                                     message:

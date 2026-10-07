@@ -249,6 +249,14 @@
       "borderLight": "#a5b4fc",
       "borderDark": "#4f46e5"
     },
+    "Entertainment": {
+      "accent": "#db2777",
+      "foreground": "#ffffff",
+      "softLight": "#fce7f3",
+      "softDark": "#500724",
+      "borderLight": "#f9a8d4",
+      "borderDark": "#be185d"
+    },
     "System": {
       "accent": "#64748b",
       "foreground": "#ffffff",
@@ -312,8 +320,8 @@
     ]
   },
   "provenance": {
-    "sourcePath": "packages/workjet-ui-contract/src/contract.json",
-    "sourceSha256": "6121ac0cd76c1abad54d6d6e7e3483bb4f31f3ed36f4f1eb24d329a8ce99b5b6",
+    "sourcePath": "src/apps/business-os/ui-contract/v1/workjet-ui-contract.source.json",
+    "sourceSha256": "032ebf9d59590ed33818418b5bbe6b63f3a65fbc585afea0b77733e3a2ca2881",
     "generator": "src/apps/business-os/scripts/generate-workjet-ui-contract-snapshot.mjs"
   }
 }
