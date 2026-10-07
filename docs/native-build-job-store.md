@@ -16,6 +16,10 @@ expired running job, returning the envelope and lease capability. Leases last
 1–300000 ms. A live claim cannot be replaced. Claims increment revision and
 generation and allocate a fresh UUID token. `checkpoint(lease, revision,
 progress, lease_ms)` writes progress and renews in one transaction.
+`release(lease, revision, progress)` saves progress, advances revision, clears
+claimant/deadline and returns to admitted state for a later bounded step. It
+requires the same live lease and CAS as checkpoint/completion. A later claim
+increments generation and permanently fences the released lease.
 `complete(lease, revision, progress, terminal)` accepts `succeeded`, `failed`
 or `cancelled`, clears the lease and permanently prevents relaunch. Every
 write requires the exact owner, job identity, revision, generation, claimant

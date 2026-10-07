@@ -147,6 +147,16 @@ impl BuildJobStore {
         self.write_at(lease, revision, progress, None, lease_ms, now_ms()?)
     }
 
+    /// Save a nonterminal checkpoint and release a live claim for a later step.
+    pub fn release(
+        &mut self,
+        lease: &BuildJobLease,
+        revision: i64,
+        progress: &Value,
+    ) -> Result<BuildJob> {
+        self.write_at(lease, revision, progress, Some("admitted"), 0, now_ms()?)
+    }
+
     /// Terminal completion releases the lease and permanently excludes future claims.
     pub fn complete(
         &mut self,
@@ -167,12 +177,12 @@ impl BuildJobStore {
         lease: &BuildJobLease,
         revision: i64,
         progress: &Value,
-        terminal: Option<&str>,
+        next_state: Option<&str>,
         lease_ms: i64,
         now: i64,
     ) -> Result<BuildJob> {
         identity(&lease.owner, &lease.job_id)?;
-        let until = if terminal.is_some() {
+        let until = if next_state.is_some() {
             None
         } else {
             Some(deadline(now, lease_ms)?)
@@ -192,7 +202,7 @@ impl BuildJobStore {
                 lease.generation,
                 lease.claimant,
                 serde_json::to_string(progress)?,
-                terminal,
+                next_state,
                 until,
                 now
             ],
@@ -348,6 +358,72 @@ mod tests {
             1
         );
     }
+    #[test]
+    fn sqlite_release_checkpoint_reopens_and_fences_old_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.sqlite3");
+        let mut store = open(&path);
+        store
+            .create("alice", "job", &json!({"immutable":true}))
+            .unwrap();
+        let (claimed, old) = store.claim("alice", "job", 0, MAX_LEASE_MS).unwrap();
+        let mut forged = old.clone();
+        forged.claimant = "wrong-token".into();
+        assert!(store
+            .release(&forged, claimed.revision, &json!({}))
+            .is_err());
+        forged = old.clone();
+        forged.generation += 1;
+        assert!(store
+            .release(&forged, claimed.revision, &json!({}))
+            .is_err());
+        assert!(store
+            .release(&old, claimed.revision - 1, &json!({}))
+            .is_err());
+        let progress = json!({"next_step":2});
+        let released = store.release(&old, claimed.revision, &progress).unwrap();
+        assert_eq!(released.state, "admitted");
+        assert_eq!(released.revision, claimed.revision + 1);
+        assert_eq!(released.lease_generation, claimed.lease_generation);
+        assert_eq!(released.progress, progress);
+        assert!(released.claimant.is_none() && released.lease_until_ms.is_none());
+        assert!(store.release(&old, released.revision, &json!({})).is_err());
+        drop(store);
+        let mut store = open(&path);
+        assert_eq!(store.read("alice", "job").unwrap().unwrap(), released);
+        let (reclaimed, current) = store
+            .claim("alice", "job", released.revision, MAX_LEASE_MS)
+            .unwrap();
+        assert!(current.generation > old.generation);
+        assert!(store.release(&old, reclaimed.revision, &json!({})).is_err());
+        assert!(store
+            .checkpoint(&old, reclaimed.revision, &json!({}), 10)
+            .is_err());
+        assert!(store
+            .complete(&old, reclaimed.revision, &json!({}), "succeeded")
+            .is_err());
+        let final_release = store
+            .release(&current, reclaimed.revision, &progress)
+            .unwrap();
+        let (expired_job, expired) = store
+            .claim_at("alice", "job", final_release.revision, 10, 100)
+            .unwrap();
+        assert!(store
+            .write_at(
+                &expired,
+                expired_job.revision,
+                &json!({}),
+                Some("admitted"),
+                0,
+                110
+            )
+            .is_err());
+        assert!(store
+            .release(&expired, expired_job.revision, &json!({}))
+            .is_err());
+        assert_eq!(store.read("alice", "job").unwrap().unwrap(), expired_job);
+    }
+
     #[test]
     fn bounded_leases_and_owner_identity() {
         let dir = tempfile::tempdir().unwrap();
