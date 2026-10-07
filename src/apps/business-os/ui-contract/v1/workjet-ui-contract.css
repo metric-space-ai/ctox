@@ -1,4 +1,4 @@
-/* Workjet UI contract v1; provenance-sha256: 6121ac0cd76c1abad54d6d6e7e3483bb4f31f3ed36f4f1eb24d329a8ce99b5b6; generated-by: src/apps/business-os/scripts/generate-workjet-ui-contract-snapshot.mjs */
+/* Workjet UI contract v1; provenance-sha256: 032ebf9d59590ed33818418b5bbe6b63f3a65fbc585afea0b77733e3a2ca2881; generated-by: src/apps/business-os/scripts/generate-workjet-ui-contract-snapshot.mjs */
 :root,
 :root[data-theme="light"] {
   --workjet-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -59,10 +59,6 @@
   --workjet-category-productivity-accent-foreground: #111827;
   --workjet-category-productivity-accent-soft: #e0f2fe;
   --workjet-category-productivity-accent-border: #7dd3fc;
-  --workjet-category-entertainment-accent: #be185d;
-  --workjet-category-entertainment-accent-foreground: #ffffff;
-  --workjet-category-entertainment-accent-soft: #fce7f3;
-  --workjet-category-entertainment-accent-border: #f9a8d4;
   --workjet-category-development-accent: #4f46e5;
   --workjet-category-development-accent-foreground: #ffffff;
   --workjet-category-development-accent-soft: #e0e7ff;
@@ -167,8 +163,6 @@
   --workjet-category-collaboration-accent-border: #0e7490;
   --workjet-category-productivity-accent-soft: #082f49;
   --workjet-category-productivity-accent-border: #0369a1;
-  --workjet-category-entertainment-accent-soft: #500724;
-  --workjet-category-entertainment-accent-border: #be185d;
   --workjet-category-development-accent-soft: #1e1b4b;
   --workjet-category-development-accent-border: #4338ca;
   --workjet-category-engineering-accent-soft: #2e1065;

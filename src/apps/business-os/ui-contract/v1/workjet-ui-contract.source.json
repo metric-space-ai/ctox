@@ -1,7 +1,7 @@
 {
   "schema": "workjet.ui.contract.snapshot-source.v1",
-  "sourcePath": "packages/workjet-ui-contract/src/contract.json",
-  "sourceSha256": "6121ac0cd76c1abad54d6d6e7e3483bb4f31f3ed36f4f1eb24d329a8ce99b5b6",
+  "sourcePath": "src/apps/business-os/ui-contract/v1/workjet-ui-contract.source.json",
+  "sourceSha256": "032ebf9d59590ed33818418b5bbe6b63f3a65fbc585afea0b77733e3a2ca2881",
   "payload": {
     "schema": "workjet.ui.contract.v1",
     "version": 1,
@@ -253,6 +253,14 @@
         "borderLight": "#a5b4fc",
         "borderDark": "#4f46e5"
       },
+      "Entertainment": {
+        "accent": "#db2777",
+        "foreground": "#ffffff",
+        "softLight": "#fce7f3",
+        "softDark": "#500724",
+        "borderLight": "#f9a8d4",
+        "borderDark": "#be185d"
+      },
       "System": {
         "accent": "#64748b",
         "foreground": "#ffffff",
@@ -315,5 +323,10 @@
         "\\b(?:tenant|replication|control plane)\\b"
       ]
     }
+  },
+  "upstreamSource": {
+    "sourcePath": "packages/workjet-ui-contract/src/contract.json",
+    "sourceSha256": "6121ac0cd76c1abad54d6d6e7e3483bb4f31f3ed36f4f1eb24d329a8ce99b5b6",
+    "nativeExtension": "Entertainment category preserves the effective browser colors introduced by a795dfcec and a617ea953; this versioned CTOX source snapshot is authoritative for the generated browser artifacts."
   }
 }

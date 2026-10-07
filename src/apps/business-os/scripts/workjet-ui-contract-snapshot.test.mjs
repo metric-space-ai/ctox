@@ -98,6 +98,7 @@ test("every category has an explicit derived foreground and a matching CSS varia
     "Governance",
     "Security",
     "Analytics",
+    "Entertainment",
     "System",
     "Imported",
   ]);
@@ -122,6 +123,14 @@ test("every category has an explicit derived foreground and a matching CSS varia
   assert.equal(payload.categories.Engineering.accent, "#7c3aed");
   assert.equal(payload.categories.Security.accent, "#dc2626");
   assert.equal(payload.categories.Imported.accent, "#71717a");
+  assert.deepEqual(payload.categories.Entertainment, {
+    accent: "#db2777",
+    foreground: "#ffffff",
+    softLight: "#fce7f3",
+    softDark: "#500724",
+    borderLight: "#f9a8d4",
+    borderDark: "#be185d",
+  });
 });
 
 test("type rhythm, focus, elevation, and vocabulary remain contract data", async () => {
