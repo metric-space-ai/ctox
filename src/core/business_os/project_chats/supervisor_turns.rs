@@ -50,7 +50,7 @@ pub(in crate::business_os) fn is_command(command_type: &str) -> bool {
     )
 }
 
-fn binding(
+pub(super) fn binding(
     root: &Path,
     owner: &str,
     project_id: &str,

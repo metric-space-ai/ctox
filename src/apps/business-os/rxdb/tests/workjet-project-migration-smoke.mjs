@@ -5,7 +5,7 @@ import { applyDeclarativeMigration } from '../../shared/declarative-migrations.j
 
 const packaged = JSON.parse(readFileSync(new URL('../../modules/ctox/collections.schema.json', import.meta.url)));
 const contract = JSON.parse(readFileSync(new URL('../../../../core/business_os/business_os_schema_contract.json', import.meta.url)));
-assert.equal(collections.workjet_projects.version, 1);
+assert.equal(collections.workjet_projects.version, 2);
 for (const [name, schema] of Object.entries(collections).filter(([, schema]) => schema.version > 0)) {
   assert.deepEqual(packaged.collections[name], schema, `${name}: packaged/browser schema parity`);
   assert.deepEqual(contract[name], schema, `${name}: native/browser schema parity`);
@@ -22,16 +22,19 @@ const legacy = {
 };
 const configured = {
   ...legacy, repo_url: 'https://github.com/metric-space-ai/ctox', public_url: 'https://ctox.dev',
-  info: { goal: 'Owner goal', phase: 'build' },
+  info: { summary: 'Owner summary', goal: 'Owner goal', phase: 'build' },
   jour_fixe: { weekday: 1, time: '13:00', timezone: 'Europe/Berlin' },
 };
 for (const original of [legacy, configured, { ...configured, status: 'archived', archived_at_ms: 200, is_deleted: true, _deleted: true }]) {
   const before = structuredClone(original);
-  const js = migrationStrategies.workjet_projects[1](original);
-  const native = applyDeclarativeMigration(original, packaged.migration_strategies.workjet_projects['1']);
+  let js = original, native = original;
+  for (let step = 1; step <= collections.workjet_projects.version; step += 1) {
+    js = migrationStrategies.workjet_projects[step](js);
+    native = applyDeclarativeMigration(native, packaged.migration_strategies.workjet_projects[String(step)]);
+  }
   assert.deepEqual(js, before);
   assert.deepEqual(native, before);
   assert.deepEqual(original, before, 'identity upgrade preserves ownership/configuration/revisions/tombstones');
   assert.deepEqual(applyDeclarativeMigration(native, packaged.migration_strategies.workjet_projects['1']), native);
 }
-console.log('All versioned cockpit schemas have complete matching migration chains; project identity/configuration survives v0->v1');
+console.log('All versioned cockpit schemas have complete matching migration chains; project identity/configuration survives v0->v2');

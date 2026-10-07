@@ -365,9 +365,14 @@ impl NativeGuestExecution {
             source.matches_provider(&self.provider),
             "foreign native capture owner"
         );
+        // Verify local capture authority before querying quorum. No worker,
+        // issuer or policy lock survives the remote authority await.
+        self.with_capture_authority(source, |_, _| Ok(()))?;
+        let mut effects = source_effects::SourceEffects::observe(self)?;
         source.with_current_capture_transaction(|worker, facts| {
             self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
                 verify()?;
+                effects.verify_controller(entry)?;
                 core_configuration_bytes(&self.binding.spec, configuration)?;
                 validate_session_state(&self.binding.spec, session_state)?;
                 let bytes = journal.read_bytes(PortableJournalLimits::default().max_bytes)?;
@@ -405,6 +410,7 @@ impl NativeGuestExecution {
                         configuration,
                         session_state,
                         &bytes,
+                        &effects,
                     )?);
                 }
                 ensure!(

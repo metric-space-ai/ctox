@@ -156,6 +156,7 @@ pub enum TranscriptEvent {
 pub enum SpeechError {
     ConfigurationUnavailable,
     MissingCredential,
+    MissingVoice,
     UnsupportedBackend,
     InvalidRequest,
     Transport,
@@ -176,7 +177,22 @@ impl std::error::Error for SpeechError {}
 pub struct SpeechStatus {
     pub config: SpeechRuntimeConfig,
     pub mistral_credential_present: bool,
+    pub mistral_voice_configured: bool,
     pub streaming_stt_selected: bool,
+}
+
+/// Local operator configuration through the existing runtime store. This is not
+/// a browser/control-plane endpoint; remote callers retain their Owner/Admin gate.
+/// Parse and validate the complete bounded document before modifying persisted state.
+pub fn configure_from_file(root: &Path, path: &Path) -> anyhow::Result<SpeechStatus> {
+    let mut raw = Vec::new();
+    std::fs::File::open(path)?
+        .take(4097)
+        .read_to_end(&mut raw)?;
+    anyhow::ensure!(raw.len() <= 4096, "speech configuration exceeds 4096 bytes");
+    let config: SpeechRuntimeConfig = serde_json::from_slice(&raw)?;
+    config.save(root)?;
+    Ok(SpeechGateway::from_root(root)?.status())
 }
 
 pub struct SpeechGateway {
@@ -198,6 +214,7 @@ impl SpeechGateway {
         SpeechStatus {
             config: self.config.clone(),
             mistral_credential_present: mistral_key(&self.root).is_some(),
+            mistral_voice_configured: self.config.voice_id.is_some(),
             streaming_stt_selected: self.config.transcription == SpeechBackend::Mistral,
         }
     }
@@ -228,6 +245,9 @@ impl SpeechGateway {
                 (audio, model)
             }
             SpeechBackend::Mistral => {
+                // This adapter uses saved voices, not reference-audio uploads.
+                // A missing voice is a local prerequisite, never an upstream rejection.
+                let voice = voice.ok_or(SpeechError::MissingVoice)?;
                 let key = mistral_key(&self.root).ok_or(SpeechError::MissingCredential)?;
                 let body = json!({
                     "model": MISTRAL_TTS_MODEL, "input": request.text,
