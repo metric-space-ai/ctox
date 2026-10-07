@@ -214,7 +214,13 @@ TCG in `PreparedQemuGuest`. Both choices are available in production builds;
 the enum is restricted to the native Business OS module and is not deserialized
 from renderer or model requests. KVM never falls back automatically to TCG.
 Both choices retain the same memory/vCPU bounds, paused process startup,
-private transport, disk ownership and controller/quorum checks.
+private transport, disk ownership and controller/quorum checks. The native
+launcher pins `pc-i440fx-5.1` and `qemu64-v1,kvm=off,kvmclock=off,svm=off`
+on both hosts, with `kernel-irqchip=off` on KVM. These are the hardware settings
+of the verified Ubuntu 24.04 V10 image candidate; unversioned QEMU defaults
+must not silently select a different device or CPU migration layout.
+Existing guests with a different hardware profile require explicit lifecycle
+reconciliation; selecting this profile does not convert their saved state.
 
 The approved second-host path uses GPU3 with KVM and GPU4 with explicitly
 selected TCG. This option enables native configuration; it does not prove

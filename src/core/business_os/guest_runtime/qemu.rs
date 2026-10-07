@@ -108,9 +108,18 @@ fn prepare_command(
         .context("overlay path must be UTF-8")?;
 
     let mut command = Command::new(&config.program);
+    // Keep the device layout and exposed CPU identical on both approved hosts.
+    // Versioned models are required: the unversioned pc/qemu64 aliases change
+    // between QEMU 6.2 (KVM) and QEMU 8.2 (TCG). A kernel irqchip and kvmclock
+    // cannot be restored by the software-emulation target.
     command.args([
         "-machine",
-        "pc",
+        match config.acceleration {
+            QemuAcceleration::Kvm => "pc-i440fx-5.1,kernel-irqchip=off",
+            QemuAcceleration::Tcg => "pc-i440fx-5.1",
+        },
+        "-cpu",
+        "qemu64-v1,kvm=off,kvmclock=off,svm=off",
         "-accel",
         match config.acceleration {
             QemuAcceleration::Kvm => "kvm",
