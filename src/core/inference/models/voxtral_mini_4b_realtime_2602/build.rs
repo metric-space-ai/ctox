@@ -4,6 +4,8 @@ use std::{env, fs};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=GGML_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=NVCC");
+    println!("cargo:rerun-if-env-changed=CTOX_CUDA_SM");
     println!("cargo:rerun-if-env-changed=CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_BUILD_GGML");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_GGML_BLAS");
@@ -78,6 +80,33 @@ fn build_vendored_ggml() {
         .arg("-DGGML_BUILD_TESTS=OFF")
         .arg("-DGGML_BUILD_EXAMPLES=OFF")
         .arg("-DBUILD_SHARED_LIBS=OFF");
+
+    if enable_cuda {
+        // Resolve symlinked nvcc before CMake infers its toolkit root. Hosts can
+        // have /usr/local/bin/nvcc -> a versioned toolkit and another default.
+        let nvcc = env::var_os("NVCC")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::split_paths(&env::var_os("PATH").unwrap_or_default())
+                    .map(|dir| dir.join("nvcc"))
+                    .find(|path| path.is_file())
+            })
+            .expect("CUDA feature requires nvcc on PATH or NVCC");
+        let nvcc = fs::canonicalize(nvcc).expect("resolve CUDA compiler");
+        let toolkit = nvcc
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("CUDA compiler toolkit root");
+        configure.arg(format!("-DCMAKE_CUDA_COMPILER={}", nvcc.display()));
+        configure.arg(format!("-DCUDAToolkit_ROOT={}", toolkit.display()));
+        if let Ok(sm) = env::var("CTOX_CUDA_SM") {
+            assert!(
+                sm.bytes().all(|b| b.is_ascii_digit()) && !sm.is_empty(),
+                "CTOX_CUDA_SM must contain a numeric build architecture"
+            );
+            configure.arg(format!("-DCMAKE_CUDA_ARCHITECTURES={sm}"));
+        }
+    }
 
     #[cfg(target_os = "macos")]
     configure.arg("-DGGML_METAL=ON");
