@@ -37,7 +37,7 @@ function fixture(startCollection, loadError = null) {
     assert.equal(name, 'business_module_catalog'); return collection;
   } } };
   const context = vm.createContext({
-    state, Promise, console: { warn(...args) { warnings.push(args); } },
+    state, Promise, clearTimeout, console: { warn(...args) { warnings.push(args); } },
     loadModuleMessages: async () => ({}), loadModuleMarkup: async () => '<div>Store</div>',
     applyTranslations() {}, ensureStylesheet() {}, bindElements() {}, applyHeaderActionIcons() {}, wireEvents() {},
     async loadCatalog() { state.catalog = await ctx.db.collection('business_module_catalog').findOne('module-catalog').exec(); },
