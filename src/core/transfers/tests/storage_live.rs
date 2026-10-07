@@ -8,7 +8,41 @@ use std::sync::{
     Arc,
 };
 
+// The worker redacts transport errors. Keep fixture diagnostics at the adapter
+// boundary so a failing real protocol test identifies its operation and cause.
+struct TracedConnection(Box<dyn StorageConnection>);
+fn traced<T>(operation: &str, result: Result<T>) -> Result<T> {
+    if let Err(error) = &result {
+        eprintln!("fixture {operation}: {error:#}");
+    }
+    result
+}
+impl StorageConnection for TracedConnection {
+    fn length(&mut self, path: &str) -> Result<Option<u64>> {
+        traced("length", self.0.length(path))
+    }
+    fn read(&mut self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>> {
+        traced("read", self.0.read(path, offset, length))
+    }
+    fn create(&mut self, path: &str) -> Result<()> {
+        traced("create", self.0.create(path))
+    }
+    fn truncate(&mut self, path: &str, length: u64) -> Result<()> {
+        traced("truncate", self.0.truncate(path, length))
+    }
+    fn write(&mut self, path: &str, offset: u64, bytes: &[u8]) -> Result<()> {
+        traced("write", self.0.write(path, offset, bytes))
+    }
+    fn publish(&mut self, staging: &str, destination: &str) -> Result<()> {
+        traced("publish", self.0.publish(staging, destination))
+    }
+    fn close(&mut self) -> Result<()> {
+        traced("close", self.0.close())
+    }
+}
+
 struct Live {
+
     config: Value,
     store: Store,
     pause: AtomicBool,
@@ -48,7 +82,8 @@ impl StorageResolver for Live {
                 password: c["password"].as_str().unwrap(),
             }),
             _ => anyhow::bail!("unsupported fixture protocol"),
-        }
+        };
+        Ok(Box::new(TracedConnection(traced("connect", connection)?)))
     }
 }
 fn request(id: &str, body: &[u8], direction: StorageDirection) -> DownloadRequest {
@@ -105,7 +140,7 @@ async fn real_storage_pause_restart_upload_download_and_no_replace() {
     let worker = store.worker_with_sources(None, Some(live.clone())).unwrap();
     worker.run_next(&AtomicBool::new(false)).await.unwrap();
     let paused = store.get(&upload.id).unwrap();
-    assert_eq!(paused.state, "paused");
+    assert_eq!(paused.state, "paused", "{:?}", paused.error_code);
     assert!(paused.completed_bytes > 0 && paused.completed_bytes < upload.size);
     drop(worker);
     store.control(&upload.id, "resume").unwrap();
