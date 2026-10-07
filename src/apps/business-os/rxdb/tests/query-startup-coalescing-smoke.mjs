@@ -194,4 +194,4 @@ const strict = token => ({ selector: {}, limit: 1, requireRevision: token });
   await flush();
   assert.equal(one.transport.diagnostics().activeQueryStreams, 0);
 }
-console.log('query startup admission/coalescing smoke OK (component fixture; not installed THESEN latency)');
+console.log('query startup admission/coalescing smoke OK (component fixture; not installed installed tenant latency)');
