@@ -70,7 +70,7 @@ class OwnedNative {
       row.exit = code; invariant(code === 0, `Native ${row.kind} failed (private output suppressed)`);
       return secret ? undefined : JSON.parse(stdout);
     } finally { clearTimeout(timer); row.terminal = child.exitCode !== null || child.signalCode !== null;
-      this.children.delete(child); this.save(); }
+      await this.stop(child); this.save(); }
   }
   start(kind, args) {
     const child = spawn(this.config.binary, args, { cwd: this.config.root, env: this.env,
@@ -78,7 +78,7 @@ class OwnedNative {
     this.children.add(child);
     const row = { pid: child.pid, pgid: child.pid, kind, terminal: false, stop: 'runner finally or1800s' };
     this.processes.push(row); child.once('error', () => {});
-    child.once('close', code => { row.exit = code; row.terminal = true; this.children.delete(child); this.save(); });
+    child.once('close', code => { row.exit = code; row.terminal = true; this.save(); });
     this.save(); return child;
   }
   async stop(child, signal = 'SIGTERM') {
@@ -93,6 +93,9 @@ class OwnedNative {
       try { process.kill(-child.pid, 0); } catch (e) { if (e.code === 'ESRCH') break; throw e; }
       invariant(performance.now() < groupDeadline, 'Owned process group survived cleanup'); await sleep(50);
     }
+    this.children.delete(child);
+    const row = this.processes.find(item => item.pid === child.pid);
+    if (row) { row.cleanup = 'owned group absent'; row.terminal = true; this.save(); }
   }
   async restartPeer() {
     await this.stop(this.peer, 'SIGKILL');
@@ -109,7 +112,7 @@ class OwnedNative {
     return value;
   }
   async read(ids) {
-    const script = `import sqlite3,json,sys\nc=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)\nids=json.loads(sys.stdin.read())\nrows=c.execute('SELECT record_id,payload_json,deleted FROM business_records WHERE collection=?',('desktop_icons',))\nprint(json.dumps({i:json.loads(p) for i,p,d in rows if i in ids and not d}))\n`;
+    const script = `import sqlite3,json,sys\nc=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)\nids=set(json.loads(sys.stdin.read()))\nrows=c.execute('SELECT record_id,payload_json,deleted FROM business_records WHERE collection=?',('desktop_icons',))\nprint(json.dumps({i:json.loads(p) for i,p,d in rows if i in ids and not d}))\n`;
     const child = spawn('python3', ['-c', script, join(this.config.root, 'runtime', 'business-os.sqlite3')],
       { stdio: ['pipe', 'pipe', 'ignore'] });
     let body = ''; const timer = setTimeout(() => child.kill('SIGKILL'), 10000);
@@ -274,6 +277,18 @@ async function closePage(page) {
   await page.evaluate(async () => { await globalThis.__installedAcceptance?.sync.stop(); await globalThis.__installedAcceptance?.db.close(); });
   await page.close();
 }
+const networkSessions = new WeakMap();
+async function offline(context, page, value) {
+  await context.setOffline(value);
+  const session = networkSessions.get(page) || await context.newCDPSession(page);
+  networkSessions.set(page, session);
+  // CDP's packetLoss explicitly affects WebRTC rather than just HTTP.
+  // https://github.com/ChromeDevTools/devtools-protocol/blob/master/pdl/domains/Network.pdl
+  await session.send('Network.emulateNetworkConditions', {
+    offline: value, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+    packetLoss: value ? 100 : 0,
+  });
+}
 async function metrics(page) {
   return page.evaluate(async () => {
     const s = globalThis.__installedAcceptance;
@@ -331,7 +346,7 @@ export async function runAcceptance(browser, configPath) {
           for (let round = 0; round < 3; round++) {
             const values = Array.from({ length: 200 }, (_, i) => ({ id: `acceptance-${name}-${round}-${i}`,
               target_type: 'acceptance', label: `round${round}-document${i}`, x: i, y: round, updated_at_ms: Date.now() }));
-            await a.setOffline(true); const offlineStart = performance.now();
+            await offline(a, A, true); const offlineStart = performance.now();
             const timings = await write(A, values);
             await native.restartPeer();
             await B.evaluate(async () => {
@@ -339,9 +354,11 @@ export async function runAcceptance(browser, configPath) {
             });
             B = await attach(b, origin, await native.invite('B'), name + '-b', 0, B);
             await sleep(Math.max(0, 30000 - (performance.now() - offlineStart)));
+            const offlineServer = await native.read(values.map(d => d.id));
+            invariant(Object.keys(offlineServer).length === 0, 'Client offline fault leaked WebRTC writes to native');
             const offlineMs = performance.now() - offlineStart;
             const reconnectStart = performance.now();
-            await a.setOffline(false);
+            await offline(a, A, false);
             // Renew native-issued login and reopen the SAME IndexedDB; no cache wipe.
             await closePage(A); A = await attach(a, origin, await native.invite('A-relogin'), name + '-a');
             await converge(native, B, values);
@@ -388,15 +405,15 @@ export async function runAcceptance(browser, configPath) {
           const id = `acceptance-${name}-merge`, base = { id, target_type: 'acceptance', label: 'base', x: 0, y: 0, updated_at_ms: Date.now() };
           await write(A, [base]); await converge(native, B, [base]);
           const staleBaseline = (await docs(A, [id]))[id];
-          await a.setOffline(true); await b.setOffline(true);
+          await offline(a, A, true); await offline(b, B, true);
           await write(A, [{ ...base, x: 1 }]); await write(B, [{ ...base, y: 2 }]);
-          await a.setOffline(false); await b.setOffline(false);
+          await offline(a, A, false); await offline(b, B, false);
           await converge(native, B, [{ id, x: 1, y: 2 }]);
           receipt.measured.distinctFieldMerge = true;
-          await a.setOffline(true); await b.setOffline(true);
+          await offline(a, A, true); await offline(b, B, true);
           const beforeA = (await docs(A, [id]))[id], beforeB = (await docs(B, [id]))[id];
           await write(A, [{ ...beforeA, label: 'same-field-A' }]); await write(B, [{ ...beforeB, label: 'same-field-B' }]);
-          await a.setOffline(false); await b.setOffline(false); await sleep(5000);
+          await offline(a, A, false); await offline(b, B, false); await sleep(5000);
           receipt.measured.sameField = { A: await metrics(A), B: await metrics(B), server: await native.read([id]) };
           const masterBefore = await native.read([id]);
           const staleResponse = await A.evaluate(async ({ old, id }) => {

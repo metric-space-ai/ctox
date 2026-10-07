@@ -52,6 +52,11 @@ Goal5 performs three200-write rounds:30s offline, owned peer kill/respawn,
 B reopen, A native invitation renewal and reopen with unchanged IndexedDB name.
 The local write maximum and entire reconnect→exact server/B convergence
 interval are recorded. No cache wipe, blind restart loop or final-count-only pass.
+`setOffline` is supplemented with the documented CDP WebRTC packet-loss control;
+the runner also requires zero native receipt of those200 writes before going
+online again. Unsupported emulation is a harness failure, never a sync pass.
+[Chrome's protocol definition](https://github.com/ChromeDevTools/devtools-protocol/blob/master/pdl/domains/Network.pdl)
+specifies the packet-loss parameter for WebRTC.
 
 Goal6 seeds10000 cached documents, closes B, applies50 updates and checks native
 readback before B reopens. Local usability and catchup are separate. A missing
