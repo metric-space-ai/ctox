@@ -66,4 +66,21 @@ function memoryStorage() {
   assert.equal(pulled, 0, 'no pull for a demand-only collection');
 }
 
-console.log('demand change push smoke PASS: pushed writes and refreshed windows name changed rows with revisions');
+// 3. An id-only invalidation of a newly inserted row must notify even when no
+// cached window contained it. Exercise both the indexed sidecar and scan path.
+for (const indexed of [true, false]) {
+  const notes = [];
+  const sidecar = createSidecarWithMemoryBackend({databaseName:'id-only-' + indexed});
+  if (!indexed) sidecar.invalidateQueryWindowsForDocuments = undefined;
+  const loader = createQueryDemandLoader({
+    storageCollection:memoryStorage(), sidecar, collectionName:'leads', schemaVersion:0,
+    requestQueryFetch:async () => { throw new Error('invalidation must not fetch rows'); },
+    onQueryWindowChanged:change => notes.push(change),
+  });
+  assert.equal(await loader.invalidateDocumentChange(['new-row']), 0);
+  assert.deepEqual(notes, [{changes:[{id:'new-row'}]}], 'new id-only rows reach subscribers without a cached window');
+  await loader.invalidateDocumentChange([]);
+  assert.equal(notes.length, 1, 'no changed ids means no invented notification');
+}
+
+console.log('demand change push smoke PASS: known row ids survive document and id-only invalidations');

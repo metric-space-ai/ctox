@@ -821,8 +821,16 @@ The shell's scoped collection facade preserves this subscription option.
 Consumers that only need a change hint use
 `collection.$.subscribe(listener, { invalidateOnly: true })`. This emits
 `{ collectionName, invalidated: true }` after subscription and debounces store,
-loader-generation and projected-window changes. It performs no initial query,
-snapshot read or document materialization. The listener runs its own bounded
+loader-generation and projected-window changes. When every trigger in the
+burst identifies its rows, the event also carries `changes: [{ id, rev?, deleted? }]`.
+Local and pushed document writes include known revision/deletion metadata;
+other-tab and ID-only window/loader invalidations retain IDs without inventing
+unknown metadata. New IDs notify even when no cached window contains them.
+Any unnamed trigger (including collection clear, resync or loader replacement)
+omits `changes` for the entire burst, requiring the normal full refresh. A
+consumer may fetch only named rows through its existing authorized query and
+patch its view; hints alone are neither row payloads nor permission receipts.
+Subscribing performs no initial query, snapshot read or document materialization. The listener runs its own bounded
 query; the hint alone confirms neither readiness nor read permission. The
 option also passes through scoped, maintenance and permission-guarded shell
 collection facades. Unsubscribing retires the timer, listeners and foreground
