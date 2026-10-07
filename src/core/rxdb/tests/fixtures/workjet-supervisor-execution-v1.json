@@ -1,0 +1,244 @@
+{
+  "schema": "ctox.workjet.supervisor_execution.v1",
+  "contract_version": 1,
+  "types": {
+    "EventCursor": {
+      "fields": {
+        "after_sequence": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "after_event_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        }
+      }
+    },
+    "ExecutionPageRequest": {
+      "fields": {
+        "attempt_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128,
+          "optional": true
+        },
+        "cursor": {
+          "type": "EventCursor",
+          "optional": true
+        },
+        "limit": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 50,
+          "optional": true
+        }
+      }
+    },
+    "AttemptRef": {
+      "fields": {
+        "attempt_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "run_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128,
+          "optional": true
+        },
+        "attempt_index": {
+          "type": "u64",
+          "optional": true
+        },
+        "status": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 64,
+          "optional": true
+        },
+        "started_at_ms": {
+          "type": "i64",
+          "minimum": 0,
+          "optional": true
+        },
+        "finished_at_ms": {
+          "type": "i64",
+          "minimum": 0,
+          "optional": true
+        }
+      }
+    },
+    "ExecutionEvent": {
+      "fields": {
+        "id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "sequence": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "kind": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 64
+        },
+        "title": {
+          "type": "String",
+          "max_chars": 256
+        },
+        "created_at_ms": {
+          "type": "i64",
+          "minimum": 0
+        },
+        "tool_name": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128,
+          "optional": true
+        },
+        "call_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128,
+          "optional": true
+        },
+        "success": {
+          "type": "bool",
+          "optional": true
+        }
+      }
+    },
+    "ExecutionPage": {
+      "fields": {
+        "command_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "task_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "attempt": {
+          "type": "AttemptRef",
+          "optional": true
+        },
+        "events": {
+          "type": "Vec<ExecutionEvent>",
+          "max_items": 50
+        },
+        "next_cursor": {
+          "type": "EventCursor",
+          "optional": true
+        },
+        "has_more": {
+          "type": "bool"
+        }
+      }
+    }
+  },
+  "commands": {
+    "ctox.workjet.project.supervisor.turn.watch": {
+      "opt_in_field": "execution_page",
+      "request_type": "ExecutionPageRequest",
+      "response_field": "execution_page",
+      "response_type": "ExecutionPage",
+      "response_contract_field": "execution_contract",
+      "authorization": "current_native_project_owner"
+    }
+  },
+  "valid_cases": [
+    {
+      "type": "ExecutionPageRequest",
+      "value": {}
+    },
+    {
+      "type": "ExecutionPageRequest",
+      "value": {
+        "attempt_id": "worker-attempt:real",
+        "cursor": {
+          "after_sequence": 3,
+          "after_event_id": "event-real"
+        },
+        "limit": 25
+      }
+    },
+    {
+      "type": "ExecutionPage",
+      "value": {
+        "command_id": "command-real",
+        "task_id": "queue-real",
+        "events": [],
+        "has_more": false
+      }
+    },
+    {
+      "type": "AttemptRef",
+      "value": {
+        "attempt_id": "worker-attempt:real",
+        "run_id": "worker-attempt:real",
+        "attempt_index": 2,
+        "status": "succeeded",
+        "started_at_ms": 1,
+        "finished_at_ms": 2
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "type": "ExecutionPageRequest",
+      "value": {
+        "limit": 0
+      }
+    },
+    {
+      "type": "ExecutionPageRequest",
+      "value": {
+        "limit": 51
+      }
+    },
+    {
+      "type": "ExecutionPageRequest",
+      "value": {
+        "attempt_id": " "
+      }
+    },
+    {
+      "type": "ExecutionPageRequest",
+      "value": {
+        "owner_user_id": "foreign"
+      }
+    },
+    {
+      "type": "EventCursor",
+      "value": {
+        "after_sequence": 0,
+        "after_event_id": "e"
+      }
+    },
+    {
+      "type": "EventCursor",
+      "value": {
+        "after_sequence": 1,
+        "after_event_id": ""
+      }
+    },
+    {
+      "type": "ExecutionPage",
+      "value": {
+        "command_id": "c",
+        "task_id": "t",
+        "events": [],
+        "has_more": false,
+        "raw_metadata": {
+          "secret": "x"
+        }
+      }
+    }
+  ]
+}

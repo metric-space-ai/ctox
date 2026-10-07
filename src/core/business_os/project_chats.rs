@@ -17,6 +17,7 @@ use std::path::Path;
 mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
 pub(in crate::business_os) mod supervisor_turns;
+mod supervisor_observation;
 mod weekly_reports;
 pub(super) use privacy::{
     command_access_check, document_visible_from_connections, document_visible_to_actor,
