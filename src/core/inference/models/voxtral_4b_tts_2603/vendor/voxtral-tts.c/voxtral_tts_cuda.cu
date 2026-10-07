@@ -231,7 +231,9 @@ static void *upload_bf16(const uint16_t *host_bf16, size_t n_elements) {
     void *d_ptr = NULL;
     size_t bytes = n_elements * sizeof(uint16_t);
     cudaMalloc(&d_ptr, bytes);
-    if (d_ptr) cudaMemcpy(d_ptr, host_bf16, bytes, cudaMemcpyHostToDevice);
+    if (d_ptr && cudaMemcpy(d_ptr, host_bf16, bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+        cudaFree(d_ptr); return NULL;
+    }
     return d_ptr;
 }
 
@@ -239,7 +241,9 @@ static float *upload_f32(const float *host_f32, int n_elements) {
     float *d_ptr = NULL;
     size_t bytes = n_elements * sizeof(float);
     cudaMalloc(&d_ptr, bytes);
-    if (d_ptr) cudaMemcpy(d_ptr, host_f32, bytes, cudaMemcpyHostToDevice);
+    if (d_ptr && cudaMemcpy(d_ptr, host_f32, bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+        cudaFree(d_ptr); return NULL;
+    }
     return d_ptr;
 }
 
@@ -253,6 +257,7 @@ extern "C" int tts_cuda_upload_llm_weights(void *decoder_ptr) {
 
     /* Final norm */
     g_cuda.dec_norm_gpu = upload_f32(dec->norm, TTS_DEC_DIM);
+    if (!g_cuda.dec_norm_gpu) return -1;
 
     /* Per-layer weights */
     for (int i = 0; i < TTS_DEC_LAYERS; i++) {
@@ -273,7 +278,8 @@ extern "C" int tts_cuda_upload_llm_weights(void *decoder_ptr) {
         dst->ffn_norm = upload_f32(src->ffn_norm, TTS_DEC_DIM);
 
         if (!dst->wq || !dst->wk || !dst->wv || !dst->wo ||
-            !dst->w1 || !dst->w2 || !dst->w3) {
+            !dst->w1 || !dst->w2 || !dst->w3 ||
+            !dst->attention_norm || !dst->ffn_norm) {
             fprintf(stderr, "cuda: failed to upload LLM layer %d\n", i);
             return -1;
         }
@@ -1112,4 +1118,10 @@ extern "C" void tts_cuda_predict_velocity(float *out_velocity,
                cudaMemcpyDeviceToHost);
 
     cudaFree(d_xt); cudaFree(d_time_emb); cudaFree(d_llm); cudaFree(d_vel);
+}
+
+/* CTOX boundary: failed native execution must not report successful audio. */
+extern "C" int ctox_voxtral_cuda_status(void) {
+    if (cudaGetLastError() != cudaSuccess) return -1;
+    return cudaDeviceSynchronize() == cudaSuccess ? 0 : -1;
 }
