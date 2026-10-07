@@ -16,7 +16,7 @@ use super::store::{
 };
 use anyhow::Context;
 use rusqlite::Connection;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -33,9 +33,65 @@ struct ProjectUpsertPayload {
     project_id: Option<String>,
     name: String,
     #[serde(default)]
-    description: Option<String>,
+    description: ProjectField<String>,
     #[serde(default)]
-    archived: bool,
+    repo_url: ProjectField<String>,
+    #[serde(default)]
+    public_url: ProjectField<String>,
+    #[serde(default)]
+    info: ProjectField<ProjectInfo>,
+    #[serde(default)]
+    jour_fixe: ProjectField<JourFixe>,
+    #[serde(default)]
+    archived: Option<bool>,
+}
+
+// Missing keeps the current value; explicit null clears it. Option<T> alone
+// cannot distinguish those two states in a partial project update.
+#[derive(Debug)]
+enum ProjectField<T> {
+    Keep,
+    Clear,
+    Set(T),
+}
+
+impl<T> Default for ProjectField<T> {
+    fn default() -> Self { Self::Keep }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for ProjectField<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Option::<T>::deserialize(deserializer)? {
+            Some(value) => Self::Set(value),
+            None => Self::Clear,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    goal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JourFixe {
+    weekday: u8,
+    time: String,
+    #[serde(default = "default_project_timezone")]
+    timezone: String,
+}
+
+fn default_project_timezone() -> String {
+    "Europe/Berlin".to_owned()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -209,7 +265,31 @@ pub(super) fn handle_workjet_project_upsert_command(
         .context("project_id is required")?;
     let project_id = bounded_required(&project_id, "project_id", 128)?;
     let name = bounded_required(&payload.name, "name", 256)?;
-    let description = optional_bounded(payload.description, "description", 4096)?;
+    let description = project_field_value(payload.description, |value| {
+        Ok(Value::String(bounded_required(&value, "description", 4096)?))
+    })?;
+    let repo_url = project_field_value(payload.repo_url, |value| project_url(value, "repo_url"))?;
+    let public_url = project_field_value(payload.public_url, |value| project_url(value, "public_url"))?;
+    let info = project_field_value(payload.info, |mut info| {
+        info.description = optional_bounded(info.description, "info.description", 4096)?;
+        info.goal = optional_bounded(info.goal, "info.goal", 4096)?;
+        info.phase = optional_bounded(info.phase, "info.phase", 128)?;
+        info.status = optional_bounded(info.status, "info.status", 128)?;
+        Ok(serde_json::to_value(info)?)
+    })?;
+    let jour_fixe = project_field_value(payload.jour_fixe, |mut meeting| {
+        anyhow::ensure!((1..=7).contains(&meeting.weekday), "jour_fixe.weekday must be ISO 1..7 (Monday..Sunday)");
+        let time = meeting.time.as_bytes();
+        anyhow::ensure!(time.len() == 5 && time[2] == b':'
+            && [time[0], time[1], time[3], time[4]].iter().all(u8::is_ascii_digit),
+            "jour_fixe.time must be HH:mm");
+        let hour: u8 = meeting.time[..2].parse()?;
+        let minute: u8 = meeting.time[3..].parse()?;
+        anyhow::ensure!(hour < 24 && minute < 60, "jour_fixe.time must be HH:mm");
+        meeting.timezone = bounded_required(&meeting.timezone, "jour_fixe.timezone", 128)?;
+        let _: chrono_tz::Tz = meeting.timezone.parse().map_err(|_| anyhow::anyhow!("jour_fixe.timezone must be an IANA timezone"))?;
+        Ok(serde_json::to_value(meeting)?)
+    })?;
 
     let mut conn = open_store(root)?;
     let applied = admission.apply(&mut conn, |transaction| {
@@ -228,12 +308,15 @@ pub(super) fn handle_workjet_project_upsert_command(
             .and_then(|record| record.get("created_at_ms"))
             .and_then(Value::as_i64)
             .unwrap_or(now);
-        let status = if payload.archived {
+        let archived = payload.archived.unwrap_or_else(|| {
+            existing.as_ref().and_then(|record| record.get("status")).and_then(Value::as_str) == Some("archived")
+        });
+        let status = if archived {
             "archived"
         } else {
             "active"
         };
-        let archived_at_ms = if payload.archived {
+        let archived_at_ms = if archived {
             existing
                 .as_ref()
                 .filter(|record| record.get("status").and_then(Value::as_str) == Some("archived"))
@@ -252,10 +335,24 @@ pub(super) fn handle_workjet_project_upsert_command(
             "updated_at_ms": now,
             "is_deleted": false,
         });
-        if let Some(description) = description {
-            project["description"] = Value::String(description);
+        for (field, patch) in [
+            ("description", description),
+            ("repo_url", repo_url),
+            ("public_url", public_url),
+            ("info", info),
+            ("jour_fixe", jour_fixe),
+        ] {
+            match patch {
+                ProjectField::Keep => {
+                    if let Some(value) = existing.as_ref().and_then(|record| record.get(field)) {
+                        project[field] = value.clone();
+                    }
+                }
+                ProjectField::Clear => {}
+                ProjectField::Set(value) => project[field] = value,
+            }
         }
-        if payload.archived {
+        if archived {
             project["archived_at_ms"] = Value::from(archived_at_ms);
         }
 
@@ -458,6 +555,26 @@ fn ensure_owned(existing: Option<&Value>, owner_user_id: &str, kind: &str) -> an
     Ok(())
 }
 
+fn project_field_value<T>(
+    field: ProjectField<T>,
+    validate: impl FnOnce(T) -> anyhow::Result<Value>,
+) -> anyhow::Result<ProjectField<Value>> {
+    Ok(match field {
+        ProjectField::Keep => ProjectField::Keep,
+        ProjectField::Clear => ProjectField::Clear,
+        ProjectField::Set(value) => ProjectField::Set(validate(value)?),
+    })
+}
+
+fn project_url(value: String, field: &str) -> anyhow::Result<Value> {
+    let value = bounded_required(&value, field, 2048)?;
+    let url = url::Url::parse(&value).with_context(|| format!("{field} must be an absolute HTTP(S) URL"))?;
+    anyhow::ensure!(matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+        && url.username().is_empty() && url.password().is_none(),
+        "{field} must be an HTTP(S) URL without credentials");
+    Ok(Value::String(value))
+}
+
 fn bounded_required(value: &str, field: &str, max_chars: usize) -> anyhow::Result<String> {
     let value = value.trim();
     validate_bounded(value, field, max_chars, false)?;
@@ -567,7 +684,7 @@ pub(crate) mod tests {
         fs::create_dir_all(root.join("runtime"))?;
         let conn = Connection::open(rxdb_store_path(root))?;
         for (collection, version) in [
-            (PROJECTS_COLLECTION, 0),
+            (PROJECTS_COLLECTION, 1),
             (WORKING_COPIES_COLLECTION, 0),
             (super::super::project_chats::CHATS, 0),
             (super::super::project_chats::THREADS, 1),

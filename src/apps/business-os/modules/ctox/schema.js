@@ -567,13 +567,35 @@ export const collections = {
   },
   workjet_projects: {
 
-    version: 0,
+    version: 1,
     primaryKey: 'id',
     type: 'object',
     properties: {
       id: { type: 'string', maxLength: 128 },
       name: { type: 'string', maxLength: 256 },
       description: { type: 'string', maxLength: 4096 },
+      repo_url: { type: 'string', maxLength: 2048 },
+      public_url: { type: 'string', maxLength: 2048 },
+      info: {
+        type: 'object',
+        properties: {
+          description: { type: 'string', maxLength: 4096 },
+          goal: { type: 'string', maxLength: 4096 },
+          phase: { type: 'string', maxLength: 128 },
+          status: { type: 'string', maxLength: 128 }
+        },
+        additionalProperties: false
+      },
+      jour_fixe: {
+        type: 'object',
+        properties: {
+          weekday: { type: 'integer', minimum: 1, maximum: 7 },
+          time: { type: 'string', pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' },
+          timezone: { type: 'string', maxLength: 128 }
+        },
+        required: ['weekday', 'time', 'timezone'],
+        additionalProperties: false
+      },
       status: { type: 'string', enum: ['active', 'archived'] },
       owner_user_id: { type: 'string', maxLength: 256 },
       created_at_ms: { type: 'number' },
