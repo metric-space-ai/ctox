@@ -15,7 +15,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE_PATH
   ? pathToFileURL(path.join(process.env.PLAYWRIGHT_MODULE_PATH, 'index.mjs')).href : 'playwright');
 const oldSource = process.env.CTOX_APP_STORE_MOUNT_SOURCE;
 const html = `<!doctype html><html lang="de" data-theme="dark" data-shell-style="ctox">
-<link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css">
+<meta charset="utf-8"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css">
 <style>body{margin:0;background:#0b0e13}#open{position:absolute;right:8px;top:8px}
 .shell-window{position:absolute;left:20px;top:50px;width:1180px;height:760px}</style>
 <button id="open">App Store öffnen</button><div id="desktop"></div>
