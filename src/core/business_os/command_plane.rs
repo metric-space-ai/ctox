@@ -364,6 +364,8 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 103] = [
     "ctox.workjet.computer.list",
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
+    "ctox.workjet.project.kpis.read",
+    "ctox.workjet.project.kpis.configure",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.supervisor.bind",
     "ctox.workjet.project.supervisor.turn.submit",
@@ -1263,6 +1265,7 @@ impl CentralCommandPolicyRequirement {
         } else if matches!(
             command_type,
             "ctox.workjet.project.list"
+                | "ctox.workjet.project.kpis.read"
                 | "ctox.workjet.computer.list"
                 | "ctox.workjet.session.list"
         ) {
@@ -1748,6 +1751,18 @@ fn dispatch_business_command(
                     None,
                     serde_json::json!({"ok": false, "error": error.to_string()}),
                     error,
+                )),
+            }
+        }
+        "ctox.workjet.project.kpis.read" | "ctox.workjet.project.kpis.configure" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor = session_user_id(session).context("KPI command requires an authenticated user")?;
+            match super::workjet_project_kpis::handle_command(
+                root, command, actor, prepared.domain_effect_admission.as_ref(),
+            ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None, serde_json::json!({"ok":false,"error":error.to_string()}), error,
                 )),
             }
         }

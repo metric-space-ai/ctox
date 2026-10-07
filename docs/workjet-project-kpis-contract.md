@@ -46,9 +46,35 @@ produce `missing_source`, e.g. `analytics_not_connected`, instead of estimating
 visitor counts. Permission loss must hide the snapshot rather than preserve data
 under a revoked authority.
 
-This PR supplies the typed persistence/command contract and shared regression
-corpus. Native storage, registered metric resolvers, refresh scheduling, command
-handlers and the supervisor KPI tool are the following implementation slice.
-The command metadata here does not register a callable tool or establish an
-installed KPI workflow. Main owns card/configuration UI; Crew owns the native
-implementation and installed evidence. Business data continues over WebRTC/RxDB.
+The shared fixture generates the native/browser contract and regression corpus.
+The configuration/read slice below supplies native prompt storage and handlers;
+registered metric resolvers, refresh scheduling and the supervisor KPI tool
+remain follow-ups. The resolver metadata alone does not register a callable
+tool or establish an installed KPI workflow. Main owns card/configuration UI;
+Crew owns native implementation and installed evidence. Business data continues
+over WebRTC/RxDB.
+
+## Native configuration/read slice
+
+`ctox.workjet.project.kpis.configure` and `.kpis.read` run through the existing
+signed command plane, workspace DataWrite/DataRead policy and current native
+project owner check (including a verified same-person alias). Read uses the
+shared `ReadKpisRequest {project_id}`. Both return `{ok:true,kpis:ProjectKpis}`.
+An unconfigured project reads as revision 0/items []; saving three sentences
+persists a new project KPI revision, and `prompts:[]` clears them. Unchanged
+sentences retain their prompt revisions. Changed/re-added IDs advance a durable
+watermark even across clear, so old resolutions cannot become current again.
+
+Configuration atomically commits native state and its domain receipt. An
+operation ID replays only its original intent; stale expected revisions and
+conflicting reuses fail without changing state. The native table is not a
+browser-writable collection. Project metadata, owner IDs and legacy local
+card settings are untouched. Foreign, archived, deleted and revoked identities
+cannot read or configure a project's KPI state.
+
+New sentences explicitly have `missing_source/source_not_bound` and no numeric
+snapshot. This slice does not register `.kpi.resolve`, publish source values or
+claim refresh scheduling. The native supervisor resolver/tool, independently
+verified source adapters and bounded refresh scheduling remain the next slice.
+The Guest bridge must call these typed commands over the existing WebRTC route;
+there is no HTTP data endpoint. Installed acceptance is separate from checks.
