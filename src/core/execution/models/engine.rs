@@ -1945,6 +1945,15 @@ mod tests {
     #[test]
     fn recognizes_minimax_m3_api_chat_model() {
         assert!(is_minimax_api_chat_model("MiniMax-M3"));
+        assert!(is_minimax_api_chat_model("MiniMax-M3.1-Flash-Preview"));
+        assert!(api_provider_supports_model(
+            "minimax",
+            "MiniMax-M3.1-Flash-Preview"
+        ));
+        assert_eq!(
+            chat_model_family_for_model("MiniMax-M3.1-Flash-Preview"),
+            chat_model_family_for_model("MiniMax-M3")
+        );
         assert!(is_api_chat_model("MiniMax-M3"));
         assert_eq!(default_api_provider_for_model("MiniMax-M3"), "minimax");
         assert!(api_provider_supports_model("minimax", "MiniMax-M3"));
