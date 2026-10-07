@@ -161,6 +161,48 @@ fn legacy_schedule_rows_migrate_without_changing_utc_or_identity() -> Result<()>
 }
 
 #[test]
+fn unchanged_schedule_ensure_preserves_due_deadline_and_run_history() -> Result<()> {
+    let root = TestRoot::new();
+    let first = ensure_task_with_calendar(&root.0, request(), berlin(120))?;
+    let prior_run = emit_task_now(&root.0, &first.task_id)?;
+    let conn = open_schedule_db(&root.0)?;
+    let due_at = now_utc() - Duration::minutes(1);
+    let due_text = due_at.to_rfc3339();
+    let last_run = (due_at - Duration::days(7)).to_rfc3339();
+    conn.execute(
+        "UPDATE scheduled_tasks SET next_run_at=?2, last_run_at=?3, updated_at=?3 WHERE task_id=?1",
+        params![first.task_id, due_text, last_run],
+    )?;
+    let due = load_task(&conn, &first.task_id)?.unwrap();
+    let mut equal = request();
+    equal.cron_expr = format!(" {} ", equal.cron_expr);
+    equal.prompt = format!(" {} ", equal.prompt);
+    let kept = ensure_task_with_calendar(&root.0, equal, berlin(120))?;
+    assert_eq!(kept.task_id, due.task_id);
+    assert_eq!(kept.next_run_at, due.next_run_at);
+    assert_eq!(kept.last_run_at, due.last_run_at);
+    assert_eq!(kept.updated_at, due.updated_at);
+    assert_eq!(kept.created_at, due.created_at);
+    assert_eq!(list_due_tasks(&conn, &now_utc())?.len(), 1);
+    let retained_runs: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM scheduled_task_runs WHERE task_id=?1 AND run_id=?2",
+        params![first.task_id, prior_run.run_id],
+        |row| row.get(0),
+    )?;
+    assert_eq!(retained_runs, 1);
+
+    // A real appointment change still calculates a new deadline without
+    // deleting its previous run timestamp or creating another task.
+    let changed = ensure_task_with_calendar(&root.0, request(), berlin(0))?;
+    assert_eq!(changed.task_id, due.task_id);
+    assert_eq!(changed.calendar, berlin(0));
+    assert_ne!(changed.next_run_at, due.next_run_at);
+    assert_eq!(changed.last_run_at, due.last_run_at);
+    assert_eq!(list_tasks(&root.0)?.len(), 1);
+    Ok(())
+}
+
+#[test]
 fn calendar_survives_upsert_pause_resume_and_real_native_trigger() -> Result<()> {
     let root = TestRoot::new();
     let first = ensure_task_with_calendar(&root.0, request(), berlin(120))?;

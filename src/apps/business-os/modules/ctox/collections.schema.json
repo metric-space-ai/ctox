@@ -1585,8 +1585,54 @@
           "maxLength": 128,
           "type": "string"
         },
+        "info": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "goal": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "phase": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "status": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "is_deleted": {
           "type": "boolean"
+        },
+        "jour_fixe": {
+          "additionalProperties": false,
+          "properties": {
+            "time": {
+              "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+              "type": "string"
+            },
+            "timezone": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "weekday": {
+              "maximum": 7,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "weekday",
+            "time",
+            "timezone"
+          ],
+          "type": "object"
         },
         "name": {
           "maxLength": 256,
@@ -1594,6 +1640,14 @@
         },
         "owner_user_id": {
           "maxLength": 256,
+          "type": "string"
+        },
+        "public_url": {
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "repo_url": {
+          "maxLength": 2048,
           "type": "string"
         },
         "status": {
@@ -1616,7 +1670,7 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 0
+      "version": 1
     },
     "workjet_session_transfers": {
       "additionalProperties": false,
@@ -2175,6 +2229,11 @@
             ]
           }
         ]
+      }
+    },
+    "workjet_projects": {
+      "1": {
+        "operations": []
       }
     }
   },

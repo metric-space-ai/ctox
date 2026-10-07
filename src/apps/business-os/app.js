@@ -13803,7 +13803,7 @@ async function workjetProjectControl(request = {}) {
       || !Number.isSafeInteger(turn.attempt) || turn.attempt < 0
       || typeof turn.terminal !== 'boolean' || turn.terminal !== (turn.execution_phase === 'terminal')
       || typeof turn.result_truncated !== 'boolean') {
-      throw new Error('Workjet supervisor turn returned an uncorrelated or invalid native receipt.');
+      throw new Error('Workjet supervisor turn returned an invalid or unmatched confirmation.');
     }
     const result = {
       action, commandId, projectId, contract,
@@ -13820,7 +13820,7 @@ async function workjetProjectControl(request = {}) {
       const cancellation = receipt.result.cancellation;
       if (turn.status !== 'cancelled' || typeof cancellation?.side_effects_may_have_started !== 'boolean'
         || cancellation.worker_interrupt_acknowledged !== false) {
-        throw new Error('Workjet supervisor cancellation has no matching native acknowledgement.');
+        throw new Error('Workjet supervisor cancellation has no matching confirmation.');
       }
       result.cancellation = {
         commandId: boundedWorkjetProjectText(cancellation.command_id, 'native cancellation commandId', 256),

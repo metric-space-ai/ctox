@@ -1,0 +1,61 @@
+{
+  "additionalProperties": false,
+  "indexes": [
+    "owner_user_id",
+    "status",
+    "updated_at_ms",
+    [
+      "owner_user_id",
+      "status",
+      "updated_at_ms"
+    ]
+  ],
+  "primaryKey": "id",
+  "properties": {
+    "archived_at_ms": {
+      "type": "number"
+    },
+    "created_at_ms": {
+      "type": "number"
+    },
+    "description": {
+      "maxLength": 4096,
+      "type": "string"
+    },
+    "id": {
+      "maxLength": 128,
+      "type": "string"
+    },
+    "is_deleted": {
+      "type": "boolean"
+    },
+    "name": {
+      "maxLength": 256,
+      "type": "string"
+    },
+    "owner_user_id": {
+      "maxLength": 256,
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "active",
+        "archived"
+      ],
+      "type": "string"
+    },
+    "updated_at_ms": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "status",
+    "owner_user_id",
+    "created_at_ms",
+    "updated_at_ms"
+  ],
+  "type": "object",
+  "version": 0
+}
