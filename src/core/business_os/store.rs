@@ -18574,8 +18574,7 @@ pub(super) fn check_webrtc_collection_permission(
     if token.trim().is_empty() {
         return Ok(false);
     }
-    with_store_connection(root, |_| Ok(()))
-        .context("webrtc authority store bootstrap")?;
+    with_store_connection(root, |_| Ok(())).context("webrtc authority store bootstrap")?;
     with_current_webrtc_capability_signer(root, |secret| {
         with_store_connection(root, |conn| {
             check_webrtc_collection_permission_from_connection(
@@ -18596,9 +18595,15 @@ pub(super) fn check_webrtc_collection_permission(
 /// messages, actor records, or an arbitrary underlying error body.
 fn webrtc_collection_authority_diagnostic(error: &anyhow::Error) -> Value {
     let contexts = error.chain().map(ToString::to_string).collect::<Vec<_>>();
-    let phase = if contexts.iter().any(|s| s == "webrtc authority store bootstrap") {
+    let phase = if contexts
+        .iter()
+        .any(|s| s == "webrtc authority store bootstrap")
+    {
         "store_bootstrap"
-    } else if contexts.iter().any(|s| s == "webrtc authority policy store") {
+    } else if contexts
+        .iter()
+        .any(|s| s == "webrtc authority policy store")
+    {
         "policy_store"
     } else {
         "current_signer"
@@ -18610,15 +18615,30 @@ fn webrtc_collection_authority_diagnostic(error: &anyhow::Error) -> Value {
         return json!({"phase": phase, "kind": "io", "code": format!("{:?}", io.kind())});
     }
     let known = [
-        ("secret master-key authority is unavailable", "master_key_busy"),
-        ("secret master-key file is oversized", "master_key_oversized"),
-        ("secret master key conflicts with the embedded legacy key", "master_key_embedded_conflict"),
-        ("secret master key conflicts with the legacy runtime key", "master_key_legacy_conflict"),
+        (
+            "secret master-key authority is unavailable",
+            "master_key_busy",
+        ),
+        (
+            "secret master-key file is oversized",
+            "master_key_oversized",
+        ),
+        (
+            "secret master key conflicts with the embedded legacy key",
+            "master_key_embedded_conflict",
+        ),
+        (
+            "secret master key conflicts with the legacy runtime key",
+            "master_key_legacy_conflict",
+        ),
         ("current secret not found", "issuer_missing"),
         ("current capability signing secret is empty", "issuer_empty"),
     ];
-    let code = known.iter().find(|(message, _)| contexts.iter().any(|s| s == message))
-        .map(|(_, code)| *code).unwrap_or("opaque_error");
+    let code = known
+        .iter()
+        .find(|(message, _)| contexts.iter().any(|s| s == message))
+        .map(|(_, code)| *code)
+        .unwrap_or("opaque_error");
     json!({"phase": phase, "kind": "authority", "code": code})
 }
 
@@ -18628,13 +18648,24 @@ pub(super) fn log_webrtc_collection_authority_error(collection: &str, error: &an
     static LAST_LOG_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let at = u64::try_from(now_ms()).unwrap_or(u64::MAX);
     let last = LAST_LOG_MS.load(std::sync::atomic::Ordering::Relaxed);
-    if at.saturating_sub(last) < 15_000 || LAST_LOG_MS.compare_exchange(last, at,
-        std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed).is_err() {
+    if at.saturating_sub(last) < 15_000
+        || LAST_LOG_MS
+            .compare_exchange(
+                last,
+                at,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_err()
+    {
         return;
     }
-    eprintln!("[business-os] native collection authority unavailable: {}", json!({
-        "collection": collection, "diagnostic": webrtc_collection_authority_diagnostic(error)
-    }));
+    eprintln!(
+        "[business-os] native collection authority unavailable: {}",
+        json!({
+            "collection": collection, "diagnostic": webrtc_collection_authority_diagnostic(error)
+        })
+    );
 }
 
 #[cfg(test)]
@@ -18646,14 +18677,22 @@ mod collection_authority_diagnostic_tests {
         let error = anyhow::Error::new(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
             Some("private-token-and-record-must-not-leak".into()),
-        )).context("webrtc authority policy store").context("webrtc authority current signer");
+        ))
+        .context("webrtc authority policy store")
+        .context("webrtc authority current signer");
         let diagnostic = webrtc_collection_authority_diagnostic(&error);
         assert_eq!(diagnostic["phase"], "policy_store");
         assert_eq!(diagnostic["extended_code"], rusqlite::ffi::SQLITE_BUSY);
         assert!(!diagnostic.to_string().contains("private-token"));
-        let opaque = anyhow::anyhow!("private-secret-must-not-leak").context("webrtc authority current signer");
-        assert_eq!(webrtc_collection_authority_diagnostic(&opaque)["code"], "opaque_error");
-        assert!(!webrtc_collection_authority_diagnostic(&opaque).to_string().contains("private-secret"));
+        let opaque = anyhow::anyhow!("private-secret-must-not-leak")
+            .context("webrtc authority current signer");
+        assert_eq!(
+            webrtc_collection_authority_diagnostic(&opaque)["code"],
+            "opaque_error"
+        );
+        assert!(!webrtc_collection_authority_diagnostic(&opaque)
+            .to_string()
+            .contains("private-secret"));
     }
 
     #[test]
@@ -18663,8 +18702,12 @@ mod collection_authority_diagnostic_tests {
         let diagnostic = webrtc_collection_authority_diagnostic(&io);
         assert_eq!(diagnostic["phase"], "store_bootstrap");
         assert_eq!(diagnostic["code"], "PermissionDenied");
-        let issuer = anyhow::anyhow!("current secret not found").context("webrtc authority current signer");
-        assert_eq!(webrtc_collection_authority_diagnostic(&issuer)["code"], "issuer_missing");
+        let issuer =
+            anyhow::anyhow!("current secret not found").context("webrtc authority current signer");
+        assert_eq!(
+            webrtc_collection_authority_diagnostic(&issuer)["code"],
+            "issuer_missing"
+        );
     }
 }
 
@@ -30528,6 +30571,47 @@ pub(super) mod tests {
             );
             Ok(())
         })?;
+        Ok(())
+    }
+
+    #[test]
+    fn collection_authority_diagnostic_tracks_a_real_busy_issuer_without_denial(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "authority-diagnostic-owner", "chef")?;
+        let (token, _) = issue_business_os_capability_token(
+            root.path(),
+            "authority-diagnostic-owner",
+            now_ms() as i64,
+        )?;
+        let check = || {
+            check_webrtc_collection_permission(
+                root.path(),
+                &token,
+                "business_commands",
+                BusinessOsPermission::DataRead,
+            )
+        };
+        assert!(check()?);
+        with_current_webrtc_capability_signer(root.path(), |_secret| {
+            let error =
+                check().expect_err("the held non-recursive issuer fence must remain unavailable");
+            let diagnostic = webrtc_collection_authority_diagnostic(&error);
+            assert_eq!(diagnostic["phase"], "current_signer");
+            assert_eq!(diagnostic["code"], "master_key_busy");
+            assert!(!diagnostic.to_string().contains(&token));
+            Ok(())
+        })?;
+        assert!(
+            check()?,
+            "a transient issuer failure did not change native permissions"
+        );
+        assert!(!check_webrtc_collection_permission(
+            root.path(),
+            "",
+            "business_commands",
+            BusinessOsPermission::DataRead
+        )?);
         Ok(())
     }
 
