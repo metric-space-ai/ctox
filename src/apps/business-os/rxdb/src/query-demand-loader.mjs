@@ -590,12 +590,13 @@ export function createQueryDemandLoader({
     // ids is marked incomplete so the next exec triggers a remote refresh.
     async invalidateDocumentChange(changedDocumentIds = []) {
       if (!changedDocumentIds.length) return 0;
-      if (typeof sidecar.invalidateQueryWindowsForDocuments === 'function') {
-        const count = await sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
-        if (count) onQueryWindowChanged?.();
-        return count;
-      }
-      return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
+      const count = typeof sidecar.invalidateQueryWindowsForDocuments === 'function'
+        ? await sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds)
+        : await invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
+      // New rows may not belong to any cached window yet. Their known ids
+      // still wake a list consumer, without claiming unknown row metadata.
+      onQueryWindowChanged?.({ changes: changedDocumentIds.map(id => ({ id })) });
+      return count;
     },
 
     // Remote writes carry the changed documents. Consumers learn which rows

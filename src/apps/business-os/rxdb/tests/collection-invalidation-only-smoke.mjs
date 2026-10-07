@@ -90,13 +90,29 @@ for (const mode of ['direct', 'control-plane', 'maintenance-scope', 'permission-
     assert.equal(hints[2].changes, undefined, mode + ': an unnamed window change carries no changes');
     assert.equal(hints[3].changes, undefined, mode + ': a loader replacement carries no changes');
     assert.deepEqual(Object.values(reads), [0,0,0,0,0,0], mode + ': changes must make zero find/exec/storage/demand reads');
+    for (const observer of observers) observer({external:true, ids:['a', 'b', 'a']});
+    await wait();
+    assert.deepEqual(hints[4].changes, [{id:'a'}, {id:'b'}],
+      mode + ': other-tab ids survive without invented revisions or deletion states');
+    collection.notifyQueryWindowChange({documentIds:['c']});
+    await wait();
+    assert.equal(hints[5].changes, undefined,
+      mode + ': window member ids cannot certify the complete changed-row set');
+    for (const observer of observers) observer({success:{a:{...row, _deleted:true}}});
+    collection.notifyQueryWindowChange();
+    await wait();
+    assert.equal(hints[6].changes, undefined, mode + ': an unknown trigger dominates a mixed known/unknown burst');
+    for (const observer of observers) observer({external:true, ids:[]});
+    await wait();
+    assert.equal(hints[7].changes, undefined, mode + ': collection clearing still requests a full refresh');
+    assert.deepEqual(Object.values(reads), [0,0,0,0,0,0], mode + ': id-only hints also perform zero reads');
     subscription.unsubscribe();
     subscription.unsubscribe();
     assert.equal(observers.size, 0, mode + ': store listener must retire');
     collection.notifyQueryWindowChange();
     collection.setDemandLoader({...loader});
     await wait();
-    assert.equal(hints.length, 4, mode + ': unsubscribe must cancel all future hints');
+    assert.equal(hints.length, 8, mode + ': unsubscribe must cancel all future hints');
   } finally {
     subscription.unsubscribe();
     await db.close();

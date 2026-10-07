@@ -415,7 +415,7 @@ class CtoxRxCollection {
   // materializing a collection snapshot. Payload and permission authority
   // remain with that query, including projected query-window refreshes.
   //
-  // The event names the changed rows as `changes: [{ id, rev, deleted }]` when
+  // The event names the changed rows as `changes: [{ id, rev?, deleted? }]` when
   // every trigger in the debounce window identified them (local writes,
   // pushed remote writes, refreshed query windows). Otherwise `changes` is
   // absent and the consumer re-runs its query, as before.
@@ -450,6 +450,7 @@ class CtoxRxCollection {
     const unsubscribe = this.observe((event) => note(storageEventChanges(event)));
     const unsubscribeLoader = this.subscribeDemandLoaderChange(() => note(null), true);
     const unsubscribeWindow = this.subscribeQueryWindowChange((change) => note(
+      // Result-window membership does not identify removed or unseen changes.
       Array.isArray(change?.changes) ? change.changes : null,
     ));
     note(null);
@@ -1440,11 +1441,12 @@ export const ctoxRxdbTestInternals = {
 };
 
 // Storage change events carry the written documents (`success`: id -> stored
-// document). External events from other tabs carry only ids, without
-// revisions, and stay unidentified.
+// document). External events from other tabs carry only ids: preserve those
+// without inventing a revision or a deletion state. Empty ids also represent
+// a cleared collection and must retain the full-invalidation fallback.
 function storageEventChanges(event) {
   const success = event?.success;
-  if (!success || typeof success !== 'object') return null;
+  if (!success || typeof success !== 'object') return documentIdChanges(event?.ids);
   const changes = [];
   for (const [id, doc] of Object.entries(success)) {
     changes.push({
@@ -1454,4 +1456,10 @@ function storageEventChanges(event) {
     });
   }
   return changes;
+}
+
+function documentIdChanges(ids) {
+  if (!Array.isArray(ids) || !ids.length
+    || ids.some(id => typeof id !== 'string' || !id)) return null;
+  return [...new Set(ids)].map(id => ({ id }));
 }

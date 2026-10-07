@@ -8831,12 +8831,9 @@ function createQueryDemandLoader({
     // ids is marked incomplete so the next exec triggers a remote refresh.
     async invalidateDocumentChange(changedDocumentIds = []) {
       if (!changedDocumentIds.length) return 0;
-      if (typeof sidecar.invalidateQueryWindowsForDocuments === "function") {
-        const count = await sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
-        if (count) onQueryWindowChanged?.();
-        return count;
-      }
-      return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
+      const count = typeof sidecar.invalidateQueryWindowsForDocuments === "function" ? await sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds) : await invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
+      onQueryWindowChanged?.({ changes: changedDocumentIds.map((id) => ({ id })) });
+      return count;
     },
     // Remote writes carry the changed documents. Consumers learn which rows
     // changed (and their new revision) even when no cached window references
@@ -14245,7 +14242,7 @@ var CtoxRxCollection = class {
   // materializing a collection snapshot. Payload and permission authority
   // remain with that query, including projected query-window refreshes.
   //
-  // The event names the changed rows as `changes: [{ id, rev, deleted }]` when
+  // The event names the changed rows as `changes: [{ id, rev?, deleted? }]` when
   // every trigger in the debounce window identified them (local writes,
   // pushed remote writes, refreshed query windows). Otherwise `changes` is
   // absent and the consumer re-runs its query, as before.
@@ -14278,6 +14275,7 @@ var CtoxRxCollection = class {
     const unsubscribe = this.observe((event) => note(storageEventChanges(event)));
     const unsubscribeLoader = this.subscribeDemandLoaderChange(() => note(null), true);
     const unsubscribeWindow = this.subscribeQueryWindowChange((change) => note(
+      // Result-window membership does not identify removed or unseen changes.
       Array.isArray(change?.changes) ? change.changes : null
     ));
     note(null);
@@ -15149,7 +15147,7 @@ var ctoxRxdbTestInternals = {
 };
 function storageEventChanges(event) {
   const success = event?.success;
-  if (!success || typeof success !== "object") return null;
+  if (!success || typeof success !== "object") return documentIdChanges(event?.ids);
   const changes = [];
   for (const [id, doc] of Object.entries(success)) {
     changes.push({
@@ -15159,6 +15157,10 @@ function storageEventChanges(event) {
     });
   }
   return changes;
+}
+function documentIdChanges(ids) {
+  if (!Array.isArray(ids) || !ids.length || ids.some((id) => typeof id !== "string" || !id)) return null;
+  return [...new Set(ids)].map((id) => ({ id }));
 }
 
 // src/apps/business-os/rxdb/src/advanced-status-bridge.mjs
