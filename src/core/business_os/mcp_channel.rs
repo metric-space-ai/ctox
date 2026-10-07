@@ -1754,7 +1754,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         read_tool(
             "business_os.get_command_status",
-            "Use this when you need the current status for a Business OS command.",
+            "Read a Business OS command status. command_id may also be mcp-request:<request_id> to recover a timed-out action's command for the same originating actor and workspace. This does not retry the action; missing or ambiguous correlation fails closed.",
             object_schema(vec![required_string("command_id")]),
         ),
         read_tool(
@@ -4452,6 +4452,46 @@ pub fn get_command_status(
     context.validate()?;
     ensure_non_empty("command_id", command_id)?;
     enforce_collection_policy(root, "business_commands")?;
+    let resolved_command_id;
+    let command_id = if let Some(request_id) = command_id.strip_prefix("mcp-request:") {
+        if request_id.is_empty()
+            || request_id.len() > 256
+            || request_id.trim() != request_id
+            || request_id.chars().any(char::is_control)
+        {
+            return Err(BusinessOsMcpError::validation(
+                "command_id",
+                "mcp-request: requires an opaque request ID of at most 256 bytes",
+            )
+            .into());
+        }
+        let matches = store::find_business_command_ids_for_mcp_request(
+            root,
+            request_id,
+            &context.actor,
+            &context.workspace,
+        )?;
+        match matches.as_slice() {
+            [] => {
+                return Err(BusinessOsMcpError::not_found(
+                    BusinessOsMcpErrorCode::RecordNotFound,
+                    "No command correlation was found for this MCP request",
+                )
+                .into());
+            }
+            [id] => resolved_command_id = id.clone(),
+            _ => {
+                return Err(BusinessOsMcpError::validation(
+                    "command_id",
+                    "MCP request matches multiple commands; use an explicit command_id",
+                )
+                .into());
+            }
+        }
+        resolved_command_id.as_str()
+    } else {
+        command_id
+    };
     let payload =
         store::pull_business_command_status_record(root, command_id)?.ok_or_else(|| {
             BusinessOsMcpError::not_found(
@@ -15487,6 +15527,190 @@ mod tests {
                 .pointer("/record/data/command_id")
                 .and_then(Value::as_str),
             Some("cmd_1")
+        );
+        Ok(())
+    }
+
+    fn seed_mcp_correlated_status(
+        root: &Path,
+        command_id: &str,
+        request_id: &str,
+        context: &McpChannelRequestContext,
+    ) -> anyhow::Result<()> {
+        let client_context = serde_json::json!({
+            "request_id": request_id,
+            "mcp_actor": context.actor,
+            "workspace": context.workspace,
+        });
+        store::open_store(root)?.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status,
+                 payload_json, client_context_json, observed_at_ms)
+             VALUES (?1, 'tickets', 'ctox.coding.turn', '', 'failed', '{}', ?2, 42)",
+            params![command_id, serde_json::to_string(&client_context)?],
+        )?;
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "business_commands",
+                "documents": [{
+                    "id": command_id,
+                    "command_id": command_id,
+                    "module": "tickets",
+                    "command_type": "ctox.coding.turn",
+                    "status": "failed",
+                    "error_code": "coding_turn",
+                    "client_context": client_context,
+                    "updated_at_ms": 42,
+                }],
+            }),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn get_command_status_recovers_mcp_request_behind_large_recent_records() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let context = test_context("business_os.get_command_status");
+        seed_business_user(root, &context.actor, "admin")?;
+        seed_mcp_correlated_status(root, "cmd_original", "local-original", &context)?;
+        // A latest-record window cannot find the original, and returning these
+        // unrelated prompts would exceed the MCP response budget.
+        let documents: Vec<_> = (0..20)
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("cmd_newer_{index}"),
+                    "updated_at_ms": 1000 + index,
+                    "payload": {"prompt": "x".repeat(20000)},
+                })
+            })
+            .collect();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "business_commands", "documents": documents,
+            }),
+        )?;
+        let recent = store::pull_latest_collection_records(root, "business_commands", Some(16))?;
+        assert!(serde_json::to_vec(&recent)?.len() > 262144);
+        assert!(recent["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|record| record["id"] != "cmd_original"));
+
+        let result = call_tool(
+            root,
+            "business_os.get_command_status",
+            serde_json::json!({
+                "command_id": "mcp-request:local-original",
+                "_context": {"actor": context.actor, "workspace": context.workspace},
+            }),
+        )?;
+        assert_eq!(result["record"]["data"]["command_id"], "cmd_original");
+        assert_eq!(result["record"]["data"]["status"], "failed");
+        assert_eq!(result["record"]["data"]["error_code"], "coding_turn");
+        assert!(serde_json::to_vec(&result)?.len() < 2048);
+        let conn = store::open_store(root)?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM business_commands", [], |row| {
+            row.get(0)
+        })?;
+        assert_eq!(count, 1, "status recovery must not create another command");
+        Ok(())
+    }
+
+    #[test]
+    fn get_command_status_mcp_request_is_scoped_and_rejects_ambiguity() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let context = test_context("business_os.get_command_status");
+        seed_mcp_correlated_status(root, "cmd_original", "local-shared", &context)?;
+        for foreign in [
+            McpChannelRequestContext {
+                actor: "chatgpt:other".into(),
+                ..context.clone()
+            },
+            McpChannelRequestContext {
+                workspace: "other-workspace".into(),
+                ..context.clone()
+            },
+        ] {
+            let error = get_command_status(root, &foreign, "mcp-request:local-shared")
+                .expect_err("correlation belongs to its originating actor and workspace");
+            assert_eq!(
+                error.downcast_ref::<BusinessOsMcpError>().unwrap().code,
+                BusinessOsMcpErrorCode::RecordNotFound
+            );
+        }
+        seed_mcp_correlated_status(root, "cmd_duplicate", "local-shared", &context)?;
+        let error = get_command_status(root, &context, "mcp-request:local-shared")
+            .expect_err("never pick one of multiple commands by recency");
+        assert_eq!(
+            error
+                .downcast_ref::<BusinessOsMcpError>()
+                .unwrap()
+                .field
+                .as_deref(),
+            Some("command_id")
+        );
+        assert!(error.to_string().contains("multiple commands"));
+        Ok(())
+    }
+
+    #[test]
+    fn get_command_status_mcp_request_rejects_malformed_and_missing_ids() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let context = test_context("business_os.get_command_status");
+        for request_id in [
+            "".to_string(),
+            " leading".to_string(),
+            "trailing ".to_string(),
+            "control\ncharacter".to_string(),
+            "x".repeat(257),
+        ] {
+            let error =
+                get_command_status(temp.path(), &context, &format!("mcp-request:{request_id}"))
+                    .expect_err("malformed request selector must fail validation");
+            assert_eq!(
+                error
+                    .downcast_ref::<BusinessOsMcpError>()
+                    .unwrap()
+                    .field
+                    .as_deref(),
+                Some("command_id")
+            );
+        }
+        let error = get_command_status(temp.path(), &context, "mcp-request:missing")
+            .expect_err("absent correlation is not a terminal success or a retry");
+        assert_eq!(
+            error.downcast_ref::<BusinessOsMcpError>().unwrap().code,
+            BusinessOsMcpErrorCode::RecordNotFound
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn get_command_status_mcp_request_obeys_read_policy() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let context = test_context("business_os.get_command_status");
+        seed_mcp_correlated_status(temp.path(), "cmd_original", "local-original", &context)?;
+        save_mcp_policy_env(
+            temp.path(),
+            &[("CTOX_BUSINESS_OS_MCP_ALLOW_READS", "false")],
+        )?;
+        let error = call_tool(
+            temp.path(),
+            "business_os.get_command_status",
+            serde_json::json!({
+                "command_id": "mcp-request:local-original",
+                "_context": {"actor": context.actor, "workspace": context.workspace},
+            }),
+        )
+        .expect_err("request lookup must not bypass the read gate");
+        assert_eq!(
+            error.downcast_ref::<BusinessOsMcpError>().unwrap().code,
+            BusinessOsMcpErrorCode::PermissionDenied
         );
         Ok(())
     }
