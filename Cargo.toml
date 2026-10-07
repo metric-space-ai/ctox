@@ -64,7 +64,7 @@ regex = "1"
 qrcode = "0.14"
 quick-xml = "0.41"
 roxmltree = "0.21"
-rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+rusqlite = { version = "0.32", features = ["bundled", "hooks", "trace"] }
 # IoT automation-widget trigger runtime (RFC 0011): Rust-native, sandboxed
 # scripting for the CTOX-generated watcher. No FS/net; engine-level op/time limits.
 # NOTE: rhai pulls `smartstring`, whose blanket `impl Add<SmartString> for String`

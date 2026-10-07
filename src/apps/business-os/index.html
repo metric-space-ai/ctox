@@ -56,6 +56,7 @@
          sets, so it is inert in a browser: no host detection, no conditional
          loading. It carries no design of its own — see the file header. -->
     <link rel="stylesheet" href="themes/ctox-desktop-shell.css?v=20261007-shell-v2-workjet-supervisor-turn-control" />
+    <link rel="stylesheet" href="shared/shell-topbar.css?v=20261007-shell-v2-workjet-supervisor-turn-control" />
   </head>
   <body data-module-shell="full" data-module-loading="startup">
     <script>
@@ -84,12 +85,23 @@
           <div class="topbar-status-bar">
             <span class="brand-status" data-status-text aria-live="polite">Starting local runtime</span>
             <div class="ctox-version-line shell-release-line" data-shell-release>
-              <button class="shell-release-version" type="button" data-shell-version-label aria-haspopup="dialog" aria-expanded="false">v—</button>
+              <button class="shell-instance-button" type="button" data-shell-instance-toggle aria-haspopup="dialog" aria-expanded="false">
+                <span class="shell-instance-dot" data-shell-instance-health data-health="unknown" aria-hidden="true"></span>
+                <span data-shell-instance-name>Instanz</span>
+                <span class="shell-instance-chevron" aria-hidden="true">⌄</span>
+              </button>
+              <button class="shell-recovery-pill" type="button" data-shell-instance-toggle data-shell-recovery-pill aria-haspopup="dialog" aria-expanded="false" hidden>Recovery</button>
               <button class="ctox-update-button shell-release-status" type="button" data-shell-release-status data-state="checking" aria-label="Shell-Status" aria-expanded="false">
                 <span aria-hidden="true" data-shell-release-icon>…</span>
               </button>
-              <section class="shell-release-panel" data-shell-release-panel hidden>
+              <section class="shell-release-panel" data-shell-release-panel role="dialog" aria-label="Instanz und Versionen" hidden>
                 <strong>Business-OS-Shell</strong>
+                <p class="shell-instance-cause" data-shell-instance-cause hidden></p>
+                <button class="shell-release-version" type="button" data-shell-version-label aria-haspopup="dialog" aria-expanded="false">v—</button>
+                <div class="ctox-version-line ctox-backend-version-line" data-ctox-version hidden>
+                  <span data-ctox-version-label>CTOX —</span>
+                  <button class="ctox-update-button" type="button" data-ctox-update-button hidden>Aktualisieren</button>
+                </div>
                 <dl>
                   <div><dt>Version</dt><dd data-shell-release-panel-version>—</dd></div>
                   <div><dt>Angebot</dt><dd data-shell-release-panel-offered>—</dd></div>
@@ -102,22 +114,24 @@
                   <div><dt>Aktion</dt><dd data-shell-release-panel-action>Vorgang läuft</dd></div>
                 </dl>
                 <div class="shell-release-panel-actions">
+                  <button class="text-button" type="button" data-open-settings data-shell-t="settings">Einstellungen</button>
                   <button class="text-button" type="button" data-open-sync-diagnostics>Sync-Diagnose öffnen</button>
                   <button class="ctox-shell-warning" type="button" data-ctox-shell-warning hidden data-shell-t="ctoxNotWorking">CTOX Verbindung prüfen</button>
                   <button class="ctox-shell-warning" type="button" data-recovery-warning hidden data-shell-t="recoveryExport">Recovery exportieren</button>
                 </div>
               </section>
             </div>
-            <div class="ctox-version-line ctox-backend-version-line" data-ctox-version hidden>
-              <span data-ctox-version-label>CTOX —</span>
-              <button class="ctox-update-button" type="button" data-ctox-update-button hidden>Aktualisieren</button>
-            </div>
+
           </div>
         </div>
         <div class="module-nav">
           <nav class="module-tabs" data-module-tabs aria-label="Geöffnete Apps" data-shell-t-aria="openApps"></nav>
         </div>
         <div class="topbar-actions">
+          <button class="shell-sync-status" type="button" data-collection-freshness-warning data-open-sync-diagnostics aria-label="Sync-Status">
+            <span class="shell-sync-dot" aria-hidden="true"></span>
+            <span data-sync-state-label aria-live="polite"></span>
+          </button>
           <button class="account-button" type="button" data-open-account aria-label="Login öffnen" data-shell-t-aria="loginOpen">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 12.5a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path>
@@ -125,14 +139,10 @@
             </svg>
             <span data-account-label>Login</span>
           </button>
-          <button class="icon-button app-menu-button" type="button" data-open-settings aria-label="App-Menü öffnen" data-shell-t-aria="appMenuOpen">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 7h14M5 12h14M5 17h14"></path>
-            </svg>
-          </button>
+
         </div>
       </header>
-      <span class="collection-freshness-warning" data-collection-freshness-warning role="status" aria-live="polite" hidden></span>
+
 
       <section class="ctox-maintenance-banner" data-maintenance-banner role="status" aria-live="polite" hidden>
         <div class="ctox-maintenance-icon" aria-hidden="true">↻</div>

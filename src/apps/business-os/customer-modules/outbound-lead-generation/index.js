@@ -1368,6 +1368,12 @@ function bindCollections() {
   state.collectionBindingGeneration = (state.collectionBindingGeneration || 0) + 1;
   state.collectionReloader = createCollectionReloader({
     collections: state.collections,
+    // Running research writes leads continuously; with the 1 s default the
+    // whole paged lead list (~7 pages) was fetched again almost every second
+    // after start (thesen 07.10.2026), a permanent query load on the shared
+    // native peer. Background changes may show up to 5 s later; user actions
+    // reload explicitly and are not throttled.
+    intervalMs: 5000,
     reload: (keys) => reload(keys),
     afterReload: (keys) => {
       if (keys.length === 1 && keys[0] === 'leads' && state.lastLeadReloadChanged === false && listLeads().length) return;
