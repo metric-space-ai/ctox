@@ -182,7 +182,10 @@ fn weekly_report_revoked_user_or_conflicting_history_cannot_use_an_old_schedule(
         let conn = open_store(root.path())?;
         if inactive {
             assert_eq!(
-                conn.execute("UPDATE business_users SET active=0 WHERE user_id='owner'", [])?,
+                conn.execute(
+                    "UPDATE business_users SET active=0 WHERE user_id='owner'",
+                    []
+                )?,
                 1
             );
         } else {
