@@ -2489,7 +2489,7 @@ class CtoxWebRtcReplicationState {
       sidecar: this.demandSidecar,
       collectionName: this.collection.name,
       schemaVersion: this.collection.schema?.version || 0,
-      requestQueryFetch: (envelope) => demandTransport.requestQueryFetch(envelope),
+      requestQueryFetch: (envelope, options) => demandTransport.requestQueryFetch(envelope, options),
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: this.demandStatus,
       multiTabBroker: this.multiTabBroker,

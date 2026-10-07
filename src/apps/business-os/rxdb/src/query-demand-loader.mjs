@@ -70,6 +70,7 @@ export function createQueryDemandLoader({
     Number(queryWindowRevalidateMs) || DEFAULT_QUERY_WINDOW_REVALIDATE_MS,
   );
 
+  const loaderRequestScope = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
   const inflightByFingerprint = new Map();
   const coordinatedByFingerprint = new Map();
   let nextRequestSequence = 0;
@@ -127,7 +128,7 @@ export function createQueryDemandLoader({
         bumpStatus(status, 'queryFetchDedupHitCount');
         return existingInvocation.job;
       }
-      const requestId = `${collectionName}|query|${clock()}|${nextRequestSequence += 1}`;
+      const requestId = `${collectionName}|query|${loaderRequestScope}|${clock()}|${nextRequestSequence += 1}`;
       const invocationEntry = {
         job: null,
         requestId,
@@ -327,6 +328,8 @@ export function createQueryDemandLoader({
                 skip: query?.skip,
               },
               window: normalizedWindow,
+            }, {
+              authorityKey: JSON.stringify([String(queryGeneration?.() || ''), fetchPermissionDigest]),
             }),
             cancellationPromise,
           ]);
@@ -924,8 +927,7 @@ function v15Log(event, fields) {
     try { v15LogSink(event, fields); } catch {}
     return;
   }
-  // Thousands of these per page load cost real main-thread time (thesen
-  // 07.10.2026: >3000 in 10 s). Diagnostics opt in explicitly.
+  // Production is quiet; diagnostic output is explicitly enabled.
   if (globalThis?.__CTOX_V15_DEBUG__ === true && globalThis?.console?.debug) {
     globalThis.console.debug('[V1.5]', event, fields);
   }

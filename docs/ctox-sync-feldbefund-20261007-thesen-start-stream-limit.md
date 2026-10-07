@@ -62,3 +62,24 @@ die Einzelabfragen in 0,2–1,5 s beantwortet werden.
 - Zusammenlegen identischer strikter Fenster, solange eines unterwegs ist.
 - `[V1.5]`-Debug-Logging im Produktivbetrieb abschalten.
 - `workjet_session_transfers`-Registrierung auf thesen klären (cancel-Fehler).
+
+## Quellstand der Architekturkorrektur
+
+Auf main `a963dd343` existiert bereits eine pro Browser-Realm gemeinsame,
+begrenzte Zulassungswarteschlange (bisher sechs aktive Streams). Die
+`fetch:start`-Meldung entsteht vor dieser Zulassung und beweist daher allein
+keinen gleichzeitig laufenden nativen Stream. Der native Grenzwert von acht
+Streams gilt außerdem über alle Verbindungen; konkurrierende Browser können
+weiterhin das serverseitige Limit erreichen.
+
+Die Korrektur übernimmt den generierten Grenzwert acht in diese bestehende
+Warteschlange, teilt identische laufende strikte Fenster im gemeinsamen Transport
+und entfernt das standardmäßige `[V1.5]`-Logging. Berechtigungsdigest,
+Verbindungsgeneration und jeder einzelne Abbruch bleiben getrennt abgesichert;
+abgeschlossene Antworten werden nicht als neue strikte Lesung wiederverwendet.
+Der gezielte Regressionstest misst Komponentenverhalten, keine THESEN-Latenz.
+
+Die Vorher-Messung bleibt der obige Feldbefund (~20 s, identifizierter Release).
+Die Nachher-Messung muss nach Claudes Installation am echten Outbound erfolgen:
+Release/Shell-Stempel, Seitenaufruf bis erste sichtbare Lead-Liste, tatsächliche
+RPCs/Limitablehnungen und Konsole erfassen. Ein lokaler Testlauf ersetzt sie nicht.
