@@ -324,6 +324,22 @@ pub(super) fn assert_native_source_handoff_enrollment(
     assert_eq!(renewed.binding_id, first.binding_id);
     assert_eq!(renewed.binding_revision, 2);
     assert_ne!(renewed.binding_digest, original_digest);
+    registry.with_policy(|tx| {
+        let (captured, assigned, authorized): (i64,i64,i64) = tx.query_row(
+            "SELECT c.workspace_revision,w.revision,json_extract(a.source_json,'$.workspaceRevision')
+             FROM business_native_source_checkpoints c
+             JOIN business_native_source_journals j ON j.capture_id=c.capture_id
+             JOIN business_native_guest_workspace_assignments w
+             ON w.owner_user_id=j.owner_user_id AND w.worker_profile_id=j.worker_profile_id AND w.project_id=j.project_id
+             JOIN business_native_source_handoff_authorizations a ON a.binding_id=?2
+             WHERE c.capture_id=?1",
+            rusqlite::params![receipt.capture_id,first.binding_id],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+        )?;
+        assert!(assigned > captured,"explicit workspace regrants advance their revision");
+        assert_eq!(authorized,assigned,"renewed binding records the current workspace revision");
+        Ok(())
+    }).unwrap();
     assert!(
         gate.authorize(&request).is_err(),
         "old binding digest cannot mint after renewal"

@@ -188,6 +188,6 @@ fn resolve(
         checkpoint_digest: row.12,
         checkpoint_sequence: u64::try_from(row.13)?,
         source_working_copy_id: row.14,
-        workspace_revision: u64::try_from(row.15)?,
+        workspace_revision: workspace.revision,
     })
 }
