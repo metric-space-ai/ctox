@@ -381,6 +381,10 @@ pub(super) fn visible_in_store(
     if user_id.is_empty() {
         return Some(false);
     }
+    let Ok(owner) = super::super::workjet_identity::owner_from_connection(conn, user_id) else {
+        return Some(false);
+    };
+    let user_id = owner.as_str();
     let mut references_to_check = BTreeSet::new();
     references(document, &mut references_to_check);
     if is_owned_collection(collection) {

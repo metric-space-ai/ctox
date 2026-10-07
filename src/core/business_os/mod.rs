@@ -61,6 +61,7 @@ mod populated_store_recovery;
 mod project_chats;
 pub(crate) use project_chats::{emit_project_report, reconcile_project_reports};
 mod project_crew;
+mod workjet_identity;
 pub(crate) use project_crew::project_crew_member_for_task;
 pub mod build_delivery;
 pub mod build_source;

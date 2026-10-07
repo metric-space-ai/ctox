@@ -1709,7 +1709,13 @@ fn dispatch_business_command(
         | "ctox.workjet.project.supervisor.turn.watch"
         | "ctox.workjet.project.supervisor.turn.cancel" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
-            match super::project_chats::supervisor_turns::control(root, command, session) {
+            let mut project_session = session.clone();
+            let user = project_session
+                .user
+                .as_mut()
+                .context("Workjet supervisor requires a user")?;
+            user.id = super::workjet_identity::owner(root, &user.id)?;
+            match super::project_chats::supervisor_turns::control(root, command, &project_session) {
                 Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,

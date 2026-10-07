@@ -13915,6 +13915,19 @@ async function workjetProjectControl(request = {}) {
         code: 'WORKJET_PROJECT_LIST_INCOMPLETE', retryable: false,
       });
     }
+    // The confirmed owner can differ from the authenticated actor for a verified alias.
+    // Keep the original actor/session fence; only the native receipt selects the read scope.
+    let projectOwnerUserId = ownerUserId;
+    if (Object.hasOwn(receipt.result, 'owner_user_id')) {
+      const confirmedOwner = receipt.result.owner_user_id;
+      if (typeof confirmedOwner !== 'string' || !confirmedOwner || confirmedOwner.length > 256
+        || confirmedOwner.trim() !== confirmedOwner || /[\u0000-\u001f\u007f]/.test(confirmedOwner)) {
+        throw Object.assign(new Error('Workjet could not confirm the project owner identity.'), {
+          code: 'WORKJET_PROJECT_LIST_UNCONFIRMED', retryable: false,
+        });
+      }
+      projectOwnerUserId = confirmedOwner;
+    }
     let confirmedProjectIds = null;
     if (Object.hasOwn(receipt.result, 'project_ids')) {
       const ids = receipt.result.project_ids;
@@ -13927,7 +13940,7 @@ async function workjetProjectControl(request = {}) {
       }
       confirmedProjectIds = new Set(ids);
     }
-    const selector = { owner_user_id: { $eq: ownerUserId } };
+    const selector = { owner_user_id: { $eq: projectOwnerUserId } };
     const projectSelector = { ...selector, status: { $eq: 'active' } };
     const controller = new AbortController();
     const projectAuthority = {};
@@ -13941,9 +13954,9 @@ async function workjetProjectControl(request = {}) {
         }, commandId, listDeadline, controller.signal),
       ]);
       assertCurrentIdentity();
-      const workingCopies = await listProjectedWorkjetWorkingCopies(ownerUserId, copyDocs);
+      const workingCopies = await listProjectedWorkjetWorkingCopies(projectOwnerUserId, copyDocs);
       let projects = await listProjectedWorkjetProjects(
-        ownerUserId, WORKJET_PROJECT_CONTROL_MAX_RESULTS, workingCopies, projectDocs,
+        projectOwnerUserId, WORKJET_PROJECT_CONTROL_MAX_RESULTS, workingCopies, projectDocs,
         { includeConfiguration },
       );
       assertCurrentIdentity();
@@ -13960,7 +13973,7 @@ async function workjetProjectControl(request = {}) {
           }
           projectDocs = projectDocs.concat(missingDocs);
           projects = await listProjectedWorkjetProjects(
-            ownerUserId, WORKJET_PROJECT_CONTROL_MAX_RESULTS, workingCopies, projectDocs,
+            projectOwnerUserId, WORKJET_PROJECT_CONTROL_MAX_RESULTS, workingCopies, projectDocs,
             { includeConfiguration },
           );
         }
@@ -14263,7 +14276,10 @@ async function listProjectedWorkjetWorkingCopies(ownerUserId, nativeDocs = null)
     limit: WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES,
   }).exec();
   return docs
-    .map((doc) => boundedWorkjetWorkingCopyResult(doc?.toJSON?.() || doc))
+    .map((doc) => {
+      const value = doc?.toJSON?.() || doc;
+      return value?.owner_user_id === ownerUserId ? boundedWorkjetWorkingCopyResult(value) : null;
+    })
     .filter(Boolean)
     .sort((left, right) => left.id.localeCompare(right.id));
 }

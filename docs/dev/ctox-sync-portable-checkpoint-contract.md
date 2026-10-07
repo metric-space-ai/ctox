@@ -64,8 +64,10 @@ acceptable fallback.
 The strict validator is consumed by the portable checkpoint capture,
 publication/receipt verification, and restore primitives. This is not yet a
 complete operational portability path: no CTOX daemon or provider adapter
-currently invokes those primitives at a proven turn-quiescence boundary, imports
-provider state, or resumes Codex/Claude on another host. Consequently #175 and
+currently resumes Codex/Claude on another host. The configured native producer
+captures its stopped Core journal/state and Git workspace; protected native
+copy and target workspace preparation now consume those artifacts under native
+policy. This does not import or activate the original Core session. Consequently #175 and
 #97 remain open. This contract does not claim portable session export/import,
 provider resume, cross-host failover, or production portability.
 
@@ -119,7 +121,13 @@ The consumer:
   can report success.
 
 This package reconstructs a Git workspace. Source-object transfer across
-hosts and real provider export/resume remain subsequent integrations.
+hosts can also use `CheckpointStore::reconstruct_workspace_from_bundle`: the
+caller explicitly selects a hash-verified bundle reference contained in the
+checkpoint. An isolated bare repository imports those objects without any remote
+fetch, then the same exact-base and patch reconstruction runs. The native target
+consumer selects the captured `native-workspace.bundle` under Receive/Execute
+policy. Pending effects still reject preparation. Real provider import/resume
+remains a subsequent integration.
 
 ## Capture producer
 

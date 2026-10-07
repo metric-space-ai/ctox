@@ -66,9 +66,17 @@ body[data-module-loading] .app-shell > .topbar { z-index: 60; }
   flex: 0 0 auto; max-width: none; overflow: visible;
   white-space: nowrap; text-overflow: clip;
 }
-.topbar .module-tab-icon, .topbar .module-tab-state,
+.topbar .module-tab-icon {
+  display: grid; place-items: center; flex: 0 0 18px; width: 18px; height: 18px;
+  border-radius: 5px; font-size: 10px;
+}
+.topbar .module-tab-state,
 .topbar .module-tab[data-pinned]::before, .topbar .module-tab[data-running]::after { display: none; }
-.topbar .module-tab[aria-current="page"] { box-shadow: none !important; border-color: transparent !important; }
+:root .topbar .module-tab[aria-current="page"],
+:root .topbar .module-tab[data-running="focused"] {
+  background: var(--surface-2) !important; color: var(--text) !important;
+  box-shadow: inset 0 -2px 0 var(--accent) !important; border-color: transparent !important;
+}
 .topbar .module-tab-count {
   min-width: 16px; padding: 1px 4px; border-radius: 4px;
   background: var(--accent-soft); color: var(--accent);

@@ -9,9 +9,12 @@ import {
 } from './file-integrity.js?v=20260831-ctox-desktopapp-ports-v328';
 import { renderGlobalCtoxAgentScopeHtml } from './shell-permissions-ui.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
+
   normalizeWorkjetCategory,
   workjetCategoryStyle,
 } from './workjet-theme.js?v=20260903-entertainment-import-v336';
+
+const CREW_RELOAD_MIN_INTERVAL_MS = 3000;
 
 const CHAT_STYLE_ID = 'ctox-business-chat-style';
 const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
@@ -496,9 +499,18 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     })().catch(() => {}).finally(() => { reloadInFlight = null; });
     return reloadInFlight;
   };
+  // Busy workers change queue tasks several times per second; reloading 400 ms
+  // after each change re-read the crew task windows almost continuously
+  // (thesen 07.10.2026). Coalesce to at most one reload every 3 s.
+  let lastReloadStartedAt = 0;
   const scheduleReload = () => {
     if (disposed || reloadTimer) return;
-    reloadTimer = window.setTimeout(() => { reloadTimer = null; reload(); }, 400);
+    const wait = Math.max(400, CREW_RELOAD_MIN_INTERVAL_MS - (Date.now() - lastReloadStartedAt));
+    reloadTimer = window.setTimeout(() => {
+      reloadTimer = null;
+      lastReloadStartedAt = Date.now();
+      reload();
+    }, wait);
   };
   const onHarnessChange = () => {
     if (disposed) return Promise.resolve();
