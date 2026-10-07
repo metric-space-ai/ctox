@@ -198,7 +198,12 @@ assert(status.queryFetchEvictedWindowMissCount === 1, 'evicted window miss is di
   assert(pending[0]?.status === 'pending_sync', 'first command query materializes pending state');
   await commandLoader.resolveQuery({ selector: { id: 'cmd-status-1' }, limit: 1 });
   assert(commandFetches === 1, 'fresh command status window stays local within its freshness budget');
+  // Untracked command windows age 5 s (pushed remote writes invalidate them
+  // directly); one second is no longer a reason to poll the native peer.
   commandNow += 1_001;
+  await commandLoader.resolveQuery({ selector: { id: 'cmd-status-1' }, limit: 1 });
+  assert(commandFetches === 1, 'an untracked command window is not re-polled after 1 s');
+  commandNow += 4_000;
   const accepted = await commandLoader.resolveQuery({ selector: { id: 'cmd-status-1' }, limit: 1 });
   assert(commandFetches === 2, 'stale command status window is revalidated over WebRTC');
   assert(accepted[0]?.status === 'accepted', 'revalidation materializes the native command lifecycle');

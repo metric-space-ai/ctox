@@ -8422,7 +8422,7 @@ function canonicalizeWindow(window2) {
 // src/apps/business-os/rxdb/src/query-demand-loader.mjs
 var DEFAULT_WINDOW_LIMIT = 200;
 var DEFAULT_QUERY_WINDOW_REVALIDATE_MS = 3e4;
-var CONTROL_PLANE_QUERY_REVALIDATE_MS = 1e3;
+var CONTROL_PLANE_QUERY_REVALIDATE_MS = 5e3;
 var TRACKED_CONTROL_PLANE_QUERY_REVALIDATE_MS = 250;
 var ACTIVE_COMMAND_STORAGE_KEY = "ctox.businessOs.activeCommandIds.v1";
 var EMPTY_QUERY_WINDOW_REVALIDATE_MS = 5e3;

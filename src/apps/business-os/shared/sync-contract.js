@@ -6,6 +6,7 @@ export const SYNC_TRANSPORT = 'webrtc';
 export const SYNC_TOPIC_PREFIX = 'ctox-business-os';
 export const RXDB_NATIVE_PEER_PENDING_REASON = 'CTOX native WebRTC peer is starting or unavailable';
 export const COLLECTION_READINESS_STATES = ['never-synced', 'catching-up', 'live', 'offline-pending'];
+export const COLLECTION_FRESHNESS_MAX_AGE_MS = 120_000;
 
 export function normalizeCollectionReadinessState(value) {
   return COLLECTION_READINESS_STATES.includes(value) ? value : null;
@@ -46,7 +47,7 @@ export function collectionFreshnessFromDiagnostics(collection, entry, { syncMode
   let state = local ? 'live'
     : normalizeCollectionReadinessState(entry?.frameTransport?.collectionFreshnessState) || 'catching-up';
   const confirmedAt = Number(entry?.frameTransport?.lastSuccessfulPullAtMs || 0);
-  if (!local && state === 'live' && (!confirmedAt || nowMs - confirmedAt > 120_000)) {
+  if (!local && state === 'live' && (!confirmedAt || nowMs - confirmedAt > COLLECTION_FRESHNESS_MAX_AGE_MS)) {
     state = 'catching-up';
   }
   return Object.freeze({
