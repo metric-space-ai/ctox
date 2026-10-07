@@ -13,6 +13,7 @@ const { createDemandLoadingTransport } = await import(process.argv.includes('--s
   ? '../src/demand-loading-transport.mjs'
   : '../dist/ctox-rxdb-js.mjs');
 import { deflateRawSync } from 'node:zlib';
+import { CLIENT_QUERY_STREAM_LIMIT } from '../src/demand-loading-transport.mjs';
 
 const transport = createDemandLoadingTransport({ getPeerId: () => 'peer-1' });
 
@@ -459,7 +460,7 @@ admissionTransport.attach({
   ]),
   async request() { return { ack: true }; },
 });
-const activeQueries = Array.from({ length: 6 }, (_, index) => (
+const activeQueries = Array.from({ length: CLIENT_QUERY_STREAM_LIMIT }, (_, index) => (
   admissionTransport.requestQueryFetch({ ...envelope, requestId: `q-admission-${index}` })
     .catch((error) => error)
 ));

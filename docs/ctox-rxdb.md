@@ -1134,7 +1134,9 @@ artifact still retains the complete evidence directory.
 Browser demand-query admission also separates a pending handshake from an
 active native query stream. Unauthenticated/unavailable collection transports
 remain in the existing bounded queue (128 requests, 1 MiB of queued envelopes).
-They do not consume the six active stream slots. The scheduler admits the first
+They do not consume the eight active stream slots, matching the generated
+native query-stream bound. This is one shared queue per browser JavaScript realm;
+it does not reserve native capacity against other browser connections. The scheduler admits the first
 currently ready queued request, rechecks authorization readiness before
 dispatch, and reserves its slot synchronously before another caller can enter.
 A queued peer that loses authorization returns to readiness waiting. Cancellation
@@ -1142,6 +1144,18 @@ and transport teardown remove only that owner's requests; a later handshake
 cannot revive a removed request. The existing 60-second peer-readiness wait
 remains bounded. Already dispatched requests retain their existing RPC,
 collector and retry behavior.
+
+Identical demand-query windows also share an unfinished network operation when
+connection generation, accepted peer, current permission digest and the complete
+query/projection envelope match. Distinct `requireRevision` hydration tokens retain
+their own loader jobs, publication fences and cache satisfaction; an already
+completed response cannot satisfy a subsequent strict read. Cancelling one caller
+leaves surviving callers live, and the last caller cancels the original native
+request. Peer teardown rejects all attached consumers. Consumer aliases remain
+bounded alongside the existing admission queue. Production emits no default
+`[V1.5]` console debug output; the existing explicit `setV15LogSink` remains the
+opt-in diagnostic path. `query-startup-coalescing-smoke.mjs` covers these component
+contracts; installed THESEN lead-list latency still requires post-deploy measurement.
 
 Ordered transport ingestion must not await application/RPC handlers. Incoming
 RPCs, including reassembled requests, enter a separate queue that preserves
