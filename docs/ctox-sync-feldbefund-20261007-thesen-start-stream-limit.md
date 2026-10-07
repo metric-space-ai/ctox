@@ -62,3 +62,57 @@ die Einzelabfragen in 0,2–1,5 s beantwortet werden.
 - Zusammenlegen identischer strikter Fenster, solange eines unterwegs ist.
 - `[V1.5]`-Debug-Logging im Produktivbetrieb abschalten.
 - `workjet_session_transfers`-Registrierung auf thesen klären (cancel-Fehler).
+
+## Quellstand der Architekturkorrektur
+
+Auf main `a963dd343` existiert bereits eine pro Browser-Realm gemeinsame,
+begrenzte Zulassungswarteschlange (bisher sechs aktive Streams). Die
+`fetch:start`-Meldung entsteht vor dieser Zulassung und beweist daher allein
+keinen gleichzeitig laufenden nativen Stream. Der native Grenzwert von acht
+Streams gilt außerdem über alle Verbindungen; konkurrierende Browser können
+weiterhin das serverseitige Limit erreichen.
+
+Die Korrektur übernimmt den generierten Grenzwert acht in diese bestehende
+Warteschlange, teilt identische laufende strikte Fenster im gemeinsamen Transport
+und entfernt das standardmäßige `[V1.5]`-Logging. Berechtigungsdigest,
+Verbindungsgeneration und jeder einzelne Abbruch bleiben getrennt abgesichert;
+abgeschlossene Antworten werden nicht als neue strikte Lesung wiederverwendet.
+Der gezielte Regressionstest misst Komponentenverhalten, keine THESEN-Latenz.
+
+Die Vorher-Messung bleibt der obige Feldbefund (~20 s, identifizierter Release).
+Die Nachher-Messung muss nach Claudes Installation am echten Outbound erfolgen:
+Release/Shell-Stempel, Seitenaufruf bis erste sichtbare Lead-Liste, tatsächliche
+RPCs/Limitablehnungen und Konsole erfassen. Ein lokaler Testlauf ersetzt sie nicht.
+
+## Nachtrag 07.10.2026 17:10 (Claude, gemessen auf THESEN nach Installation)
+
+Gemessen im Business-OS-Desktop vom Owner-Mac (WebRTC über TURN-Relay, daher
+langsamer als im THESEN-LAN), Kennzahl „Seitenaufruf bis Kampagnenliste sichtbar“.
+
+| Stand | Zeit |
+|---|---|
+| native-main-ecd15981a9cb, Outbound 1.0.302 | 22,6 s / 24,1 s |
+| + 86098f681 (Slot-Warten im Transport, `[V1.5]` nur mit `__CTOX_V15_DEBUG__`) | 27–33 s (keine Besserung) |
+| + 0fc6e7176 (Limit-Ablehnung über die RPC-Antwort wird wiederholt) | 27 s |
+| + Outbound 1.0.303 d3852fcc5 (gleichzeitige Lead-Listen-Ladungen geteilt, 45 s Budget) | 21,6 s; 0 `fetch:error`, keine Doppelseiten |
+
+Zusätzlich gefundene Ursache (in 0fc6e7176 behoben): Der native Peer lehnt eine
+Abfrage über dem Limit zweimal ab — als RPC-Antwort ohne `retryable` und als
+`rxdb.query.error`-Frame. Die Antwort kommt zuerst; der Client verlangte
+`retryable` und wiederholte deshalb nie. Der neue Smoke scheitert gegen den
+alten Transport genau damit.
+
+Verbleibende Zeit (Messlauf 15:06Z, Outbound 1.0.303):
+- 0–12,5 s: noch keine einzige Abfrage — Peer-Verbindungsaufbau vom Mac.
+- ab 12,5 s belegen Shell-Abfragen 5 von 6 Client-Slots für 9–11 s:
+  `ctox_queue_tasks` (limit 120 und 200), `business_commands` (200),
+  `ctox_harness_events` (198), `ctox_runs` (197). Die Leads der geöffneten App
+  bekommen den letzten Slot; 7 Seiten à 200 nacheinander, je 1,4–1,8 s.
+- Die Kampagnenliste wird erst bei `fertig` sichtbar, nicht nach dem ersten
+  vollständigen Laden (~23 s).
+- Nach `fertig` lädt Outbound die ganze Lead-Liste fast im Sekundentakt neu
+  (laufende Recherche-Writebacks invalidieren die Sammlung) — Dauerlast.
+
+Vorschlag: Abfragen der sichtbaren App vor Hintergrund-Abfragen der Shell
+zulassen (Priorität in der Zulassungswarteschlange) und die großen
+Shell-Fenster beim Start verkleinern oder verzögern.

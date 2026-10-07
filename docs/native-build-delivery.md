@@ -1,5 +1,9 @@
 # Frozen source delivery
 
+Git-aware worker capture and isolated reconstruction are documented in
+[native worker source intake](native-worker-source.md). Ordinary private build
+delivery remains a plain frozen tree.
+
 `business_os::build_delivery::package` consumes an unmodified native source capture,
 a validated build grant, a disposable staging root, a unique run ID and the
 SHA256 of the actual compiler/toolchain profile. It produces owned upload files,
