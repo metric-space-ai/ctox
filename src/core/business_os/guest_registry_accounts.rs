@@ -117,6 +117,14 @@ pub(crate) fn revoke_provider_assignment(root: &Path, owner: &str, profile: &str
 
 /// Optional during provisioning; absence cannot authorize a producer.
 pub(super) fn snapshot(policy: &Connection, d: &GuestRestoreDestination) -> Result<Option<Value>> {
+    snapshot_scope(policy, &d.human_owner_id, &d.worker_profile_id)
+}
+
+pub(super) fn snapshot_scope(
+    policy: &Connection,
+    owner: &str,
+    profile: &str,
+) -> Result<Option<Value>> {
     let exists: bool = policy.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
         AND name='business_native_guest_provider_assignments')",
@@ -132,7 +140,7 @@ pub(super) fn snapshot(policy: &Connection, d: &GuestRestoreDestination) -> Resu
         FROM business_native_guest_provider_assignments a
         JOIN business_users u ON u.user_id=a.owner_user_id
         WHERE a.owner_user_id=?1 AND a.worker_profile_id=?2",
-        rusqlite::params![d.human_owner_id,d.worker_profile_id],
+        rusqlite::params![owner,profile],
         |row| Ok(json!({
             "computer_id":row.get::<_,String>(0)?,
             "gateway_account_id":row.get::<_,String>(1)?,
@@ -155,13 +163,14 @@ pub(super) fn require_assignment(
     policy: &Connection,
     d: &GuestRestoreDestination,
 ) -> Result<Value> {
-    let assigned =
-        snapshot(policy, d)?.context("native guest provider account is not explicitly assigned")?;
-    let profile = super::super::worker_profile_bindings::require_active(
-        policy,
-        &d.human_owner_id,
-        &d.worker_profile_id,
-    )?;
+    require_scope(policy, &d.human_owner_id, &d.worker_profile_id)
+}
+
+pub(super) fn require_scope(policy: &Connection, owner: &str, profile_id: &str) -> Result<Value> {
+    let assigned = snapshot_scope(policy, owner, profile_id)?
+        .context("native guest provider account is not explicitly assigned")?;
+    let profile =
+        super::super::worker_profile_bindings::require_active(policy, &owner, &profile_id)?;
     ensure!(
         assigned["state"] == "active"
             && assigned["principal_active"] == 1

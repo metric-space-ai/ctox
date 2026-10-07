@@ -168,6 +168,20 @@ pub(crate) fn revoke_workspace_assignment(
 }
 
 pub(super) fn snapshot(policy: &Connection, d: &GuestRestoreDestination) -> Result<Option<Value>> {
+    snapshot_scope(
+        policy,
+        &d.human_owner_id,
+        &d.worker_profile_id,
+        &d.project_id,
+    )
+}
+
+pub(super) fn snapshot_scope(
+    policy: &Connection,
+    owner: &str,
+    profile: &str,
+    project: &str,
+) -> Result<Option<Value>> {
     let exists: bool = policy.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
         AND name='business_native_guest_workspace_assignments')",
@@ -182,7 +196,7 @@ pub(super) fn snapshot(policy: &Connection, d: &GuestRestoreDestination) -> Resu
         a.principal_epoch,a.state,a.revision,u.active,u.capability_epoch
         FROM business_native_guest_workspace_assignments a JOIN business_users u ON u.user_id=a.owner_user_id
         WHERE a.owner_user_id=?1 AND a.worker_profile_id=?2 AND a.project_id=?3",
-        rusqlite::params![d.human_owner_id,d.worker_profile_id,d.project_id],
+        rusqlite::params![owner,profile,project],
         |row| Ok(json!({
             "computerId":row.get::<_,String>(0)?,
             "workingCopyId":row.get::<_,String>(1)?,
@@ -196,8 +210,8 @@ pub(super) fn snapshot(policy: &Connection, d: &GuestRestoreDestination) -> Resu
     if let Some(a) = &mut assigned {
         let copy = working_copy(
             policy,
-            &d.human_owner_id,
-            &d.project_id,
+            &owner,
+            &project,
             a["computerId"]
                 .as_str()
                 .context("native workspace computer absent")?,
@@ -231,12 +245,26 @@ pub(super) fn require(
     d: &GuestRestoreDestination,
     actual_cwd: &Path,
 ) -> Result<AssignedWorkspace> {
-    let a = snapshot(policy, d)?.context("native workspace has no explicit host assignment")?;
-    let profile = super::super::worker_profile_bindings::require_active(
+    require_scope(
         policy,
         &d.human_owner_id,
         &d.worker_profile_id,
-    )?;
+        &d.project_id,
+        actual_cwd,
+    )
+}
+
+pub(super) fn require_scope(
+    policy: &Connection,
+    owner: &str,
+    profile_id: &str,
+    project: &str,
+    actual_cwd: &Path,
+) -> Result<AssignedWorkspace> {
+    let a = snapshot_scope(policy, owner, profile_id, project)?
+        .context("native workspace has no explicit host assignment")?;
+    let profile =
+        super::super::worker_profile_bindings::require_active(policy, &owner, &profile_id)?;
     ensure!(
         a["state"] == "active"
             && a["principalActive"] == 1
@@ -272,8 +300,8 @@ pub(super) fn require(
     );
     working_copy(
         policy,
-        &d.human_owner_id,
-        &d.project_id,
+        &owner,
+        &project,
         a["computerId"]
             .as_str()
             .context("native workspace computer absent")?,

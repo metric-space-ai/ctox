@@ -14,7 +14,8 @@
 //! not a retained fence for later asynchronous protected-byte publication.
 //!
 //! What this adapter deliberately does not do: it does not fabricate a
-//! binding (the local operator enrolls from an actual source capture), it does not infer
+//! binding (the operator enrolls an actual source capture and signed target proof),
+//! it does not infer
 //! account or workspace entitlement from a reachable model route or a sole
 //! configured account, and it does not consume checkpoint bytes. The
 //! operational transfer consumer that must call `SessionHandoffTransfer` is
@@ -271,39 +272,77 @@ fn audit_decision(
     .map_err(|_| deny("policy_audit_unavailable"))
 }
 
+impl NativeSessionHandoffGate {
+    /// All real phases resolve native provenance before a signed decision escapes.
+    fn authorize_fenced(
+        &self,
+        conn: &Connection,
+        identity: &SigningIdentity,
+        request: &SessionHandoffGateRequest,
+    ) -> Result<SessionHandoffPermit, SessionHandoffDenial> {
+        let decision = (|| {
+            // Resolve the basic binding, exact grant and pinned issuer first.
+            let permit = self.authorize_with_conn(conn, request, identity)?;
+            #[cfg(unix)]
+            {
+                let config = crate::sync_host::handoff_configuration(&self.root)
+                    .map_err(|_| deny("host_unavailable"))?;
+                match request.phase {
+                    SessionHandoffPhase::Disclose => {
+                        super::session_handoff_enrollment::validate_source_decision(
+                            &self.root, conn, &config, identity, request,
+                        )
+                        .map_err(|_| deny("source_authority_changed"))?
+                    }
+                    SessionHandoffPhase::Receive | SessionHandoffPhase::Resume => {
+                        super::session_handoff_enrollment::target::validate_target_decision(
+                            &self.root, conn, &config, identity, request,
+                        )
+                        .map_err(|_| deny("target_authority_changed"))?
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            return Err(deny("native_authority_unavailable"));
+            Ok(permit)
+        })();
+        if let Err(error) = audit_decision(conn, request, identity, &decision) {
+            return Err(decision.err().unwrap_or(error));
+        }
+        decision
+    }
+}
 impl SessionHandoffGate for NativeSessionHandoffGate {
     fn authorize(
         &self,
         request: &SessionHandoffGateRequest,
     ) -> Result<SessionHandoffPermit, SessionHandoffDenial> {
-        // Do not initialize/migrate stores or let separate reads straddle
-        // revocation. The signature is made before either fence is released.
-        self.with_current_authority(|conn, identity| {
-            let decision = (|| {
-                if request.phase == SessionHandoffPhase::Disclose {
-                    #[cfg(unix)]
-                    {
-                        let config = crate::sync_host::handoff_configuration(&self.root)
-                            .map_err(|_| deny("host_unavailable"))?;
-                        super::session_handoff_enrollment::validate_source_decision(
-                            &self.root, conn, &config, identity, request,
-                        )
-                        .map_err(|_| deny("source_authority_changed"))?;
-                    }
-                    #[cfg(not(unix))]
-                    return Err(deny("source_authority_unavailable"));
-                }
-                self.authorize_with_conn(conn, request, identity)
-            })();
-            if let Err(audit_denial) = audit_decision(conn, request, identity, &decision) {
-                // An allowed decision can never escape an audit failure. If
-                // authority was already unavailable, preserve that denial:
-                // absent/blank stores cannot also persist their own failure.
-                return Err(decision.err().unwrap_or(audit_denial));
-            }
-            decision
-        })
+        self.with_current_authority(|conn, identity| self.authorize_fenced(conn, identity, request))
     }
+}
+
+/// Public enrollment metadata only; the generated Disclose permit authenticates
+/// its canonical hash plus target challenge. No journal, path or credential export.
+#[cfg(unix)]
+pub(crate) fn native_source_offer(
+    root: &Path,
+    binding: &str,
+    challenge: &str,
+) -> anyhow::Result<super::session_handoff_enrollment::target::SourceOffer> {
+    let pin = crate::sync_host::signing_identity(root)?.public_identity();
+    let gate = NativeSessionHandoffGate {
+        root: root.into(),
+        issuer_identity: pin,
+        permit_ttl_ms: PERMIT_TTL_MS,
+    };
+    Ok(gate.with_current_authority(|conn, identity| {
+        let body = super::session_handoff_enrollment::target::offer_body(conn, binding, challenge)
+            .map_err(|_| deny("source_offer_unavailable"))?;
+        let request = super::session_handoff_enrollment::target::offer_request(&body)
+            .map_err(|_| deny("invalid_request"))?;
+        let disclosure = gate.authorize_fenced(conn, identity, &request)?;
+        Ok(super::session_handoff_enrollment::target::SourceOffer { body, disclosure })
+    })?)
 }
 
 /// Construct the production gate for this instance. Fails visibly when the
@@ -522,46 +561,22 @@ mod tests {
 
     #[cfg(unix)]
     fn production_fixture() -> ProductionFixture {
-        let root = tempfile::tempdir().unwrap();
-        crate::persistence::store_text_value(root.path(), "handoff_fixture", Some("present"))
-            .unwrap();
-        crate::sync_host::handle_command(root.path(), &["init".into()]).unwrap();
-        let identity = crate::sync_host::signing_identity(root.path()).unwrap();
-        let fixture = fixture();
-        fixture
-            .conn
-            .execute(
-                "UPDATE business_session_handoff_bindings SET side='target',
-                 target_identity=?1,target_principal_user_id='alice'",
-                [identity.public_identity()],
-            )
-            .unwrap();
-        // These minimal fixtures isolate issuer/store fencing on the Receive
-        // phase. Disclosure provenance is exercised through the actual Core
-        // capture regression in guest_registry_source_handoff_tests.
-        fixture
-            .conn
-            .execute(
-                "UPDATE business_permission_grants SET permission=?1",
-                [BusinessOsPermission::SessionHandoffReceive.as_str()],
-            )
-            .unwrap();
-        let mut request = request(&fixture, SessionHandoffPhase::Receive);
-        request.issuer_identity = identity.public_identity();
-        let path = business_os_store_path(root.path());
-        fixture
-            .conn
-            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
-            .unwrap();
-        let gate = native_session_handoff_gate(root.path()).unwrap();
-        let writer =
-            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE).unwrap();
+        // Use the actual target enrollment and current native assignments. The
+        // standalone signed source fixture isolates issuer/store guards; the
+        // stopped Core test separately supplies the production source offer.
+        let target = super::super::session_handoff_enrollment::target::tests::gate_fixture();
+        let gate = native_session_handoff_gate(target.root.path()).unwrap();
+        let writer = Connection::open_with_flags(
+            business_os_store_path(target.root.path()),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .unwrap();
         writer.busy_timeout(std::time::Duration::ZERO).unwrap();
         ProductionFixture {
-            root,
+            root: target.root,
+            identity: target.identity,
+            request: target.request,
             gate,
-            identity,
-            request,
             writer,
         }
     }
@@ -639,8 +654,8 @@ mod tests {
                 .reason_code,
             "wrong_instance",
         );
-        // This is a fixture enrollment update, not a production enrollment
-        // path: the real independent enrollment owner remains required.
+        // A row edit cannot replace the independently enrolled target identity,
+        // even if a newly constructed gate sees the rotated signing secret.
         fixture
             .writer
             .execute(
@@ -650,10 +665,11 @@ mod tests {
             .unwrap();
         let mut next_request = fixture.request.clone();
         next_request.issuer_identity = rotated.public_identity();
-        let next = next_gate.authorize(&next_request).unwrap();
-        verify_session_handoff_permit(&next, &rotated.public_identity(), "scope-1", "nonce-1")
-            .unwrap();
-        assert_eq!(next.binding_revision, 4);
+        assert_eq!(
+            next_gate.authorize(&next_request).unwrap_err().reason_code,
+            "target_authority_changed",
+            "a rewritten issuer/binding cannot substitute native target enrollment"
+        );
         assert_eq!(
             fixture
                 .gate
@@ -713,15 +729,18 @@ mod tests {
         // decisions must reread the new durable state.
         fixture
             .writer
-            .execute("UPDATE business_users SET capability_epoch=12", [])
+            .execute(
+                "UPDATE business_users SET capability_epoch=capability_epoch+1",
+                [],
+            )
             .unwrap();
         assert_eq!(
             fixture
                 .gate
                 .authorize(&fixture.request)
-                .unwrap()
-                .principal_epoch,
-            12
+                .unwrap_err()
+                .reason_code,
+            "target_authority_changed"
         );
         fixture
             .writer

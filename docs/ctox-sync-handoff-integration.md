@@ -16,7 +16,7 @@ acceptance evidence or a replacement for the full portability requirement.
 | CTOX `src/core/sync/src/capture.rs::CheckpointStore::capture` | Captures Git plus caller-supplied history/provider artifacts; requires the caller to establish quiescence. | The configured native queue owner now supplies its stopped Core journal/state and explicitly assigned Git working copy. Target transport, effect reconciliation and original-session resume remain open. |
 | CTOX `src/core/business_os/workjet_transfer_git.rs` | CLI pack/apply helpers reconstruct a working copy. | They are not called by the native session handoff lifecycle and do not establish account/principal permission. |
 | CTOX `src/core/sync/src/authority/handoff.rs` | Verifies signed gate results and discards old evidence during revalidation. | The production gate adapter now exists (see below); transfer invocations remain absent — no production consumer calls `SessionHandoffTransfer`. |
-| CTOX `business_session_handoff_bindings` | Migration creates binding fields and indexes; a production reader now exists. | The local operator now enrolls a source binding from an actual native capture; target-local enrollment and protected transfer remain open. |
+| CTOX `business_session_handoff_bindings` | Migration creates binding fields and indexes; a production reader now exists. | The local operator enrolls the actual native source capture and a source-signed offer against target-local policy; protected transfer remains open. |
 | CTOX `src/core/business_os/session_handoff_gate.rs` | Production `SessionHandoffGate`: per call re-reads the active binding by digest, matches side/phase, job, session, scope, checkpoint, ownership generation, harness/model-route/account/model against the row, requires this instance's enrolled identity for the side, resolves the principal's current role and capability epoch from `business_users`, demands the exact `session_handoff` grant on the binding, then mints a 60s signed permit. | Source disclosure additionally re-resolves the capture, full producer contract, native policy/workspace and enrolled destination peer. It is not yet invoked by a protected checkpoint sender/receiver. |
 
 The older Workjet snapshot module records an August decision to transfer only
@@ -78,9 +78,10 @@ replaced assignments fail closed and require reconciliation.
 
 Registrations belong to this daemon lifetime. Restart does not resurrect a
 live provider/process from a persisted claim; abandoned import directories
-need explicit reconciliation. The first-turn producer connection is described below. Source/target handoff
-binding enrollment, protected checkpoint transport and original-session target
-resume remain production connections under #183. Enrollment alone does not
+need explicit reconciliation. The first-turn producer connection is described
+below. Source/target handoff bindings now have separate native operator enrollment.
+Protected checkpoint transport and original-session target resume remain
+production connections under #183. Enrollment alone does not
 start QEMU or establish two-host restoration.
 
 ## Native source handoff binding enrollment
@@ -145,10 +146,61 @@ regression now follows grant mutation, current assignment provisioning and
 native renewal with a strictly increasing principal epoch.
 
 This is source policy reauthorization. Current credential/physical-byte
-guards, target enrollment and same-session target activation remain open.
+guards and same-session target activation remain open. Target-local enrollment
+is described below; Receive/Execute still require separate exact grants. Effect
+reconciliation, authenticated byte transport and target activation remain open.
 
-Receive/execute grants, target-local enrollment, effect reconciliation,
-authenticated byte transport and same-session target activation remain open.
+## Native target handoff enrollment
+
+Target policy is now enrolled through the trusted local operator, separately
+from source disclosure and guest/process creation. Provision the target's
+existing project and logical chat, assigned worker profile/computer, explicit
+provider account/model and protected native working copy first. The project
+and chat IDs remain the source IDs; neither a target cwd nor a provider session
+label can create or select a replacement conversation.
+
+`ctox sync handoff-configure-target-repository` accepts public JSON with
+`ownerUserId`, `workerProfileId`, `projectId`, `workingCopyId`, `repositoryId`.
+It binds that opaque logical repository to the already assigned native working
+copy under current principal authority. It cannot supply a path or issue a
+handoff grant. Repository reconfiguration advances its native revision; grant
+changes require explicit current provider/workspace/repository regrants.
+
+The target runs `ctox sync handoff-target-challenge`. The source runs
+`ctox sync handoff-source-offer <binding-id> <challenge>`, after current source
+disclosure authorization. Its public metadata contains the actual captured
+execution facts, current binding revision, original logical chat, exact target
+selection and both enrolled public identities. The existing generated Disclose
+permit signs the canonical metadata hash plus this fresh target challenge.
+It contains no native paths, journal contents or reusable credentials.
+
+The target runs `ctox sync handoff-enroll-target` with `{offer, workerProfileId}`
+on stdin. It checks its own enrolled instance/key and current source membership,
+the full metadata/digest/signature and 60-second validity, then consumes its
+exact issued challenge in the same transaction as target binding, native
+provenance and identifier-only audit. Changed/expired/reused challenges, unsigned
+or altered metadata, a foreign target, missing local principal/project/chat/
+computer/account/workspace/repository assignment and an audit failure deny.
+Exact lost-response retries remain idempotent. A revoked target binding cannot
+be resurrected. Explicit fresh enrollment may refresh current target policy
+with a new local binding revision; it creates no grants or running guest.
+
+Receive and Resume gate decisions now require that native target provenance
+and re-resolve all current local assignments, configured computer/requirements,
+workspace directory identity, exact binding fields, logical chat and provider
+contract. A copied legacy binding row without enrollment cannot authorize.
+Account/profile/role/epoch/repository/policy changes require explicit renewal;
+row edits or a rotated issuer cannot replace the enrolled proof.
+
+This is native provisioning over local operator CLI, with signed public source
+metadata. It is not the authenticated peer checkpoint byte transport. No HTTP
+bridge, protected journal stream, remote credential use, reconstruction, quorum
+receipt, ownership takeover or target Core activation is supplied here. The
+future transfer must obtain fresh decisions from both live instances and retain
+account/policy/accepted-connection guards at physical publication/ingestion;
+the stored offer is historical enrollment provenance, never current source
+permission. These are compatible same-contract mappings; changing harness/model
+needs the later typed transition over the same durable conversation.
 
 ## Native working-copy source checkpoint
 
@@ -237,8 +289,9 @@ enrollment.
 This connects the first-turn production producer only. It grants no checkpoint
 disclosure, target receipt or target execution. An already-bound guest cannot
 start a replacement provider session without lifecycle reconciliation.
-Source/target handoff enrollment, complete artifact capture, authorized
-checkpoint transport and continuation of the original session remain open.
+Source/target handoff enrollment and complete native working-copy capture are
+described above. Authorized checkpoint transport, external-effect reconciliation
+and continuation of the original session remain open.
 
 ## Queue-owned source journal publication
 
@@ -310,9 +363,10 @@ and externally supplied sessions retain their existing owners.
 
 This is durable private journal input, not a complete checkpoint or a disclosure,
 receive or execution grant. No provider-state blob is fabricated from journal
-syntax. Workspace/files/attachments, provider continuation, external effects,
-authorized source/target binding enrollment and protected transport remain
-required. Artifact fsync, the policy transaction and assistant/worker store have
+syntax. Workspace/files/attachments, provider continuation and external effects
+still require their native owners. Source/target enrollment is described above;
+protected transport and actual target activation remain required. Artifact fsync,
+the policy transaction and assistant/worker store have
 separate commits: failed metadata publication can leave a private orphan blob;
 a later authority or reply-persistence failure can leave private journal
 input without a successful worker marker and needs reconciliation. Installed
@@ -500,9 +554,9 @@ The smallest owner contract that closes step 3:
    `business_os::native_session_handoff_gate(root)` so permits are minted by
    the enrolled instance identity from the CTOX secret store; no consumer may
    substitute a caller-supplied key or a permit-returning stub.
-5. Binding rows are written only by a separately authorized enrollment path
-   that resolves the fields listed in step 2; that writer is still
-   unimplemented and remains part of this owner contract.
+5. Binding rows come from the separate native source/target enrollment paths
+   above. The target verifies a signed offer against its current local policy;
+   enrollment neither supplies grants nor starts protected transfer.
 
 ## Current native admission authority
 
@@ -518,11 +572,14 @@ stores deny without schema initialization or migration.
 These fences end when the synchronous admission decision returns. They do not
 cover subsequent asynchronous checkpoint bytes, peer membership, current
 provider-account entitlement or filesystem replacement outside native runtime
-ownership. The production enrollment writer, quiescent capture owner and actual
-sender/receiver/resume consumer remain required. Three source regressions use
-the production constructor and decision path with fixture enrollment rows for
-key deletion/rotation, competing issuer/policy writers and absent/uninitialized
-stores; they are not real session-transfer acceptance.
+ownership. Source capture and native source/target enrollment now exist; the
+actual sender/receiver/resume consumer remains required. Gate regressions use
+the production constructor with signed source offers and real target-local
+assignments for key deletion/rotation, epoch changes, competing issuer/policy
+writers and absent/uninitialized stores. The stopped Core capture regression
+also exercises source-offer signing, target enrollment, exact retries, changed
+local authority and workspace replacement. These are policy regressions, not
+real session-transfer acceptance.
 
 ## Atomic effect-checkpoint reconciliation
 
@@ -536,8 +593,8 @@ effect. It cannot clear another pending effect or reuse an older sequence.
 The unchanged-legacy-checkpoint upgrade is limited to a clean checkpoint and
 ordinary `ProtectCheckpoint`. It cannot refresh a dirty checkpoint after
 ordinary effect completion, or complete a live effect with unchanged bytes.
-The production enrollment, held publication guard and actual sender/receiver
-remain required; this reconciliation does not supply them or claim acceptance.
+Native enrollment is described above. The held publication guard and actual
+sender/receiver remain required; this reconciliation does not supply them or claim acceptance.
 
 ## Acceptance evidence
 

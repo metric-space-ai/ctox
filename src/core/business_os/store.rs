@@ -27738,6 +27738,30 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             policy_snapshot_json TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS business_native_target_handoff_challenges (
+            nonce TEXT PRIMARY KEY,
+            target_identity TEXT NOT NULL,
+            scope_id TEXT NOT NULL,
+            expires_at_ms INTEGER NOT NULL,
+            used_binding_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS business_native_target_repository_assignments (
+            owner_user_id TEXT NOT NULL,
+            worker_profile_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            working_copy_id TEXT NOT NULL,
+            repository_id TEXT NOT NULL,
+            principal_epoch INTEGER NOT NULL,
+            revision INTEGER NOT NULL CHECK(revision > 0),
+            PRIMARY KEY(owner_user_id,worker_profile_id,project_id)
+        );
+        CREATE TABLE IF NOT EXISTS business_native_target_handoff_bindings (
+            binding_id TEXT PRIMARY KEY REFERENCES business_session_handoff_bindings(binding_id),
+            binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
+            source_offer_json TEXT NOT NULL,
+            target_scope_json TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS business_module_releases (
             version_id TEXT PRIMARY KEY,
             module_id TEXT NOT NULL,

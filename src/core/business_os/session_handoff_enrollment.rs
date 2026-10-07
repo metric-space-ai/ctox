@@ -14,7 +14,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-#[derive(Serialize, Deserialize)]
+#[path = "session_handoff_target.rs"]
+pub(crate) mod target;
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SourceHandoffEnrollment {
     pub capture_id: String,
@@ -107,7 +110,7 @@ fn target_identity<'a>(
     Ok(&target.identity)
 }
 
-fn digest(
+pub(crate) fn digest(
     source: &SourceHandoffFacts,
     input: &SourceHandoffEnrollment,
     source_identity: &str,
