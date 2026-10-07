@@ -356,7 +356,17 @@ impl StorageConnection for SshStorage {
                                         "en",
                                     )
                                     .await?;
-                                session.await?;
+                                // The transport reports Disconnect when our requested
+                                // shutdown ends its receive loop. All data operations
+                                // (including fsync) have already returned successfully.
+                                if let Err(error) = session.await {
+                                    if !matches!(
+                                        error.downcast_ref::<russh::Error>(),
+                                        Some(russh::Error::Disconnect)
+                                    ) {
+                                        return Err(error);
+                                    }
+                                }
                             }
                             Ok::<_, anyhow::Error>(())
                         })
