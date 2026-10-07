@@ -3482,12 +3482,18 @@ fn upsert_thread(
         .collect::<BTreeSet<_>>();
     merged.extend(participants.iter().cloned());
     let mut metadata = json!({"source_context": source});
-    if let Some(binding) = super::project_chats::supervisor_binding::for_thread(conn, &owner, thread_id)? {
-        anyhow::ensure!(source_string(source, "module").as_deref() == Some("ctox")
-            && source_string(source, "record_type").as_deref() == Some("workjet_project")
-            && source_string(source, "record_id").as_deref() == Some(binding.project_id.as_str()),
-            "supervisor source context conflicts with its native project binding");
-        metadata["workjet_supervisor_contract"] = json!(super::project_chats::supervisor_binding::CONTRACT);
+    if let Some(binding) =
+        super::project_chats::supervisor_binding::for_thread(conn, &owner, thread_id)?
+    {
+        anyhow::ensure!(
+            source_string(source, "module").as_deref() == Some("ctox")
+                && source_string(source, "record_type").as_deref() == Some("workjet_project")
+                && source_string(source, "record_id").as_deref()
+                    == Some(binding.project_id.as_str()),
+            "supervisor source context conflicts with its native project binding"
+        );
+        metadata["workjet_supervisor_contract"] =
+            json!(super::project_chats::supervisor_binding::CONTRACT);
         metadata["workjet_supervisor"] = serde_json::to_value(binding)?;
     }
     let record = json!({

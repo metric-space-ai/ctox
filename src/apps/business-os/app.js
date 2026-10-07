@@ -13746,7 +13746,7 @@ async function workjetProjectControl(request = {}) {
     const threadId = boundedWorkjetProjectText(request.threadId, 'threadId', 36);
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(threadId)
       || threadId === '00000000-0000-0000-0000-000000000000') {
-      throw new TypeError('Workjet supervisor threadId must be its existing canonical CodeThread UUID.');
+      throw new TypeError('Workjet supervisor threadId must be its existing lowercase CodeThread UUID.');
     }
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
