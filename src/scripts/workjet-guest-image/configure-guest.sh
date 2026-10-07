@@ -50,8 +50,9 @@ try:
 finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
-# Kernel framebuffer repainting is costly under single-thread TCG. Preserve
-# other arguments and keep Xorg's real graphical VT intact.
+# The fixed virtio-vga guest has one framebuffer. Keep fbcon from taking over
+# its text consoles: emulated framebuffer damage work otherwise dominates
+# cold boot. Xorg still uses the real DRM device and graphical VT.
 grub = pathlib.Path('/etc/default/grub.d/99-ctox-serial-console.cfg')
 grub.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
 grub.write_text('''ctox_without_console() {
@@ -65,7 +66,7 @@ grub.write_text('''ctox_without_console() {
 }
 GRUB_CMDLINE_LINUX_DEFAULT=$(ctox_without_console "$GRUB_CMDLINE_LINUX_DEFAULT")
 ctox_linux=$(ctox_without_console "$GRUB_CMDLINE_LINUX")
-GRUB_CMDLINE_LINUX="$ctox_linux console=ttyS0,115200n8"
+GRUB_CMDLINE_LINUX="$ctox_linux console=ttyS0,115200n8 fbcon=map:1"
 unset ctox_linux
 unset -f ctox_without_console
 ''')
@@ -76,7 +77,7 @@ PY
 
 if [ "${1-}" = --boot-only ]; then
     [ "$#" -eq 1 ]
-    [ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-555140a08-v7 ]
+    [ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-555140a08-v8 ]
     [ "$(id -u ctox-desktop)" = 1500 ]
     [ ! -e /etc/ctox/guest-startup.json ]
     configure_boot
