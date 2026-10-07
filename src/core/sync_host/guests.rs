@@ -27,6 +27,8 @@ pub(super) struct Configuration {
     /// Explicit privileged local-operator grants; enrollment cannot mint them.
     #[serde(default)]
     provider_assignments: Vec<crate::business_os::ProviderAssignmentInput>,
+    #[serde(default)]
+    workspace_assignments: Vec<crate::business_os::WorkspaceAssignmentInput>,
 }
 impl Configuration {
     fn validate(&self) -> Result<()> {
@@ -43,7 +45,8 @@ impl Configuration {
                 && !self.required_capabilities.is_empty()
                 && self.required_capabilities.len() <= 32
                 && self.required_capabilities.iter().all(|c| valid(c))
-                && self.provider_assignments.len() <= 64,
+                && self.provider_assignments.len() <= 64
+                && self.workspace_assignments.len() <= 64,
             "invalid native guest host configuration"
         );
         Ok(())
@@ -54,15 +57,16 @@ pub(super) fn configure(root: &Path, input: &str) -> Result<()> {
     value.validate()?;
     let _lease = HostDirectoryLock::acquire(&directory(root))?;
     configuration(root)?.validate_key(key(root)?.as_ref())?;
+    crate::business_os::configure_native_guest_assignments(
+        root,
+        &value.computer_id,
+        &value.provider_assignments,
+        &value.workspace_assignments,
+    )?;
     crate::inference::runtime_env::set_runtime_env_value(
         root,
         CONFIG_KEY,
         &serde_json::to_string(&value)?,
-    )?;
-    crate::business_os::configure_provider_assignments(
-        root,
-        &value.computer_id,
-        &value.provider_assignments,
     )
 }
 fn load(root: &Path) -> Result<Option<Configuration>> {

@@ -59,6 +59,22 @@ pub struct CaptureResult {
 }
 
 impl CheckpointStore {
+    /// Preserve the actual HEAD object closure, including commits unavailable
+    /// from any upstream. The quiescent owner retains the resulting bundle as
+    /// a protected native artifact; this does not authorize target Git IO.
+    pub async fn capture_git_bundle(&self, workspace: &Path) -> io::Result<Vec<u8>> {
+        let root = fs::canonicalize(workspace)?;
+        if git_bytes(&root, &["rev-parse", "--show-prefix"], 4096).await? != b"\n" {
+            return Err(invalid_capture("Git bundle requires the workspace root"));
+        }
+        git_bytes(
+            &root,
+            &["-c", "pack.threads=2", "bundle", "create", "-", "HEAD"],
+            self.max_blob_bytes(),
+        )
+        .await
+    }
+
     /// Capture bounded Git state and caller-supplied durable artifacts, then
     /// publish one content-addressed manifest. The caller must stop accepting
     /// new work before calling this method.

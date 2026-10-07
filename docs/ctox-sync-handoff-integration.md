@@ -13,7 +13,7 @@ acceptance evidence or a replacement for the full portability requirement.
 | Workjet `WorkjetMailboxDelivery.ts::acceptHandoff` | Dispatches `thread.create` with a new thread ID, host model settings, null branch and null worktree. | This is a new contextual conversation, not continuation of the captured provider session. |
 | Workjet `apps/server/src/workjet/sync/WorkjetSyncIpc.ts::requestSyncAuthority` | Typed private IPC client; current calls are in its test file. | No production execution owner invokes checkpoint protection or takeover through it. |
 | CTOX `src/core/sync/src/native_execution.rs::activate` | Starts the private authority listener and supervises authenticated peer-route discovery. | Does not capture, stream, restore or resume a checkpoint. |
-| CTOX `src/core/sync/src/capture.rs::CheckpointStore::capture` | Captures Git plus caller-supplied history/provider artifacts; requires the caller to establish quiescence. | No production session owner supplies that boundary and those artifacts. |
+| CTOX `src/core/sync/src/capture.rs::CheckpointStore::capture` | Captures Git plus caller-supplied history/provider artifacts; requires the caller to establish quiescence. | The configured native queue owner now supplies its stopped Core journal/state and explicitly assigned Git working copy. Target transport, effect reconciliation and original-session resume remain open. |
 | CTOX `src/core/business_os/workjet_transfer_git.rs` | CLI pack/apply helpers reconstruct a working copy. | They are not called by the native session handoff lifecycle and do not establish account/principal permission. |
 | CTOX `src/core/sync/src/authority/handoff.rs` | Verifies signed gate results and discards old evidence during revalidation. | The production gate adapter now exists (see below); transfer invocations remain absent — no production consumer calls `SessionHandoffTransfer`. |
 | CTOX `business_session_handoff_bindings` | Migration creates binding fields and indexes; a production reader now exists. | No production binding enrollment path writes this table yet; rows are the gate's only authority. |
@@ -82,6 +82,59 @@ need explicit reconciliation. The first-turn producer connection is described be
 binding enrollment, protected checkpoint transport and original-session target
 resume remain production connections under #183. Enrollment alone does not
 start QEMU or establish two-host restoration.
+
+## Native working-copy source checkpoint
+
+The trusted local operator may add `workspaceAssignments` to
+`ctox sync configure-guests`. Each entry contains `ownerUserId`,
+`workerProfileId`, `projectId`, `workingCopyId` and `nativeWorkspace`.
+The existing owner/profile/computer/project and active working-copy records
+must agree. The Workjet working-copy path stays opaque: only this explicit
+host assignment supplies the native path. The path must be absolute, canonical,
+owned by this process user and protected from group/world writes. Its directory
+device/inode, current principal epoch and assignment revision are persisted in
+the existing policy store. Provider and workspace grants are configured in one
+policy transaction; invalid input rolls back both. Host startup reads this
+authority and never recreates a revoked grant. The local operator can revoke
+it with `ctox sync revoke-guest-workspace <owner> <profile> <project>`.
+
+The assignment participates in the admitted policy revision. Before native
+TurnStart, its path must equal the actual turn cwd. A configured native
+producer holds an exclusive advisory lock on the actual directory from
+controller binding until its checked, quiescent source publication finishes.
+Another cooperating native writer cannot acquire that directory concurrently.
+This lock does not fence arbitrary editors or filesystem changes outside
+native ownership; directory replacement is independently rejected.
+
+After checked Core shutdown, the actual queue capture owner calls the shared
+CheckpointStore capture under its retained worker/account/policy/controller
+guards. Bounded local Git IO retains the base, staged and unstaged patches,
+deletions, untracked files and an actual HEAD bundle, including locally
+unpublished commit objects. The protected native artifacts also retain the
+actual journal, final Core configuration and sealed session/provider state.
+The artifact store must be outside the captured working copy. The bundle uses
+at most two packing workers; every Git command is bounded and the complete
+capture has a ninety-second deadline and the existing per-blob budget.
+Private metadata links the exact capture and workspace revision to the
+immutable manifest. A conflicting retry cannot replace it.
+The shared checkpoint validator accepts the canonical native CTOX Core writer in
+addition to legacy Codex journals. Native journal metadata must match the
+manifest's writer version and model route on capture, publication and load;
+identity, syntax, limits and unsupported-harness checks remain in force.
+
+
+Ordinary enrolled chats without a native workspace assignment remain explicitly
+journal-only and emit a checkpoint-unavailable reason. Their working-copy
+labels or turn cwd cannot grant checkpoint capture. A configured but stale,
+foreign, replaced, revoked or non-Git workspace fails visibly.
+
+Native turn external effects remain unknown, so the manifest retains an
+unresolved effect and the existing reconstruction guard refuses execution.
+This is source capture, not effect reconciliation, permission to disclose,
+target authorization, upstream retention or same-session target activation.
+Attachments/files outside the captured Git working copy and complete VM state
+still require their actual native owners. No target transport or live two-host
+acceptance is claimed by these source regressions.
 
 ## Native queue producer connection
 

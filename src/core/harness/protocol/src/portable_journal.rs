@@ -26,6 +26,8 @@ use time::format_description::well_known::Rfc3339;
 pub const PORTABLE_CODEX_JOURNAL_FORMAT: &str = "ctox-codex-rollout-jsonl";
 /// Version of the strict validation contract in this crate.
 pub const PORTABLE_CODEX_JOURNAL_VERSION: u32 = 1;
+/// Native CTOX writer identity; native manifests also bind version and route.
+pub const PORTABLE_CTOX_HARNESS: &str = "ctox-core";
 
 /// Upper bounds enforced before any journal record is decoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +102,8 @@ pub struct ValidatedPortableJournal {
     pub format_version: u32,
     pub artifact: PortableArtifactRef,
     pub session_id: ThreadId,
+    /// Strictly validated initial metadata, kept separate from replay items.
+    pub metadata: SessionMetaLine,
     pub record_count: usize,
     pub limits: PortableJournalLimits,
     pub provider_continuation: ProviderContinuationState,
@@ -305,6 +309,7 @@ pub fn validate_portable_journal(
             size_bytes: artifact.size_bytes,
         },
         session_id: session_meta.meta.id,
+        metadata: session_meta,
         record_count,
         limits: *limits,
         provider_continuation: ProviderContinuationState::Unresolved,

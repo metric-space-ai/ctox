@@ -66,6 +66,17 @@ authority, and publishes both beside its original journal in the existing
 CheckpointStore. Native policy stores only capture-associated references;
 retry cannot replace conflicting state, and old captures are not promoted.
 
+## 2026-10 Native writer compatibility in portable checkpoints
+
+The shared portable-journal contract names the native writer as
+`ctox-core`, matching the actual compiled Core package identity. Native
+checkpoint readers bind SessionMeta's writer version and model-provider route
+to the manifest on capture, publication and load. Legacy Codex journals remain
+readable through their existing strict codec. Unknown harnesses, wrong session,
+writer-version/route mismatches and malformed/truncated journals still deny.
+This recognizes the actual native producer; it does not issue execution or
+disclosure authority or resolve external effects.
+
 ## 2026-10 Native MCP emission boundary
 
 The MCP handler consults a live in-process native dispatcher immediately before

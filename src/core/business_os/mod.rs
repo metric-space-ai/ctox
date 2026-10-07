@@ -30,6 +30,10 @@ pub(crate) use guest_registry::accounts::{
     configure_provider_assignments, revoke_provider_assignment, ProviderAssignmentInput,
 };
 #[cfg(unix)]
+pub(crate) use guest_registry::workspaces::{
+    configure_native_guest_assignments, revoke_workspace_assignment, WorkspaceAssignmentInput,
+};
+#[cfg(unix)]
 pub(crate) use guest_registry::{
     NativeGuestAssignment, NativeGuestExecution, NativeGuestRegistry, NativeSourceJournalReceipt,
 };

@@ -2,8 +2,10 @@
 //! in this record; the operator host supplies them from its secret/runtime store.
 use crate::authority::{auth::SigningIdentity, NodeId};
 use rusqlite::{Connection, OptionalExtension};
+#[cfg(feature = "webrtc")]
+use std::collections::BTreeMap;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     io,
     path::{Path, PathBuf},
 };

@@ -96,6 +96,13 @@ fn accepts_independent_timestamps_and_states_what_it_did_not_validate() {
     );
     assert_eq!(validated.external_effects, ExternalEffectState::Unknown);
     assert_eq!(validated.items.len(), 1);
+    assert_eq!(validated.metadata.meta.id, expected().session_id);
+    assert_eq!(validated.metadata.meta.cli_version, "1.0.0");
+    assert_eq!(
+        validated.metadata.meta.model_provider.as_deref(),
+        Some("test-provider")
+    );
+    assert!(matches!(validated.items[0], RolloutItem::EventMsg(_)));
 }
 
 #[test]

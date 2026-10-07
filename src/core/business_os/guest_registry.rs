@@ -9,8 +9,12 @@
 pub(crate) mod accounts;
 #[path = "guest_registry_command.rs"]
 mod command;
+#[path = "guest_registry_source_checkpoint.rs"]
+mod source_checkpoint;
 #[path = "guest_registry_source_journal.rs"]
 mod source_journal;
+#[path = "guest_registry_workspaces.rs"]
+pub(crate) mod workspaces;
 pub(crate) use source_journal::NativeSourceJournalReceipt;
 #[path = "guest_registry_frames.rs"]
 mod frames;
@@ -290,6 +294,7 @@ struct ExecutionBinding {
 }
 
 struct Registration {
+    workspace_lease: Option<std::fs::File>,
     assignment: NativeGuestAssignment,
     import_identity: FileIdentity,
     revoked: bool,
@@ -673,6 +678,7 @@ impl NativeGuestRegistry {
         entries.insert(
             assignment.destination.guest_id.clone(),
             Arc::new(Mutex::new(Registration {
+                workspace_lease: None,
                 assignment: assignment.clone(),
                 import_identity,
                 revoked: false,
@@ -991,6 +997,7 @@ fn validate_policy(conn: &Connection, destination: &GuestRestoreDestination) -> 
         "guest thread is closed, archived or foreign"
     );
     let provider_assignment = accounts::snapshot(conn, destination)?;
+    let workspace_assignment = workspaces::snapshot(conn, destination)?;
     Ok(format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&(
@@ -1000,7 +1007,8 @@ fn validate_policy(conn: &Connection, destination: &GuestRestoreDestination) -> 
             member,
             chat,
             thread,
-            provider_assignment
+            provider_assignment,
+            workspace_assignment
         ))?)
     ))
 }
@@ -1035,7 +1043,10 @@ impl NativeGuestExecution {
                             == entry.import_identity,
                         "native import parent replaced"
                     );
+                    let workspace_lease =
+                        workspaces::acquire_lease(tx, &entry.assignment.destination)?;
                     entry.execution = Some(self.binding.clone());
+                    entry.workspace_lease = workspace_lease;
                     entry.provider = Some(self.provider.clone());
                     Ok(())
                 })
