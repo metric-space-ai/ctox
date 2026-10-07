@@ -1378,3 +1378,20 @@ fn maintenance_replays_events_only_without_cursor_or_after_the_replay_interval()
     ));
     assert!(event_replay_due(Some(42), None, now));
 }
+
+#[test]
+fn failed_replay_leaves_a_cursor_so_the_next_pass_is_incremental() -> Result<()> {
+    let (root, conn) = setup()?;
+    conn.execute("INSERT INTO communication_routing_state(message_key,route_status,updated_at) VALUES('task','leased',?1)", [Utc::now().to_rfc3339()])?;
+    // Unparseable metadata makes the replay fail part-way, like a busy store.
+    conn.execute("INSERT INTO ctox_harness_flow_events VALUES('broken','worker.phase','Working','','task',NULL,NULL,'{not json',?1)", [Utc::now().to_rfc3339()])?;
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    assert!(project_events(root.path(), &conn, &mut writer).is_err());
+    assert!(writer.event_cursor.is_some());
+    assert!(!event_replay_due(
+        writer.event_cursor,
+        writer.last_event_replay,
+        Instant::now()
+    ));
+    Ok(())
+}

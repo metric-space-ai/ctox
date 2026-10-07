@@ -982,6 +982,20 @@ fn project_events_since(
     let since = writer
         .event_cursor
         .filter(|previous| !replay && *previous <= high_water);
+    if since.is_none() {
+        // Claim the replay before running it. A replay that fails part-way
+        // (a busy store, after minutes of work) previously left no cursor, so
+        // every following pass started the full replay again and failed again
+        // (thesen 07.10.2026: 250-530 s passes ending in "database is locked").
+        // Now normal delivery continues from here and the next replay waits
+        // for the interval.
+        writer.last_event_replay = Some(Instant::now());
+        writer.event_cursor = Some(
+            writer
+                .event_cursor
+                .map_or(high_water, |c| c.min(high_water)),
+        );
+    }
     let mut delivered = true;
     let mut cursor = String::new();
     loop {
@@ -1093,9 +1107,6 @@ fn project_events_since(
     }
     if delivered {
         writer.event_cursor = Some(high_water);
-        if since.is_none() {
-            writer.last_event_replay = Some(Instant::now());
-        }
     }
     Ok(())
 }
