@@ -276,8 +276,8 @@ pub(super) fn handle_workjet_project_upsert_command(
     let public_url =
         project_field_value(payload.public_url, |value| project_url(value, "public_url"))?;
     let info = project_field_value(payload.info, |mut info| {
-        info.description = optional_bounded(info.description, "info.description", 4096)?;
-        info.goal = optional_bounded(info.goal, "info.goal", 4096)?;
+        info.description = optional_project_info_text(info.description, "info.description", 4096)?;
+        info.goal = optional_project_info_text(info.goal, "info.goal", 4096)?;
         info.phase = optional_bounded(info.phase, "info.phase", 128)?;
         info.status = optional_bounded(info.status, "info.status", 128)?;
         Ok(serde_json::to_value(info)?)
@@ -611,6 +611,30 @@ fn optional_bounded(
         .map(|value| {
             let value = value.trim();
             validate_bounded(value, field, max_chars, true)?;
+            Ok(value.to_owned())
+        })
+        .transpose()
+}
+
+fn optional_project_info_text(
+    value: Option<String>,
+    field: &str,
+    max_chars: usize,
+) -> anyhow::Result<Option<String>> {
+    value
+        .map(|value| {
+            let value = value.trim();
+            anyhow::ensure!(
+                value.chars().count() <= max_chars,
+                "{field} exceeds {max_chars} characters"
+            );
+            anyhow::ensure!(
+                !value
+                    .chars()
+                    .any(|character| character.is_control()
+                        && !matches!(character, '\n' | '\r' | '\t')),
+                "{field} contains control characters"
+            );
             Ok(value.to_owned())
         })
         .transpose()
