@@ -141,7 +141,7 @@ pub(super) async fn reconstruct<H: WebRTCConnectionHandler + 'static>(
     let live = lifetime.0.clone();
     let guard_pool = pool.clone();
     let peer_guard = Arc::new(move |apply: &mut dyn FnMut() -> RxResult<()>| {
-        guard_pool.with_current_native_control_peer(&peer, apply)
+        guard_pool.with_current_native_control_peer(&peer, apply)?
     });
     let target = Arc::new(
         tokio::task::spawn_blocking(move || {
