@@ -290,6 +290,12 @@ def main():
                 raise ValueError("captured dimensions differ")
             (out / name).write_bytes(png)
             assertion("fresh_same_session_capture", file=name, width=w, height=h, sha256=hashlib.sha256(png).hexdigest())
+        if source:
+            # The live KVM-to-TCG restore answers the endpoint before the
+            # resumed desktop has settled. Retain the native helper deadline;
+            # allow this bounded software-emulation settle before observing.
+            time.sleep(desktop_settle)
+            assertion("restored_desktop_settled", seconds=desktop_settle)
         capture(2, "capture-before.png")
         # XFCE can still be painting when the X11 endpoint first answers.
         # Retain that first frame and inspect a second actual capture after a
@@ -305,7 +311,22 @@ def main():
             actions = json.loads(args.input_json.read_text())
             if not isinstance(actions, list) or not 0 < len(actions) <= 30:
                 raise ValueError("bounded native action list required")
+            pause_seconds = 0
+            for action in actions:
+                if not isinstance(action, dict):
+                    raise ValueError("component input action must be an object")
+                if action.get("kind") == "pause":
+                    seconds = action.get("seconds")
+                    if type(seconds) is not int or not 1 <= seconds <= 30:
+                        raise ValueError("component pause must be 1 to 30 whole seconds")
+                    pause_seconds += seconds
+            if pause_seconds > 60:
+                raise ValueError("component input pauses exceed 60 seconds")
             for i, action in enumerate(actions, 5):
+                if action.get("kind") == "pause":
+                    time.sleep(action["seconds"])
+                    assertion("component_input_pause", seconds=action["seconds"])
+                    continue
                 reply = request(guest, dict(kind="input_session", id=i, session_id=session_id, input=action))
                 if reply.get("kind") != "applied":
                     raise ValueError("requested component input failed")

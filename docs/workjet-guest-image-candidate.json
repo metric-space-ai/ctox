@@ -182,7 +182,44 @@
     }
   },
   "isolated_checkpoint_probe": {
-    "status": "implementation_pending_real_two_host_run",
+    "status": "real_two_host_component_passed_with_bounded_settle",
+    "source_capture": {
+      "receipt_run": "o04-guest-checkpoint-component-20261007T055534Z",
+      "source_commit": "b0ce01ea3d6f5c418a875112130fc497f7110eb2",
+      "guest_id": "o04-kvm-f49e88a2-d8ba-4cfc-a708-3320747cbdb7",
+      "session_id": "fd15db1e-6df3-4cfd-9ec9-74f929cbb835",
+      "receipt_sha256": "53280aaf772b6decc1b4a5019c657ffb87d72e1c7339a44013d82966fc53570d",
+      "source_qmp_quit_exit": 0,
+      "owned_qemu_reaped": true,
+      "checkpoint_files": {
+        "root.qcow2": {"bytes": 16056320, "sha256": "0bb63d8388c370607b03d6cf8d943ab2821c77d6bdd657ef932734aed422649a"},
+        "vm-state.bin": {"bytes": 856539461, "sha256": "2466a85c55287208d5446ea0f14410d07e44d114f00193b7e13002a2abcdff6f"}
+      }
+    },
+    "first_target_attempt": {
+      "receipt_run": "o04-guest-checkpoint-component-20261007T060801Z",
+      "status": "failed",
+      "restore_reached_paused": true,
+      "original_session_restored": true,
+      "error": "Immediate native Xorg capture failed after endpoint resumed; no desktop acceptance claimed.",
+      "owned_qemu_reaped": true
+    },
+    "target_restore": {
+      "receipt_run": "o04-guest-checkpoint-component-20261007T061433Z",
+      "source_commit": "c137864d8570b4baf021dcdc128cb3a5984952fa",
+      "status": "component_passed",
+      "host": "gpu4",
+      "qemu_version": "8.2.2",
+      "acceleration": "tcg",
+      "diagnostic_driver_pre_capture_settle_seconds": 30,
+      "original_session_restored": true,
+      "endpoint_resume_seconds": 0.3555663840379566,
+      "real_xfce_frame_viewed": true,
+      "wrong_session_denied": true,
+      "graceful_powerdown": true,
+      "owned_qemu_reaped": true,
+      "unsaved_text_continuity_accepted": false
+    },
     "entry": "src/scripts/workjet-guest-image/verify-guest.py --checkpoint / --restore-from",
     "machine": "pc-i440fx-5.1",
     "cpu": "qemu64-v1,kvm=off,kvmclock=off,svm=off",
