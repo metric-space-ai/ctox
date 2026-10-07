@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {PROJECT_KPIS_SCHEMA, PROJECT_KPIS_VERSION, PROJECT_KPIS_TYPES, PROJECT_KPIS_COMMANDS, PROJECT_KPIS_RULES, validateProjectKpiValue} from '../../shared/workjet-project-kpis-contract.generated.mjs';
+const fixture=JSON.parse(readFileSync(new URL('../../../../core/rxdb/tests/fixtures/workjet-project-kpis-v1.json',import.meta.url),'utf8'));
+assert.equal(PROJECT_KPIS_SCHEMA,fixture.schema);
+assert.equal(PROJECT_KPIS_VERSION,fixture.contract_version);
+assert.deepEqual(PROJECT_KPIS_TYPES,fixture.types);
+assert.deepEqual(PROJECT_KPIS_RULES,fixture.rules);
+assert.deepEqual(PROJECT_KPIS_COMMANDS,fixture.commands);
+for (const {type,value} of fixture.valid_cases) assert.equal(validateProjectKpiValue(type,value).ok,true,type);
+for (const {type,value,reason} of fixture.invalid_cases) assert.equal(validateProjectKpiValue(type,value).ok,false,reason);
+assert.throws(()=>{PROJECT_KPIS_RULES.KpiResult.state_fields.states.missing_source.forbidden=[];},TypeError);
+assert.equal(PROJECT_KPIS_COMMANDS['ctox.workjet.project.kpi.resolve'].accepts_client_result,false);
+console.log(`Prompted KPIs: ${fixture.valid_cases.length} valid / ${fixture.invalid_cases.length} rejected native/browser cases`);
