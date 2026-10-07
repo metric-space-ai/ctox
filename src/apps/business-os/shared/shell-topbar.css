@@ -125,6 +125,7 @@
   .topbar .topbar-left-group { gap: 4px; }
   .topbar .shell-instance-button { gap: 5px; padding-inline: 4px; font-size: 12px; }
   .topbar .shell-instance-chevron { display: none; }
+  .topbar .shell-release-panel { position: fixed; left: 8px; top: calc(var(--shell-topbar-height) + 8px); }
   .topbar .shell-release-line { gap: 3px; }
   .topbar .shell-recovery-pill { font-size: 10px; padding-inline: 4px; }
   .topbar [data-sync-state-label] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

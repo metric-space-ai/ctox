@@ -160,6 +160,13 @@ try {
   await page.locator('[data-shell-recovery-pill]').click();
   await page.waitForSelector('[data-shell-release-panel]', { state: 'visible' });
   await page.screenshot({ path: path.join(output, 'topbar-recovery.png') });
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 390, height: 700 });
+  await page.locator('[data-shell-recovery-pill]').click();
+  await page.waitForSelector('[data-shell-release-panel]', { state: 'visible' });
+  const recoveryBox = await page.locator('[data-shell-release-panel]').boundingBox();
+  assert(recoveryBox.x >= 7 && recoveryBox.x + recoveryBox.width <= 391, 'Recovery menu stays within phone viewport: ' + JSON.stringify(recoveryBox));
+  await page.screenshot({ path: path.join(output, 'topbar-phone-recovery.png') });
   assert.deepEqual(pageErrors, []);
   await writeFile(path.join(output, 'result.json'), JSON.stringify({ fixture: 'Actual source topbar DOM/CSS + production controllers; no installed acceptance claim', results, keyboard: true, launchesPreserved: true, recoveryMenu: true, pageErrors }, null, 2));
   console.log('TOPBAR_BROWSER_CHECKS_PASS widths1440/1000/390 full names, overflow, launch, keyboard, recovery');
