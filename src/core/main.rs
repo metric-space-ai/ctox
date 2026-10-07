@@ -204,6 +204,7 @@ RUN / EXEC
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
   ctox runtime speech-status
+  ctox runtime speech-configure <speech-config.json>
   ctox runtime speech-synthesize <output.wav> --text <text>
   ctox runtime speech-benchmark <16khz-mono-s16le.pcm>
   ctox runtime stt-doctor
@@ -635,6 +636,15 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     "input_characters":speech.input_characters, "audio_bytes":speech.audio.len(),
                     "format":speech.format,
                 }));
+                Ok(())
+            }
+            Some("speech-configure") => {
+                anyhow::ensure!(
+                    args.len() == 3,
+                    "usage: ctox runtime speech-configure <speech-config.json>"
+                );
+                let status = execution::speech::configure_from_file(&root, Path::new(&args[2]))?;
+                println!("{}", serde_json::to_string_pretty(&status)?);
                 Ok(())
             }
             Some("speech-status") => {
