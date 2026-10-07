@@ -2387,6 +2387,77 @@ fn attempt_bound_hold_and_failed_ack_do_not_rewrite_on_resume() -> Result<()> {
 }
 
 #[test]
+fn attempt_ack_waits_for_a_concurrent_writer_instead_of_failing_locked() -> Result<()> {
+    // thesen 07.10.2026: a deferred ack read the attempt marker, another writer
+    // committed meanwhile, and the ack's write failed at once with "database
+    // is locked" (SQLite 517). The attempt stayed `finalizing` and its review
+    // was repeated on every re-lease without ever terminalizing the task.
+    let root = tempfile::tempdir()?;
+    fs::create_dir_all(root.path().join("runtime"))?;
+    let db_path = resolve_db_path(root.path(), None);
+    let engine =
+        crate::context::lcm::LcmEngine::open(&db_path, crate::context::lcm::LcmConfig::default())?;
+    let task = create_queue_task(
+        root.path(),
+        QueueTaskCreateRequest {
+            title: "ack under a concurrent writer".to_string(),
+            prompt: "Fail once while another writer commits.".to_string(),
+            thread_key: "queue/attempt-ack-contended".to_string(),
+            workspace_root: None,
+            priority: "normal".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        },
+    )?;
+    lease_queue_task(root.path(), &task.message_key, "ctox-test")?;
+    engine.begin_worker_attempt_finalization(
+        crate::context::lcm::WorkerAttemptFinalizationInput {
+            attempt_id: "attempt-ack-contended",
+            work_key: "queue:attempt-ack-contended",
+            conversation_id: 7203,
+            source_label: "queue-test",
+            agent_outcome: crate::context::lcm::AgentOutcome::Success,
+            reply_text: "reviewed",
+            error_text: None,
+        },
+    )?;
+    let holder_path = db_path.clone();
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = thread::spawn(move || -> Result<()> {
+        let mut conn = Connection::open(&holder_path)?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ack_lock_probe (value INTEGER);
+             INSERT INTO ack_lock_probe VALUES (1);",
+        )?;
+        held_tx.send(()).ok();
+        thread::sleep(std::time::Duration::from_millis(600));
+        tx.commit()?;
+        Ok(())
+    });
+    held_rx.recv().ok();
+    assert_eq!(
+        ack_leased_messages_for_attempt(
+            root.path(),
+            "attempt-ack-contended",
+            std::slice::from_ref(&task.message_key),
+            "failed",
+            Some("terminal completion-review failure"),
+        )?,
+        1
+    );
+    holder.join().expect("lock holder")?;
+    let route_status: String = open_channel_db(&db_path)?.query_row(
+        "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+        [task.message_key.as_str()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(route_status, "failed");
+    Ok(())
+}
+
+#[test]
 fn tui_ingest_sanitizes_minimax_secret_before_persisting_message() -> Result<()> {
     let root = std::env::temp_dir().join(format!(
         "ctox-tui-secret-test-{}",

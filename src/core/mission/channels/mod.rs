@@ -2614,7 +2614,14 @@ pub fn ack_leased_messages_for_attempt(
     let mut conn = open_channel_db(&db_path)?;
     guard_founder_handled_ack(root, &conn, message_keys, status.as_str())?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.unchecked_transaction()?;
+    // Immediate: this reads the attempt marker, then writes routing state and
+    // the attached queue projection store the RxDB peer writes constantly. A
+    // deferred read cannot be promoted once another writer committed (SQLite
+    // 517, "database is locked" at once, without the busy timeout). On thesen
+    // (07.10.2026) every reviewed lead-research ack failed so: the attempt
+    // stayed `finalizing`, the lease expired, and each re-lease re-ran the
+    // review of the same reply (one task 28 times) without ever terminalizing.
+    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
     let already_applied: Option<Option<String>> = tx
         .query_row(
             "SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id = ?1",
@@ -2779,7 +2786,8 @@ pub fn mark_worker_attempt_queue_effects_applied_if_status(
     let expected_status = canonical_queue_route_status(expected_status)?;
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
-    let tx = conn.unchecked_transaction()?;
+    // Immediate for the same reason as `ack_leased_messages_for_attempt`.
+    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
     let already_applied: Option<Option<String>> = tx
         .query_row(
             "SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id = ?1",
@@ -3094,7 +3102,8 @@ pub fn wake_messages_waiting_for(root: &Path, entity_type: &str, entity_id: &str
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.unchecked_transaction()?;
+    // Immediate: reads waiting rows, then writes them (see the ack above).
+    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
     let now = now_iso_string();
     let message_keys = {
         let mut statement = tx.prepare(
@@ -4271,7 +4280,10 @@ pub fn release_stale_queue_task_leases(
         // retried on the next sweep pass; released rows stay released
         // (idempotent), so a re-run never duplicates the linked command.
         let outcome = (|| -> Result<bool> {
-            let tx = conn.transaction()?;
+            // Immediate: the claim below is followed by reads and writes on the
+            // attached projection store; a deferred transaction failed these
+            // sweeps with "database is locked" on thesen (07.10.2026).
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             // Acquire SQLite's write lock while proving that every lease
             // identity field still matches the stale candidate. A renewed or
             // re-leased row changes at least one field and is left untouched.
