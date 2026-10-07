@@ -338,6 +338,35 @@ const responseLimitResult = await responseLimitTransport.requestQueryFetch({ ...
 assert(responseLimitAttempts === 4, `an RPC-response stream limit must be retried (got ${responseLimitAttempts})`);
 assert(responseLimitResult.documents[0]?.id === 'after-response-limit', 'RPC-response stream-limit retry result materialised');
 
+// Shell background feeds may not starve the app the user opened: at most half
+// of the client slots go to them, and a waiting app query is admitted first.
+{
+  const priorityTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-priority' });
+  const started = [];
+  priorityTransport.attach({
+    connections: new Map([
+      ['peer-priority', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+    ]),
+    async request(_peerId, _method, params) {
+      started.push(params?.[0]?.collectionName + ':' + params?.[0]?.requestId);
+      return { ack: true };
+    },
+  });
+  const pending = [];
+  for (let i = 0; i < 6; i += 1) {
+    pending.push(priorityTransport.requestQueryFetch({ ...envelope, collectionName: 'ctox_queue_tasks', requestId: `bg-${i}` }).catch(() => null));
+  }
+  pending.push(priorityTransport.requestQueryFetch({ ...envelope, collectionName: 'outbound_lead_generation_leads', requestId: 'app-0' }).catch(() => null));
+  await new Promise((r) => setImmediate(r));
+  const background = started.filter((name) => name.startsWith('ctox_queue_tasks')).length;
+  const backgroundCap = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
+  assert(background <= backgroundCap && backgroundCap < 6, `background feeds are capped at half the slots (got ${background}, cap ${backgroundCap})`);
+  assert(started.some((name) => name.startsWith('outbound_lead_generation_leads')), 'the app query starts although six background queries were queued first');
+  for (let i = 0; i < 6; i += 1) await priorityTransport.requestQueryCancel({ requestId: `bg-${i}` });
+  await priorityTransport.requestQueryCancel({ requestId: 'app-0' });
+  await Promise.all(pending);
+}
+
 // Cancel path: removes the in-flight collector AND rejects the outstanding
 // fetch with QUERY_CANCELLED so callers stop waiting (hardened cancel
 // semantics — previously the promise just hung forever).

@@ -7215,6 +7215,18 @@ async function deflateInflate(bytes) {
 var ACK_RESPONSE = Object.freeze({ ack: true });
 var SERVER_QUERY_STREAM_LIMIT = Math.max(1, Number(CTOX_QUERY_RPC.maxInFlightStreams) || 4);
 var CLIENT_QUERY_STREAM_LIMIT = SERVER_QUERY_STREAM_LIMIT;
+var SHELL_BACKGROUND_QUERY_COLLECTIONS = /* @__PURE__ */ new Set([
+  "business_commands",
+  "ctox_queue_tasks",
+  "ctox_harness_events",
+  "ctox_runs",
+  "ctox_harness_status",
+  "business_chats"
+]);
+var CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
+function isBackgroundQuery(envelope) {
+  return SHELL_BACKGROUND_QUERY_COLLECTIONS.has(String(envelope?.collectionName || ""));
+}
 var CLIENT_QUERY_QUEUE_LIMIT = 128;
 var CLIENT_QUERY_QUEUE_BUDGET_BYTES = 1024 * 1024;
 var CLIENT_FILE_COLLECTOR_LIMIT = 8;
@@ -7548,15 +7560,18 @@ function createDemandLoadingTransport({
     return new Promise((resolve, reject) => {
       const requestId = String(envelope?.requestId || "");
       const estimatedBytes = estimateEnvelopeBytes(envelope);
+      const background = isBackgroundQuery(envelope);
       const run = () => {
         queryStreamState.active += 1;
+        if (background) queryStreamState.activeBackground = (queryStreamState.activeBackground || 0) + 1;
         Promise.resolve().then(fn).then(resolve, reject).finally(() => {
           queryStreamState.active = Math.max(0, queryStreamState.active - 1);
+          if (background) queryStreamState.activeBackground = Math.max(0, (queryStreamState.activeBackground || 0) - 1);
           drainReadyQueryRequests();
         });
       };
       const ready = Boolean(resolvePeerId());
-      if (ready && queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) run();
+      if (ready && hasFreeQuerySlot(background)) run();
       else {
         const queuedBytes = queryStreamState.queue.reduce(
           (total, entry2) => total + Math.max(0, Number(entry2?.estimatedBytes) || 0),
@@ -7575,6 +7590,7 @@ function createDemandLoadingTransport({
           reject,
           owner: transportOwner,
           estimatedBytes,
+          background,
           isReady: () => Boolean(resolvePeerId()),
           waitingForPeer: false
         };
@@ -7605,13 +7621,21 @@ function createDemandLoadingTransport({
       }
     });
   }
+  function hasFreeQuerySlot(background) {
+    if (queryStreamState.active >= CLIENT_QUERY_STREAM_LIMIT) return false;
+    return !background || (queryStreamState.activeBackground || 0) < CLIENT_BACKGROUND_QUERY_STREAM_LIMIT;
+  }
   function drainReadyQueryRequests() {
     while (queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) {
-      const index = queryStreamState.queue.findIndex((entry2) => {
-        if (entry2.isReady()) return true;
-        entry2.waitForReady();
-        return false;
-      });
+      const admissible = (entry2) => {
+        if (!entry2.isReady()) {
+          entry2.waitForReady();
+          return false;
+        }
+        return hasFreeQuerySlot(entry2.background);
+      };
+      let index = queryStreamState.queue.findIndex((entry2) => !entry2.background && admissible(entry2));
+      if (index < 0) index = queryStreamState.queue.findIndex((entry2) => entry2.background && admissible(entry2));
       if (index < 0) return;
       const [entry] = queryStreamState.queue.splice(index, 1);
       entry.run();
