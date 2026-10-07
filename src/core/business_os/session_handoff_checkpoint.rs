@@ -765,6 +765,85 @@ pub(crate) fn assert_native_checkpoint_path(
         fetch_with_account(server.clone(), peer, verified, auth.clone()).is_err(),
         "one-use request"
     );
+    // Exercise every protected byte from the actual stopped Core/Git capture,
+    // not only the manifest response. This is a native store-path regression;
+    // the peer publication callback remains controlled, not network acceptance.
+    let copied = tempfile::tempdir().unwrap();
+    let received = CheckpointStore::open(copied.path().into(), BLOB_LIMIT).unwrap();
+    let read_part = |artifact: Option<ArtifactRef>| {
+        let mut bytes = Vec::new();
+        loop {
+            let (sent, verified) = make_fetch(artifact.clone(), bytes.len() as u64);
+            let response =
+                fetch_with_account(server.clone(), peer, verified, auth.clone()).unwrap();
+            response.publication.with_current(&mut || Ok(())).unwrap();
+            let SessionHandoffWireReply::Chunk {
+                size_bytes, hex, ..
+            } = sent.verify_reply(response.result, now_ms() as u64).unwrap()
+            else {
+                panic!("expected signed checkpoint chunk");
+            };
+            let chunk: Vec<u8> = hex
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect();
+            target
+                .current(&local, |_, _| {
+                    bytes.extend_from_slice(&chunk);
+                    Ok(())
+                })
+                .unwrap();
+            assert!(bytes.len() as u64 <= size_bytes);
+            if bytes.len() as u64 == size_bytes {
+                break;
+            }
+            assert!(!chunk.is_empty(), "incomplete ranges must make progress");
+        }
+        bytes
+    };
+    let manifest_bytes = read_part(None);
+    let manifest: CheckpointManifest = serde_json::from_slice(&manifest_bytes).unwrap();
+    let mut copied_artifacts = std::collections::BTreeSet::new();
+    for artifact in artifacts(&manifest) {
+        if copied_artifacts.insert(artifact.sha256.clone()) {
+            let bytes = read_part(Some(artifact.clone()));
+            if !bytes.is_empty() {
+                assert!(
+                    target
+                        .current(&local, |_, _| {
+                            received.ingest_blob(artifact, &bytes[..bytes.len() - 1])?;
+                            Ok(())
+                        })
+                        .is_err(),
+                    "truncated input must never be acknowledged"
+                );
+            }
+            target
+                .current(&local, |_, _| {
+                    received.ingest_blob(artifact, bytes.as_slice())?;
+                    Ok(())
+                })
+                .unwrap();
+        }
+    }
+    assert!(!copied_artifacts.is_empty());
+    target
+        .current(&local, |_, _| {
+            let digest = received.publish(&manifest)?;
+            anyhow::ensure!(
+                digest == remote.checkpoint_digest,
+                "copied checkpoint changed"
+            );
+            received.verify_durable_copy(&digest)?;
+            let loaded = received.load(&digest)?;
+            anyhow::ensure!(
+                serde_json::to_vec(&loaded)? == manifest_bytes,
+                "manifest changed"
+            );
+            Ok(())
+        })
+        .unwrap();
     let (_, foreign) = make_fetch(
         Some(ArtifactRef {
             sha256: "aa".repeat(32),
