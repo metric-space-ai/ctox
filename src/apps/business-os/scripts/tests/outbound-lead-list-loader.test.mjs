@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { loadLeadList, loadFullLeadRows, leadListRow, LEAD_LIST_PROJECTION } from '../../customer-modules/outbound-lead-generation/lead-list-loader.mjs';
+import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority, LEAD_LIST_PROJECTION } from '../../customer-modules/outbound-lead-generation/lead-list-loader.mjs';
 
 const lead = (id, rev = `1-${id}`) => ({ id, _rev: rev, name: 'Firma ' + id, campaign: 'Chemie', country: 'DE', city: 'Köln',
   research_status: 'needs_review', updated_at_ms: 1,
@@ -69,4 +69,67 @@ test('invalid revisions, non-advancing pages and duplicate detail rows fail clos
   await assert.rejects(loadLeadList({ find: () => ({ exec: async () => [{ id: 'a' }] }) }), { code: 'LEAD_LIST_REVISION_MISSING' });
   await assert.rejects(loadLeadList({ find: () => ({ exec: async () => [leadListRow(lead('a'))] }) }), { code: 'LEAD_LIST_PAGINATION' });
   await assert.rejects(loadFullLeadRows({ find: () => ({ exec: async () => [lead('a'), lead('a')] }) }, ['a']), { code: 'LEAD_DETAIL_INVALID' });
+});
+
+function authority({ ready = async () => {}, generation = () => 'g1', leaseWait = null } = {}) {
+  const record = { calls: 0, released: 0, budgets: [] };
+  const replication = {
+    activeRemotePeerId: 'native',
+    awaitQueryReady: async budget => { record.budgets.push(budget); await ready(); },
+    collectionQueryGenerationToken: generation,
+  };
+  const lease = { bridge: { state: replication }, release: async () => { record.released++; } };
+  const sync = { leaseCollection: async (collection, reason, options) => {
+    record.calls++;
+    assert.equal(collection, 'outbound_lead_generation_leads');
+    assert.deepEqual(options, { forceDirect: true });
+    if (leaseWait) await leaseWait;
+    return lease;
+  } };
+  return { record, replication, lease, sync };
+}
+test('list and detail queries wait for current native query authority and release the scoped lease', async () => {
+  let resolve; const ready = new Promise(done => { resolve = done; });
+  const a = authority({ ready: () => ready }); let reads = 0;
+  const pending = withLeadQueryAuthority(a.sync, async signal => {
+    assert.equal(signal.aborted, false); reads++; return 'current data';
+  });
+  await new Promise(done => setTimeout(done, 1));
+  assert.equal(reads, 0, 'no raw strict read before the loader is authoritative');
+  resolve(); assert.equal(await pending, 'current data');
+  assert.equal(a.record.released, 1);
+});
+test('missing or rejected authority never falls back to local rows', async () => {
+  let calls = 0;
+  await assert.rejects(withLeadQueryAuthority({}, () => calls++), { code: 'LEAD_QUERY_AUTHORITY_MISSING' });
+  const a = authority({ ready: async () => { throw Error('peer unauthorized'); } });
+  await assert.rejects(withLeadQueryAuthority(a.sync, () => calls++), /peer unauthorized/);
+  assert.equal(calls, 0); assert.equal(a.record.released, 1);
+});
+test('replaced bridge, generation and app binding invalidate query results', async () => {
+  for (const kind of ['bridge', 'generation', 'binding', 'cancelled']) {
+    let generation = 'g1', current = true;
+    const a = authority({ generation: () => generation });
+    await assert.rejects(withLeadQueryAuthority(a.sync, async () => {
+      if (kind === 'bridge') a.lease.bridge = { state: {} };
+      if (kind === 'generation') generation = 'g2';
+      if (kind === 'binding') current = false;
+      if (kind === 'cancelled') a.replication.cancelled = true;
+      return 'obsolete data';
+    }, { isCurrent: () => current }), { code: 'LEAD_QUERY_GENERATION_CHANGED' });
+    assert.equal(a.record.released, 1);
+  }
+});
+test('one bounded deadline aborts query work and releases even a late acquired lease', async () => {
+  const a = authority(); let readSignal;
+  await assert.rejects(withLeadQueryAuthority(a.sync, signal => {
+    readSignal = signal;
+    return new Promise((_, reject) => signal.addEventListener('abort', () => reject(Error('aborted'))));
+  }, { timeoutMs: 15 }), { code: 'LEAD_QUERY_TIMEOUT' });
+  assert.equal(readSignal.aborted, true); assert.equal(a.record.released, 1);
+  let resolve; const wait = new Promise(done => { resolve = done; });
+  const late = authority({ leaseWait: wait }); let reads = 0;
+  await assert.rejects(withLeadQueryAuthority(late.sync, () => reads++, { timeoutMs: 10 }), { code: 'LEAD_QUERY_TIMEOUT' });
+  resolve(); await new Promise(done => setTimeout(done, 1));
+  assert.equal(late.record.released, 1); assert.equal(reads, 0);
 });
