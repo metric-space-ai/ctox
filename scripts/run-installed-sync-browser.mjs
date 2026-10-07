@@ -48,7 +48,8 @@ try {
   receipt.rollback = await measureShellRollback(configPath); save();
   if (receipt.interrupted || receipt.deadlineReached) throw new Error('Owned acceptance unit interrupted');
   receipt.phase = 'browser-launch'; save();
-  server = await chromium.launchServer({ executablePath: '/usr/bin/google-chrome', headless: true });
+  server = await chromium.launchServer({ executablePath: '/usr/bin/google-chrome', headless: true,
+    args: ['--enable-logging=stderr'] });
   receipt.phase = 'browser-group-check'; save();
   browserPid = server.process().pid;
   browserPgid = Number(spawnSync('ps', ['-o', 'pgid=', '-p', String(browserPid)], { encoding: 'utf8' }).stdout.trim());
