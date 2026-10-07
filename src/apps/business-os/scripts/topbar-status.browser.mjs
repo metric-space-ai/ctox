@@ -131,7 +131,7 @@ try {
   await page.keyboard.press('Enter');
   await page.waitForSelector('.module-overflow-menu', { state: 'visible' });
   const menuBox = await page.locator('.module-overflow-menu').boundingBox();
-  assert(menuBox.x >= 7 && menuBox.x + menuBox.width <= 391, 'Menu stays within phone viewport');
+  assert(menuBox.x >= 7 && menuBox.x + menuBox.width <= 391, 'Menu stays within phone viewport: ' + JSON.stringify(menuBox));
   assert.equal(await page.locator('.module-overflow-menu .module-tab').count(), 3);
   await page.locator('.module-overflow-menu .module-tab[data-target="3"]').click();
   assert.deepEqual(await page.evaluate(() => window.topbarFixture.launched), ['Crew'], 'Original launch listener survives overflow');

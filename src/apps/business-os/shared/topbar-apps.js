@@ -73,6 +73,7 @@ function createController(container) {
       if (focused.isConnected) focused.focus({ preventScroll: true });
       else if (hidden.length) trigger.focus({ preventScroll: true });
     }
+    positionMenu();
   }
   function refresh() {
     if (disposed || frame !== null) return;
@@ -97,11 +98,13 @@ function createController(container) {
   };
   doc.addEventListener('click', outside);
   const positionMenu = () => {
-    if (!overflow.open) return;
-    menu.style.transform = '';
-    const box = menu.getBoundingClientRect();
-    const shift = box.left < 8 ? 8 - box.left
-      : box.right > view.innerWidth - 8 ? view.innerWidth - 8 - box.right : 0;
+    // A details toggle event can arrive after the menu's first paint.
+    // Its CSS width is available while closed, so position it during layout.
+    const width = Number.parseFloat(view.getComputedStyle(menu).width) || 0;
+    const right = overflow.getBoundingClientRect().right;
+    const left = right - width;
+    const shift = left < 8 ? 8 - left
+      : right > view.innerWidth - 8 ? view.innerWidth - 8 - right : 0;
     menu.style.transform = shift ? 'translateX(' + shift + 'px)' : '';
   };
   overflow.addEventListener('toggle', positionMenu);
