@@ -70,6 +70,8 @@ const strict = token => ({ selector: {}, limit: 1, requireRevision: token });
   console.debug = () => { logs += 1; };
   try {
     const abandoned = first.loader.resolveQuery(strict('first'), { signal: controller.signal }).catch(error => error);
+    // Establish which caller owns the wire ID before testing repeated abort.
+    await until(() => remote.requests.length === 1);
     const surviving = first.loader.resolveQuery(strict('second'));
     const otherLoader = second.loader.resolveQuery(strict('third'));
     await until(() => first.invocations() + second.invocations() === 3);
