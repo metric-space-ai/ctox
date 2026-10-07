@@ -982,13 +982,15 @@ fn project_events_since(
     let since = writer
         .event_cursor
         .filter(|previous| !replay && *previous <= high_water);
+    let unclaimed = (writer.event_cursor, writer.last_event_replay);
     if since.is_none() {
         // Claim the replay before running it. A replay that fails part-way
         // (a busy store, after minutes of work) previously left no cursor, so
         // every following pass started the full replay again and failed again
         // (thesen 07.10.2026: 250-530 s passes ending in "database is locked").
         // Now normal delivery continues from here and the next replay waits
-        // for the interval.
+        // for the interval. Undelivered events (collection not ready) restore
+        // the previous state below and replay again.
         writer.last_event_replay = Some(Instant::now());
         writer.event_cursor = Some(
             writer
@@ -1107,6 +1109,8 @@ fn project_events_since(
     }
     if delivered {
         writer.event_cursor = Some(high_water);
+    } else if since.is_none() {
+        (writer.event_cursor, writer.last_event_replay) = unclaimed;
     }
     Ok(())
 }
