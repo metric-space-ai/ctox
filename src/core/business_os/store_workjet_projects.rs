@@ -778,7 +778,7 @@ pub(crate) mod tests {
         let request = json!({"project_id":"project-1","name":"Project One",
             "repo_url":"https://github.com/metric-space-ai/ctox",
             "public_url":"https://ctox.dev",
-            "info":{"description":"Work daemon","goal":"Usable projects","phase":"delivery","status":"active"},
+            "info":{"description":"Work daemon","goal":"Usable projects\nPersist after reopening","phase":"delivery","status":"active"},
             "jour_fixe":{"weekday":1,"time":"09:30"}});
         let first = handle_workjet_project_upsert_command(
             root.path(),
@@ -795,7 +795,7 @@ pub(crate) mod tests {
         let conn = open_store(root.path())?;
         let persisted = outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?
             .context("project persisted")?;
-        assert_eq!(persisted["info"]["goal"], "Usable projects");
+        assert_eq!(persisted["info"]["goal"], "Usable projects\nPersist after reopening");
         drop(conn);
         let projected = load_rxdb_collection_record(root.path(), PROJECTS_COLLECTION, "project-1")?
             .context("project projected")?;
