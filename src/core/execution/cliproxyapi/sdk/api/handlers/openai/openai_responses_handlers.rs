@@ -63,7 +63,13 @@ impl OpenAiResponsesClaudeHandler {
         );
         let outcome = match self
             .pool
-            .execute_configured(&request.model, translated.clone(), true)
+            .execute_configured_with_request_context(
+                &request.model,
+                translated.clone(),
+                true,
+                body,
+                headers,
+            )
             .await
         {
             Ok(outcome) => outcome,
@@ -124,7 +130,12 @@ impl OpenAiResponsesClaudeHandler {
         );
         let outcome = match self
             .pool
-            .execute_stream_configured(&request.model, translated.clone())
+            .execute_stream_configured_with_request_context(
+                &request.model,
+                translated.clone(),
+                body,
+                headers,
+            )
             .await
         {
             Ok(outcome) => outcome,
