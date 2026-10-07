@@ -25,6 +25,17 @@ pub struct GgmlVoxtralRuntime {
     ctx: GgmlSession,
     backend: VoxtralSttBackend,
     max_decode_tokens: usize,
+    stream_decoder: Option<StreamDecoder>,
+}
+
+struct StreamDecoder {
+    position: i32,
+    token: i32,
+    output: Vec<i32>,
+    prefetched: bool,
+    ended: bool,
+    seen_text: bool,
+    consecutive_pad: usize,
 }
 
 struct GgmlModel {
@@ -143,6 +154,7 @@ impl GgmlVoxtralRuntime {
             ctx,
             backend,
             max_decode_tokens: 256,
+            stream_decoder: None,
         })
     }
 
@@ -192,6 +204,104 @@ impl GgmlVoxtralRuntime {
                 tokens.len()
             );
             Ok(text)
+        }
+    }
+
+    pub fn start_stream(&mut self) {
+        unsafe { self.ctx.clear_kv_cache() };
+        self.stream_decoder = Some(StreamDecoder {
+            position: (VOX_N_LEFT_PAD_TOKENS + VOX_N_DELAY_TOKENS) as i32,
+            token: VOX_TOKEN_STREAMING_PAD,
+            output: Vec::new(),
+            prefetched: false,
+            ended: false,
+            seen_text: false,
+            consecutive_pad: 0,
+        });
+    }
+
+    /// Decoder KV persists. The causal encoder is recomputed over the bounded
+    /// utterance; previously generated decoder tokens are never replayed.
+    pub fn stream_samples(&mut self, samples: &[f32], final_audio: bool) -> Result<String> {
+        if samples.is_empty() {
+            return Err(Error::InvalidFormat("stream contains no audio"));
+        }
+        let state = self
+            .stream_decoder
+            .as_ref()
+            .ok_or(Error::InvalidFormat("stream not opened"))?;
+        if state.ended {
+            return Ok(self.model.decode_tokens(&state.output));
+        }
+        // Hold one audio token behind capture: STFT uses a centred 400-sample
+        // window, so its incomplete tail must not enter persistent decoder KV.
+        let available = if final_audio {
+            usize::MAX
+        } else {
+            VOX_N_LEFT_PAD_TOKENS + samples.len() / VOX_RAW_AUDIO_LENGTH_PER_TOK - 1
+        };
+        if !final_audio && available <= state.position as usize {
+            return Ok(self.model.decode_tokens(&state.output));
+        }
+        let padded = audio::pad_audio_streaming(
+            samples,
+            VOX_N_LEFT_PAD_TOKENS,
+            if final_audio {
+                VOX_N_RIGHT_PAD_TOKENS
+            } else {
+                0
+            },
+        );
+        let mel = self.ctx.mel_plan.compute(&padded);
+        let frames = padded.len() / VOX_HOP_LENGTH;
+        let mut logits = vec![0.0f32; VOX_VOCAB_SIZE];
+        unsafe {
+            self.ctx
+                .run_encoder_chunked(&self.model, mel.as_ptr(), frames as i32)?;
+            self.ctx.run_adapter(&self.model)?;
+            let state = self.stream_decoder.as_mut().unwrap();
+            let limit = available.min(self.ctx.dec_seq_len as usize) as i32;
+            if !state.prefetched && limit > state.position {
+                let mut prefix = vec![VOX_TOKEN_STREAMING_PAD; state.position as usize];
+                prefix[0] = VOX_TOKEN_BOS;
+                self.ctx
+                    .run_decoder_prefill(&self.model, &prefix, &mut logits)?;
+                state.prefetched = true;
+            }
+            while state.position < limit && state.output.len() < self.max_decode_tokens {
+                self.ctx.run_decoder_step(
+                    &self.model,
+                    state.token,
+                    state.position,
+                    state.position,
+                    &mut logits,
+                )?;
+                state.position += 1;
+                state.token = argmax(&logits) as i32;
+                if state.token == VOX_TOKEN_EOS {
+                    state.ended = true;
+                    break;
+                }
+                state.output.push(state.token);
+                if state.token == VOX_TOKEN_STREAMING_PAD {
+                    state.consecutive_pad += 1;
+                } else {
+                    state.consecutive_pad = 0;
+                    state.seen_text |= state.token >= self.model.tokenizer_num_special_tokens;
+                }
+                if final_audio && state.seen_text && state.consecutive_pad >= VOX_N_RIGHT_PAD_TOKENS
+                {
+                    state.ended = true;
+                    break;
+                }
+            }
+            if state.output.len() >= self.max_decode_tokens
+                && state.position < limit
+                && !state.ended
+            {
+                return Err(Error::Unsupported("stream decode token limit reached"));
+            }
+            Ok(self.model.decode_tokens(&state.output))
         }
     }
 
@@ -1724,9 +1834,17 @@ fn init_weight_backend(backend: VoxtralSttBackend) -> (ffi::ggml_backend_t, bool
             }
             (init_cpu_backend(), false)
         }
-        VoxtralSttBackend::Cpu | VoxtralSttBackend::Wgsl | VoxtralSttBackend::Cuda => {
-            (init_cpu_backend(), false)
+        VoxtralSttBackend::Cuda => {
+            #[cfg(ctox_ggml_cuda)]
+            unsafe {
+                // Device 0 is relative to the supervisor's admitted devices.
+                let cuda = ffi::ggml_backend_cuda_init(0);
+                return (cuda, !cuda.is_null());
+            }
+            #[cfg(not(ctox_ggml_cuda))]
+            (ptr::null_mut(), false)
         }
+        VoxtralSttBackend::Cpu | VoxtralSttBackend::Wgsl => (init_cpu_backend(), false),
     }
 }
 
@@ -1736,6 +1854,17 @@ fn init_compute_backend(
     threads: i32,
 ) -> (ffi::ggml_backend_t, ffi::ggml_backend_t, bool) {
     match backend {
+        VoxtralSttBackend::Cuda if prefer_accel => {
+            #[cfg(ctox_ggml_cuda)]
+            unsafe {
+                let cuda = ffi::ggml_backend_cuda_init(0);
+                if !cuda.is_null() {
+                    let cpu = init_cpu_backend_with_threads(threads);
+                    return (cuda, cpu, true);
+                }
+            }
+            (ptr::null_mut(), ptr::null_mut(), false)
+        }
         VoxtralSttBackend::Metal if prefer_accel => {
             #[cfg(target_os = "macos")]
             unsafe {

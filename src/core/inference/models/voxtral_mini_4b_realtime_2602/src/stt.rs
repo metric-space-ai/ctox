@@ -10,7 +10,7 @@ use crate::gguf;
 use crate::kernels::VoxtralSttBackend;
 use crate::{Error, Result};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxtralSttConfig {
@@ -68,6 +68,63 @@ struct VoxtralQ4Runtime {
 #[cfg(ctox_ggml_unavailable)]
 struct VoxtralQ4Runtime;
 
+/// One bounded utterance owns the model decoder cache until dropped.
+/// Use a dedicated blocking executor, never the async meeting reactor.
+pub struct VoxtralSttStream<'a> {
+    runtime: MutexGuard<'a, VoxtralQ4Runtime>,
+    samples: Vec<f32>,
+    last_inferred_samples: usize,
+    finished: bool,
+}
+
+pub const MAX_STREAM_AUDIO_SECONDS: usize = 15;
+const STREAM_INFERENCE_SAMPLES: usize = 5120;
+
+impl VoxtralSttStream<'_> {
+    pub fn append_pcm(&mut self, pcm: &[u8]) -> Result<Option<String>> {
+        if self.finished {
+            return Err(Error::InvalidFormat("stream already finished"));
+        }
+        if pcm.is_empty() || pcm.len() % 2 != 0 || pcm.len() > 3200 {
+            return Err(Error::InvalidFormat(
+                "expected at most 100 ms mono PCM16 at 16 kHz",
+            ));
+        }
+        if self.samples.len() + pcm.len() / 2 > MAX_STREAM_AUDIO_SECONDS * 16_000 {
+            return Err(Error::Unsupported("speech utterance exceeds 15 seconds"));
+        }
+        self.samples.extend(
+            pcm.chunks_exact(2)
+                .map(|p| i16::from_le_bytes([p[0], p[1]]) as f32 / 32768.0),
+        );
+        if self.samples.len() - self.last_inferred_samples < STREAM_INFERENCE_SAMPLES {
+            return Ok(None);
+        }
+        self.flush().map(Some)
+    }
+
+    pub fn flush(&mut self) -> Result<String> {
+        if self.finished {
+            return Err(Error::InvalidFormat("stream already finished"));
+        }
+        let text = self.runtime.stream_samples(&self.samples, false)?;
+        self.last_inferred_samples = self.samples.len();
+        Ok(text)
+    }
+
+    pub fn finish(&mut self) -> Result<String> {
+        if self.finished {
+            return Err(Error::InvalidFormat("stream already finished"));
+        }
+        self.finished = true;
+        self.runtime.stream_samples(&self.samples, true)
+    }
+
+    pub fn audio_duration_ms(&self) -> u64 {
+        self.samples.len() as u64 / 16
+    }
+}
+
 impl std::fmt::Debug for VoxtralSttModel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VoxtralSttModel")
@@ -101,6 +158,11 @@ impl VoxtralSttModel {
     }
 
     pub fn from_gguf(path: impl AsRef<Path>, backend: VoxtralSttBackend) -> Result<Self> {
+        if !backend.is_available() {
+            return Err(Error::Unsupported(
+                "requested Voxtral STT backend is not compiled",
+            ));
+        }
         let inspection = inspect_gguf(path)?;
         if !inspection.required_tensors_present {
             return Err(Error::Parse(format!(
@@ -137,6 +199,22 @@ impl VoxtralSttModel {
         self.inspection.as_ref()
     }
 
+    pub fn open_stream(&self) -> Result<VoxtralSttStream<'_>> {
+        let mut runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(Error::Unsupported("native STT model is not loaded"))?
+            .try_lock()
+            .map_err(|_| Error::Runtime("native STT model is busy".into()))?;
+        runtime.start_stream()?;
+        Ok(VoxtralSttStream {
+            runtime,
+            samples: Vec::new(),
+            last_inferred_samples: 0,
+            finished: false,
+        })
+    }
+
     pub fn transcribe(&self, request: &TranscriptionRequest<'_>) -> Result<TranscriptionResponse> {
         if request.audio_bytes.is_empty() {
             return Err(Error::InvalidFormat("transcription audio is empty"));
@@ -163,6 +241,29 @@ impl VoxtralSttModel {
 }
 
 impl VoxtralQ4Runtime {
+    fn start_stream(&mut self) -> Result<()> {
+        #[cfg(not(ctox_ggml_unavailable))]
+        {
+            self.runtime.start_stream();
+            Ok(())
+        }
+        #[cfg(ctox_ggml_unavailable)]
+        {
+            Err(Error::Unsupported("native STT ggml runtime is not linked"))
+        }
+    }
+
+    fn stream_samples(&mut self, samples: &[f32], final_audio: bool) -> Result<String> {
+        #[cfg(not(ctox_ggml_unavailable))]
+        {
+            self.runtime.stream_samples(samples, final_audio)
+        }
+        #[cfg(ctox_ggml_unavailable)]
+        {
+            let _ = (samples, final_audio);
+            Err(Error::Unsupported("native STT ggml runtime is not linked"))
+        }
+    }
     #[cfg(not(ctox_ggml_unavailable))]
     fn load(gguf_path: &Path, backend: VoxtralSttBackend) -> Result<Self> {
         let runtime = GgmlVoxtralRuntime::load(gguf_path, backend)?;
@@ -304,6 +405,24 @@ mod tests {
         assert!(err
             .to_string()
             .contains("requires a ggml-compatible Q4 GGUF"));
+    }
+
+    #[test]
+    fn unavailable_backend_is_rejected_before_artifact_loading() {
+        let error = VoxtralSttModel::from_gguf("not-a-model.gguf", VoxtralSttBackend::Wgsl)
+            .expect_err("an unimplemented GPU backend must not run on CPU");
+        assert!(error.to_string().contains("backend is not compiled"));
+    }
+
+    #[test]
+    fn streaming_without_loaded_model_is_rejected() {
+        let model = VoxtralSttModel::new(VoxtralSttConfig::default(), VoxtralSttBackend::Cpu);
+        assert!(model
+            .open_stream()
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("not loaded"));
     }
 
     fn tiny_wav() -> Vec<u8> {

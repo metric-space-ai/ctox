@@ -8,6 +8,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_BUILD_GGML");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_GGML_BLAS");
     println!("cargo:rustc-check-cfg=cfg(ctox_ggml_blas)");
+    println!("cargo:rustc-check-cfg=cfg(ctox_ggml_cuda)");
     println!("cargo:rustc-check-cfg=cfg(ctox_ggml_unavailable)");
 
     if let Ok(dir) = env::var("GGML_LIB_DIR") {
@@ -49,6 +50,14 @@ fn build_vendored_ggml() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let src = manifest_dir.join("vendor/ggml");
     let build = out_dir.join("ggml-build");
+    let enable_cuda = env::var_os("CARGO_FEATURE_CUDA").is_some();
+    if enable_cuda {
+        assert_eq!(
+            env::var("CARGO_CFG_TARGET_OS").as_deref(),
+            Ok("linux"),
+            "Voxtral CUDA is supported on Linux only"
+        );
+    }
     if build.join("CMakeCache.txt").is_file() {
         let _ = fs::remove_dir_all(&build);
     }
@@ -61,6 +70,11 @@ fn build_vendored_ggml() {
         .arg(&build)
         .arg("-DGGML_CPU=ON")
         .arg("-DGGML_NATIVE=ON")
+        .arg(if enable_cuda {
+            "-DGGML_CUDA=ON"
+        } else {
+            "-DGGML_CUDA=OFF"
+        })
         .arg("-DGGML_BUILD_TESTS=OFF")
         .arg("-DGGML_BUILD_EXAMPLES=OFF")
         .arg("-DBUILD_SHARED_LIBS=OFF");
@@ -82,7 +96,14 @@ fn build_vendored_ggml() {
         .arg("--config")
         .arg("Release")
         .arg("-j")
-        .arg("2")
+        .arg(
+            env::var("NUM_JOBS")
+                .ok()
+                .and_then(|n| n.parse::<usize>().ok())
+                .unwrap_or(2)
+                .clamp(1, 2)
+                .to_string()
+        )
         .status()
         .expect("run cmake build")
         .success());
@@ -101,6 +122,36 @@ fn link_ggml(base: &PathBuf) {
     println!("cargo:rustc-link-lib=static=ggml");
     println!("cargo:rustc-link-lib=static=ggml-base");
     println!("cargo:rustc-link-lib=static=ggml-cpu");
+
+    if env::var_os("CARGO_FEATURE_CUDA").is_some() {
+        let cuda = base.join("ggml-cuda");
+        assert!(
+            cuda.is_dir(),
+            "CUDA feature requested without a built ggml-cuda backend"
+        );
+        println!("cargo:rustc-cfg=ctox_ggml_cuda");
+        println!("cargo:rustc-link-search=native={}", cuda.display());
+        let cache = base
+            .parent()
+            .expect("ggml build root")
+            .join("CMakeCache.txt");
+        let cache = fs::read_to_string(cache).expect("read ggml CMake cache");
+        for line in cache.lines() {
+            if line.starts_with("CUDA_cudart_LIBRARY:")
+                || line.starts_with("CUDA_cublas_LIBRARY:")
+                || line.starts_with("CUDA_cublasLt_LIBRARY:")
+            {
+                if let Some((_, path)) = line.split_once('=') {
+                    if let Some(dir) = std::path::Path::new(path).parent() {
+                        println!("cargo:rustc-link-search=native={}", dir.display());
+                    }
+                }
+            }
+        }
+        println!("cargo:rustc-link-lib=dylib=cudart");
+        println!("cargo:rustc-link-lib=dylib=cublas");
+        println!("cargo:rustc-link-lib=dylib=cublasLt");
+    }
 
     let blas = base.join("ggml-blas");
     if blas.is_dir() {

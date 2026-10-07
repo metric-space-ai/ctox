@@ -15,6 +15,10 @@ exclude = [
 name = "ctox"
 path = "src/core/main.rs"
 
+[features]
+# Build-time capability; runtime placement still uses the GPU admission plan.
+local-speech-cuda = ["ctox-voxtral-mini-4b-realtime-2602/cuda"]
+
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"

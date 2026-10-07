@@ -15,12 +15,30 @@ Current scope:
   `__native-voxtral-stt-service`.
 
 Linux defaults to ggml's native CPU kernels (`GGML_NATIVE=ON`) so quantized
-Q4 matmul stays on ggml's AVX/FMA/architecture-specific path. BLAS is available
+Q4 matmul stays on ggml's AVX/FMA/architecture-specific path. The crate's `cuda`
+feature (CTOX binary: `--features local-speech-cuda`) builds the already vendored
+ggml CUDA kernels and uses CUDA for both weights and graph execution. It requires
+a Linux CUDA toolkit. GPU placement still comes from the supervisor's existing
+GPU admission plan; device 0 is relative to that admitted visible-device set.
+An unavailable requested backend fails explicitly instead of silently using CPU.
+CMake builds respect Cargo's job count, capped at two compiler workers.
+BLAS is available
 only as an explicit build-time experiment via `CTOX_VOXTRAL_GGML_BLAS=1`.
 
 Current state: the crate loads a ggml-compatible Q4 Voxtral GGUF and returns
 real transcripts. It does not use TrevorJS, Burn, WGPU, or an external
 inference process.
+
+`engineai/Voxtral-Mini-4B-Realtime-2602` is CTOX's runtime alias. The upstream
+model is `mistralai/Voxtral-Mini-4B-Realtime-2602`; GGUF conversion must retain
+the `enc.*`, `dec.*`, `adapter.*` tensors and Voxtral tokenizer metadata expected
+by this port. Backend compilation and artifact inspection alone do not prove
+real-time performance. `open_stream` accepts mono PCM16 at 16 kHz, retains decoder
+KV for one utterance, and exposes partial snapshots before `finish`. The causal
+encoder currently recomputes the bounded prefix every 320 ms; this is not an
+incremental encoder cache. Utterances are capped at 15 seconds and concurrent
+streams are rejected while one owns the decoder. Actual transcript parity and
+sentence-end latency remain unverified until measured with real weights.
 
 ## Online Sample Harness
 
