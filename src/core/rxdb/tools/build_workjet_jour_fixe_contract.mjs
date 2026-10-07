@@ -17,9 +17,9 @@ for (const t of ['String', 'bool', 'u64', 'i64', 'f64']) {
 }
 rust += 'impl<T: WireValidate> WireValidate for Vec<T> { fn validate(&self) -> Result<(), String> { for item in self { item.validate()?; } Ok(()) } }\n';
 for (const [name, type] of Object.entries(spec.types)) {
-  rust += '\n#[derive(Debug, Clone, Deserialize, Serialize)]\n';
+  rust += type.enum ? '\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n' : '\n#[derive(Debug, Clone, Deserialize, Serialize)]\n';
   if (type.enum) {
-    rust += `pub(crate) enum ${name} {\n` + type.enum.map((v,i) => `#[serde(rename = ${JSON.stringify(v)})]\nValue${i},`).join('\n') + '\n}\n';
+    rust += `pub(crate) enum ${name} {\n` + type.enum.map(v => `#[serde(rename = ${JSON.stringify(v)})]\n${v.split(/[^A-Za-z0-9]+/).map(part => part[0].toUpperCase() + part.slice(1)).join('')},`).join('\n') + '\n}\n';
     rust += `impl WireValidate for ${name} { fn validate(&self) -> Result<(), String> { Ok(()) } }\n`;
     continue;
   }

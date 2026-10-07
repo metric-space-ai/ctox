@@ -51,24 +51,24 @@ impl<T: WireValidate> WireValidate for Vec<T> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum MeetingState {
     #[serde(rename = "planned")]
-    Value0,
+    Planned,
     #[serde(rename = "preparing")]
-    Value1,
+    Preparing,
     #[serde(rename = "ready")]
-    Value2,
+    Ready,
     #[serde(rename = "live")]
-    Value3,
+    Live,
     #[serde(rename = "review")]
-    Value4,
+    Review,
     #[serde(rename = "confirmed")]
-    Value5,
+    Confirmed,
     #[serde(rename = "cancelled")]
-    Value6,
+    Cancelled,
     #[serde(rename = "failed")]
-    Value7,
+    Failed,
 }
 impl WireValidate for MeetingState {
     fn validate(&self) -> Result<(), String> {
@@ -76,12 +76,12 @@ impl WireValidate for MeetingState {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum Speaker {
     #[serde(rename = "owner")]
-    Value0,
+    Owner,
     #[serde(rename = "supervisor")]
-    Value1,
+    Supervisor,
 }
 impl WireValidate for Speaker {
     fn validate(&self) -> Result<(), String> {
@@ -89,12 +89,12 @@ impl WireValidate for Speaker {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum Modality {
     #[serde(rename = "text")]
-    Value0,
+    Text,
     #[serde(rename = "speech")]
-    Value1,
+    Speech,
 }
 impl WireValidate for Modality {
     fn validate(&self) -> Result<(), String> {
@@ -102,14 +102,14 @@ impl WireValidate for Modality {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum TodoState {
     #[serde(rename = "proposed")]
-    Value0,
+    Proposed,
     #[serde(rename = "confirmed")]
-    Value1,
+    Confirmed,
     #[serde(rename = "superseded")]
-    Value2,
+    Superseded,
 }
 impl WireValidate for TodoState {
     fn validate(&self) -> Result<(), String> {
@@ -117,14 +117,14 @@ impl WireValidate for TodoState {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum Priority {
     #[serde(rename = "P0")]
-    Value0,
+    P0,
     #[serde(rename = "P1")]
-    Value1,
+    P1,
     #[serde(rename = "P2")]
-    Value2,
+    P2,
 }
 impl WireValidate for Priority {
     fn validate(&self) -> Result<(), String> {
