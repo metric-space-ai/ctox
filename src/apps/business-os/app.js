@@ -3,6 +3,7 @@ import { createShellPerformanceTrace } from './shared/shell-performance-trace.js
 import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-workjet-active-project-list';
 import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-workjet-active-project-list';
 import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-workjet-active-project-list';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261007-shell-v2-workjet-active-project-list';
 import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-workjet-active-project-list';
 import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-workjet-active-project-list';
 import {
@@ -2377,6 +2378,7 @@ function stableShortHash(value) {
 }
 
 function wireShellActions() {
+  installTopbarAvatar(document.querySelector('[data-open-account]'));
   window.addEventListener('unhandledrejection', (event) => {
     if (!isVolatileSyncTransportError(event.reason)) return;
     console.debug('[business-os] ignored volatile local sync transport error');
@@ -2406,13 +2408,13 @@ function wireShellActions() {
   document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
     openSettingsDrawer();
   });
-  document.querySelector('[data-open-sync-diagnostics]')?.addEventListener('click', () => {
+  document.querySelectorAll('[data-open-sync-diagnostics]').forEach((button) => button.addEventListener('click', () => {
     if (!state.session?.authenticated
       || document.documentElement.dataset.authState === 'locked'
       || document.body.dataset.authState === 'locked') return;
     els.rightDrawer.classList.remove('account-popover');
     openDrawer('right', renderSyncDiagnosticsDrawer());
-  });
+  }));
   document.querySelector('[data-shell-ctox]')?.addEventListener('click', (event) => {
     event.preventDefault();
     openModule('ctox');
@@ -2564,6 +2566,9 @@ function renderCollectionFreshnessWarning() {
     collections: Array.isArray(state.activeModule?.collections) ? state.activeModule.collections : [],
     diagnostics: state.syncDiagnostics,
     language: shellLang(),
+    compact: true,
+    contextKey: state.db,
+    sessionKey: state.session,
   });
 }
 
@@ -5421,6 +5426,7 @@ function updateThreadsAttentionBadge(count) {
     const base = tab.querySelector('.module-tab-label')?.textContent || 'Threads';
     tab.title = count ? `${base} · ${count} brauchen dich` : base;
   }
+  refreshTopbarAppItems(els.tabs);
 }
 
 async function initThreadsAttentionBadge() {
@@ -5481,14 +5487,10 @@ function renderTabs() {
   // overflows, so a row that fits shows no faded last tab. Measured after
   // layout settles.
   const signature = [...fragment.children].map((child) => child.outerHTML).join('');
-  if (signature !== renderTabs.lastSignature) {
+  if (signature !== renderTabs.lastSignature || !els.tabs.children.length) {
     renderTabs.lastSignature = signature;
-    els.tabs.replaceChildren(fragment);
+    setTopbarAppItems(els.tabs, fragment.children);
   }
-  requestAnimationFrame(() => {
-    if (!els.tabs) return;
-    els.tabs.classList.toggle('is-scrollable', els.tabs.scrollWidth > els.tabs.clientWidth + 1);
-  });
   updateThreadsAttentionBadge(state.threadsAttentionCount || 0);
 }
 
@@ -5516,10 +5518,10 @@ function renderModuleTab(target, options = {}) {
     })
     : null;
   button.innerHTML = `
-    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}${target.id === 'threads' ? '<span class="module-tab-attention" data-threads-attention hidden></span>' : ''}</span>
+    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
-    ${lifecycle?.runtimeInstalled ? `<span class="module-tab-lifecycle" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${escapeHtml(`${target.title || target.id}: ${lifecycle.version} ${lifecycle.text}`)}">${escapeHtml(lifecycle.text)}</span>` : ''}
-    ${lifecycle?.version && !lifecycle.runtimeInstalled ? `<span class="module-tab-version">${escapeHtml(lifecycle.version)}</span>` : ''}
+    ${target.id === 'threads' ? '<span class="module-tab-count" data-threads-attention hidden></span>' : ''}
+    ${lifecycle?.updateAvailable ? `<span class="module-tab-update" data-app-lifecycle-badge="${escapeHtml(target.id)}" title="${escapeHtml(lifecycle.title)}" aria-label="Update verfügbar"></span>` : ''}
     ${status ? `<span class="module-tab-state">${escapeHtml(status)}</span>` : ''}
   `;
   button.setAttribute('aria-current', state.activeModule?.id === target.id ? 'page' : 'false');
@@ -5703,6 +5705,7 @@ function showTargetContextMenu(event, target) {
       modify: () => openModuleEditDrawer(module),
     },
   });
+  if (module) items.push({ key: 'versions', icon: '↻', label: state.lang === 'en' ? 'Versions and updates' : 'Versionen und Updates', action: () => openAppLifecycleDrawer(module) });
   state.contextMenu.show(event, items);
 }
 
@@ -9030,7 +9033,9 @@ function renderLoginGate(session, options = {}) {
   delete document.body.dataset.moduleShell;
   delete document.body.dataset.moduleLoading;
   state.modules = [];
-  els.tabs.replaceChildren();
+  setTopbarAppItems(els.tabs, []);
+  renderTabs.lastSignature = '';
+  renderCollectionFreshnessWarning();
   els.leftContent.replaceChildren();
   els.rightContent.replaceChildren();
 
@@ -10476,6 +10481,7 @@ async function loadShellCtoxHealth() {
 function renderShellCtoxWarning(status) {
   if (!els.ctoxWarning) return;
   const problem = shellCtoxHealthProblem(status);
+  renderShellInstanceStatus(status, problem);
   if (!problem) {
     els.ctoxWarning.hidden = true;
     els.ctoxWarning.removeAttribute('title');
@@ -15168,6 +15174,23 @@ function workspaceStatusText() {
 
 function setWorkspaceStatus() {
   setStatus(workspaceStatusText());
+  renderShellInstanceStatus();
+}
+
+function renderShellInstanceStatus(status = state.ctoxHealth, problem = shellCtoxHealthProblem(status)) {
+  const name = document.querySelector('[data-shell-instance-name]');
+  if (name) name.textContent = workspaceStatusText();
+  const dot = document.querySelector('[data-shell-instance-health]');
+  if (dot) {
+    const healthy = status?.ok !== false && status?.ctox_service?.running === true && !problem;
+    dot.dataset.health = problem ? 'degraded' : healthy ? 'healthy' : 'unknown';
+    dot.title = problem || (healthy ? (state.lang === 'en' ? 'Instance ready' : 'Instanz bereit') : (state.lang === 'en' ? 'Connecting' : 'Verbindung wird hergestellt'));
+  }
+  const cause = document.querySelector('[data-shell-instance-cause]');
+  if (cause) {
+    cause.hidden = !problem;
+    cause.textContent = problem || '';
+  }
 }
 
 function isWorkspaceStatusText(text) {

@@ -86,6 +86,9 @@ function render(root, detail) {
   const state = normalizeShellUpdateStatus(detail?.state);
   const channel = detail?.channel || (version ? shellChannel(version) : 'recovery');
   const [icon, stateLabel] = STATUS_COPY[state];
+  root.dataset.shellState = state;
+  const recovery = root.querySelector('[data-shell-recovery-pill]');
+  if (recovery) recovery.hidden = state !== 'recovery';
   root.querySelector('[data-shell-version-label]').textContent = version ? `v${version}` : 'Recovery';
   const statusButton = root.querySelector('[data-shell-release-status]');
   statusButton.dataset.state = state;
@@ -118,28 +121,40 @@ function start() {
   // lifecycle status across its typed bridge. A relative fetch here would be
   // an accidental HTTP control/data fallback against appassets and must not
   // run in the RxDB/WebRTC-only mobile host.
-  if (document.documentElement.dataset.workjetMobileHost === 'true') return;
   const root = document.querySelector('[data-shell-release]');
   if (!root) return;
   const button = root.querySelector('[data-shell-release-status]');
   const panel = root.querySelector('[data-shell-release-panel]');
   let lastDetail = { version: '', channel: 'recovery', state: 'recovery' };
   const versionLabel = root.querySelector('[data-shell-version-label]');
+  const instanceButtons = root.querySelectorAll('[data-shell-instance-toggle]');
   const togglePanel = () => {
     panel.hidden = !panel.hidden;
     button.setAttribute('aria-expanded', String(!panel.hidden));
     versionLabel?.setAttribute?.('aria-expanded', String(!panel.hidden));
+    instanceButtons.forEach((control) => control.setAttribute('aria-expanded', String(!panel.hidden)));
     if (!panel.hidden) render(root, lastDetail);
   };
   button.addEventListener('click', togglePanel);
-  // Die Versionsnummer selbst oeffnet das Menue; die Status-Bubble traegt im
-  // Zustand "Aktuell" keine Information und ist dann per CSS ausgeblendet
-  // (Betreiber-Direktive 31.08.).
+  // The instance and Recovery controls expose the existing release menu;
+  // version identities remain available in that menu.
   versionLabel?.addEventListener?.('click', togglePanel);
+  instanceButtons.forEach((control) => control.addEventListener('click', togglePanel));
+  root.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || panel.hidden) return;
+    panel.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+    versionLabel?.setAttribute?.('aria-expanded', 'false');
+    instanceButtons.forEach((control) => control.setAttribute('aria-expanded', 'false'));
+    instanceButtons[0]?.focus();
+    event.preventDefault();
+  });
   document.addEventListener('click', (event) => {
     if (root.contains(event.target)) return;
     panel.hidden = true;
     button.setAttribute('aria-expanded', 'false');
+    versionLabel?.setAttribute?.('aria-expanded', 'false');
+    instanceButtons.forEach((control) => control.setAttribute('aria-expanded', 'false'));
   });
   window.addEventListener('workjet:shell-update-status', (event) => {
     lastDetail = event.detail;
