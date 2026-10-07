@@ -281,9 +281,19 @@ def main():
         assertion("actual_guest_endpoint", session_id=session_id, boot_seconds=time.monotonic()-start)
         guest.settimeout(10)
         def capture(i, name):
-            reply = request(guest, dict(kind="observe_session", id=i, session_id=session_id))
-            if reply.get("kind") != "observation":
-                raise ValueError("real Xorg capture failed")
+            # Only a complete, correlated failure of a read-only observation
+            # may be retried on the slow restored TCG guest. Never replay input
+            # or retry a timeout, malformed frame, or changed session identity.
+            attempts = 3 if source else 1
+            for attempt in range(attempts):
+                request_id = i + 1000 * attempt
+                reply = request(guest, dict(kind="observe_session", id=request_id, session_id=session_id))
+                if reply.get("kind") == "observation":
+                    break
+                if reply.get("kind") != "failed" or attempt + 1 == attempts:
+                    raise ValueError("real Xorg capture failed")
+                assertion("native_capture_retry", file=name, request_id=request_id, attempt=attempt + 1)
+                time.sleep(2)
             png = packet(guest, 16 * 1024 * 1024)
             if len(png) < 33 or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR":
                 raise ValueError("invalid actual captured PNG")
