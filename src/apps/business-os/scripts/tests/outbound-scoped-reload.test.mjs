@@ -141,7 +141,17 @@ try {
       } }),
     }]));
     Object.assign(state, {
-      ctx: { host: { querySelector: () => null } },
+      ctx: { host: { querySelector: () => null }, sync: {
+        leaseCollection: async (name, reason, options) => {
+          assert.equal(name, 'outbound_lead_generation_leads');
+          assert.equal(options.forceDirect, true);
+          const replication = {
+            awaitQueryReady: async () => 'native-generation',
+            collectionQueryGenerationToken: () => 'native-generation',
+          };
+          return { bridge: { state: replication }, release: async () => {} };
+        },
+      } },
       collections: db, sources: [], adapters: [], imports: [], leads: [existingLead], leadListRows: null,
       recipientEligibilityReady: new Set(['lead_a']), selectedDetailLoadingKey: '', selectedDetailRequestedKey: '',
       fullLeadReadSequence: 0, fullLeadAppliedSequence: new Map(),

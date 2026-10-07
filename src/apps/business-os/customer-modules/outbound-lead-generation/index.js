@@ -26,7 +26,7 @@ function showBusinessConfirm(message, options = {}) { return shellConfirm(messag
 function showBusinessPrompt(message, options = {}) { return shellPrompt(message, { host: eigenesDialogZiel(), ...options }); }
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCollectionReloader } from './collection-reloader.mjs';
-import { loadLeadList, loadFullLeadRows, leadListRow } from './lead-list-loader.mjs';
+import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } from './lead-list-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 
@@ -1602,7 +1602,10 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   const outcomes = await Promise.allSettled(requested.map(async (key) => {
     const collection = collections[key];
     if (key === 'leads') {
-      leadChanges = await loadLeadList(collection, previousLeads);
+      leadChanges = await withLeadQueryAuthority(state.ctx.sync,
+        signal => loadLeadList(collection, previousLeads, { signal }), {
+          isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
+        });
       return [key, leadChanges.rows];
     }
     const docs = await collection.find().exec();
@@ -1736,7 +1739,10 @@ async function ensureFullLeads(ids, { fresh = false } = {}) {
   const missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
   if (!missing.length) return requested.map(id => cached.get(id));
   const sequence = ++state.fullLeadReadSequence;
-  const rows = await loadFullLeadRows(state.collections.leads, missing);
+  const rows = await withLeadQueryAuthority(state.ctx.sync,
+    signal => loadFullLeadRows(state.collections.leads, missing, { signal }), {
+      isCurrent: () => state.collectionBindingGeneration === generation && state.uiMounted !== false,
+    });
   if (generation !== state.collectionBindingGeneration || state.uiMounted === false) {
     throw new Error('Die CTOX-Verbindung hat sich geändert. Bitte die Aktion erneut versuchen.');
   }
