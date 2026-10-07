@@ -349,7 +349,11 @@ fn install_sqlite_error_log() {
     }
     // SAFETY: runs once at process start, before any SQLite connection exists;
     // the callback never calls into SQLite and only writes to stderr.
-    let _ = unsafe { rusqlite::trace::config_log(Some(log)) };
+    if let Err(error) = unsafe { rusqlite::trace::config_log(Some(log)) } {
+        // SQLite rejects the log after its own initialization; say so instead
+        // of silently missing the very errors this log exists for.
+        eprintln!("[sqlite] error log unavailable: {error}");
+    }
 }
 
 fn main() -> anyhow::Result<()> {
