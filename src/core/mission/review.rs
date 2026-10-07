@@ -695,6 +695,11 @@ fn run_external_review_legs(
     }
 
     let mut prompt = build_review_prompt(request, reasons);
+    if is_lead_research_review(request) {
+        if let Some(table) = lead_research_stored_result(root, &request.task_prompt) {
+            prompt.push_str(&table);
+        }
+    }
     let mut last_report = String::new();
 
     for leg in 0..REVIEW_MAX_LEGS {
@@ -879,6 +884,91 @@ fn assess_review_requirement(
         ),
         ReviewRequirement::NotRequired => (false, 0, Vec::new()),
     }
+}
+
+fn is_lead_research_review(request: &CompletionReviewRequest) -> bool {
+    request.bound_skill.as_deref().map(str::trim) == Some("outbound-lead-generation-research")
+        || (request.task_prompt.contains("[outbound-lead-generation]")
+            && request.task_prompt.contains("leadgen-lead-research-"))
+}
+
+fn lead_id_from_task_prompt(task_prompt: &str) -> Option<&str> {
+    let start = task_prompt.find("[lead_")? + 1;
+    let len = task_prompt[start..].find(']')?;
+    let id = &task_prompt[start..start + len];
+    id.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        .then_some(id)
+}
+
+/// The lead's stored research result as a compact table for the reviewer.
+/// Without it the reviewer spent most of its budget rediscovering the RxDB
+/// schema with raw sqlite3 (07.10.2026: ~430 sqlite3 calls per hour on one
+/// tenant, the review took ~40 % of all model calls in the worker slots).
+fn lead_research_stored_result(root: &Path, task_prompt: &str) -> Option<String> {
+    let lead_id = lead_id_from_task_prompt(task_prompt)?;
+    let lead = crate::business_os::store::load_outbound_lead_document(root, lead_id).ok()??;
+    Some(render_lead_research_stored_result(lead_id, &lead))
+}
+
+fn render_lead_research_stored_result(lead_id: &str, lead: &serde_json::Value) -> String {
+    fn clip(text: &str, max: usize) -> String {
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if flat.chars().count() <= max {
+            flat
+        } else {
+            format!("{}…", flat.chars().take(max).collect::<String>())
+        }
+    }
+    let text = |value: Option<&serde_json::Value>| match value {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Null) | None => String::new(),
+        Some(other) => other.to_string(),
+    };
+    let mut out = format!(
+        "\n\nStored lead result (authoritative; lead {lead_id}, research_status {}):\n\
+field | status | value | sources (provider: quote) | reason | attempts\n",
+        text(lead.get("research_status"))
+    );
+    let Some(fields) = lead
+        .get("field_status")
+        .and_then(serde_json::Value::as_object)
+    else {
+        out.push_str("(no field_status stored)\n");
+        return out;
+    };
+    for (field, entry) in fields {
+        let sources = entry
+            .get("sources")
+            .and_then(serde_json::Value::as_array)
+            .map(|sources| {
+                sources
+                    .iter()
+                    .map(|source| {
+                        format!(
+                            "{}: {}",
+                            text(source.get("source_id")),
+                            clip(&text(source.get("quote")), 140)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" || ")
+            })
+            .unwrap_or_default();
+        let attempts = entry
+            .get("attempts")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        out.push_str(&format!(
+            "{field} | {} | {} | {} | {} | {attempts}\n",
+            text(entry.get("status")),
+            clip(&text(entry.get("value")), 120),
+            sources,
+            clip(&text(entry.get("reason")), 120),
+        ));
+    }
+    out
 }
 
 fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) -> String {
@@ -1091,18 +1181,15 @@ Internal artifact review gate:\n\
     // reviewer load mission, continuity, queue and communication state with
     // raw sqlite3 for every lead: 41% of all model calls on an on-prem tenant
     // (07.10.2026). Review what matters for this task type instead.
-    let lead_research_review_work = if bound_skill == "outbound-lead-generation-research"
-        || (task_prompt.contains("[outbound-lead-generation]")
-            && task_prompt.contains("leadgen-lead-research-"))
-    {
+    let lead_research_review_work = if is_lead_research_review(request) {
         "\
 Outbound lead research completion gate (replaces required review work steps 1-6 for this task type; the server already enforced the writeback contract):\n\
-- read the lead's stored result once: `sqlite3 -readonly <state>/business-os-rxdb.sqlite3 \"select json_extract(data,'$.research_status'), json_extract(data,'$.field_status') from ctox_business_os__outbound_lead_generation_leads__v0 where id='<lead_id>'\"` (lead id is in the task prompt, e.g. [lead_abc]); do not query other tables or the core database\n\
+- the lead's stored result is appended below as `Stored lead result` (read from the store when this review started); judge from it and do not query any database. Only if that block is missing, read it once: `sqlite3 -readonly <state>/business-os-rxdb.sqlite3 \"select json_extract(data,'$.research_status'), json_extract(data,'$.field_status') from ctox_business_os__outbound_lead_generation_leads__v0 where id='<lead_id>'\"` (lead id is in the task prompt, e.g. [lead_abc])\n\
 - compare the worker's final answer against that field_status: counts of verified / no_match / action_required fields, named persons and e-mails must match; FAIL on a claimed value that is not stored\n\
 - spot-check at most three verified fields: the quote must name the value; open the source URL with ctox_web_read only if the quote is ambiguous\n\
 - quality: a verified register field (name, address, management, revenue, employees, WZ code) backed by a single source without a `single source:` reason is a finding (rework), not a FAIL by itself\n\
 - no_match is acceptable only with attempts listing the sources asked; a field left open after a source failure must be action_required\n\
-- finish within about ten tool calls; do not inspect queue, mission, continuity, communication or meeting state for this task\n\
+- finish within about five tool calls; do not read skill files, workspaces, queue, mission, continuity, communication or meeting state for this task\n\
 "
     } else {
         ""
@@ -2317,7 +2404,7 @@ mod tests {
         };
         let rendered = build_review_prompt(&lead, &["durable_queue_or_ticket_work".to_string()]);
         assert!(rendered.contains("Outbound lead research completion gate"));
-        assert!(rendered.contains("ctox_business_os__outbound_lead_generation_leads__v0"));
+        assert!(rendered.contains("Stored lead result"));
         let other = CompletionReviewRequest {
             source_label: "queue".to_string(),
             task_prompt: "Write the quarterly summary".to_string(),
@@ -2325,6 +2412,32 @@ mod tests {
         };
         let rendered = build_review_prompt(&other, &["durable_queue_or_ticket_work".to_string()]);
         assert!(!rendered.contains("Outbound lead research completion gate"));
+    }
+
+    #[test]
+    fn lead_research_review_receives_the_stored_result_table() {
+        assert_eq!(
+            lead_id_from_task_prompt("Neurecherche für X GmbH [lead_1j61rtm] (Auftrag a)"),
+            Some("lead_1j61rtm")
+        );
+        assert_eq!(lead_id_from_task_prompt("kein Lead [lead_x; drop]"), None);
+        let lead = serde_json::json!({
+            "research_status": "needs_review",
+            "field_status": {
+                "umsatz": {"status": "verified", "value": "6,26M",
+                    "sources": [{"source_id": "dnbhoovers.com", "quote": "D&B Hoovers revenue EUR: 6,26M"}],
+                    "attempts": [], "reason": ""},
+                "firma_fax": {"status": "no_match", "value": null, "sources": [],
+                    "attempts": [{"source_id": "northdata.de"}, {"source_id": "firmenwissen.de"}],
+                    "reason": "no fax published"}
+            }
+        });
+        let table = render_lead_research_stored_result("lead_1", &lead);
+        assert!(table.contains("research_status needs_review"));
+        assert!(table.contains(
+            "umsatz | verified | 6,26M | dnbhoovers.com: D&B Hoovers revenue EUR: 6,26M |  | 0"
+        ));
+        assert!(table.contains("firma_fax | no_match |  |  | no fax published | 2"));
     }
 
     #[test]

@@ -5,7 +5,7 @@
     <base href="/business-os/">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>CTOX Business OS</title>
-    <link rel="icon" href="assets/ctox-app-icon.png?v=20261007-shell-v2-workjet-project-config" />
+    <link rel="icon" href="assets/ctox-app-icon.png?v=20261007-query-startup-coalescing" />
     <script>
       (() => {
         try {
@@ -48,14 +48,14 @@
       }
     </style>
     <link rel="stylesheet" href="ui-contract/v1/workjet-ui-contract.css?v=5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419" />
-    <link rel="stylesheet" href="app.css?v=20261007-shell-v2-workjet-project-config" />
-    <link rel="stylesheet" href="shared/base.css?v=20261007-shell-v2-workjet-project-config" />
-    <link rel="stylesheet" href="mobile-host.css?v=20261007-shell-v2-workjet-project-config" />
+    <link rel="stylesheet" href="app.css?v=20261007-query-startup-coalescing" />
+    <link rel="stylesheet" href="shared/base.css?v=20261007-query-startup-coalescing" />
+    <link rel="stylesheet" href="mobile-host.css?v=20261007-query-startup-coalescing" />
     <!-- Loaded unconditionally and last. It is scoped to
          html[data-desktop-host="ctox"], an attribute only the Electron host
          sets, so it is inert in a browser: no host detection, no conditional
          loading. It carries no design of its own — see the file header. -->
-    <link rel="stylesheet" href="themes/ctox-desktop-shell.css?v=20261007-shell-v2-workjet-project-config" />
+    <link rel="stylesheet" href="themes/ctox-desktop-shell.css?v=20261007-query-startup-coalescing" />
   </head>
   <body data-module-shell="full" data-module-loading="startup">
     <script>
@@ -156,19 +156,31 @@
           <div class="workspace-startup-loader" id="startup-loader">
             <div class="startup-logo-container">
               <div class="startup-logo-glow"></div>
-              <svg class="startup-logo-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <svg class="startup-logo-svg" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Workjet">
+                <!-- Workjet app icon (workjet repo assets/workjet/workjet-logo.svg), ids prefixed for inline use -->
                 <defs>
-                  <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" style="stop-color: var(--startup-gradient-from)" />
-                    <stop offset="100%" style="stop-color: var(--startup-gradient-to)" />
-                  </linearGradient>
+                  <radialGradient id="wj-logo-bg" cx="40%" cy="34%" r="80%"><stop offset="0" stop-color="#14202f"/><stop offset="1" stop-color="#060b12"/></radialGradient>
+                  <radialGradient id="wj-logo-chamber" cx="46%" cy="42%" r="70%"><stop offset="0" stop-color="#0e1a29"/><stop offset="0.85" stop-color="#070d16"/><stop offset="1" stop-color="#040810"/></radialGradient>
+                  <linearGradient id="wj-logo-steel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e3ecf4"/><stop offset="0.45" stop-color="#a3b6c9"/><stop offset="1" stop-color="#46586c"/></linearGradient>
+                  <linearGradient id="wj-logo-rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a4a5d"/><stop offset="0.5" stop-color="#141e2b"/><stop offset="1" stop-color="#2c3a4b"/></linearGradient>
+                  <radialGradient id="wj-logo-cone" cx="40%" cy="36%" r="90%"><stop offset="0" stop-color="#d7e2ec"/><stop offset="0.6" stop-color="#8298ad"/><stop offset="1" stop-color="#33455a"/></radialGradient>
+                  <g id="wj-logo-blade"><path d="M 121.90 116.52 C 119.43 93.61 154.76 67.89 188.52 77.22 A 79.0 79.0 0 0 1 206.81 133.51 C 189.24 119.39 154.10 110.40 134.89 116.98 A 13.0 13.0 0 0 0 121.90 116.52 Z" fill="url(#wj-logo-steel)"/><path d="M 121.90 116.52 C 119.43 93.61 154.76 67.89 188.52 77.22" fill="none" stroke="#f2f7fc" stroke-width="1.4" stroke-linecap="round" opacity="0.9"/></g>
                 </defs>
-                <path d="M50 15 L85 35 L85 75 L50 95 L15 75 L15 35 Z" stroke="url(#logoGrad)" stroke-width="4" stroke-linejoin="round" />
-                <path d="M50 30 L73 43 L73 70 L50 83 L27 70 L27 43 Z" fill="url(#logoGrad)" fill-opacity="0.15" stroke="url(#logoGrad)" stroke-width="2" />
-                <path d="M50 15 L50 95" stroke="url(#logoGrad)" stroke-width="1.5" stroke-dasharray="4 4" />
-                <path d="M15 35 L85 75" stroke="url(#logoGrad)" stroke-width="1.5" stroke-dasharray="4 4" />
-                <path d="M85 35 L15 75" stroke="url(#logoGrad)" stroke-width="1.5" stroke-dasharray="4 4" />
-                <circle cx="50" cy="50" r="10" fill="url(#logoGrad)" />
+                <rect x="8" y="8" width="240" height="240" rx="58" fill="url(#wj-logo-bg)"/>
+                <circle cx="128" cy="128" r="96" fill="url(#wj-logo-rim)"/>
+                <circle cx="128" cy="128" r="87" fill="#0a121d"/>
+                <circle cx="128" cy="128" r="85" fill="url(#wj-logo-chamber)"/>
+                <circle cx="128" cy="128" r="96" fill="none" stroke="#aebfd0" stroke-width="1.4" opacity="0.85"/>
+                <circle cx="128" cy="128" r="87" fill="none" stroke="#03070c" stroke-width="2"/>
+                <g class="startup-logo-rotor">
+                  <use href="#wj-logo-blade"/>
+                  <use href="#wj-logo-blade" transform="rotate(90 128 128)"/>
+                  <use href="#wj-logo-blade" transform="rotate(180 128 128)"/>
+                  <use href="#wj-logo-blade" transform="rotate(270 128 128)"/>
+                </g>
+                <circle cx="128" cy="128" r="18" fill="url(#wj-logo-cone)"/>
+                <circle cx="128" cy="128" r="18" fill="none" stroke="#0a1119" stroke-width="1.2"/>
+                <circle cx="128" cy="128" r="2.6" fill="#1b2836"/>
               </svg>
             </div>
             <h2 class="startup-title">Workjet Business OS</h2>
@@ -220,8 +232,8 @@
     </div>
     <aside class="shell-notifications" data-shell-notifications aria-live="polite" aria-label="Benachrichtigungen" data-shell-t-aria="notificationsAria"></aside>
 
-  <script type="module" src="shared/shell-release-status.js?v=20261007-shell-v2-workjet-project-config"></script>
-  <script type="module" src="mobile-host.js?v=20261007-shell-v2-workjet-project-config"></script>
-  <script type="module" src="app.js?v=20261007-shell-v2-workjet-project-config"></script>
+  <script type="module" src="shared/shell-release-status.js?v=20261007-query-startup-coalescing"></script>
+  <script type="module" src="mobile-host.js?v=20261007-query-startup-coalescing"></script>
+  <script type="module" src="app.js?v=20261007-query-startup-coalescing"></script>
   </body>
 </html>

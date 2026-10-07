@@ -111,7 +111,7 @@ const source = fileURLToPath(new URL('../../customer-modules/outbound-lead-gener
 mkdirSync(join(fixture, 'modules', 'olg'), { recursive: true });
 mkdirSync(join(fixture, 'shared'), { recursive: true });
 writeFileSync(join(fixture, 'package.json'), '{"type":"module"}');
-for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'lead-list-loader.mjs', 'import-preview-groups.js', 'current-state-export.mjs', 'required-field-selection.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
+for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'lead-list-loader.mjs', 'import-preview-groups.js', 'current-state-export.mjs', 'required-field-selection.mjs', 'read-error-grace.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
 writeFileSync(join(fixture, 'shared', 'universal-importer.js'), [
   'extractCompanyRowsFromWorkbookFile', 'extractCompanyRowsFromText', 'normalizeCompanyRow', 'openUniversalImporter', 'parseDelimitedText',
 ].map((name) => `export function ${name}() {}`).join('\n'));
@@ -161,7 +161,7 @@ try {
       selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
       researchPolicyLoaded: true, researchPolicy: 'saved', researchPolicyDraft: 'unsaved',
       syncPending: false, syncError: '', syncWaitingCollections: new Set(),
-      collectionReadErrors: new Map(),
+      collectionReadErrors: new Map(), collectionsEverLoaded: new Set(),
     });
     return { reads, existingLead };
   }
@@ -210,8 +210,11 @@ try {
     assert.equal(state.leadListRows, null, 'a rejected query is never an empty list');
     assert.deepEqual([...state.collectionReadErrors.keys()], ['leads']);
     hooks.renderSyncLine();
+    assert.equal(line.className, 'is-syncing', 'a never-loaded collection is still starting up');
+    state.collectionReadErrors.get('leads').since -= 61_000;
+    hooks.renderSyncLine();
     assert.match(line.innerHTML, /Leads konnten nicht geladen werden/);
-    assert.equal(line.className, 'is-error', 'read failure takes priority over the sync spinner');
+    assert.equal(line.className, 'is-error', 'after the grace period the read failure takes priority over the sync spinner');
     failed = false;
     await hooks.reload(['leads']);
     assert.equal(state.collectionReadErrors.size, 0);
@@ -235,6 +238,12 @@ try {
     assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
     assert.match(leadBody.innerHTML, /Leads werden geladen/);
     await assert.rejects(hooks.reload(['leads', 'imports']), error => error.code === 'OUTBOUND_COLLECTION_READ_FAILED' && /remote request token timeout/.test(error.details.leads));
+    render();
+    // A collection that never loaded is still starting: loading, not an error.
+    assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
+    assert.match(leadBody.innerHTML, /Leads werden geladen/);
+    // After the grace period the same failure is shown as an error.
+    state.collectionReadErrors.get('leads').since -= 61_000;
     render();
     assert.match(campaignBody.innerHTML, /Kampagnen konnten nicht geladen werden/);
     assert.match(leadBody.innerHTML, /Leads konnten nicht geladen werden/);
@@ -263,7 +272,8 @@ try {
     assert.equal(signal.aborted, true, 'timed-out collection query is cancelled');
     assert.equal(state.leadListRows.length, 1, 'healthy lead query survives the other collection timeout');
     assert.deepEqual([...state.collectionReadErrors.keys()], ['adapters']);
-    assert.match(state.collectionReadErrors.get('adapters'), /nicht rechtzeitig/);
+    assert.match(state.collectionReadErrors.get('adapters').message, /nicht rechtzeitig/);
+    assert.equal(state.collectionReadErrors.get('adapters').transient, true, 'a timeout is a transient read failure');
   });
   await test('an older rejected read cannot invalidate a newer successful collection read', async () => {
     const blocked = deferred(); let reads = 0;
@@ -363,6 +373,23 @@ try {
     const old = hooks.reload(['sources']); await hooks.reload(['sources']);
     blocked.resolve([{ toJSON: () => ({ id: 'old', label: 'Old' }) }]); await old;
     assert.equal(state.sources[0].id, 'new');
+  });
+  await test('concurrent lead list reloads share one paged load', async () => {
+    const gate = deferred(); let leadReads = 0;
+    const { existingLead } = setup({ leads: async query => {
+      leadReads += 1;
+      await gate.promise;
+      return query.selector.id?.$gt ? [] : [{ toJSON: () => leadListRow(existingLead) }];
+    } });
+    state.leadListLoad = null;
+    const first = hooks.reload(['leads']);
+    const second = hooks.reload(['leads']);
+    await new Promise(resolve => setImmediate(resolve));
+    gate.resolve();
+    await Promise.all([first, second]);
+    assert.equal(leadReads, 2, 'one paged load (first page + empty next page), not one per caller');
+    assert.equal(state.leadListRows.length, 1);
+    assert.equal(state.leadListLoad, null, 'the shared load is released when it settles');
   });
   await test('a closed or recovered binding cannot apply its delayed documents', async () => {
     const blocked = deferred(); setup({ sources: () => blocked.promise });

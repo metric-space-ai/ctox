@@ -29,6 +29,7 @@ import { createCollectionReloader } from './collection-reloader.mjs';
 import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } from './lead-list-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
+import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -633,6 +634,7 @@ export async function mount(ctx) {
   state.syncError = '';
   state.syncMessage = navigator.onLine === false ? 'Keine Netzwerkverbindung' : 'Daten werden verbunden';
   state.collectionReadErrors = new Map();
+  state.collectionsEverLoaded = new Set();
   state.syncWaitingCollections = new Set(REPLICATED_COLLECTIONS);
   const handleOffline = () => {
     state.syncPending = false;
@@ -1377,7 +1379,7 @@ function bindCollections() {
     },
     onError: (error) => {
       render();
-      console.warn('[outbound-lead-generation] Nachladen fehlgeschlagen, neuer Versuch', { message: error?.message || String(error), collections: error?.details });
+      console.warn('[outbound-lead-generation] Nachladen fehlgeschlagen, neuer Versuch', error?.message || String(error), JSON.stringify(error?.details || {}));
     },
   });
 }
@@ -1594,6 +1596,29 @@ async function alleDokumente(collection, selector = {}, seitengroesse = SEITENGR
   return alle;
 }
 
+// Start, the first scheduled reload and the collection reloader each asked for
+// the full lead list at the same moment; every call paged all leads with its
+// own revision token, so the native peer served the same 200-row pages three
+// times (thesen 07.10.2026: 2.3/4.4/5.7 s for one page). Callers that arrive
+// while a list load of the same binding is running share it. The whole paged
+// list (≈7 pages over a relayed WebRTC link) also outgrew the 15 s single-query
+// budget, was aborted and started over; give it 45 s.
+const LEAD_LIST_LOAD_TIMEOUT_MS = 45000;
+function sharedLeadListLoad(collection, previousLeads, bindingGeneration) {
+  const running = state.leadListLoad;
+  if (running && running.bindingGeneration === bindingGeneration) return running.promise;
+  const promise = withLeadQueryAuthority(state.ctx.sync,
+    signal => loadLeadList(collection, previousLeads, { signal }), {
+      isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
+      timeoutMs: LEAD_LIST_LOAD_TIMEOUT_MS,
+    });
+  const entry = { bindingGeneration, promise };
+  state.leadListLoad = entry;
+  const clear = () => { if (state.leadListLoad === entry) state.leadListLoad = null; };
+  promise.then(clear, clear);
+  return promise;
+}
+
 async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   const collections = state.collections;
   const requested = [...new Set(keys)].filter((key) => collections[key]);
@@ -1602,10 +1627,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   const outcomes = await Promise.allSettled(requested.map(async (key) => {
     const collection = collections[key];
     if (key === 'leads') {
-      leadChanges = await withLeadQueryAuthority(state.ctx.sync,
-        signal => loadLeadList(collection, previousLeads, { signal }), {
-          isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
-        });
+      leadChanges = await sharedLeadListLoad(collection, previousLeads, bindingGeneration);
       return [key, leadChanges.rows];
     }
     const collectionName = `outbound_lead_generation_${key === 'researchPolicies' ? 'research_policies' : key}`;
@@ -1628,11 +1650,13 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
     if (outcome.status === 'fulfilled') {
       results.push(outcome.value);
       readErrors.delete(key);
+      (state.collectionsEverLoaded ||= new Set()).add(key);
     } else {
       // Keep the last complete data, but never present a rejected read as
       // empty/successful. One failed collection must not discard healthy reads.
       applied.set(key, lauf);
-      readErrors.set(key, String(outcome.reason?.message || outcome.reason));
+      readErrors.set(key, readErrorEntry(readErrors.get(key), outcome.reason, Date.now(),
+        { neverLoaded: !state.collectionsEverLoaded?.has(key) }));
       failures.push(key);
     }
   }
@@ -1725,7 +1749,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
     if (failures.length) {
       throw Object.assign(new Error('Daten konnten nicht geladen werden: ' + failures.join(', ')), {
         code: 'OUTBOUND_COLLECTION_READ_FAILED', failedKeys: failures,
-        details: Object.fromEntries(failures.map(key => [key, readErrors.get(key)])),
+        details: Object.fromEntries(failures.map(key => [key, readErrors.get(key)?.message])),
       });
     }
   }
@@ -1965,12 +1989,13 @@ function renderSyncLine() {
   const line = state.ctx.host.querySelector('[data-sync-line]');
   if (!line) return;
   const waiting = state.syncWaitingCollections.size;
-  if (state.collectionReadErrors?.size) {
+  const visibleErrors = visibleReadErrorKeys(state.collectionReadErrors);
+  if (visibleErrors.length) {
     const labels = { leads: 'Leads', sources: 'Quellen', adapters: 'Adapter', imports: 'Kampagnen', researchPolicies: 'Einstellungen' };
-    const failed = [...state.collectionReadErrors.keys()].map(key => labels[key] || key).join(', ');
+    const failed = visibleErrors.map(key => labels[key] || key).join(', ');
     line.innerHTML = `${escapeHtml(failed)} konnten nicht geladen werden. Der vorhandene Stand bleibt erhalten. <button class="leadgen-approve-link" data-action="retry-sync">Neu verbinden</button>`;
     line.className = 'is-error';
-  } else if (state.syncPending) {
+  } else if (state.syncPending || state.collectionReadErrors?.size) {
     line.textContent = `${state.syncMessage || 'Daten werden verbunden'} (${REPLICATED_COLLECTIONS.length - waiting}/${REPLICATED_COLLECTIONS.length})`;
     line.className = 'is-syncing';
   } else if (state.syncError) {
@@ -12306,7 +12331,10 @@ function setzeHtmlWennGeaendert(element, html) {
 // „Noch keine Leads importiert“ da, obwohl 12 Kampagnen gleich kamen.
 function emptyCollectionText(keys, loadingText, emptyText, errorText) {
   // A failed read is not a pending read, even while other collections reconnect.
-  if (keys.some(key => state.collectionReadErrors?.has(key))) return errorText;
+  // A transient failure during a CTOX (re)start stays "loading" for a grace period.
+  const visibleErrors = visibleReadErrorKeys(state.collectionReadErrors);
+  if (keys.some(key => visibleErrors.includes(key))) return errorText;
+  if (keys.some(key => state.collectionReadErrors?.has(key))) return loadingText;
   if (keys.every(key => state.reloadAngewendetJeSammlung?.has(key))) return emptyText;
   if (state.syncError) return errorText;
   return datenLadenNoch() ? loadingText : emptyText;

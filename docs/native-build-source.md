@@ -1,5 +1,9 @@
 # Native build source intake
 
+Git-aware worker capture and isolated reconstruction are documented in
+[native worker source intake](native-worker-source.md). Ordinary private build
+delivery remains a plain frozen tree.
+
 `business_os::build_source::capture(worktree, staging_root, public_base)` freezes
 Git-tracked and non-ignored untracked files under a unique disposable directory
 outside the worktree. The caller prevents concurrent edits during capture and

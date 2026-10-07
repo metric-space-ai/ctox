@@ -12,7 +12,7 @@ import { CTOX_FILE_RPC, CTOX_QUERY_RPC, CTOX_ROWS_RPC } from './protocol-contrac
 
 const ACK_RESPONSE = Object.freeze({ ack: true });
 const SERVER_QUERY_STREAM_LIMIT = Math.max(1, Number(CTOX_QUERY_RPC.maxInFlightStreams) || 4);
-const CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMIT - 1 || 1));
+export const CLIENT_QUERY_STREAM_LIMIT = SERVER_QUERY_STREAM_LIMIT;
 export const CLIENT_QUERY_QUEUE_LIMIT = 128;
 export const CLIENT_QUERY_QUEUE_BUDGET_BYTES = 1024 * 1024;
 export const CLIENT_FILE_COLLECTOR_LIMIT = 8;
@@ -22,8 +22,16 @@ export const CLIENT_ROWS_COLLECTOR_LIMIT = 8;
 // legit stream stays far under this; the cap only bites a hostile/buggy peer
 // that keeps pushing chunks to grow slot.chunks unbounded before the timeout.
 export const DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES = 8 * 1024 * 1024;
+// The native peer frees a stream slot only after it has sent the final chunk,
+// and a locally cancelled stream keeps its server slot until the peer notices.
+// A start burst therefore meets STREAM_LIMIT_EXCEEDED although the browser
+// keeps under the limit. Six retries (~3.4 s) pushed the failure into the
+// apps' own backoff (2, 4, 8 … s), so Outbound needed ~20 s on thesen
+// (07.10.2026) for queries that answer in under 1.5 s. Wait for a slot with
+// short, capped pauses for up to ~14 s instead.
 const QUERY_STREAM_LIMIT_RETRY_MS = 160;
-const QUERY_STREAM_LIMIT_RETRIES = 6;
+const QUERY_STREAM_LIMIT_RETRY_MAX_MS = 800;
+const QUERY_STREAM_LIMIT_RETRIES = 20;
 const QUERY_RATE_LIMIT_RETRY_MS = 100;
 const QUERY_RATE_LIMIT_RETRIES = 16;
 const QUERY_PEER_RETRY_MS = 250;
@@ -57,6 +65,8 @@ export function createDemandLoadingTransport({
     throw new TypeError('createDemandLoadingTransport requires getPeerId');
   }
 
+  const coalescedQueryWindows = new Map();
+  const coalescedQueryConsumers = new Map();
   const queryCollectors = new Map();   // requestId -> { chunks, resolve, reject, decoded }
   const fileCollectors = new Map();    // requestId -> { chunks, resolve, reject }
   const rowsCollectors = new Map();    // requestId -> { bySeq, finalSeq, resolve, reject }
@@ -78,6 +88,7 @@ export function createDemandLoadingTransport({
   );
   const metrics = {
     queryFetchRequests: 0,
+    queryFetchCoalescedRequests: 0,
     fileFetchRequests: 0,
     queryChunksReceived: 0,
     fileChunksReceived: 0,
@@ -277,10 +288,66 @@ export function createDemandLoadingTransport({
 
   let peer = null;
   let rowsRequestSequence = 0;
-  function attach(p) { peer = p; }
+  let peerGeneration = 0;
+  function attach(p) {
+    if (p !== peer) peerGeneration += 1;
+    peer = p;
+  }
 
-  async function requestQueryFetch(envelope) {
-    return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope));
+  function requestQueryFetch(envelope, { authorityKey = null } = {}) {
+    // Share only a currently executing exact window under the caller's current
+    // bridge/account authority. Hydration revision tokens remain loader-local;
+    // a completed operation is never reused as a new strict native read.
+    if (typeof authorityKey !== 'string' || !authorityKey) {
+      return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope));
+    }
+    const requestId = String(envelope?.requestId || '');
+    const peerId = String(getPeerId() || '');
+    const key = JSON.stringify([
+      peerGeneration, peerId, authorityKey, { ...envelope, requestId: undefined },
+    ]);
+    let shared = coalescedQueryWindows.get(key);
+    const created = !shared;
+    if (!shared) {
+      shared = { key, requestId, peerId, consumers: new Map(), aliases: new Set(), cancelledReason: null };
+    }
+    if (coalescedQueryConsumers.has(requestId)
+      || coalescedQueryConsumers.size >= CLIENT_QUERY_QUEUE_LIMIT + CLIENT_QUERY_STREAM_LIMIT) {
+      const error = new Error('QUERY_QUEUE_LIMIT: coalesced query consumers exceed the browser budget or reuse a request ID');
+      error.code = 'QUERY_QUEUE_LIMIT';
+      error.retryable = true;
+      return Promise.reject(error);
+    }
+    const promise = new Promise((resolve, reject) => {
+      shared.consumers.set(requestId, { resolve, reject });
+    });
+    shared.aliases.add(requestId);
+    coalescedQueryConsumers.set(requestId, shared);
+    if (created) {
+      coalescedQueryWindows.set(key, shared);
+      withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope, () => shared.cancelledReason)).then(
+        result => settleCoalescedQuery(shared, null, result),
+        error => settleCoalescedQuery(shared, error),
+      );
+    } else {
+      metrics.queryFetchCoalescedRequests += 1;
+    }
+    return promise;
+  }
+
+  function settleCoalescedQuery(shared, error, result) {
+    if (coalescedQueryWindows.get(shared.key) === shared) {
+      coalescedQueryWindows.delete(shared.key);
+    }
+    for (const requestId of shared.aliases) {
+      if (coalescedQueryConsumers.get(requestId) === shared) coalescedQueryConsumers.delete(requestId);
+    }
+    shared.aliases.clear();
+    for (const consumer of shared.consumers.values()) {
+      if (error) consumer.reject(error);
+      else consumer.resolve(result);
+    }
+    shared.consumers.clear();
   }
 
   function withQueryStreamSlot(envelope, fn) {
@@ -364,13 +431,14 @@ export function createDemandLoadingTransport({
     }
   }
 
-  async function requestQueryFetchWithRetry(envelope) {
+  async function requestQueryFetchWithRetry(envelope, cancellationReason = () => null) {
     const baseRequestId = envelope?.requestId;
     let attempt = 0;
     for (;;) {
+      if (cancellationReason()) throw createQueryCancelError(cancellationReason());
       const requestId = attempt === 0 ? baseRequestId : `${baseRequestId}|retry-${attempt}`;
       try {
-        return await requestQueryFetchOnce({ ...envelope, requestId });
+        return await requestQueryFetchOnce({ ...envelope, requestId }, cancellationReason);
       } catch (error) {
         const peerUnavailable = isRetryableQueryPeerUnavailable(error);
         const rateLimited = isRetryableQueryRateLimited(error);
@@ -387,27 +455,31 @@ export function createDemandLoadingTransport({
         }
         attempt += 1;
         const retryDelayMs = peerUnavailable || ackTimeout
-          ? QUERY_PEER_RETRY_MS
+          ? QUERY_PEER_RETRY_MS * attempt
           : rateLimited
-            ? QUERY_RATE_LIMIT_RETRY_MS
-            : QUERY_STREAM_LIMIT_RETRY_MS;
-        await delay(retryDelayMs * attempt);
+            ? QUERY_RATE_LIMIT_RETRY_MS * attempt
+            : Math.min(QUERY_STREAM_LIMIT_RETRY_MS * attempt, QUERY_STREAM_LIMIT_RETRY_MAX_MS);
+        await delay(retryDelayMs);
       }
     }
   }
 
-  async function requestQueryFetchOnce(envelope) {
+  async function requestQueryFetchOnce(envelope, cancellationReason = () => null) {
     const requestId = envelope?.requestId;
     const cancelReason = consumeQueryCancelReason(requestId);
     if (cancelReason) throw createQueryCancelError(cancelReason);
     if (!peer) throw new Error('demand transport has no peer attached');
-    const peerId = await waitForPeerId();
+    const peerId = await waitForPeerId(AUTHORIZED_PEER_WAIT_TIMEOUT_MS, () => Boolean(cancellationReason()));
+    if (cancellationReason()) throw createQueryCancelError(cancellationReason());
     if (!peerId) throw new Error('PEER_UNAVAILABLE');
     const promise = new Promise((resolve, reject) => {
       queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId, bufferedBytes: 0 });
       metrics.queryFetchRequests += 1;
       updatePeaks();
     });
+    // Stream errors can arrive before the fetch ACK rejects. Observe them now;
+    // awaiting the original promise below still propagates the stream failure.
+    promise.catch(() => {});
     try {
       await peer.request(peerId, CTOX_QUERY_RPC.fetch, [envelope], QUERY_FETCH_REQUEST_TIMEOUT_MS);
     } catch (err) {
@@ -434,10 +506,16 @@ export function createDemandLoadingTransport({
     };
   }
 
+  // The native peer rejects an over-limit fetch twice: as the RPC response to
+  // the request (a plain "CODE: message" error without a retryable flag) and as
+  // a retryable rxdb.query.error frame. The response arrives first, so a check
+  // that required `retryable` never retried and handed the failure to the app
+  // (thesen 07.10.2026). These two codes are always retryable on the peer.
   function isRetryableQueryStreamLimit(error) {
     const code = String(error?.code || '');
     const message = String(error?.message || '');
-    return Boolean(error?.retryable) && (code === 'STREAM_LIMIT_EXCEEDED' || message.includes('STREAM_LIMIT_EXCEEDED'));
+    return code === 'STREAM_LIMIT_EXCEEDED' || message.startsWith('STREAM_LIMIT_EXCEEDED:')
+      || (Boolean(error?.retryable) && message.includes('STREAM_LIMIT_EXCEEDED'));
   }
 
   function isRetryableQueryFetch(error) {
@@ -450,8 +528,8 @@ export function createDemandLoadingTransport({
   function isRetryableQueryRateLimited(error) {
     const code = String(error?.code || '');
     const message = String(error?.message || '');
-    return Boolean(error?.retryable)
-      && (code === 'RATE_LIMITED' || message.includes('RATE_LIMITED'));
+    return code === 'RATE_LIMITED' || message.startsWith('RATE_LIMITED:')
+      || (Boolean(error?.retryable) && message.includes('RATE_LIMITED'));
   }
 
   function isRetryableQueryPeerUnavailable(error) {
@@ -470,6 +548,18 @@ export function createDemandLoadingTransport({
 
   async function requestQueryCancel({ requestId, reason = 'client-abort' }) {
     if (!requestId) return;
+    const shared = coalescedQueryConsumers.get(requestId);
+    if (shared) {
+      const consumer = shared.consumers.get(requestId);
+      if (!consumer) return; // Repeated abort must not cancel surviving callers.
+      shared.consumers.delete(requestId);
+      consumer?.reject(createQueryCancelError(reason));
+      // An abort retires its consumer, not another hydration of this window.
+      if (shared.consumers.size) return;
+      if (coalescedQueryWindows.get(shared.key) === shared) coalescedQueryWindows.delete(shared.key);
+      shared.cancelledReason = reason;
+      requestId = shared.requestId;
+    }
     metrics.queryCancelRequests += 1;
     const matchingRequestIds = matchingQueryRequestIds(requestId);
     const queuedRequestIds = rejectQueuedQueryRequests(requestId, reason);
@@ -663,6 +753,12 @@ export function createDemandLoadingTransport({
     const fileError = createFileCancelError(reason);
     const rowsError = createRowsCancelError(reason);
     let rejected = 0;
+    for (const shared of [...coalescedQueryWindows.values()]) {
+      if (peerId && shared.peerId && shared.peerId !== peerId) continue;
+      shared.cancelledReason = reason;
+      markQueryCancelled(shared.requestId, reason);
+      settleCoalescedQuery(shared, queryError);
+    }
     for (const [requestId, slot] of [...queryCollectors.entries()]) {
       if (peerId && slot.peerId !== peerId) continue;
       queryCollectors.delete(requestId);

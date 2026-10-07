@@ -107,7 +107,7 @@ impl QueueExecutionFence {
         let path = resolve_db_path(&fence.root, None);
         let identity = queue_turn_store_identity(&path)?;
         let mut conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        conn.busy_timeout(QUEUE_FENCE_READ_BUSY_TIMEOUT)?;
         let tx = conn.transaction()?;
         let rows = fence
             .message_keys
@@ -195,7 +195,7 @@ impl QueueExecutionFence {
             "native execution store was replaced"
         );
         let mut conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        conn.busy_timeout(QUEUE_FENCE_WRITE_BUSY_TIMEOUT)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure!(
             queue_turn_store_identity(&path)? == self.identity,
@@ -218,6 +218,14 @@ impl QueueExecutionFence {
         Ok(result)
     }
 }
+
+/// The core store is shared by every queue worker, its review and the
+/// projections. With eight parallel workers a 100 ms wait lost 11 of 130
+/// worker turns in three hours to "database is locked" (thesen 07.10.2026),
+/// and each such loss also paused the whole dispatcher. Waiting a few seconds
+/// for the write lock is cheap compared to discarding a finished model turn.
+const QUEUE_FENCE_WRITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const QUEUE_FENCE_READ_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[cfg(test)]
 mod tests {
@@ -267,6 +275,29 @@ mod tests {
             Some(&fence.worker_id),
         ));
         Ok((root, fence, lifetime))
+    }
+
+    #[test]
+    fn queue_execution_publication_waits_for_a_briefly_held_write_lock() -> Result<()> {
+        let (_root, fence, lifetime) = admitted()?;
+        let guard = QueueExecutionFence::capture(&fence, "native-attempt", lifetime)?;
+        let path = resolve_db_path(&fence.root, None);
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || -> Result<()> {
+            let mut conn = Connection::open(&path)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            held_tx.send(()).ok();
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            tx.commit()?;
+            Ok(())
+        });
+        held_rx.recv().ok();
+        let published = guard.with_current_transaction(|tx| {
+            Ok(tx.query_row("SELECT 7", [], |row| row.get::<_, i64>(0))?)
+        })?;
+        assert_eq!(published, 7);
+        holder.join().expect("lock holder")?;
+        Ok(())
     }
 
     #[test]

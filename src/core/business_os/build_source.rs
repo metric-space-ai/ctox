@@ -151,7 +151,7 @@ pub fn capture(
     if let Some(base) = &public_base {
         validate_public_base(&root, base, &revision)?;
     }
-    let names = paths(
+    let mut names = paths(
         &git_output(
             &root,
             &[
@@ -167,6 +167,8 @@ pub fn capture(
     let changed = paths(&git_output(&root, &["diff", "--name-only", "-z", "HEAD", "--"])?.stdout)?;
     let untracked =
         paths(&git_output(&root, &["ls-files", "-z", "--others", "--exclude-standard"])?.stdout)?;
+    // Include staged deletions: ls-files --cached no longer lists those paths.
+    names.extend(changed.iter().cloned());
     let overlay_names = changed.union(&untracked).cloned().collect::<BTreeSet<_>>();
     let staging = tempfile::Builder::new()
         .prefix("ctox-build-source-")
@@ -302,6 +304,79 @@ pub fn capture(
         public_base,
         overlay_paths,
         bundle,
+    })
+}
+
+/// Frozen worker source, including reconstructable Git history. Unlike ordinary
+/// private Cargo source capture, this always supplies a commit bundle.
+#[derive(Debug)]
+pub struct CapturedWorkerSource {
+    pub(crate) source: CapturedBuildSource,
+    pub(crate) base_revision: String,
+}
+
+impl CapturedWorkerSource {
+    pub fn source(&self) -> &CapturedBuildSource {
+        &self.source
+    }
+
+    pub fn base_revision(&self) -> &str {
+        &self.base_revision
+    }
+}
+
+/// Capture an exact ancestor base, HEAD and working tree for a fresh worker.
+/// Private bundles include the complete HEAD ancestry; no local .git directory,
+/// configuration, credentials or hooks are exported. Public bases retain the
+/// existing anonymous-fetch requirement. The caller fences concurrent edits.
+pub fn capture_worker(
+    root: &Path,
+    staging_root: &Path,
+    base_revision: &str,
+    public_base: Option<PublicGithubBase>,
+) -> Result<CapturedWorkerSource> {
+    validate_revision(base_revision)?;
+    if let Some(base) = &public_base {
+        anyhow::ensure!(base.revision == base_revision, "worker public base differs");
+    }
+    let mut source = capture(root, staging_root, public_base)?;
+    git_output(
+        root,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            base_revision,
+            &source.head_revision,
+        ],
+    )?;
+    if source.public_base.is_none() {
+        let bundle = source.staging.path().join("commits.bundle");
+        let reference = format!("refs/ctox-build-source/{}", uuid::Uuid::new_v4());
+        git_output(root, &["update-ref", &reference, &source.head_revision, ""])?;
+        let bundled = git_output(
+            root,
+            &[
+                "bundle",
+                "create",
+                bundle.to_str().context("worker bundle path")?,
+                &reference,
+            ],
+        );
+        let removed = git_output(
+            root,
+            &["update-ref", "-d", &reference, &source.head_revision],
+        );
+        bundled?;
+        removed?;
+        source.bundle = Some(bundle);
+    }
+    anyhow::ensure!(
+        head(root)? == source.head_revision,
+        "source HEAD changed during worker capture"
+    );
+    Ok(CapturedWorkerSource {
+        source,
+        base_revision: base_revision.to_owned(),
     })
 }
 

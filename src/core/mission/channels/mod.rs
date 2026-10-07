@@ -4438,7 +4438,9 @@ impl QueueTurnLeaseFence {
         );
         // Keep one read-only connection per bounded turn, without schema
         // repair, write transactions or a long-lived WAL read transaction.
-        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        // A busy error here reads as "lease lost" and cancels the turn, so
+        // give a contended store a moment instead of failing after 100 ms.
+        conn.busy_timeout(std::time::Duration::from_secs(2))?;
         Ok(QueueTurnLeaseReader {
             connection: conn,
             #[cfg(unix)]

@@ -893,6 +893,44 @@ fn mark_maintenance_rolled_back(state_root: &Path, error: &str) -> Result<()> {
     Ok(())
 }
 
+/// The freshly restarted service holds the secret and runtime stores busy
+/// while it boots. Reading them for the post-upgrade invariant check then
+/// failed with "database is locked" (thesen 07.10.2026): the release was
+/// live, but the update reported failure and never recorded the new release
+/// in the install manifest. A lock is not a missing credential, so wait for
+/// it; any other failure is still reported at once.
+fn verify_preserved_while_service_starts(
+    invariants: &RuntimeCredentialSnapshot,
+    state_root: &Path,
+) -> Result<()> {
+    retry_while_store_locked(Duration::from_secs(60), Duration::from_secs(2), || {
+        invariants.verify_preserved(state_root)
+    })
+}
+
+fn retry_while_store_locked<T>(
+    budget: Duration,
+    pause: Duration,
+    mut attempt: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    let deadline = Instant::now() + budget;
+    loop {
+        match attempt() {
+            Err(error) if store_lock_error(&error) && Instant::now() < deadline => {
+                std::thread::sleep(pause);
+            }
+            result => return result,
+        }
+    }
+}
+
+fn store_lock_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let text = cause.to_string().to_ascii_lowercase();
+        text.contains("database is locked") || text.contains("database is busy")
+    })
+}
+
 fn mark_maintenance_service_active(state_root: &Path, lease_id: &str) -> Result<()> {
     update_maintenance(state_root, lease_id, |state| {
         state.phase = "waiting_replication".to_string();
@@ -2152,7 +2190,7 @@ fn apply_update(
             return Err(err);
         }
     }
-    runtime_invariants.verify_preserved(&layout.state_root)?;
+    verify_preserved_while_service_starts(&runtime_invariants, &layout.state_root)?;
     if should_restart {
         if let Some(state) = load_maintenance_state_from_root(&layout.state_root)? {
             if !state.is_terminal() {
@@ -4872,6 +4910,31 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use tempfile::tempdir;
+
+    #[test]
+    fn post_upgrade_check_waits_out_a_locked_store_but_not_other_errors() {
+        let mut calls = 0;
+        let result =
+            retry_while_store_locked(Duration::from_secs(5), Duration::from_millis(1), || {
+                calls += 1;
+                if calls < 3 {
+                    Err(anyhow::anyhow!("database is locked")
+                        .context("failed to read secret store"))
+                } else {
+                    Ok(calls)
+                }
+            });
+        assert_eq!(result.unwrap(), 3);
+
+        let mut calls = 0;
+        let result: Result<()> =
+            retry_while_store_locked(Duration::from_secs(5), Duration::from_millis(1), || {
+                calls += 1;
+                anyhow::bail!("post-upgrade runtime credential invariant failed: KEY missing")
+            });
+        assert!(result.is_err());
+        assert_eq!(calls, 1, "a real invariant failure is reported at once");
+    }
 
     #[test]
     fn watchdog_unit_skips_ticks_during_release_switch() {

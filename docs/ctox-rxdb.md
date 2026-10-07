@@ -172,15 +172,21 @@ whole list rather than delivering a partial result.
 Missing authority, a replaced generation or a changed actor/database rejects
 the list; an authorized empty native result is valid.
 
-The correlated native receipt must confirm an integer project `count` within
-the 100-project limit and `truncated:false`. Missing/malformed completeness
-metadata rejects with `WORKJET_PROJECT_LIST_UNCONFIRMED`; truncation or a
-projected result whose length differs from that count rejects with
-`WORKJET_PROJECT_LIST_INCOMPLETE`. A projected zero is valid only when the
-native count is also zero. Successful responses include `count` and
-`truncated:false` alongside `action` and `projects`, so consumers can reject
-legacy unconfirmed responses and retain their cached gallery on failure. This
-confirmation describes projects; working copies keep their separate 500-row cap.
+Native counting and the shell projection include only owner-scoped projects
+with `status:active` and no deletion marker; archived projects remain stored.
+The correlated native receipt confirms an integer project `count` within the
+100-project limit, `truncated:false`, and a bounded `project_ids` window of
+active identities. Missing/malformed completeness metadata or malformed identity
+windows reject with `WORKJET_PROJECT_LIST_UNCONFIRMED`. Legacy count-only
+receipts remain compatible when the active projection is complete.
+Before rejecting a replication gap, the shell queries only the missing confirmed
+IDs through the same direct WebRTC query bridge with an owner/active selector,
+a fresh query revision, the original generation and the original deadline.
+Unresolved missing rows, extra active identities, changed authority or truncation
+still reject; there is no cached-data or HTTP fallback. A native zero count
+confirms only an empty active projection. Successful responses keep `count` and
+`truncated:false` alongside `action` and `projects`; working copies keep
+their separate 500-row cap.
 
 Collection acquisition, command completion and both queries share a 29-second
 deadline inside Workjet's existing 30-second desktop call. Timeout does not
@@ -1134,7 +1140,9 @@ artifact still retains the complete evidence directory.
 Browser demand-query admission also separates a pending handshake from an
 active native query stream. Unauthenticated/unavailable collection transports
 remain in the existing bounded queue (128 requests, 1 MiB of queued envelopes).
-They do not consume the six active stream slots. The scheduler admits the first
+They do not consume the eight active stream slots, matching the generated
+native query-stream bound. This is one shared queue per browser JavaScript realm;
+it does not reserve native capacity against other browser connections. The scheduler admits the first
 currently ready queued request, rechecks authorization readiness before
 dispatch, and reserves its slot synchronously before another caller can enter.
 A queued peer that loses authorization returns to readiness waiting. Cancellation
@@ -1142,6 +1150,18 @@ and transport teardown remove only that owner's requests; a later handshake
 cannot revive a removed request. The existing 60-second peer-readiness wait
 remains bounded. Already dispatched requests retain their existing RPC,
 collector and retry behavior.
+
+Identical demand-query windows also share an unfinished network operation when
+connection generation, accepted peer, current permission digest and the complete
+query/projection envelope match. Distinct `requireRevision` hydration tokens retain
+their own loader jobs, publication fences and cache satisfaction; an already
+completed response cannot satisfy a subsequent strict read. Cancelling one caller
+leaves surviving callers live, and the last caller cancels the original native
+request. Peer teardown rejects all attached consumers. Consumer aliases remain
+bounded alongside the existing admission queue. Production emits no default
+`[V1.5]` console debug output; the explicit `setV15LogSink` and main's existing
+`__CTOX_V15_DEBUG__ === true` switch retain opt-in diagnostics. `query-startup-coalescing-smoke.mjs` covers these component
+contracts; installed THESEN lead-list latency still requires post-deploy measurement.
 
 Ordered transport ingestion must not await application/RPC handlers. Incoming
 RPCs, including reassembled requests, enter a separate queue that preserves
