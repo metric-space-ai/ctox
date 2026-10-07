@@ -39,6 +39,15 @@ receipts nor browser URLs contain them. Evidence uses a direct local cached
 read and a mode=ro native SQLite readback, not an HTTP record bridge. CLI-generated
 identities belong only to this synthetic tenant.
 
+For Goal23's one-component backward/forward proof, call
+`measureShellRollback(configPath)` under the same admitted ownership. It stages
+the existing signed beta79 through native signature verification, activates it
+in the fresh prefix and observes the changed versioned app.js. Supported
+shell-update rollback restores builtin Main; the served hash and native binary
+must match their baseline again. Only owned static-server groups are restarted.
+Failure restoration is retained separately. A successful component proof still
+does not certify the health of Workjet, WELSCH native and the installed Shell.
+
 Goal5 performs three200-write rounds:30s offline, owned peer kill/respawn,
 B reopen, A native invitation renewal and reopen with unchanged IndexedDB name.
 The local write maximum and entire reconnect→exact server/B convergence

@@ -122,6 +122,71 @@ class OwnedNative {
   async close() { for (const child of [...this.children]) await this.stop(child); }
 }
 
+/** Goal23 component evidence only. The installed three-component health remains a separate criterion. */
+export async function measureShellRollback(configPath) {
+  const config = validateConfig(JSON.parse(readFileSync(configPath)), configPath);
+  const output = join(config.acceptanceBase, 'component-rollback');
+  mkdirSync(output, { mode: 0o700 });
+  const native = new OwnedNative(config, output);
+  const record = { owner: OWNER, source: config.source, host: config.host, isolated: true,
+    component: 'business-os-shell', steps: [], pass: false, productionWrites: false };
+  let server = null, activated = false, restored = false;
+  const shell = args => native.cli(['business-os', 'shell-update', ...args], false, 180000);
+  const serve = async () => {
+    await native.stop(server);
+    server = native.start('isolated-static-shell-rollback', ['business-os', 'serve', '--addr', `127.0.0.1:${config.port}`]);
+    const until = performance.now() + 30000;
+    while (performance.now() < until) {
+      invariant(server.exitCode === null && server.signalCode === null, 'Owned static server exited');
+      try {
+        const response = await fetch(`http://127.0.0.1:${config.port}/app.js?v=${randomUUID()}`,
+          { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+        if (response.ok) {
+          const bytes = Buffer.from(await response.arrayBuffer());
+          invariant(bytes.length < 4 * 2 ** 20, 'Static app size bound');
+          return createHash('sha256').update(bytes).digest('hex');
+        }
+      } catch (error) { if (error.name === 'InstalledCriterionError') throw error; }
+      await sleep(100);
+    }
+    invariant(false, 'Isolated static server did not serve a versioned app');
+  };
+  try {
+    const initial = await shell(['status']);
+    invariant(initial.currentSlot === null, 'Fresh acceptance prefix must initially serve builtin Main');
+    const beforeHash = await serve();
+    invariant(beforeHash === config.contractHashes['app.js'], 'Installed builtin app differs from verified shared Main');
+    record.steps.push({ action: 'baseline', slot: null, appSha256: beforeHash });
+    await shell(['stage', '--version', '0.1.46-beta.79']);
+    await shell(['activate']); activated = true;
+    const previous = await shell(['status']);
+    invariant(previous.currentSlot === '0.1.46-beta.79', 'Signed predecessor was not activated');
+    const previousHash = await serve();
+    invariant(previousHash !== beforeHash, 'Backward switch must change the actually served app');
+    record.steps.push({ action: 'activate-signed-predecessor', slot: '0.1.46-beta.79', appSha256: previousHash,
+      signatureVerifiedByNativeStage: true });
+    await shell(['rollback']); restored = true;
+    const final = await shell(['status']);
+    invariant(final.currentSlot === null, 'Supported rollback did not restore builtin Main');
+    const afterHash = await serve();
+    invariant(afterHash === beforeHash, 'Forward restoration did not restore exact installed app');
+    invariant(digest(config.binary) === config.binarySha256, 'Shell switch changed installed native binary');
+    record.steps.push({ action: 'restore-builtin-Main', slot: null, appSha256: afterHash });
+    record.pass = true;
+  } catch (error) {
+    record.failure = { name: error.name, message: error.name === 'InstalledCriterionError' ? error.message
+      : 'Component rollback failed; private native output suppressed' };
+  } finally {
+    if (activated && !restored) {
+      try { await shell(['rollback']); record.restoredAfterFailure = true; }
+      catch { record.restoredAfterFailure = false; }
+    }
+    await native.close();
+    writeFileSync(join(output, 'component-rollback.json'), JSON.stringify(record, null, 2) + '\n', { mode: 0o600 });
+  }
+  return { output, componentRollbackPassed: record.pass, wholeInstalledSetPassed: false };
+}
+
 async function attach(context, origin, config, name, skewMs = 0) {
   const page = await context.newPage();
   await page.goto(`${origin}/rxdb/manifest.json`, { waitUntil: 'domcontentloaded', timeout: 30000 });
