@@ -1377,7 +1377,7 @@ function bindCollections() {
     },
     onError: (error) => {
       render();
-      console.warn('[outbound-lead-generation] Nachladen fehlgeschlagen, neuer Versuch', { message: error?.message || String(error) });
+      console.warn('[outbound-lead-generation] Nachladen fehlgeschlagen, neuer Versuch', { message: error?.message || String(error), collections: error?.details });
     },
   });
 }
@@ -1719,6 +1719,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
     if (failures.length) {
       throw Object.assign(new Error('Daten konnten nicht geladen werden: ' + failures.join(', ')), {
         code: 'OUTBOUND_COLLECTION_READ_FAILED', failedKeys: failures,
+        details: Object.fromEntries(failures.map(key => [key, readErrors.get(key)])),
       });
     }
   }
