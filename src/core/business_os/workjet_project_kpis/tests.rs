@@ -281,13 +281,25 @@ fn revoked_alias_and_archived_or_deleted_project_are_not_readable() -> anyhow::R
             if reason == "archived" {
                 project["status"] = json!("archived");
             } else {
-                project["_deleted"] = json!(true);
+                project["is_deleted"] = json!(true);
             }
             store::upsert_business_record(&conn, "workjet_projects", "project-1", 2, project)?;
+            let persisted = store::outbound_load_record(&conn, "workjet_projects", "project-1")?
+                .context("persisted project")?;
+            if reason == "archived" {
+                assert_eq!(persisted["status"], "archived", "{reason}");
+            } else {
+                assert_eq!(persisted["is_deleted"], true, "{reason}");
+            }
         }
         drop(conn);
-        rejected(read(root.path(), ALIAS, "after-revocation"));
-        rejected(configure(root.path(), "revoked-edit", 1, json!([])));
+        rejected(read(root.path(), ALIAS, &format!("read-{reason}")));
+        rejected(configure(
+            root.path(),
+            &format!("edit-{reason}"),
+            1,
+            json!([]),
+        ));
     }
     Ok(())
 }
