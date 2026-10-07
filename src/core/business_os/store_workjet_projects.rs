@@ -56,7 +56,9 @@ enum ProjectField<T> {
 }
 
 impl<T> Default for ProjectField<T> {
-    fn default() -> Self { Self::Keep }
+    fn default() -> Self {
+        Self::Keep
+    }
 }
 
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for ProjectField<T> {
@@ -266,10 +268,13 @@ pub(super) fn handle_workjet_project_upsert_command(
     let project_id = bounded_required(&project_id, "project_id", 128)?;
     let name = bounded_required(&payload.name, "name", 256)?;
     let description = project_field_value(payload.description, |value| {
-        Ok(Value::String(bounded_required(&value, "description", 4096)?))
+        Ok(Value::String(
+            optional_bounded(Some(value), "description", 4096)?.unwrap_or_default(),
+        ))
     })?;
     let repo_url = project_field_value(payload.repo_url, |value| project_url(value, "repo_url"))?;
-    let public_url = project_field_value(payload.public_url, |value| project_url(value, "public_url"))?;
+    let public_url =
+        project_field_value(payload.public_url, |value| project_url(value, "public_url"))?;
     let info = project_field_value(payload.info, |mut info| {
         info.description = optional_bounded(info.description, "info.description", 4096)?;
         info.goal = optional_bounded(info.goal, "info.goal", 4096)?;
@@ -278,16 +283,27 @@ pub(super) fn handle_workjet_project_upsert_command(
         Ok(serde_json::to_value(info)?)
     })?;
     let jour_fixe = project_field_value(payload.jour_fixe, |mut meeting| {
-        anyhow::ensure!((1..=7).contains(&meeting.weekday), "jour_fixe.weekday must be ISO 1..7 (Monday..Sunday)");
+        anyhow::ensure!(
+            (1..=7).contains(&meeting.weekday),
+            "jour_fixe.weekday must be ISO 1..7 (Monday..Sunday)"
+        );
         let time = meeting.time.as_bytes();
-        anyhow::ensure!(time.len() == 5 && time[2] == b':'
-            && [time[0], time[1], time[3], time[4]].iter().all(u8::is_ascii_digit),
-            "jour_fixe.time must be HH:mm");
+        anyhow::ensure!(
+            time.len() == 5
+                && time[2] == b':'
+                && [time[0], time[1], time[3], time[4]]
+                    .iter()
+                    .all(u8::is_ascii_digit),
+            "jour_fixe.time must be HH:mm"
+        );
         let hour: u8 = meeting.time[..2].parse()?;
         let minute: u8 = meeting.time[3..].parse()?;
         anyhow::ensure!(hour < 24 && minute < 60, "jour_fixe.time must be HH:mm");
         meeting.timezone = bounded_required(&meeting.timezone, "jour_fixe.timezone", 128)?;
-        let _: chrono_tz::Tz = meeting.timezone.parse().map_err(|_| anyhow::anyhow!("jour_fixe.timezone must be an IANA timezone"))?;
+        let _: chrono_tz::Tz = meeting
+            .timezone
+            .parse()
+            .map_err(|_| anyhow::anyhow!("jour_fixe.timezone must be an IANA timezone"))?;
         Ok(serde_json::to_value(meeting)?)
     })?;
 
@@ -309,13 +325,13 @@ pub(super) fn handle_workjet_project_upsert_command(
             .and_then(Value::as_i64)
             .unwrap_or(now);
         let archived = payload.archived.unwrap_or_else(|| {
-            existing.as_ref().and_then(|record| record.get("status")).and_then(Value::as_str) == Some("archived")
+            existing
+                .as_ref()
+                .and_then(|record| record.get("status"))
+                .and_then(Value::as_str)
+                == Some("archived")
         });
-        let status = if archived {
-            "archived"
-        } else {
-            "active"
-        };
+        let status = if archived { "archived" } else { "active" };
         let archived_at_ms = if archived {
             existing
                 .as_ref()
@@ -568,10 +584,15 @@ fn project_field_value<T>(
 
 fn project_url(value: String, field: &str) -> anyhow::Result<Value> {
     let value = bounded_required(&value, field, 2048)?;
-    let url = url::Url::parse(&value).with_context(|| format!("{field} must be an absolute HTTP(S) URL"))?;
-    anyhow::ensure!(matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
-        && url.username().is_empty() && url.password().is_none(),
-        "{field} must be an HTTP(S) URL without credentials");
+    let url = url::Url::parse(&value)
+        .with_context(|| format!("{field} must be an absolute HTTP(S) URL"))?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none(),
+        "{field} must be an HTTP(S) URL without credentials"
+    );
     Ok(Value::String(value))
 }
 
@@ -723,6 +744,143 @@ pub(crate) mod tests {
             "active": true,
             "inbound_channel": "ctox"
         }))?;
+        Ok(())
+    }
+
+    #[test]
+    fn project_configuration_persists_native_and_projected_values() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        create_workjet_rxdb_projection_tables(root.path())?;
+        let request = json!({"project_id":"project-1","name":"Project One",
+            "repo_url":"https://github.com/metric-space-ai/ctox",
+            "public_url":"https://ctox.dev",
+            "info":{"description":"Work daemon","goal":"Usable projects","phase":"delivery","status":"active"},
+            "jour_fixe":{"weekday":1,"time":"09:30"}});
+        let first = handle_workjet_project_upsert_command(
+            root.path(),
+            &command("ctox.workjet.project.upsert", request.clone()),
+            "owner-1",
+        )?;
+        let second = handle_workjet_project_upsert_command(
+            root.path(),
+            &command("ctox.workjet.project.upsert", request),
+            "owner-1",
+        )?;
+        assert_eq!(first["project"], second["project"]);
+        assert_eq!(first["project"]["jour_fixe"]["timezone"], "Europe/Berlin");
+        let conn = open_store(root.path())?;
+        let persisted = outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?
+            .context("project persisted")?;
+        assert_eq!(persisted["info"]["goal"], "Usable projects");
+        drop(conn);
+        let projected = load_rxdb_collection_record(root.path(), PROJECTS_COLLECTION, "project-1")?
+            .context("project projected")?;
+        for field in ["repo_url", "public_url", "info", "jour_fixe"] {
+            assert_eq!(persisted[field], projected[field]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn project_configuration_partial_updates_preserve_and_null_clears() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let initial = json!({"project_id":"project-1","name":"Project One","description":"Original",
+            "repo_url":"https://github.com/metric-space-ai/ctox","public_url":"https://ctox.dev",
+            "info":{"goal":"Keep this"},"jour_fixe":{"weekday":7,"time":"23:59","timezone":"UTC"},"archived":true});
+        let first = handle_workjet_project_upsert_command(
+            root.path(),
+            &command("ctox.workjet.project.upsert", initial),
+            "owner-1",
+        )?;
+        let renamed = handle_workjet_project_upsert_command(
+            root.path(),
+            &command(
+                "ctox.workjet.project.upsert",
+                json!({"project_id":"project-1","name":"Renamed"}),
+            ),
+            "owner-1",
+        )?;
+        assert_eq!(renamed["project"]["status"], "archived");
+        for field in [
+            "description",
+            "repo_url",
+            "public_url",
+            "info",
+            "jour_fixe",
+            "archived_at_ms",
+        ] {
+            assert_eq!(renamed["project"][field], first["project"][field]);
+        }
+        let cleared = handle_workjet_project_upsert_command(
+            root.path(),
+            &command(
+                "ctox.workjet.project.upsert",
+                json!({"project_id":"project-1","name":"Renamed","repo_url":null,"public_url":null,"info":null,"jour_fixe":null,"archived":false}),
+            ),
+            "owner-1",
+        )?;
+        for field in [
+            "repo_url",
+            "public_url",
+            "info",
+            "jour_fixe",
+            "archived_at_ms",
+        ] {
+            assert!(cleared["project"].get(field).is_none());
+        }
+        assert_eq!(cleared["project"]["description"], "Original");
+        assert_eq!(cleared["project"]["status"], "active");
+        Ok(())
+    }
+
+    #[test]
+    fn project_configuration_rejects_invalid_fields_without_mutation() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let before = create_project(root.path())?;
+        for patch in [
+            json!({"repo_url":"javascript:alert(1)"}),
+            json!({"public_url":"https://user:secret@example.test"}),
+            json!({"repo_url":"relative/path"}),
+            json!({"jour_fixe":{"weekday":0,"time":"09:00"}}),
+            json!({"jour_fixe":{"weekday":8,"time":"09:00"}}),
+            json!({"jour_fixe":{"weekday":1,"time":"9:00"}}),
+            json!({"jour_fixe":{"weekday":1,"time":"24:00"}}),
+            json!({"jour_fixe":{"weekday":1,"time":"09:60"}}),
+            json!({"jour_fixe":{"weekday":1,"time":"09:00","timezone":"Invalid/Timezone"}}),
+            json!({"info":{"owner_user_id":"foreign"}}),
+            json!({"owner_user_id":"foreign"}),
+        ] {
+            let mut payload = json!({"project_id":"project-1","name":"Must not change"});
+            payload
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            assert!(handle_workjet_project_upsert_command(
+                root.path(),
+                &command("ctox.workjet.project.upsert", payload),
+                "owner-1"
+            )
+            .is_err());
+        }
+        let conn = open_store(root.path())?;
+        let current = outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?
+            .context("unchanged project")?;
+        assert_eq!(current, before["project"]);
+        Ok(())
+    }
+
+    #[test]
+    fn project_configuration_cannot_edit_another_owners_project() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        create_project(root.path())?;
+        let payload = json!({"project_id":"project-1","name":"Forged","jour_fixe":{"weekday":2,"time":"09:30"},"info":{"goal":"Replace"}});
+        let error = handle_workjet_project_upsert_command(
+            root.path(),
+            &command("ctox.workjet.project.upsert", payload),
+            "foreign-owner",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("different owner"));
         Ok(())
     }
 
