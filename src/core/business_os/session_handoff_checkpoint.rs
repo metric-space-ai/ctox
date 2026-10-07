@@ -325,17 +325,21 @@ struct Target<P> {
     source_identity: String,
     original: SessionHandoffPermit,
     auth: Arc<ctox_core::AuthManager>,
-    peer_guard: PeerGuard,
+    peer_guard: Option<PeerGuard>,
     live: Arc<Mutex<bool>>,
 }
 impl<P: Clone + Eq + Hash + Send + Sync + 'static> Target<P> {
     fn prepare(
         server: Arc<Server<P>>,
         binding: &str,
-        peer_guard: PeerGuard,
+        peer_guard: Option<PeerGuard>,
         live: Arc<Mutex<bool>>,
         phase: SessionHandoffPhase,
     ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            peer_guard.is_some() || phase == SessionHandoffPhase::Resume,
+            "checkpoint receive requires a native peer fence"
+        );
         let request=server.gate.with_current_authority(|conn,identity|{
             let json:String=conn.query_row("SELECT n.source_offer_json FROM business_native_target_handoff_bindings n
                 JOIN business_session_handoff_bindings b ON b.binding_id=n.binding_id WHERE b.binding_digest=?1",
@@ -402,15 +406,22 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Target<P> {
                 return Err(deny("copy_retired"));
             }
             let mut action = Some(action);
-            (self.peer_guard)(&mut || {
+            let mut publish = || {
                 result = Some(action
                     .take()
                     .ok_or_else(|| new_rx_error("RC_WEBRTC_CONTROL", None))?(
                     &permit, identity, conn,
                 ));
                 Ok(())
-            })
-            .map_err(|_| deny("peer_unavailable"))?;
+            };
+            if let Some(guard) = &self.peer_guard {
+                guard(&mut publish).map_err(|_| deny("peer_unavailable"))?;
+            } else {
+                if self.request.phase != SessionHandoffPhase::Resume {
+                    return Err(deny("peer_unavailable"));
+                }
+                publish().map_err(|_| deny("target_publication_failed"))?;
+            }
             Ok(())
         })?;
         result.ok_or_else(|| anyhow::anyhow!("target publication absent"))?
@@ -581,7 +592,7 @@ async fn copy<H: WebRTCConnectionHandler + 'static>(
             Target::prepare(
                 server,
                 &binding,
-                peer_guard,
+                Some(peer_guard),
                 live,
                 SessionHandoffPhase::Receive,
             )
@@ -722,7 +733,7 @@ pub(crate) fn assert_native_checkpoint_path(
         source_identity: source_key.public_identity(),
         original,
         auth: auth.clone(),
-        peer_guard: Arc::new(|apply| apply()),
+        peer_guard: Some(Arc::new(|apply| apply())),
         live: live.clone(),
     };
     let peer = ("exact-peer", 1);
@@ -966,6 +977,7 @@ pub(crate) fn assert_native_checkpoint_path(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CopyRequest {
     pub binding_digest: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_route: String,
     #[serde(default, skip_serializing_if = "copy_only")]
     pub reconstruct: bool,
@@ -1033,40 +1045,35 @@ pub(super) fn listen(
                         && r.binding_digest
                             .bytes()
                             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                        && !r.source_route.is_empty()
-                        && r.source_route.len() <= 256 =>
+                        && ((r.reconstruct && r.source_route.is_empty())
+                            || (!r.reconstruct
+                                && !r.source_route.is_empty()
+                                && r.source_route.len() <= 256)) =>
                 {
-                    match pool.connection_handler.connection_for_peer(&r.source_route) {
-                        Some(peer) => {
-                            let operation = async {
-                                if r.reconstruct {
-                                    let (checkpoint_digest, preparation_id) =
-                                        reconstruction::reconstruct(
-                                            server.clone(),
-                                            pool.clone(),
-                                            peer,
-                                            r.binding_digest,
-                                        )
-                                        .await?;
-                                    Ok::<_, anyhow::Error>(CopyResponse::Reconstructed {
-                                        checkpoint_digest,
-                                        preparation_id,
-                                    })
-                                } else {
-                                    let checkpoint_digest =
-                                        copy(server.clone(), pool.clone(), peer, r.binding_digest)
-                                            .await?;
-                                    Ok(CopyResponse::Copied { checkpoint_digest })
-                                }
-                            };
-                            tokio::select! {
-                                result=tokio::time::timeout(std::time::Duration::from_secs(60),operation)=>{
-                                    match result {Ok(Ok(response))=>response,_=>CopyResponse::Denied}
-                                },
-                                _=stream.read_u8()=>CopyResponse::Denied,
-                            }
+                    let operation = async {
+                        if r.reconstruct {
+                            let (checkpoint_digest, preparation_id) =
+                                reconstruction::reconstruct(server.clone(), r.binding_digest)
+                                    .await?;
+                            Ok::<_, anyhow::Error>(CopyResponse::Reconstructed {
+                                checkpoint_digest,
+                                preparation_id,
+                            })
+                        } else {
+                            let peer = pool
+                                .connection_handler
+                                .connection_for_peer(&r.source_route)
+                                .ok_or_else(|| anyhow::anyhow!("checkpoint source unavailable"))?;
+                            let checkpoint_digest =
+                                copy(server.clone(), pool.clone(), peer, r.binding_digest).await?;
+                            Ok(CopyResponse::Copied { checkpoint_digest })
                         }
-                        None => CopyResponse::Denied,
+                    };
+                    tokio::select! {
+                        result=tokio::time::timeout(std::time::Duration::from_secs(60),operation)=>{
+                            match result {Ok(Ok(response))=>response,_=>CopyResponse::Denied}
+                        },
+                        _=stream.read_u8()=>CopyResponse::Denied,
                     }
                 }
                 _ => CopyResponse::Denied,

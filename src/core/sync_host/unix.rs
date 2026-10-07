@@ -221,7 +221,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             })
         },
         ["handoff-copy", binding, route] => checkpoint_copy(&root, binding, route, false),
-        ["handoff-reconstruct", binding, route] => checkpoint_copy(&root, binding, route, true),
+        ["handoff-reconstruct", binding] => checkpoint_copy(&root, binding, "", true),
         ["handoff-revoke", binding] => {
             let revoked = crate::business_os::session_handoff_enrollment::revoke_binding(&root, binding)?;
             print(serde_json::json!({"revoked": revoked}))
@@ -244,7 +244,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
         }, |started, _authority, _guests| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
-        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-target-challenge | handoff-source-offer <binding> <challenge> | handoff-configure-target-repository (public JSON on stdin) | handoff-enroll-target (public JSON on stdin) | handoff-copy <binding-digest> <source-route> | handoff-reconstruct <binding-digest> <source-route> | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
+        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-target-challenge | handoff-source-offer <binding> <challenge> | handoff-configure-target-repository (public JSON on stdin) | handoff-enroll-target (public JSON on stdin) | handoff-copy <binding-digest> <source-route> | handoff-reconstruct <binding-digest> | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
     }
 }
 

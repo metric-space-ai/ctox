@@ -131,27 +131,16 @@ impl StagedWorkspace {
     }
 }
 
-pub(super) async fn reconstruct<H: WebRTCConnectionHandler + 'static>(
-    server: Arc<Server<H::Peer>>,
-    pool: Arc<RxWebRTCReplicationPool<H>>,
-    peer: H::Peer,
+pub(super) async fn reconstruct<P: Clone + Eq + Hash + Send + Sync + 'static>(
+    server: Arc<Server<P>>,
     binding: String,
 ) -> anyhow::Result<(String, String)> {
     let lifetime = CopyLifetime(Arc::new(Mutex::new(true)));
     let live = lifetime.0.clone();
-    let guard_pool = pool.clone();
-    let peer_guard = Arc::new(move |apply: &mut dyn FnMut() -> RxResult<()>| {
-        guard_pool.with_current_native_control_peer(&peer, apply)?
-    });
+
     let target = Arc::new(
         tokio::task::spawn_blocking(move || {
-            Target::prepare(
-                server,
-                &binding,
-                peer_guard,
-                live,
-                SessionHandoffPhase::Resume,
-            )
+            Target::prepare(server, &binding, None, live, SessionHandoffPhase::Resume)
         })
         .await??,
     );
@@ -187,7 +176,7 @@ pub(super) fn assert_native_reconstruction<P: Clone + Eq + Hash + Send + Sync + 
         original,
         source_identity: received_target.source_identity.clone(),
         auth: received_target.auth.clone(),
-        peer_guard: received_target.peer_guard.clone(),
+        peer_guard: None,
         live: received_target.live.clone(),
     });
     let store = store.clone();
@@ -309,4 +298,11 @@ fn checkpoint_control_keeps_copy_requests_compatible_and_rejects_path_inputs() {
     );
     reconstruct["targetPath"] = serde_json::json!("/client/supplied/path");
     assert!(serde_json::from_value::<CopyRequest>(reconstruct).is_err());
+    let offline = serde_json::json!({"bindingDigest":"a".repeat(64),"reconstruct":true});
+    let request: CopyRequest = serde_json::from_value(offline.clone()).unwrap();
+    assert!(
+        request.source_route.is_empty(),
+        "local reconstruction needs no live source route"
+    );
+    assert_eq!(serde_json::to_value(request).unwrap(), offline);
 }

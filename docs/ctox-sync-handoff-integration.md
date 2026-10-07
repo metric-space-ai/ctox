@@ -122,11 +122,13 @@ throughput, VM portability or external-effect reconciliation.
 ## Native target workspace preparation
 
 After a successful protected copy, the operator runs
-`ctox sync handoff-reconstruct <binding-digest> <source-route>` against the same
+`ctox sync handoff-reconstruct <binding-digest>` against the same
 running target host and private control socket. The request contains identifiers
 only, never a target path, repository URL or account override. Existing copy
-requests remain compatible. The accepted native source connection, target account,
-host lifetime and exact enrolled policy remain mandatory.
+requests remain compatible. The enrolled source binding, target account,
+host lifetime and exact target policy remain mandatory. Local reconstruction
+does not require the source host to remain reachable after its protected copy;
+transport still requires the exact authenticated source connection.
 
 Both current Receive and Execute grants are required. Preparation uses only the
 hash-verified `native-workspace.bundle` artifact in the enrolled checkpoint.
@@ -139,7 +141,7 @@ reconstruction validator. The assigned target working copy is not overwritten.
 Git runs in a private temporary stage without retaining an authority transaction
 or account/peer lock across awaits. Authority is checked before reconstruction,
 after Git IO and during final preparation publication. Revocation, changed
-account/workspace/binding/epoch, peer retirement, host close or client disconnect
+account/workspace/binding/epoch, host close or client disconnect
 forbids publication and removes the unpublished stage. The operation retains the
 existing 60-second local command bound. Successful publication writes an
 identifier-only native audit and returns `reconstructed:true`, a host-created
