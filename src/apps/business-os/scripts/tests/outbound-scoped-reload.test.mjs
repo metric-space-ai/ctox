@@ -111,7 +111,7 @@ const source = fileURLToPath(new URL('../../customer-modules/outbound-lead-gener
 mkdirSync(join(fixture, 'modules', 'olg'), { recursive: true });
 mkdirSync(join(fixture, 'shared'), { recursive: true });
 writeFileSync(join(fixture, 'package.json'), '{"type":"module"}');
-for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'lead-list-loader.mjs', 'import-preview-groups.js', 'current-state-export.mjs', 'required-field-selection.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
+for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'lead-list-loader.mjs', 'import-preview-groups.js', 'current-state-export.mjs', 'required-field-selection.mjs', 'read-error-grace.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
 writeFileSync(join(fixture, 'shared', 'universal-importer.js'), [
   'extractCompanyRowsFromWorkbookFile', 'extractCompanyRowsFromText', 'normalizeCompanyRow', 'openUniversalImporter', 'parseDelimitedText',
 ].map((name) => `export function ${name}() {}`).join('\n'));
@@ -263,7 +263,8 @@ try {
     assert.equal(signal.aborted, true, 'timed-out collection query is cancelled');
     assert.equal(state.leadListRows.length, 1, 'healthy lead query survives the other collection timeout');
     assert.deepEqual([...state.collectionReadErrors.keys()], ['adapters']);
-    assert.match(state.collectionReadErrors.get('adapters'), /nicht rechtzeitig/);
+    assert.match(state.collectionReadErrors.get('adapters').message, /nicht rechtzeitig/);
+    assert.equal(state.collectionReadErrors.get('adapters').transient, true, 'a timeout is a transient read failure');
   });
   await test('an older rejected read cannot invalidate a newer successful collection read', async () => {
     const blocked = deferred(); let reads = 0;

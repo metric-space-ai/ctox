@@ -10,7 +10,7 @@ const source=fileURLToPath(new URL('../../customer-modules/outbound-lead-generat
 mkdirSync(join(fixture,'modules','olg'),{recursive:true});
 mkdirSync(join(fixture,'shared'),{recursive:true});
 writeFileSync(join(fixture,'package.json'),'{"type":"module"}');
-for(const name of ['index.js','collection-reloader.mjs','lead-revision-loader.mjs','lead-list-loader.mjs','import-preview-groups.js','current-state-export.mjs', 'required-field-selection.mjs'])
+for(const name of ['index.js','collection-reloader.mjs','lead-revision-loader.mjs','lead-list-loader.mjs','import-preview-groups.js','current-state-export.mjs', 'required-field-selection.mjs', 'read-error-grace.mjs'])
   copyFileSync(join(source,name),join(fixture,'modules','olg',name));
 writeFileSync(join(fixture,'shared','universal-importer.js'), `
 export async function extractCompanyRowsFromWorkbookFile(file,options) {
