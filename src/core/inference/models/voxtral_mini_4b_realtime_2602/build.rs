@@ -60,9 +60,8 @@ fn build_vendored_ggml() {
             "Voxtral CUDA is supported on Linux only"
         );
     }
-    if build.join("CMakeCache.txt").is_file() {
-        let _ = fs::remove_dir_all(&build);
-    }
+    // CMake tracks source/configuration dependencies; retain its compiled
+    // kernels across Rust-only/linker edits instead of rebuilding CUDA cold.
 
     let mut configure = Command::new("cmake");
     configure
@@ -160,6 +159,7 @@ fn link_ggml(base: &PathBuf) {
         );
         println!("cargo:rustc-cfg=ctox_ggml_cuda");
         println!("cargo:rustc-link-search=native={}", cuda.display());
+        println!("cargo:rustc-link-lib=static=ggml-cuda");
         let cache = base
             .parent()
             .expect("ggml build root")
