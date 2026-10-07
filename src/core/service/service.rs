@@ -24705,6 +24705,17 @@ fn fallback_text<'a>(value: &'a str, fallback: &'a str) -> &'a str {
 
 fn runtime_blocker_backoff_remaining_secs(shared: &SharedState) -> Option<u64> {
     let error = shared.last_error.as_deref()?;
+    // MiniMax's token-plan 402 (2067) hits single requests, not the provider:
+    // on thesen it repeated deterministically for the same six tasks within
+    // seconds of their start while all other workers kept succeeding. The
+    // task itself cools down via its retry_not_before; pausing the whole pool
+    // for every such 402 cut the call rate from ~40 to ~6 per minute.
+    if error
+        .to_ascii_lowercase()
+        .contains("token plan usage limit")
+    {
+        return None;
+    }
     let cooldown_secs = turn_loop::hard_runtime_blocker_retry_cooldown_secs(error)?;
     let elapsed_secs = current_epoch_secs().saturating_sub(shared.last_progress_epoch_secs);
     if elapsed_secs < cooldown_secs {
@@ -40995,6 +41006,15 @@ Use shell tools to create or update these files."
         assert!(runtime_error_is_transient_api_failure(
             "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)"
         ));
+        let mut shared = SharedState::default();
+        shared.last_error = Some(
+            "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)"
+                .to_string(),
+        );
+        shared.last_progress_epoch_secs = current_epoch_secs();
+        assert_eq!(runtime_blocker_backoff_remaining_secs(&shared), None);
+        shared.last_error = Some("database is locked".to_string());
+        assert!(runtime_blocker_backoff_remaining_secs(&shared).is_some());
         assert_eq!(failed_worker_route_status(false, false, true), "pending");
     }
 
