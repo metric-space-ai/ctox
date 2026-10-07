@@ -8,6 +8,8 @@ use tempfile::{tempdir, TempDir};
 
 #[path = "recovery_tests.rs"]
 mod recovery;
+#[path = "supervisor_tests.rs"]
+mod supervisor;
 
 fn command(kind: &str, id: &str, payload: Value) -> BusinessCommand {
     BusinessCommand {

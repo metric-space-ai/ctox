@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 mod privacy;
+pub(in crate::business_os) mod supervisor_binding;
 pub(super) use privacy::{
     command_access_check, document_visible_from_connections, document_visible_to_actor,
     has_restricted_reference, VisibilityReadContext,
@@ -65,6 +66,7 @@ pub(super) fn is_command(command_type: &str) -> bool {
     matches!(
         command_type,
         "ctox.workjet.project.chat.ensure"
+            | "ctox.workjet.project.supervisor.bind"
             | "ctox.workjet.project.worker.add"
             | "ctox.workjet.project.worker.remove"
             | "ctox.workjet.project.chat.create"
@@ -119,6 +121,9 @@ fn apply_command(
 ) -> anyhow::Result<Value> {
     let now = super::store::now_ms() as i64;
     match command.command_type.as_str() {
+        "ctox.workjet.project.supervisor.bind" => {
+            supervisor_binding::apply(conn, command, owner, projections)
+        }
         "ctox.workjet.project.chat.ensure" => {
             let payload: ProjectPayload = serde_json::from_value(command.payload.clone())?;
             let project = owned_project(conn, &payload.project_id, owner, false)?;

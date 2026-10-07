@@ -365,6 +365,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 99] = [
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
     "ctox.workjet.project.chat.ensure",
+    "ctox.workjet.project.supervisor.bind",
     "ctox.workjet.project.chat.create",
     "ctox.workjet.project.worker.add",
     "ctox.workjet.project.worker.remove",
@@ -1698,6 +1699,7 @@ fn dispatch_business_command(
             handle_business_os_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
         }
         "ctox.workjet.project.chat.ensure"
+        | "ctox.workjet.project.supervisor.bind"
         | "ctox.workjet.project.chat.create"
         | "ctox.workjet.project.worker.add"
         | "ctox.workjet.project.worker.remove"

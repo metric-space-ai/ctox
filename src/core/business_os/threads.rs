@@ -3481,6 +3481,15 @@ fn upsert_thread(
         .into_iter()
         .collect::<BTreeSet<_>>();
     merged.extend(participants.iter().cloned());
+    let mut metadata = json!({"source_context": source});
+    if let Some(binding) = super::project_chats::supervisor_binding::for_thread(conn, &owner, thread_id)? {
+        anyhow::ensure!(source_string(source, "module").as_deref() == Some("ctox")
+            && source_string(source, "record_type").as_deref() == Some("workjet_project")
+            && source_string(source, "record_id").as_deref() == Some(binding.project_id.as_str()),
+            "supervisor source context conflicts with its native project binding");
+        metadata["workjet_supervisor_contract"] = json!(super::project_chats::supervisor_binding::CONTRACT);
+        metadata["workjet_supervisor"] = serde_json::to_value(binding)?;
+    }
     let record = json!({
         "id": thread_id,
         "thread_id": thread_id,
@@ -3503,9 +3512,7 @@ fn upsert_thread(
         "snoozed_until_ms": existing.get("snoozed_until_ms").and_then(Value::as_i64).unwrap_or(0),
         "archived_at_ms": existing.get("archived_at_ms").and_then(Value::as_i64).unwrap_or(0),
         "last_seen_by_user": existing.get("last_seen_by_user").cloned().unwrap_or_else(|| json!({})),
-        "metadata": {
-            "source_context": source,
-        },
+        "metadata": metadata,
         "created_at_ms": created_at_ms,
         "updated_at_ms": now,
     });
