@@ -1732,13 +1732,12 @@ fn dispatch_business_command(
         | "ctox.workjet.worker_profile.bind"
         | "ctox.workjet.worker_profile.unbind" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
-            let actor = session_user_id(session)
+            let owner = session_user_id(session)
                 .context("authorized Workjet chat command is missing a user identity")?;
-            let owner = super::workjet_identity::owner(root, actor)?;
             match super::project_chats::handle_command(
                 root,
                 command,
-                &owner,
+                owner,
                 prepared
                     .domain_effect_admission
                     .as_ref()

@@ -130,7 +130,8 @@ pub(super) fn handle_workjet_project_store_command(
 ) -> anyhow::Result<Value> {
     // Policy/receipts retain the actor; only project ownership resolves to a
     // native-enrolled same-person identity. Project owners are never migrated.
-    let owner = super::workjet_identity::owner(root, authorized_owner_user_id)?;
+    let actor_user_id = authorized_owner_user_id;
+    let owner = super::workjet_identity::owner(root, actor_user_id)?;
     let authorized_owner_user_id = owner.as_str();
     match command.command_type.as_str() {
         "ctox.workjet.project.list" => {
@@ -139,7 +140,7 @@ pub(super) fn handle_workjet_project_store_command(
         "ctox.workjet.project.upsert" => handle_workjet_project_upsert_command(
             root,
             command,
-            authorized_owner_user_id,
+            actor_user_id,
             admission.context("new Workjet project mutation requires domain admission")?,
             None,
         ),
@@ -262,6 +263,9 @@ pub(super) fn handle_workjet_project_upsert_command(
 
     let mut conn = open_store(root)?;
     let applied = admission.apply(&mut conn, |transaction| {
+        // Recheck identity inside the actual domain writer transaction, so an
+        // alias revoked after dispatch cannot mutate the previous owner's row.
+        let owner_user_id = super::workjet_identity::owner_from_connection(transaction, &owner_user_id)?;
         let mut chat_projections = Vec::new();
         let now = super::store::now_ms() as i64;
         let existing = outbound_load_record(&transaction, PROJECTS_COLLECTION, &project_id)?;
