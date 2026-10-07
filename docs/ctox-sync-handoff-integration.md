@@ -18,6 +18,7 @@ policy, quorum ownership, effect reconciliation or independent-host acceptance.
 The production target currently decodes the protected Core artifact before
 workspace preparation and still returns `resumed:false`. Connecting authorized
 execution admission to the prepared workspace remains the next #183 slice.
+
 Source audit: CTOX `a1b5e04f90333ba18f78fcca270c81b373e534b8`,
 Workjet `f0ad31f297b921d7f96c054abf118840d0939789` (2026-09-20).
 This records the remaining production integration for issue #183. It is not

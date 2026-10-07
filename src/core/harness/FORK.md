@@ -13,6 +13,7 @@ Fork policy:
 - This tree is integrated directly into CTOX and is not treated as a package dependency.
 - Local modifications inside this subtree belong to the CTOX fork state unless explicitly documented otherwise.
 - CTOX must not auto-clone, auto-fetch, or auto-update this subtree from upstream.
+
 ## 2026-10 Original-session checkpoint import
 
 `ThreadManager::resume_thread_from_native_checkpoint` restores the captured

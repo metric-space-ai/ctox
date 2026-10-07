@@ -1,5 +1,5 @@
 //! Private snapshot of the actual quiescent Core/provider state.
-//! This object has no wire constructor and grants no target execution.
+//! Strict checkpoint decoding restores context and grants no target execution.
 use ctox_protocol::ThreadId;
 use serde::Serialize;
 use std::io::{self, Write};
@@ -88,7 +88,7 @@ pub(crate) struct NativeImportPayload {
     pub(crate) user_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
-    pub(crate) reasoning_summary: ReasoningSummary,
+    pub(crate) reasoning_summary: Option<ReasoningSummary>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) mcp_dependency_prompted: BTreeSet<String>,
     pub(crate) active_connector_selection: BTreeSet<String>,

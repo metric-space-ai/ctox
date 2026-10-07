@@ -227,18 +227,51 @@ fn native_core_import_preserves_original_session_context_and_next_response_chain
         let (target_manager, auth) = manager(&target_config);
         let target_journal = root.path().join("target-home/imported.jsonl");
         std::fs::write(&target_journal, &journal_bytes).unwrap();
-        let target = tokio::time::timeout(
-            Duration::from_secs(20),
-            target_manager.resume_thread_from_native_checkpoint(
-                target_config,
-                target_journal.clone(),
-                auth,
-                imported(),
-            ),
-        )
+        for invalid in ["model", "ephemeral", "provider"] {
+            let mut denied_config = target_config.clone();
+            match invalid {
+                "model" => denied_config.model = Some("foreign-fixture-model".into()),
+                "ephemeral" => denied_config.ephemeral = true,
+                _ => denied_config.model_provider_id = "foreign-fixture-provider".into(),
+            }
+            let (denied_manager, denied_auth) = manager(&denied_config);
+            assert!(denied_manager
+                .resume_thread_from_native_checkpoint(
+                    denied_config,
+                    target_journal.clone(),
+                    denied_auth,
+                    imported(),
+                )
+                .await
+                .is_err());
+            assert_eq!(std::fs::read(&target_journal).unwrap(), journal_bytes);
+        }
+        // Both real import calls race for the same original session. Exactly
+        // one may expose a thread; the loser must never create another recorder.
+        let (first, second) = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::join!(
+                target_manager.resume_thread_from_native_checkpoint(
+                    target_config.clone(),
+                    target_journal.clone(),
+                    auth.clone(),
+                    imported()
+                ),
+                target_manager.resume_thread_from_native_checkpoint(
+                    target_config,
+                    target_journal.clone(),
+                    auth,
+                    imported()
+                ),
+            )
+        })
         .await
-        .unwrap()
         .unwrap();
+        assert_ne!(
+            first.is_ok(),
+            second.is_ok(),
+            "exactly one native import wins"
+        );
+        let target = first.or(second).unwrap();
         assert_eq!(target.thread_id, source.thread_id);
         assert_eq!(
             target.session_configured.cwd,
