@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261007-shell-v2-appstore-reopen-perf';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261007-shell-v2-workjet-logo';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
