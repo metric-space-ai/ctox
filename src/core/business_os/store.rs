@@ -30761,7 +30761,7 @@ pub(super) mod tests {
     #[test]
     fn prompt_preview_shows_repeated_long_text_once() {
         let instructions = "Recherchiere jedes Feld mit Beleg. ".repeat(40);
-        let payload = json!({
+        let payload = serde_json::json!({
             "research_instructions": instructions,
             "research_instructions_default": instructions,
             "source_policy": {"sources": [{"target_key": "northdata-de"}]},
