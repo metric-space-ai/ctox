@@ -572,7 +572,10 @@ async fn pump(
 /// Replay a supplied 16 kHz mono s16le PCM fixture at its actual capture cadence.
 /// This is an explicit operator smoke, never microphone capture or automatic production inference.
 pub async fn benchmark_pcm(root: &Path, pcm_path: &Path) -> anyhow::Result<Value> {
-    let pcm = std::fs::read(pcm_path)?;
+    let file = std::fs::File::open(pcm_path)?;
+    let mut pcm = Vec::new();
+    file.take((16_000 * 2 * 15 + 1) as u64)
+        .read_to_end(&mut pcm)?;
     anyhow::ensure!(
         !pcm.is_empty() && pcm.len() % 2 == 0 && pcm.len() <= 16_000 * 2 * 15,
         "benchmark requires at most 15 seconds of 16kHz mono s16le PCM"

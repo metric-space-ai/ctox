@@ -248,6 +248,40 @@ async fn cancel_closes_provider_connection() {
 }
 
 #[tokio::test]
+async fn concurrent_streams_keep_transcripts_and_accounting_separate() {
+    let (endpoint1, server1) = fixture("normal").await;
+    let (endpoint2, server2) = fixture("normal").await;
+    let (mut first, mut second) = tokio::join!(start(&endpoint1), start(&endpoint2));
+    first.append_pcm(&[0; 640]).unwrap();
+    second.append_pcm(&[0; 640]).unwrap();
+    second.append_pcm(&[0; 640]).unwrap();
+    first.finish_audio().unwrap();
+    second.finish_audio().unwrap();
+    async fn final_event(stream: &mut TranscriptionStream) -> (u64, u64) {
+        loop {
+            match timeout(IO_TIMEOUT, stream.next_event())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+            {
+                TranscriptEvent::Final {
+                    sequence,
+                    audio_duration_ms,
+                    ..
+                } => return (sequence, audio_duration_ms),
+                _ => {}
+            }
+        }
+    }
+    let (a, b) = tokio::join!(final_event(&mut first), final_event(&mut second));
+    assert_eq!(a, (2, 20));
+    assert_eq!(b, (3, 40));
+    timeout(IO_TIMEOUT, server1).await.unwrap().unwrap();
+    timeout(IO_TIMEOUT, server2).await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn event_backpressure_remains_an_explicit_terminal_error() {
     let (endpoint, server) = fixture("overflow").await;
     let mut stream = start(&endpoint).await;
