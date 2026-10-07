@@ -12,7 +12,7 @@ pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_remote_worke
     owner_user_id TEXT NOT NULL, source_instance_id TEXT NOT NULL,
     target_environment_id TEXT NOT NULL, record_json TEXT NOT NULL,
     PRIMARY KEY(owner_user_id,source_instance_id,target_environment_id));";
-const CONTRACT: &str = "ctox.workjet.remote-worker-target.v1";
+pub(super) const CONTRACT: &str = "ctox.workjet.remote-worker-target.v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

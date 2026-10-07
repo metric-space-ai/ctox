@@ -462,6 +462,13 @@ fn remote_worker_receipt_preserves_only_typed_account_reference() -> anyhow::Res
             "unknown secret field {pointer}"
         );
     }
+    let target = redact_receipt(json!({
+        "contract": target::CONTRACT, "credentialRef":{"accountId":"test-secret"},
+        "target":{"targetComputerId":"computer-1"}, "token":"test-token"
+    }))?;
+    assert_eq!(target["credentialRef"], REDACTED_MCP_VALUE);
+    assert_eq!(target["token"], REDACTED_MCP_VALUE);
+    assert_eq!(target["target"]["targetComputerId"], "computer-1");
     let mut wrong_contract = permit;
     wrong_contract["contract"] = json!("untrusted");
     assert!(redact_receipt(wrong_contract).is_err());

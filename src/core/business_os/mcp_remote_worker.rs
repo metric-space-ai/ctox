@@ -118,6 +118,10 @@ struct Receipt {
 /// Preserve only the typed, secret-free account locator in our own receipt.
 /// Generic records (including similarly named objects) retain normal redaction.
 pub(super) fn redact_receipt(value: Value) -> anyhow::Result<Value> {
+    // Target registrations carry no account reference and need no exemption.
+    if value.get("contract").and_then(Value::as_str) == Some(target::CONTRACT) {
+        return Ok(redact_mcp_response(value));
+    }
     let receipt: Receipt = serde_json::from_value(value)?;
     anyhow::ensure!(
         receipt.contract == CONTRACT,
