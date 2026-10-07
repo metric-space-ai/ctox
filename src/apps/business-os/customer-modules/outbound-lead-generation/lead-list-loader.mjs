@@ -6,8 +6,19 @@ export const LEAD_LIST_PROJECTION = Object.freeze([
   'payload.weitere_kampagnen', 'payload.campaign_task_id',
   'payload.campaign_command_id', 'payload.research_execution_phase',
   'payload.research_execution_phase_command_id', 'payload.research_execution_detail',
-  'payload.research_queued_at_ms', 'payload.sellify_precheck',
+  'payload.research_queued_at_ms', 'payload.sellify_precheck.known', 'payload.sellify_precheck.contact_id',
+  'payload.sellify_started_at_ms', 'payload.imported_row.sellify_contact_id',
 ]);
+const envelopeFields = new Set(['_rev', '_meta', '_deleted', '_attachments']);
+function projectionContainsOnlyListFields(row, paths = LEAD_LIST_PROJECTION, root = true) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
+  return Object.keys(row).every(key => {
+    if (root && envelopeFields.has(key)) return true;
+    if (paths.includes(key)) return true;
+    const nested = paths.filter(path => path.startsWith(key + '.')).map(path => path.slice(key.length + 1));
+    return nested.length > 0 && projectionContainsOnlyListFields(row[key], nested, false);
+  });
+}
 let sequence = 0;
 const json = (doc) => doc?.toJSON?.() || doc;
 const token = () => `outbound-list:${++sequence}:${globalThis.crypto?.randomUUID?.() || Math.random()}`;
@@ -53,7 +64,7 @@ export async function loadLeadList(collection, previousRows = [], { pageSize = 2
       if (row._deleted) continue;
       seen.add(row.id);
       // Reject a broken projection instead of silently materializing huge/full rows.
-      if (['data', 'contacts', 'evidence', 'field_status', 'person_field_status'].some(key => Object.hasOwn(row, key))) {
+      if (!projectionContainsOnlyListFields(row)) {
         throw error('CTOX hat die Listenprojektion nicht angewendet.', 'LEAD_LIST_PROJECTION_NOT_APPLIED');
       }
       rows.push(previous.get(row.id)?._rev === row._rev ? previous.get(row.id) : row);

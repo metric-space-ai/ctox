@@ -1675,7 +1675,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   if (nachImport && (Date.now() > nachImport.bis || campaigns.some((campaign) => campaign.name === nachImport.titel))) {
     if (Date.now() <= nachImport.bis) {
       state.selectedCampaign = nachImport.titel;
-      state.selectedLeadId = campaignLeads(nachImport.titel)[0]?.id || '';
+      state.selectedLeadId = campaignListLeads(nachImport.titel)[0]?.id || '';
     }
     state.kampagneNachImport = null;
   }
@@ -1711,6 +1711,13 @@ async function ensureFullLeads(ids, { fresh = false } = {}) {
   const rows = await loadFullLeadRows(state.collections.leads, missing);
   if (generation !== state.collectionBindingGeneration || state.uiMounted === false) {
     throw new Error('Die CTOX-Verbindung hat sich geändert. Bitte die Aktion erneut versuchen.');
+  }
+  const currentSummaries = new Map(listLeads().map(row => [row.id, row]));
+  for (const row of rows) {
+    if (summaries.get(row.id)?._rev !== currentSummaries.get(row.id)?._rev
+      && row._rev !== currentSummaries.get(row.id)?._rev) {
+      throw new Error('Der Lead wurde während des Ladens aktualisiert. Bitte die Aktion erneut versuchen.');
+    }
   }
   const current = new Map(state.leads.map(row => [row.id, row]));
   for (const row of rows) {
@@ -2939,7 +2946,8 @@ function renderCenter() {
           const lauf = state.kampagnenVermerkLauf;
           if (lauf) return `<button class="ctox-button" disabled>${icon('search')}<span>Vermerke laden ${lauf.done}/${lauf.total}</span></button>`;
           const geprueft = state.leads.filter(lead => leads.some(row => row.id === lead.id) && vermerkPruefungErledigt(lead)).length;
-          return `<button class="ctox-button" data-action="check-campaign-remarks" data-campaign="${escapeHtml(state.selectedCampaign)}" title="${escapeHtml('Sellify-Freitextvermerke aller Leads dieser Kampagne vom CTOX-Agenten auf Kontaktsperren prüfen lassen')}">${icon('check')}<span>Sellify-Vermerke (${geprueft}/${leads.length})</span></button>`;
+          const alleBekannt = leads.every(row => state.leads.some(lead => lead.id === row.id));
+          return `<button class="ctox-button" data-action="check-campaign-remarks" data-campaign="${escapeHtml(state.selectedCampaign)}" title="${escapeHtml('Sellify-Freitextvermerke aller Leads dieser Kampagne vom CTOX-Agenten auf Kontaktsperren prüfen lassen')}">${icon('check')}<span>Sellify-Vermerke${alleBekannt ? ` (${geprueft}/${leads.length})` : ' prüfen'}</span></button>`;
         })()}
         <button class="ctox-pane-icon" data-action="export-campaign-xlsx" data-campaign="${escapeHtml(state.selectedCampaign)}"
           title="${escapeHtml(tr('exportCampaignXlsxTitle', 'Kampagne als Excel-Datei herunterladen'))}" aria-label="${escapeHtml(tr('exportCampaignXlsxTitle', 'Kampagne als Excel-Datei herunterladen'))}"
@@ -3081,7 +3089,7 @@ function renderUnvollstaendigerImport(campaign) {
   const job = unvollstaendigerImport(campaign);
   if (!job) return '';
   const erwartet = Number(job.payload?.expected_lead_count || 0);
-  const vorhanden = campaignLeads(campaign).length;
+  const vorhanden = campaignListLeads(campaign).length;
   return `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status">
     <span>${escapeHtml(`Import unvollständig: ${vorhanden} von ${erwartet} Firmen übernommen`)}</span>
     <button class="ctox-button" data-action="resume-import" data-import-id="${escapeHtml(job.id)}">Fortsetzen</button>
@@ -4002,6 +4010,7 @@ function sellifyBekanntOhneAbfrage(lead) {
 }
 
 async function startSelectionResearch(variant = 'followup') {
+  await ensureFullLeads([...state.selectedLeadIds]);
   // Owner-Befund 04.09.2026: 19 Leads angehakt, Knopf meldet "Bitte mindestens
   // einen Lead auswaehlen". Ursache: die Auswahl wurde zusaetzlich gegen
   // `state.selectedCampaign` geschnitten. Nach einer Kampagnen-Umbenennung
@@ -4187,6 +4196,7 @@ async function befehlAmServer(commandId) {
 
 async function startCampaignResearch(campaignName) {
   const campaign = String(campaignName || '').trim();
+  await ensureFullLeads(campaignListLeads(campaign).map((lead) => lead.id));
   const leads = campaignLeads(campaign);
   return startScopedResearch(campaign, leads, {
     scope: 'campaign',
@@ -5386,6 +5396,8 @@ async function verarbeiteFreitextAntworten() {
 // CTOX-Agenten anfordern. Seriell, damit die Sellify-Abfragen die App nicht
 // verstopfen (siehe refreshAllRecipientEligibility).
 async function pruefeKampagnenVermerke(campaign) {
+  if (state.kampagnenVermerkLauf) return;
+  await ensureFullLeads(campaignListLeads(campaign).map((lead) => lead.id));
   const leads = campaignLeads(campaign);
   if (!leads.length || state.kampagnenVermerkLauf) return;
   state.kampagnenVermerkLauf = { campaign, done: 0, total: leads.length };
@@ -8972,9 +8984,7 @@ function sellifyLaenderkennung(firma) {
 async function korrigiereSellifyImportlaender() {
   // Laufende Recherchen bleiben unberuehrt; alle anderen bekommen nur das
   // richtige Land (die Recherche selbst hatte CH bereits erkannt).
-  const alleLeads = state.leads.length
-    ? state.leads
-    : (await state.collections.leads.find({ selector: { country: 'DE' } }).exec()).map((doc) => doc.toJSON?.() || doc);
+  const alleLeads = listLeads();
   const kandidaten = alleLeads.filter((lead) => String(lead.country || '') === 'DE'
     && lead.payload?.imported_row?.sellify_contact_id
     && !['queued', 'running', 'requested'].includes(String(lead.research_status || '')));
@@ -9001,9 +9011,11 @@ async function korrigiereSellifyImportlaender() {
   }
   if (globalThis.__olgLaenderkorrektur) globalThis.__olgLaenderkorrektur.laender = Object.fromEntries(laender);
   let korrigiert = 0;
-  for (const lead of kandidaten) {
-    const land = laender.get(String(lead.payload.imported_row.sellify_contact_id));
+  for (const summary of kandidaten) {
+    const land = laender.get(String(summary.payload.imported_row.sellify_contact_id));
     if (!land || land === 'DE') continue;
+    const [lead] = await ensureFullLeads([summary.id]);
+    if (['queued', 'running', 'requested'].includes(String(lead.research_status || ''))) continue;
     const nieGesendet = lead.research_status === 'failed' && !hatRechercheErgebnis(lead)
       && auftragNichtZugestellt(lead.payload?.research_error || lead.research_error || '');
     await patchLead(lead.id, {
@@ -9126,7 +9138,7 @@ async function importiereSellifyKampagne(kampagnenName) {
     clearInterval(uhr);
     await reload();
     if (Number(ergebnis?.lead_count || 0) > 0) {
-      if (campaignLeads(titel).length) state.selectedCampaign = titel;
+      if (campaignListLeads(titel).length) state.selectedCampaign = titel;
       else state.kampagneNachImport = { titel, bis: Date.now() + 120_000 };
       render();
       zeigeHinweis(`Import „${name}“ fertig: ${ergebnis?.lead_count} Firmen aus ${rows.length} Kontakten in ${Math.round((Date.now() - start) / 1000)} s.`
@@ -9246,13 +9258,13 @@ async function openImporter(defaultTitle = '') {
           const titel = String(payload?.title || '').trim();
           // Stehen die neuen Leads beim ersten Nachladen noch nicht bereit,
           // holt reloadAusfuehren die Auswahl nach (Nachtest P2 FX-1).
-          if (titel && !campaignLeads(titel).length) state.kampagneNachImport = { titel, bis: Date.now() + 120_000 };
-          if (titel && campaignLeads(titel).length) {
+          if (titel && !campaignListLeads(titel).length) state.kampagneNachImport = { titel, bis: Date.now() + 120_000 };
+          if (titel && campaignListLeads(titel).length) {
             state.selectedCampaign = titel;
             // Die Detailspalte zeigte sonst weiter einen Lead der vorigen
             // Kampagne (Klicktest P1 #7, P3 FX-01).
-            const auswahlInKampagne = campaignLeads(titel).some((lead) => lead.id === state.selectedLeadId);
-            if (!auswahlInKampagne) state.selectedLeadId = campaignLeads(titel)[0]?.id || '';
+            const auswahlInKampagne = campaignListLeads(titel).some((lead) => lead.id === state.selectedLeadId);
+            if (!auswahlInKampagne) state.selectedLeadId = campaignListLeads(titel)[0]?.id || '';
           }
           render();
         } catch (fehler) {
@@ -9673,7 +9685,7 @@ function unvollstaendigerImport(campaignName) {
   const spaeterFertig = jobs.some((job) => job?.status === 'imported'
     && Number(job.created_at_ms || 0) > Number(offen.created_at_ms || 0));
   if (spaeterFertig) return null;
-  if (campaignLeads(name).length >= Number(offen.payload?.expected_lead_count || 0)) return null;
+  if (campaignListLeads(name).length >= Number(offen.payload?.expected_lead_count || 0)) return null;
   return offen;
 }
 async function setzeImportFort(importId) {
@@ -9779,6 +9791,8 @@ function offeneRecherchefelder(lead) {
 // nur die sichtbaren, nie stillschweigend die ganze Kampagne (28.09.2026).
 async function schliesseKampagnenLuecken(kampagne, sichtbareIds = '') {
   const auswahl = new Set(String(sichtbareIds || '').split(',').filter(Boolean));
+  await ensureFullLeads(campaignListLeads(kampagne)
+    .filter((lead) => !auswahl.size || auswahl.has(lead.id)).map((lead) => lead.id));
   const leads = campaignLeads(kampagne).filter((lead) => (!auswahl.size || auswahl.has(lead.id))
     && hatRechercheErgebnis(lead)
     && !researchInFlight(lead) && !researchSubmissionPending(lead) && offeneRecherchefelder(lead).length);
@@ -12537,7 +12551,7 @@ async function cancelResearch(id) {
   const kampagne = String(aktuell.campaign || lead.campaign || '').trim();
   const lauf = state.campaignRuns.get(kampagne);
   if (lauf && ['queued', 'running'].includes(String(lauf.status || ''))
-    && !campaignLeads(kampagne).some((entry) => researchInFlight(entry))) {
+    && !campaignListLeads(kampagne).some((entry) => researchInFlight(entry))) {
     Object.assign(lauf, { status: 'cancelled', finishedAtMs: Date.now() });
   }
   zeigeHinweis('Recherche abgebrochen.');
@@ -13723,6 +13737,7 @@ function icon(name) {
 export const __leadgenOutboundTestHooks = {
   listLeads,
   ensureFullLeads,
+  loadSelectedLeadDetails,
   prepareFullLeadAction,
   renderOptionalFieldSettings,
   saveOptionalFields,

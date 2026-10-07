@@ -130,7 +130,8 @@ try {
     Object.assign(state, {
       ctx: { host: { querySelector: () => null } },
       collections: db, sources: [], adapters: [], imports: [], leads: [existingLead], leadListRows: null,
-      recipientEligibilityReady: new Set(['lead_a']), selectedDetailLoadingKey: '',
+      recipientEligibilityReady: new Set(['lead_a']), selectedDetailLoadingKey: '', selectedDetailRequestedKey: '',
+      fullLeadReadSequence: 0, fullLeadAppliedSequence: new Map(),
       collectionBindingGeneration: 1, leadHydrationBindingGeneration: 1, reloadAngewendetJeSammlung: new Map(),
       sourceToggleIntent: new Map(), pendingLeadPatches: new Map(),
       selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
@@ -169,6 +170,7 @@ try {
     const { reads } = setup({ leads: async (query) => rows
       .filter((row) => !query.selector.id || (query.selector.id.$in ? query.selector.id.$in.includes(row.id) : row.id > query.selector.id.$gt))
       .slice(0, query.limit).map((row) => ({ toJSON: () => row })) });
+    state.recipientEligibilityReady = new Set(rows.map(row => row.id));
     await hooks.reload(['leads']);
     assert.equal(state.leadListRows.length, 351);
     assert.equal(new Set(state.leadListRows.map((row) => row.id)).size, 351);
@@ -198,6 +200,36 @@ try {
     blocked.resolve([{ toJSON: () => ({ id: 'a', _rev: '1-a', contacts: [], evidence: [] }) }]);
     await assert.rejects(pending, /Verbindung/);
     assert.deepEqual(state.leads, []);
+  });
+  await test('a late full read cannot replace a newer compact revision', async () => {
+    const blocked = deferred(); setup({ leads: () => blocked.promise });
+    state.leads = []; state.leadListRows = [{ id: 'a', _rev: '1-a' }];
+    const pending = hooks.ensureFullLeads(['a']);
+    state.leadListRows[0] = { id: 'a', _rev: '2-a', research_status: 'needs_review' };
+    blocked.resolve([{ toJSON: () => ({ id: 'a', _rev: '1-a', evidence: [{ quote: 'old' }] }) }]);
+    await assert.rejects(pending, /aktualisiert/);
+    assert.deepEqual(state.leads, []);
+    assert.equal(state.leadListRows[0]._rev, '2-a');
+  });
+  await test('selected detail reads coalesce live changes and hydrate the latest selection once', async () => {
+    const blocked = deferred(), latest = deferred(); const ids = [];
+    setup({ leads: query => {
+      ids.push(query.selector.id.$in);
+      return ids.length === 1 ? blocked.promise : latest.promise;
+    } });
+    state.leads = []; state.leadListRows = [{ id: 'a', _rev: '1-a' }, { id: 'b', _rev: '1-b' }];
+    state.selectedLeadId = 'a'; state.recipientEligibilityReady = new Set(['a', 'b']);
+    const first = hooks.loadSelectedLeadDetails();
+    for (let i = 0; i < 10; i++) await hooks.loadSelectedLeadDetails();
+    state.selectedLeadId = 'b'; await hooks.loadSelectedLeadDetails();
+    assert.deepEqual(ids, [['a']], 'no overlapping full reads');
+    blocked.resolve([{ toJSON: () => ({ id: 'a', _rev: '1-a', contacts: [] }) }]);
+    await first;
+    assert.deepEqual(ids, [['a'], ['b']], 'latest selection is read after the first finishes');
+    latest.resolve([{ toJSON: () => ({ id: 'b', _rev: '1-b', contacts: [], evidence: [{ quote: 'latest' }] }) }]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(state.selectedDetailLoadingKey, '');
+    assert.equal(state.leads.find(row => row.id === 'b').evidence[0].quote, 'latest');
   });
   await test('a newer read of another collection does not suppress a delayed result', async () => {
     const blocked = deferred();

@@ -4,7 +4,7 @@ import { loadLeadList, loadFullLeadRows, leadListRow, LEAD_LIST_PROJECTION } fro
 
 const lead = (id, rev = `1-${id}`) => ({ id, _rev: rev, name: 'Firma ' + id, campaign: 'Chemie', country: 'DE', city: 'Köln',
   research_status: 'needs_review', updated_at_ms: 1,
-  payload: { weitere_kampagnen: ['Test'], imported_row: { blob: 'unused'.repeat(10000) } },
+  payload: { weitere_kampagnen: ['Test'], imported_row: { sellify_contact_id: 'crm-' + id, blob: 'unused'.repeat(10000) } },
   contacts: [{ id: 'person-' + id, person_email: id + '@firma.test' }],
   data: { firma_name: id }, evidence: [{ quote: 'Beleg'.repeat(12000) }], field_status: { firma_name: { status: 'verified' } },
 });
@@ -30,7 +30,7 @@ test('850-lead cold list transfers only compact summaries, not contacts, evidenc
   assert.ok(w.bytes() < 1_000_000, 'fixture response bytes, not production network measurement');
   for (const row of list.rows) {
     for (const key of ['data', 'contacts', 'evidence', 'field_status']) assert.equal(row[key], undefined);
-    assert.equal(row.payload.imported_row, undefined);
+    assert.deepEqual(row.payload.imported_row, { sellify_contact_id: 'crm-' + row.id });
     assert.deepEqual(row.payload.weitere_kampagnen, ['Test']);
   }
 });
@@ -62,6 +62,8 @@ test('unsupported or ignored projection fails without a full-query fallback', as
   const calls = [];
   await assert.rejects(loadLeadList({ find: query => ({ exec: async () => { calls.push(query); return [{ toJSON: () => lead('a') }]; } }) }), { code: 'LEAD_LIST_PROJECTION_NOT_APPLIED' });
   assert.equal(calls.length, 1); assert.deepEqual(calls[0].projection, [...LEAD_LIST_PROJECTION]);
+  await assert.rejects(loadLeadList({ find: () => ({ exec: async () => [{ id: 'a', _rev: '1-a', payload: { imported_row: { large: 'unused' } } }] }) }), { code: 'LEAD_LIST_PROJECTION_NOT_APPLIED' });
+  await assert.rejects(loadLeadList({ find: () => ({ exec: async () => [{ id: 'a', _rev: '1-a', payload: { sellify_precheck: { known: true, entire_company: 'unused' } } }] }) }), { code: 'LEAD_LIST_PROJECTION_NOT_APPLIED' });
 });
 test('invalid revisions, non-advancing pages and duplicate detail rows fail closed', async () => {
   await assert.rejects(loadLeadList({ find: () => ({ exec: async () => [{ id: 'a' }] }) }), { code: 'LEAD_LIST_REVISION_MISSING' });
