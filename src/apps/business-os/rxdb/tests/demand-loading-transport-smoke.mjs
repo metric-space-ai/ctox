@@ -311,6 +311,33 @@ const streamResult = await streamTransport.requestQueryFetch({ ...envelope, requ
 assert(streamAttempts === 9, `stream-limited query.fetch must keep waiting for a slot (got ${streamAttempts})`);
 assert(streamResult.documents[0]?.id === 'after-stream-slot', 'stream-limit retry result materialised');
 
+// The peer's first answer to an over-limit fetch is the RPC response itself:
+// peer.request rejects with a plain "STREAM_LIMIT_EXCEEDED: …" error without a
+// retryable flag. That must be retried as well.
+const responseLimitTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-response-limit' });
+let responseLimitAttempts = 0;
+responseLimitTransport.attach({
+  connections: new Map([
+    ['peer-response-limit', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(_peerId, _method, params) {
+    responseLimitAttempts += 1;
+    const requestId = params?.[0]?.requestId;
+    if (responseLimitAttempts <= 3) {
+      throw new Error('STREAM_LIMIT_EXCEEDED: max in-flight query streams reached');
+    }
+    queueMicrotask(() => {
+      responseLimitTransport.requestHandlers['rxdb.query.chunk']({
+        params: [{ requestId, sequence: 0, documents: [{ id: 'after-response-limit', status: 'open' }], complete: true, authoritativeRevision: 'rev-response-limit' }],
+      });
+    });
+    return { ack: true };
+  },
+});
+const responseLimitResult = await responseLimitTransport.requestQueryFetch({ ...envelope, requestId: 'q-response-limit' });
+assert(responseLimitAttempts === 4, `an RPC-response stream limit must be retried (got ${responseLimitAttempts})`);
+assert(responseLimitResult.documents[0]?.id === 'after-response-limit', 'RPC-response stream-limit retry result materialised');
+
 // Cancel path: removes the in-flight collector AND rejects the outstanding
 // fetch with QUERY_CANCELLED so callers stop waiting (hardened cancel
 // semantics — previously the promise just hung forever).

@@ -153,6 +153,32 @@ const strict = token => ({ selector: {}, limit: 1, requireRevision: token });
   assert.deepEqual(requests, []);
 }
 
+// A native stream-limit error can precede the correlated RPC rejection. It
+// remains retryable without leaving an unhandled collector rejection at the ACK.
+{
+  let rejectAck;
+  const requests = [];
+  const transport = createDemandLoadingTransport({ getPeerId: () => 'native' });
+  transport.attach({
+    connections: new Map([['native', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }]]),
+    async request(peerId, method, [envelope]) {
+      if (method !== CTOX_QUERY_RPC.fetch) return { ack: true };
+      requests.push(envelope);
+      if (requests.length === 1) return new Promise((resolve, reject) => { rejectAck = reject; });
+      return { ack: true };
+    },
+  });
+  const pending = transport.requestQueryFetch({ requestId: 'ack-error', collectionName: 'leads' }, { authorityKey: 'owner' });
+  await until(() => rejectAck);
+  await transport.requestHandlers[CTOX_QUERY_RPC.error]({ params: [{ requestId: 'ack-error', code: 'STREAM_LIMIT_EXCEEDED', retryable: true }] });
+  await flush();
+  rejectAck(new Error('STREAM_LIMIT_EXCEEDED: max in-flight query streams reached'));
+  await until(() => requests.length === 2);
+  await transport.requestHandlers[CTOX_QUERY_RPC.chunk]({ params: [{ requestId: requests[1].requestId, sequence: 0, documents: [], complete: true }] });
+  await pending;
+  await flush();
+}
+
 // Different connection generations with the same permission cannot coalesce.
 {
   const remote = native();
