@@ -12158,6 +12158,7 @@ pub(in crate::business_os) mod tests {
     #[test]
     fn workjet_project_schema_migration_preserves_populated_v0_identity_and_history(
     ) -> anyhow::Result<()> {
+        for source_version in [0, 1] {
         let root = tempfile::tempdir()?;
         std::fs::create_dir_all(root.path().join("runtime"))?;
         let collection = "workjet_projects";
@@ -12165,7 +12166,7 @@ pub(in crate::business_os) mod tests {
         for version in [0, 1, 2] {
             create_runtime_migration_source_table(root.path(), collection, version)?;
         }
-        let source = rxdb_collection_version_table_name(collection, 0);
+        let source = rxdb_collection_version_table_name(collection, source_version);
         let target = rxdb_collection_version_table_name(collection, 2);
         let read_rows = || -> anyhow::Result<Vec<(String, String, i64, f64, Value)>> {
             let conn = Connection::open(store::rxdb_store_path(root.path()))?;
@@ -12232,6 +12233,7 @@ pub(in crate::business_os) mod tests {
             16,
             "source remains retained before verified cleanup"
         );
+        }
         Ok(())
     }
 

@@ -161,3 +161,17 @@ fn weekly_report_forged_schedule_does_not_create_a_message_or_queue_turn() -> an
     }
     Ok(())
 }
+
+#[test]
+fn weekly_report_storage_failure_keeps_the_existing_schedule_enabled() -> anyhow::Result<()> {
+    let root=fixture()?;
+    let first=task(root.path())?;
+    open_store(root.path())?.execute("DROP TABLE business_users",[])?;
+    assert!(crate::business_os::reconcile_project_reports(root.path()).is_err());
+    let retained=schedule::list_tasks(root.path())?;
+    assert_eq!(retained.len(),1);
+    assert!(retained[0].enabled);
+    assert_eq!(retained[0].next_run_at,first.next_run_at);
+    assert_eq!(count(root.path(),"user_thread_messages")?,0);
+    Ok(())
+}
