@@ -64,7 +64,7 @@ async fn stage<P: Clone + Eq + Hash + Send + Sync + 'static>(
                 .read_to_end(&mut bytes)?;
             let _decoded = ctox_core::NativeSessionState::from_checkpoint(
                 &bytes,
-                manifest.session.session_id.parse()?,
+                ctox_protocol::ThreadId::from_string(&manifest.session.session_id)?,
                 &manifest.session.model_id,
                 &manifest.session.model_route_id,
             )?;
