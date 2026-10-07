@@ -4,10 +4,8 @@ struct TestRoot(PathBuf);
 
 impl TestRoot {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "ctox-schedule-calendar-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("ctox-schedule-calendar-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create isolated root");
         Self(root)
     }
@@ -20,7 +18,10 @@ impl Drop for TestRoot {
 }
 
 fn berlin(lead_minutes: u16) -> ScheduleCalendar {
-    ScheduleCalendar { timezone: "Europe/Berlin".into(), lead_minutes }
+    ScheduleCalendar {
+        timezone: "Europe/Berlin".into(),
+        lead_minutes,
+    }
 }
 
 fn request() -> ScheduleEnsureRequest {
@@ -50,7 +51,12 @@ fn weekly_preparation_tracks_iana_zone_in_winter_and_summer() -> Result<()> {
 #[test]
 fn preparation_before_midnight_preserves_the_meetings_weekday() -> Result<()> {
     assert_eq!(
-        next_run_after("30 0 * * 1", &berlin(120), parse_rfc3339_utc("2026-07-04T00:00:00Z")?)?.as_deref(),
+        next_run_after(
+            "30 0 * * 1",
+            &berlin(120),
+            parse_rfc3339_utc("2026-07-04T00:00:00Z")?
+        )?
+        .as_deref(),
         Some("2026-07-05T20:30:00+00:00")
     );
     Ok(())
@@ -59,10 +65,20 @@ fn preparation_before_midnight_preserves_the_meetings_weekday() -> Result<()> {
 #[test]
 fn dst_gap_is_skipped_and_fold_produces_only_one_occurrence() -> Result<()> {
     assert_eq!(
-        next_run_after("30 2 * * 0", &berlin(120), parse_rfc3339_utc("2026-03-28T00:00:00Z")?)?.as_deref(),
+        next_run_after(
+            "30 2 * * 0",
+            &berlin(120),
+            parse_rfc3339_utc("2026-03-28T00:00:00Z")?
+        )?
+        .as_deref(),
         Some("2026-04-04T22:30:00+00:00")
     );
-    let first = next_run_after("30 2 * * 0", &berlin(120), parse_rfc3339_utc("2026-10-24T00:00:00Z")?)?.unwrap();
+    let first = next_run_after(
+        "30 2 * * 0",
+        &berlin(120),
+        parse_rfc3339_utc("2026-10-24T00:00:00Z")?,
+    )?
+    .unwrap();
     assert_eq!(first, "2026-10-24T22:30:00+00:00");
     assert_eq!(
         next_run_after("30 2 * * 0", &berlin(120), parse_rfc3339_utc(&first)?)?.as_deref(),
@@ -71,7 +87,12 @@ fn dst_gap_is_skipped_and_fold_produces_only_one_occurrence() -> Result<()> {
     // 10:00 on transition Sunday is still prepared exactly two elapsed hours
     // early, rather than applying yesterday's UTC offset to a local cron.
     assert_eq!(
-        next_run_after("0 10 * * 0", &berlin(120), parse_rfc3339_utc("2026-03-28T00:00:00Z")?)?.as_deref(),
+        next_run_after(
+            "0 10 * * 0",
+            &berlin(120),
+            parse_rfc3339_utc("2026-03-28T00:00:00Z")?
+        )?
+        .as_deref(),
         Some("2026-03-29T06:00:00+00:00")
     );
     Ok(())
@@ -81,7 +102,10 @@ fn dst_gap_is_skipped_and_fold_produces_only_one_occurrence() -> Result<()> {
 fn invalid_calendar_is_rejected_before_database_creation_or_mutation() -> Result<()> {
     let root = TestRoot::new();
     for calendar in [
-        ScheduleCalendar { timezone: "not/an-iana-zone".into(), lead_minutes: 120 },
+        ScheduleCalendar {
+            timezone: "not/an-iana-zone".into(),
+            lead_minutes: 120,
+        },
         berlin(1441),
     ] {
         assert!(ensure_task_with_calendar(&root.0, request(), calendar).is_err());
@@ -101,7 +125,8 @@ fn legacy_schedule_rows_migrate_without_changing_utc_or_identity() -> Result<()>
     let root = TestRoot::new();
     fs::create_dir_all(root.0.join("runtime"))?;
     let conn = Connection::open(resolve_db_path(&root.0))?;
-    conn.execute_batch("CREATE TABLE scheduled_tasks (
+    conn.execute_batch(
+        "CREATE TABLE scheduled_tasks (
         task_id TEXT PRIMARY KEY, name TEXT NOT NULL, cron_expr TEXT NOT NULL,
         prompt TEXT NOT NULL, thread_key TEXT NOT NULL, skill TEXT,
         enabled INTEGER NOT NULL, next_run_at TEXT, last_run_at TEXT,
@@ -110,17 +135,26 @@ fn legacy_schedule_rows_migrate_without_changing_utc_or_identity() -> Result<()>
         'existing', 'existing task', '0 14 * * 4', 'original prompt',
         'existing/thread', NULL, 1, '2026-07-02T14:00:00+00:00', NULL,
         '2026-07-01T00:00:00+00:00', '2026-07-01T00:00:00+00:00'
-    );")?;
+    );",
+    )?;
     ensure_schedule_schema(&conn)?;
     ensure_schedule_schema(&conn)?;
     let task = load_task(&conn, "existing")?.unwrap();
     assert_eq!(task.calendar, ScheduleCalendar::default());
     assert_eq!(task.thread_key, "existing/thread");
-    assert_eq!(task.next_run_at.as_deref(), Some("2026-07-02T14:00:00+00:00"));
+    assert_eq!(
+        task.next_run_at.as_deref(),
+        Some("2026-07-02T14:00:00+00:00")
+    );
     assert_eq!(task.prompt, "original prompt");
     assert!(serde_json::to_value(&task)?.get("calendar").is_none());
     assert_eq!(
-        next_run_after(&task.cron_expr, &task.calendar, parse_rfc3339_utc("2026-07-01T00:00:00Z")?)?.as_deref(),
+        next_run_after(
+            &task.cron_expr,
+            &task.calendar,
+            parse_rfc3339_utc("2026-07-01T00:00:00Z")?
+        )?
+        .as_deref(),
         Some("2026-07-02T14:00:00+00:00")
     );
     Ok(())
@@ -144,18 +178,29 @@ fn calendar_survives_upsert_pause_resume_and_real_native_trigger() -> Result<()>
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     )?;
     assert_eq!(thread, "fixture/existing-supervisor");
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&metadata)?["skill"], "workjet-jour-fixe");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&metadata)?["skill"],
+        "workjet-jour-fixe"
+    );
     assert!(body.contains("Calendar occurrence:"));
     assert!(body.contains("Europe/Berlin"));
     assert!(body.contains("preparation lead: 120 minutes"));
     let stored = load_task(&conn, &first.task_id)?.unwrap();
     assert_eq!(stored.calendar, berlin(120));
-    let occurrence = parse_rfc3339_utc(stored.next_run_at.as_deref().unwrap())? + Duration::minutes(120);
+    let occurrence =
+        parse_rfc3339_utc(stored.next_run_at.as_deref().unwrap())? + Duration::minutes(120);
     let local = occurrence.with_timezone(&chrono_tz::Europe::Berlin);
     assert_eq!(local.weekday().num_days_from_monday(), 3);
     assert_eq!((local.hour(), local.minute()), (14, 0));
     // The service's due-task continuation uses the persisted calendar too.
-    let (next, enabled) = next_task_state_after_emit(false, "emitted", "0 14 * * 4", &berlin(120), "2026-07-02T10:00:00+00:00", parse_rfc3339_utc("2026-07-02T10:01:00Z")?)?;
+    let (next, enabled) = next_task_state_after_emit(
+        false,
+        "emitted",
+        "0 14 * * 4",
+        &berlin(120),
+        "2026-07-02T10:00:00+00:00",
+        parse_rfc3339_utc("2026-07-02T10:01:00Z")?,
+    )?;
     assert!(enabled);
     assert_eq!(next.as_deref(), Some("2026-07-09T10:00:00+00:00"));
     Ok(())
@@ -163,13 +208,37 @@ fn calendar_survives_upsert_pause_resume_and_real_native_trigger() -> Result<()>
 
 #[test]
 fn cli_calendar_defaults_are_compatible_and_malformed_values_are_named() -> Result<()> {
-    let base: Vec<String> = ["add", "--name", "meeting", "--cron", "0 14 * * 4", "--prompt", "prepare"]
-        .into_iter().map(str::to_owned).collect();
-    assert_eq!(parse_add_request(&base)?.calendar, ScheduleCalendar::default());
+    let base: Vec<String> = [
+        "add",
+        "--name",
+        "meeting",
+        "--cron",
+        "0 14 * * 4",
+        "--prompt",
+        "prepare",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(
+        parse_add_request(&base)?.calendar,
+        ScheduleCalendar::default()
+    );
     let mut zoned = base.clone();
-    zoned.extend(["--timezone", "Europe/Berlin", "--lead-minutes", "120"].into_iter().map(str::to_owned));
+    zoned.extend(
+        ["--timezone", "Europe/Berlin", "--lead-minutes", "120"]
+            .into_iter()
+            .map(str::to_owned),
+    );
     assert_eq!(parse_add_request(&zoned)?.calendar, berlin(120));
-    for tail in [vec!["--timezone"], vec!["--lead-minutes"], vec!["--lead-minutes", "--skill", "test"], vec!["--lead-minutes", "-1"], vec!["--lead-minutes", "1441"], vec!["--timezone", "not/a-zone"]] {
+    for tail in [
+        vec!["--timezone"],
+        vec!["--lead-minutes"],
+        vec!["--lead-minutes", "--skill", "test"],
+        vec!["--lead-minutes", "-1"],
+        vec!["--lead-minutes", "1441"],
+        vec!["--timezone", "not/a-zone"],
+    ] {
         let mut invalid = base.clone();
         invalid.extend(tail.into_iter().map(str::to_owned));
         assert!(parse_add_request(&invalid).is_err());

@@ -3,9 +3,9 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Duration;
-use chrono::Timelike;
-use chrono::TimeZone;
 use chrono::LocalResult;
+use chrono::TimeZone;
+use chrono::Timelike;
 use chrono::Utc;
 use rusqlite::params;
 use rusqlite::Connection;
@@ -152,18 +152,25 @@ pub struct ScheduleCalendar {
 
 impl Default for ScheduleCalendar {
     fn default() -> Self {
-        Self { timezone: "UTC".to_string(), lead_minutes: 0 }
+        Self {
+            timezone: "UTC".to_string(),
+            lead_minutes: 0,
+        }
     }
 }
 
 impl ScheduleCalendar {
-    fn is_default(&self) -> bool { self == &Self::default() }
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
 
     fn validate(&self) -> Result<chrono_tz::Tz> {
         if self.lead_minutes > 24 * 60 {
             anyhow::bail!("schedule lead_minutes must be at most 1440");
         }
-        self.timezone.parse().with_context(|| format!("invalid schedule IANA timezone {}", self.timezone))
+        self.timezone
+            .parse()
+            .with_context(|| format!("invalid schedule IANA timezone {}", self.timezone))
     }
 }
 
@@ -694,9 +701,19 @@ fn render_scheduled_prompt(task: &ScheduledTaskView, scheduled_for: &str) -> Str
         "If work remains open after this run, leave exactly one open CTOX follow-up, plan, or queue item. A sentence in the reply does not count as open work.".to_string(),
     ];
     if !task.calendar.is_default() {
-        if let (Ok(preparation), Ok(zone)) = (parse_rfc3339_utc(task.next_run_at.as_deref().unwrap_or(scheduled_for)), task.calendar.validate()) {
-            if let Some(occurrence) = preparation.checked_add_signed(Duration::minutes(i64::from(task.calendar.lead_minutes))) {
-                lines.push(format!("Calendar occurrence: {} ({}); preparation lead: {} minutes", occurrence.with_timezone(&zone).to_rfc3339(), task.calendar.timezone, task.calendar.lead_minutes));
+        if let (Ok(preparation), Ok(zone)) = (
+            parse_rfc3339_utc(task.next_run_at.as_deref().unwrap_or(scheduled_for)),
+            task.calendar.validate(),
+        ) {
+            if let Some(occurrence) = preparation
+                .checked_add_signed(Duration::minutes(i64::from(task.calendar.lead_minutes)))
+            {
+                lines.push(format!(
+                    "Calendar occurrence: {} ({}); preparation lead: {} minutes",
+                    occurrence.with_timezone(&zone).to_rfc3339(),
+                    task.calendar.timezone,
+                    task.calendar.lead_minutes
+                ));
             }
         }
     }
@@ -822,7 +839,10 @@ fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScheduledTaskView> 
         last_run_at: row.get(8)?,
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
-        calendar: ScheduleCalendar { timezone: row.get(11)?, lead_minutes: row.get(12)? },
+        calendar: ScheduleCalendar {
+            timezone: row.get(11)?,
+            lead_minutes: row.get(12)?,
+        },
     })
 }
 
@@ -928,10 +948,16 @@ fn ensure_schedule_schema(conn: &Connection) -> Result<()> {
         rows.collect::<rusqlite::Result<_>>()?
     };
     if !columns.contains("timezone") {
-        tx.execute("ALTER TABLE scheduled_tasks ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'", [])?;
+        tx.execute(
+            "ALTER TABLE scheduled_tasks ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'",
+            [],
+        )?;
     }
     if !columns.contains("lead_minutes") {
-        tx.execute("ALTER TABLE scheduled_tasks ADD COLUMN lead_minutes INTEGER NOT NULL DEFAULT 0", [])?;
+        tx.execute(
+            "ALTER TABLE scheduled_tasks ADD COLUMN lead_minutes INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
     tx.commit()?;
     Ok(())
@@ -1112,15 +1138,22 @@ fn system_time_to_unix_nanos(time: SystemTime) -> u128 {
 
 fn parse_add_request(args: &[String]) -> Result<ScheduleCreateRequest> {
     let calendar_value = |flag: &str| -> Result<Option<&str>> {
-        let Some(index) = args.iter().position(|arg| arg == flag) else { return Ok(None); };
-        let value = args.get(index + 1).filter(|value| !value.starts_with("--"))
+        let Some(index) = args.iter().position(|arg| arg == flag) else {
+            return Ok(None);
+        };
+        let value = args
+            .get(index + 1)
+            .filter(|value| !value.starts_with("--"))
             .with_context(|| format!("{flag} requires a value"))?;
         Ok(Some(value.as_str()))
     };
     let calendar = ScheduleCalendar {
         timezone: calendar_value("--timezone")?.unwrap_or("UTC").to_string(),
-        lead_minutes: calendar_value("--lead-minutes")?.map(str::parse).transpose()
-            .context("--lead-minutes must be an integer from 0 to 1440")?.unwrap_or(0),
+        lead_minutes: calendar_value("--lead-minutes")?
+            .map(str::parse)
+            .transpose()
+            .context("--lead-minutes must be an integer from 0 to 1440")?
+            .unwrap_or(0),
     };
     calendar.validate()?;
     Ok(ScheduleCreateRequest {
@@ -1227,15 +1260,27 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-04-28T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        let (next_run, enabled) =
-            next_task_state_after_emit(true, "started", "0 12 28 4 *", &ScheduleCalendar::default(), "2026-04-28T12:00:00Z", now)
-                .expect("started state");
+        let (next_run, enabled) = next_task_state_after_emit(
+            true,
+            "started",
+            "0 12 28 4 *",
+            &ScheduleCalendar::default(),
+            "2026-04-28T12:00:00Z",
+            now,
+        )
+        .expect("started state");
         assert_eq!(next_run, None);
         assert!(!enabled);
 
-        let (next_run, enabled) =
-            next_task_state_after_emit(true, "failed", "0 12 28 4 *", &ScheduleCalendar::default(), "2026-04-28T12:00:00Z", now)
-                .expect("failed state");
+        let (next_run, enabled) = next_task_state_after_emit(
+            true,
+            "failed",
+            "0 12 28 4 *",
+            &ScheduleCalendar::default(),
+            "2026-04-28T12:00:00Z",
+            now,
+        )
+        .expect("failed state");
         assert_eq!(next_run.as_deref(), Some("2026-04-28T12:01:00+00:00"));
         assert!(enabled);
     }
@@ -1412,14 +1457,28 @@ mod tests {
         let scheduled = "2026-07-29T10:00:00+00:00";
         // Five minutes in: still retrying, one minute out.
         let now = parse_rfc3339_utc("2026-07-29T10:05:00+00:00")?;
-        let (next, enabled) = next_task_state_after_emit(true, "failed", "", &ScheduleCalendar::default(), scheduled, now)?;
+        let (next, enabled) = next_task_state_after_emit(
+            true,
+            "failed",
+            "",
+            &ScheduleCalendar::default(),
+            scheduled,
+            now,
+        )?;
         assert!(enabled);
         assert_eq!(next.as_deref(), Some("2026-07-29T10:06:00+00:00"));
 
         // Fifteen minutes past the scheduled start: the join is dead — no
         // further retries, task disabled.
         let now = parse_rfc3339_utc("2026-07-29T10:15:00+00:00")?;
-        let (next, enabled) = next_task_state_after_emit(true, "failed", "", &ScheduleCalendar::default(), scheduled, now)?;
+        let (next, enabled) = next_task_state_after_emit(
+            true,
+            "failed",
+            "",
+            &ScheduleCalendar::default(),
+            scheduled,
+            now,
+        )?;
         assert!(!enabled);
         assert!(next.is_none());
         Ok(())
@@ -1462,7 +1521,11 @@ fn validate_cron_expr(expr: &str) -> Result<()> {
     Ok(())
 }
 
-fn next_run_after(expr: &str, calendar: &ScheduleCalendar, after: DateTime<Utc>) -> Result<Option<String>> {
+fn next_run_after(
+    expr: &str,
+    calendar: &ScheduleCalendar,
+    after: DateTime<Utc>,
+) -> Result<Option<String>> {
     let parsed = CronExpr::parse(expr)?;
     let timezone = calendar.validate()?;
     let lead = Duration::minutes(i64::from(calendar.lead_minutes));
@@ -1472,12 +1535,16 @@ fn next_run_after(expr: &str, calendar: &ScheduleCalendar, after: DateTime<Utc>)
         .context("failed to normalize cron timestamp")?
         + Duration::minutes(1);
     for _ in 0..CRON_SCAN_MINUTES {
-        let occurrence = candidate.checked_add_signed(lead).context("schedule occurrence exceeds timestamp range")?;
+        let occurrence = candidate
+            .checked_add_signed(lead)
+            .context("schedule occurrence exceeds timestamp range")?;
         let local = occurrence.with_timezone(&timezone);
         // Skip absent wall-clock times and fire repeated ones only once.
         let first_occurrence = match timezone.from_local_datetime(&local.naive_local()) {
             LocalResult::Single(_) => true,
-            LocalResult::Ambiguous(first, second) => occurrence == first.min(second).with_timezone(&Utc),
+            LocalResult::Ambiguous(first, second) => {
+                occurrence == first.min(second).with_timezone(&Utc)
+            }
             LocalResult::None => false,
         };
         if parsed.matches(&local) && first_occurrence {
