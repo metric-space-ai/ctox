@@ -200,7 +200,7 @@ try {
       },
     });
     const line = { innerHTML: '', textContent: '', className: '' };
-    state.ctx.host.querySelector = () => line;
+    state.ctx.host.querySelector = selector => selector === '[data-sync-line]' ? line : null;
     state.syncPending = true;
     await assert.rejects(hooks.reload(['sources', 'leads']), error => {
       assert.deepEqual(error.failedKeys, ['leads']); return true;
