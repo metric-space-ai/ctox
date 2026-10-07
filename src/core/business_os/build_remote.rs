@@ -116,15 +116,22 @@ impl BuildRemote {
     /// Source preparation is detached and bounded on the host. If acknowledgement
     /// is lost, query the same preparation directory; never overwrite/relaunch.
     pub(crate) fn start_preparation(&self, delivery: &BuildSourceDelivery) -> Result<()> {
+        self.start_preparation_script(&delivery.incoming_dir, &delivery.prepare_script)
+    }
+
+    pub(crate) fn start_preparation_script(
+        &self,
+        incoming_directory: &str,
+        script: &str,
+    ) -> Result<()> {
         ensure!(
-            delivery.incoming_dir
+            incoming_directory
                 == format!("{}/incoming/{}", self.ssh.grant().lane_root, self.job_id),
             "source delivery belongs to another lane/job"
         );
-        let output = self.ssh.execute_generated(
-            &python(PREPARE_LAUNCH, &self.args())?,
-            delivery.prepare_script.as_bytes(),
-        )?;
+        let output = self
+            .ssh
+            .execute_generated(&python(PREPARE_LAUNCH, &self.args())?, script.as_bytes())?;
         ensure!(
             output.exit_code == 0 || output.exit_code == 73,
             "native source preparation launch rejected"
