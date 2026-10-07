@@ -145,6 +145,26 @@ class OwnedNative {
 export async function measureShellRollback(configPath) {
   const config = validateConfig(JSON.parse(readFileSync(configPath)), configPath);
   const output = join(config.acceptanceBase, 'component-rollback');
+  const { existsSync } = await import('node:fs');
+  if (existsSync(join(output, 'component-rollback.json'))) {
+    const previous = JSON.parse(readFileSync(join(output, 'component-rollback.json')));
+    invariant(previous.pass && previous.owner === OWNER && previous.source === config.source
+      && previous.host === config.host && previous.isolated && !previous.productionWrites
+      && previous.steps.length === 3
+      && previous.steps[0].appSha256 === config.contractHashes['app.js']
+      && previous.steps[2].appSha256 === config.contractHashes['app.js'],
+    'Only a completed exact-prefix component proof may be reused');
+    const recheck = join(config.acceptanceBase, `component-recheck-${Date.now()}`);
+    mkdirSync(recheck, { mode: 0o700 });
+    const native = new OwnedNative(config, recheck);
+    try {
+      const current = await native.cli(['business-os', 'shell-update', 'status']);
+      invariant(current.currentSlot === null
+        && digest(join(config.root, 'src/apps/business-os/app.js')) === config.contractHashes['app.js'],
+      'Previously restored builtin component has changed');
+    } finally { await native.close(); }
+    return { output, componentRollbackPassed: true, wholeInstalledSetPassed: false, reused: true };
+  }
   mkdirSync(output, { mode: 0o700 });
   const native = new OwnedNative(config, output);
   const record = { owner: OWNER, source: config.source, host: config.host, isolated: true,

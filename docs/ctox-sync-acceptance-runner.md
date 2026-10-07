@@ -59,6 +59,9 @@ shell-update rollback restores builtin Main; the served hash and native binary
 must match their baseline again. Only owned static-server groups are restarted.
 Failure restoration is retained separately. A successful component proof still
 does not certify the health of Workjet, WELSCH native and the installed Shell.
+When repairing a launcher failure, the same completed component proof is reused
+only after checking its exact prefix/source/owner, builtin slot and app hash.
+Each launcher attempt has its own receipt; failed evidence is never overwritten.
 
 Goal5 performs three200-write rounds:30s offline, owned peer kill/respawn,
 B reopen, A native invitation renewal and reopen with unchanged IndexedDB name.
