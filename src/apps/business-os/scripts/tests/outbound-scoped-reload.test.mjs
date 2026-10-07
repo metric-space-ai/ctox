@@ -234,7 +234,7 @@ try {
     render();
     assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
     assert.match(leadBody.innerHTML, /Leads werden geladen/);
-    await assert.rejects(hooks.reload(['leads', 'imports']), /remote request token timeout/);
+    await assert.rejects(hooks.reload(['leads', 'imports']), error => error.code === 'OUTBOUND_COLLECTION_READ_FAILED' && /remote request token timeout/.test(error.details.leads));
     render();
     assert.match(campaignBody.innerHTML, /Kampagnen konnten nicht geladen werden/);
     assert.match(leadBody.innerHTML, /Leads konnten nicht geladen werden/);
