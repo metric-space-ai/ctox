@@ -27,14 +27,15 @@ impl BoundImport<'_> {
         &self,
         action: impl FnOnce(&mut Registration, &dyn Fn() -> Result<()>) -> Result<T>,
     ) -> Result<T> {
-        // Worker -> issuer -> policy -> controller. Enter the issuer guard
-        // before the same policy transaction used by handoff decisions.
-        self.execution
-            .provider
-            .with_live_provider_transaction(|worker, facts, _| {
-                crate::sync_host::with_current_signing_identity(
-                    &self.execution.registry.runtime_root,
-                    |identity| {
+        // Issuer -> worker/account -> policy -> controller. The existing
+        // secret mutation fence must precede worker/policy locks; its callback
+        // neither initializes credentials nor re-enters secret APIs.
+        crate::sync_host::with_current_signing_identity(
+            &self.execution.registry.runtime_root,
+            |identity| {
+                self.execution
+                    .provider
+                    .with_live_provider_transaction(|worker, facts, _| {
                         self.execution.with_held_worker_policy(
                             worker,
                             facts,
@@ -57,9 +58,9 @@ impl BoundImport<'_> {
                                 result.context("guest import fence did not publish")
                             },
                         )
-                    },
-                )
-            })
+                    })
+            },
+        )
     }
 }
 impl GuestRestoreOwner for BoundImport<'_> {
