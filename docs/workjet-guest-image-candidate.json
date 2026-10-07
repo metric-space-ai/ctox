@@ -143,7 +143,7 @@
   ],
   "approval_scope": "Claude authorized acquisition/build of this fixed Ubuntu input and source-bound recipe plus bounded real guest/two-host verification on2026-10-06. This record supplies no controller/effect authority and is not acceptance evidence. Shared-image deletion, credentials/admin bypass and substituting force-stop for a consistent checkpoint remain outside scope.",
   "pending_desktop_startup_repair": {
-    "status": "source_fix_pending_postmerge_image_build",
+    "status": "image_built_kvm_passed_tcg_cold_boot_failed",
     "candidate_id": "workjet-noble-amd64-20260926-ctox-555140a08-v9",
     "setup_sha256": "c8f962b60ecd461789cc24b3d94c53eef62b187438c824f66b9c47e3b630279d",
     "mode": "--desktop-only",
@@ -153,7 +153,44 @@
     "preserved_guards": "Fresh guest assignment, real modesetting display, fixed desktop UID/Xauthority, required Xorg/native dependencies, no automatic restart, native session rejection and owned-child cleanup.",
     "derivation": "Create a new stopped private overlay over the exact V8 RAW, apply only the shared desktop unit/readiness helper through the exact V9 marker and --desktop-only, verify native113b unchanged and no assigned startup JSON, then fsync a new standalone RAW and record its actual identity. No APT or user/native rebuild.",
     "product_enrollment_p2p_restore_accepted": false,
-    "next_native_rebuild": "Include Architecture PR314, PR322 and PR327 in the exact host/native source; the retained555 guest-side component artifact is not relabeled as that newer source."
+    "next_native_rebuild": "Include Architecture PR314, PR322, PR327 and PR331 in the exact host/native source; the retained555 guest-side component artifact is not relabeled as that newer source.",
+    "bootstrap_source": "555c7d228525cf379b7e5d66354120062ff96bf8",
+    "derived_raw_sha256": "2ae4513a1ec913ba21d66bbcbe3c5a88a56824b7415c7f2ec1c1b8d2d9c89667",
+    "derived_raw_bytes": 8589934592,
+    "provisioning_delta": {
+      "qcow2_sha256": "614b0f66727973a7babbb45fe5687465a1691d04e7df72e28a7a588e3d97dc6f",
+      "qcow2_bytes": 2686976,
+      "gzip_sha256": "d671716e65e864b7f41be4739a6e652c7fdbc3f3374bd260992d9d17087f9a70",
+      "gzip_bytes": 215456,
+      "portable_session_checkpoint": false
+    },
+    "kvm_probe": {
+      "receipt_run": "o04-guest-x11-readiness-20261007T042641Z",
+      "status": "passed",
+      "endpoint_boot_seconds": 4.832598602864891,
+      "real_xfce_frame_viewed": true,
+      "wrong_session_denied": true,
+      "graceful_powerdown": true,
+      "owned_qemu_reaped": true
+    },
+    "tcg_probe": {
+      "receipt_run": "o04-guest-x11-readiness-20261007T045732Z",
+      "status": "failed",
+      "boot_timeout_seconds": 900,
+      "error": "AppArmor profile loading completed only at the endpoint deadline, then snapd AppArmor loading started. No CTOX desktop/native unit startup reached; no X11 readiness failure inferred.",
+      "owned_qemu_reaped": true
+    }
+  },
+  "isolated_checkpoint_probe": {
+    "status": "implementation_pending_real_two_host_run",
+    "entry": "src/scripts/workjet-guest-image/verify-guest.py --checkpoint / --restore-from",
+    "machine": "pc-i440fx-6.2",
+    "cpu": "qemu64-v1",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "scope": "Capture paused VM RAM/devices and disk, quit/reap the source, hash-bind the exact artifacts and source receipt, restore paused under explicit TCG, then require the original guest/session identity. Operator SSH custody is a component probe, not the production enrollment/protected P2P/epoch fence.",
+    "reference": "https://www.qemu.org/docs/master/devel/migration/main.html",
+    "product_enrollment_p2p_restore_accepted": false
   },
   "component_probes": {
     "kvm": {

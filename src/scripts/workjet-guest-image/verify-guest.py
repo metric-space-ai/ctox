@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded isolated-image component probe; NOT product enrollment/P2P acceptance."""
 import argparse
+import array
 import hashlib
 import json
 import os
@@ -51,6 +52,12 @@ def main():
     p.add_argument("--sha256", required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--input-json", type=Path)
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--checkpoint", action="store_true",
+                      help="KVM component: retain coherent RAM/devices/disk and quit the source")
+    mode.add_argument("--restore-from", type=Path,
+                      help="TCG component: restore that stopped source; never a fresh boot")
+    p.add_argument("--source-receipt-sha256")
     p.add_argument("--accel", choices=("kvm", "tcg"), default="kvm",
                    help="Explicit accelerator; never falls back from KVM to TCG")
     args = p.parse_args()
@@ -62,6 +69,44 @@ def main():
         raise ValueError("base must be sector aligned and read only")
     if digest(base) != args.sha256:
         raise ValueError("actual frozen base identity differs")
+    source = None
+    if args.checkpoint and args.accel != "kvm":
+        raise ValueError("checkpoint component source must explicitly use KVM")
+    if args.restore_from:
+        if args.accel != "tcg" or not args.source_receipt_sha256:
+            raise ValueError("restore requires explicit TCG and the source receipt hash")
+        if not args.restore_from.is_absolute():
+            raise ValueError("source checkpoint directory must be absolute")
+        path = args.restore_from / "receipt.json"
+        meta = path.lstat()
+        if (not stat.S_ISREG(meta.st_mode) or not 0 < meta.st_size <= 65536
+                or meta.st_uid != os.geteuid()):
+            raise ValueError("source receipt must be a bounded owned regular file")
+        if digest(path) != args.source_receipt_sha256:
+            raise ValueError("source receipt custody differs")
+        source = json.loads(path.read_text())
+        if (source.get("status") != "checkpoint_captured"
+                or source.get("schema") != "ctox.guest_image_component_probe.v1"
+                or source.get("owner_thread") != "01a0879f-fa04-7a72-a9be-f471c2df5471"
+                or source.get("base_sha256") != args.sha256
+                or source.get("acceleration") != "kvm"
+                or source.get("owned_qemu_reaped") is not True
+                or source.get("source_qmp_quit_exit") != 0
+                or source.get("machine") != "pc-i440fx-6.2"
+                or source.get("cpu") != "qemu64-v1"
+                or source.get("vcpus") != 2):
+            raise ValueError("source is not a completed, reaped compatible component checkpoint")
+        for name, limit in [("root.qcow2", 9 * 1024**3), ("vm-state.bin", 5 * 1024**3)]:
+            path = args.restore_from / name
+            meta = path.lstat()
+            bound = source.get("checkpoint_files", {}).get(name, {})
+            if (not stat.S_ISREG(meta.st_mode) or not 0 < meta.st_size <= limit
+                    or meta.st_uid != os.geteuid() or meta.st_mode & 0o222
+                    or meta.st_size != bound.get("bytes")
+                    or digest(path) != bound.get("sha256")):
+                raise ValueError("source checkpoint file custody differs: " + name)
+    elif args.source_receipt_sha256:
+        raise ValueError("source receipt hash applies only to restore")
     os.umask(0o077)
     args.out.mkdir(mode=0o700, parents=False, exist_ok=False)
     out = args.out.resolve()
@@ -69,7 +114,9 @@ def main():
         raise ValueError("private QEMU socket paths cannot contain keyval delimiters")
     # Multiple guest CPUs contend on the single TCG execution thread.
     # Keep KVM's two vCPUs; explicit software emulation uses one.
-    vcpus = 1 if args.accel == "tcg" else 2
+    checkpoint_mode = args.checkpoint or source is not None
+    vcpus = 2 if checkpoint_mode else (1 if args.accel == "tcg" else 2)
+    machine = "pc-i440fx-6.2" if checkpoint_mode else "pc"
     # The actual TCG cold boot can exceed six minutes even with both
     # mandatory boot mounts healthy. Keep finite accelerator-specific
     # lifetime limits and always reap the owned child.
@@ -77,7 +124,7 @@ def main():
     boot_timeout = 900 if args.accel == "tcg" else 120
     desktop_settle = 30 if args.accel == "tcg" else 10
     shutdown_timeout = 120 if args.accel == "tcg" else 45
-    guest_id = "o04-" + args.accel + "-" + str(uuid.uuid4())
+    guest_id = source["guest_id"] if source else "o04-" + args.accel + "-" + str(uuid.uuid4())
     receipt = dict(schema="ctox.guest_image_component_probe.v1", scope="isolated image/endpoint only",
                    owner_thread="01a0879f-fa04-7a72-a9be-f471c2df5471",
                    guest_id=guest_id, acceleration=args.accel,
@@ -87,6 +134,10 @@ def main():
                    shutdown_timeout_seconds=shutdown_timeout,
                    probe_timeout_seconds=probe_timeout,
                    product_enrollment_p2p_restore_accepted=False, assertions=[])
+    if checkpoint_mode:
+        receipt.update(machine=machine, cpu="qemu64-v1",
+                       checkpoint_scope="isolated VM RAM/devices/disk only; no native enrollment, protected P2P or distributed owner fence",
+                       source_receipt_sha256=args.source_receipt_sha256)
     def interrupted(number, _frame):
         raise TimeoutError("component probe interrupted or deadline reached: " + str(number))
     signal.signal(signal.SIGTERM, interrupted)
@@ -108,13 +159,20 @@ def main():
         listeners.append(s)
         return s
     try:
-        subprocess.run(["/usr/bin/qemu-img", "create", "-f", "qcow2", "-F", "raw", "-b",
-                        str(base), str(out / "root.qcow2")], check=True, timeout=20)
+        if source:
+            with (args.restore_from / "root.qcow2").open("rb") as src, (out / "root.qcow2").open("xb") as dst:
+                for part in iter(lambda: src.read(1024 * 1024), b""):
+                    dst.write(part)
+                dst.flush()
+                os.fsync(dst.fileno())
+        else:
+            subprocess.run(["/usr/bin/qemu-img", "create", "-f", "qcow2", "-F", "raw", "-b",
+                            str(base), str(out / "root.qcow2")], check=True, timeout=20)
         startup = out / "guest-startup.json"
         startup.write_text(json.dumps(dict(guest_id=guest_id, display=":0",
                                           xauthority="/run/ctox-desktop/Xauthority")))
         qmp_listener, guest_listener = listener("qmp.sock"), listener("guest.sock")
-        command = ["/usr/bin/qemu-system-x86_64", "-machine", "pc", "-accel",
+        command = ["/usr/bin/qemu-system-x86_64", "-machine", machine, "-accel",
                    "kvm" if args.accel == "kvm" else "tcg,thread=single",
                    "-m", "4096", "-smp", str(vcpus), "-fw_cfg",
                    "name=opt/org.ctox/guest-startup,file=" + str(startup),
@@ -132,6 +190,10 @@ def main():
                    "-mon", "chardev=control,mode=control", "-chardev",
                    "socket,id=guestctl,path=" + str(out / "guest.sock") + ",server=off",
                    "-device", "virtserialport,chardev=guestctl,name=org.ctox.guest.desktop"]
+        if checkpoint_mode:
+            command += ["-cpu", "qemu64-v1"]
+        if source:
+            command += ["-incoming", "defer"]
         logs = (out / "qemu.stderr").open("wb")
         proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=logs, env={})
@@ -155,13 +217,19 @@ def main():
         if "QMP" not in greeting:
             raise ValueError("invalid QMP greeting")
         counter = 0
-        def monitor(execute, arguments=None):
+        def monitor(execute, arguments=None, descriptor=None):
             nonlocal counter
             counter += 1
             command = dict(execute=execute, id=counter)
             if arguments is not None:
                 command["arguments"] = arguments
-            qmp.sendall(json.dumps(command).encode() + b"\n")
+            wire = json.dumps(command).encode() + b"\n"
+            if descriptor is None:
+                qmp.sendall(wire)
+            else:
+                sent = qmp.sendmsg([wire], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                           array.array("i", [descriptor]))])
+                qmp.sendall(wire[sent:])
             for _ in range(50):
                 line = f.readline(65536)
                 if not line:
@@ -176,7 +244,20 @@ def main():
         status = monitor("query-status")
         if status["running"]:
             raise ValueError("guest did not start paused")
-        assertion("fresh_guest_initially_paused", status=status)
+        assertion("restore_process_initially_paused" if source else "fresh_guest_initially_paused", status=status)
+        if source:
+            with (args.restore_from / "vm-state.bin").open("rb") as state:
+                monitor("getfd", dict(fdname="checkpoint"), state.fileno())
+                monitor("migrate-incoming", dict(uri="fd:checkpoint"))
+                deadline = time.monotonic() + 300
+                while True:
+                    status = monitor("query-status")
+                    if status["status"] == "paused" and not status["running"]:
+                        break
+                    if status["status"] != "inmigrate" or time.monotonic() >= deadline:
+                        raise ValueError("checkpoint restore did not reach paused state: " + str(status))
+                    time.sleep(1)
+            assertion("actual_checkpoint_restored_paused", status=status)
         start = time.monotonic()
         monitor("cont")
         guest.settimeout(boot_timeout)
@@ -184,6 +265,9 @@ def main():
         session_id = endpoint.get("session_id", "")
         if endpoint.get("kind") != "endpoint" or endpoint.get("guest_id") != guest_id or str(uuid.UUID(session_id)) != session_id:
             raise ValueError("native endpoint identity/session differs")
+        if source and session_id != source.get("session_id"):
+            raise ValueError("restore created a different native guest session")
+        receipt["session_id"] = session_id
         assertion("actual_guest_endpoint", session_id=session_id, boot_seconds=time.monotonic()-start)
         guest.settimeout(10)
         def capture(i, name):
@@ -222,6 +306,43 @@ def main():
         if final != dict(kind="endpoint", id=41, guest_id=guest_id, session_id=session_id):
             raise ValueError("guest session changed during component test")
         assertion("session_stable_after_capture_and_input")
+        if args.checkpoint:
+            monitor("stop")
+            status = monitor("query-status")
+            if status["running"]:
+                raise ValueError("source did not quiesce")
+            assertion("source_stopped_before_checkpoint", status=status)
+            with (out / "vm-state.bin").open("xb") as state:
+                monitor("getfd", dict(fdname="checkpoint"), state.fileno())
+                monitor("migrate", dict(uri="fd:checkpoint"))
+                deadline = time.monotonic() + 300
+                while True:
+                    migration = monitor("query-migrate")
+                    if migration.get("status") == "completed":
+                        break
+                    if migration.get("status") in ("failed", "cancelled") or time.monotonic() >= deadline:
+                        raise ValueError("source VM migration failed: " + str(migration))
+                    time.sleep(1)
+                state.flush()
+                os.fsync(state.fileno())
+            status = monitor("query-status")
+            if status["running"] or status["status"] != "postmigrate":
+                raise ValueError("source was runnable after checkpoint")
+            assertion("source_vm_state_captured", migration=migration, status=status)
+            monitor("quit")
+            code = proc.wait(timeout=10)
+            if code != 0:
+                raise ValueError("source QMP quit failed")
+            receipt["source_qmp_quit_exit"] = code
+            receipt["checkpoint_files"] = {}
+            for name in ["root.qcow2", "vm-state.bin"]:
+                path = out / name
+                with path.open("rb") as stream:
+                    os.fsync(stream.fileno())
+                path.chmod(0o400)
+                receipt["checkpoint_files"][name] = dict(bytes=path.stat().st_size, sha256=digest(path))
+            receipt["status"] = "checkpoint_captured"
+            return
         monitor("system_powerdown")
         try:
             code = proc.wait(timeout=shutdown_timeout)
