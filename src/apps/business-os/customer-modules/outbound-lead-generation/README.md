@@ -21,9 +21,24 @@ Concurrent document-revision changes are rechecked once, then reported as an
 error with the existing bounded retry. A replaced App binding refetches full
 records rather than reusing its old cache.
 
-Cold startup still hydrates every Lead once. A slim list with lazy detail and
-explicit full-data action hydration remains outstanding. This source change
-does not claim the <1 MB startup goal or production acceptance.
+1.0.296 separates compact, revision-bound list DTOs from the full-record cache.
+Cold startup reads list fields and campaign membership only, then hydrates the
+selected detail. Selecting another lead loads its complete record. Explicit
+campaign/selection actions hydrate their chosen full records before research,
+editing, CRM handoff or export. Already cached exports retain snapshot behavior.
+An unavailable full record rejects the action rather than exporting a partial
+record. A replaced App binding rejects pending hydration. Import previews use
+list identities, but updates still load full persisted records first.
+
+Live list invalidations refresh compact DTOs and retire stale cached details;
+they do not hydrate every changed research record. Background legacy maintenance
+uses only hydrated records. This does not establish the native command lifecycle
+for all unselected leads; that remains server-authoritative. Full campaign
+actions can intentionally read all selected records and show a loading notice.
+The 850-lead fixture verifies compact responses below 1 MB, not installed wire
+bytes. Real cold/warm transfer, live updates and action acceptance remain open.
+The separate import membership, native Sellify batch and database-recovery
+findings are not declared fixed by this package.
 
 Runtime dependencies: main PR277's confirmed projection/strict hydration API,
 and collection.$.subscribe(callback,{invalidateOnly:true}). The latter exists
@@ -38,6 +53,8 @@ This narrow exception does not authorize an alternate Business OS data plane.
 Required regressions (through the Linux GPU lane):
 - node src/apps/business-os/scripts/tests/outbound-scoped-reload.test.mjs
 - node src/apps/business-os/scripts/tests/outbound-lead-revision-loader.test.mjs
+- node src/apps/business-os/scripts/tests/outbound-lead-list-loader.test.mjs
+- node src/apps/business-os/scripts/tests/outbound-import-app.test.mjs
 
 Real browser load/transfer, detail, edit, export, live updates and reconnect
 acceptance follow installation on the identified customer runtime.

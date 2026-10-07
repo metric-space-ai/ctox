@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createCollectionReloader } from '../../customer-modules/outbound-lead-generation/collection-reloader.mjs';
+import { leadListRow } from '../../customer-modules/outbound-lead-generation/lead-list-loader.mjs';
 
 function deferred() {
   let resolve, reject;
@@ -97,7 +98,7 @@ const source = fileURLToPath(new URL('../../customer-modules/outbound-lead-gener
 mkdirSync(join(fixture, 'modules', 'olg'), { recursive: true });
 mkdirSync(join(fixture, 'shared'), { recursive: true });
 writeFileSync(join(fixture, 'package.json'), '{"type":"module"}');
-for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'import-preview-groups.js', 'current-state-export.mjs', 'required-field-selection.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
+for (const name of ['index.js', 'collection-reloader.mjs', 'lead-revision-loader.mjs', 'lead-list-loader.mjs', 'import-preview-groups.js', 'current-state-export.mjs', 'required-field-selection.mjs']) copyFileSync(join(source, name), join(fixture, 'modules', 'olg', name));
 writeFileSync(join(fixture, 'shared', 'universal-importer.js'), [
   'extractCompanyRowsFromWorkbookFile', 'extractCompanyRowsFromText', 'normalizeCompanyRow', 'openUniversalImporter', 'parseDelimitedText',
 ].map((name) => `export function ${name}() {}`).join('\n'));
@@ -123,12 +124,13 @@ try {
         reads.push(key);
         if (overrides[key]) return overrides[key](query);
         return values[key].filter((doc) => !query.selector?.id?.$gt || doc.id > query.selector.id.$gt)
-          .map((value) => ({ toJSON: () => structuredClone(value) }));
+          .map((value) => ({ toJSON: () => query.projection ? leadListRow(value) : structuredClone(value) }));
       } }),
     }]));
     Object.assign(state, {
       ctx: { host: { querySelector: () => null } },
-      collections: db, sources: [], adapters: [], imports: [], leads: [existingLead],
+      collections: db, sources: [], adapters: [], imports: [], leads: [existingLead], leadListRows: null,
+      recipientEligibilityReady: new Set(['lead_a']), selectedDetailLoadingKey: '',
       collectionBindingGeneration: 1, leadHydrationBindingGeneration: 1, reloadAngewendetJeSammlung: new Map(),
       sourceToggleIntent: new Map(), pendingLeadPatches: new Map(),
       selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
@@ -168,9 +170,34 @@ try {
       .filter((row) => !query.selector.id || (query.selector.id.$in ? query.selector.id.$in.includes(row.id) : row.id > query.selector.id.$gt))
       .slice(0, query.limit).map((row) => ({ toJSON: () => row })) });
     await hooks.reload(['leads']);
-    assert.equal(state.leads.length, 351);
-    assert.equal(new Set(state.leads.map((row) => row.id)).size, 351);
+    assert.equal(state.leadListRows.length, 351);
+    assert.equal(new Set(state.leadListRows.map((row) => row.id)).size, 351);
+    assert.ok(state.leads.length <= 1, 'cold list never hydrates every lead');
     assert.ok(reads.every((key) => key === 'leads'));
+  });
+  await test('the real App hydrates only explicitly chosen leads; summaries never enter full state', async () => {
+    const full = id => ({ id, _rev: `1-${id}`, name: id, campaign: 'K', contacts: [{ id: 'person-' + id }], evidence: [{ quote: 'proof' }] });
+    const requests = [];
+    setup({ leads: async query => {
+      requests.push(query);
+      return ['a', 'b'].filter(id => !query.selector.id || query.selector.id.$in?.includes(id))
+        .map(id => ({ toJSON: () => query.projection ? leadListRow(full(id)) : full(id) }));
+    } });
+    state.leads = []; state.leadListRows = ['a', 'b'].map(id => leadListRow(full(id)));
+    const result = await hooks.ensureFullLeads(['b']);
+    assert.deepEqual(state.leads.map(row => row.id), ['b']);
+    assert.equal(result[0].evidence[0].quote, 'proof');
+    assert.equal(state.leadListRows[1].evidence, undefined);
+    assert.deepEqual(requests.map(q => q.selector.id.$in), [['b']]);
+  });
+  await test('a replaced App binding rejects full-data hydration without publishing it', async () => {
+    const blocked = deferred(); setup({ leads: () => blocked.promise });
+    state.leads = []; state.leadListRows = [{ id: 'a', _rev: '1-a' }];
+    const pending = hooks.ensureFullLeads(['a']);
+    state.collectionBindingGeneration++;
+    blocked.resolve([{ toJSON: () => ({ id: 'a', _rev: '1-a', contacts: [], evidence: [] }) }]);
+    await assert.rejects(pending, /Verbindung/);
+    assert.deepEqual(state.leads, []);
   });
   await test('a newer read of another collection does not suppress a delayed result', async () => {
     const blocked = deferred();
