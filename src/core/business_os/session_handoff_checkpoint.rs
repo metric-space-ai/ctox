@@ -8,6 +8,8 @@ use std::io::{Read, Seek, SeekFrom};
 const CHUNK: usize = 8192;
 const MANIFEST_LIMIT: u64 = 8 * 1024 * 1024;
 const BLOB_LIMIT: u64 = 64 * 1024 * 1024;
+#[path = "session_handoff_reconstruction.rs"]
+mod reconstruction;
 
 /// Resolve the native Core credential source in the assigned workspace. The
 /// returned manager pins the actual account, not a client account label. It
@@ -332,6 +334,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Target<P> {
         binding: &str,
         peer_guard: PeerGuard,
         live: Arc<Mutex<bool>>,
+        phase: SessionHandoffPhase,
     ) -> anyhow::Result<Self> {
         let request=server.gate.with_current_authority(|conn,identity|{
             let json:String=conn.query_row("SELECT n.source_offer_json FROM business_native_target_handoff_bindings n
@@ -341,7 +344,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Target<P> {
                 serde_json::from_str(&json).map_err(|_|deny("binding_unknown"))?;
             let mut request=crate::business_os::session_handoff_enrollment::target::offer_request(&offer.body)
                 .map_err(|_|deny("binding_unknown"))?;
-            request.phase=SessionHandoffPhase::Receive;
+            request.phase=phase;
             request.issuer_identity=identity.public_identity();
             request.nonce=fresh_nonce().map_err(|_|deny("nonce_generation_failed"))?;
             server.gate.authorize_fenced(conn,identity,&request)?;
@@ -368,12 +371,27 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Target<P> {
         request: &SessionHandoffGateRequest,
         action: impl FnOnce(&SessionHandoffPermit, &SigningIdentity) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
+        self.current_policy(request, |permit, identity, _| action(permit, identity))
+    }
+    fn current_policy<T>(
+        &self,
+        request: &SessionHandoffGateRequest,
+        action: impl FnOnce(&SessionHandoffPermit, &SigningIdentity, &Connection) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
         let _account = self.auth.current_runtime_account_guard()?;
         let mut result = None;
         self.server.gate.with_current_authority(|conn, identity| {
             let permit = self.server.gate.resolve_fenced(conn, identity, request)?;
             if !currency_matches(&self.original, &permit) {
                 return Err(deny("target_authority_changed"));
+            }
+            if self.request.phase == SessionHandoffPhase::Resume {
+                let mut receive = request.clone();
+                receive.phase = SessionHandoffPhase::Receive;
+                let permit = self.server.gate.resolve_fenced(conn, identity, &receive)?;
+                if !currency_matches(&self.original, &permit) {
+                    return Err(deny("target_authority_changed"));
+                }
             }
             let ledger = self.server.lock_ledger()?;
             if !ledger.alive {
@@ -388,7 +406,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Target<P> {
                 result = Some(action
                     .take()
                     .ok_or_else(|| new_rx_error("RC_WEBRTC_CONTROL", None))?(
-                    &permit, identity,
+                    &permit, identity, conn,
                 ));
                 Ok(())
             })
@@ -559,8 +577,16 @@ async fn copy<H: WebRTCConnectionHandler + 'static>(
         guard_pool.with_current_native_control_peer(&guard_peer, apply)?
     });
     let target = Arc::new(
-        tokio::task::spawn_blocking(move || Target::prepare(server, &binding, peer_guard, live))
-            .await??,
+        tokio::task::spawn_blocking(move || {
+            Target::prepare(
+                server,
+                &binding,
+                peer_guard,
+                live,
+                SessionHandoffPhase::Receive,
+            )
+        })
+        .await??,
     );
     let t = target.clone();
     let (store, staging) = tokio::task::spawn_blocking(move || {
@@ -769,7 +795,7 @@ pub(crate) fn assert_native_checkpoint_path(
     // not only the manifest response. This is a native store-path regression;
     // the peer publication callback remains controlled, not network acceptance.
     let copied = tempfile::tempdir().unwrap();
-    let received = CheckpointStore::open(copied.path().into(), BLOB_LIMIT).unwrap();
+    let received = Arc::new(CheckpointStore::open(copied.path().into(), BLOB_LIMIT).unwrap());
     let copy_started = std::time::Instant::now();
     let read_part = |artifact: Option<ArtifactRef>| {
         let part_started = std::time::Instant::now();
@@ -865,6 +891,7 @@ pub(crate) fn assert_native_checkpoint_path(
             Ok(())
         })
         .unwrap();
+    reconstruction::assert_native_reconstruction(&target, &received);
     let (_, foreign) = make_fetch(
         Some(ArtifactRef {
             sha256: "aa".repeat(32),
@@ -940,11 +967,22 @@ pub(crate) fn assert_native_checkpoint_path(
 pub(crate) struct CopyRequest {
     pub binding_digest: String,
     pub source_route: String,
+    #[serde(default, skip_serializing_if = "copy_only")]
+    pub reconstruct: bool,
+}
+fn copy_only(reconstruct: &bool) -> bool {
+    !reconstruct
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum CopyResponse {
-    Copied { checkpoint_digest: String },
+    Copied {
+        checkpoint_digest: String,
+    },
+    Reconstructed {
+        checkpoint_digest: String,
+        preparation_id: String,
+    },
     Denied,
 }
 pub(crate) struct CheckpointListener {
@@ -1000,11 +1038,30 @@ pub(super) fn listen(
                 {
                     match pool.connection_handler.connection_for_peer(&r.source_route) {
                         Some(peer) => {
-                            let operation =
-                                copy(server.clone(), pool.clone(), peer, r.binding_digest);
+                            let operation = async {
+                                if r.reconstruct {
+                                    let (checkpoint_digest, preparation_id) =
+                                        reconstruction::reconstruct(
+                                            server.clone(),
+                                            pool.clone(),
+                                            peer,
+                                            r.binding_digest,
+                                        )
+                                        .await?;
+                                    Ok::<_, anyhow::Error>(CopyResponse::Reconstructed {
+                                        checkpoint_digest,
+                                        preparation_id,
+                                    })
+                                } else {
+                                    let checkpoint_digest =
+                                        copy(server.clone(), pool.clone(), peer, r.binding_digest)
+                                            .await?;
+                                    Ok(CopyResponse::Copied { checkpoint_digest })
+                                }
+                            };
                             tokio::select! {
                                 result=tokio::time::timeout(std::time::Duration::from_secs(60),operation)=>{
-                                    match result {Ok(Ok(checkpoint_digest))=>CopyResponse::Copied{checkpoint_digest},_=>CopyResponse::Denied}
+                                    match result {Ok(Ok(response))=>response,_=>CopyResponse::Denied}
                                 },
                                 _=stream.read_u8()=>CopyResponse::Denied,
                             }

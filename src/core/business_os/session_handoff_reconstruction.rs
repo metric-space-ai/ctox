@@ -1,0 +1,312 @@
+// Origin: CTOX
+// License: AGPL-3.0-only
+//! Target-local workspace preparation. This never starts Core or changes ownership.
+use super::*;
+use ctox_sync::contracts::WorkspaceEntryKind;
+use std::io::Write;
+
+struct StagedWorkspace {
+    directory: tempfile::TempDir,
+    checkpoint_digest: String,
+}
+
+fn verify_manifest(
+    manifest: &CheckpointManifest,
+    request: &SessionHandoffGateRequest,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        manifest.sequence == request.checkpoint_sequence
+            && manifest.session.session_id == request.spec.session_id
+            && manifest.session.scope_id == request.spec.scope_id
+            && manifest.session.harness == request.spec.harness
+            && manifest.session.harness_version == request.spec.harness_version
+            && manifest.session.gateway_account_id == request.spec.gateway_account_id
+            && manifest.session.model_route_id == request.spec.model_route_id
+            && manifest.session.model_id == request.spec.model_id
+            && manifest.session.required_capabilities == request.spec.required_capabilities
+            && manifest.pending_effects.is_empty(),
+        "checkpoint differs from target enrollment or has unreconciled effects"
+    );
+    Ok(())
+}
+
+async fn stage<P: Clone + Eq + Hash + Send + Sync + 'static>(
+    target: Arc<Target<P>>,
+    store: Arc<CheckpointStore>,
+) -> anyhow::Result<StagedWorkspace> {
+    let t = target.clone();
+    let (manifest, directory, bundle, store) = tokio::task::spawn_blocking(move || {
+        t.current(&t.request, |_, _| {
+            anyhow::ensure!(
+                t.request.phase == SessionHandoffPhase::Resume,
+                "workspace preparation requires execute permission"
+            );
+            let manifest = store.load(&t.request.checkpoint_digest)?;
+            verify_manifest(&manifest, &t.request)?;
+            let mut bundles = manifest
+                .provider_state
+                .iter()
+                .filter(|e| e.path == "native-workspace.bundle");
+            let bundle = bundles
+                .next()
+                .filter(|e| e.kind == WorkspaceEntryKind::File)
+                .ok_or_else(|| anyhow::anyhow!("native workspace bundle absent"))?
+                .artifact
+                .clone();
+            anyhow::ensure!(
+                bundles.next().is_none(),
+                "native workspace bundle is ambiguous"
+            );
+            let parent = t.server.gate.root.join("runtime/ctox-sync");
+            private_dir(&parent)?;
+            let parent = parent.join("prepared-workspaces");
+            create_private(&parent)?;
+            let directory = tempfile::Builder::new()
+                .prefix("workspace-")
+                .tempdir_in(parent)?;
+            Ok((manifest, directory, bundle, store))
+        })
+    })
+    .await??;
+
+    // No account, policy, host or peer lock survives Git IO. Only a private,
+    // non-executable stage exists until the post-await publication check.
+    let reconstructed = store
+        .reconstruct_workspace_from_bundle(
+            &target.request.checkpoint_digest,
+            &bundle,
+            &directory.path().join("workspace"),
+        )
+        .await?;
+    anyhow::ensure!(
+        serde_json::to_vec(&manifest)? == serde_json::to_vec(&reconstructed)?,
+        "reconstructed checkpoint changed"
+    );
+    let t = target.clone();
+    tokio::task::spawn_blocking(move || {
+        t.current(&t.request, |_, _| {
+            verify_manifest(&reconstructed, &t.request)?;
+            Ok(StagedWorkspace {
+                directory,
+                checkpoint_digest: t.request.checkpoint_digest.clone(),
+            })
+        })
+    })
+    .await?
+}
+
+impl StagedWorkspace {
+    fn publish<P: Clone + Eq + Hash + Send + Sync + 'static>(
+        self,
+        target: &Target<P>,
+    ) -> anyhow::Result<(String, String)> {
+        target.current_policy(&target.request, |permit, _, policy| {
+            private_dir(self.directory.path())?;
+            let preparation_id = self.directory.path().file_name()
+                .and_then(|s| s.to_str()).ok_or_else(|| anyhow::anyhow!("workspace preparation id absent"))?.to_owned();
+            let metadata = serde_json::json!({
+                "version": 1, "bindingDigest": target.request.binding_digest,
+                "checkpointDigest": self.checkpoint_digest, "sessionId": target.request.spec.session_id,
+                "principalEpoch": permit.principal_epoch, "bindingRevision": permit.binding_revision,
+                "ownership": target.request.ownership, "resumed": false
+            });
+            let mut marker = std::fs::OpenOptions::new().write(true).create_new(true)
+                .open(self.directory.path().join("prepared.json"))?;
+            marker.write_all(&serde_json::to_vec(&metadata)?)?;
+            marker.sync_all()?;
+            std::fs::File::open(self.directory.path())?.sync_all()?;
+            let binding_id: String = policy.query_row(
+                "SELECT binding_id FROM business_session_handoff_bindings WHERE binding_digest=?1",
+                [&target.request.binding_digest], |r| r.get(0))?;
+            super::super::super::super::store::insert_business_event(
+                policy, "business_session_handoff_bindings", &binding_id,
+                "business_os.session_handoff.workspace_prepared",
+                serde_json::json!({"version":1,"binding_digest":target.request.binding_digest,
+                    "checkpoint_digest":self.checkpoint_digest,"session_id":target.request.spec.session_id,
+                    "preparation_id":preparation_id,"principal_epoch":permit.principal_epoch,
+                    "binding_revision":permit.binding_revision,"resumed":false}), now_ms() as i64)?;
+            let _path = self.directory.keep();
+            Ok((self.checkpoint_digest, preparation_id))
+        })
+    }
+}
+
+pub(super) async fn reconstruct<H: WebRTCConnectionHandler + 'static>(
+    server: Arc<Server<H::Peer>>,
+    pool: Arc<RxWebRTCReplicationPool<H>>,
+    peer: H::Peer,
+    binding: String,
+) -> anyhow::Result<(String, String)> {
+    let lifetime = CopyLifetime(Arc::new(Mutex::new(true)));
+    let live = lifetime.0.clone();
+    let guard_pool = pool.clone();
+    let peer_guard = Arc::new(move |apply: &mut dyn FnMut() -> RxResult<()>| {
+        guard_pool.with_current_native_control_peer(&peer, apply)
+    });
+    let target = Arc::new(
+        tokio::task::spawn_blocking(move || {
+            Target::prepare(
+                server,
+                &binding,
+                peer_guard,
+                live,
+                SessionHandoffPhase::Resume,
+            )
+        })
+        .await??,
+    );
+    let t = target.clone();
+    let store = tokio::task::spawn_blocking(move || {
+        t.current(&t.request, |_, _| {
+            let path = t
+                .server
+                .gate
+                .root
+                .join("runtime/ctox-sync/received-checkpoints");
+            private_dir(&path)?;
+            Ok(Arc::new(CheckpointStore::open(path, BLOB_LIMIT)?))
+        })
+    })
+    .await??;
+    let staged = stage(target.clone(), store).await?;
+    tokio::task::spawn_blocking(move || staged.publish(&target)).await?
+}
+
+#[cfg(test)]
+pub(super) fn assert_native_reconstruction<P: Clone + Eq + Hash + Send + Sync + 'static>(
+    received_target: &Target<P>,
+    store: &Arc<CheckpointStore>,
+) {
+    let mut request = received_target.request.clone();
+    request.phase = SessionHandoffPhase::Resume;
+    request.nonce = fresh_nonce().unwrap();
+    let original = received_target.server.gate.authorize(&request).unwrap();
+    let target = Arc::new(Target {
+        server: received_target.server.clone(),
+        request,
+        original,
+        source_identity: received_target.source_identity.clone(),
+        auth: received_target.auth.clone(),
+        peer_guard: received_target.peer_guard.clone(),
+        live: received_target.live.clone(),
+    });
+    let store = store.clone();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let parent = target
+        .server
+        .gate
+        .root
+        .join("runtime/ctox-sync/prepared-workspaces");
+    let entries = || std::fs::read_dir(&parent).map(|r| r.count()).unwrap_or(0);
+    assert_eq!(entries(), 0);
+    let staged = runtime
+        .block_on(stage(target.clone(), store.clone()))
+        .unwrap();
+    let workspace = staged.directory.path().join("workspace");
+    assert_eq!(
+        std::fs::read(workspace.join("tracked.txt")).unwrap(),
+        b"unstaged\n"
+    );
+    assert_eq!(
+        std::fs::read(workspace.join("untracked.bin")).unwrap(),
+        b"required\0bytes"
+    );
+    assert!(!workspace.join("removed.txt").exists());
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        output.stdout
+    };
+    assert_eq!(git(&["show", ":tracked.txt"]), b"staged\n");
+    let manifest = store.load(&target.request.checkpoint_digest).unwrap();
+    assert_eq!(
+        String::from_utf8(git(&["rev-parse", "HEAD"]))
+            .unwrap()
+            .trim(),
+        manifest.workspace_state.base_commit
+    );
+    let policy = Connection::open(business_os_store_path(&target.server.gate.root)).unwrap();
+    policy
+        .execute(
+            "UPDATE business_session_handoff_bindings SET state='revoked' WHERE binding_digest=?1",
+            [&target.request.binding_digest],
+        )
+        .unwrap();
+    assert!(
+        staged.publish(&target).is_err(),
+        "revocation after Git IO forbids publication"
+    );
+    assert_eq!(entries(), 0, "rejected private workspace is removed");
+    assert!(
+        runtime
+            .block_on(stage(target.clone(), store.clone()))
+            .is_err(),
+        "revoked setup creates no reconstruction directory"
+    );
+    assert_eq!(entries(), 0);
+    policy
+        .execute(
+            "UPDATE business_session_handoff_bindings SET state='active' WHERE binding_digest=?1",
+            [&target.request.binding_digest],
+        )
+        .unwrap();
+    let staged = runtime
+        .block_on(stage(target.clone(), store.clone()))
+        .unwrap();
+    *target.live.lock().unwrap() = false;
+    assert!(
+        staged.publish(&target).is_err(),
+        "client retirement fences staged workspace publication"
+    );
+    assert_eq!(entries(), 0);
+    *target.live.lock().unwrap() = true;
+    let staged = runtime
+        .block_on(stage(target.clone(), store.clone()))
+        .unwrap();
+    let (digest, id) = staged.publish(&target).unwrap();
+    assert_eq!(digest, target.request.checkpoint_digest);
+    let prepared = parent.join(&id);
+    assert!(prepared.join("workspace/.git").is_dir());
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(prepared.join("prepared.json")).unwrap()).unwrap();
+    assert_eq!(marker["resumed"], false);
+    assert_eq!(marker["sessionId"], target.request.spec.session_id);
+    assert_eq!(marker["bindingDigest"], target.request.binding_digest);
+    assert_eq!(entries(), 1);
+    let audited: i64 = policy
+        .query_row(
+            "SELECT count(*) FROM business_events
+        WHERE command_type='business_os.session_handoff.workspace_prepared'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(audited, 1);
+}
+
+#[cfg(test)]
+#[test]
+fn checkpoint_control_keeps_copy_requests_compatible_and_rejects_path_inputs() {
+    let old = serde_json::json!({"bindingDigest":"a".repeat(64),"sourceRoute":"peer"});
+    let request: CopyRequest = serde_json::from_value(old.clone()).unwrap();
+    assert!(!request.reconstruct);
+    assert_eq!(serde_json::to_value(request).unwrap(), old);
+    let mut reconstruct = old.clone();
+    reconstruct["reconstruct"] = serde_json::json!(true);
+    assert!(
+        serde_json::from_value::<CopyRequest>(reconstruct.clone())
+            .unwrap()
+            .reconstruct
+    );
+    reconstruct["targetPath"] = serde_json::json!("/client/supplied/path");
+    assert!(serde_json::from_value::<CopyRequest>(reconstruct).is_err());
+}

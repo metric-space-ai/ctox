@@ -109,7 +109,8 @@ after expiry/failure; this is not an automatic retry or general crash recovery.
 
 This connects production checkpoint sending and local durable ingestion.
 It creates no Raft DATA receipt, ownership transfer, clean-effect witness or
-Core activation. Original-session target reconstruction/resume remains open.
+Core activation. Target workspace preparation is connected below; original-session
+Core resume remains open.
 Remote policy revocation cannot atomically recall already authorized bytes:
 the source sees a signed target Receive decision valid for at most 60 seconds,
 while the honest target rechecks its own current grant before each request and
@@ -117,6 +118,45 @@ write. Independently replaced stores/workspace/credential files are rechecked
 but do not share an atomic cross-process mutation guard. Native fixture tests
 do not establish independent-host networking, installed acceptance, transfer
 throughput, VM portability or external-effect reconciliation.
+
+## Native target workspace preparation
+
+After a successful protected copy, the operator runs
+`ctox sync handoff-reconstruct <binding-digest> <source-route>` against the same
+running target host and private control socket. The request contains identifiers
+only, never a target path, repository URL or account override. Existing copy
+requests remain compatible. The accepted native source connection, target account,
+host lifetime and exact enrolled policy remain mandatory.
+
+Both current Receive and Execute grants are required. Preparation uses only the
+hash-verified `native-workspace.bundle` artifact in the enrolled checkpoint.
+The shared kernel imports it into an isolated bare repository with configuration,
+hooks and command deadlines bounded as for normal reconstruction. It fetches no
+remote objects or credentials. The exact checkpoint base is required; staged and
+unstaged patches, deletions and required untracked files use the existing
+reconstruction validator. The assigned target working copy is not overwritten.
+
+Git runs in a private temporary stage without retaining an authority transaction
+or account/peer lock across awaits. Authority is checked before reconstruction,
+after Git IO and during final preparation publication. Revocation, changed
+account/workspace/binding/epoch, peer retirement, host close or client disconnect
+forbids publication and removes the unpublished stage. The operation retains the
+existing 60-second local command bound. Successful publication writes an
+identifier-only native audit and returns `reconstructed:true`, a host-created
+`preparationId`, the checkpoint digest and `resumed:false`; no native path or
+checkpoint contents cross the local control socket.
+
+This is workspace preparation, not executable admission or durable quorum
+evidence. Pending effects remain rejected; current native source captures still
+require authoritative effect reconciliation before they become eligible.
+Prepared workspaces do not create a guest, change its assigned cwd, replace a
+conversation, import Core state, transfer Raft ownership or start a turn.
+Preparation files and the policy audit have separate commit boundaries; a lost
+reply, crash or out-of-band filesystem replacement can leave a private orphan
+requiring reconciliation. Future Core admission must revalidate current policy,
+workspace contents, clean effects and quorum ownership, not trust the marker.
+Native regressions exercise the real captured bundle, target policy and retained
+account guard; they do not prove independent-host networking or installed resume.
 
 ## Native guest acceleration selection
 
