@@ -53,6 +53,7 @@ struct GgmlModel {
     adapter_0_weight: Tensor,
     adapter_2_weight: Tensor,
     tok_embeddings_weight: Tensor,
+    host_embedding_lookup: Option<HostEmbeddingLookup>,
     dec_norm_weight: Tensor,
     dec_layers: Vec<DecoderLayer>,
     mel_filters: Option<Tensor>,
@@ -60,6 +61,61 @@ struct GgmlModel {
     tokenizer_special_ranks: HashSet<i32>,
     tokenizer_vocab_b64: Vec<String>,
     tokenizer_bytes_cache: HashMap<i32, String>,
+}
+
+/// Vendored CUDA GET_ROWS does not support K-quantized embedding weights.
+/// Keep their exact bytes on the host once; the tied output projection stays
+/// on CUDA. Otherwise the scheduler copies the whole table for every token.
+struct HostEmbeddingLookup {
+    meta: MetaContext,
+    backend: ffi::ggml_backend_t,
+    buffer: ffi::ggml_backend_buffer_t,
+    tensor: Tensor,
+}
+
+impl HostEmbeddingLookup {
+    fn new(source: Tensor) -> Result<Self> {
+        let mut lookup = Self {
+            meta: MetaContext::new(2)?,
+            backend: init_cpu_backend_with_threads(2),
+            buffer: ptr::null_mut(),
+            tensor: ptr::null_mut(),
+        };
+        if lookup.backend.is_null() {
+            return Err(Error::Runtime("host embedding backend unavailable".into()));
+        }
+        unsafe {
+            if (*source).ne[2] != 1 || (*source).ne[3] != 1 {
+                return Err(Error::Unsupported("Voxtral embedding table must be two dimensional"));
+            }
+            lookup.tensor = ffi::ggml_new_tensor_2d(
+                lookup.meta.ctx, (*source).type_, (*source).ne[0], (*source).ne[1],
+            );
+            if lookup.tensor.is_null() {
+                return Err(Error::Runtime("host embedding metadata unavailable".into()));
+            }
+            set_name(lookup.tensor, "tok_embeddings.host_lookup");
+            lookup.buffer = ffi::ggml_backend_alloc_ctx_tensors(lookup.meta.ctx, lookup.backend);
+            if lookup.buffer.is_null() || (*lookup.tensor).data.is_null() {
+                return Err(Error::Runtime("host embedding buffer unavailable".into()));
+            }
+            // One byte-identical copy; quantization and arithmetic remain the
+            // same vendored CPU GET_ROWS implementation used before this fix.
+            ffi::ggml_backend_tensor_get(
+                source, (*lookup.tensor).data, 0, ffi::ggml_nbytes(source),
+            );
+        }
+        Ok(lookup)
+    }
+}
+
+impl Drop for HostEmbeddingLookup {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.buffer.is_null() { ffi::ggml_backend_buffer_free(self.buffer); }
+            if !self.backend.is_null() { ffi::ggml_backend_free(self.backend); }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -491,7 +547,7 @@ impl GgmlModel {
         let (tokenizer_num_special_tokens, tokenizer_special_ranks, tokenizer_vocab_b64) =
             unsafe { load_tokenizer_metadata(gguf)? };
 
-        Ok(Self {
+        let mut model = Self {
             ctx: meta_ctx,
             gguf,
             weights_backend,
@@ -506,6 +562,7 @@ impl GgmlModel {
             adapter_0_weight,
             adapter_2_weight,
             tok_embeddings_weight,
+            host_embedding_lookup: None,
             dec_norm_weight,
             dec_layers,
             mel_filters,
@@ -513,7 +570,15 @@ impl GgmlModel {
             tokenizer_special_ranks,
             tokenizer_vocab_b64,
             tokenizer_bytes_cache: HashMap::new(),
-        })
+        };
+        if matches!(backend, VoxtralSttBackend::Cuda) {
+            model.host_embedding_lookup = Some(HostEmbeddingLookup::new(tok_embeddings_weight)?);
+        }
+        Ok(model)
+    }
+
+    fn embedding_lookup_weight(&self) -> Tensor {
+        self.host_embedding_lookup.as_ref().map_or(self.tok_embeddings_weight, |lookup| lookup.tensor)
     }
 
     fn decode_tokens(&mut self, tokens: &[i32]) -> String {
@@ -1424,7 +1489,7 @@ impl GgmlSession {
             set_name(time_emb, "time_emb");
             ffi::ggml_backend_sched_set_tensor_backend(self.sched_dec_pre, time_emb, self.backend);
 
-            let tok_emb = ffi::ggml_get_rows(gctx, model.tok_embeddings_weight, token_ids);
+            let tok_emb = ffi::ggml_get_rows(gctx, model.embedding_lookup_weight(), token_ids);
             let audio_emb = ffi::ggml_view_2d(
                 gctx,
                 self.decoder_memory,
@@ -1500,7 +1565,7 @@ impl GgmlSession {
             set_name(time_emb, "time_emb");
             ffi::ggml_backend_sched_set_tensor_backend(self.sched_dec_step, time_emb, self.backend);
 
-            let tok_emb = ffi::ggml_get_rows(gctx, model.tok_embeddings_weight, token_id);
+            let tok_emb = ffi::ggml_get_rows(gctx, model.embedding_lookup_weight(), token_id);
             let audio_emb = ffi::ggml_view_2d(
                 gctx,
                 self.decoder_memory,
