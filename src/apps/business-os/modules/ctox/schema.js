@@ -810,6 +810,10 @@ export const collections = {
 };
 
 export const migrationStrategies = {
+  // Optional configuration fields leave existing project identity and state intact.
+  workjet_projects: {
+    1: (oldDoc) => oldDoc
+  },
   workjet_computers: {
     1: (oldDoc) => ({
       ...oldDoc,

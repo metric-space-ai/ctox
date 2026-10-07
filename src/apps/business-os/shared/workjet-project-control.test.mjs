@@ -378,11 +378,39 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
   };
   let sequence = 0;
   const context = { state, actorContext: (session) => ({ id: session.id }),
-    newId: () => `list-${++sequence}`, AbortController, setTimeout, clearTimeout };
+    newId: () => `list-${++sequence}`, AbortController, URL, setTimeout, clearTimeout };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return { state, context, starts, commands, reads, rows, peers,
-    invoke: async () => JSON.parse(JSON.stringify(await context.invoke({ action: 'project.list' }))) };
+    invoke: async (request = {}) => JSON.parse(JSON.stringify(await context.invoke({ action: 'project.list', ...request }))) };
 }
+
+test('project list preserves the strict legacy shape until configuration is explicitly requested', async () => {
+  const fixture = nativeProjectListFixture();
+  Object.assign(fixture.rows.workjet_projects[0], {
+    created_at_ms: 1_700_000_000_000,
+    description: 'Native description', repo_url: 'https://example.test/repo',
+    public_url: 'https://example.test', info: { goal: 'Saved native goal' },
+    jour_fixe: { weekday: 1, time: '09:00', timezone: 'Europe/Berlin' },
+  });
+  const legacy = await fixture.invoke();
+  assert.deepEqual(Object.keys(legacy.projects[0]).sort(), ['createdAt', 'id', 'title', 'workingCopies']);
+  assert.deepEqual(await fixture.invoke({ includeConfiguration: false }), legacy);
+  const enhanced = await fixture.invoke({ includeConfiguration: true });
+  assert.equal(enhanced.projects[0].repoUrl, 'https://example.test/repo');
+  assert.equal(enhanced.projects[0].publicUrl, 'https://example.test');
+  assert.deepEqual(enhanced.projects[0].info, { goal: 'Saved native goal' });
+  assert.deepEqual(enhanced.projects[0].jourFixe, { weekday: 1, time: '09:00', timezone: 'Europe/Berlin' });
+  assert.deepEqual(enhanced.projects[0].workingCopies, legacy.projects[0].workingCopies);
+  assert.ok(fixture.commands.every(({ command }) => !Object.hasOwn(command.payload, 'includeConfiguration')));
+});
+
+test('project list rejects malformed configuration negotiation before native dispatch', async () => {
+  const fixture = nativeProjectListFixture();
+  for (const value of ['true', 1, null, {}]) {
+    await assert.rejects(fixture.invoke({ includeConfiguration: value }), /includeConfiguration/);
+  }
+  assert.equal(fixture.commands.length, 0);
+});
 
 test('project list starts all bridges concurrently and skips historical command replication', async () => {
   const waiting = [];

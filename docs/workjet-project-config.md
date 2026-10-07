@@ -34,8 +34,13 @@ await workjetProjectControl({
 ```
 
 The bridge translates camelCase keys to the native fields and waits for a
-terminal, correlated native receipt. Its response and `project.list` expose
-`repoUrl`, `publicUrl`, `info`, `jourFixe`; no caller-supplied owner, archive flag,
+terminal, correlated native receipt. Its response exposes `repoUrl`, `publicUrl`,
+`info`, `jourFixe`. Existing `project.list` and `project.create` clients retain
+exactly the legacy `id`, `title`, optional `createdAt`, `workingCopies` shape,
+even when native configuration is present. A new client requests list metadata
+explicitly with `{ action: 'project.list', includeConfiguration: true }`; the
+flag must be boolean and is not forwarded as native authority or stored data.
+No caller-supplied owner, archive flag,
 credential or execution thread is accepted by this configuration action.
 A replaced browser session or a receipt for another actor/project is rejected.
 Business data remains on the command/WebRTC plane; this adds no HTTP data API.

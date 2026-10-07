@@ -13739,7 +13739,11 @@ async function workjetProjectControl(request = {}) {
   }
 
   if (action === 'project.list') {
-    assertWorkjetProjectPayloadKeys(request, new Set(['action']));
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'includeConfiguration']));
+    if (Object.hasOwn(request, 'includeConfiguration') && typeof request.includeConfiguration !== 'boolean') {
+      throw new Error('Invalid Workjet project includeConfiguration.');
+    }
+    const includeConfiguration = request.includeConfiguration === true;
     const commandId = `cmd_workjet_project_list_${newId()}`;
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
@@ -13805,6 +13809,7 @@ async function workjetProjectControl(request = {}) {
       WORKJET_PROJECT_CONTROL_MAX_RESULTS,
       workingCopies,
       projectDocs,
+      { includeConfiguration },
     );
     assertCurrentIdentity();
     if (projects.length !== count) {
@@ -13849,7 +13854,7 @@ async function workjetProjectControl(request = {}) {
       || nativeProject?.owner_user_id !== ownerUserId) {
       throw new Error('Workjet project configuration returned an uncorrelated or unsuccessful receipt.');
     }
-    const project = boundedWorkjetProjectResult(nativeProject);
+    const project = boundedWorkjetProjectResult(nativeProject, { includeConfiguration: true });
     if (!project) throw new Error('Workjet project configuration returned no native project.');
     return { action, commandId, project };
   }
@@ -14015,7 +14020,7 @@ async function readWorkjetProjectListRows(bridge, query, requireRevision, deadli
   return rows;
 }
 
-async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null) {
+async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null, { includeConfiguration = false } = {}) {
   const collection = state.db?.collection?.('workjet_projects');
   const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId } },
@@ -14023,7 +14028,7 @@ async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = 
   }).exec();
   const projects = docs
     .map((doc) => {
-      const project = boundedWorkjetProjectResult(doc?.toJSON?.() || doc);
+      const project = boundedWorkjetProjectResult(doc?.toJSON?.() || doc, { includeConfiguration });
       if (!project) return null;
       return Object.freeze({
         ...project,
@@ -14172,7 +14177,7 @@ async function workjetProjectChildCommandId(parentCommandId, kind) {
   return `cmd_workjet_${kind.replaceAll('-', '_')}_${hex}`;
 }
 
-function boundedWorkjetProjectResult(value) {
+function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {}) {
   if (!value || typeof value !== 'object' || value._deleted === true || value.is_deleted === true) {
     return null;
   }
@@ -14184,6 +14189,7 @@ function boundedWorkjetProjectResult(value) {
   if (Number.isFinite(createdAtMs) && createdAtMs >= 0) {
     result.createdAt = new Date(createdAtMs).toISOString();
   }
+  if (!includeConfiguration) return Object.freeze(result);
   const metadata = boundedWorkjetProjectMetadata({
     ...(Object.hasOwn(value, 'description') ? { description: value.description } : {}),
     ...(Object.hasOwn(value, 'repo_url') ? { repoUrl: value.repo_url } : {}),
