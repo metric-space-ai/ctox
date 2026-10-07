@@ -42,7 +42,6 @@ impl StorageConnection for TracedConnection {
 }
 
 struct Live {
-
     config: Value,
     store: Store,
     pause: AtomicBool,
@@ -62,7 +61,7 @@ impl StorageResolver for Live {
     fn connect(&self, _: &DownloadRequest) -> Result<Box<dyn StorageConnection>> {
         let c = &self.config;
         let text = |k: &str| -> String { c[k].as_str().unwrap().into() };
-        match c["protocol"].as_str().unwrap() {
+        let connection = match c["protocol"].as_str().unwrap() {
             "ssh" => storage_ssh::connect(storage_ssh::SshStorageOptions {
                 host: text("host"),
                 port: c["port"].as_u64().unwrap() as u16,
