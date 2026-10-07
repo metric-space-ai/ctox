@@ -17,7 +17,7 @@ path = "src/core/main.rs"
 
 [features]
 # Build-time capability; runtime placement still uses the GPU admission plan.
-local-speech-cuda = ["ctox-voxtral-mini-4b-realtime-2602/cuda"]
+local-speech-cuda = ["ctox-voxtral-mini-4b-realtime-2602/cuda", "ctox-voxtral-4b-tts-2603/cuda"]
 
 [dependencies]
 anyhow = "1"
