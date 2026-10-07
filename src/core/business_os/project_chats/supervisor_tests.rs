@@ -44,6 +44,8 @@ fn supervisor_binding_preserves_existing_code_uuid_and_replays_without_history_r
     later["last_message_id"] = json!("existing-message");
     later["last_message_at_ms"] = json!(91);
     store::upsert_business_record(&conn, THREADS, THREAD, 90, later.clone())?;
+    // Preserve the full committed record, including its native revision and timestamps.
+    let later = outbound_load_record(&conn, THREADS, THREAD)?.unwrap();
     let replay = bind(root.path(), "bind-supervisor", "owner", payload.clone())?;
     assert_eq!(replay["result"], first["result"]);
     let repeat = bind(root.path(), "bind-supervisor-again", "owner", payload)?;
@@ -134,6 +136,7 @@ fn supervisor_binding_refuses_adopting_or_replacing_history_and_cross_project_uu
     let conn = open_store(root.path())?;
     let history = json!({"id":THREAD,"owner_user_id":"owner", "title":"Unrelated history", "updated_at_ms":1});
     store::upsert_business_record(&conn, THREADS, THREAD, 1, history.clone())?;
+    let history = outbound_load_record(&conn, THREADS, THREAD)?.unwrap();
     assert!(handle_command(
         root.path(),
         &command(
@@ -244,7 +247,7 @@ fn registered_supervisor_uses_the_existing_native_ai_producer_and_retains_bindin
     let root = project_fixture()?;
     let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
     let schemas: Value = serde_json::from_str(include_str!("../business_os_schema_contract.json"))?;
-    for collection in ["user_thread_states", "user_thread_notifications"] {
+    for collection in ["user_thread_states", "user_notifications"] {
         let version = schemas[collection]["version"]
             .as_u64()
             .context("canonical Threads version")?;
