@@ -598,6 +598,31 @@ impl WireValidate for ProjectKpis {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ReadKpisRequest {
+    pub(crate) project_id: String,
+}
+impl WireValidate for ReadKpisRequest {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("ReadKpisRequest.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("ReadKpisRequest.project_id violates max_chars".into());
+            }
+        }
+        validate_rules(
+            "ReadKpisRequest",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ConfigureKpisRequest {
     pub(crate) operation_id: String,
     pub(crate) project_id: String,
@@ -744,6 +769,9 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
         "ProjectKpis" => serde_json::from_value::<ProjectKpis>(value)
             .map_err(|e| e.to_string())?
             .validate(),
+        "ReadKpisRequest" => serde_json::from_value::<ReadKpisRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
         "ConfigureKpisRequest" => serde_json::from_value::<ConfigureKpisRequest>(value)
             .map_err(|e| e.to_string())?
             .validate(),
@@ -756,7 +784,7 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
 
 fn rules() -> &'static serde_json::Value {
     static RULES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
-    RULES.get_or_init(|| serde_json::from_str(r#"{"PromptInput":{"nonblank":["kpi_id","prompt"]},"KpiPrompt":{"nonblank":["kpi_id","prompt"]},"Computation":{"lte":[["window_start_ms","window_end_ms"]],"unique":[{"field":"input_keys"}]},"Freshness":{"lt":[["calculated_at_ms","refresh_at_ms"]],"lte":[["refresh_at_ms","fresh_until_ms"]]},"KpiSnapshot":{"unique":[{"field":"sources","key":"source_key"}],"every_eq":[{"field":"sources","key":"project_id","target":"project_id"}],"every_lte":[{"field":"sources","key":"observed_at_ms","target":"freshness.calculated_at_ms"}],"calculate":true},"KpiResult":{"state_fields":{"field":"status","states":{"resolving":{"forbidden":["snapshot","reason_code","message"]},"ready":{"required":["snapshot"],"forbidden":["reason_code","message"]},"stale":{"required":["snapshot","reason_code","message"]},"missing_source":{"required":["reason_code","message"],"forbidden":["snapshot"]},"failed":{"required":["reason_code","message"],"forbidden":["snapshot"]}}}},"KpiRecord":{"eq":[["prompt.kpi_id","result.snapshot.kpi_id"],["prompt.revision","result.snapshot.prompt_revision"]]},"ProjectKpis":{"unique":[{"field":"items","key":"prompt.kpi_id"}],"every_eq":[{"field":"items","key":"result.snapshot.project_id","target":"project_id"}]},"ConfigureKpisRequest":{"unique":[{"field":"prompts","key":"kpi_id"}]}}"#).expect("generated KPI rules"))
+    RULES.get_or_init(|| serde_json::from_str(r#"{"PromptInput":{"nonblank":["kpi_id","prompt"]},"KpiPrompt":{"nonblank":["kpi_id","prompt"]},"Computation":{"lte":[["window_start_ms","window_end_ms"]],"unique":[{"field":"input_keys"}]},"Freshness":{"lt":[["calculated_at_ms","refresh_at_ms"]],"lte":[["refresh_at_ms","fresh_until_ms"]]},"KpiSnapshot":{"unique":[{"field":"sources","key":"source_key"}],"every_eq":[{"field":"sources","key":"project_id","target":"project_id"}],"every_lte":[{"field":"sources","key":"observed_at_ms","target":"freshness.calculated_at_ms"}],"calculate":true},"KpiResult":{"state_fields":{"field":"status","states":{"resolving":{"forbidden":["snapshot","reason_code","message"]},"ready":{"required":["snapshot"],"forbidden":["reason_code","message"]},"stale":{"required":["snapshot","reason_code","message"]},"missing_source":{"required":["reason_code","message"],"forbidden":["snapshot"]},"failed":{"required":["reason_code","message"],"forbidden":["snapshot"]}}}},"KpiRecord":{"eq":[["prompt.kpi_id","result.snapshot.kpi_id"],["prompt.revision","result.snapshot.prompt_revision"]]},"ProjectKpis":{"unique":[{"field":"items","key":"prompt.kpi_id"}],"every_eq":[{"field":"items","key":"result.snapshot.project_id","target":"project_id"}]},"ReadKpisRequest":{"nonblank":["project_id"]},"ConfigureKpisRequest":{"nonblank":["operation_id","project_id"],"unique":[{"field":"prompts","key":"kpi_id"}]}}"#).expect("generated KPI rules"))
 }
 
 // JSON/JS has one numeric type. Preserve integral measurements as integers,

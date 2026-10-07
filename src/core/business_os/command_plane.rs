@@ -1756,13 +1756,19 @@ fn dispatch_business_command(
         }
         "ctox.workjet.project.kpis.read" | "ctox.workjet.project.kpis.configure" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
-            let actor = session_user_id(session).context("KPI command requires an authenticated user")?;
+            let actor =
+                session_user_id(session).context("KPI command requires an authenticated user")?;
             match super::workjet_project_kpis::handle_command(
-                root, command, actor, prepared.domain_effect_admission.as_ref(),
+                root,
+                command,
+                actor,
+                prepared.domain_effect_admission.as_ref(),
             ) {
                 Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
-                    None, serde_json::json!({"ok":false,"error":error.to_string()}), error,
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
                 )),
             }
         }

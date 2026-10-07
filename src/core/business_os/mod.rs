@@ -112,9 +112,9 @@ mod store_workjet_sessions;
 mod support;
 mod threads;
 mod worker_profile_bindings;
-mod workjet_project_kpis;
 #[path = "workjet_jour_fixe_contract.generated.rs"]
 pub(crate) mod workjet_jour_fixe_contract;
+mod workjet_project_kpis;
 #[path = "workjet_project_kpis_contract.generated.rs"]
 pub(crate) mod workjet_project_kpis_contract;
 pub mod workjet_transfer_git;
