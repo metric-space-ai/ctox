@@ -155,7 +155,16 @@
     },
     "tcg": {
       "host": "gpu4",
-      "status": "pending_after_merge"
+      "receipt_run": "o04-guest-probe-pr312-20261007T024907Z",
+      "status": "failed",
+      "error": "native endpoint did not answer within the 360-second cold-boot window",
+      "boot_timeout_seconds": 360,
+      "mandatory_boot_mounts_succeeded": true,
+      "framebuffer_damage_work_warnings_observed": false,
+      "owned_qemu_reaped": true,
+      "retry_status": "pending_after_followup_merge",
+      "retry_boot_timeout_seconds": 900,
+      "retry_probe_timeout_seconds": 1200
     },
     "product_enrollment_p2p_restore_accepted": false
   }
