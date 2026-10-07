@@ -22,8 +22,15 @@ fn collection_permission_distinguishes_issuer_contention_from_invalid_credential
     };
     assert!(check()?);
     store::with_current_webrtc_capability_signer(root.path(), |_| {
-        // A valid preparatory read no longer needs the publication mutex.
+        // Both the warm decision and a cold preparatory read work without
+        // acquiring the publication mutex. A cache hit alone cannot prove it.
         assert!(check()?);
+        assert!(store::check_webrtc_collection_permission(
+            root.path(),
+            &token,
+            "ctox_crew_members",
+            crate::business_os::policy::BusinessOsPermission::DataRead,
+        )?);
         // Publication still cannot reenter the non-recursive issuer fence.
         assert!(store::with_current_webrtc_capability_signer(root.path(), |_| Ok(())).is_err());
         Ok(())
