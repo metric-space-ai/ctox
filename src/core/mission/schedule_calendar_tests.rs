@@ -165,13 +165,12 @@ fn unchanged_schedule_ensure_preserves_due_deadline_and_run_history() -> Result<
     let root = TestRoot::new();
     let first = ensure_task_with_calendar(&root.0, request(), berlin(120))?;
     let conn = open_schedule_db(&root.0)?;
+    let due_at = now_utc() - Duration::minutes(1);
+    let due_text = due_at.to_rfc3339();
+    let last_run = (due_at - Duration::days(7)).to_rfc3339();
     conn.execute(
         "UPDATE scheduled_tasks SET next_run_at=?2, last_run_at=?3, updated_at=?3 WHERE task_id=?1",
-        params![
-            first.task_id,
-            "2026-07-02T10:00:00+00:00",
-            "2026-06-25T10:00:00+00:00"
-        ],
+        params![first.task_id, due_text, last_run],
     )?;
     let due = load_task(&conn, &first.task_id)?.unwrap();
     let mut equal = request();
