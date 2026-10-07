@@ -179,6 +179,17 @@ older harness-flow stream remains an audit and observability projection, not
 the persistence authority.
 
 
+## Priority system queue admission
+
+Runnable urgent/high system tasks are selected before ordinary queue-pressure
+containment and before app validation/recovery work. Selection filters priorities
+before its bounded result window; older normal batches cannot hide them.
+A leased app does not reserve an otherwise free serial slot. App builds are
+excluded from this priority path, and pause, deferred times, working hours,
+runtime cooldown, active workers and dispatch reservations still fence admission.
+Canonical metadata is checked again under the lease write lock. Each dispatch
+reserves the existing serial slot; it does not increase worker capacity.
+
 ## Checked embedded-runtime shutdown
 
 The in-process runtime and its client facade propagate failed shutdown
