@@ -183,12 +183,20 @@ try {
   await page.locator('[data-shell-instance-toggle]').first().click();
   await page.waitForSelector('[data-shell-release-panel]', { state: 'visible' });
   assert.equal(await page.locator('[data-shell-instance-toggle]').first().getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.locator('[data-shell-recovery-explanation]').getAttribute('hidden'), '', 'Current shell has no Recovery explanation');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('[data-shell-release-panel]').getAttribute('hidden'), '');
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('workjet:shell-update-status', { detail: { version: '0.1.0', state: 'recovery', health: 'degraded' } })));
   await page.waitForSelector('[data-shell-recovery-pill]', { state: 'visible' });
   await page.locator('[data-shell-recovery-pill]').click();
   await page.waitForSelector('[data-shell-release-panel]', { state: 'visible' });
+  await page.getByText('Ursache', { exact: true }).waitFor({ state: 'visible' });
+  await page.getByText('Auswirkung', { exact: true }).waitFor({ state: 'visible' });
+  assert.match(await page.locator('[data-shell-recovery-reason]').textContent(), /Ein genauer Grund wurde nicht übermittelt/);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('workjet:shell-update-status', { detail: { version: '', state: 'recovery' } })));
+  assert.match(await page.locator('[data-shell-recovery-reason]').textContent(), /keine bestätigte Shell-Paketversion/);
+  assert.match(await page.locator('[data-shell-recovery-explanation]').textContent(), /Apps und gespeicherte Daten bleiben erhalten/);
   await page.screenshot({ path: path.join(output, 'topbar-recovery.png') });
   await page.keyboard.press('Escape');
   await page.setViewportSize({ width: 390, height: 700 });
@@ -198,7 +206,13 @@ try {
   assert(recoveryBox.x >= 7 && recoveryBox.x + recoveryBox.width <= 391, 'Recovery menu stays within phone viewport: ' + JSON.stringify(recoveryBox));
   await page.getByText('Veröffentlicht', { exact: true }).waitFor({ state: 'visible' });
   await page.getByText('Kompatibilität', { exact: true }).waitFor({ state: 'visible' });
+  await page.getByText('Ursache', { exact: true }).waitFor({ state: 'visible' });
+  await page.getByText('Auswirkung', { exact: true }).waitFor({ state: 'visible' });
   await page.screenshot({ path: path.join(output, 'topbar-phone-recovery.png') });
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('workjet:shell-update-status', { detail: { version: '0.1.0', state: 'current' } })));
+  assert.equal(await page.locator('[data-shell-recovery-explanation]').getAttribute('hidden'), '', 'Recovery explanation clears after a current status');
+  assert.equal(await page.locator('[data-shell-recovery-pill]').getAttribute('hidden'), '');
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('workjet:shell-update-status', { detail: { version: '', state: 'recovery' } })));
   await page.keyboard.press('Escape');
   for (const width of [1000, 390]) {
     await page.setViewportSize({ width, height: 700 });
@@ -233,7 +247,7 @@ try {
     }
   }
   assert.deepEqual(pageErrors, []);
-  await writeFile(path.join(output, 'result.json'), JSON.stringify({ fixture: 'Actual source topbar DOM/CSS + production controllers; no installed acceptance claim', results, keyboard: true, launchesPreserved: true, recoveryMenu: true, pageErrors }, null, 2));
+  await writeFile(path.join(output, 'result.json'), JSON.stringify({ fixture: 'Actual source topbar DOM/CSS + production controllers; no installed acceptance claim', results, keyboard: true, launchesPreserved: true, recoveryMenu: true, recoveryCauseAndImpact: true, recoveryClearsOnCurrent: true, pageErrors }, null, 2));
   console.log('TOPBAR_BROWSER_CHECKS_PASS widths1440/1000/390 full names, overflow, pointer launch over open windows/loading, keyboard, recovery, modal priority');
 } finally {
   await context.close();

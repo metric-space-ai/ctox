@@ -48,6 +48,13 @@ body[data-module-loading] .app-shell > .topbar { z-index: 60; }
 }
 .topbar .shell-release-panel .ctox-backend-version-line[hidden] { display: none; }
 .topbar .shell-instance-cause { color: var(--danger); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.topbar .shell-recovery-explanation {
+  margin: 12px 0; padding-bottom: 12px; border-bottom: 1px solid var(--line);
+  font-size: 12px; line-height: 1.5; color: var(--muted);
+}
+.topbar .shell-recovery-explanation p { display: grid; gap: 3px; margin: 0; }
+.topbar .shell-recovery-explanation p + p { margin-top: 10px; }
+.topbar .shell-recovery-explanation strong { color: var(--text); font-size: 12px; }
 .topbar .module-nav { min-width: 0; grid-column: 2; grid-row: 1; align-self: center; overflow: visible; }
 .topbar .module-tabs {
   position: relative; width: 100%; min-height: 32px;
