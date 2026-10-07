@@ -226,11 +226,12 @@ export async function measureShellRollback(configPath) {
   return { output, componentRollbackPassed: record.pass, wholeInstalledSetPassed: false };
 }
 
-async function attach(context, origin, config, name, skewMs = 0, existingPage = null) {
+async function attach(context, origin, config, name, skewMs = 0, existingPage = null, localProbeIds = []) {
+  const localOpenStarted = performance.now();
   const page = existingPage || await context.newPage();
   if (existingPage) await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
   else await page.goto(`${origin}/rxdb/manifest.json`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.evaluate(async ({ config, name, skewMs }) => {
+  const localReadback = await page.evaluate(async ({ config, name, skewMs, localProbeIds }) => {
     if (skewMs) {
       const RealDate = Date;
       class SkewedDate extends RealDate {
@@ -240,13 +241,25 @@ async function attach(context, origin, config, name, skewMs = 0, existingPage = 
       globalThis.Date = SkewedDate;
     }
     const { createBusinessDb } = await import('/shared/db.js');
-    const { createSyncRuntime } = await import('/shared/sync.js');
     const { collections, migrationStrategies } = await import('/modules/desktop/schema.js');
     const db = await createBusinessDb({ name });
     const definition = collections.desktop_icons;
     await db.addCollections({ desktop_icons: migrationStrategies?.desktop_icons
       ? { schema: definition, migrationStrategies: migrationStrategies.desktop_icons } : definition });
-    const diagnostics = [], wirePulls = [];
+    const localStarted = performance.now();
+    const localDocuments = localProbeIds.length
+      ? await db.collections.desktop_icons.storageCollection.findDocumentsById(localProbeIds) : {};
+    const localReadMs = performance.now() - localStarted;
+    globalThis.__installedAcceptance = { db, sync: null, diagnostics: [], wirePulls: [], state: null };
+    return { localReadMs, cachedDocuments: Array.isArray(localDocuments)
+      ? localDocuments.length : Object.keys(localDocuments).length };
+  }, { config, name, skewMs, localProbeIds });
+  // Capture local readiness BEFORE creating or awaiting the remote sync bridge.
+  page.installedCacheReadback = { ...localReadback, localOpenAndReadMs: performance.now() - localOpenStarted };
+  await page.evaluate(async config => {
+    const session = globalThis.__installedAcceptance;
+    const { db, diagnostics, wirePulls } = session;
+    const { createSyncRuntime } = await import('/shared/sync.js');
     const runtime = db.rxdb;
     db.rxdb = { ...runtime, async replicateWebRTC(options) {
       const state = await runtime.replicateWebRTC(options);
@@ -269,12 +282,11 @@ async function attach(context, origin, config, name, skewMs = 0, existingPage = 
         collection: value.collections?.desktop_icons,
         storage: value.browserStorage }); if (diagnostics.length > 2000) diagnostics.shift();
     } });
-    const session = { db, sync, diagnostics, wirePulls, state: null };
-    globalThis.__installedAcceptance = session;
+    session.sync = sync;
     const bridge = await sync.startCollection('desktop_icons');
     const ready = bridge?.ready ? await bridge.ready : bridge;
     session.state = ready?.state;
-  }, { config, name, skewMs });
+  }, config);
   return page;
 }
 const docs = (page, ids) => page.evaluate(async ids => {
@@ -362,13 +374,14 @@ export async function runAcceptance(browser, configPath) {
         artifacts: [], clientType: 'Installed canonical DB+sync modules in real Chromium; not a Shell UI acceptance',
         transport: 'webrtc', customerWrites: false };
       receipts.push(receipt);
-      let A, B, a, b;
+      let A, B, a, b, invitationA, invitationB;
       try {
         a = await browser.newContext(); b = await browser.newContext(); contexts.push(a, b);
         a.setDefaultTimeout(30000); b.setDefaultTimeout(30000);
         const name = `ctox-installed-acceptance-${goal}-${randomUUID()}`;
-        A = await attach(a, origin, await native.invite('A'), name + '-a');
-        B = await attach(b, origin, await native.invite('B'), name + '-b');
+        invitationA = await native.invite('A'); invitationB = await native.invite('B');
+        A = await attach(a, origin, invitationA, name + '-a');
+        B = await attach(b, origin, invitationB, name + '-b');
         const probe = { id: `acceptance-${name}-connected`, target_type: 'acceptance',
           label: 'live-WebRTC-baseline', updated_at_ms: Date.now() };
         await write(A, [probe]); await converge(native, B, [probe]);
@@ -414,9 +427,14 @@ export async function runAcceptance(browser, configPath) {
           const changed = values.slice(0, 50).map(d => ({ ...d, label: d.label + '-changed', updated_at_ms: Date.now() }));
           await write(A, changed);
           await waitNative(native, changed);
-          const reopenStart = performance.now(); B = await attach(b, origin, await native.invite('B-reopen'), name + '-b');
-          receipt.measured.localUsableMs = performance.now() - reopenStart;
-          receipt.measured.catchupMs = await converge(native, B, changed);
+          const reopenStart = performance.now();
+          B = await attach(b, origin, invitationB, name + '-b', 0, null, values.map(d => d.id));
+          receipt.measured.localCacheReadyMs = B.installedCacheReadback.localOpenAndReadMs;
+          receipt.measured.localCachedDocumentsBeforeSync = B.installedCacheReadback.cachedDocuments;
+          receipt.measured.localReadMs = B.installedCacheReadback.localReadMs;
+          await converge(native, B, changed);
+          receipt.measured.catchupMs = performance.now() - reopenStart;
+          receipt.measured.localUsabilityScope = 'Installed cache open and10000-document local read before sync; actual Shell UI usability remains unmeasured';
           receipt.measured.diagnostics = await metrics(B);
           // Do not infer wire row counts from HTTP sizes, final cache count or checkpoint ages.
           const pulls = receipt.measured.diagnostics.wirePulls;

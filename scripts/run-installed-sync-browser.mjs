@@ -46,10 +46,18 @@ try {
   // Component proof comes first and cannot touch a service outside the synthetic prefix.
   receipt.phase = 'component-rollback'; save();
   receipt.rollback = await measureShellRollback(configPath); save();
+  if (!receipt.rollback.componentRollbackPassed) throw new Error('Component baseline was not restored; no browser faults allowed');
   if (receipt.interrupted || receipt.deadlineReached) throw new Error('Owned acceptance unit interrupted');
   receipt.phase = 'browser-launch'; save();
-  server = await chromium.launchServer({ executablePath: '/usr/bin/google-chrome', headless: true,
-    args: ['--enable-logging=stderr'] });
+  const browserHome = join(out, 'browser-home'); mkdirSync(browserHome, { mode: 0o700 });
+  const browserEnv = Object.fromEntries(['PATH', 'LANG', 'LC_ALL', 'TMPDIR']
+    .filter(key => process.env[key]).map(key => [key, process.env[key]]));
+  Object.assign(browserEnv, { HOME: browserHome, XDG_CONFIG_HOME: join(browserHome, 'config'),
+    XDG_DATA_HOME: join(browserHome, 'data'), XDG_CACHE_HOME: join(browserHome, 'cache') });
+  // The distro launcher rewrites standard descriptors via shell subprocesses and host HOME.
+  // Use its verified existing real binary with a private minimal environment; no download.
+  server = await chromium.launchServer({ executablePath: '/opt/google/chrome/chrome', headless: true,
+    env: browserEnv, args: ['--enable-logging=stderr'] });
   receipt.phase = 'browser-group-check'; save();
   browserPid = server.process().pid;
   browserPgid = Number(spawnSync('ps', ['-o', 'pgid=', '-p', String(browserPid)], { encoding: 'utf8' }).stdout.trim());

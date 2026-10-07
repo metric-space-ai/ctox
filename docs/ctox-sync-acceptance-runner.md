@@ -30,7 +30,10 @@ framework or a shared browser. The package is pinned to1.64.0 inside the gate's
 temporary directory; gpu3's existing `/home/metricspace/.local/bin/node` is20.20.1.
 Its ordinary SSH `node` is12 and must not be used for the browser controller.
 Install the package only during admission (ignore lifecycle scripts and use
-the existing `/usr/bin/google-chrome`); no system installation or browser download.
+the existing `/opt/google/chrome/chrome` with private HOME/config/cache and a minimal environment); no system installation or browser download. The public wrapper rewrites standard descriptors through shell
+subprocesses and uses the host HOME; the direct installed binary preserves the
+controller's descriptor ownership. SIGTRAP startup failures remain separate
+from sync findings until actual measurements run.
 
 Inside that admitted unit:
 
@@ -74,7 +77,9 @@ online again. Unsupported emulation is a harness failure, never a sync pass.
 specifies the packet-loss parameter for WebRTC.
 
 Goal6 seeds10000 cached documents, closes B, applies50 updates and checks native
-readback before B reopens. Local usability and catchup are separate. A missing
+readback before B reopens. Local cache open/read is captured before any sync bridge starts; the original
+invitation is reused for reopen, and full catchup is timed from reopen. These
+module timings do not certify actual Shell UI usability. A missing
 verified WebRTC pull-row counter or backlog indicator keeps this goal false;
 HTTP asset bytes and a10000-row final cache do not prove incremental transfer.
 The call-through sensor counts real masterChangesSince reply documents and
