@@ -71,6 +71,64 @@ CTOX_QUERY_FIXTURE
     }
 
     #[test]
+    fn script_override_tests_a_draft_without_touching_the_registered_target() {
+        let root = temp_root("script-override-draft");
+        fixture(&root);
+        let registered = execute(&root, "records");
+        assert_eq!(
+            registered.status,
+            ScrapeRunStatus::Succeeded,
+            "{registered:?}"
+        );
+        let preview = registered
+            .records_preview
+            .as_ref()
+            .expect("records preview");
+        assert_eq!(preview["records"][0]["company_name"], "Previous Company");
+        let latest_before = fs::read_to_string(
+            root.join("runtime/scraping/targets/query-provider/state/latest_records.json"),
+        )
+        .ok();
+
+        let draft = root.join("draft.sh");
+        fs::write(
+            &draft,
+            "echo '{\"records\":[{\"id\":\"draft\",\"company_name\":\"Draft Company\"}]}'\n",
+        )
+        .unwrap();
+        let tested = execute_scrape_with_outcome(
+            &root,
+            &[
+                "--target-key".into(),
+                "query-provider".into(),
+                "--input-json".into(),
+                json!({"company":"Current Company","mode":"records"}).to_string(),
+                "--timeout-seconds".into(),
+                "10".into(),
+                "--script-override".into(),
+                draft.to_string_lossy().into_owned(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(tested.status, ScrapeRunStatus::Succeeded, "{tested:?}");
+        assert!(tested.reason.starts_with("script_override_test:"));
+        let preview = tested.records_preview.as_ref().expect("draft preview");
+        assert_eq!(preview["records"][0]["company_name"], "Draft Company");
+        // Nothing of the draft became current.
+        let latest_after = fs::read_to_string(
+            root.join("runtime/scraping/targets/query-provider/state/latest_records.json"),
+        )
+        .ok();
+        assert_eq!(latest_before, latest_after);
+        let again = execute(&root, "records");
+        assert_eq!(
+            again.records_preview.as_ref().unwrap()["records"][0]["company_name"],
+            "Previous Company"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn completed_empty_query_persists_current_receipt_without_fabricated_or_old_records() {
         let root = temp_root("completed-empty-query");
         let target = fixture(&root);
