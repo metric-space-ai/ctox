@@ -839,6 +839,34 @@ pub(crate) fn verify_internal_command_session_token(
     }))
 }
 
+/// Revalidate a verified native command context on the already-held worker
+/// transaction. No second connection or cached lease can authorize a guest.
+pub(super) fn current_guest_crew_command(
+    conn: &rusqlite::Connection,
+    context: &Value,
+) -> anyhow::Result<Value> {
+    let expected: crew_context::SessionBinding = serde_json::from_value(
+        context
+            .get("crew_binding")
+            .cloned()
+            .context("native guest has no Crew binding")?,
+    )?;
+    let command_id = required_arg(context, "command_id")?;
+    let payload_hash = required_arg(context, "payload_hash")?;
+    let (current, _) =
+        crew_context::live_binding(conn, &command_id, &payload_hash, &expected.attempt_id)?;
+    anyhow::ensure!(
+        current == expected,
+        "native guest Crew command binding changed"
+    );
+    let command = crate::channels::business_command_projection_from_conn(conn, &command_id)?;
+    anyhow::ensure!(
+        command["payload_hash"] == payload_hash && command["execution_phase"] != "terminal",
+        "native guest command changed or completed"
+    );
+    Ok(command)
+}
+
 fn decode_internal_command_session_token(
     root: &Path,
     token: &str,
