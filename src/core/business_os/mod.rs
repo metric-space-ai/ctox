@@ -7,6 +7,7 @@ mod backup_restore;
 pub(crate) mod build_ssh;
 mod browser_control;
 mod browser_runtime;
+pub mod build_job_store;
 pub mod build_lane_runner;
 mod capability;
 mod command_plane;
