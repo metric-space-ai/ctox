@@ -4142,12 +4142,16 @@ fn ctox_source_context(command: &Value, task: Option<&Value>, fallback_id: &str)
         .unwrap_or_else(|| fallback_id.to_owned());
     let deep_link = source_string(&payload_context, "deep_link")
         .or_else(|| client_context.and_then(|context| non_empty_string(context, "deep_link")))
-        .unwrap_or_else(|| {
-            format!(
+        .unwrap_or_else(|| match (module.as_str(), record_type.as_str()) {
+            ("ctox", "command") => format!("#ctox?command_id={}", slug_part(&record_id)),
+            ("ctox", "queue_task" | "ctox_task" | "task") => {
+                format!("#ctox?task_id={}", slug_part(&record_id))
+            }
+            _ => format!(
                 "#{module}?record={}&record_type={}",
                 slug_part(&record_id),
                 slug_part(&record_type)
-            )
+            ),
         });
     json!({
         "module": module,
@@ -7398,7 +7402,7 @@ mod tests {
             assert_eq!(value_string(&thread, "source_record_type"), "command");
             assert_eq!(
                 value_string(&thread, "source_deep_link"),
-                format!("#ctox?record={command_id}&record_type=command")
+                format!("#ctox?command_id={command_id}")
             );
             let link_id = format!("link_{thread_id}_business_commands_{command_id}");
             let link = load_record(temp.path(), "user_thread_links", &link_id)?
@@ -7427,6 +7431,10 @@ mod tests {
         let source = ctox_source_context(&command, None, "cmd-control");
         assert_eq!(value_string(&source, "record_id"), "task-source");
         assert_eq!(value_string(&source, "record_type"), "queue_task");
+        assert_eq!(
+            value_string(&source, "deep_link"),
+            "#ctox?task_id=task-source"
+        );
         let selected = json!({
             "id": "cmd-control",
             "module": "ctox",
@@ -7437,6 +7445,10 @@ mod tests {
         });
         let source = ctox_source_context(&selected, None, "cmd-control");
         assert_eq!(value_string(&source, "record_id"), "cmd-selected");
+        assert_eq!(
+            value_string(&source, "deep_link"),
+            "#ctox?command_id=cmd-selected"
+        );
         let business = json!({
             "id": "cmd-business", "module": "support", "record_id": "case-1"
         });
