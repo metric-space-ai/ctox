@@ -111,9 +111,9 @@ mod store_workjet_sessions;
 mod support;
 mod threads;
 mod worker_profile_bindings;
-pub mod workjet_transfer_git;
 #[path = "workjet_jour_fixe_contract.generated.rs"]
 pub(crate) mod workjet_jour_fixe_contract;
+pub mod workjet_transfer_git;
 
 pub(crate) use app_runtime::inspect_module as inspect_app_runtime_module;
 pub use browser_control::browser_context_capture;
