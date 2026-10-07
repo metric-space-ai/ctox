@@ -8,6 +8,7 @@ const ALIAS: &str = "michael.welsch@metric-space.ai";
 const FOREIGN: &str = "foreign@example.org";
 fn fixture() -> anyhow::Result<tempfile::TempDir> {
     let root = tempfile::tempdir()?;
+    drop(crate::business_os::store_projections::tests::create_repair_rxdb_tables(root.path())?);
     create_workjet_rxdb_projection_tables(root.path())?;
     let now = 1_791_395_000_000;
     // These calls represent the authenticated managed control plane, not a
