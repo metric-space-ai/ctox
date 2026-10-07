@@ -16,8 +16,9 @@ impl NativeHandoffHost<rxdb::plugins::replication_webrtc::WebRTCRsConnection> {
         pool: Arc<
             RxWebRTCReplicationPool<rxdb::plugins::replication_webrtc::WebRTCRsConnectionHandler>,
         >,
+        guests: Option<Arc<super::super::NativeGuestRegistry>>,
     ) -> anyhow::Result<checkpoint::CheckpointListener> {
-        checkpoint::listen(self.server.clone(), ipc, pool)
+        checkpoint::listen(self.server.clone(), ipc, pool, guests)
     }
 }
 use ctox_sync::authority::auth::handoff_wire::{

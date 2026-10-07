@@ -131,15 +131,19 @@ where
                     crate::business_os::NativeHandoffHost::start(root, peer.pool().clone())
                         .map_err(io::Error::other)?,
                 );
+                guest_host = guests::Host::start(root, ipc.path(), authority.clone(), peer)
+                    .map_err(io::Error::other)?;
                 checkpoint_host = Some(
                     handoff_host
                         .as_ref()
                         .unwrap()
-                        .serve_checkpoint(ipc.path(), peer.pool().clone())
+                        .serve_checkpoint(
+                            ipc.path(),
+                            peer.pool().clone(),
+                            guest_host.as_ref().map(|host| host.registry.clone()),
+                        )
                         .map_err(io::Error::other)?,
                 );
-                guest_host = guests::Host::start(root, ipc.path(), authority.clone(), peer)
-                    .map_err(io::Error::other)?;
                 descriptor = Some(
                     DescriptorGuard::publish(
                         root,
