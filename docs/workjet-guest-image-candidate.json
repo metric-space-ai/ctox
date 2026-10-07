@@ -1,6 +1,6 @@
 {
   "schema": "ctox.workjet_guest_image_candidate.v1",
-  "candidate_id": "workjet-noble-amd64-20260926-ctox-555140a08-v6",
+  "candidate_id": "workjet-noble-amd64-20260926-ctox-555140a08-v8",
   "status": "image_built_probe_pending",
   "owner_thread": "01a0879f-fa04-7a72-a9be-f471c2df5471",
   "upstream": {
@@ -28,20 +28,53 @@
     "linux_build_receipt_and_binary_sha256_required": true,
     "binary_sha256": "113b92756e094c8bdaf7ce120dbc76d57d1a4891b0548a9df6610723cdf35f3c",
     "build_receipt_run": "o04-guest-text-pr293-20261007T002000Z",
-    "source_repair": "V6 contains PR293's actual LF/CRLF/Tab X11 repair at source555140a088ab83f04a02d04abdc2e8aaed251585. That head passed full locked release cargo check/fmt, four real X11 tests,513 RustRxDB cases and154 JS/browser/wire scopes on gpu3 before normal merge b932864. The Noble native build first reached its45-minute limit with no compiler errors; the same-source continuation002000 completed and its uploaded binary was extracted from the stopped image and matched SHA113b92756e094c8bdaf7ce120dbc76d57d1a4891b0548a9df6610723cdf35f3c. This is a guest-side artifact, not production enrollment or checkpoint acceptance.",
-    "paths": ["src/core/business_os/guest_runtime/startup.rs", "src/core/business_os/guest_runtime/x11.rs", "src/core/business_os/guest_runtime/channel.rs"],
+    "source_repair": "V8 retains the exact PR293 guest-side native artifact555140a088ab83f04a02d04abdc2e8aaed251585/SHA113b92756e094c8bdaf7ce120dbc76d57d1a4891b0548a9df6610723cdf35f3c, built and extracted under receipt002000. The source passed fmt, full locked release check, four real X11 cases,513 RustRxDB and154 JS/browser/wire scopes before normal merge b932864. V8 changes boot configuration and corrects the in-image native provenance ledgers; it does not rebuild native code or supply production enrollment/checkpoint acceptance.",
+    "paths": [
+      "src/core/business_os/guest_runtime/startup.rs",
+      "src/core/business_os/guest_runtime/x11.rs",
+      "src/core/business_os/guest_runtime/channel.rs"
+    ],
     "entry": "/usr/local/bin/ctox __native-guest-desktop --config /etc/ctox/guest-startup.json"
   },
   "recipe": {
     "guest_setup_source": "src/scripts/workjet-guest-image/configure-guest.sh",
-    "guest_setup_sha256": "32775f6a0584137c0016cd2431a3701941901e47ad004f864621ff53bbec6821",
+    "guest_setup_sha256": "5d0f2b2f54bffd225addee3ee15f53ea2f6bc50ba94b08fef4864ff3df32f40a",
     "builder_distribution": "Ubuntu24.04 amd64 at the same signed snapshot; require native binary/source receipt and record ELF dependencies. Do not use a Mac artifact or claim a cross-linker is present.",
     "root_partition": "/dev/sda1 must be verified as the actual Ubuntu root filesystem by libguestfs inspection before resize. A different/unexpected layout fails closed instead of selecting another disk.",
-    "host_prerequisites": ["qemu-system-x86", "qemu-utils", "libguestfs-tools", "pax-utils", "gpgv", "gnupg", "curl", "coreutils"],
-
+    "host_prerequisites": [
+      "qemu-system-x86",
+      "qemu-utils",
+      "libguestfs-tools",
+      "pax-utils",
+      "gpgv",
+      "gnupg",
+      "curl",
+      "coreutils"
+    ],
     "apt_snapshot": "20261001T000000Z",
     "apt_snapshot_reference": "https://snapshot.ubuntu.com/",
-    "packages": ["xserver-xorg-core", "xserver-xorg-video-all", "xserver-xorg-input-libinput", "xauth", "x11-utils", "x11-xserver-utils", "xfce4-session", "xfce4-panel", "xfwm4", "xfdesktop4", "xfce4-settings", "xfce4-terminal", "thunar", "mousepad", "dbus-x11", "fonts-dejavu-core", "maim", "xdotool", "kmod", "linux-modules-extra-6.8.0-142-generic"],
+    "packages": [
+      "xserver-xorg-core",
+      "xserver-xorg-video-all",
+      "xserver-xorg-input-libinput",
+      "xauth",
+      "x11-utils",
+      "x11-xserver-utils",
+      "xfce4-session",
+      "xfce4-panel",
+      "xfwm4",
+      "xfdesktop4",
+      "xfce4-settings",
+      "xfce4-terminal",
+      "thunar",
+      "mousepad",
+      "dbus-x11",
+      "fonts-dejavu-core",
+      "maim",
+      "xdotool",
+      "kmod",
+      "linux-modules-extra-6.8.0-142-generic"
+    ],
     "desktop": "Real Xorg modesetting on the QEMU virtio-vga device; XFCE session, file manager, terminal and text editor. No Xvfb/dummy display.",
     "desktop_uid_gid": 1500,
     "desktop_user": "ctox-desktop",
@@ -50,20 +83,80 @@
     "virtio_port": "/dev/virtio-ports/org.ctox.guest.desktop",
     "controller_or_host_credentials_in_image": false,
     "static_guest_id_in_golden_image": false,
-    "per_assignment_config_required": "RetainedQemuDesktop supplies the actual enrolled guest_id to QemuProcess::spawn_paused. A native-owned mode0600 JSON in the private process directory is exposed only via opt/org.ctox/guest-startup fw_cfg, with fixed display/xauthority and no host credentials or controller authority. The required root oneshot copies at most4096bytes into this guest overlay, atomically owned1500:1500/mode0600, before the endpoint starts. Missing/oversized firmware data or a failed unit denies endpoint startup even after restore. This is source integration; actual VM boot remains unverified.",
-    "raw_derivation": "Verify signed fixed upstream checksum; create a new private working copy; expand to8GiB using virt-resize after confirming the actual root partition; configure ONLY that stopped copy, reinstall GRUB with grub-install --target=i386-pc --recheck /dev/sda and update-grub after GPT resize; qemu-img convert -f qcow2 -O raw into a new golden-base.raw; sync; record actual raw SHA256, size, package ledger, binary/dependency hashes and command/tool versions. Never modify the downloaded original or an active guest.",
-    "derived_raw_sha256": "d726acdd00bff8dc0ccf78d34d17bf96193b81c57aa295e9eab35440b3bb1d26",
-    "raw_checksum_reason": "V6 starts from preserved standalone V5 RAW5ab0a013b2c93815a9330378b712fcde5d859f2cdb76d9997e265722b3bb8505. Its signed Ubuntu/kernel/Xorg/XFCE recipe and repaired GRUB/fw_cfg bootstrap remain. Run o04-guest-text-pr293-20261007T002000Z admitted00:26:45UTC and ended00:38:45UTC exit0. It rebuilt the source555 Noble ELF, uploaded that binary and its eight recorded ELF dependencies into a stopped private copy, verified no assigned startup JSON, checked the in-image binary, extracted it and matched the native SHA. The new standalone8GiB golden-base-v6.raw was fsynced, made0400 and hashed d726acdd00bff8dc0ccf78d34d17bf96193b81c57aa295e9eab35440b3bb1d26. Earlier V3/V4/V5 failure/repair and actual KVM desktop evidence remain in the owner's durable record. Real V6 GUI/save and product/P2P/two-host acceptance remain pending.",
-    "linux_build_commands": ["cargo +1.93.0 build --release --locked --jobs 2 --bin ctox --target x86_64-unknown-linux-gnu", "readelf -h <verified-ctox> (must be ELF64 x86-64)", "lddtree -l <verified-ctox> (record dependencies and copy only verified libraries into matching guest paths)", "virt-customize --format qcow2 -a <private-stopped-copy> --smp 2 --memsize 2048 --upload <verified-ctox>:/usr/local/bin/ctox --chmod 0755:/usr/local/bin/ctox --run-command 'chown 0:0 /usr/local/bin/ctox' --write /etc/ctox-image-build.marker:workjet-noble-amd64-20260926-ctox-555140a08-v6 --run src/scripts/workjet-guest-image/configure-guest.sh", "qemu-img convert -f qcow2 -O raw <configured-copy> <new-golden-base.raw>"],
+    "per_assignment_config_required": "RetainedQemuDesktop supplies the actual enrolled guest_id to QemuProcess::spawn_paused. A native-owned mode0600 JSON in the private process directory is exposed only via opt/org.ctox/guest-startup fw_cfg, with fixed display/xauthority and no host credentials or controller authority. The required root oneshot copies at most4096bytes atomically as1500:1500/mode0600 before the endpoint starts. Missing/oversized firmware data or a failed unit denies endpoint startup even after restore. Isolated KVM component boot/capture and session rejection were actually exercised; production canonical enrollment and guarded P2P acceptance remain open.",
+    "raw_derivation": "Preserve the verified immutable V6 standalone RAW d726acdd00bff8dc0ccf78d34d17bf96193b81c57aa295e9eab35440b3bb1d26 and its signed Ubuntu/kernel/package inputs. Create a new private qcow2 provisioning overlay over that RAW. Upload the reviewed configure-guest.sh, set the V8 copy marker and invoke --boot-only under virt-customize --no-network; do not rerun APT, create users, rebuild native code or modify a live guest. Verify the unchanged native hash and absence of assigned startup JSON; correct native source/hash ledgers. Verify generated mandatory fstab entries, all generated serial-only kernel consoles and fbcon=map:1 for this fixed one-framebuffer virtio guest. Convert to a new standalone8GiB RAW, fsync, make0400 and record its actual hash. The small separately hash-bound provisioning delta can reproduce that exact RAW on another host with the exact immutable V6 backing image; this is image provisioning, not a session checkpoint.",
+    "derived_raw_sha256": "3aab612b59e7c0d2532af1c269d3cf8df9d867b89cb55f1adcf097852c406c5a",
+    "raw_checksum_reason": "V8 derivation/KVM run o04-guest-probe-pr312-20261007T023039Z at source70e9c3d0167d124bec94b937f761f2f1eb38e331 admitted02:33:04UTC and ended02:35:11UTC exit0. It verified the exact V6 base and unchanged native113b artifact, applied only stopped-image boot configuration plus corrected native provenance ledgers, and checked mandatory boot mounts and all three generated serial-only kernel commands with fbcon=map:1. The new standalone8GiB RAW was fsynced/made0400 and hashed3aab612b59e7c0d2532af1c269d3cf8df9d867b89cb55f1adcf097852c406c5a. Actual KVM endpoint/capture/session-denial/ACPI probe passed; parent viewed its real XFCE frame. Three earlier GPU4 V6 probes failed at device deadlines/emergency mode; V7 still timed out with recurring framebuffer damage work despite serial-only kernel output. All failed evidence is preserved. V8 TCG and product enrollment/P2P/portable checkpoint/two-host session continuation remain pending.",
+    "linux_build_commands": [
+      "Reuse exact source555140a088ab83f04a02d04abdc2e8aaed251585 Noble native artifact from o04-guest-text-pr293-20261007T002000Z; do not relabel a newer-source binary",
+      "qemu-img create -f qcow2 -F raw -b golden-base-v6.raw private-repair-v8.qcow2 (inside the owned stage containing the verified V6 RAW)",
+      "virt-customize --no-network --format qcow2 -a <stopped-private-V8-overlay> --smp 2 --memsize 2048 --upload src/scripts/workjet-guest-image/configure-guest.sh:/root/ctox-configure-boot-v8.sh --chmod 0700:/root/ctox-configure-boot-v8.sh --write /etc/ctox-image-build.marker:workjet-noble-amd64-20260926-ctox-555140a08-v8 --run-command '/bin/sh /root/ctox-configure-boot-v8.sh --boot-only' (also verify unchanged native SHA, remove uploaded payload, and correct native source/hash ledgers as recorded in the receipt)",
+      "qemu-img convert -f qcow2 -O raw <configured-private-overlay> <new-golden-base-v8.raw>; sync; chmod0400; verify actual RAW size/hash",
+      "python3 src/scripts/workjet-guest-image/verify-guest.py --accel kvm --base <exact-readonly-V8-RAW> --sha256 3aab612b59e7c0d2532af1c269d3cf8df9d867b89cb55f1adcf097852c406c5a --out <new-private-probe-directory>",
+      "python3 src/scripts/workjet-guest-image/verify-guest.py --accel tcg --base <independently-reproduced-exact-readonly-V8-RAW> --sha256 3aab612b59e7c0d2532af1c269d3cf8df9d867b89cb55f1adcf097852c406c5a --out <new-private-probe-directory>"
+    ],
     "build_appliance_network": "Only outgoing signed Ubuntu snapshot package acquisition during an approved bounded image build. Does not enable networking in the worker VM. No host shares or privileged host mount into a running worker.",
-    "runtime": {"vcpus": 2, "memory_mib": 4096, "acceleration": "KVM", "firmware": "QEMU PC SeaBIOS", "disk_gib": 8, "network": "none under existing PreparedQemuGuest", "host_transport": "existing owned QMP/virtio Unix sockets; existing native WebRTC guarded frame source"}
+    "runtime": {
+      "vcpus": 2,
+      "memory_mib": 4096,
+      "acceleration": "Explicit KVM on gpu3; explicit single-thread TCG on gpu4, never fallback",
+      "firmware": "QEMU PC SeaBIOS",
+      "disk_gib": 8,
+      "network": "none under existing PreparedQemuGuest",
+      "host_transport": "existing owned QMP/virtio Unix sockets; existing native WebRTC guarded frame source",
+      "tcg_vcpus": 1
+    },
+    "boot_recipe_commit": "70e9c3d0167d124bec94b937f761f2f1eb38e331",
+    "boot_configuration": {
+      "mandatory_mounts": [
+        "/boot",
+        "/boot/efi"
+      ],
+      "device_timeout_seconds": 300,
+      "kernel_console": "ttyS0,115200n8",
+      "preserve_other_kernel_arguments": true,
+      "framebuffer_console_map": 1,
+      "framebuffer_console_reference": "https://docs.kernel.org/fb/fbcon.html"
+    },
+    "derived_raw_bytes": 8589934592,
+    "provisioning_delta": {
+      "backing_raw_sha256": "d726acdd00bff8dc0ccf78d34d17bf96193b81c57aa295e9eab35440b3bb1d26",
+      "qcow2_sha256": "dfafe0b2fe46a1b5c24cb5bc8731a7a924d10de356a5e16b2c087aea60cd82ec",
+      "qcow2_bytes": 2883584,
+      "gzip_sha256": "019e6512a873d9bc77cf70e59007af1f6a9e549bf4f015134be65c35af969b70",
+      "gzip_bytes": 215521,
+      "portable_session_checkpoint": false
+    }
   },
   "host_constraints": {
-    "second_host": "Claude explicitly approved gpu3 KVM plus gpu4 QEMU TCG; Yoda is retired. gpu4 has QEMU8.2.2 and a hash-verified compressed V5 copy, but repeated EDAC channel2/slot0 corrected DRAM errors/unhandlable pages require hardware resolution before its acceptance guest. The approved Mac alternative has QEMU11.1.1; native host desktop/image/qemu modules are currently Linux-only, so DevOps must supply an admitted owned Linux runtime there. Explicit production TCG support landed separately in Architecture PR294; the guest-side source555 artifact is not that native host controller. No silent acceleration fallback or completed two-host claim.",
+    "second_host": "Claude explicitly instructed gpu3 KVM plus gpu4 QEMU TCG for the functional two-host proof; Yoda and the Mac diversion are retired for this run. GPU4 QEMU8.2.2/qemu-img are actually present; disabled BIOS VT-x does not block explicit TCG. EDAC/RAS reports remain a distinct known hardware risk with no proven guest-failure causality and no renewed hardware acceptance gate. The source555 artifact is guest-side; native production host TCG support landed separately in Architecture PR294. Image custody and isolated probes do not prove production checkpoint/session continuation.",
     "gpu3": "Claude cleared QEMU6.2/KVM, qemu-img, guestfish, virt-customize and scanelf on2026-10-06 and authorized this input/recipe. Fresh Root SSH confirms metricspace kvm group and /dev/kvm O_RDWR. Staging /mnt/nvme1 initially91GiB free, root38GiB; recheck actual capacity on admission. No password or ACL bypass.",
     "admission": "Main all12 Mac repair remains P0. One admitted image build, at most2 workers/vCPUs, bounded45minutes, at least60GiB staging free before source-build/image preparation, keeping at least20GiB free on system and staging throughout. On Mac all build/cache/temp stays on /Volumes/tmp under mandatory shared admission; remote build only under explicit host capacity/ownership clearance.",
     "durability": "Approved final raw image and receipt require durable approved storage and an independent verified copy before cleanup. /Volumes/tmp is only disposable staging, never sole golden image custody. Do not delete shared Docker images or unrelated task data."
   },
-  "required_acceptance": ["Actual Linux native artifact compilation and relevant guest regressions", "Boot the actual assigned KVM child, Xorg/XFCE and native endpoint; fresh same-session capture proof", "Authorized capture through actual native guarded P2P queue and rendering, typed input observed in a real application", "Revoke/controller change/expiry/child or endpoint death prevents later send and input; no automatic replay", "Consistent portable checkpoint and real two-host continuation with old-owner fencing and independent durable copies"],
-  "approval_scope": "Claude authorized acquisition/build of this fixed Ubuntu input and source-bound recipe plus bounded real guest/two-host verification on2026-10-06. This record supplies no controller/effect authority and is not acceptance evidence. Shared-image deletion, credentials/admin bypass and substituting force-stop for a consistent checkpoint remain outside scope."
+  "required_acceptance": [
+    "Actual Linux native artifact compilation and relevant guest regressions",
+    "Boot the actual assigned KVM child, Xorg/XFCE and native endpoint; fresh same-session capture proof",
+    "Authorized capture through actual native guarded P2P queue and rendering, typed input observed in a real application",
+    "Revoke/controller change/expiry/child or endpoint death prevents later send and input; no automatic replay",
+    "Consistent portable checkpoint and real two-host continuation with old-owner fencing and independent durable copies"
+  ],
+  "approval_scope": "Claude authorized acquisition/build of this fixed Ubuntu input and source-bound recipe plus bounded real guest/two-host verification on2026-10-06. This record supplies no controller/effect authority and is not acceptance evidence. Shared-image deletion, credentials/admin bypass and substituting force-stop for a consistent checkpoint remain outside scope.",
+  "component_probes": {
+    "kvm": {
+      "host": "gpu3",
+      "receipt_run": "o04-guest-probe-pr312-20261007T023039Z",
+      "status": "passed",
+      "endpoint_boot_seconds": 5.199499296024442,
+      "real_xfce_frame_viewed": true,
+      "wrong_session_denied": true,
+      "graceful_powerdown": true,
+      "owned_qemu_reaped": true
+    },
+    "tcg": {
+      "host": "gpu4",
+      "status": "pending_after_merge"
+    },
+    "product_enrollment_p2p_restore_accepted": false
+  }
 }

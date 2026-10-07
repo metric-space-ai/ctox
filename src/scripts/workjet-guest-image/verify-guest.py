@@ -67,11 +67,22 @@ def main():
     out = args.out.resolve()
     if any(c in str(out) for c in ",\n\r"):
         raise ValueError("private QEMU socket paths cannot contain keyval delimiters")
+    # Multiple guest CPUs contend on the single TCG execution thread.
+    # Keep KVM's two vCPUs; explicit software emulation uses one.
+    vcpus = 1 if args.accel == "tcg" else 2
+    # Explicit software emulation needs longer cold-boot/shutdown windows.
+    # The whole probe still has one 600s deadline and always reaps its child.
+    boot_timeout = 360 if args.accel == "tcg" else 120
+    desktop_settle = 30 if args.accel == "tcg" else 10
+    shutdown_timeout = 120 if args.accel == "tcg" else 45
     guest_id = "o04-" + args.accel + "-" + str(uuid.uuid4())
     receipt = dict(schema="ctox.guest_image_component_probe.v1", scope="isolated image/endpoint only",
                    owner_thread="01a0879f-fa04-7a72-a9be-f471c2df5471",
                    guest_id=guest_id, acceleration=args.accel,
+                   vcpus=vcpus,
                    base_sha256=args.sha256, started=time.time(),
+                   boot_timeout_seconds=boot_timeout, desktop_settle_seconds=desktop_settle,
+                   shutdown_timeout_seconds=shutdown_timeout,
                    product_enrollment_p2p_restore_accepted=False, assertions=[])
     def interrupted(number, _frame):
         raise TimeoutError("component probe interrupted or deadline reached: " + str(number))
@@ -102,7 +113,7 @@ def main():
         qmp_listener, guest_listener = listener("qmp.sock"), listener("guest.sock")
         command = ["/usr/bin/qemu-system-x86_64", "-machine", "pc", "-accel",
                    "kvm" if args.accel == "kvm" else "tcg,thread=single",
-                   "-m", "4096", "-smp", "2", "-fw_cfg",
+                   "-m", "4096", "-smp", str(vcpus), "-fw_cfg",
                    "name=opt/org.ctox/guest-startup,file=" + str(startup),
                    "-nodefaults", "-no-user-config", "-display", "none",
                    "-serial", "file:" + str(out / "boot-serial.log"),
@@ -164,7 +175,7 @@ def main():
         assertion("fresh_guest_initially_paused", status=status)
         start = time.monotonic()
         monitor("cont")
-        guest.settimeout(120)
+        guest.settimeout(boot_timeout)
         endpoint = request(guest, dict(kind="probe", id=1))
         session_id = endpoint.get("session_id", "")
         if endpoint.get("kind") != "endpoint" or endpoint.get("guest_id") != guest_id or str(uuid.UUID(session_id)) != session_id:
@@ -187,7 +198,7 @@ def main():
         # XFCE can still be painting when the X11 endpoint first answers.
         # Retain that first frame and inspect a second actual capture after a
         # bounded cold-start settling period; neither proves a usable desktop.
-        time.sleep(10)
+        time.sleep(desktop_settle)
         capture(3, "capture-desktop.png")
         bad = request(guest, dict(kind="input_session", id=4, session_id=str(uuid.uuid4()),
                                  input=dict(kind="type", text="INVALID_SESSION_MUST_NOT_APPLY")))
@@ -209,7 +220,7 @@ def main():
         assertion("session_stable_after_capture_and_input")
         monitor("system_powerdown")
         try:
-            code = proc.wait(timeout=45)
+            code = proc.wait(timeout=shutdown_timeout)
             assertion("guest_acpi_powerdown", exit=code)
             receipt["guest_graceful_powerdown"] = code == 0
             if code != 0:
