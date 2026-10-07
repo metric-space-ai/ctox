@@ -18368,13 +18368,24 @@ pub(super) fn verified_webrtc_capability_claims_from_connection(
     signing_secret: &[u8],
     at_ms: i64,
 ) -> Option<super::capability::CapabilityClaims> {
+    check_verified_webrtc_capability_claims_from_connection(conn, token, signing_secret, at_ms)
+        .ok()
+        .flatten()
+}
+
+fn check_verified_webrtc_capability_claims_from_connection(
+    conn: &Connection,
+    token: &str,
+    signing_secret: &[u8],
+    at_ms: i64,
+) -> anyhow::Result<Option<super::capability::CapabilityClaims>> {
     let token = token.trim();
     if token.is_empty() {
-        return None;
+        return Ok(None);
     }
     if let Some(claims) = super::capability::verify_capability_token(signing_secret, token, at_ms) {
-        if let Some(claims) = validate_capability_claims_from_connection(conn, claims) {
-            return Some(claims);
+        if let Some(claims) = validate_capability_claims_from_connection(conn, claims)? {
+            return Ok(Some(claims));
         }
     }
     if let Some(claims) =
@@ -18382,9 +18393,13 @@ pub(super) fn verified_webrtc_capability_claims_from_connection(
     {
         return validate_capability_claims_from_connection(conn, claims);
     }
-    let claims = super::capability::verify_capability_token_allow_expired(signing_secret, token)?;
+    let Some(claims) =
+        super::capability::verify_capability_token_allow_expired(signing_secret, token)
+    else {
+        return Ok(None);
+    };
     if !super::mobile_invites::is_active_paired_device_user_from_connection(conn, &claims.user_id) {
-        return None;
+        return Ok(None);
     }
     validate_capability_claims_from_connection(conn, claims)
 }
@@ -18392,19 +18407,21 @@ pub(super) fn verified_webrtc_capability_claims_from_connection(
 fn validate_capability_claims_from_connection(
     conn: &Connection,
     claims: super::capability::CapabilityClaims,
-) -> Option<super::capability::CapabilityClaims> {
-    let (role, epoch): (String, i64) = conn
+) -> anyhow::Result<Option<super::capability::CapabilityClaims>> {
+    let Some((role, epoch)): Option<(String, i64)> = conn
         .query_row(
             "SELECT role, capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
             params![claims.user_id.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()
-        .ok()??;
+        .optional()?
+    else {
+        return Ok(None);
+    };
     if normalize_business_role(&role) != normalize_business_role(&claims.role)
         || epoch != claims.actor_epoch
     {
-        return None;
+        return Ok(None);
     }
     if let Some(binding) = &claims.device_binding {
         if !super::mobile_invites::is_active_device_binding_from_connection(
@@ -18412,10 +18429,10 @@ fn validate_capability_claims_from_connection(
             &claims.user_id,
             binding,
         ) {
-            return None;
+            return Ok(None);
         }
     }
-    Some(claims)
+    Ok(Some(claims))
 }
 
 /// Collection permission remains independent of document/controller ownership.
@@ -18428,16 +18445,41 @@ pub(super) fn webrtc_capability_allows_collection_permission_from_connection(
     permission: BusinessOsPermission,
     at_ms: i64,
 ) -> bool {
-    let Some(claims) =
-        verified_webrtc_capability_claims_from_connection(conn, token, signing_secret, at_ms)
+    check_webrtc_collection_permission_from_connection(
+        conn,
+        token,
+        signing_secret,
+        collection,
+        permission,
+        at_ms,
+    )
+    .unwrap_or(false)
+}
+
+/// Keep a failed actor/grant lookup distinct from a verified policy denial.
+/// Boolean publication callers still fail closed; RPC admission may retry
+/// unavailable authority within its existing bounded window.
+pub(super) fn check_webrtc_collection_permission_from_connection(
+    conn: &Connection,
+    token: &str,
+    signing_secret: &[u8],
+    collection: &str,
+    permission: BusinessOsPermission,
+    at_ms: i64,
+) -> anyhow::Result<bool> {
+    let Some(claims) = check_verified_webrtc_capability_claims_from_connection(
+        conn,
+        token,
+        signing_secret,
+        at_ms,
+    )?
     else {
-        return false;
+        return Ok(false);
     };
     let actor = BusinessOsActor::new(Some(claims.user_id), claims.role);
     let scope = BusinessOsScope::collection(collection.trim());
     evaluate_policy_with_explicit_grants(conn, &actor, permission, &scope)
         .map(|decision| decision.allowed)
-        .unwrap_or(false)
 }
 
 pub(super) fn verify_webrtc_capability_actor(root: &Path, token: &str) -> Option<(String, String)> {
@@ -18529,15 +18571,13 @@ pub(super) fn check_webrtc_collection_permission(
     with_store_connection(root, |_| Ok(()))?;
     with_current_webrtc_capability_signer(root, |secret| {
         with_store_connection(root, |conn| {
-            Ok(
-                webrtc_capability_allows_collection_permission_from_connection(
-                    conn,
-                    token,
-                    secret,
-                    collection,
-                    permission,
-                    now_ms() as i64,
-                ),
+            check_webrtc_collection_permission_from_connection(
+                conn,
+                token,
+                secret,
+                collection,
+                permission,
+                now_ms() as i64,
             )
         })
     })

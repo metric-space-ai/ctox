@@ -1815,7 +1815,11 @@ Demand-query admission distinguishes a verified collection-policy denial from
 an unavailable authority lookup. Only `COLLECTION_AUTHORITY_UNAVAILABLE` is
 retried inside that bounded admission window; invalid credentials and replaced
 peer/token generations remain immediate denials. The existing issuer fence is
-retained. Ordinary `masterChangesSince` and `masterWrite` admission now uses
+retained. Failed native reads of the current actor role/epoch or collection
+grants propagate as unavailable authority rather than invalid credentials;
+missing/inactive actors, role/epoch mismatches and foreign signed tokens remain
+verified denials. Boolean publication gates still fail closed on lookup errors.
+Ordinary `masterChangesSince` and `masterWrite` admission now uses
 the same bounded typed check. An exhausted availability error returns a
 replication-scope `ctoxError` with `COLLECTION_AUTHORITY_UNAVAILABLE`,
 `retryable: true`, and the correct pull/push direction; other authority
