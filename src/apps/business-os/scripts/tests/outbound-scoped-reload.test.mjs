@@ -374,6 +374,23 @@ try {
     blocked.resolve([{ toJSON: () => ({ id: 'old', label: 'Old' }) }]); await old;
     assert.equal(state.sources[0].id, 'new');
   });
+  await test('concurrent lead list reloads share one paged load', async () => {
+    const gate = deferred(); let leadReads = 0;
+    const { existingLead } = setup({ leads: async query => {
+      leadReads += 1;
+      await gate.promise;
+      return query.selector.id?.$gt ? [] : [{ toJSON: () => leadListRow(existingLead) }];
+    } });
+    state.leadListLoad = null;
+    const first = hooks.reload(['leads']);
+    const second = hooks.reload(['leads']);
+    await new Promise(resolve => setImmediate(resolve));
+    gate.resolve();
+    await Promise.all([first, second]);
+    assert.equal(leadReads, 2, 'one paged load (first page + empty next page), not one per caller');
+    assert.equal(state.leadListRows.length, 1);
+    assert.equal(state.leadListLoad, null, 'the shared load is released when it settles');
+  });
   await test('a closed or recovered binding cannot apply its delayed documents', async () => {
     const blocked = deferred(); setup({ sources: () => blocked.promise });
     const old = hooks.reload(['sources']); state.collectionBindingGeneration++;

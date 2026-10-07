@@ -13374,10 +13374,10 @@ async function workjetComputerControl(request = {}) {
         || (payload.capability_config !== undefined
           && JSON.stringify(boundedWorkjetOperationalCapabilities(native.capability_config))
             !== JSON.stringify(payload.capability_config))) {
-        throw new Error('Workjet capability grant was not confirmed by the native command.');
+        throw new Error('Workjet access grant was not confirmed.');
       }
       const confirmed = boundedWorkjetComputerResult(native);
-      if (!confirmed) throw new Error('Invalid native Workjet capability result.');
+      if (!confirmed) throw new Error('Invalid Workjet access grant result.');
       return { action: 'computer.assign', computer: confirmed };
     }
     const computer = await waitForProjectedWorkjetComputer(
@@ -13420,7 +13420,7 @@ async function workjetComputerControl(request = {}) {
     if (!endpoint || endpoint.id !== endpointRef || endpoint.owner_user_id !== ownerUserId
       || endpoint.enabled !== upsert
       || (upsert && endpoint.computer_id !== payload.computer_id)) {
-      throw new Error('Workjet endpoint change was not confirmed by the native command.');
+      throw new Error('Workjet connection change was not confirmed.');
     }
     return { action, endpointRef, computerId: endpoint.computer_id, enabled: endpoint.enabled };
   }
@@ -13532,7 +13532,7 @@ function boundedWorkjetComputerEndpoint(value) {
     : ['protocol', 'host', 'port', 'username', 'root', 'share', 'password']));
   const reference = (candidate) => {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
-      throw new Error('Workjet credentials must reference the native Secret Store.');
+      throw new Error('Workjet credentials must reference the Secret Store.');
     }
     assertWorkjetComputerPayloadKeys(candidate, new Set(['scope', 'name']));
     return {
@@ -13890,7 +13890,7 @@ async function workjetProjectControl(request = {}) {
       throw new Error('Workjet project configuration returned an uncorrelated or unsuccessful receipt.');
     }
     const project = boundedWorkjetProjectResult(nativeProject, { includeConfiguration: true });
-    if (!project) throw new Error('Workjet project configuration returned no native project.');
+    if (!project) throw new Error('Workjet project configuration returned no project.');
     return { action, commandId, project };
   }
 

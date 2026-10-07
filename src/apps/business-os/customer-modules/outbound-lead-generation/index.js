@@ -1368,6 +1368,12 @@ function bindCollections() {
   state.collectionBindingGeneration = (state.collectionBindingGeneration || 0) + 1;
   state.collectionReloader = createCollectionReloader({
     collections: state.collections,
+    // Running research writes leads continuously; with the 1 s default the
+    // whole paged lead list (~7 pages) was fetched again almost every second
+    // after start (thesen 07.10.2026), a permanent query load on the shared
+    // native peer. Background changes may show up to 5 s later; user actions
+    // reload explicitly and are not throttled.
+    intervalMs: 5000,
     reload: (keys) => reload(keys),
     afterReload: (keys) => {
       if (keys.length === 1 && keys[0] === 'leads' && state.lastLeadReloadChanged === false && listLeads().length) return;
@@ -1596,6 +1602,29 @@ async function alleDokumente(collection, selector = {}, seitengroesse = SEITENGR
   return alle;
 }
 
+// Start, the first scheduled reload and the collection reloader each asked for
+// the full lead list at the same moment; every call paged all leads with its
+// own revision token, so the native peer served the same 200-row pages three
+// times (thesen 07.10.2026: 2.3/4.4/5.7 s for one page). Callers that arrive
+// while a list load of the same binding is running share it. The whole paged
+// list (≈7 pages over a relayed WebRTC link) also outgrew the 15 s single-query
+// budget, was aborted and started over; give it 45 s.
+const LEAD_LIST_LOAD_TIMEOUT_MS = 45000;
+function sharedLeadListLoad(collection, previousLeads, bindingGeneration) {
+  const running = state.leadListLoad;
+  if (running && running.bindingGeneration === bindingGeneration) return running.promise;
+  const promise = withLeadQueryAuthority(state.ctx.sync,
+    signal => loadLeadList(collection, previousLeads, { signal }), {
+      isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
+      timeoutMs: LEAD_LIST_LOAD_TIMEOUT_MS,
+    });
+  const entry = { bindingGeneration, promise };
+  state.leadListLoad = entry;
+  const clear = () => { if (state.leadListLoad === entry) state.leadListLoad = null; };
+  promise.then(clear, clear);
+  return promise;
+}
+
 async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   const collections = state.collections;
   const requested = [...new Set(keys)].filter((key) => collections[key]);
@@ -1604,10 +1633,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   const outcomes = await Promise.allSettled(requested.map(async (key) => {
     const collection = collections[key];
     if (key === 'leads') {
-      leadChanges = await withLeadQueryAuthority(state.ctx.sync,
-        signal => loadLeadList(collection, previousLeads, { signal }), {
-          isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
-        });
+      leadChanges = await sharedLeadListLoad(collection, previousLeads, bindingGeneration);
       return [key, leadChanges.rows];
     }
     const collectionName = `outbound_lead_generation_${key === 'researchPolicies' ? 'research_policies' : key}`;

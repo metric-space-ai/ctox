@@ -13,6 +13,7 @@ const { createDemandLoadingTransport } = await import(process.argv.includes('--s
   ? '../src/demand-loading-transport.mjs'
   : '../dist/ctox-rxdb-js.mjs');
 import { deflateRawSync } from 'node:zlib';
+import { CLIENT_QUERY_STREAM_LIMIT } from '../src/demand-loading-transport.mjs';
 
 const transport = createDemandLoadingTransport({ getPeerId: () => 'peer-1' });
 
@@ -280,6 +281,92 @@ const rateResult = await rateTransport.requestQueryFetch({ ...envelope, requestI
 assert(rateAttempts === 2, `rate-limited query.fetch must retry once (got ${rateAttempts})`);
 assert(rateResult.documents[0]?.id === 'after-rate-refill', 'rate-limit retry result materialised');
 
+// A start burst meets STREAM_LIMIT_EXCEEDED while the native peer still holds
+// slots of streams it already finished sending. The transport must wait for a
+// slot instead of handing the failure to the app after a few quick retries.
+const streamTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-stream' });
+let streamAttempts = 0;
+streamTransport.attach({
+  connections: new Map([
+    ['peer-stream', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(_peerId, _method, params) {
+    streamAttempts += 1;
+    const requestId = params?.[0]?.requestId;
+    queueMicrotask(() => {
+      if (streamAttempts <= 8) {
+        streamTransport.requestHandlers['rxdb.query.error']({
+          params: [{ requestId, code: 'STREAM_LIMIT_EXCEEDED', message: 'max in-flight query streams reached', retryable: true }],
+        });
+      } else {
+        streamTransport.requestHandlers['rxdb.query.chunk']({
+          params: [{ requestId, sequence: 0, documents: [{ id: 'after-stream-slot', status: 'open' }], complete: true, authoritativeRevision: 'rev-stream' }],
+        });
+      }
+    });
+    return { ack: true };
+  },
+});
+const streamResult = await streamTransport.requestQueryFetch({ ...envelope, requestId: 'q-stream' });
+assert(streamAttempts === 9, `stream-limited query.fetch must keep waiting for a slot (got ${streamAttempts})`);
+assert(streamResult.documents[0]?.id === 'after-stream-slot', 'stream-limit retry result materialised');
+
+// The peer's first answer to an over-limit fetch is the RPC response itself:
+// peer.request rejects with a plain "STREAM_LIMIT_EXCEEDED: …" error without a
+// retryable flag. That must be retried as well.
+const responseLimitTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-response-limit' });
+let responseLimitAttempts = 0;
+responseLimitTransport.attach({
+  connections: new Map([
+    ['peer-response-limit', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(_peerId, _method, params) {
+    responseLimitAttempts += 1;
+    const requestId = params?.[0]?.requestId;
+    if (responseLimitAttempts <= 3) {
+      throw new Error('STREAM_LIMIT_EXCEEDED: max in-flight query streams reached');
+    }
+    queueMicrotask(() => {
+      responseLimitTransport.requestHandlers['rxdb.query.chunk']({
+        params: [{ requestId, sequence: 0, documents: [{ id: 'after-response-limit', status: 'open' }], complete: true, authoritativeRevision: 'rev-response-limit' }],
+      });
+    });
+    return { ack: true };
+  },
+});
+const responseLimitResult = await responseLimitTransport.requestQueryFetch({ ...envelope, requestId: 'q-response-limit' });
+assert(responseLimitAttempts === 4, `an RPC-response stream limit must be retried (got ${responseLimitAttempts})`);
+assert(responseLimitResult.documents[0]?.id === 'after-response-limit', 'RPC-response stream-limit retry result materialised');
+
+// Shell background feeds may not starve the app the user opened: at most half
+// of the client slots go to them, and a waiting app query is admitted first.
+{
+  const priorityTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-priority' });
+  const started = [];
+  priorityTransport.attach({
+    connections: new Map([
+      ['peer-priority', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+    ]),
+    async request(_peerId, _method, params) {
+      started.push(params?.[0]?.collectionName + ':' + params?.[0]?.requestId);
+      return { ack: true };
+    },
+  });
+  const pending = [];
+  for (let i = 0; i < 6; i += 1) {
+    pending.push(priorityTransport.requestQueryFetch({ ...envelope, collectionName: 'ctox_queue_tasks', requestId: `bg-${i}` }).catch(() => null));
+  }
+  pending.push(priorityTransport.requestQueryFetch({ ...envelope, collectionName: 'outbound_lead_generation_leads', requestId: 'app-0' }).catch(() => null));
+  await new Promise((r) => setImmediate(r));
+  const background = started.filter((name) => name.startsWith('ctox_queue_tasks')).length;
+  const backgroundCap = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
+  assert(background <= backgroundCap && backgroundCap < 6, `background feeds are capped at half the slots (got ${background}, cap ${backgroundCap})`);
+  assert(started.some((name) => name.startsWith('outbound_lead_generation_leads')), 'the app query starts although six background queries were queued first');
+  for (let i = 0; i < 6; i += 1) await priorityTransport.requestQueryCancel({ requestId: `bg-${i}` });
+  await priorityTransport.requestQueryCancel({ requestId: 'app-0' });
+  await Promise.all(pending);
+}
+
 // Cancel path: removes the in-flight collector AND rejects the outstanding
 // fetch with QUERY_CANCELLED so callers stop waiting (hardened cancel
 // semantics — previously the promise just hung forever).
@@ -459,7 +546,7 @@ admissionTransport.attach({
   ]),
   async request() { return { ack: true }; },
 });
-const activeQueries = Array.from({ length: 6 }, (_, index) => (
+const activeQueries = Array.from({ length: CLIENT_QUERY_STREAM_LIMIT }, (_, index) => (
   admissionTransport.requestQueryFetch({ ...envelope, requestId: `q-admission-${index}` })
     .catch((error) => error)
 ));
