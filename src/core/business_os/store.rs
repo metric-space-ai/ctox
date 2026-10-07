@@ -12010,14 +12010,13 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
     Ok(Some((id, record)))
 }
 
-/// Required lookup surface: missing/unreadable storage is not an empty query.
-/// Keep every probe on the same read transaction instead of checking readiness
-/// and then reopening through optional helpers which may silently return empty.
-pub(super) fn required_rxdb_collection_read_connection(
+/// Prepare optional indexes before batch callers hold any read transactions.
+/// In rollback-journal stores, an earlier reader would block later index DDL.
+pub(super) fn prepare_rxdb_collection_lookup_indexes(
     root: &Path,
     collection: &str,
     lookup_fields: &[&str],
-) -> anyhow::Result<(Connection, String)> {
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         is_safe_rxdb_collection_name(collection),
         "invalid collection name"
@@ -12051,6 +12050,19 @@ pub(super) fn required_rxdb_collection_read_connection(
             }
         }
     }
+    Ok(())
+}
+
+/// Required lookup surface: missing/unreadable storage is not an empty query.
+/// Keep every data probe on the same read transaction. Batch callers prepare
+/// all indexes first, then pass no fields here to avoid DDL under a read lock.
+pub(super) fn required_rxdb_collection_read_connection(
+    root: &Path,
+    collection: &str,
+    lookup_fields: &[&str],
+) -> anyhow::Result<(Connection, String)> {
+    prepare_rxdb_collection_lookup_indexes(root, collection, lookup_fields)?;
+    let path = rxdb_store_path(root);
     let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .context("required lookup store is unavailable")?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
