@@ -1054,10 +1054,12 @@ pub fn restore_native_rxdb_immutable_backup(root: &Path, backup: &Path) -> anyho
         // first. locking_mode=EXCLUSIVE keeps other connections out until drop.
         conn.execute_batch("ROLLBACK;")
             .context("end exclusive restore transaction before WAL checkpoint")?;
+        // A failed physical read cannot prove checkpointing stale WAL is safe.
         let live_already_matches_backup = live_path.is_file()
             && sqlite_file_sha256(conn)
-                .ok()
-                .is_some_and(|(_, sha)| sha == backup_sha256);
+                .context("verify live physical image before restore checkpoint")?
+                .1
+                == backup_sha256;
         // Leftover live-named WAL must not be merged into an already-published
         // backup image. Skipping PRAGMA wal_checkpoint is not enough: bundled
         // SQLite may still checkpoint on last-connection close. Enable
