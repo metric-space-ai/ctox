@@ -6,6 +6,16 @@ The same-UID `ctox sync handoff-copy` control socket carries only identifiers an
 a final local-copy result. It carries no checkpoint payload or browser business
 data. See [the integration boundary](ctox-sync-handoff-integration.md#protected-native-checkpoint-copy)
 for limits, account guards, cancellation and remaining Core-resume work.
+### Native query task cancellation
+
+Each accepted native query stream holds a permit through its awaits. Task
+abort or unwind drops that permit, cancels its producer flag and returns its
+in-flight slot. Cleanup compares the exact accepted flag under the registry
+lock, so an old stream cannot remove a replacement using the same connection
+and request key after peer cancellation. Ordinary completion and rejection
+release before publishing their terminal response. This does not change
+collection authority, retryable errors or the browser admission queue.
+
 ### CLI app command admission
 
 CLI app create/modify and app-bench requests persist and enqueue the real coding
