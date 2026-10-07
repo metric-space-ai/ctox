@@ -830,9 +830,10 @@ test('Workjet does not dispatch after session replacement during data-plane read
 const supervisorThread = 'cc6cfe73-2824-4360-9daf-3b3efb079931';
 function supervisorBindingFixture(change = () => {}) {
   const commands = [];
+  const startedCollections = [];
   const state = {
-    session: { id: 'owner-1' }, db: { collection: () => ({}) },
-    sync: { async startCollection() { return {}; } },
+    session: { id: 'owner-1' }, db: { collection: name => name === 'business_commands' ? {} : null },
+    sync: { async startCollection(name) { startedCollections.push(name); return {}; } },
     commandBus: { async dispatch(command, options) {
       commands.push({ command, options });
       const receipt = {
@@ -849,7 +850,7 @@ function supervisorBindingFixture(change = () => {}) {
   };
   const context = { state, actorContext: session => ({ id: session.id }), URL };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
-  return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
+  return { commands, startedCollections, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
 }
 function supervisorBindingRequest(extra = {}) {
   return { action: 'project.supervisor.bind', commandId: 'bind-1', projectId: 'project-1', threadId: supervisorThread, ...extra };
@@ -862,6 +863,7 @@ test('supervisor registration uses authenticated command plane and returns the e
   assert.equal(command.client_context.actor.id, 'owner-1');
   assert.deepEqual(command.payload, { project_id: 'project-1', thread_id: supervisorThread });
   assert.equal(options.until, 'terminal');
+  assert.deepEqual(fixture.startedCollections, ['business_commands']);
   assert.deepEqual(result.binding, {
     contract: 'ctox.workjet.supervisor_binding.v1', projectId: 'project-1',
     threadId: supervisorThread, threadKey: `business-os/threads/${supervisorThread}`,

@@ -13688,7 +13688,8 @@ async function workjetProjectControl(request = {}) {
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
-  const acquisition = requireWorkjetProjectDataPlane();
+  const acquisition = action === 'project.supervisor.bind'
+    ? requireWorkjetSupervisorDataPlane() : requireWorkjetProjectDataPlane();
   const { projectBridge, workingCopyBridge } = listDeadline
     ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
     : await acquisition;
@@ -14007,6 +14008,14 @@ async function workjetProjectControl(request = {}) {
   }
 
   throw new Error(`Unsupported Workjet project control action: ${action}`);
+}
+
+async function requireWorkjetSupervisorDataPlane() {
+  if (!state.commandBus?.dispatch || !state.db?.collection?.('business_commands')) {
+    throw new Error('Workjet supervisor control is not ready.');
+  }
+  await state.sync?.startCollection?.('business_commands');
+  return {};
 }
 
 async function requireWorkjetProjectDataPlane() {
