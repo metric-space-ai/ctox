@@ -202,7 +202,7 @@ const DEFAULT_TURN_EDGE_URL: &str = "https://ctox.dev/turn-ice";
 const BUSINESS_OS_TURN_TTL_SECS: i64 = 3600;
 const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
 const BUSINESS_OS_APP_QUEUE_PROMPT_MAX_CHARS: usize = 24_000;
-const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
+const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 32_000;
 const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
 const BUSINESS_USER_PROFILE_MAX_FIELDS: usize = 64;
 const BUSINESS_USER_PROFILE_KEY_MAX_CHARS: usize = 80;
@@ -3268,6 +3268,36 @@ fn accept_recovery_responsibility_for_modules(
     Ok(record_ids)
 }
 
+// Editing an already-authorized actor's own profile does not assign workspace
+// authority. Require the exact active native row and unchanged role/activity;
+// the profile-only SQL below never writes either authority field.
+fn user_mutation_policy_decision(
+    root: &Path,
+    session: &BusinessOsSession,
+    mutation: &BusinessOsUserMutation,
+) -> anyhow::Result<(super::policy::PolicyDecision, bool)> {
+    let role = normalize_business_role(&mutation.role);
+    let profile_only = if let Some(actor) = session.user.as_ref() {
+        session.ok
+            && session.authenticated
+            && mutation.active
+            && mutation.id.trim() == actor.id
+            && role == normalize_business_role(&actor.role)
+            && with_store_connection(root, |conn| {
+                Ok(business_user_by_id(conn, &actor.id)?
+                    .is_some_and(|user| user.active && normalize_business_role(&user.role) == role))
+            })?
+    } else {
+        false
+    };
+    let decision = if profile_only {
+        workspace_policy_decision(root, session, BusinessOsPermission::UsersManage)?
+    } else {
+        user_upsert_policy_decision(root, session, &role)?
+    };
+    Ok((decision, profile_only))
+}
+
 pub fn upsert_user(
     root: &Path,
     session: &BusinessOsSession,
@@ -3279,7 +3309,7 @@ pub fn upsert_user(
         matches!(role.as_str(), "chef" | "admin" | "founder" | "user"),
         "role must be chef, admin, founder, or user"
     );
-    let decision = user_upsert_policy_decision(root, session, &role)?;
+    let (decision, profile_only) = user_mutation_policy_decision(root, session, &mutation)?;
     anyhow::ensure!(
         decision.allowed,
         if WORKSPACE_AUTHORITY_ROLES.contains(&role.as_str()) {
@@ -3289,7 +3319,9 @@ pub fn upsert_user(
         }
     );
     let conn = open_store(root)?;
-    seed_session_user(&conn, session)?;
+    if !profile_only {
+        seed_session_user(&conn, session)?;
+    }
     let now = now_ms() as i64;
     let user_id = mutation.id.trim().to_owned();
     let display_name = mutation.display_name.trim().to_owned();
@@ -3312,8 +3344,17 @@ pub fn upsert_user(
             now,
         )?;
     }
-    conn.execute(
-        "INSERT INTO business_users
+    if profile_only {
+        let changed = conn.execute(
+            "UPDATE business_users SET display_name=?2, updated_at_ms=?3,
+                profile_json=COALESCE(?4, profile_json)
+             WHERE user_id=?1 AND role=?5 AND active=1",
+            params![user_id, display_name, now, profile_json.as_deref(), role],
+        )?;
+        anyhow::ensure!(changed == 1, "current profile authority changed");
+    } else {
+        conn.execute(
+            "INSERT INTO business_users
             (user_id, display_name, role, active, created_at_ms, updated_at_ms, profile_json)
          VALUES (?1, ?2, ?3, ?4, ?5, ?5, COALESCE(?6, '{}'))
          ON CONFLICT(user_id) DO UPDATE SET
@@ -3322,15 +3363,16 @@ pub fn upsert_user(
             active = excluded.active,
             updated_at_ms = excluded.updated_at_ms,
             profile_json = COALESCE(?6, business_users.profile_json)",
-        params![
-            user_id.as_str(),
-            display_name.as_str(),
-            role.as_str(),
-            mutation.active as i64,
-            now,
-            profile_json.as_deref()
-        ],
-    )?;
+            params![
+                user_id.as_str(),
+                display_name.as_str(),
+                role.as_str(),
+                mutation.active as i64,
+                now,
+                profile_json.as_deref()
+            ],
+        )?;
+    }
     if !mutation.active {
         // Deactivating a user immediately revokes their live HTTP shell sessions
         // (session_with_persisted_user also denies them on the next request).
@@ -16790,8 +16832,7 @@ pub(super) fn handle_business_os_command(
             let mutation: BusinessOsUserMutation = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.business_os.user.upsert payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
-            let target_role = normalize_business_role(&mutation.role);
-            let decision = user_upsert_policy_decision(root, &session, &target_role)?;
+            let (decision, _) = user_mutation_policy_decision(root, &session, &mutation)?;
             if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
                 return Ok(outcome);
             }
@@ -26991,8 +27032,52 @@ fn business_chat_attachment_prompt_manifest(
     output
 }
 
+/// Long free-text values repeated verbatim under another key are shown once.
+/// A lead research payload carried `research_instructions` and an identical
+/// `research_instructions_default` (about 5k chars each); together with the
+/// preview limit that pushed `source_policy` past the cut, so the agent never
+/// saw most of its adapters (on-prem tenant, 07.10.2026).
+const PROMPT_PREVIEW_DEDUPE_MIN_CHARS: usize = 400;
+
+fn dedupe_repeated_long_strings(value: &Value) -> Value {
+    fn walk(value: &Value, path: &str, seen: &mut HashMap<String, String>) -> Value {
+        match value {
+            Value::String(text) if text.chars().count() >= PROMPT_PREVIEW_DEDUPE_MIN_CHARS => {
+                if let Some(first) = seen.get(text) {
+                    Value::String(format!("(identical to {first})"))
+                } else {
+                    seen.insert(text.clone(), path.to_string());
+                    value.clone()
+                }
+            }
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(key, child)| {
+                        let child_path = if path.is_empty() {
+                            key.clone()
+                        } else {
+                            format!("{path}.{key}")
+                        };
+                        (key.clone(), walk(child, &child_path, seen))
+                    })
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, child)| walk(child, &format!("{path}[{index}]"), seen))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+    walk(value, "", &mut HashMap::new())
+}
+
 fn prompt_json_preview(value: &Value, max_chars: usize) -> String {
-    let raw = serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string());
+    let value = dedupe_repeated_long_strings(value);
+    let raw = serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string());
     if raw.chars().count() <= max_chars {
         return raw;
     }
@@ -27640,6 +27725,41 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             capture_id TEXT NOT NULL REFERENCES business_native_source_checkpoints(capture_id),
             source_json TEXT NOT NULL,
             input_json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS business_native_source_policy_snapshots (
+            capture_id TEXT PRIMARY KEY REFERENCES business_native_source_journals(capture_id),
+            snapshot_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS business_native_source_handoff_authorizations (
+            binding_id TEXT PRIMARY KEY REFERENCES business_native_source_handoff_bindings(binding_id),
+            binding_revision INTEGER NOT NULL CHECK(binding_revision > 1),
+            source_json TEXT NOT NULL,
+            policy_snapshot_json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS business_native_target_handoff_challenges (
+            nonce TEXT PRIMARY KEY,
+            target_identity TEXT NOT NULL,
+            scope_id TEXT NOT NULL,
+            expires_at_ms INTEGER NOT NULL,
+            used_binding_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS business_native_target_repository_assignments (
+            owner_user_id TEXT NOT NULL,
+            worker_profile_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            working_copy_id TEXT NOT NULL,
+            repository_id TEXT NOT NULL,
+            principal_epoch INTEGER NOT NULL,
+            revision INTEGER NOT NULL CHECK(revision > 0),
+            PRIMARY KEY(owner_user_id,worker_profile_id,project_id)
+        );
+        CREATE TABLE IF NOT EXISTS business_native_target_handoff_bindings (
+            binding_id TEXT PRIMARY KEY REFERENCES business_session_handoff_bindings(binding_id),
+            binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
+            source_offer_json TEXT NOT NULL,
+            target_scope_json TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS business_module_releases (
@@ -30741,6 +30861,21 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn prompt_preview_shows_repeated_long_text_once() {
+        let instructions = "Recherchiere jedes Feld mit Beleg. ".repeat(40);
+        let payload = serde_json::json!({
+            "research_instructions": instructions,
+            "research_instructions_default": instructions,
+            "source_policy": {"sources": [{"target_key": "northdata-de"}]},
+        });
+        let preview = prompt_json_preview(&payload, 32_000);
+        assert_eq!(preview.matches("Recherchiere jedes Feld").count(), 40);
+        assert!(preview.contains("(identical to research_instructions)"));
+        assert!(preview.contains("northdata-de"));
+        assert!(!preview.contains("truncated"));
+    }
+
+    #[test]
     fn collection_authority_waits_for_a_briefly_held_issuer_fence() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         seed_business_user(root.path(), "authority-wait-owner", "chef")?;
@@ -32857,6 +32992,148 @@ pub(super) mod tests {
         Ok(())
     }
 
+    fn profile_command_for_test(
+        root: &Path,
+        actor: &str,
+        target: &str,
+        role: &str,
+        active: bool,
+        id: &str,
+    ) -> anyhow::Result<Value> {
+        let (token, _) = issue_business_os_capability_token(root, actor, now_ms() as i64)?;
+        accept_rxdb_business_command_with_origin(
+            root,
+            serde_json::json!({
+                "id":id, "command_id":id, "module":"ctox",
+                "command_type":"ctox.business_os.user.upsert", "record_id":target,
+                "payload":{"id":target, "display_name":"Updated profile", "role":role, "active":active},
+                "client_context":{"actor":{"id":actor,"role":"admin"}, "capability_token":token}
+            }),
+            CommandOrigin::ReplicatedPeer,
+        )
+    }
+
+    #[test]
+    fn self_profile_admin_save_preserves_role_activity_epoch_and_existing_profile(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        seed_business_user(root.path(), "profile-admin", "admin")?;
+        let conn = open_store(root.path())?;
+        conn.execute(
+            "UPDATE business_users SET profile_json=?2 WHERE user_id=?1",
+            params![
+                "profile-admin",
+                serde_json::json!({"language":"de"}).to_string()
+            ],
+        )?;
+        let before: (String, bool, i64, String) = conn.query_row(
+            "SELECT role, active, capability_epoch, profile_json FROM business_users WHERE user_id='profile-admin'", [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        let result = profile_command_for_test(
+            root.path(),
+            "profile-admin",
+            "profile-admin",
+            "admin",
+            true,
+            "self-profile-accepted",
+        )?;
+        assert_eq!(
+            result["status"], "completed",
+            "signed Admin's own unchanged authority is not a role grant"
+        );
+        let after: (String, bool, i64, String) = conn.query_row(
+            "SELECT role, active, capability_epoch, profile_json FROM business_users WHERE user_id='profile-admin'", [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        assert_eq!(after, before);
+        let name: String = conn.query_row(
+            "SELECT display_name FROM business_users WHERE user_id='profile-admin'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(name, "Updated profile");
+        Ok(())
+    }
+
+    #[test]
+    fn self_profile_cannot_assign_owner_deactivate_or_modify_another_admin() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        seed_business_user(root.path(), "profile-admin", "admin")?;
+        seed_business_user(root.path(), "other-admin", "admin")?;
+        for (id, target, role, active) in [
+            ("self-profile-promote", "profile-admin", "chef", true),
+            ("self-profile-deactivate", "profile-admin", "admin", false),
+            ("self-profile-foreign-admin", "other-admin", "admin", true),
+        ] {
+            let result =
+                profile_command_for_test(root.path(), "profile-admin", target, role, active, id)?;
+            assert_policy_denied(&result, "workspace.manage", "workspace", None);
+        }
+        let conn = open_store(root.path())?;
+        for id in ["profile-admin", "other-admin"] {
+            let user = business_user_by_id(&conn, id)?.unwrap();
+            assert_eq!(user.role, "admin");
+            assert!(user.active);
+            assert_ne!(user.display_name, "Updated profile");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn self_profile_foreign_signed_peer_cannot_claim_admin_identity() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        seed_business_user(root.path(), "profile-admin", "admin")?;
+        seed_business_user(root.path(), "foreign-peer", "user")?;
+        let result = profile_command_for_test(
+            root.path(),
+            "foreign-peer",
+            "profile-admin",
+            "admin",
+            true,
+            "self-profile-forged-actor",
+        )?;
+        assert_policy_denied(&result, "users.manage", "workspace", None);
+        let conn = open_store(root.path())?;
+        let user = business_user_by_id(&conn, "profile-admin")?.unwrap();
+        assert_eq!(user.role, "admin");
+        assert_ne!(user.display_name, "Updated profile");
+        Ok(())
+    }
+
+    #[test]
+    fn self_profile_stale_admin_session_cannot_restore_revoked_role_or_activity(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        seed_business_user(root.path(), "profile-admin", "admin")?;
+        let session = test_session("profile-admin", "admin");
+        let conn = open_store(root.path())?;
+        for (role, active) in [("user", true), ("admin", false)] {
+            conn.execute(
+                "UPDATE business_users SET role=?1, active=?2 WHERE user_id='profile-admin'",
+                params![role, active],
+            )?;
+            assert!(upsert_user(
+                root.path(),
+                &session,
+                BusinessOsUserMutation {
+                    id: "profile-admin".into(),
+                    display_name: "Updated profile".into(),
+                    role: "admin".into(),
+                    active: true,
+                    profile: None,
+                    accept_recovery_responsibility: false,
+                }
+            )
+            .is_err());
+            let user = business_user_by_id(&conn, "profile-admin")?.unwrap();
+            assert_eq!(user.role, role);
+            assert_eq!(user.active, active);
+            assert_ne!(user.display_name, "Updated profile");
+        }
+        Ok(())
+    }
+
     #[test]
     fn admin_cannot_assign_owner_role_through_user_upsert() -> anyhow::Result<()> {
         let temp = tempdir()?;
@@ -32898,7 +33175,6 @@ pub(super) mod tests {
         Ok(())
     }
 
-    #[test]
     // REGRESSION: a users.manage grant must not mint its own superiors. It
     // already could not create an owner; admin was the gap, and admin carries
     // workspace authority just the same — so the permission was self-elevating
@@ -32958,6 +33234,7 @@ pub(super) mod tests {
         Ok(())
     }
 
+    #[test]
     fn users_manage_grant_cannot_assign_owner_role() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();

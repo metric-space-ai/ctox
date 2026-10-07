@@ -86,10 +86,19 @@ function previewUrlFor(id) {
 const els = {};
 
 export async function mount(ctx) {
+  const owner = { active: true };
+  if (state.mountOwner) state.mountOwner.active = false;
+  try { state.unsubscribe?.unsubscribe?.(); } catch {}
+  state.unsubscribe = null;
+  retireShelf();
+  state.mountOwner = owner;
   state.ctx = ctx;
   const messages = await loadModuleMessages(import.meta.url, ctx.locale).catch(() => ({}));
+  if (!owner.active || state.mountOwner !== owner) return () => {};
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
-  ctx.host.innerHTML = await loadModuleMarkup();
+  const markup = await loadModuleMarkup();
+  if (!owner.active || state.mountOwner !== owner) return () => {};
+  ctx.host.innerHTML = markup;
   applyTranslations(ctx.host, state.t);
   ensureStylesheet();
   bindElements(ctx.host);
@@ -105,11 +114,13 @@ export async function mount(ctx) {
     console.warn('[app-store] Sync warmup failed:', error);
   });
   await loadCatalog();
+  if (!owner.active || state.mountOwner !== owner) return () => {};
   applyCatalogMarketplaceState();
   state.unsubscribe = ctx.db?.collection?.('business_module_catalog')
     ?.findOne('module-catalog')
     ?.$
     ?.subscribe?.((doc) => {
+      if (!owner.active || state.mountOwner !== owner) return;
       const data = doc?.toJSON?.();
       if (data) {
         state.catalog = mergeShellModulesIntoCatalog(data);
@@ -125,8 +136,23 @@ export async function mount(ctx) {
   // handle inside the `[data-resize-frame]` root — including width persistence.
 
   return () => {
+    if (!owner.active || state.mountOwner !== owner) return;
+    owner.active = false;
     try { state.unsubscribe?.unsubscribe?.(); } catch {}
+    state.unsubscribe = null;
+    retireShelf();
   };
+}
+
+function retireShelf() {
+  try { state.shelf?.destroy?.(); } catch {}
+  state.shelf = null;
+  state.shelfPromise = null;
+  state.shelfSignature = '';
+  state.shelfUnavailable = false;
+  clearTimeout(state.shelfRetryTimer);
+  state.shelfRetryTimer = null;
+  state.shelfRetryPending = false;
 }
 
 function ensureStylesheet() {
@@ -896,26 +922,39 @@ async function ensureShelf() {
   // create competing shelf instances on the same canvas (the empty last one
   // would own the WebGL context and the boxes would never show).
   if (state.shelfPromise) return state.shelfPromise;
-  state.shelfPromise = buildShelf();
+  const owner = state.mountOwner;
+  const hosts = {
+    canvas: els.shelfCanvas, stage: els.shelfStage,
+    scroll: els.shelfScroll, track: els.shelfTrack,
+  };
+  state.shelfPromise = buildShelf(owner, hosts);
   return state.shelfPromise;
 }
 
-async function buildShelf() {
+async function buildShelf(owner, hosts) {
   try {
-    const mod = await import('../../vendor/store-shelf/store-shelf.mjs');
-    state.shelf = mod.createStoreShelf(els.shelfCanvas, {
+    const mod = await import('../../vendor/store-shelf/store-shelf.mjs?v=20261007-shell-v2-appstore-reopen-perf');
+    if (!owner?.active || state.mountOwner !== owner) return null;
+    const shelf = mod.createStoreShelf(hosts.canvas, {
       apps: [],
       locale: (state.ctx?.locale || 'de').startsWith('en') ? 'en' : 'de',
-      scrollContainer: els.shelfScroll,
-      track: els.shelfTrack,
-      stage: els.shelfStage,
+      scrollContainer: hosts.scroll,
+      track: hosts.track,
+      stage: hosts.stage,
       onSelect: (id) => {
+        if (!owner.active || state.mountOwner !== owner) return;
         state.selectedId = id;
         state.drawerOpen = true;
         render();
       },
     });
+    if (!owner.active || state.mountOwner !== owner) {
+      shelf.destroy();
+      return null;
+    }
+    state.shelf = shelf;
   } catch (err) {
+    if (!owner?.active || state.mountOwner !== owner) return null;
     // The cards view stays the cards view: without the WebGL surface it
     // renders as DOM shard cards, so the toggle keeps two real renderings.
     console.warn('[app-store] shelf unavailable, falling back to DOM shard cards', err);
@@ -938,7 +977,9 @@ function shelfAppFor(item) {
 }
 
 async function syncShelf(items) {
+  const owner = state.mountOwner;
   const shelf = await ensureShelf();
+  if (!owner?.active || state.mountOwner !== owner) return;
   if (!shelf) {
     if (state.shelfUnavailable) render();
     return;
@@ -956,7 +997,11 @@ async function syncShelf(items) {
       state.shelfSignature = '';
       if (!state.shelfRetryPending) {
         state.shelfRetryPending = true;
-        setTimeout(() => { state.shelfRetryPending = false; render(); }, 600);
+        state.shelfRetryTimer = setTimeout(() => {
+          if (!owner.active || state.mountOwner !== owner) return;
+          state.shelfRetryPending = false;
+          render();
+        }, 600);
       }
       return;
     }

@@ -414,6 +414,11 @@ pub(crate) struct ScrapeExecutionOutcome {
     pub(crate) status: ScrapeRunStatus,
     pub(crate) records_found: i64,
     pub(crate) fields_extracted: Vec<String>,
+    /// The extracted values themselves, compact and bounded, so an agent
+    /// can use what a run found without reading run files (THESEN
+    /// 07.10.2026: agents read the shared latest_records.json instead).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) records_preview: Option<Value>,
     pub(crate) latency_ms: u64,
     pub(crate) reason: String,
     pub(crate) error: Option<String>,

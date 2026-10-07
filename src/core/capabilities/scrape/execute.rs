@@ -446,8 +446,23 @@ pub(crate) fn execute_scrape_with_probe_grant(
     };
     let owner_user_id = session_owner_user_id.as_deref().or(claimed_owner_user_id);
     let conn = open_db(root)?;
-    let target =
+    let mut target =
         load_registered_target(root, &conn, target_key)?.context("target_key not found")?;
+    // `--script-override` runs a draft script against the registered target
+    // without changing anything: no registry, latest-records, state, repair or
+    // reauthorization effects. It lets an agent test a new or repaired
+    // extraction script before `register-script` makes it current.
+    let script_override = find_flag_value(args, "--script-override")
+        .map(|path| -> Result<String> {
+            let path = fs::canonicalize(path)
+                .with_context(|| format!("--script-override {path} not found"))?;
+            anyhow::ensure!(path.is_file(), "--script-override must be a file");
+            Ok(path.to_string_lossy().into_owned())
+        })
+        .transpose()?;
+    if let Some(path) = &script_override {
+        target.script.script_path = path.clone();
+    }
     let workspace_dir = resolve_workspace_dir(root, &target.view.workspace_dir);
     let _run_lock = acquire_target_run_lock(&workspace_dir, target_key)?;
     let run_started_at = now_iso_string();
@@ -612,6 +627,39 @@ pub(crate) fn execute_scrape_with_probe_grant(
             // outrank a receipt and retain their existing recovery disposition.
             _ => {}
         }
+    }
+    if script_override.is_some() {
+        let fields_extracted = extracted_record_fields(records.as_deref());
+        let error = scrape_error_diagnostic(&classification, &payload, &probe, &execution);
+        return Ok(ScrapeExecutionOutcome {
+            ok: matches!(
+                classification.status,
+                ScrapeRunStatus::Succeeded
+                    | ScrapeRunStatus::CompletedEmpty
+                    | ScrapeRunStatus::PartialOutput
+            ),
+            target_key: target.view.target_key,
+            run_id,
+            status: classification.status,
+            records_found,
+            fields_extracted,
+            records_preview: records_preview(records.as_deref()),
+            latency_ms: execution_started
+                .elapsed()
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+            reason: format!("script_override_test:{}", classification.reason),
+            error,
+            query_completion,
+            probe: probe_to_json(&probe),
+            should_queue_repair: false,
+            repair_request_path: None,
+            repair_queue_task: None,
+            reauthorization,
+            template_event: None,
+            materialization: None,
+            run_manifest_path: run_dir.join("run.json"),
+        });
     }
     let run_finished_at = now_iso_string();
     let default_schema_key = target
@@ -882,6 +930,7 @@ pub(crate) fn execute_scrape_with_probe_grant(
         status: classification.status,
         records_found,
         fields_extracted,
+        records_preview: records_preview(records.as_deref()),
         latency_ms: execution_started
             .elapsed()
             .as_millis()
@@ -900,6 +949,55 @@ pub(crate) fn execute_scrape_with_probe_grant(
         materialization: materialization.as_ref().map(|item| item.summary.clone()),
         run_manifest_path: run_dir.join("run.json"),
     })
+}
+
+const RECORDS_PREVIEW_MAX_RECORDS: usize = 40;
+const RECORDS_PREVIEW_MAX_VALUE_CHARS: usize = 400;
+const RECORDS_PREVIEW_MAX_CHARS: usize = 12_000;
+
+/// Scalar fields of the first records, long strings shortened, bounded in
+/// total size. Nested objects and internal `_`-prefixed keys are left out.
+fn records_preview(records: Option<&[Value]>) -> Option<Value> {
+    let records = records.filter(|items| !items.is_empty())?;
+    let mut preview = Vec::new();
+    let mut used = 0usize;
+    for record in records.iter().take(RECORDS_PREVIEW_MAX_RECORDS) {
+        let Some(map) = record.as_object() else {
+            continue;
+        };
+        let compact = map
+            .iter()
+            .filter(|(key, value)| !key.starts_with('_') && !value.is_object() && !value.is_array())
+            .map(|(key, value)| {
+                let value = match value {
+                    Value::String(text)
+                        if text.chars().count() > RECORDS_PREVIEW_MAX_VALUE_CHARS =>
+                    {
+                        Value::String(
+                            text.chars()
+                                .take(RECORDS_PREVIEW_MAX_VALUE_CHARS)
+                                .collect::<String>()
+                                + "…",
+                        )
+                    }
+                    other => other.clone(),
+                };
+                (key.clone(), value)
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let size = Value::Object(compact.clone()).to_string().len();
+        if used + size > RECORDS_PREVIEW_MAX_CHARS {
+            break;
+        }
+        used += size;
+        preview.push(Value::Object(compact));
+    }
+    let shown = preview.len();
+    Some(json!({
+        "shown": shown,
+        "total": records.len(),
+        "records": preview,
+    }))
 }
 
 fn now_millis() -> i64 {
@@ -992,6 +1090,7 @@ fn suppressed_account_outcome(
         status: ScrapeRunStatus::ProviderAccountInactive,
         records_found: 0,
         fields_extracted: Vec::new(),
+        records_preview: None,
         latency_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         reason: "provider_account_inactive_suppressed".to_string(),
         error: Some(format!(

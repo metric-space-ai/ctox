@@ -15,6 +15,10 @@ mod source_checkpoint;
 pub(crate) mod source_handoff;
 #[path = "guest_registry_source_journal.rs"]
 mod source_journal;
+#[path = "guest_registry_source_policy.rs"]
+mod source_policy;
+#[path = "guest_registry_target_handoff.rs"]
+pub(crate) mod target_handoff;
 #[path = "guest_registry_workspaces.rs"]
 pub(crate) mod workspaces;
 pub(crate) use source_journal::NativeSourceJournalReceipt;
@@ -939,80 +943,85 @@ impl NativeGuestRegistry {
     }
 }
 
-fn validate_policy(conn: &Connection, destination: &GuestRestoreDestination) -> Result<String> {
-    let project = super::project_chats::owned_project(
-        conn,
-        &destination.project_id,
-        &destination.human_owner_id,
-        true,
-    )?;
-    let profile = super::worker_profile_bindings::require_active(
+fn policy_snapshot(
+    conn: &Connection,
+    destination: &GuestRestoreDestination,
+) -> Result<serde_json::Value> {
+    policy_snapshot_scope(
         conn,
         &destination.human_owner_id,
         &destination.worker_profile_id,
-    )?;
+        &destination.project_id,
+        &destination.thread_id,
+    )
+}
+
+fn policy_snapshot_scope(
+    conn: &Connection,
+    owner: &str,
+    profile_id: &str,
+    project_id: &str,
+    thread_id: &str,
+) -> Result<serde_json::Value> {
+    let project = super::project_chats::owned_project(conn, &project_id, &owner, true)?;
+    let profile = super::worker_profile_bindings::require_active(conn, &owner, &profile_id)?;
     let computer_id = profile["computer_id"]
         .as_str()
         .context("worker computer missing")?;
     let computer = super::store_workjet_computers::require_assigned_workjet_computer(
         conn,
         computer_id,
-        &destination.human_owner_id,
+        &owner,
     )?;
     ensure!(computer["is_deleted"] != true, "guest computer is deleted");
-    let member_id = super::project_chats::stable_id(
-        "workjet_member",
-        &[
-            &destination.human_owner_id,
-            &destination.project_id,
-            &destination.worker_profile_id,
-        ],
-    );
+    let member_id =
+        super::project_chats::stable_id("workjet_member", &[&owner, &project_id, &profile_id]);
     let member = outbound_load_record(conn, super::project_chats::MEMBERS, &member_id)?
         .context("guest worker is not a project member")?;
     ensure!(
-        member["owner_user_id"] == destination.human_owner_id
-            && member["project_id"] == destination.project_id
-            && member["worker_profile_id"] == destination.worker_profile_id
+        member["owner_user_id"] == owner
+            && member["project_id"] == project_id
+            && member["worker_profile_id"] == profile_id
             && member["status"] == "active"
             && member["is_deleted"] != true,
         "guest project worker is unavailable"
     );
-    let chat = outbound_load_record(conn, super::project_chats::CHATS, &destination.thread_id)?
+    let chat = outbound_load_record(conn, super::project_chats::CHATS, &thread_id)?
         .context("guest chat is not registered")?;
     ensure!(
-        chat["owner_user_id"] == destination.human_owner_id
-            && chat["project_id"] == destination.project_id
-            && chat["thread_id"] == destination.thread_id
+        chat["owner_user_id"] == owner
+            && chat["project_id"] == project_id
+            && chat["thread_id"] == thread_id
             && chat["is_deleted"] != true
-            && (chat["worker_profile_id"] == destination.worker_profile_id
-                || (chat["kind"] == "group" && member["group_chat_id"] == destination.thread_id)),
+            && (chat["worker_profile_id"] == profile_id
+                || (chat["kind"] == "group" && member["group_chat_id"] == thread_id)),
         "guest chat is outside the approved worker assignment"
     );
-    let thread = outbound_load_record(conn, super::project_chats::THREADS, &destination.thread_id)?
+    let thread = outbound_load_record(conn, super::project_chats::THREADS, &thread_id)?
         .context("guest thread is unavailable")?;
     ensure!(
-        thread["owner_user_id"] == destination.human_owner_id
+        thread["owner_user_id"] == owner
             && thread["status"] == "open"
             && thread["is_deleted"] != true
             && thread["archived_at_ms"].as_i64().unwrap_or(0) == 0,
         "guest thread is closed, archived or foreign"
     );
-    let provider_assignment = accounts::snapshot(conn, destination)?;
-    let workspace_assignment = workspaces::snapshot(conn, destination)?;
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&(
-            project,
-            profile,
-            computer,
-            member,
-            chat,
-            thread,
-            provider_assignment,
-            workspace_assignment
-        ))?)
-    ))
+    let provider_assignment = accounts::snapshot_scope(conn, owner, profile_id)?;
+    let workspace_assignment = workspaces::snapshot_scope(conn, owner, profile_id, project_id)?;
+    Ok(serde_json::to_value((
+        project,
+        profile,
+        computer,
+        member,
+        chat,
+        thread,
+        provider_assignment,
+        workspace_assignment,
+    ))?)
+}
+
+fn validate_policy(conn: &Connection, destination: &GuestRestoreDestination) -> Result<String> {
+    source_policy::revision(&policy_snapshot(conn, destination)?)
 }
 
 impl NativeGuestExecution {

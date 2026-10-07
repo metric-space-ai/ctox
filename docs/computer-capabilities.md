@@ -31,6 +31,17 @@ SSH/SMB connection details and SecretStore references; Transfer owns IO and
 job lifecycle. NFS is explicitly unsupported in this endpoint increment.
 This capability contract contains no credentials.
 
+## Workjet projection
+
+The existing WebRTC computer-list control can request `includeOperationalDetails: true`.
+Only that opt-in reply includes bounded `capabilityConfig` and a persisted boolean
+`agentless`. Legacy list and assignment replies retain their original shape. The
+Shell advertises `workjetComputerControl.supportsOperationalDetails`; Desktop omits
+the optional flag for older Shells, retaining one normal authorized list request.
+Owner filtering, native command admission and all grant policy remain unchanged.
+Endpoint connection records, credential references and secret values are not added
+to this projection. GPU labels come from the typed saved model and VRAM values.
+
 ## Typed descriptors
 
 ```json
@@ -59,8 +70,11 @@ capacity and disk floors, acquire the remote slot lease, keep a target directory
 per source/PR, and produce exit status/logs that survive SSH interruption.
 Public source uses GitHub plus the exact local diff; private source uses the
 existing authenticated transfer path. Credentials must not be copied with
-source. `~/.codex/bin/gpu-build-run.sh` is the current execution prototype;
-registry integration does not replace its detached runner yet.
+source. The native detached runner shares the slot, priority and active-target
+metadata conventions of `~/.codex/bin/gpu-build-run.sh`. Registration of a
+source-specific target and its live PID metadata is serialized with the lane's
+`gc.lock`, so prototype cleanup preserves an active native build. Finishing a
+run refreshes its target's idle time and retires its liveness metadata.
 
 Native `load_registered_computer_capabilities` returns only assigned, undeleted
 computers of the requested owner and validates persisted settings before use.
@@ -118,8 +132,8 @@ Workjet UI contract and editing workflow are coordinated with Main after
 Workjet 0.0.35 is installed. Native registered endpoint resolution now uses the
 owner-bound registry and a frozen per-job authority fingerprint. Native
 capability_epoch is excluded from the v1 projection along with typed settings.
-Actual build dispatch, protocol IO and deployed UI acceptance remain integration
-work.
+Native build dispatch and TransferEngine protocol IO are implemented. Acceptance
+of the complete workflow in installed Workjet remains open.
 
 Acceptance for the complete capability outcome remains: gpu3 and gpu4 registered
 for build, ASUSTOR `flashstore24-nas` (10.0.0.28) registered as agentless storage,

@@ -202,6 +202,9 @@ RUN / EXEC
   ctox runtime timeout <secs>    set only the per-turn worker budget (CTOX_CHAT_TURN_TIMEOUT_SECS)
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
+  ctox runtime speech-status
+  ctox runtime speech-synthesize <output.wav> --text <text>
+  ctox runtime speech-benchmark <16khz-mono-s16le.pcm>
   ctox runtime stt-doctor
   ctox runtime stt-smoke <wav-path>
   ctox runtime stt-realtime-smoke <wav-path>
@@ -592,6 +595,36 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                         &root, token_id
                     ))?
                 );
+                Ok(())
+            }
+            Some("speech-synthesize") => {
+                let output = args.get(2).context("usage: ctox runtime speech-synthesize <output.wav> --text <text>")?;
+                let text = find_flag_value(args, "--text").context("missing --text")?;
+                let gateway = execution::speech::SpeechGateway::from_root(&root)?;
+                let speech = gateway.synthesize(&execution::speech::SpeechRequest {
+                    text: text.to_string(),
+                    format: execution::speech::SpeechAudioFormat::Wav,
+                    voice_id: None,
+                })?;
+                let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
+                std::io::Write::write_all(&mut file, &speech.audio)?;
+                println!("{}", serde_json::json!({
+                    "model":speech.model, "elapsed_ms":speech.elapsed_ms,
+                    "input_characters":speech.input_characters, "audio_bytes":speech.audio.len(),
+                    "format":speech.format,
+                }));
+                Ok(())
+            }
+            Some("speech-status") => {
+                let gateway = execution::speech::SpeechGateway::from_root(&root)?;
+                println!("{}", serde_json::to_string_pretty(&gateway.status())?);
+                Ok(())
+            }
+            Some("speech-benchmark") => {
+                let pcm = args.get(2).context("usage: ctox runtime speech-benchmark <16khz-mono-s16le.pcm>")?;
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                let result = runtime.block_on(execution::speech::benchmark_pcm(&root, Path::new(pcm)))?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
                 Ok(())
             }
             Some("stt-doctor") => {

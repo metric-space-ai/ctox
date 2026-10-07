@@ -106,6 +106,62 @@ struct CtoxWebScrapeArgs {
     input: Option<serde_json::Value>,
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    /// `test` / `register_script`: script file inside the task workspace.
+    #[serde(default)]
+    script_path: Option<String>,
+    /// `register_script`: why this revision exists (shown in the history).
+    #[serde(default)]
+    change_reason: Option<String>,
+    /// `upsert_target`: the adapter definition (target_key, display_name,
+    /// start_url, target_kind, config, output_schema, ...).
+    #[serde(default)]
+    target: Option<serde_json::Value>,
+}
+
+/// Script maintenance modes. The worker sandbox cannot run the `ctox scrape`
+/// CLI, so agents could not create or repair extraction scripts and fell
+/// back to throwaway Playwright/curl code that every later lead repeated
+/// (THESEN 07.10.2026). These modes run the same registry code in the
+/// harness process; paths must stay inside the task workspace.
+fn scrape_maintenance_mode(arguments: &str) -> Option<String> {
+    let mode = serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()?
+        .get("mode")?
+        .as_str()?
+        .trim()
+        .to_ascii_lowercase();
+    matches!(mode.as_str(), "test" | "register_script" | "upsert_target").then_some(mode)
+}
+
+fn workspace_file(
+    cwd: &std::path::Path,
+    path: &str,
+) -> Result<std::path::PathBuf, FunctionCallError> {
+    let candidate = if std::path::Path::new(path).is_absolute() {
+        std::path::PathBuf::from(path)
+    } else {
+        cwd.join(path)
+    };
+    let resolved = candidate.canonicalize().map_err(|_| {
+        FunctionCallError::RespondToModel(format!("script_path {path} does not exist"))
+    })?;
+    let workspace = cwd.canonicalize().map_err(|_| {
+        FunctionCallError::RespondToModel("task workspace is unavailable".to_string())
+    })?;
+    if !resolved.starts_with(&workspace) || !resolved.is_file() {
+        return Err(FunctionCallError::RespondToModel(
+            "script_path must be a file inside the task workspace".to_string(),
+        ));
+    }
+    Ok(resolved)
+}
+
+fn valid_scrape_target_key(target_key: &str) -> bool {
+    !target_key.is_empty()
+        && target_key.len() <= 120
+        && target_key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
 /// The worker sandbox cannot open the CTOX state store, so `ctox scrape
@@ -364,6 +420,103 @@ impl ToolHandler for CtoxWebHandler {
                     command_session,
                 )?;
             }
+            "ctox_web_scrape" if scrape_maintenance_mode(&arguments).is_some() => {
+                let args: CtoxWebScrapeArgs = parse_arguments(&arguments)?;
+                if !valid_scrape_target_key(&args.target_key) {
+                    return Err(FunctionCallError::RespondToModel(
+                        "ctox_web_scrape needs a target_key (letters, digits, - _ .)".to_string(),
+                    ));
+                }
+                match args.mode.trim().to_ascii_lowercase().as_str() {
+                    "test" => {
+                        let script_path = args.script_path.as_deref().ok_or_else(|| {
+                            FunctionCallError::RespondToModel(
+                                "mode test needs script_path (draft script in the workspace)"
+                                    .to_string(),
+                            )
+                        })?;
+                        let script = workspace_file(&turn.cwd, script_path)?;
+                        let command_session = require_scrape_execute_command_session(
+                            business_os_command_session_from_turn(&turn),
+                        )?;
+                        append_scrape_execute_args(
+                            &mut command,
+                            &args.target_key,
+                            args.input,
+                            args.timeout_seconds,
+                            command_session,
+                        )?;
+                        command.arg("--script-override").arg(script);
+                    }
+                    "register_script" => {
+                        require_scrape_execute_command_session(
+                            business_os_command_session_from_turn(&turn),
+                        )?;
+                        let script_path = args.script_path.as_deref().ok_or_else(|| {
+                            FunctionCallError::RespondToModel(
+                                "mode register_script needs script_path".to_string(),
+                            )
+                        })?;
+                        let change_reason = args
+                            .change_reason
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|reason| !reason.is_empty())
+                            .ok_or_else(|| {
+                                FunctionCallError::RespondToModel(
+                                    "mode register_script needs change_reason".to_string(),
+                                )
+                            })?;
+                        let script = workspace_file(&turn.cwd, script_path)?;
+                        command
+                            .arg("scrape")
+                            .arg("register-script")
+                            .arg("--target-key")
+                            .arg(&args.target_key)
+                            .arg("--script-file")
+                            .arg(script)
+                            .arg("--change-reason")
+                            .arg(change_reason);
+                    }
+                    _ => {
+                        require_scrape_execute_command_session(
+                            business_os_command_session_from_turn(&turn),
+                        )?;
+                        let mut target = args.target.ok_or_else(|| {
+                            FunctionCallError::RespondToModel(
+                                "mode upsert_target needs target (adapter definition object)"
+                                    .to_string(),
+                            )
+                        })?;
+                        let Some(object) = target.as_object_mut() else {
+                            return Err(FunctionCallError::RespondToModel(
+                                "target must be a JSON object".to_string(),
+                            ));
+                        };
+                        object.insert(
+                            "target_key".to_string(),
+                            serde_json::Value::String(args.target_key.clone()),
+                        );
+                        let dir = turn.cwd.join(".ctox").join("scrape-targets");
+                        std::fs::create_dir_all(&dir).map_err(|error| {
+                            FunctionCallError::RespondToModel(format!(
+                                "cannot write target definition: {error}"
+                            ))
+                        })?;
+                        let path = dir.join(format!("{}.json", args.target_key));
+                        std::fs::write(&path, target.to_string()).map_err(|error| {
+                            FunctionCallError::RespondToModel(format!(
+                                "cannot write target definition: {error}"
+                            ))
+                        })?;
+                        command
+                            .arg("scrape")
+                            .arg("upsert-target")
+                            .arg("--input")
+                            .arg(path);
+                    }
+                }
+            }
             "ctox_web_scrape" => {
                 let args: CtoxWebScrapeArgs = parse_arguments(&arguments)?;
                 command
@@ -488,7 +641,9 @@ fn web_tool_is_mutating(tool_name: &str, payload: &ToolPayload) -> bool {
         return false;
     }
     match payload {
-        ToolPayload::Function { arguments } => scrape_execute_requested(arguments),
+        ToolPayload::Function { arguments } => {
+            scrape_execute_requested(arguments) || scrape_maintenance_mode(arguments).is_some()
+        }
         _ => false,
     }
 }
@@ -880,12 +1035,44 @@ mod tests {
     }
 
     #[test]
+    fn scrape_maintenance_paths_stay_inside_the_task_workspace() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(workspace.path().join("extractor.js"), "// draft").expect("draft");
+        std::fs::write(outside.path().join("evil.js"), "// outside").expect("outside");
+        assert!(workspace_file(workspace.path(), "extractor.js").is_ok());
+        assert!(workspace_file(workspace.path(), "../nope.js").is_err());
+        assert!(
+            workspace_file(
+                workspace.path(),
+                &outside.path().join("evil.js").to_string_lossy()
+            )
+            .is_err()
+        );
+        assert!(workspace_file(workspace.path(), ".").is_err());
+        assert_eq!(
+            scrape_maintenance_mode(r#"{"target_key":"x","mode":"Register_Script"}"#).as_deref(),
+            Some("register_script")
+        );
+        assert!(scrape_maintenance_mode(r#"{"target_key":"x","mode":"execute"}"#).is_none());
+    }
+
+    #[test]
     fn scrape_execute_is_mutating_but_stored_reads_are_not() {
         let payload = |mode| ToolPayload::Function {
             arguments: format!(r#"{{"target_key":"northdata-de","mode":"{mode}"}}"#),
         };
         assert!(web_tool_is_mutating("ctox_web_scrape", &payload("execute")));
         assert!(!web_tool_is_mutating("ctox_web_scrape", &payload("latest")));
+        assert!(web_tool_is_mutating("ctox_web_scrape", &payload("test")));
+        assert!(web_tool_is_mutating(
+            "ctox_web_scrape",
+            &payload("register_script")
+        ));
+        assert!(web_tool_is_mutating(
+            "ctox_web_scrape",
+            &payload("upsert_target")
+        ));
         assert!(!web_tool_is_mutating(
             "ctox_web_scrape",
             &payload("semantic")

@@ -6,238 +6,103 @@ cluster: communication
 
 # Universal Scraping
 
-## CTOX Runtime Contract
+A scrape is a registered **target** (`target_key`) with a versioned extraction **script**: built once, reused by every run. Use only the tools below — not the shell `ctox` CLI (fails in the worker sandbox), `curl`, or scripts you run yourself.
 
-- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
-- The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
-- Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
+## 1. Use what exists
 
+1. **Stored records are enough?** `ctox_web_scrape {"target_key": "…", "mode": "latest", "limit": 20}` or `{"mode": "semantic", "query": "…", "limit": 10}`. No live call, but shared by all runs: no evidence for one specific record.
+2. **Live run:** `{"target_key": "…", "mode": "execute", "input": {…}, "timeout_seconds": 180}` (max 420). The result carries `status`, `reason` and `records_preview` `{shown, total, records}` (≤ 40 records). Take values from it; never read run or state files.
+3. **Read the status:**
 
-For CTOX mission work, scraped findings become durable knowledge only when the relevant facts are persisted into the the CTOX runtime store. Raw exports or workspace notes do not count as durable knowledge by themselves.
+| status | meaning | next step |
+| --- | --- | --- |
+| `succeeded`, `partial_output` | records delivered | use them; partial → consider §2 |
+| `completed_empty` | query proven empty | accept |
+| `portal_drift` | page reached, nothing extracted, or script error | check with `ctox_web_read` that the data is really there, then §2 |
+| `invalid_input` | input missing or wrong | fix your input once; still failing → §2 |
+| `blocked` | challenge, 401/403 | no repeat; §3 only if needed for this task |
+| `temporary_unreachable` | timeout, 429, 5xx | no repeat in this task |
+| `authorization_required` | login wall | `auto_reauthorization.ok: true` → rerun once; otherwise the run has already handed the login to the owner (§5) |
+| `provider_account_inactive` | paid account inactive | no repeat; report |
 
-Use this skill when the task is really about recurring extraction:
+## 2. Write or repair the script (priority 1)
 
-- scraping a website or portal
-- deriving a stable extractor from a browser/API observation
-- revising a broken scraper after portal drift
-- scheduling repeat scrapes through CTOX
-- storing scrape outputs and revisions so later runs can reuse them
+1. **Draft** in your workspace, e.g. `adapters/<target_key>.js`. To repair, start from the target's current script (`scripts/current.js` in the target folder, two levels above `run_manifest_path`); read nothing else from that tree.
+2. **Test:** `{"target_key": "…", "mode": "test", "script_path": "adapters/<target_key>.js", "input": {…}}` runs the draft through the real runner and stores nothing (no revision, records, state, repair or re-login); `reason` starts with `script_override_test:`. At most 3 tests per source and task.
+3. **Register:** `{"target_key": "…", "mode": "register_script", "script_path": "…", "change_reason": "<what changed and why>"}` makes it the active revision (old ones stay). Only after a test with correct records.
+4. **Run:** one `execute` to confirm the registered revision.
+5. **New source:** first `{"target_key": "…", "mode": "upsert_target", "target": {"display_name": "…", "start_url": "https://…", "target_kind": "prospect-research", "config": {"record_key_fields": ["field", "source_url"], "expected_min_records": 1}, "output_schema": {"schema_key": "prospect.v1"}}}`, then steps 1–4. It replaces the whole definition: never use it on an existing target.
 
-Do not store generated target scripts inside the skill folder.
+**Script contract** (the runner starts `node <script>` with a cleared environment plus these variables):
+- `CTOX_SCRAPE_INPUT_JSON` — the call's `input` (JSON text); `CTOX_SCRAPE_START_URL`, `CTOX_SCRAPE_TARGET_KEY`, `CTOX_SCRAPE_RUN_DIR`, `CTOX_SCRAPE_OUTPUT_DIR` (scratch for captures); `CTOX_BIN` — the running ctox binary for `web browser-capture`, `web read`, `secret get`.
+- stdout: exactly one JSON value — `{"records": [...]}` (also accepted: a bare array, `items`, `jobs`, `result.records`), or `{"records": [], "failure_mode": "<mode>", "detail": "<why>"}`. Without an optional `query_completion` receipt, 0 records counts as `portal_drift`.
+- `failure_mode`: `invalid_input`, `temporary_unreachable`, `blocked`, `portal_drift`, `authorization_required`, `provider_account_inactive`, `partial_output`.
+- Prospect records: `{"field", "value", "confidence": "high|medium", "source_url", "note"}`.
 
-The skill folder is for stable reusable resources:
+Minimal skeleton (Node ≥ 18, CommonJS, built-ins only):
 
-- workflow rules
-- helper tooling
-- template logic
-- storage contracts
+```js
+"use strict";
+const BASE = "https://www.example.org"; // the source
+const TIMEOUT_MS = 20000;
+const out = (o) => process.stdout.write(JSON.stringify(o));
+const fail = (mode, detail) => out({ records: [], failure_mode: mode, detail });
 
-Target-specific generated scripts and run artifacts belong under `runtime/`, with metadata in CTOX runtime state.
+async function main() {
+  let input;
+  try { input = JSON.parse(process.env.CTOX_SCRAPE_INPUT_JSON || "{}"); }
+  catch { return fail("invalid_input", "input is not JSON"); }
+  const company = String(input.company || "").trim();
+  if (!company) return fail("invalid_input", "input.company missing");
 
-## Operating Model
+  let res;
+  try {
+    res = await fetch(`${BASE}/suche?q=${encodeURIComponent(company)}`,
+      { signal: AbortSignal.timeout(TIMEOUT_MS), headers: { "user-agent": "Mozilla/5.0" } });
+  } catch (e) { return fail("temporary_unreachable", `fetch: ${e.name}`); }
+  if (res.status === 401 || res.status === 403) return fail("blocked", `HTTP ${res.status}`);
+  if (res.status === 429 || res.status >= 500) return fail("temporary_unreachable", `HTTP ${res.status}`);
+  if (!res.ok) return fail("portal_drift", `HTTP ${res.status}`);
+  const html = await res.text();
+  if (/captcha|cf-chl|verify you are human/i.test(html)) return fail("blocked", "challenge page");
 
-This skill uses a hybrid model:
+  const records = [];
+  const tel = html.match(/Telefon:?\s*([+0-9][0-9 ()\/-]{5,})/);
+  if (tel) records.push({ field: "firma_telefon", value: tel[1].trim(), confidence: "high",
+    source_url: res.url, note: "Telefon line on result page" });
 
-1. repo-managed skill resources under `skills/system/communication/universal-scraping/`
-2. mutable target workspaces under `runtime/scraping/targets/<target_key>/`
-3. mutable registry state in `runtime/ctox_scraping.db`
-4. optional compact evidence in the shared CTOX knowledge store with `skill_key=universal_scraping`
-
-That split is intentional:
-
-- the skill stays clean and reusable
-- generated scripts become inspectable runtime artifacts
-- revisions, promotions, runs, and artifact metadata stay queryable
-- scheduled work can point to a stable `target_key` instead of embedding ad hoc logic every time
-
-## Preferred Helpers
-
-Use the native CTOX scrape surface when it fits:
-
-- `ctox scrape upsert-target`
-  - owns target registration and workspace creation
-- `ctox scrape register-script`
-  - owns script revisioning
-- `ctox scrape register-source-module`
-  - owns per-source extractor/module revisioning inside a multi-source target
-- `ctox scrape record-template-example`
-  - owns reusable template evidence capture
-- `ctox scrape promote-template`
-  - owns promoted provider-family templates
-- `ctox scrape execute`
-  - owns run execution, drift classification, artifacts, and repair enqueueing
-- `ctox scrape show-latest`
-  - exposes the current materialized canonical record set for a target
-- `ctox scrape show-api`
-  - exposes the default target API contract and documented endpoints
-- `ctox scrape query-records`
-  - runs exact-match filters against the canonical latest record set
-- `ctox scrape semantic-search`
-  - runs semantic retrieval backed by the configured embedding service
-- `ctox scrape summary`
-  - summarizes targets, templates, and recent runs
-
-## Tool Contracts
-
-Think in these capability contracts:
-
-- `scrape.target_upsert`
-- `scrape.script_register`
-- `scrape.template_record`
-- `scrape.template_promote`
-- `scrape.run_record`
-- `scrape.registry_query`
-
-## Workflow
-
-1. Define the target.
-   Identify the real source, extraction goal, cadence, and output contract.
-2. Register the target first.
-   Use `ctox scrape upsert-target` so the scrape has a stable `target_key`, workspace, and output schema before code generation starts.
-   For multi-source scrapers, define `config.sources[]` here so each source gets a stable `source_key`, folder, and module path up front.
-3. Prefer the cheapest stable extraction path.
-   Use direct API/feed/embedded JSON paths before browser-driven DOM scraping.
-4. Use browser work as reviewed capability, not as prompt sludge.
-   Keep browser traces compact and store artifacts on disk instead of dumping long traces into the main agent context.
-5. Generate or revise the extractor script.
-   Materialize target-specific scripts under the target workspace and register them as revisions.
-   If the target aggregates multiple websites or feeds, keep source-specific logic in `sources/<source_key>/` modules and register those with `ctox scrape register-source-module` instead of stuffing everything into one root script.
-6. Record reusable patterns separately.
-   If the script solves a provider family, record it as a template example and promote only after cross-target evidence.
-7. Record each real run.
-   Store trigger, schedule slot, result summary, and artifact metadata with `record-run`.
-8. Keep recurring work in CTOX schedule.
-   Use `ctox schedule add --skill "universal-scraping"` for repeat runs, and let the scheduled prompt carry `target_key`, cadence, and desired output contract.
-9. Keep outputs normalized.
-   Each target should define where canonical outputs land and which schema key they follow.
-10. Build the API surface with the scraper, not afterward.
-   Each target should carry a default records API, semantic-search config, and editable LLM-enrichment template in its runtime workspace.
-11. Treat drift honestly.
-   If selectors, URLs, or API paths changed, revise the script and record a new revision instead of overwriting history.
-
-## CTOX Execution Path
-
-Use the native CLI bridge when you want the scrape lifecycle to stay inside CTOX:
-
-```sh
-ctox scrape init
-ctox scrape upsert-target --input /path/to/target.json
-ctox scrape register-script --target-key acme-jobs --script-file /path/to/extractor.js --change-reason initial_import
-ctox scrape register-source-module --target-key acme-jobs --source-key board-a --module-file /path/to/board-a.js --change-reason initial_source_import
-ctox scrape execute --target-key acme-jobs --allow-heal
-ctox scrape show-api --target-key acme-jobs
-ctox scrape query-records --target-key acme-jobs --where classification.category=job --limit 20
-ctox scrape semantic-search --target-key acme-jobs --query "remote rust jobs"
+  if (!records.length) return fail("portal_drift", "page loaded, no extractable fields");
+  out({ records });
+}
+main().catch((e) => fail("portal_drift", `unexpected: ${e.message}`));
 ```
 
-`ctox scrape execute` and the target runtime do six things:
+JS-rendered page: `execFileSync(process.env.CTOX_BIN, ["web", "browser-capture", "--url", url, "--out-dir", dir, "--timeout-ms", "45000"])` (`dir` under `CTOX_SCRAPE_OUTPUT_DIR`), then read `dir/page.html` (as the `impressum` adapter does).
 
-- runs the latest registered script revision
-- passes the normalized source graph plus latest source-module revisions into the runtime so one target can aggregate multiple upstream sources
-- classifies the outcome as `succeeded`, `temporary_unreachable`, `portal_drift`, `blocked`, or `partial_output`
-- records the run and artifacts into the scrape registry
-- applies optional target-local LLM enrichment before canonical materialization, so classifications and extracted fields become part of the default API surface
-- materializes the current canonical latest dataset plus delta summary for successful runs
-- writes a default target API contract plus editable enrichment and semantic templates under `runtime/scraping/targets/<target_key>/api/`
-- makes the materialized state available through native records and semantic query surfaces
-- if `--allow-heal` is set and the failure looks like drift instead of downtime, creates a CTOX queue repair task instead of silently rewriting on transient outages
+## 3. Browser (priority 2)
 
-Do not overwrite an existing target-local `semantic_template.json` or `llm_enrichment_template.json` just because the manifest is refreshed. Those files are intended to be edited per scraper and then reused by later executions.
-Do not patch a source-local module in place and call it done; register a source revision so later repair work can compare what changed per upstream source.
+`ctox_browser_automation` runs plain JavaScript in CTOX's browser: `await ctoxBrowser.goto(url)`, `observe()`, `click(target)`, `fill(target, value)`, `press(target, key)`, `screenshot()`. Only when a script is not feasible (interactive flow) or for one record now; write the working path (URLs, selectors, steps) into `adapters/<target_key>.notes.md` so it can become a script.
 
-That is the CTOX-native replacement for a second hidden agent loop.
+## 4. Robustness rules
 
-## Scheduling Pattern
+- **Selectors:** stable labels, `id`, `name`, `data-*`, `aria-*`, JSON-LD, embedded JSON — never generated classes or positions. API or feed beats HTML.
+- **Timeouts:** every request has its own timeout well below the run's `timeout_seconds`; at that limit the runner kills the whole process tree and the run counts as `temporary_unreachable`. At most one retry, only for a transient load failure — never for a loaded page that yields nothing.
+- **No loops:** bounded pagination (fixed page cap), no `while (true)`, no retry without a counter.
+- **Honest outcome:** set `failure_mode` yourself instead of crashing. Non-zero exit or unparseable stdout → `portal_drift`; "timeout", "429", "ssl" in stderr can turn a run `temporary_unreachable`. stdout holds only the JSON.
+- **No fabrication:** only what the page states, with its exact `source_url`.
+- **Self-contained:** Node built-ins only; no relative `require`, no npm packages.
+- **Secrets:** never print, log or put into records or `detail` a credential, token or cookie.
 
-Recommended schedule prompts should include:
+## 5. Authenticated sources
 
-- target key
-- expected trigger type
-- expected output schema
-- freshness expectation
-- failure rule
+- The credential belongs to the target config: `credential_ref: "ctox-secret://credentials/<NAME>"` (or `credential_secret_name`). Set it in `upsert_target` for a new target; never put a value into a script or input.
+- The script fetches it at runtime only when it must: `execFileSync(process.env.CTOX_BIN, ["secret", "get", "--scope", "credentials", "--name", NAME])` returns `{"value": …}`. An API key is sent as the API expects (e.g. `Authorization: Bearer …`).
+- Landing on a login page → `failure_mode: "authorization_required"`; a rejected key → `blocked` with the HTTP status in `detail`. Never mask a credential problem as `temporary_unreachable`.
+- Re-login is the run's job: on `authorization_required` it signs in with the stored credential itself (`auto_reauthorization`, including an e-mail one-time code) and otherwise hands the login to the owner. You never type credentials and do not request a second login.
 
-Example:
+## 6. Where the tools work
 
-```sh
-ctox schedule add \
-  --name "refresh acme jobs" \
-  --cron "0 */6 * * *" \
-  --skill "universal-scraping" \
-  --prompt "Run target_key=acme-jobs. Expect schema=jobs.v1. Store outputs in the registered runtime workspace. If the portal drifted, revise the script, register a new revision, and summarize the delta."
-```
+- `execute`/`test`: only in an Outbound research task, for targets in its `source_policy`. Elsewhere draft and report; never register an untested script.
+- `register_script`/`upsert_target`: any bound Business OS task. `latest`/`semantic`: everywhere.
 
-## Completion Gate
-
-Do not report a scrape workflow as prepared until:
-
-- a target exists in the registry
-- the target workspace exists under `runtime/scraping/targets/`
-- the latest script is versioned, not just pasted in chat
-- multi-source targets have named `config.sources[]` definitions and source modules registered where source-specific logic exists
-- the output schema and storage path are explicit
-- repeat execution can be routed through CTOX schedule or queue state
-
-Do not report a reusable template as promoted until:
-
-- it was recorded as a template example
-- it has evidence across more than one target or a strong explicit override reason
-- the promoted template metadata exists in the registry
-
-## Authenticated targets (credentials live in the secret store)
-
-A target whose config carries `credential_ref: ctox-secret://credentials/<NAME>`
-is meant to be scraped **from a signed-in session**, and the sign-in is your
-job, not the owner's.
-
-- Check that the referenced secret exists and when it was last updated
-  (`ctox secret list`). Never read, print, log or embed the value; scripts fetch
-  it at runtime themselves (`ctox secret get --scope credentials --name <NAME>`
-  through `CTOX_BIN`), so it never reaches an artifact.
-- Sign in through the CTOX browser session for that target, verify the session
-  (an element only a signed-in page shows), then derive the extractor as usual.
-  The command for that is
-  `ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref ctox-secret://credentials/<NAME> --target-url <login-url> --task-id <your task id> --timeout-ms 240000`:
-  CTOX fills the stored credential itself and completes an e-mail one-time code
-  from the connected mailbox (D&B/Okta). A run that returns
-  `authorization_required` with a `reauthorization` block is exactly this case:
-  take `source_id`, `credential_ref` and `login_url` from that block, sign in,
-  then rerun `ctox scrape execute`. Only if the automatic sign-in fails hand it
-  to the owner with `auth-assist-request`.
-- When the sign-in stops at the e-mail code, the result names it in
-  `email_otp.status` (`source-capture`: `email_otp_status`/`email_otp_detail`).
-  `no_code_mail` means the provider's mail did not reach a synced mailbox in
-  time: run the sign-in once more before anything else, because the provider
-  often sends the code only on the second challenge. `otp_mailbox_unbound`
-  means the stored login names no code mailbox; that, and a code mailbox owned
-  by another person, are the only cases for `auth-assist-request`, and the
-  request must quote the status.
-- To give up on a queue task, `ctox channel ack --status failed` needs
-  `--reason "<exact cause>"`; without a reason the ack is refused.
-- An API-key target (name ends in `_TOKEN` or `_API_KEY`) holds one raw value,
-  not a user/password pair. The script reads it and sends it as the API's
-  credential (for example `Authorization: Bearer <value>`).
-- If the sign-in fails, the run's `failure_mode` is `blocked` and the detail
-  names the exact cause (MFA, captcha, lockout, rejected key with HTTP status).
-  A silent "temporarily unreachable" hides a credential problem and wastes the
-  next run.
-- Never park an authenticated target as "waiting for the owner" without having
-  attempted the sign-in in this turn.
-
-## Guardrails
-
-- Do not mutate the skill folder with target-specific scripts.
-- Do not treat raw browser traces as the durable product.
-- Do not overwrite working scripts in place without creating a revision.
-- Do not hide schedule state in prose; use CTOX queue or schedule explicitly.
-- Prefer compact artifacts, typed outputs, and stable schemas over free-form dumps.
-- Keep browser-backed repeated work eligible for later specialist-model or deterministic-worker promotion.
-
-## Resources
-
-- [references/architecture.md](references/architecture.md)
-- [references/storage-layout.md](references/storage-layout.md)
-- [references/task-contracts.md](references/task-contracts.md)
+Operators (host shell only): `ctox scrape list-targets | show-target --target-key <key> | execute --target-key <key> --input-json '<json>'`; `ctox scrape register-script --target-key <key> --script-file <path> --change-reason <text>`; `ctox scrape upsert-target --input <target.json>`.

@@ -71,6 +71,7 @@ pub(super) fn persist(
         exact_source,
         "native checkpoint has a foreign source capture"
     );
+    source_policy::persist(policy, destination, &receipt.capture_id)?;
     ensure!(
         tokio::runtime::Handle::try_current().is_err(),
         "native checkpoint requires the synchronous quiescent owner"

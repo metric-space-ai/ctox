@@ -647,6 +647,7 @@ function installAdvancedStatusInterface() {
   };
   window.CTOX_BUSINESS_OS_STATUS = api;
   window.CTOX_BUSINESS_OS_APP = state;
+  workjetComputerControl.supportsOperationalDetails = true;
   globalThis.workjetComputerControl = workjetComputerControl;
   globalThis.workjetProjectControl = workjetProjectControl;
   globalThis.workjetSessionControl = workjetSessionControl;
@@ -13267,7 +13268,11 @@ async function workjetComputerControl(request = {}) {
   const computerBridge = await requireWorkjetComputerDataPlane();
 
   if (action === 'computer.list') {
-    assertWorkjetComputerPayloadKeys(request, new Set(['action']));
+    assertWorkjetComputerPayloadKeys(request, new Set(['action', 'includeOperationalDetails']));
+    if (request.includeOperationalDetails !== undefined
+      && typeof request.includeOperationalDetails !== 'boolean') {
+      throw new Error('Invalid Workjet computer includeOperationalDetails.');
+    }
     const commandId = `cmd_workjet_computer_list_${newId()}`;
     await state.commandBus.dispatch({
       id: commandId,
@@ -13284,7 +13289,9 @@ async function workjetComputerControl(request = {}) {
     await waitForSyncBridgeReady(computerBridge, WORKJET_COMPUTER_CONTROL_TIMEOUT_MS);
     return {
       action: 'computer.list',
-      computers: await listProjectedWorkjetComputers(ownerUserId),
+      computers: await listProjectedWorkjetComputers(ownerUserId, {
+        includeOperationalDetails: request.includeOperationalDetails === true,
+      }),
     };
   }
 
@@ -13563,7 +13570,7 @@ async function requireWorkjetComputerDataPlane() {
   return computerBridge;
 }
 
-async function listProjectedWorkjetComputers(ownerUserId) {
+async function listProjectedWorkjetComputers(ownerUserId, options = {}) {
   const collection = state.db?.collection?.('workjet_computers');
   const docs = await collection.find({
     selector: {
@@ -13573,7 +13580,7 @@ async function listProjectedWorkjetComputers(ownerUserId) {
     limit: WORKJET_COMPUTER_CONTROL_MAX_RESULTS,
   }).exec();
   return docs
-    .map((doc) => boundedWorkjetComputerResult(doc?.toJSON?.() || doc))
+    .map((doc) => boundedWorkjetComputerResult(doc?.toJSON?.() || doc, options))
     .filter(Boolean)
     .sort((left, right) => left.displayName.localeCompare(right.displayName)
       || left.id.localeCompare(right.id));
@@ -13643,6 +13650,10 @@ function boundedWorkjetComputerResult(value, options = {}) {
     hostingMode: boundedWorkjetComputerHostingMode(value.hosting_mode),
     status: value.status,
     capabilities: Object.freeze(boundedWorkjetComputerCapabilities(value.capabilities)),
+    ...(options.includeOperationalDetails && value.capability_config !== undefined
+      ? { capabilityConfig: Object.freeze(boundedWorkjetOperationalCapabilities(value.capability_config)) } : {}),
+    ...(options.includeOperationalDetails && typeof value.agentless === 'boolean'
+      ? { agentless: value.agentless } : {}),
     selfHostedColocation: value.self_hosted_colocation === true,
   });
 }
