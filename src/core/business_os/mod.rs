@@ -60,6 +60,7 @@ pub mod policy;
 mod populated_store_recovery;
 mod project_chats;
 mod project_crew;
+mod workjet_identity;
 pub(crate) use project_crew::project_crew_member_for_task;
 pub mod build_delivery;
 pub mod build_source;

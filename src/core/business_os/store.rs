@@ -19402,6 +19402,7 @@ pub fn issue_business_os_capability_token_for_managed_user_with_email(
             updated_at_ms = excluded.updated_at_ms",
         params![user_id, display_name, role.as_str(), now_ms],
     )?;
+    super::workjet_identity::remember_managed_identity(&conn, user_id, email.as_deref(), now_ms)?;
     drop(conn);
     issue_business_os_capability_token_until_with_identity(
         root,
@@ -27529,6 +27530,13 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_business_command_intake_failures_open
             ON business_command_intake_failures(exhausted, observed_at_ms)
             WHERE resolved_at_ms IS NULL;
+
+        -- Native identity provenance; never supplied by an editable profile.
+        CREATE TABLE IF NOT EXISTS business_user_identity_aliases (
+            alias TEXT PRIMARY KEY,
+            canonical_user_id TEXT NOT NULL,
+            verified_at_ms INTEGER NOT NULL
+        );
 
         CREATE TABLE IF NOT EXISTS business_users (
             user_id TEXT PRIMARY KEY,

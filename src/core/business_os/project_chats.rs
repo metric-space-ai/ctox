@@ -94,6 +94,7 @@ pub(super) fn handle_command(
     super::worker_profile_bindings::validate_crew_reference(root, command)?;
     let mut conn = open_store(root)?;
     let applied = admission.apply(&mut conn, |tx| {
+        let owner = super::workjet_identity::owner_from_connection(tx, &owner)?;
         let mut projections = Vec::new();
         let result = apply_command(root, tx, command, &owner, &mut projections)?;
         Ok(AppliedDomainEffect {
