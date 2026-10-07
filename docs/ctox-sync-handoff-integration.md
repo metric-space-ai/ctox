@@ -157,8 +157,11 @@ Preparation files and the policy audit have separate commit boundaries; a lost
 reply, crash or out-of-band filesystem replacement can leave a private orphan
 requiring reconciliation. Future Core admission must revalidate current policy,
 workspace contents, clean effects and quorum ownership, not trust the marker.
-Native regressions exercise the real captured bundle, target policy and retained
-account guard; they do not prove independent-host networking or installed resume.
+Native regressions keep the actual captured checkpoint immutable and reject its
+unreconciled effects before staging. Isolated publication fixtures exercise the
+real target policy and retained account guard. A separately declared clean kernel
+fixture restores exact Git state from its protected bundle after source removal.
+These checks do not prove independent-host networking or installed resume.
 
 ## Native guest acceleration selection
 

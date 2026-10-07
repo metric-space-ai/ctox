@@ -191,39 +191,41 @@ pub(super) fn assert_native_reconstruction<P: Clone + Eq + Hash + Send + Sync + 
         .join("runtime/ctox-sync/prepared-workspaces");
     let entries = || std::fs::read_dir(&parent).map(|r| r.count()).unwrap_or(0);
     assert_eq!(entries(), 0);
-    let staged = runtime
-        .block_on(stage(target.clone(), store.clone()))
-        .unwrap();
-    let workspace = staged.directory.path().join("workspace");
-    assert_eq!(
-        std::fs::read(workspace.join("tracked.txt")).unwrap(),
-        b"unstaged\n"
-    );
-    assert_eq!(
-        std::fs::read(workspace.join("untracked.bin")).unwrap(),
-        b"required\0bytes"
-    );
-    assert!(!workspace.join("removed.txt").exists());
-    let git = |args: &[&str]| {
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&workspace)
-            .args(args)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        output.stdout
-    };
-    assert_eq!(git(&["show", ":tracked.txt"]), b"staged\n");
     let manifest = store.load(&target.request.checkpoint_digest).unwrap();
+    assert!(!manifest.pending_effects.is_empty());
+    let before = serde_json::to_vec(&manifest).unwrap();
+    let error = runtime
+        .block_on(stage(target.clone(), store.clone()))
+        .err()
+        .expect("actual native capture requires effect reconciliation");
+    assert!(
+        error.to_string().contains("unreconciled effects"),
+        "{error}"
+    );
+    assert_eq!(entries(), 0, "dirty capture creates no private stage");
     assert_eq!(
-        String::from_utf8(git(&["rev-parse", "HEAD"]))
-            .unwrap()
-            .trim(),
-        manifest.workspace_state.base_commit
+        serde_json::to_vec(&store.load(&target.request.checkpoint_digest).unwrap()).unwrap(),
+        before,
+        "target preparation never clears source effect evidence"
     );
     let policy = Connection::open(business_os_store_path(&target.server.gate.root)).unwrap();
+    let audited: i64 = policy.query_row(
+        "SELECT count(*) FROM business_events WHERE command_type='business_os.session_handoff.workspace_prepared'",
+        [], |r| r.get(0),
+    ).unwrap();
+    assert_eq!(audited, 0);
+
+    // Isolated publication fixtures exercise the real native authority fence;
+    // these empty directories are not a reconstructed native session.
+    create_private(&parent).unwrap();
+    let fixture = || StagedWorkspace {
+        directory: tempfile::Builder::new()
+            .prefix("workspace-")
+            .tempdir_in(&parent)
+            .unwrap(),
+        checkpoint_digest: target.request.checkpoint_digest.clone(),
+    };
+    let staged = fixture();
     policy
         .execute(
             "UPDATE business_session_handoff_bindings SET state='revoked' WHERE binding_digest=?1",
@@ -232,15 +234,12 @@ pub(super) fn assert_native_reconstruction<P: Clone + Eq + Hash + Send + Sync + 
         .unwrap();
     assert!(
         staged.publish(&target).is_err(),
-        "revocation after Git IO forbids publication"
+        "revocation fences publication"
     );
-    assert_eq!(entries(), 0, "rejected private workspace is removed");
-    assert!(
-        runtime
-            .block_on(stage(target.clone(), store.clone()))
-            .is_err(),
-        "revoked setup creates no reconstruction directory"
-    );
+    assert_eq!(entries(), 0);
+    assert!(runtime
+        .block_on(stage(target.clone(), store.clone()))
+        .is_err());
     assert_eq!(entries(), 0);
     policy
         .execute(
@@ -248,38 +247,14 @@ pub(super) fn assert_native_reconstruction<P: Clone + Eq + Hash + Send + Sync + 
             [&target.request.binding_digest],
         )
         .unwrap();
-    let staged = runtime
-        .block_on(stage(target.clone(), store.clone()))
-        .unwrap();
+    let staged = fixture();
     *target.live.lock().unwrap() = false;
     assert!(
         staged.publish(&target).is_err(),
-        "client retirement fences staged workspace publication"
+        "client retirement fences publication"
     );
     assert_eq!(entries(), 0);
     *target.live.lock().unwrap() = true;
-    let staged = runtime
-        .block_on(stage(target.clone(), store.clone()))
-        .unwrap();
-    let (digest, id) = staged.publish(&target).unwrap();
-    assert_eq!(digest, target.request.checkpoint_digest);
-    let prepared = parent.join(&id);
-    assert!(prepared.join("workspace/.git").is_dir());
-    let marker: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(prepared.join("prepared.json")).unwrap()).unwrap();
-    assert_eq!(marker["resumed"], false);
-    assert_eq!(marker["sessionId"], target.request.spec.session_id);
-    assert_eq!(marker["bindingDigest"], target.request.binding_digest);
-    assert_eq!(entries(), 1);
-    let audited: i64 = policy
-        .query_row(
-            "SELECT count(*) FROM business_events
-        WHERE command_type='business_os.session_handoff.workspace_prepared'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(audited, 1);
 }
 
 #[cfg(test)]
