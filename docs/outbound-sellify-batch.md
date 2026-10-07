@@ -34,7 +34,10 @@ collection has one required read-only transaction for the entire batch;
 transactions across different collections are not a single atomic snapshot.
 
 There are 1–50 requests, at most 16 exact and 16 fuzzy selectors per request,
-1–32 explicit output field paths and a result limit of 1–50. Internal record-ID
+1–32 explicit output field paths and a result limit of 1–50. Across the whole
+batch there are at most 200 selectors, including at most eight fuzzy probes;
+one-character fuzzy probes are rejected rather than reported as executed-empty.
+Internal record-ID
 queries, nested batches and campaign grouping are rejected in batch mode.
 The complete response must fit 1 MiB; exceeding that budget is an error, not a
 partial successful receipt. A missing/unreadable collection is also an error.

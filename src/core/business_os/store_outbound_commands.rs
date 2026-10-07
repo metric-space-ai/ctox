@@ -1892,6 +1892,8 @@ fn outbound_sellify_batch_lookup(root: &Path, payload: &Value) -> anyhow::Result
     );
     let mut keys = BTreeSet::new();
     let mut indexed_fields: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut total_selectors = 0;
+    let mut fuzzy_selectors = 0;
     // Validate every request before opening any collection or returning data.
     for request in requests {
         let key = outbound_required_string(request, &["key"])?;
@@ -1936,6 +1938,12 @@ fn outbound_sellify_batch_lookup(root: &Path, payload: &Value) -> anyhow::Result
                     .or_default()
                     .insert(field);
                 criteria += 1;
+                total_selectors += 1;
+                fuzzy_selectors += usize::from(selector_key == "fuzzy_selectors");
+                anyhow::ensure!(
+                    total_selectors <= 200 && fuzzy_selectors <= 8,
+                    "Sellify batch exceeds the 200-selector/8-fuzzy-probe budget; split the batch"
+                );
             }
         }
         anyhow::ensure!(
@@ -7139,6 +7147,7 @@ mod tests {
             serde_json::json!({"batch":[]}),
             serde_json::json!({"batch":[{"key":"a","entity":"company","fuzzy_selectors":[{"field":"name","value":"A"}],"fields":["name"]}]}),
             serde_json::json!({"batch":vec![valid.clone();51]}),
+            serde_json::json!({"batch":[{"key":"a","entity":"company","fuzzy_selectors":vec![serde_json::json!({"field":"name","value":"Firma"});9],"fields":["name"]}]}),
             serde_json::json!({"batch":[valid.clone(),valid.clone()]}),
             serde_json::json!({"batch":[{"key":"a","entity":"company","selectors":[],"fields":["name"]}]}),
             serde_json::json!({"batch":[{"key":"a","entity":"company","selectors":[{"field":"unsupported","value":"1"}],"fields":["name"]}]}),
