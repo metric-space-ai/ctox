@@ -15542,27 +15542,26 @@ mod tests {
             "mcp_actor": context.actor,
             "workspace": context.workspace,
         });
-        store::open_store(root)?.execute(
+        let conn = store::open_store(root)?;
+        conn.execute(
             "INSERT INTO business_commands
                 (command_id, module, command_type, record_id, status,
                  payload_json, client_context_json, observed_at_ms)
              VALUES (?1, 'tickets', 'ctox.coding.turn', '', 'failed', '{}', ?2, 42)",
             params![command_id, serde_json::to_string(&client_context)?],
         )?;
-        store::push_collection_records(
-            root,
+        store::upsert_business_record(
+            &conn,
+            "business_commands",
+            command_id,
+            42,
             serde_json::json!({
-                "collection": "business_commands",
-                "documents": [{
-                    "id": command_id,
-                    "command_id": command_id,
-                    "module": "tickets",
-                    "command_type": "ctox.coding.turn",
-                    "status": "failed",
-                    "error_code": "coding_turn",
-                    "client_context": client_context,
-                    "updated_at_ms": 42,
-                }],
+                "command_id": command_id,
+                "module": "tickets",
+                "command_type": "ctox.coding.turn",
+                "status": "failed",
+                "error_code": "coding_turn",
+                "client_context": client_context,
             }),
         )?;
         Ok(())
