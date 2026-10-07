@@ -15,6 +15,16 @@ Fork policy:
 - CTOX must not auto-clone, auto-fetch, or auto-update this subtree from upstream.
 
 
+## 2026-10 User-agent platform discovery
+
+The HTTP user-agent builder memoizes only its process-local OS diagnostic
+metadata. Linux distribution discovery previously launched `lsb_release`,
+`dpkg-query` and `getconf` on every auth reconstruction, including current-account
+publication checks during checkpoint transfer. Originator, terminal and suffix
+remain evaluated per call. No credential, account, policy or permit is cached:
+current-account storage and issuer/publication guards still revalidate each poll.
+The actual captured-checkpoint regression is the transfer-path verifier.
+
 ## 2026-09 Exact-turn interrupt receipts
 
 The V2 `turn/interrupt` handler preserves the supplied turn ID and submits

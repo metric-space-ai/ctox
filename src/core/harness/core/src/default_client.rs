@@ -120,9 +120,14 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
     originator_value == "codex_atlas" || originator_value == "ctox_chatgpt_desktop"
 }
 
+// OS diagnostics are process metadata, not account or publication authority.
+// Linux discovery launches distribution tools; repeated auth reloads must not
+// repeat those subprocesses. Originator, terminal and suffix remain live below.
+static USER_AGENT_OS_INFO: LazyLock<os_info::Info> = LazyLock::new(os_info::get);
+
 pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
-    let os_info = os_info::get();
+    let os_info = &*USER_AGENT_OS_INFO;
     let originator = originator();
     let prefix = format!(
         "{}/{build_version} ({} {}; {}) {}",
