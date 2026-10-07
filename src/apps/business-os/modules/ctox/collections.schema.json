@@ -1603,6 +1603,10 @@
             "status": {
               "maxLength": 128,
               "type": "string"
+            },
+            "summary": {
+              "maxLength": 4096,
+              "type": "string"
             }
           },
           "type": "object"
@@ -1670,7 +1674,7 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 1
+      "version": 2
     },
     "workjet_session_transfers": {
       "additionalProperties": false,
@@ -2233,6 +2237,9 @@
     },
     "workjet_projects": {
       "1": {
+        "operations": []
+      },
+      "2": {
         "operations": []
       }
     }

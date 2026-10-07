@@ -3,7 +3,7 @@
 use super::*;
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 
-fn fixture() -> anyhow::Result<TempDir> {
+pub(super) fn fixture() -> anyhow::Result<TempDir> {
     let root = project_fixture()?;
     let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
     let schemas: Value = serde_json::from_str(include_str!("../business_os_schema_contract.json"))?;
@@ -31,7 +31,7 @@ fn fixture() -> anyhow::Result<TempDir> {
     Ok(root)
 }
 
-fn control(
+pub(super) fn control(
     root: &Path,
     operation: &str,
     actor: &str,
