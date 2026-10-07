@@ -2,10 +2,10 @@
 // License: AGPL-3.0-only
 //! Server-side speech contract shared by meeting tools and native Workjet.
 //! Caller owns meeting authorization and persistence; credentials never cross this API.
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fmt,
     io::Read,
@@ -18,11 +18,10 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_tungstenite::{
-    connect_async_with_config,
+    MaybeTlsStream, WebSocketStream, connect_async_with_config,
     tungstenite::{
-        client::IntoClientRequest, http::HeaderValue, protocol::WebSocketConfig, Message,
+        Message, client::IntoClientRequest, http::HeaderValue, protocol::WebSocketConfig,
     },
-    MaybeTlsStream, WebSocketStream,
 };
 
 const CONFIG_KEY: &str = "speech_gateway";
@@ -316,16 +315,16 @@ impl SpeechGateway {
         if self.config.transcription != SpeechBackend::Mistral {
             let root = self.root.clone();
             let binding = tokio::task::spawn_blocking(move || {
-                crate::inference::runtime_kernel::InferenceRuntimeKernel::resolve(&root)
-                    .ok()
-                    .and_then(|r| {
-                        r.binding_for_auxiliary_role(crate::inference::engine::AuxiliaryRole::Stt)
-                            .cloned()
-                    })
+                let runtime =
+                    crate::inference::runtime_kernel::InferenceRuntimeKernel::resolve(&root)
+                        .map_err(|_| SpeechError::ConfigurationUnavailable)?;
+                runtime
+                    .binding_for_auxiliary_role(crate::inference::engine::AuxiliaryRole::Stt)
+                    .cloned()
+                    .ok_or(SpeechError::UnsupportedBackend)
             })
             .await
-            .map_err(|_| SpeechError::ConfigurationUnavailable)?
-            .ok_or(SpeechError::UnsupportedBackend)?;
+            .map_err(|_| SpeechError::ConfigurationUnavailable)??;
             return TranscriptionStream::open_runtime(
                 binding.transport,
                 binding.request_model,

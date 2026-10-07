@@ -52,10 +52,12 @@ fn typed_configuration_persists_and_rejects_unknown_fields() {
     };
     config.save(root.path()).unwrap();
     assert_eq!(SpeechRuntimeConfig::load(root.path()).unwrap(), config);
-    assert!(serde_json::from_str::<SpeechRuntimeConfig>(
-        r#"{"synthesis":"mistral","transcription":"mistral","api_key":"secret"}"#
-    )
-    .is_err());
+    assert!(
+        serde_json::from_str::<SpeechRuntimeConfig>(
+            r#"{"synthesis":"mistral","transcription":"mistral","api_key":"secret"}"#
+        )
+        .is_err()
+    );
     let invalid = SpeechRuntimeConfig {
         voice_id: Some(" ".into()),
         ..config
@@ -119,11 +121,35 @@ fn missing_saved_voice_fails_before_provider_transport() {
 #[tokio::test]
 async fn unavailable_streaming_fails_before_transport() {
     let root = tempfile::tempdir().unwrap();
+    // Local streaming is now implemented. Explicitly disable its runtime
+    // selection to keep testing the unavailable-backend preflight boundary.
+    let mut state =
+        crate::inference::runtime_state::load_or_resolve_runtime_state(root.path()).unwrap();
+    state.transcription.enabled = false;
+    crate::inference::runtime_state::persist_runtime_state(root.path(), &state).unwrap();
     let gateway = SpeechGateway::from_root(root.path()).unwrap();
     assert!(!gateway.status().streaming_stt_selected);
     assert!(matches!(
         gateway.open_transcription(PcmFormat::default()).await,
         Err(SpeechError::UnsupportedBackend)
+    ));
+}
+
+#[tokio::test]
+async fn selected_local_stream_without_runtime_reports_local_transport_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let mut state =
+        crate::inference::runtime_state::load_or_resolve_runtime_state(root.path()).unwrap();
+    state.transcription.enabled = true;
+    state.transcription.configured_model = Some("engineai/Voxtral-Mini-4B-Realtime-2602".into());
+    crate::inference::runtime_state::persist_runtime_state(root.path(), &state).unwrap();
+    let gateway = SpeechGateway::from_root(root.path()).unwrap();
+    assert!(gateway.status().streaming_stt_selected);
+    // No runtime socket exists under this isolated root. Selection is not
+    // readiness and its failure must never become a provider rejection.
+    assert!(matches!(
+        gateway.open_transcription(PcmFormat::default()).await,
+        Err(SpeechError::Transport)
     ));
 }
 
@@ -256,10 +282,12 @@ async fn real_websocket_streams_partial_then_final_with_end_mark() {
         }
         _ => panic!("expected final"),
     }
-    assert!(timeout(IO_TIMEOUT, stream.next_event())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        timeout(IO_TIMEOUT, stream.next_event())
+            .await
+            .unwrap()
+            .is_none()
+    );
     timeout(IO_TIMEOUT, server).await.unwrap().unwrap();
 }
 
