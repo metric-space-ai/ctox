@@ -4585,6 +4585,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_control_ingestion_uses_cancellation_and_exact_peer_fences() {
+        let handler = MockHandler::new();
+        let pool = RxWebRTCReplicationPool::new_multi(Vec::new(), handler.clone());
+        let peer = MockPeer("ingest-route".into(), 1);
+        let foreign = MockPeer("ingest-route".into(), 2);
+        let mut writes = 0;
+        assert!(pool
+            .with_current_native_control_peer(&peer, || {
+                writes += 1;
+            })
+            .is_err());
+        pool.mark_peer_admitted(&peer, false);
+        assert!(pool
+            .with_current_native_control_peer(&peer, || {
+                writes += 1;
+            })
+            .is_err());
+        pool.mark_peer_admitted(&peer, true);
+        pool.with_current_native_control_peer(&peer, || {
+            assert!(pool.auxiliary_publication_alive.try_lock().is_none());
+            writes += 1;
+        })
+        .unwrap();
+        assert!(pool
+            .with_current_native_control_peer(&foreign, || {
+                writes += 1;
+            })
+            .is_err());
+        handler.retired.lock().insert(peer.clone());
+        assert!(pool
+            .with_current_native_control_peer(&peer, || {
+                writes += 1;
+            })
+            .is_err());
+        handler.retired.lock().remove(&peer);
+        pool.cancel().await;
+        assert!(pool
+            .with_current_native_control_peer(&peer, || {
+                writes += 1;
+            })
+            .is_err());
+        assert_eq!(writes, 1);
+    }
+
+    #[tokio::test]
     async fn guarded_native_control_requires_both_handshakes_and_exact_connection() {
         use super::super::webrtc_types::WebRTCPublicationGuard;
         let handler = MockHandler::new();

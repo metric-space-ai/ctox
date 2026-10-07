@@ -13,7 +13,7 @@ acceptance evidence or a replacement for the full portability requirement.
 | Workjet `WorkjetMailboxDelivery.ts::acceptHandoff` | Dispatches `thread.create` with a new thread ID, host model settings, null branch and null worktree. | This is a new contextual conversation, not continuation of the captured provider session. |
 | Workjet `apps/server/src/workjet/sync/WorkjetSyncIpc.ts::requestSyncAuthority` | Typed private IPC client; current calls are in its test file. | No production execution owner invokes checkpoint protection or takeover through it. |
 | CTOX `src/core/sync/src/native_execution.rs::activate` | Starts the private authority listener and supervises authenticated peer-route discovery. | Does not capture, stream, restore or resume a checkpoint. |
-| CTOX `src/core/sync/src/capture.rs::CheckpointStore::capture` | Captures Git plus caller-supplied history/provider artifacts; requires the caller to establish quiescence. | The configured native queue owner now supplies its stopped Core journal/state and explicitly assigned Git working copy. Target transport, effect reconciliation and original-session resume remain open. |
+| CTOX `src/core/sync/src/capture.rs::CheckpointStore::capture` | Captures Git plus caller-supplied history/provider artifacts; requires the caller to establish quiescence. | The configured native queue owner now supplies its stopped Core journal/state and explicitly assigned Git working copy. The protected native copy path now transfers it to target storage; effect reconciliation and original-session resume remain open. |
 | CTOX `src/core/business_os/workjet_transfer_git.rs` | CLI pack/apply helpers reconstruct a working copy. | They are not called by the native session handoff lifecycle and do not establish account/principal permission. |
 | CTOX `src/core/sync/src/authority/handoff.rs` | Verifies signed gate results and discards old evidence during revalidation. | The production gate adapter now exists (see below); transfer invocations remain absent — no production consumer calls `SessionHandoffTransfer`. |
 | CTOX `business_session_handoff_bindings` | Migration creates binding fields and indexes; a production reader now exists. | The local operator enrolls the actual native source capture and a source-signed offer against target-local policy; the guarded native copy command now transfers it; Core resume remains open. |
@@ -172,8 +172,8 @@ Registrations belong to this daemon lifetime. Restart does not resurrect a
 live provider/process from a persisted claim; abandoned import directories
 need explicit reconciliation. The first-turn producer connection is described
 below. Source/target handoff bindings now have separate native operator enrollment.
-Original-session target resume remains a production connection under #183; Enrollment alone does not
-start QEMU or establish two-host restoration.
+Original-session target resume remains open under #183. Enrollment alone does
+not start QEMU or establish two-host restoration.
 
 ## Native source handoff binding enrollment
 
