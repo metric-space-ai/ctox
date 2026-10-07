@@ -109,10 +109,22 @@ async fn native_source_effect_observation_matches_actual_retained_child_without_
     std::fs::File::create(&base)?.set_len(2 * 1024 * 1024)?;
     let overlay = root.path().join("owned-overlay.qcow2");
     std::fs::write(&overlay, b"owned validation fixture")?;
+    // AF_UNIX paths are bounded even when the lane's per-run TMPDIR is long.
+    // Keep the tiny private socket directory on the same lane tmp storage.
+    let tmp_root = std::env::temp_dir();
+    let socket_parent = if tmp_root.as_os_str().len() > 48 {
+        tmp_root.parent().context("fixture tmp parent absent")?
+    } else {
+        tmp_root.as_path()
+    };
+    let socket_root = tempfile::Builder::new()
+        .prefix("child-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(socket_parent)?;
     let desktop = RetainedQemuDesktop::spawn_paused(
         &PreparedQemuGuest {
             program,
-            runtime_parent: assignment.destination.import_parent.clone(),
+            runtime_parent: socket_root.path().into(),
             base_raw: base,
             overlay_qcow2: overlay,
             memory_mib: 64,
