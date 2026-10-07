@@ -192,6 +192,27 @@ impl NativeBusinessDataPolicy {
         )
     }
 
+    // Preparing a document may overlap native writes. The result is private
+    // until final publication rechecks it under mutation fences.
+    fn with_read_snapshot_authority<T>(
+        &self,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        collection: &str,
+        scope: &Scope,
+        apply: impl FnOnce(&NativeReadAuthority<'_>) -> anyhow::Result<T>,
+    ) -> io::Result<T> {
+        self.with_authority(
+            identity,
+            capability_token,
+            collection,
+            Access::Read,
+            scope,
+            false,
+            apply,
+        )
+    }
+
     fn with_current_authority<T>(
         &self,
         identity: &RemoteIdentity,
@@ -201,27 +222,64 @@ impl NativeBusinessDataPolicy {
         scope: &Scope,
         apply: impl FnOnce(&NativeReadAuthority<'_>) -> anyhow::Result<T>,
     ) -> io::Result<T> {
+        self.with_authority(
+            identity,
+            capability_token,
+            collection,
+            access,
+            scope,
+            true,
+            apply,
+        )
+    }
+
+    fn with_authority<T>(
+        &self,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        collection: &str,
+        access: Access,
+        scope: &Scope,
+        publication: bool,
+        apply: impl FnOnce(&NativeReadAuthority<'_>) -> anyhow::Result<T>,
+    ) -> io::Result<T> {
         self.allowed(collection, scope)?;
-        store::with_current_webrtc_capability_signer(&self.root, |signer| {
-            // No CREATE flag, schema preparation, cached credentials or waits.
-            // Enter issuer -> Core -> policy -> projection, then borrow all
-            // readers for one bounded synchronous check/publication callback.
+        let read = |signer: &[u8]| {
+            // No CREATE flag, schema preparation or cached credentials. Only
+            // publication enters issuer -> Core -> policy -> projection fences.
+            let mut timing = publication.then(NativePublicationFenceTiming::new);
+            let behavior = if publication {
+                rusqlite::TransactionBehavior::Immediate
+            } else {
+                rusqlite::TransactionBehavior::Deferred
+            };
             let open = |path: PathBuf| -> anyhow::Result<rusqlite::Connection> {
                 let conn = rusqlite::Connection::open_with_flags(
                     path,
-                    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+                    if publication {
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                    } else {
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    },
                 )?;
                 conn.busy_timeout(std::time::Duration::ZERO)?;
                 Ok(conn)
             };
             let mut core = open(crate::paths::core_db(&self.root))?;
-            let core = core.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let core = core.transaction_with_behavior(behavior)?;
+            if let Some(timing) = &mut timing {
+                timing.core = Some(std::time::Instant::now());
+            }
             let mut policy = open(store::business_os_store_path(&self.root))?;
-            let policy =
-                policy.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let policy = policy.transaction_with_behavior(behavior)?;
+            if let Some(timing) = &mut timing {
+                timing.policy = Some(std::time::Instant::now());
+            }
             let mut projection = open(store::rxdb_store_path(&self.root))?;
-            let projection =
-                projection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let projection = projection.transaction_with_behavior(behavior)?;
+            if let Some(timing) = &mut timing {
+                timing.projection = Some(std::time::Instant::now());
+            }
             let at_ms = chrono::Utc::now().timestamp_millis();
             let claims = store::verified_webrtc_capability_claims_from_connection(
                 &policy,
@@ -263,16 +321,73 @@ impl NativeBusinessDataPolicy {
                 store::existing_instance_id(&self.root)? == identity.instance_id,
                 "native instance changed during callback"
             );
-            // Read-only publication: dropping the immediate transactions
-            // releases the mutation fences, without writing or committing data.
+            // Dropping these transactions never commits or writes data.
             Ok(result)
-        })
-        .map_err(|_| {
+        };
+        let result = if publication {
+            store::with_current_webrtc_capability_signer(&self.root, read)
+        } else {
+            store::with_webrtc_capability_signer_snapshot(&self.root, read)
+        };
+        result.map_err(|_| {
             io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "native read authority unavailable",
             )
         })
+    }
+}
+
+// Holds no authority itself. Drop runs after the SQLite transactions and
+// reports only fixed timing fields, at most once per 15 seconds.
+struct NativePublicationFenceTiming {
+    started: std::time::Instant,
+    core: Option<std::time::Instant>,
+    policy: Option<std::time::Instant>,
+    projection: Option<std::time::Instant>,
+}
+
+impl NativePublicationFenceTiming {
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            core: None,
+            policy: None,
+            projection: None,
+        }
+    }
+}
+
+impl Drop for NativePublicationFenceTiming {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        if elapsed < std::time::Duration::from_millis(2) {
+            return;
+        }
+        static LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+        let at = chrono::Utc::now().timestamp_millis();
+        let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
+        if at.saturating_sub(last) >= 15_000
+            && LAST
+                .compare_exchange(
+                    last,
+                    at,
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                )
+                .is_ok()
+        {
+            let held = |since: Option<std::time::Instant>| since.map(|at| at.elapsed().as_micros());
+            eprintln!(
+                "[business-os] native publication fence timing: {}",
+                json!({
+                    "elapsed_us": elapsed.as_micros(),
+                    "core_hold_us": held(self.core),
+                    "policy_hold_us": held(self.policy),
+                    "projection_hold_us": held(self.projection),
+                })
+            );
+        }
     }
 }
 
@@ -680,6 +795,161 @@ mod owner_receipt_tests {
                 )
                 .await?,
             Some(child)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preparatory_read_snapshots_allow_native_writers_but_final_publication_still_fences(
+    ) -> anyhow::Result<()> {
+        let fixture = read_fixture("chef").await?;
+        let paths = [
+            crate::paths::core_db(fixture.root.path()),
+            store::business_os_store_path(fixture.root.path()),
+            store::rxdb_store_path(fixture.root.path()),
+        ];
+        let writers = paths
+            .iter()
+            .map(|path| {
+                let conn = rusqlite::Connection::open(path)?;
+                conn.execute_batch(
+                    "PRAGMA journal_mode=WAL; CREATE TABLE snapshot_probe (id INTEGER)",
+                )?;
+                conn.busy_timeout(std::time::Duration::ZERO)?;
+                Ok(conn)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        // Active unrelated writes must not reject preparation. The committed
+        // actor/parent snapshots remain private until final publication.
+        let transactions = writers
+            .iter()
+            .map(|writer| {
+                rusqlite::Transaction::new_unchecked(
+                    writer,
+                    rusqlite::TransactionBehavior::Immediate,
+                )
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        fixture.policy.with_read_snapshot_authority(
+            &fixture.identity,
+            &fixture.token,
+            "ctox_crew_members",
+            &Scope::Instance {},
+            |authority| {
+                for conn in [authority.core, authority.policy, authority.projection] {
+                    assert_eq!(
+                        conn.query_row::<i64, _, _>(
+                            "SELECT count(*) FROM snapshot_probe",
+                            [],
+                            |row| row.get(0)
+                        )?,
+                        0
+                    );
+                    assert!(
+                        conn.execute("INSERT INTO snapshot_probe VALUES (1)", [])
+                            .is_err(),
+                        "snapshot handle must be read-only"
+                    );
+                }
+                for tx in &transactions {
+                    tx.execute("INSERT INTO snapshot_probe VALUES (1)", [])?;
+                }
+                Ok(())
+            },
+        )?;
+        for tx in transactions {
+            tx.commit()?;
+        }
+        // Preparation no longer reserves any of these writers across its callback.
+        fixture.policy.with_read_snapshot_authority(
+            &fixture.identity,
+            &fixture.token,
+            "ctox_crew_members",
+            &Scope::Instance {},
+            |authority| {
+                for conn in [authority.core, authority.policy, authority.projection] {
+                    assert_eq!(
+                        conn.query_row::<i64, _, _>(
+                            "SELECT count(*) FROM snapshot_probe",
+                            [],
+                            |row| row.get(0)
+                        )?,
+                        1
+                    );
+                }
+                for writer in &writers {
+                    writer.execute("INSERT INTO snapshot_probe VALUES (2)", [])?;
+                }
+                Ok(())
+            },
+        )?;
+        fixture.policy.with_current_read_authority(
+            &fixture.identity,
+            &fixture.token,
+            "ctox_crew_members",
+            &Scope::Instance {},
+            |_| {
+                for writer in &writers {
+                    assert!(
+                        writer
+                            .execute("INSERT INTO snapshot_probe VALUES (3)", [])
+                            .is_err(),
+                        "publication still excludes native mutations"
+                    );
+                }
+                Ok(())
+            },
+        )?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn issuer_rotated_after_preparation_cannot_publish_retained_native_page(
+    ) -> anyhow::Result<()> {
+        let fixture = read_fixture("chef").await?;
+        let (request, response) = prepared_page(
+            Query {
+                collection: "business_commands".into(),
+                scope: Scope::Instance {},
+                query: json!({"selector":{}, "sort":[{"id":"asc"}]}),
+                page_size: 1,
+            },
+            None,
+        );
+        let guard = fixture.policy.response_publication(
+            &fixture.identity,
+            &fixture.token,
+            &request,
+            &response,
+        )?;
+        fixture.policy.with_read_snapshot_authority(
+            &fixture.identity,
+            &fixture.token,
+            "business_commands",
+            &Scope::Instance {},
+            |_| Ok(()),
+        )?;
+        guard
+            .with_current(&mut || Ok(()))
+            .expect("current issuer permits the page");
+        crate::secrets::write_secret_record(
+            fixture.root.path(),
+            "credentials",
+            "BUSINESS_OS_CAPABILITY_SECRET",
+            "new-native-issuer-fixture-only",
+            None,
+            json!({}),
+        )?;
+        let mut sent = false;
+        assert!(guard
+            .with_current(&mut || {
+                sent = true;
+                Ok(())
+            })
+            .is_err());
+        assert!(
+            !sent,
+            "a preparatory snapshot never authorizes publication after rotation"
         );
         Ok(())
     }
@@ -1598,21 +1868,13 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
         collection: &str,
         document: &Value,
     ) -> io::Result<Option<Value>> {
-        self.authorize(
-            identity,
-            capability_token,
-            collection,
-            Access::Read,
-            &Scope::Instance {},
-        )
-        .await?;
         let policy = self.clone();
         let token = capability_token.to_owned();
         let identity = identity.clone();
         let requested_collection = collection.to_owned();
         let document = document.clone();
         tokio::task::spawn_blocking(move || {
-            policy.with_current_read_authority(
+            policy.with_read_snapshot_authority(
                 &identity,
                 &token,
                 &requested_collection,

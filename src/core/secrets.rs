@@ -220,20 +220,58 @@ pub(crate) fn with_current_secret_values_and_fingerprint<T>(
     keys: &[(&str, &str)],
     apply: impl FnOnce(&[&[u8]], &str) -> Result<T>,
 ) -> Result<T> {
+    with_secret_values_authority(root, keys, true, apply)
+}
+
+/// Preparatory verification only: one read-only encrypted snapshot, without the
+/// master-key mutex or a SQLite writer reservation. Never use this as a permit
+/// to publish data/effects; final publication must re-read under the fence.
+/// No cached plaintext, migration, key generation or schema setup occurs.
+pub(crate) fn with_secret_value_snapshot<T>(
+    root: &Path,
+    scope: &str,
+    name: &str,
+    apply: impl FnOnce(&[u8]) -> Result<T>,
+) -> Result<T> {
+    with_secret_values_authority(root, &[(scope, name)], false, |values, _| apply(values[0]))
+}
+
+fn with_secret_values_authority<T>(
+    root: &Path,
+    keys: &[(&str, &str)],
+    publication: bool,
+    apply: impl FnOnce(&[&[u8]], &str) -> Result<T>,
+) -> Result<T> {
     anyhow::ensure!(
         !keys.is_empty() && keys.len() <= 8,
         "invalid publication secret tuple"
     );
     let master = master_key_guard(root);
-    let _master = master
-        .try_lock()
-        .map_err(|_| anyhow::anyhow!("secret master-key authority is unavailable"))?;
-    let conn = Connection::open_with_flags(
-        resolve_db_path(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
-    )?;
+    let _master = if publication {
+        Some(
+            master
+                .try_lock()
+                .map_err(|_| anyhow::anyhow!("secret master-key authority is unavailable"))?,
+        )
+    } else {
+        None
+    };
+    let _timing = publication.then(SecretPublicationFenceTiming::new);
+    let flags = if publication {
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+    } else {
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+    };
+    let conn = Connection::open_with_flags(resolve_db_path(root), flags)?;
     conn.busy_timeout(std::time::Duration::ZERO)?;
-    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+    let tx = rusqlite::Transaction::new_unchecked(
+        &conn,
+        if publication {
+            rusqlite::TransactionBehavior::Immediate
+        } else {
+            rusqlite::TransactionBehavior::Deferred
+        },
+    )?;
     // This file is reread, rather than treating a formerly valid key as current.
     // Bound its read independently of an accidentally replaced large file.
     let mut raw = Zeroizing::new(String::new());
@@ -261,7 +299,7 @@ pub(crate) fn with_current_secret_values_and_fingerprint<T>(
     let legacy_path = persistence::sqlite_path(root);
     let legacy = if legacy_path.try_exists()? {
         let conn =
-            Connection::open_with_flags(legacy_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+            Connection::open_with_flags(legacy_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         conn.busy_timeout(std::time::Duration::ZERO)?;
         Some(conn)
     } else {
@@ -295,6 +333,18 @@ pub(crate) fn with_current_secret_values_and_fingerprint<T>(
         revisions.push(json!([scope, name, nonce, ciphertext]));
         decrypt_secret_value(&key, &nonce, &ciphertext)
     }).collect::<Result<Vec<_>>>()?;
+    if !publication {
+        // A protected key replacement concurrent with the encrypted read must
+        // fail closed, even if both generations happen to decrypt this record.
+        let mut after = Zeroizing::new(String::new());
+        fs::File::open(master_key_path(root))?
+            .take(129)
+            .read_to_string(&mut after)?;
+        anyhow::ensure!(
+            after.as_str() == raw.as_str(),
+            "secret master key changed during snapshot"
+        );
+    }
     let fingerprint = format!(
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(&revisions)?)
@@ -304,6 +354,43 @@ pub(crate) fn with_current_secret_values_and_fingerprint<T>(
         .map(|value| value.as_slice())
         .collect::<Vec<_>>();
     apply(&borrowed, &fingerprint)
+}
+
+// A throttled, fixed-vocabulary diagnostic. No key, record, token or root is
+// logged. The timer drops after SQLite readers, before the master mutex.
+struct SecretPublicationFenceTiming(std::time::Instant);
+
+impl SecretPublicationFenceTiming {
+    fn new() -> Self {
+        Self(std::time::Instant::now())
+    }
+}
+
+impl Drop for SecretPublicationFenceTiming {
+    fn drop(&mut self) {
+        let held = self.0.elapsed();
+        if held < std::time::Duration::from_millis(2) {
+            return;
+        }
+        static LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+        let at = chrono::Utc::now().timestamp_millis();
+        let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
+        if at.saturating_sub(last) >= 15_000
+            && LAST
+                .compare_exchange(
+                    last,
+                    at,
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                )
+                .is_ok()
+        {
+            eprintln!(
+                "[business-os] issuer publication fence timing: issuer_hold_us={}",
+                held.as_micros()
+            );
+        }
+    }
 }
 
 /// One encrypted secret mutation used by callers that must rotate a credential
@@ -2106,6 +2193,90 @@ mod tests {
         assert_eq!(records.len(), 1);
 
         let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn secret_snapshot_reads_committed_issuer_while_writer_and_master_fence_are_held() -> Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        put_secret(
+            root.path(),
+            "snapshot-fixture",
+            "issuer",
+            "before",
+            None,
+            json!({}),
+        )?;
+        let writer = Connection::open(resolve_db_path(root.path()))?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &writer,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        tx.execute("UPDATE ctox_secret_records SET ciphertext_b64='uncommitted-invalid' WHERE scope='snapshot-fixture'", [])?;
+        let master = master_key_guard(root.path());
+        let _master = master.lock().unwrap();
+        with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |value| {
+            assert_eq!(
+                value, b"before",
+                "read the committed WAL snapshot, never uncommitted ciphertext"
+            );
+            Ok(())
+        })?;
+        assert!(
+            with_current_secret_value(root.path(), "snapshot-fixture", "issuer", |_| Ok(()))
+                .is_err()
+        );
+        tx.rollback()?;
+        Ok(())
+    }
+
+    #[test]
+    fn secret_snapshot_does_not_block_rotation_and_next_read_reloads_it() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        put_secret(
+            root.path(),
+            "snapshot-fixture",
+            "issuer",
+            "before",
+            None,
+            json!({}),
+        )?;
+        let writer = Connection::open(resolve_db_path(root.path()))?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |value| {
+            assert_eq!(value, b"before");
+            writer.execute(
+                "DELETE FROM ctox_secret_records WHERE scope='snapshot-fixture'",
+                [],
+            )?;
+            Ok(())
+        })?;
+        assert!(
+            with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |_| Ok(()))
+                .is_err()
+        );
+        assert!(
+            with_current_secret_value(root.path(), "snapshot-fixture", "issuer", |_| Ok(()))
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn secret_snapshot_missing_authority_never_initializes_runtime() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut entered = false;
+        assert!(
+            with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |_| {
+                entered = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!entered);
+        assert!(!root.path().join("runtime").exists());
         Ok(())
     }
 
