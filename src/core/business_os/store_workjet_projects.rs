@@ -817,15 +817,32 @@ pub(crate) mod tests {
 
     #[test]
     fn project_info_summary_uses_the_shared_configuration_fixture() -> anyhow::Result<()> {
-        let corpus: Value = serde_json::from_str(include_str!("../rxdb/tests/fixtures/workjet-project-configuration-v1.json"))?;
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../rxdb/tests/fixtures/workjet-project-configuration-v1.json"
+        ))?;
         for info in corpus["valid"].as_array().unwrap() {
             let root = tempdir()?;
-            let result = handle_workjet_project_upsert_command(root.path(), &command("ctox.workjet.project.upsert", json!({"project_id":"project-1","name":"Project","info":info})), "owner-1")?;
+            let result = handle_workjet_project_upsert_command(
+                root.path(),
+                &command(
+                    "ctox.workjet.project.upsert",
+                    json!({"project_id":"project-1","name":"Project","info":info}),
+                ),
+                "owner-1",
+            )?;
             assert_eq!(&result["project"]["info"], info);
         }
         for info in corpus["invalid"].as_array().unwrap() {
             let root = tempdir()?;
-            assert!(handle_workjet_project_upsert_command(root.path(), &command("ctox.workjet.project.upsert", json!({"project_id":"project-1","name":"Project","info":info})), "owner-1").is_err());
+            assert!(handle_workjet_project_upsert_command(
+                root.path(),
+                &command(
+                    "ctox.workjet.project.upsert",
+                    json!({"project_id":"project-1","name":"Project","info":info})
+                ),
+                "owner-1"
+            )
+            .is_err());
         }
         Ok(())
     }

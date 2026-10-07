@@ -18,11 +18,11 @@ mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
 pub(in crate::business_os) mod supervisor_turns;
 mod weekly_reports;
-pub(crate) use weekly_reports::{emit_project_report, reconcile_project_reports};
 pub(super) use privacy::{
     command_access_check, document_visible_from_connections, document_visible_to_actor,
     has_restricted_reference, VisibilityReadContext,
 };
+pub(crate) use weekly_reports::{emit_project_report, reconcile_project_reports};
 
 #[cfg(test)]
 mod tests;

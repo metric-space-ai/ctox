@@ -277,7 +277,9 @@ fn emit_due_at(root: &Path, now: DateTime<Utc>, task_id: Option<&str>) -> Result
         let tx = conn.unchecked_transaction()?;
         let run = if let Some((key, status)) = report {
             persist_report_run(&tx, &task, scheduled_for, key, status)?
-        } else { emit_task_run_tx(root, &tx, &task, scheduled_for)? };
+        } else {
+            emit_task_run_tx(root, &tx, &task, scheduled_for)?
+        };
         let (next_run, enabled) = next_task_state_after_emit(
             is_one_shot_meeting_join,
             &run.status,
@@ -411,7 +413,9 @@ pub fn emit_task_now(root: &Path, task_id: &str) -> Result<ScheduleRunView> {
     let tx = conn.unchecked_transaction()?;
     let run = if let Some((key, status)) = report {
         persist_report_run(&tx, &task, &scheduled_for, key, status)?
-    } else { emit_task_run_tx(root, &tx, &task, &scheduled_for)? };
+    } else {
+        emit_task_run_tx(root, &tx, &task, &scheduled_for)?
+    };
     let next_run_at = if task.enabled {
         next_run_after(&task.cron_expr, &task.calendar, now_utc())?
     } else {
@@ -446,13 +450,18 @@ pub fn ensure_task_with_calendar(
 
 /// Automatic project reconciliation must not undo an explicit operator pause.
 pub(crate) fn ensure_task_with_calendar_preserving_pause(
-    root: &Path, request: ScheduleEnsureRequest, calendar: ScheduleCalendar,
+    root: &Path,
+    request: ScheduleEnsureRequest,
+    calendar: ScheduleCalendar,
 ) -> Result<ScheduledTaskView> {
     ensure_calendar_task(root, request, calendar, true)
 }
 
 fn ensure_calendar_task(
-    root: &Path, request: ScheduleEnsureRequest, calendar: ScheduleCalendar, preserve_pause: bool,
+    root: &Path,
+    request: ScheduleEnsureRequest,
+    calendar: ScheduleCalendar,
+    preserve_pause: bool,
 ) -> Result<ScheduledTaskView> {
     validate_cron_expr(&request.cron_expr)?;
     calendar.validate()?;
@@ -486,7 +495,11 @@ fn ensure_calendar_task(
         }
     }
     let now = now_iso_string();
-    let next_run_at = if enabled { next_run_after(&request.cron_expr, &calendar, now_utc())? } else { None };
+    let next_run_at = if enabled {
+        next_run_after(&request.cron_expr, &calendar, now_utc())?
+    } else {
+        None
+    };
     if let Some(task_id) = existing_task_id {
         conn.execute(
             r#"
@@ -546,11 +559,24 @@ fn ensure_calendar_task(
     load_task(&conn, &task_id)?.context("failed to reload inserted scheduled task")
 }
 
-fn persist_report_run(tx: &Transaction<'_>, task: &ScheduledTaskView, scheduled_for: &str, message_key: String, status: String) -> Result<ScheduleRunView> {
+fn persist_report_run(
+    tx: &Transaction<'_>,
+    task: &ScheduledTaskView,
+    scheduled_for: &str,
+    message_key: String,
+    status: String,
+) -> Result<ScheduleRunView> {
     let run_id = format!("{}::{}", task.task_id, scheduled_for);
     let emitted_at = now_iso_string();
     tx.execute("INSERT INTO scheduled_task_runs(run_id,task_id,scheduled_for,emitted_at,message_key,status,error_text) VALUES (?1,?2,?3,?4,?5,?6,'') ON CONFLICT(run_id) DO NOTHING", params![run_id,task.task_id,scheduled_for,emitted_at,message_key,status])?;
-    Ok(ScheduleRunView {run_id,task_id:task.task_id.clone(),scheduled_for:scheduled_for.to_owned(),emitted_at,message_key,status})
+    Ok(ScheduleRunView {
+        run_id,
+        task_id: task.task_id.clone(),
+        scheduled_for: scheduled_for.to_owned(),
+        emitted_at,
+        message_key,
+        status,
+    })
 }
 
 fn emit_task_run_tx(
