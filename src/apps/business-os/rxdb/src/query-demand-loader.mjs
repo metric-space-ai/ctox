@@ -927,7 +927,10 @@ function v15Log(event, fields) {
     try { v15LogSink(event, fields); } catch {}
     return;
   }
-  // Production is quiet. The existing explicit sink enables bounded diagnostics.
+  // Production is quiet; diagnostic output is explicitly enabled.
+  if (globalThis?.__CTOX_V15_DEBUG__ === true && globalThis?.console?.debug) {
+    globalThis.console.debug('[V1.5]', event, fields);
+  }
 }
 
 function defaultMatcher(doc, selector = {}) {

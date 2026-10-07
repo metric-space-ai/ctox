@@ -1153,8 +1153,8 @@ completed response cannot satisfy a subsequent strict read. Cancelling one calle
 leaves surviving callers live, and the last caller cancels the original native
 request. Peer teardown rejects all attached consumers. Consumer aliases remain
 bounded alongside the existing admission queue. Production emits no default
-`[V1.5]` console debug output; the existing explicit `setV15LogSink` remains the
-opt-in diagnostic path. `query-startup-coalescing-smoke.mjs` covers these component
+`[V1.5]` console debug output; the explicit `setV15LogSink` and main's existing
+`__CTOX_V15_DEBUG__ === true` switch retain opt-in diagnostics. `query-startup-coalescing-smoke.mjs` covers these component
 contracts; installed THESEN lead-list latency still requires post-deploy measurement.
 
 Ordered transport ingestion must not await application/RPC handlers. Incoming

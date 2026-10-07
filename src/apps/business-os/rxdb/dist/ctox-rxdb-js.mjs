@@ -7214,14 +7214,15 @@ async function deflateInflate(bytes) {
 // src/apps/business-os/rxdb/src/demand-loading-transport.mjs
 var ACK_RESPONSE = Object.freeze({ ack: true });
 var SERVER_QUERY_STREAM_LIMIT = Math.max(1, Number(CTOX_QUERY_RPC.maxInFlightStreams) || 4);
-var CLIENT_QUERY_STREAM_LIMIT = SERVER_QUERY_STREAM_LIMIT;
+var CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMIT - 1 || 1));
 var CLIENT_QUERY_QUEUE_LIMIT = 128;
 var CLIENT_QUERY_QUEUE_BUDGET_BYTES = 1024 * 1024;
 var CLIENT_FILE_COLLECTOR_LIMIT = 8;
 var CLIENT_ROWS_COLLECTOR_LIMIT = 8;
 var DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES = 8 * 1024 * 1024;
 var QUERY_STREAM_LIMIT_RETRY_MS = 160;
-var QUERY_STREAM_LIMIT_RETRIES = 6;
+var QUERY_STREAM_LIMIT_RETRY_MAX_MS = 800;
+var QUERY_STREAM_LIMIT_RETRIES = 20;
 var QUERY_RATE_LIMIT_RETRY_MS = 100;
 var QUERY_RATE_LIMIT_RETRIES = 16;
 var QUERY_PEER_RETRY_MS = 250;
@@ -7248,8 +7249,6 @@ function createDemandLoadingTransport({
   if (typeof getPeerId !== "function") {
     throw new TypeError("createDemandLoadingTransport requires getPeerId");
   }
-  const coalescedQueryWindows = /* @__PURE__ */ new Map();
-  const coalescedQueryConsumers = /* @__PURE__ */ new Map();
   const queryCollectors = /* @__PURE__ */ new Map();
   const fileCollectors = /* @__PURE__ */ new Map();
   const rowsCollectors = /* @__PURE__ */ new Map();
@@ -7271,7 +7270,6 @@ function createDemandLoadingTransport({
   );
   const metrics = {
     queryFetchRequests: 0,
-    queryFetchCoalescedRequests: 0,
     fileFetchRequests: 0,
     queryChunksReceived: 0,
     fileChunksReceived: 0,
@@ -7485,63 +7483,11 @@ function createDemandLoadingTransport({
   };
   let peer = null;
   let rowsRequestSequence = 0;
-  let peerGeneration = 0;
   function attach(p) {
-    if (p !== peer) peerGeneration += 1;
     peer = p;
   }
-  function requestQueryFetch(envelope, { authorityKey = null } = {}) {
-    if (typeof authorityKey !== "string" || !authorityKey) {
-      return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope));
-    }
-    const requestId = String(envelope?.requestId || "");
-    const peerId = String(getPeerId() || "");
-    const key = JSON.stringify([
-      peerGeneration,
-      peerId,
-      authorityKey,
-      { ...envelope, requestId: void 0 }
-    ]);
-    let shared = coalescedQueryWindows.get(key);
-    const created = !shared;
-    if (!shared) {
-      shared = { key, requestId, peerId, consumers: /* @__PURE__ */ new Map(), aliases: /* @__PURE__ */ new Set(), cancelledReason: null };
-    }
-    if (coalescedQueryConsumers.has(requestId) || coalescedQueryConsumers.size >= CLIENT_QUERY_QUEUE_LIMIT + CLIENT_QUERY_STREAM_LIMIT) {
-      const error = new Error("QUERY_QUEUE_LIMIT: coalesced query consumers exceed the browser budget or reuse a request ID");
-      error.code = "QUERY_QUEUE_LIMIT";
-      error.retryable = true;
-      return Promise.reject(error);
-    }
-    const promise = new Promise((resolve, reject) => {
-      shared.consumers.set(requestId, { resolve, reject });
-    });
-    shared.aliases.add(requestId);
-    coalescedQueryConsumers.set(requestId, shared);
-    if (created) {
-      coalescedQueryWindows.set(key, shared);
-      withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope, () => shared.cancelledReason)).then(
-        (result) => settleCoalescedQuery(shared, null, result),
-        (error) => settleCoalescedQuery(shared, error)
-      );
-    } else {
-      metrics.queryFetchCoalescedRequests += 1;
-    }
-    return promise;
-  }
-  function settleCoalescedQuery(shared, error, result) {
-    if (coalescedQueryWindows.get(shared.key) === shared) {
-      coalescedQueryWindows.delete(shared.key);
-    }
-    for (const requestId of shared.aliases) {
-      if (coalescedQueryConsumers.get(requestId) === shared) coalescedQueryConsumers.delete(requestId);
-    }
-    shared.aliases.clear();
-    for (const consumer of shared.consumers.values()) {
-      if (error) consumer.reject(error);
-      else consumer.resolve(result);
-    }
-    shared.consumers.clear();
+  async function requestQueryFetch(envelope) {
+    return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope));
   }
   function withQueryStreamSlot(envelope, fn) {
     return new Promise((resolve, reject) => {
@@ -7616,14 +7562,13 @@ function createDemandLoadingTransport({
       entry.run();
     }
   }
-  async function requestQueryFetchWithRetry(envelope, cancellationReason = () => null) {
+  async function requestQueryFetchWithRetry(envelope) {
     const baseRequestId = envelope?.requestId;
     let attempt = 0;
     for (; ; ) {
-      if (cancellationReason()) throw createQueryCancelError(cancellationReason());
       const requestId = attempt === 0 ? baseRequestId : `${baseRequestId}|retry-${attempt}`;
       try {
-        return await requestQueryFetchOnce({ ...envelope, requestId }, cancellationReason);
+        return await requestQueryFetchOnce({ ...envelope, requestId });
       } catch (error) {
         const peerUnavailable = isRetryableQueryPeerUnavailable(error);
         const rateLimited = isRetryableQueryRateLimited(error);
@@ -7633,18 +7578,17 @@ function createDemandLoadingTransport({
           throw error;
         }
         attempt += 1;
-        const retryDelayMs = peerUnavailable || ackTimeout ? QUERY_PEER_RETRY_MS : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS;
-        await delay4(retryDelayMs * attempt);
+        const retryDelayMs = peerUnavailable || ackTimeout ? QUERY_PEER_RETRY_MS * attempt : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS * attempt : Math.min(QUERY_STREAM_LIMIT_RETRY_MS * attempt, QUERY_STREAM_LIMIT_RETRY_MAX_MS);
+        await delay4(retryDelayMs);
       }
     }
   }
-  async function requestQueryFetchOnce(envelope, cancellationReason = () => null) {
+  async function requestQueryFetchOnce(envelope) {
     const requestId = envelope?.requestId;
     const cancelReason = consumeQueryCancelReason(requestId);
     if (cancelReason) throw createQueryCancelError(cancelReason);
     if (!peer) throw new Error("demand transport has no peer attached");
-    const peerId = await waitForPeerId(AUTHORIZED_PEER_WAIT_TIMEOUT_MS, () => Boolean(cancellationReason()));
-    if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+    const peerId = await waitForPeerId();
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     const promise = new Promise((resolve, reject) => {
       queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId, bufferedBytes: 0 });
@@ -7704,17 +7648,6 @@ function createDemandLoadingTransport({
   }
   async function requestQueryCancel({ requestId, reason = "client-abort" }) {
     if (!requestId) return;
-    const shared = coalescedQueryConsumers.get(requestId);
-    if (shared) {
-      const consumer = shared.consumers.get(requestId);
-      if (!consumer) return;
-      shared.consumers.delete(requestId);
-      consumer?.reject(createQueryCancelError(reason));
-      if (shared.consumers.size) return;
-      if (coalescedQueryWindows.get(shared.key) === shared) coalescedQueryWindows.delete(shared.key);
-      shared.cancelledReason = reason;
-      requestId = shared.requestId;
-    }
     metrics.queryCancelRequests += 1;
     const matchingRequestIds = matchingQueryRequestIds(requestId);
     const queuedRequestIds = rejectQueuedQueryRequests(requestId, reason);
@@ -7904,12 +7837,6 @@ function createDemandLoadingTransport({
     const fileError = createFileCancelError(reason);
     const rowsError = createRowsCancelError(reason);
     let rejected = 0;
-    for (const shared of [...coalescedQueryWindows.values()]) {
-      if (peerId && shared.peerId && shared.peerId !== peerId) continue;
-      shared.cancelledReason = reason;
-      markQueryCancelled(shared.requestId, reason);
-      settleCoalescedQuery(shared, queryError);
-    }
     for (const [requestId, slot] of [...queryCollectors.entries()]) {
       if (peerId && slot.peerId !== peerId) continue;
       queryCollectors.delete(requestId);
@@ -8444,7 +8371,6 @@ function createQueryDemandLoader({
     250,
     Number(queryWindowRevalidateMs) || DEFAULT_QUERY_WINDOW_REVALIDATE_MS
   );
-  const loaderRequestScope = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
   const inflightByFingerprint = /* @__PURE__ */ new Map();
   const coordinatedByFingerprint = /* @__PURE__ */ new Map();
   let nextRequestSequence = 0;
@@ -8497,7 +8423,7 @@ function createQueryDemandLoader({
         bumpStatus(status, "queryFetchDedupHitCount");
         return existingInvocation.job;
       }
-      const requestId = `${collectionName}|query|${loaderRequestScope}|${clock()}|${nextRequestSequence += 1}`;
+      const requestId = `${collectionName}|query|${clock()}|${nextRequestSequence += 1}`;
       const invocationEntry = {
         job: null,
         requestId,
@@ -8620,8 +8546,6 @@ function createQueryDemandLoader({
                     skip: query?.skip
                   },
                   window: normalizedWindow
-                }, {
-                  authorityKey: JSON.stringify([String(queryGeneration?.() || ""), fetchPermissionDigest])
                 }),
                 cancellationPromise
               ]);
@@ -9099,6 +9023,9 @@ function v15Log(event, fields) {
     } catch {
     }
     return;
+  }
+  if (globalThis?.__CTOX_V15_DEBUG__ === true && globalThis?.console?.debug) {
+    globalThis.console.debug("[V1.5]", event, fields);
   }
 }
 function defaultMatcher(doc, selector = {}) {
@@ -12567,7 +12494,7 @@ var CtoxWebRtcReplicationState = class {
       sidecar: this.demandSidecar,
       collectionName: this.collection.name,
       schemaVersion: this.collection.schema?.version || 0,
-      requestQueryFetch: (envelope, options) => demandTransport.requestQueryFetch(envelope, options),
+      requestQueryFetch: (envelope) => demandTransport.requestQueryFetch(envelope),
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: this.demandStatus,
       multiTabBroker: this.multiTabBroker,

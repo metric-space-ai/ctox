@@ -281,6 +281,36 @@ const rateResult = await rateTransport.requestQueryFetch({ ...envelope, requestI
 assert(rateAttempts === 2, `rate-limited query.fetch must retry once (got ${rateAttempts})`);
 assert(rateResult.documents[0]?.id === 'after-rate-refill', 'rate-limit retry result materialised');
 
+// A start burst meets STREAM_LIMIT_EXCEEDED while the native peer still holds
+// slots of streams it already finished sending. The transport must wait for a
+// slot instead of handing the failure to the app after a few quick retries.
+const streamTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-stream' });
+let streamAttempts = 0;
+streamTransport.attach({
+  connections: new Map([
+    ['peer-stream', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(_peerId, _method, params) {
+    streamAttempts += 1;
+    const requestId = params?.[0]?.requestId;
+    queueMicrotask(() => {
+      if (streamAttempts <= 8) {
+        streamTransport.requestHandlers['rxdb.query.error']({
+          params: [{ requestId, code: 'STREAM_LIMIT_EXCEEDED', message: 'max in-flight query streams reached', retryable: true }],
+        });
+      } else {
+        streamTransport.requestHandlers['rxdb.query.chunk']({
+          params: [{ requestId, sequence: 0, documents: [{ id: 'after-stream-slot', status: 'open' }], complete: true, authoritativeRevision: 'rev-stream' }],
+        });
+      }
+    });
+    return { ack: true };
+  },
+});
+const streamResult = await streamTransport.requestQueryFetch({ ...envelope, requestId: 'q-stream' });
+assert(streamAttempts === 9, `stream-limited query.fetch must keep waiting for a slot (got ${streamAttempts})`);
+assert(streamResult.documents[0]?.id === 'after-stream-slot', 'stream-limit retry result materialised');
+
 // Cancel path: removes the in-flight collector AND rejects the outstanding
 // fetch with QUERY_CANCELLED so callers stop waiting (hardened cancel
 // semantics — previously the promise just hung forever).
