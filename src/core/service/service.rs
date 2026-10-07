@@ -16985,9 +16985,6 @@ fn route_external_messages_with_priority_dispatch(
     if should_skip_idle_channel_router_preflight(root) {
         return Ok(());
     }
-    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
-        push_event(state, format!("Ticket reconciliation failed: {err}"));
-    }
     let settings = live_service_settings(root);
     match crate::mission::approval_nag::process_inbound_approval_replies(root, &settings) {
         Ok(processed) if processed > 0 => push_event(
@@ -17013,6 +17010,9 @@ fn route_external_messages_with_priority_dispatch(
             dispatch_priority(prompt);
             return Ok(());
         }
+    }
+    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
+        push_event(state, format!("Ticket reconciliation failed: {err}"));
     }
     if queue_pressure_active(root, state) {
         match repair_stalled_founder_communications(root, state, &settings) {
