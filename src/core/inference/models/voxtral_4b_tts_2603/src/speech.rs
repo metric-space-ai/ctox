@@ -183,6 +183,11 @@ impl VoxtralTtsModel {
 
 pub fn inspect_model_dir(model_dir: impl AsRef<Path>) -> Result<VoxtralTtsArtifactInspection> {
     let root = model_dir.as_ref().to_path_buf();
+    if root.as_os_str().as_encoded_bytes().len() > 400 {
+        return Err(Error::InvalidFormat(
+            "native model path exceeds upstream path limit",
+        ));
+    }
     let weights_path = root.join("consolidated.safetensors");
     if !weights_path.is_file() {
         return Err(Error::InvalidFormat(

@@ -346,6 +346,11 @@ int tts_generate(tts_ctx_t *ctx, const char *text, const char *voice_name,
     }
     fprintf(stderr, "\n");
 
+    if (n_frames == max_frames) {
+        fprintf(stderr, "generate: audio frame limit exceeded\n");
+        free(all_codes); goto cleanup;
+    }
+
     if (n_frames == 0) {
         fprintf(stderr, "generate: no audio frames produced\n");
         free(all_codes);
