@@ -13,9 +13,9 @@ const meeting = meetingCorpus.valid_cases.find(item => item.type === 'Meeting').
 const start = app.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
 const end = app.indexOf('async function waitForSyncBridgeReady', start);
 const fixtureStart = tests.indexOf('function nativeProjectListFixture(');
-const fixtureEnd = tests.indexOf("test('project list starts", fixtureStart);
+const fixtureEnd = tests.indexOf("\ntest(", fixtureStart);
 const detailsStart = tests.indexOf('function nativeProjectDetailsFixture(');
-const detailsEnd = tests.indexOf("test('native KPI control reads", detailsStart);
+const detailsEnd = tests.indexOf("\ntest(", detailsStart);
 assert.ok(start >= 0 && end > start && fixtureStart >= 0 && fixtureEnd > fixtureStart);
 assert.ok(detailsStart >= 0 && detailsEnd > detailsStart);
 const output = process.argv.includes('--output-dir')
