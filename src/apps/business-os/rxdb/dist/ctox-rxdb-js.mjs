@@ -7652,6 +7652,8 @@ function createDemandLoadingTransport({
       metrics.queryFetchRequests += 1;
       updatePeaks();
     });
+    promise.catch(() => {
+    });
     try {
       await peer.request(peerId, CTOX_QUERY_RPC.fetch, [envelope], QUERY_FETCH_REQUEST_TIMEOUT_MS);
     } catch (err) {
