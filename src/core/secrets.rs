@@ -247,6 +247,15 @@ fn with_secret_values_authority<T>(
         "invalid publication secret tuple"
     );
     let master = master_key_guard(root);
+    // Report only after every actual issuer/SQLite guard has released.
+    let timing = publication.then(|| {
+        crate::authority_fence_metrics::FenceTiming::new(
+            crate::authority_fence_metrics::Category::IssuerPublication,
+        )
+    });
+    let issuer_timing = timing
+        .as_ref()
+        .map(|timing| timing.stage(crate::authority_fence_metrics::Stage::Issuer));
     let _master = if publication {
         Some(
             master
@@ -256,7 +265,9 @@ fn with_secret_values_authority<T>(
     } else {
         None
     };
-    let _timing = publication.then(SecretPublicationFenceTiming::new);
+    if let Some(timing) = &issuer_timing {
+        timing.acquired();
+    }
     let flags = if publication {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
     } else {
@@ -264,6 +275,9 @@ fn with_secret_values_authority<T>(
     };
     let conn = Connection::open_with_flags(resolve_db_path(root), flags)?;
     conn.busy_timeout(std::time::Duration::ZERO)?;
+    let sqlite_timing = timing
+        .as_ref()
+        .map(|timing| timing.stage(crate::authority_fence_metrics::Stage::EncryptedStore));
     let tx = rusqlite::Transaction::new_unchecked(
         &conn,
         if publication {
@@ -272,6 +286,9 @@ fn with_secret_values_authority<T>(
             rusqlite::TransactionBehavior::Deferred
         },
     )?;
+    if let Some(timing) = &sqlite_timing {
+        timing.acquired();
+    }
     // This file is reread, rather than treating a formerly valid key as current.
     // Bound its read independently of an accidentally replaced large file.
     let mut raw = Zeroizing::new(String::new());
@@ -360,44 +377,11 @@ fn with_secret_values_authority<T>(
         .iter()
         .map(|value| value.as_slice())
         .collect::<Vec<_>>();
-    apply(&borrowed, &fingerprint)
-}
-
-// A throttled, fixed-vocabulary diagnostic. No key, record, token or root is
-// logged. The timer drops after SQLite readers, before the master mutex.
-struct SecretPublicationFenceTiming(std::time::Instant);
-
-impl SecretPublicationFenceTiming {
-    fn new() -> Self {
-        Self(std::time::Instant::now())
+    let result = apply(&borrowed, &fingerprint);
+    if let Some(timing) = &timing {
+        timing.finish(result.is_ok());
     }
-}
-
-impl Drop for SecretPublicationFenceTiming {
-    fn drop(&mut self) {
-        let held = self.0.elapsed();
-        if held < std::time::Duration::from_millis(2) {
-            return;
-        }
-        static LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-        let at = chrono::Utc::now().timestamp_millis();
-        let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
-        if at.saturating_sub(last) >= 15_000
-            && LAST
-                .compare_exchange(
-                    last,
-                    at,
-                    std::sync::atomic::Ordering::Relaxed,
-                    std::sync::atomic::Ordering::Relaxed,
-                )
-                .is_ok()
-        {
-            eprintln!(
-                "[business-os] issuer publication fence timing: issuer_hold_us={}",
-                held.as_micros()
-            );
-        }
-    }
+    result
 }
 
 /// One encrypted secret mutation used by callers that must rotate a credential

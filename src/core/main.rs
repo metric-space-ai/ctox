@@ -14,6 +14,7 @@ const APPSEC_PIPELINE_RETRY_VERSION: &str = "ctox.appsec.pipeline_retry.v1";
 
 mod api_costs;
 mod appsec_state;
+mod authority_fence_metrics;
 mod autonomy;
 mod business_os;
 mod capabilities;
