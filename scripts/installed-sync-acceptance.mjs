@@ -187,9 +187,10 @@ export async function measureShellRollback(configPath) {
   return { output, componentRollbackPassed: record.pass, wholeInstalledSetPassed: false };
 }
 
-async function attach(context, origin, config, name, skewMs = 0) {
-  const page = await context.newPage();
-  await page.goto(`${origin}/rxdb/manifest.json`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+async function attach(context, origin, config, name, skewMs = 0, existingPage = null) {
+  const page = existingPage || await context.newPage();
+  if (existingPage) await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+  else await page.goto(`${origin}/rxdb/manifest.json`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.evaluate(async ({ config, name, skewMs }) => {
     if (skewMs) {
       const RealDate = Date;
@@ -333,7 +334,10 @@ export async function runAcceptance(browser, configPath) {
             await a.setOffline(true); const offlineStart = performance.now();
             const timings = await write(A, values);
             await native.restartPeer();
-            await closePage(B); B = await attach(b, origin, await native.invite('B'), name + '-b');
+            await B.evaluate(async () => {
+              await globalThis.__installedAcceptance.sync.stop(); await globalThis.__installedAcceptance.db.close();
+            });
+            B = await attach(b, origin, await native.invite('B'), name + '-b', 0, B);
             await sleep(Math.max(0, 30000 - (performance.now() - offlineStart)));
             const offlineMs = performance.now() - offlineStart;
             const reconnectStart = performance.now();
