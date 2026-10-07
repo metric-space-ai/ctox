@@ -46,6 +46,8 @@ mod crew_plan;
 mod metadata_read;
 #[path = "mcp_project_crew.rs"]
 mod project_crew_request;
+#[path = "mcp_remote_worker.rs"]
+mod remote_worker;
 pub(crate) use command_writeback::supports_command_writeback;
 #[path = "mcp_app_authority.rs"]
 mod app_authority;
@@ -1344,6 +1346,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         project_crew_request::descriptor(),
         project_crew_request::native_project_descriptor(),
         project_crew_request::native_project_cancel_descriptor(),
+        remote_worker::descriptor(),
         read_tool(
             "business_os.list_crew_executions",
             "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
@@ -3104,6 +3107,7 @@ fn call_tool_inner(
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
         metadata_read::TOOL => metadata_read::read(root, trusted_gateway_context, &arguments)?,
+        remote_worker::TOOL => remote_worker::execute(root, &context, &arguments)?,
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
         }
@@ -7081,6 +7085,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "web_browser_prepare"
         | "business_os.start_project_task"
+        | "business_os.remote_worker_admission"
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
         | "business_os.claim_crew_execution"
@@ -7430,6 +7435,7 @@ fn enforce_internal_command_session_scope(
     match tool_name {
         "business_os.start_project_task"
         | "business_os.cancel_project_task"
+        | "business_os.remote_worker_admission"
         | "business_os.start_crew_execution" => {
             anyhow::bail!("a command-scoped session cannot admit independent project work")
         }
