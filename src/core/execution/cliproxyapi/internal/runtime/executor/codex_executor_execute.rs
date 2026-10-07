@@ -201,6 +201,7 @@ impl CodexSubscriptionResponsesExecutor {
                 .await
                 .map_err(CodexExecutionError::Transport)?;
             if response.status() == 401 && attempt == 1 {
+                crate::internal::api::account_selection::record_upstream_status(401, &[]);
                 credentials = self
                     .auth
                     .refresh_after_status(401)
@@ -211,6 +212,10 @@ impl CodexSubscriptionResponsesExecutor {
                 continue;
             }
             if !(200..300).contains(&response.status()) {
+                crate::internal::api::account_selection::record_upstream_status(
+                    response.status(),
+                    response.body(),
+                );
                 if let (Some(cache), Some(scope)) = (&self.reasoning, &replay_scope) {
                     cache.clear_on_invalid_signature(scope, response.status(), response.body());
                 }
@@ -268,6 +273,7 @@ impl CodexSubscriptionResponsesExecutor {
                 .await
                 .map_err(CodexExecutionError::Transport)?;
             if response.status() == 401 && attempt == 1 {
+                crate::internal::api::account_selection::record_upstream_status(401, &[]);
                 credentials = self
                     .auth
                     .refresh_after_status(401)
@@ -278,6 +284,10 @@ impl CodexSubscriptionResponsesExecutor {
                 continue;
             }
             if !(200..300).contains(&response.status()) {
+                crate::internal::api::account_selection::record_upstream_status(
+                    response.status(),
+                    response.body(),
+                );
                 return Err(CodexExecutionError::Http {
                     status: response.status(),
                     retry_delay_ms: parse_retry_after_delay_ms(response.retry_after()),
@@ -358,6 +368,7 @@ impl CodexSubscriptionResponsesExecutor {
                 .await
                 .map_err(CodexExecutionError::Transport)?;
             if response.status() == 401 && attempt == 1 {
+                crate::internal::api::account_selection::record_upstream_status(401, &[]);
                 credentials = self
                     .auth
                     .refresh_after_status(401)
@@ -426,6 +437,7 @@ impl CodexSubscriptionResponsesExecutor {
                 .await
                 .map_err(CodexExecutionError::Transport)?;
             if response.status() == 401 && attempt == 1 {
+                crate::internal::api::account_selection::record_upstream_status(401, &[]);
                 credentials = self
                     .auth
                     .refresh_after_status(401)
@@ -436,6 +448,10 @@ impl CodexSubscriptionResponsesExecutor {
                 continue;
             }
             if !(200..300).contains(&response.status()) {
+                crate::internal::api::account_selection::record_upstream_status(
+                    response.status(),
+                    response.body(),
+                );
                 return Err(CodexExecutionError::Http {
                     status: response.status(),
                     retry_delay_ms: parse_retry_after_delay_ms(response.retry_after()),
@@ -492,6 +508,7 @@ impl CodexSubscriptionResponsesExecutor {
             // transports cannot accidentally require `response.completed`.
             response.set_passthrough();
             if response.status() == 401 && attempt == 1 {
+                crate::internal::api::account_selection::record_upstream_status(401, &[]);
                 credentials = self
                     .auth
                     .refresh_after_status(401)
@@ -502,6 +519,10 @@ impl CodexSubscriptionResponsesExecutor {
                 continue;
             }
             if !(200..300).contains(&response.status()) {
+                crate::internal::api::account_selection::record_upstream_status(
+                    response.status(),
+                    &[],
+                );
                 return Err(CodexExecutionError::Http {
                     status: response.status(),
                     retry_delay_ms: parse_retry_after_delay_ms(response.retry_after()),
@@ -746,7 +767,7 @@ impl CodexSubscriptionAccountPool {
         body: Vec<u8>,
         responses_lite: bool,
     ) -> Result<CodexPooledExecutionOutcome, CodexAccountPoolError> {
-        let mut remaining = self.candidates.clone();
+        let mut remaining = crate::internal::api::account_selection::candidates(&self.candidates);
         let mut attempted_auth_ids = Vec::new();
         let mut last_error = None;
 
@@ -755,6 +776,7 @@ impl CodexSubscriptionAccountPool {
                 .router
                 .select("codex", Some(model), self.clock.now_ms(), &remaining)
                 .map_err(CodexAccountPoolError::Routing)?;
+            crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
             let executor = self
@@ -768,6 +790,7 @@ impl CodexSubscriptionAccountPool {
 
             match executor.execute(target, model, &body, responses_lite).await {
                 Ok(outcome) => {
+                    crate::internal::api::account_selection::record_upstream_status(200, &[]);
                     self.record(&selected.auth_id, model, 200, None).await?;
                     return Ok(CodexPooledExecutionOutcome {
                         selected_auth_id: selected.auth_id,
@@ -801,7 +824,7 @@ impl CodexSubscriptionAccountPool {
         body: Vec<u8>,
         responses_lite: bool,
     ) -> Result<CodexPooledStreamExecutionOutcome, CodexAccountPoolError> {
-        let mut remaining = self.candidates.clone();
+        let mut remaining = crate::internal::api::account_selection::candidates(&self.candidates);
         let mut attempted_auth_ids = Vec::new();
         let mut last_error = None;
 
@@ -810,6 +833,7 @@ impl CodexSubscriptionAccountPool {
                 .router
                 .select("codex", Some(model), self.clock.now_ms(), &remaining)
                 .map_err(CodexAccountPoolError::Routing)?;
+            crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
             let executor = self
@@ -826,6 +850,7 @@ impl CodexSubscriptionAccountPool {
             {
                 Ok(outcome) => {
                     let status = outcome.response().status();
+                    crate::internal::api::account_selection::record_upstream_status(status, &[]);
                     let retry_delay_ms =
                         parse_retry_after_delay_ms(outcome.response().retry_after());
                     self.record(&selected.auth_id, model, status, retry_delay_ms)

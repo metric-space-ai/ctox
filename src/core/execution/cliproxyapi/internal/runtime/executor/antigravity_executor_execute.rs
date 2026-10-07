@@ -338,6 +338,7 @@ impl AntigravitySubscriptionExecutor {
                 .await
                 .map_err(AntigravityExecutionError::Transport)?;
             if response.status() == 401 && attempt == 1 {
+                crate::internal::api::account_selection::record_upstream_status(401, &[]);
                 credentials = self
                     .auth
                     .refresh_after_status(401)
@@ -349,6 +350,10 @@ impl AntigravitySubscriptionExecutor {
                 continue;
             }
             if !(200..300).contains(&response.status()) {
+                crate::internal::api::account_selection::record_upstream_status(
+                    response.status(),
+                    response.body(),
+                );
                 if let Some(accumulator) = replay.as_ref() {
                     accumulator
                         .clear_on_invalid_signature(
@@ -573,6 +578,7 @@ impl AntigravitySubscriptionExecutor {
                 .await
                 .map_err(AntigravityExecutionError::Transport)?;
             if response.status() == 401 && attempt == 1 {
+                crate::internal::api::account_selection::record_upstream_status(401, &[]);
                 credentials = self
                     .auth
                     .refresh_after_status(401)
@@ -584,6 +590,10 @@ impl AntigravitySubscriptionExecutor {
                 continue;
             }
             if !(200..300).contains(&response.status()) {
+                crate::internal::api::account_selection::record_upstream_status(
+                    response.status(),
+                    &[],
+                );
                 return Err(AntigravityExecutionError::Http {
                     status: response.status(),
                     retry_after: response.retry_after().map(ToOwned::to_owned),
@@ -841,7 +851,7 @@ impl AntigravitySubscriptionAccountPool {
         translated_body: Vec<u8>,
         client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityPooledExecutionOutcome, AntigravityAccountPoolError> {
-        let mut remaining = self.candidates.clone();
+        let mut remaining = crate::internal::api::account_selection::candidates(&self.candidates);
         let mut attempted_auth_ids = Vec::new();
         let mut last_error = None;
         while !remaining.is_empty() {
@@ -849,6 +859,7 @@ impl AntigravitySubscriptionAccountPool {
                 .router
                 .select("antigravity", Some(model), self.clock.now_ms(), &remaining)
                 .map_err(AntigravityAccountPoolError::Routing)?;
+            crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
             let executor = self
@@ -870,6 +881,7 @@ impl AntigravitySubscriptionAccountPool {
                 .await
             {
                 Ok(outcome) => {
+                    crate::internal::api::account_selection::record_upstream_status(200, &[]);
                     self.record(&selected.auth_id, model, 200, None).await?;
                     return Ok(AntigravityPooledExecutionOutcome {
                         selected_auth_id: selected.auth_id,
@@ -932,7 +944,7 @@ impl AntigravitySubscriptionAccountPool {
         F: Fn(&str, &str) -> bool,
     {
         let uses_native_web_search = claude_request_uses_native_web_search(&original_request);
-        let mut remaining = self.candidates.clone();
+        let mut remaining = crate::internal::api::account_selection::candidates(&self.candidates);
         if uses_native_web_search {
             remaining.retain(|candidate| supports_native_web_search(&candidate.auth_id, model));
             if remaining.is_empty() {
@@ -946,6 +958,7 @@ impl AntigravitySubscriptionAccountPool {
                 .router
                 .select("antigravity", Some(model), self.clock.now_ms(), &remaining)
                 .map_err(AntigravityAccountPoolError::Routing)?;
+            crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
             let executor = self
@@ -979,6 +992,7 @@ impl AntigravitySubscriptionAccountPool {
                 .await
             {
                 Ok(outcome) => {
+                    crate::internal::api::account_selection::record_upstream_status(200, &[]);
                     self.record(&selected.auth_id, model, 200, None).await?;
                     return Ok(AntigravityPooledExecutionOutcome {
                         selected_auth_id: selected.auth_id,
@@ -1040,7 +1054,7 @@ impl AntigravitySubscriptionAccountPool {
         F: Fn(&str, &str) -> bool,
     {
         let uses_native_web_search = claude_request_uses_native_web_search(&original_request);
-        let mut remaining = self.candidates.clone();
+        let mut remaining = crate::internal::api::account_selection::candidates(&self.candidates);
         if uses_native_web_search {
             remaining.retain(|candidate| supports_native_web_search(&candidate.auth_id, model));
             if remaining.is_empty() {
@@ -1054,6 +1068,7 @@ impl AntigravitySubscriptionAccountPool {
                 .router
                 .select("antigravity", Some(model), self.clock.now_ms(), &remaining)
                 .map_err(AntigravityAccountPoolError::Routing)?;
+            crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
             let executor = self
@@ -1088,6 +1103,7 @@ impl AntigravitySubscriptionAccountPool {
                 .await
             {
                 Ok(outcome) => {
+                    crate::internal::api::account_selection::record_upstream_status(200, &[]);
                     self.record(&selected.auth_id, model, 200, None).await?;
                     let response = outcome.into_tracked(
                         selected.auth_id.clone(),
@@ -1142,7 +1158,7 @@ impl AntigravitySubscriptionAccountPool {
         translated_body: Vec<u8>,
         client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityPooledStreamExecutionOutcome, AntigravityAccountPoolError> {
-        let mut remaining = self.candidates.clone();
+        let mut remaining = crate::internal::api::account_selection::candidates(&self.candidates);
         let mut attempted_auth_ids = Vec::new();
         let mut last_error = None;
         while !remaining.is_empty() {
@@ -1150,6 +1166,7 @@ impl AntigravitySubscriptionAccountPool {
                 .router
                 .select("antigravity", Some(model), self.clock.now_ms(), &remaining)
                 .map_err(AntigravityAccountPoolError::Routing)?;
+            crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
             let executor = self
@@ -1171,6 +1188,7 @@ impl AntigravitySubscriptionAccountPool {
                 .await
             {
                 Ok(outcome) => {
+                    crate::internal::api::account_selection::record_upstream_status(200, &[]);
                     self.record(&selected.auth_id, model, 200, None).await?;
                     let response = outcome.into_tracked(
                         selected.auth_id.clone(),

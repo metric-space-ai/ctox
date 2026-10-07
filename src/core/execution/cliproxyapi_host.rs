@@ -2350,7 +2350,13 @@ impl KimiResponsesHandler {
                 "model is required",
             ));
         };
-        let Some(route) = self.routes.iter().find(|route| route.supports_model(model)) else {
+        let requested = ctox_cliproxyapi::internal::api::account_selection::requested_account();
+        let Some(route) = self.routes.iter().find(|route| {
+            route.supports_model(model)
+                && requested
+                    .as_deref()
+                    .is_none_or(|id| id == route.account_id())
+        }) else {
             return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(
                 400,
                 "requested Kimi model is not configured",
@@ -2360,6 +2366,7 @@ impl KimiResponsesHandler {
             .get("stream")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
+        ctox_cliproxyapi::internal::api::account_selection::record_selected(route.account_id());
         let executor_request = ExecutorRequest {
             auth_id: route.account_id().to_owned(),
             auth_provider: "kimi".to_owned(),
