@@ -20,6 +20,7 @@ Actions:
 - `issue`: `{action:"issue", binding, ttl_seconds:300}`. TTL is 1–300 seconds.
 - `claim`: `{action:"claim", permit_id, binding, execution_id}`.
 - `revalidate`: `{action:"revalidate", permit_id, binding, execution_id}`.
+- `renew`: `{action:"renew", permit_id, binding, execution_id, renewal_sequence:1, ttl_seconds:300}`.
 - `revoke`: `{action:"revoke", permit_id, binding}`.
 
 `binding` has exactly these camelCase fields:
@@ -55,9 +56,20 @@ or fragments; comparison normalizes host spelling and trailing `/`/`.git`.
 The receipt has contract `ctox.workjet.remote-worker-admission.v1`, `permitId`,
 `ownerUserId`, `authorityEpoch`, `authorityFingerprint`, `expiresAtMs`, the exact
 `binding`, `state` (`issued`, `claimed`, `revoked`) and `executionId` (initially
-null). The permit ID is a locator in the source policy database, not an offline
+null), and `renewalSequence` (initially zero). The permit ID is a locator in the source policy database, not an offline
 credential. Replaying issue/claim cannot extend expiry, create a second permit,
 or claim a different execution. Revoked/expired requests cannot be reissued.
+
+The source owner can keep the same claimed execution alive by renewing before
+expiry. Each renewal rechecks the current native account/epoch, project,
+computer and policy; its TTL is again 1–300 seconds. The next sequence must be
+exactly `renewalSequence + 1`. Repeating that sequence returns the existing
+deadline and cannot extend it again; older/skipped sequences and other
+execution IDs fail. Expired leases cannot be revived. A long worker therefore
+renews its existing lease, rather than reissuing or starting a second attempt.
+Loss of source connectivity or renewal authority requires the target/gateway
+to stop using the expired lease. Revocation is idempotent for the exact current
+authenticated source owner, including after expiry/computer/project retirement.
 
 ## Required production consumers
 

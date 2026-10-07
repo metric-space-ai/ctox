@@ -1,3 +1,5 @@
+// Origin: CTOX
+// License: AGPL-3.0-only
 use super::*;
 use serde_json::json;
 
@@ -341,5 +343,137 @@ fn remote_worker_no_paths_secret_urls_or_cross_gateway_refs() -> anyhow::Result<
     let mut args = json!({"action":"issue","binding":binding(),"ttl_seconds":300});
     args["binding"]["capabilities"] = json!(["merge_pull_request"]);
     assert!(call(root.path(), "owner", args).is_err());
+    Ok(())
+}
+
+fn renewal(permit: &Value, execution: &str, sequence: u64) -> Value {
+    let mut request = operation("renew", permit, Some(execution));
+    request["renewal_sequence"] = json!(sequence);
+    request["ttl_seconds"] = json!(300);
+    request
+}
+
+#[test]
+fn remote_worker_renewal_keeps_one_execution_and_lost_ack_does_not_extend_again(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let permit = issue(root.path())?;
+    call(
+        root.path(),
+        "owner",
+        operation("claim", &permit, Some("execution-1")),
+    )?;
+    let mut short = permit.clone();
+    short["state"] = json!("claimed");
+    short["executionId"] = json!("execution-1");
+    short["expiresAtMs"] = json!(now_ms() + 60_000);
+    store::open_store(root.path())?.execute(
+        "UPDATE workjet_remote_worker_admissions SET receipt_json=?1",
+        params![serde_json::to_string(&short)?],
+    )?;
+    assert!(call(
+        root.path(),
+        "owner",
+        renewal(&permit, "foreign-execution", 1)
+    )
+    .is_err());
+    assert!(call(root.path(), "owner", renewal(&permit, "execution-1", 2)).is_err());
+    let renewed = call(root.path(), "owner", renewal(&permit, "execution-1", 1))?;
+    assert_eq!(renewed["permitId"], permit["permitId"]);
+    assert_eq!(renewed["executionId"], "execution-1");
+    assert_eq!(renewed["renewalSequence"], 1);
+    assert!(renewed["expiresAtMs"].as_i64().unwrap() > short["expiresAtMs"].as_i64().unwrap());
+    assert_eq!(
+        call(root.path(), "owner", renewal(&permit, "execution-1", 1))?,
+        renewed,
+        "duplicate renewal must return its existing deadline"
+    );
+    let second = call(root.path(), "owner", renewal(&permit, "execution-1", 2))?;
+    assert_eq!(second["renewalSequence"], 2);
+    assert!(call(root.path(), "owner", renewal(&permit, "execution-1", 1)).is_err());
+    assert!(call(
+        root.path(),
+        "owner",
+        operation("claim", &permit, Some("execution-2"))
+    )
+    .is_err());
+    store::open_store(root.path())?.execute(
+        "UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id='owner'",
+        [],
+    )?;
+    let denied = call(root.path(), "owner", renewal(&permit, "execution-1", 3)).unwrap_err();
+    assert_eq!(
+        denied.downcast_ref::<BusinessOsMcpError>().unwrap().code,
+        BusinessOsMcpErrorCode::PermissionDenied
+    );
+    Ok(())
+}
+
+#[test]
+fn remote_worker_expired_or_revoked_lease_cannot_renew_and_cancellation_is_idempotent(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let permit = issue(root.path())?;
+    let mut expired = call(
+        root.path(),
+        "owner",
+        operation("claim", &permit, Some("execution-1")),
+    )?;
+    expired["expiresAtMs"] = json!(now_ms() - 1);
+    store::open_store(root.path())?.execute(
+        "UPDATE workjet_remote_worker_admissions SET receipt_json=?1",
+        params![serde_json::to_string(&expired)?],
+    )?;
+    assert!(call(root.path(), "owner", renewal(&permit, "execution-1", 1)).is_err());
+    record(
+        root.path(),
+        "workjet_computers",
+        "computer-1",
+        json!({"id":"computer-1",
+        "owner_user_id":"owner","status":"unassigned","hosting_mode":"workstation"}),
+    )?;
+    let revoked = call(root.path(), "owner", operation("revoke", &permit, None))?;
+    assert_eq!(revoked["state"], "revoked");
+    assert_eq!(
+        call(root.path(), "owner", operation("revoke", &permit, None))?,
+        revoked
+    );
+    assert!(call(root.path(), "foreign", operation("revoke", &permit, None)).is_err());
+    assert!(call(root.path(), "owner", renewal(&permit, "execution-1", 1)).is_err());
+    Ok(())
+}
+
+#[test]
+fn remote_worker_concurrent_claims_publish_only_one_execution() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let permit = issue(root.path())?;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let tasks = ["execution-1", "execution-2"]
+        .into_iter()
+        .map(|id| {
+            let path = root.path().to_owned();
+            let args = operation("claim", &permit, Some(id));
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                call(&path, "owner", args)
+            })
+        })
+        .collect::<Vec<_>>();
+    let replies = tasks
+        .into_iter()
+        .map(|task| task.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(replies.iter().filter(|reply| reply.is_ok()).count(), 1);
+    let accepted = replies.into_iter().find_map(Result::ok).unwrap();
+    let execution = accepted["executionId"].as_str().unwrap();
+    assert_eq!(
+        call(
+            root.path(),
+            "owner",
+            operation("revalidate", &permit, Some(execution))
+        )?,
+        accepted
+    );
     Ok(())
 }

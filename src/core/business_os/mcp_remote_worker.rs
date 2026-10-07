@@ -83,6 +83,13 @@ enum Request {
         binding: Binding,
         execution_id: String,
     },
+    Renew {
+        permit_id: String,
+        binding: Binding,
+        execution_id: String,
+        renewal_sequence: u64,
+        ttl_seconds: u16,
+    },
     Revoke {
         permit_id: String,
         binding: Binding,
@@ -101,16 +108,19 @@ struct Receipt {
     binding: Binding,
     state: String,
     execution_id: Option<String>,
+    #[serde(default)]
+    renewal_sequence: u64,
 }
 
 pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(TOOL,
-        "Issue, claim, revalidate or revoke one source-native remote Workjet leaf-worker admission. Requires the current authenticated source Owner/Admin, owned active project and assigned computer. Revalidation returns through the source; the target receives no Owner bearer or model secret. Model references bind scope but do not replace the source gateway's current account grant.",
+        "Issue, claim, revalidate, renew or revoke one source-native remote Workjet leaf-worker admission. Requires the current authenticated source Owner/Admin, owned active project and assigned computer. Revalidation returns through the source; the target receives no Owner bearer or model secret. Model references bind scope but do not replace the source gateway's current account grant.",
         serde_json::json!({"type":"object", "additionalProperties":false,
             "required":["action","binding"],
             "properties": {
-                "action":{"type":"string","enum":["issue","claim","revalidate","revoke"]},
+                "action":{"type":"string","enum":["issue","claim","revalidate","renew","revoke"]},
                 "permit_id":{"type":"string"}, "execution_id":{"type":"string"},
+                "renewal_sequence":{"type":"integer","minimum":1},
                 "ttl_seconds":{"type":"integer","minimum":1,"maximum":300},
                 "binding":{"type":"object","additionalProperties":false,
                     "required":["requestId","requestDigest","sourceEnvironmentId","sourceSupervisorThreadId","sourceInstanceId","projectId","targetEnvironmentId","targetConnectionId","targetInstanceId","targetComputerId","repositoryUrl","repositoryHead","workspaceKey","credentialRef","providerRef","modelRef","capabilities"],
@@ -143,20 +153,44 @@ pub(super) fn execute(
     context: &McpChannelRequestContext,
     arguments: &Value,
 ) -> anyhow::Result<Value> {
-    // A caller-supplied _context cannot manufacture this marker. Internal
-    // command sessions cannot mint independent work, even when owner-backed.
+    execute_checked(root, context, arguments).map_err(|error| {
+        if error.downcast_ref::<BusinessOsMcpError>().is_some() {
+            error
+        } else if error.downcast_ref::<rusqlite::Error>().is_some() {
+            anyhow::Error::new(BusinessOsMcpError {
+                code: BusinessOsMcpErrorCode::RuntimeUnavailable,
+                message: "native worker admission store is unavailable".to_owned(),
+                field: Some("remote_worker_admission".to_owned()),
+            })
+        } else {
+            policy_denied(&error.to_string(), "remote_worker_admission")
+        }
+    })
+}
+
+fn execute_checked(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    // Caller context and command-scoped sessions cannot mint independent work.
     anyhow::ensure!(
         context.trusted_role_source.as_deref() == Some("ctox_dev_managed_mcp_token")
             && context.channel == "ctox_dev_managed_mcp"
             && matches!(context.trusted_role.as_deref(), Some("chef" | "admin")),
         "remote worker admission requires authenticated source Owner/Admin MCP authority"
     );
-    let request: Request = serde_json::from_value(arguments.clone())
-        .context("invalid remote worker admission request")?;
+    let request: Request = serde_json::from_value(arguments.clone()).map_err(|_| {
+        BusinessOsMcpError::validation(
+            "remote_worker_admission",
+            "invalid remote worker admission request",
+        )
+    })?;
     let binding = match &request {
         Request::Issue { binding, .. }
         | Request::Claim { binding, .. }
         | Request::Revalidate { binding, .. }
+        | Request::Renew { binding, .. }
         | Request::Revoke { binding, .. } => binding,
     };
     validate_binding(binding)?;
@@ -172,7 +206,15 @@ pub(super) fn execute(
         UNIQUE(owner_user_id,source_instance_id,request_id));",
     )?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let (epoch, fingerprint) = current_authority(&tx, context, binding)?;
+    let retiring = matches!(&request, Request::Revoke { .. });
+    let (epoch, fingerprint) = if retiring {
+        // Cancelling reduces authority; an expired permit or retired project/
+        // computer cannot obstruct it. The actual source actor and receipt
+        // owner/binding still have to be authenticated and current.
+        (current_actor(&tx, context)?.1, String::new())
+    } else {
+        current_authority(&tx, context, binding)?
+    };
     let now = now_ms();
     let mut receipt = match &request {
         Request::Issue { ttl_seconds, .. } => {
@@ -185,7 +227,7 @@ pub(super) fn execute(
                 params![context.actor, binding.source_instance_id, binding.request_id], |row| row.get(0)).optional()?;
             if let Some(existing) = existing {
                 let receipt: Receipt = serde_json::from_str(&existing)?;
-                verify_receipt(&receipt, context, binding, epoch, &fingerprint, now)?;
+                verify_receipt(&receipt, context, binding, epoch, &fingerprint, now, false)?;
                 receipt
             } else {
                 Receipt {
@@ -198,19 +240,29 @@ pub(super) fn execute(
                     binding: binding.clone(),
                     state: "issued".to_owned(),
                     execution_id: None,
+                    renewal_sequence: 0,
                 }
             }
         }
         Request::Claim { permit_id, .. }
         | Request::Revalidate { permit_id, .. }
+        | Request::Renew { permit_id, .. }
         | Request::Revoke { permit_id, .. } => {
             label(permit_id)?;
             let raw: String = tx.query_row(
                 "SELECT receipt_json FROM workjet_remote_worker_admissions WHERE permit_id=?1 AND owner_user_id=?2 AND source_instance_id=?3",
-                params![permit_id, context.actor, context.workspace], |row| row.get(0))
+                params![permit_id, context.actor, context.workspace], |row| row.get(0)).optional()?
                 .context("worker permit is unavailable to this source owner")?;
             let receipt: Receipt = serde_json::from_str(&raw)?;
-            verify_receipt(&receipt, context, binding, epoch, &fingerprint, now)?;
+            verify_receipt(
+                &receipt,
+                context,
+                binding,
+                epoch,
+                &fingerprint,
+                now,
+                retiring,
+            )?;
             receipt
         }
     };
@@ -234,6 +286,31 @@ pub(super) fn execute(
                 "worker permit is not claimed by this execution"
             );
         }
+        Request::Renew {
+            execution_id,
+            renewal_sequence,
+            ttl_seconds,
+            ..
+        } => {
+            label(&execution_id)?;
+            anyhow::ensure!(
+                receipt.state == "claimed" && receipt.execution_id.as_ref() == Some(&execution_id),
+                "worker permit is not claimed by this execution"
+            );
+            anyhow::ensure!(
+                (1..=300).contains(&ttl_seconds) && renewal_sequence > 0,
+                "worker renewal requires a positive sequence and TTL of 1..300 seconds"
+            );
+            if renewal_sequence != receipt.renewal_sequence {
+                anyhow::ensure!(
+                    receipt.renewal_sequence.checked_add(1) == Some(renewal_sequence),
+                    "worker renewal sequence is stale or skips a lease revision"
+                );
+                receipt.renewal_sequence = renewal_sequence;
+                receipt.expires_at_ms = now.saturating_add(i64::from(ttl_seconds) * 1000);
+            }
+            // Same revision is a lost-ACK replay, never a fresh extension.
+        }
         Request::Revoke { .. } => receipt.state = "revoked".to_owned(),
         Request::Issue { .. } => {}
     }
@@ -250,9 +327,8 @@ pub(super) fn execute(
             serde_json::to_string(&receipt)?
         ],
     )?;
-    // All native authority reads and the single claim linearize in this policy
-    // transaction. This response is not an offline authorization or a fence
-    // over a remote spawn; Receiver/gateway must revalidate at their boundaries.
+    // This source transaction is the native admission linearization point,
+    // not an offline permit or a lock around a subsequent remote await/spawn.
     tx.commit()?;
     Ok(response)
 }
@@ -264,6 +340,7 @@ fn verify_receipt(
     epoch: i64,
     fingerprint: &str,
     now: i64,
+    retiring: bool,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
         receipt.contract == CONTRACT
@@ -271,6 +348,15 @@ fn verify_receipt(
             && &receipt.binding == binding,
         "worker permit immutable binding differs"
     );
+    anyhow::ensure!(
+        matches!(receipt.state.as_str(), "issued" | "claimed" | "revoked")
+            && (receipt.state != "issued" || receipt.execution_id.is_none())
+            && (receipt.state != "claimed" || receipt.execution_id.is_some()),
+        "worker permit has an unknown or inconsistent lifecycle state"
+    );
+    if retiring {
+        return Ok(());
+    }
     anyhow::ensure!(
         receipt.authority_epoch == epoch && receipt.authority_fingerprint == fingerprint,
         "worker source authority changed; stale permit rejected"
@@ -282,24 +368,31 @@ fn verify_receipt(
     Ok(())
 }
 
-fn current_authority(
+fn current_actor(
     conn: &Connection,
     context: &McpChannelRequestContext,
-    binding: &Binding,
-) -> anyhow::Result<(i64, String)> {
+) -> anyhow::Result<(String, i64)> {
     let (role, active, epoch): (String, bool, i64) = conn
         .query_row(
             "SELECT role,active,capability_epoch FROM business_users WHERE user_id=?1",
             params![context.actor],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
+        .optional()?
         .context("worker source actor is not a persisted native user")?;
     anyhow::ensure!(
-        active
-            && matches!(role.as_str(), "chef" | "admin")
-            && context.trusted_role.as_deref() == Some(role.as_str()),
+        active && matches!(role.as_str(), "chef" | "admin"),
         "worker source actor authority is no longer current"
     );
+    Ok((role, epoch))
+}
+
+fn current_authority(
+    conn: &Connection,
+    context: &McpChannelRequestContext,
+    binding: &Binding,
+) -> anyhow::Result<(i64, String)> {
+    let (role, epoch) = current_actor(conn, context)?;
     for (permission, scope, id) in [
         (
             BusinessOsPermission::CtoxTaskCreate,
