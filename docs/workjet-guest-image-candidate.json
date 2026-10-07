@@ -183,19 +183,75 @@
   },
   "isolated_checkpoint_probe": {
     "portable_clock_repair": {
-      "status": "pending_postmerge_image_build",
+      "status": "ordinary_two_host_component_passed",
+      "candidate_id": "workjet-noble-amd64-20260926-ctox-555140a08-v10",
       "clocksource": "acpi_pm",
       "kernel_parameter_reference": "https://www.kernel.org/doc/html/v6.8/admin-guide/kernel-parameters.html",
       "setup_sha256": "1d25bb32499f4754fb007a06ef015d7438219a23ad908320d8fcca6a0fee730d",
+      "bootstrap_source": "2801fd31d9d898287fcb3a7dc627a5ce955c8c85",
       "source_base_sha256": "2ae4513a1ec913ba21d66bbcbe3c5a88a56824b7415c7f2ec1c1b8d2d9c89667",
       "retained_native_sha256": "113b92756e094c8bdaf7ce120dbc76d57d1a4891b0548a9df6610723cdf35f3c",
+      "derived_raw_sha256": "77c32e89b53b8cdd9f05dc6722dc11fca5ab2bf36e21a3f4441748fec29d5a89",
+      "derived_raw_bytes": 8589934592,
+      "image_build_run": "o04-guest-portable-clock-20261007T080817Z",
+      "target_image_reproduction_run": "o04-guest-portable-clock-20261007T082922Z",
+      "independent_readonly_raw_hash_verified": true,
+      "actual_source_kernel_selected_acpi_pm": true,
+      "provisioning_delta": {
+        "qcow2_sha256": "4d0dad525285d5d00bdd482cd6319d5db94281ce7ce4a3d7826df075543184ab",
+        "qcow2_bytes": 2621440,
+        "gzip_sha256": "81ed537389cf2693096bb75149f0e627fbb95773fc6c4ec7ea9b12ad0e496c6b",
+        "gzip_bytes": 198856,
+        "portable_session_checkpoint": false
+      },
       "ordinary_retry_run": "o04-guest-observation-retry-20261007T073845Z",
       "ordinary_retry_status": "failed",
-      "ordinary_retry_result": "Two correlated native capture failures, then a transport timeout; owned target QEMU 876192 reaped. No ordinary continuation pass.",
-      "kernel_evidence": "Recovered stopped-target logs show source TSC calibration 2495.957 MHz, a 40 ms watchdog skew at 06:24:56 UTC and fallback to HPET before the source checkpoint.",
-      "causality": "Clock instability is observed; whether the portable ACPI PM timer fixes TCG capture latency remains for actual postmerge image/restore validation.",
+      "ordinary_retry_result": "Previous V9 checkpoint: two correlated native capture failures, then a transport timeout; target QEMU876192 reaped. Preserve this failure.",
+      "kernel_evidence": "Recovered V9 logs show source TSC calibration2495.957MHz, a40ms watchdog skew at06:24:56UTC and HPET fallback before checkpoint. V10 boot serial verifies clocksource=acpi_pm and the actual switch to acpi_pm.",
+      "causality": "The fresh V10 checkpoint passed ordinary TCG capture/input/shutdown; this observed improvement does not independently prove the cause of all earlier capture failures.",
+      "source_capture": {
+        "receipt_run": "o04-guest-portable-clock-20261007T080817Z",
+        "receipt_sha256": "afdfbfecabc44dd0a263d4cc03d28d02fd2d038cf4aeaf401b93278bebea70e2",
+        "guest_id": "o04-kvm-2a3c5888-177d-4a84-862d-9f0117b6eada",
+        "session_id": "8a0b5bcf-5306-4933-a49f-648c352e9b07",
+        "source_qmp_quit_exit": 0,
+        "owned_qemu_reaped": true,
+        "source_unsaved_text_frame_viewed": true,
+        "checkpoint_files": {
+          "root.qcow2": {
+            "bytes": 16449536,
+            "sha256": "9f943bc7a71512394393c65ec1210fca1fdbf9d4d5c9d59820e1859f01eea96e"
+          },
+          "vm-state.bin": {
+            "bytes": 867037487,
+            "sha256": "dc4eab0a6994c4eafbde2609a971e44fe6e621c77a7f33166cd532e59fdb2d2f"
+          }
+        }
+      },
+      "target_restore": {
+        "receipt_run": "o04-guest-portable-clock-20261007T085115Z",
+        "source_commit": "2801fd31d9d898287fcb3a7dc627a5ce955c8c85",
+        "receipt_sha256": "a252e84cc5b0309a7eac8d1d87c12dadd8e1187df89a4a3e01d3d376ec4f35b8",
+        "host": "gpu4",
+        "qemu_version": "8.2.2",
+        "acceleration": "tcg",
+        "status": "component_passed",
+        "original_guest_and_session_restored": true,
+        "native_capture_failure_retries": 0,
+        "source_and_target_unsaved_text_frames_viewed": true,
+        "fresh_input_frame_viewed": true,
+        "fresh_input": "GPU4 resumed.",
+        "wrong_session_input_denied": true,
+        "diagnostic_shutdown_wait_override": false,
+        "shutdown_timeout_seconds": 180,
+        "actual_shutdown_wait_seconds": 114.36924370296765,
+        "graceful_powerdown": true,
+        "owned_qemu_reaped": true
+      },
       "clocksource_verification_disabled": false,
-      "product_enrollment_p2p_restore_accepted": false
+      "tcg_cold_boot_accepted": false,
+      "product_enrollment_p2p_restore_accepted": false,
+      "next_action": "Use this hash-bound VM compatibility baseline for the production enrollment, protected checkpoint transport and same-Core-session activation owned by Architecture under issue183. Operator SSH transfer and source process termination do not prove the distributed owner/epoch fence."
     },
     "status": "real_two_host_component_passed_with_bounded_settle",
     "source_capture": {
@@ -267,7 +323,7 @@
         "next_observation_policy": "Restored TCG only: at most three read-only observe_session attempts, two-second gaps, fresh correlated request IDs. Record each framed failure; never retry input, a timeout/EOF, invalid correlation or malformed PNG."
       },
       "next_plain_cli_shutdown_timeout_seconds": 180,
-      "next_action": "After the shutdown-margin follow-up merges, rerun the ordinary CLI without a diagnostic override. Production enrollment, protected P2P and distributed owner fencing remain unaccepted."
+      "next_action": "This historical V9 checkpoint retains its failed ordinary runs. The V10 portable_clock_repair record above contains the later ordinary CLI continuation pass; production enrollment, protected P2P and distributed owner fencing remain unaccepted."
     },
     "entry": "src/scripts/workjet-guest-image/verify-guest.py --checkpoint / --restore-from",
     "machine": "pc-i440fx-5.1",
