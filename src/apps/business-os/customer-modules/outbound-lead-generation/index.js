@@ -2066,7 +2066,7 @@ function renderCampaigns() {
             <button class="ctox-pane-icon" data-action="rename-campaign" data-campaign="${escapeHtml(campaign.name)}" title="Kampagne umbenennen" aria-label="${escapeHtml(campaign.name)} umbenennen">${icon('edit')}</button>
             <button class="ctox-pane-icon is-danger" data-action="delete-campaign" data-campaign="${escapeHtml(campaign.name)}" title="Kampagne „${escapeHtml(campaign.name)}“ löschen" aria-label="${escapeHtml(campaign.name)} löschen">${icon('trash')}</button>
           </div>
-        </div>`).join('') || `<div class="leadgen-empty">${datenLadenNoch() ? 'Kampagnen werden geladen …' : tr('noCampaigns', 'Noch keine Kampagne.')}</div>`}`;
+        </div>`).join('') || `<div class="leadgen-empty">${escapeHtml(emptyCollectionText(['leads', 'imports'], 'Kampagnen werden geladen …', tr('noCampaigns', 'Noch keine Kampagne.'), 'Kampagnen konnten nicht geladen werden. Neu verbinden und erneut versuchen.'))}</div>`}`;
   if (state.kampagnenHtml === kampagnenHtml && body.childElementCount) return;
   state.kampagnenHtml = kampagnenHtml;
   body.innerHTML = kampagnenHtml;
@@ -3081,9 +3081,9 @@ function renderCenter() {
   const filterAktiv = Boolean(String(state.search || '').trim()) || (state.leadStatusFilter?.size || 0) > 0;
   const leerText = filterAktiv && campaignListLeads(state.selectedCampaign).length
     ? 'Keine Leads passen zu Suche oder Filter.'
-    : datenLadenNoch()
-      ? 'Leads werden geladen …'
-      : tr('noLeads', 'Noch keine Leads importiert.');
+    : emptyCollectionText(['leads'], 'Leads werden geladen …',
+      tr('noLeads', 'Noch keine Leads importiert.'),
+      'Leads konnten nicht geladen werden. Neu verbinden und erneut versuchen.');
   // Wie die Kampagnenliste: unveraenderte Liste NICHT neu schreiben, sonst
   // verliert jede Sekunde ein Klick oder der Zeiger seine Zeile
   // (Owner-Befund 18.09.2026).
@@ -12304,6 +12304,14 @@ function setzeHtmlWennGeaendert(element, html) {
 // Solange die Synchronisation noch Sammlungen nachlaedt, ist eine leere Liste
 // kein Befund. Rundgang 28.09.2026: ~50 s lang stand „Noch keine Kampagne“ und
 // „Noch keine Leads importiert“ da, obwohl 12 Kampagnen gleich kamen.
+function emptyCollectionText(keys, loadingText, emptyText, errorText) {
+  // A failed read is not a pending read, even while other collections reconnect.
+  if (keys.some(key => state.collectionReadErrors?.has(key))) return errorText;
+  if (keys.every(key => state.reloadAngewendetJeSammlung?.has(key))) return emptyText;
+  if (state.syncError) return errorText;
+  return datenLadenNoch() ? loadingText : emptyText;
+}
+
 function datenLadenNoch() {
   return Boolean(state.syncPending) || (state.syncWaitingCollections?.size || 0) > 0;
 }
@@ -13815,6 +13823,8 @@ export const __leadgenOutboundTestHooks = {
   vermerkPruefungErledigt,
   reload,
   renderSyncLine,
+  renderCampaigns,
+  renderCenter,
   bindCollections,
   recoverCommandChannel,
   scheduleCollectionReload,
