@@ -14264,9 +14264,21 @@ var CtoxRxCollection = class {
         listener(changes ? { collectionName: this.name, invalidated: true, changes } : { collectionName: this.name, invalidated: true });
       }, OBSERVABLE_DEBOUNCE_MS);
     };
+    const reportedRevisions = /* @__PURE__ */ new Map();
     const note = (changes) => {
       if (Array.isArray(changes)) {
-        for (const change of changes) if (change?.id) pendingChanges.set(String(change.id), change);
+        let fresh = 0;
+        for (const change of changes) {
+          if (!change?.id) continue;
+          const id = String(change.id);
+          const revision = `${change.rev || ""}|${change.deleted === true}`;
+          if (change.rev && reportedRevisions.get(id) === revision) continue;
+          if (reportedRevisions.size >= REPORTED_REVISION_LIMIT) reportedRevisions.clear();
+          reportedRevisions.set(id, revision);
+          pendingChanges.set(id, change);
+          fresh += 1;
+        }
+        if (!fresh) return;
       } else {
         pendingUnknown = true;
       }
@@ -15145,6 +15157,7 @@ var ctoxRxdbTestInternals = {
   normalizeSort: normalizeSort2,
   sortDocuments
 };
+var REPORTED_REVISION_LIMIT = 2e4;
 function storageEventChanges(event) {
   const success = event?.success;
   if (!success || typeof success !== "object") return documentIdChanges(event?.ids);
