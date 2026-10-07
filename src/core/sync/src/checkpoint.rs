@@ -218,6 +218,14 @@ impl CheckpointStore {
     }
     /// Reverify content before issuing a durable-copy receipt or restoring a session.
     pub fn load(&self, digest: &str) -> io::Result<CheckpointManifest> {
+        let manifest = self.load_manifest(digest)?;
+        self.verify_contents(&manifest)?;
+        self.validate_portable_history(&manifest)?;
+        Ok(manifest)
+    }
+    /// Integrity-check only the immutable manifest. This is not a verified
+    /// artifact copy or resume receipt; load/verify_durable_copy verify contents.
+    pub fn load_manifest(&self, digest: &str) -> io::Result<CheckpointManifest> {
         if !hash_valid(digest) {
             return Err(invalid("invalid checkpoint digest"));
         }
@@ -233,9 +241,36 @@ impl CheckpointStore {
         let manifest: CheckpointManifest =
             serde_json::from_slice(&bytes).map_err(io::Error::other)?;
         validate_manifest(&manifest)?;
-        self.verify_contents(&manifest)?;
-        self.validate_portable_history(&manifest)?;
         Ok(manifest)
+    }
+    /// Read a bounded range only from an artifact named by this exact manifest.
+    /// Receiver must verify its whole hash before durable publication.
+    pub fn read_blob_range(
+        &self,
+        digest: &str,
+        expected: &ArtifactRef,
+        offset: u64,
+        length: usize,
+    ) -> io::Result<Vec<u8>> {
+        use std::io::{Seek, SeekFrom};
+        let manifest = self.load_manifest(digest)?;
+        if length == 0
+            || length > 8192
+            || offset > expected.size_bytes
+            || !artifacts(&manifest).any(|a| a == expected)
+        {
+            return Err(invalid("invalid checkpoint range"));
+        }
+        let path = self.blob_path(expected)?;
+        let metadata = fs::symlink_metadata(&path)?;
+        if !metadata.is_file() || metadata.len() != expected.size_bytes {
+            return Err(invalid("invalid stored checkpoint artifact"));
+        }
+        let mut input = File::open(path)?;
+        input.seek(SeekFrom::Start(offset))?;
+        let mut bytes = vec![0; length.min((expected.size_bytes - offset) as usize)];
+        input.read_exact(&mut bytes)?;
+        Ok(bytes)
     }
     /// Bind every checkpoint history artifact to strict portable journal syntax.
     fn validate_portable_history(&self, manifest: &CheckpointManifest) -> io::Result<()> {
@@ -271,7 +306,7 @@ impl CheckpointStore {
         Ok(())
     }
     /// Flush verified artifacts and their directory entries before issuing a signed receipt.
-    pub(crate) fn verify_durable_copy(&self, digest: &str) -> io::Result<CheckpointManifest> {
+    pub fn verify_durable_copy(&self, digest: &str) -> io::Result<CheckpointManifest> {
         if !cfg!(unix) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -433,7 +468,7 @@ fn sync_directory(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-fn artifacts(manifest: &CheckpointManifest) -> impl Iterator<Item = &ArtifactRef> {
+pub fn artifacts(manifest: &CheckpointManifest) -> impl Iterator<Item = &ArtifactRef> {
     manifest
         .history
         .iter()

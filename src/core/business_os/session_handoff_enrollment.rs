@@ -307,17 +307,22 @@ pub(crate) fn validate_source_decision(
     ).optional()?;
     let (source, expected, revision) = match authorization {
         Some((revision, json)) => (
-            super::guest_registry::source_handoff::resolve_reauthorized_source(
+            super::guest_registry::source_handoff::resolve_current_source_metadata(
                 root,
                 policy,
                 &input.capture_id,
-            )?
-            .0,
+                true,
+            )?,
             serde_json::from_str::<SourceHandoffFacts>(&json)?,
             revision,
         ),
         None => (
-            resolve_source_handoff(root, policy, &input.capture_id)?,
+            super::guest_registry::source_handoff::resolve_current_source_metadata(
+                root,
+                policy,
+                &input.capture_id,
+                false,
+            )?,
             stored.clone(),
             1,
         ),

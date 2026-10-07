@@ -89,6 +89,35 @@ fn populate(store: &CheckpointStore) {
         store.ingest_blob(&blob(bytes), Cursor::new(bytes)).unwrap();
     }
 }
+
+#[test]
+fn bounded_checkpoint_ranges_reject_foreign_artifacts_and_keep_copy_verification_strict() {
+    let root = tempfile::tempdir().unwrap();
+    let store = CheckpointStore::open(root.path().join("store"), 1024).unwrap();
+    populate(&store);
+    let m = manifest();
+    let digest = store.publish(&m).unwrap();
+    let a = &m.workspace[0].artifact;
+    assert_eq!(store.read_blob_range(&digest, a, 0, 5).unwrap(), b"uncom");
+    assert_eq!(
+        store.read_blob_range(&digest, a, 5, 8192).unwrap(),
+        b"mitted source"
+    );
+    assert!(store
+        .read_blob_range(&digest, a, a.size_bytes + 1, 1)
+        .is_err());
+    assert!(store.read_blob_range(&digest, a, 0, 8193).is_err());
+    let foreign = blob(b"foreign");
+    store
+        .ingest_blob(&foreign, Cursor::new(b"foreign"))
+        .unwrap();
+    assert!(store.read_blob_range(&digest, &foreign, 0, 1).is_err());
+    fs::write(root.path().join("store/blobs").join(&a.sha256), b"corrupt").unwrap();
+    assert_eq!(store.load_manifest(&digest).unwrap(), m);
+    assert!(store.load(&digest).is_err());
+    assert!(store.verify_durable_copy(&digest).is_err());
+}
+
 #[test]
 fn full_session_is_verified_and_restored_without_touching_existing_work() {
     let root = tempfile::tempdir().unwrap();

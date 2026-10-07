@@ -220,6 +220,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
                 print(crate::business_os::session_handoff_enrollment::target::enroll(&root,&config,identity,&enrollment)?)
             })
         },
+        ["handoff-copy", binding, route] => checkpoint_copy(&root, binding, route),
         ["handoff-revoke", binding] => {
             let revoked = crate::business_os::session_handoff_enrollment::revoke_binding(&root, binding)?;
             print(serde_json::json!({"revoked": revoked}))
@@ -242,7 +243,57 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
         }, |started, _authority, _guests| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
-        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-target-challenge | handoff-source-offer <binding> <challenge> | handoff-configure-target-repository (public JSON on stdin) | handoff-enroll-target (public JSON on stdin) | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
+        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-target-challenge | handoff-source-offer <binding> <challenge> | handoff-configure-target-repository (public JSON on stdin) | handoff-enroll-target (public JSON on stdin) | handoff-copy <binding-digest> <source-route> | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
+    }
+}
+
+fn checkpoint_copy(root: &Path, binding: &str, route: &str) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let config = configuration(root)?;
+    let descriptor: Descriptor = serde_json::from_reader(
+        std::fs::File::open(directory(root).join("listener.json"))?.take(16384),
+    )?;
+    anyhow::ensure!(
+        descriptor.version == 1
+            && descriptor.node_id == config.node_id()
+            && descriptor.scope_id == config.scope_id,
+        "native checkpoint host mismatch"
+    );
+    let endpoint = descriptor
+        .checkpoint_endpoint
+        .context("native checkpoint receiver unavailable")?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let response: crate::business_os::NativeCheckpointCopyResponse = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(65), async {
+            let mut stream = tokio::net::UnixStream::connect(endpoint).await?;
+            anyhow::ensure!(
+                stream.peer_cred()?.uid() == unsafe { libc::geteuid() },
+                "foreign native checkpoint host"
+            );
+            let bytes = serde_json::to_vec(&crate::business_os::NativeCheckpointCopyRequest {
+                binding_digest: binding.into(),
+                source_route: route.into(),
+            })?;
+            anyhow::ensure!(bytes.len() <= 2048, "checkpoint control request too large");
+            stream.write_u32(bytes.len() as u32).await?;
+            stream.write_all(&bytes).await?;
+            let n = stream.read_u32().await? as usize;
+            anyhow::ensure!(n > 0 && n <= 2048, "invalid checkpoint response");
+            let mut bytes = vec![0; n];
+            stream.read_exact(&mut bytes).await?;
+            Ok::<_, anyhow::Error>(serde_json::from_slice(&bytes)?)
+        })
+        .await?
+    })?;
+    match response {
+        crate::business_os::NativeCheckpointCopyResponse::Copied { checkpoint_digest } => print(
+            serde_json::json!({"copied":true,"checkpointDigest":checkpoint_digest,"resumed":false}),
+        ),
+        crate::business_os::NativeCheckpointCopyResponse::Denied => {
+            anyhow::bail!("native checkpoint copy denied or interrupted")
+        }
     }
 }
 
@@ -332,6 +383,8 @@ struct Descriptor {
     ipc_endpoint: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     guest_endpoint: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoint_endpoint: Option<PathBuf>,
 }
 struct DescriptorGuard {
     path: PathBuf,
@@ -342,6 +395,7 @@ impl DescriptorGuard {
         root: &Path,
         started: &HostStarted,
         guest_endpoint: Option<PathBuf>,
+        checkpoint_endpoint: Option<PathBuf>,
     ) -> Result<Self> {
         let path = directory(root).join("listener.json");
         let mut file = tempfile::NamedTempFile::new_in(directory(root))?;
@@ -353,6 +407,7 @@ impl DescriptorGuard {
                 scope_id: started.scope_id.clone(),
                 ipc_endpoint: started.ipc_endpoint.clone(),
                 guest_endpoint,
+                checkpoint_endpoint,
             },
         )?;
         file.as_file_mut().flush()?;

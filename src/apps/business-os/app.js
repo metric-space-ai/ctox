@@ -1,18 +1,18 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261007-shell-v2-sync-push-changes';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261007-shell-v2-sync-push-changes';
-import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-sync-push-changes';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-sync-push-changes';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-sync-push-changes';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261007-shell-v2-sync-push-changes';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-sync-push-changes';
-import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-sync-push-changes';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261007-shell-v2-sync-known-id-hints';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261007-shell-v2-sync-known-id-hints';
+import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-sync-known-id-hints';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-sync-known-id-hints';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-sync-known-id-hints';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261007-shell-v2-sync-known-id-hints';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-sync-known-id-hints';
+import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261007-shell-v2-sync-push-changes';
+} from './shared/app-lifecycle.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -21,20 +21,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261007-shell-v2-sync-push-changes';
+} from './shared/permissions.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261007-shell-v2-sync-push-changes';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261007-shell-v2-sync-push-changes';
+} from './shared/branding.js?v=20261007-shell-v2-sync-known-id-hints';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261007-shell-v2-sync-push-changes';
+} from './shared/presentation.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -45,9 +45,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261007-shell-v2-sync-push-changes';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261007-shell-v2-sync-push-changes';
-import { createDocumentsFacade } from './shared/documents.js?v=20261007-shell-v2-sync-push-changes';
+} from './shared/shell-permissions-ui.js?v=20261007-shell-v2-sync-known-id-hints';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261007-shell-v2-sync-known-id-hints';
+import { createDocumentsFacade } from './shared/documents.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -55,16 +55,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261007-shell-v2-sync-push-changes';
+} from './shared/maintenance-state.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261007-shell-v2-sync-push-changes';
+} from './shared/workspace-session.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261007-shell-v2-sync-push-changes';
+} from './shared/taskbar-pins.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -72,10 +72,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261007-shell-v2-sync-push-changes';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261007-shell-v2-sync-known-id-hints';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261007-shell-v2-sync-push-changes';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261007-shell-v2-sync-push-changes';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261007-shell-v2-sync-known-id-hints';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261007-shell-v2-sync-known-id-hints';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -83,8 +83,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261007-shell-v2-sync-push-changes';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261007-shell-v2-sync-push-changes';
+} from './shared/startup-deadlines.js?v=20261007-shell-v2-sync-known-id-hints';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261007-shell-v2-sync-known-id-hints';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -102,7 +102,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261007-shell-v2-sync-push-changes';
+const APP_BUILD = '20261007-shell-v2-sync-known-id-hints';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13694,7 +13694,10 @@ async function workjetProjectControl(request = {}) {
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
-  const acquisition = requireWorkjetProjectDataPlane();
+  const supervisorActions = ['project.supervisor.bind', 'project.supervisor.turn.submit',
+    'project.supervisor.turn.watch', 'project.supervisor.turn.cancel'];
+  const acquisition = supervisorActions.includes(action)
+    ? requireWorkjetSupervisorDataPlane() : requireWorkjetProjectDataPlane();
   const { projectBridge, workingCopyBridge } = listDeadline
     ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
     : await acquisition;
@@ -13742,6 +13745,126 @@ async function workjetProjectControl(request = {}) {
       throw new Error('Workjet project command did not return a private chat id.');
     }
     return { action, commandId, projectId, workerProfileId, chatId };
+  }
+
+  if (['project.supervisor.turn.submit', 'project.supervisor.turn.watch',
+    'project.supervisor.turn.cancel'].includes(action)) {
+    const submitting = action === 'project.supervisor.turn.submit';
+    const cancelling = action === 'project.supervisor.turn.cancel';
+    const allowedKeys = new Set(['action', 'commandId', 'projectId', 'threadId']);
+    if (submitting) allowedKeys.add('goal');
+    else allowedKeys.add('targetCommandId');
+    if (cancelling) allowedKeys.add('reason');
+    assertWorkjetProjectPayloadKeys(request, allowedKeys);
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const threadId = boundedWorkjetProjectText(request.threadId, 'threadId', 36);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(threadId)
+      || threadId === '00000000-0000-0000-0000-000000000000') {
+      throw new TypeError('Workjet supervisor threadId must be its existing lowercase CodeThread UUID.');
+    }
+    const payload = { project_id: projectId, thread_id: threadId };
+    if (submitting) payload.goal = boundedWorkjetProjectText(request.goal, 'goal', 4096);
+    else payload.target_command_id = boundedWorkjetProjectText(request.targetCommandId, 'targetCommandId', 256);
+    if (cancelling) payload.reason = boundedWorkjetProjectText(request.reason, 'reason', 512);
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the supervisor turn was delivered.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox', record_id: projectId,
+      command_type: {
+        'project.supervisor.turn.submit': 'ctox.workjet.project.supervisor.turn.submit',
+        'project.supervisor.turn.watch': 'ctox.workjet.project.supervisor.turn.watch',
+        'project.supervisor.turn.cancel': 'ctox.workjet.project.supervisor.turn.cancel',
+      }[action], payload,
+      client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentIdentity();
+    const contract = 'ctox.workjet.supervisor_turn.v1';
+    const binding = receipt?.result?.binding;
+    const turn = receipt?.result?.turn;
+    const threadKey = `business-os/threads/${threadId}`;
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId || receipt.result?.ok !== true
+      || receipt.result?.contract !== contract
+      || Object.entries(payload).some(([key, value]) => receipt.payload?.[key] !== value)
+      || binding?.project_id !== projectId || binding?.thread_id !== threadId
+      || binding?.thread_key !== threadKey || turn?.thread_id !== threadId
+      || turn?.thread_key !== threadKey || typeof turn?.command_id !== 'string'
+      || !turn.command_id || turn.command_id.length > 256
+      || (!submitting && turn.command_id !== payload.target_command_id)
+      || typeof turn.task_id !== 'string' || !turn.task_id || turn.task_id.length > 256
+      || typeof turn.execution_phase !== 'string' || !turn.execution_phase
+      || typeof turn.status !== 'string' || !turn.status || typeof turn.queue_status !== 'string'
+      || !Number.isSafeInteger(turn.attempt) || turn.attempt < 0
+      || typeof turn.terminal !== 'boolean' || turn.terminal !== (turn.execution_phase === 'terminal')
+      || typeof turn.result_truncated !== 'boolean') {
+      throw new Error('Workjet supervisor turn returned an invalid or unmatched confirmation.');
+    }
+    const result = {
+      action, commandId, projectId, contract,
+      binding: { contract: 'ctox.workjet.supervisor_binding.v1', projectId, threadId, threadKey },
+      turn: {
+        commandId: turn.command_id, taskId: turn.task_id, threadId, threadKey,
+        executionPhase: turn.execution_phase, status: turn.status, queueStatus: turn.queue_status,
+        attempt: turn.attempt, terminal: turn.terminal, result: turn.result,
+        resultTruncated: turn.result_truncated, errorCode: turn.error_code, errorMessage: turn.error_message,
+      },
+    };
+    if (submitting) result.messageId = boundedWorkjetProjectText(receipt.result.message_id, 'native messageId', 256);
+    if (cancelling) {
+      const cancellation = receipt.result.cancellation;
+      if (turn.status !== 'cancelled' || typeof cancellation?.side_effects_may_have_started !== 'boolean'
+        || cancellation.worker_interrupt_acknowledged !== false) {
+        throw new Error('Workjet supervisor cancellation has no matching confirmation.');
+      }
+      result.cancellation = {
+        commandId: boundedWorkjetProjectText(cancellation.command_id, 'native cancellation commandId', 256),
+        sideEffectsMayHaveStarted: cancellation.side_effects_may_have_started,
+        workerInterruptAcknowledged: false,
+      };
+    }
+    return result;
+  }
+
+  if (action === 'project.supervisor.bind') {
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'threadId']));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const threadId = boundedWorkjetProjectText(request.threadId, 'threadId', 36);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(threadId)
+      || threadId === '00000000-0000-0000-0000-000000000000') {
+      throw new TypeError('Workjet supervisor threadId must be its existing lowercase CodeThread UUID.');
+    }
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the supervisor binding was delivered.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox',
+      command_type: 'ctox.workjet.project.supervisor.bind', record_id: projectId,
+      payload: { project_id: projectId, thread_id: threadId },
+      client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentIdentity();
+    const contract = 'ctox.workjet.supervisor_binding.v1';
+    const binding = receipt?.result?.binding;
+    const threadKey = `business-os/threads/${threadId}`;
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId || receipt.payload?.project_id !== projectId
+      || receipt.payload?.thread_id !== threadId || receipt.result?.ok !== true
+      || receipt.result?.contract !== contract || binding?.project_id !== projectId
+      || binding?.thread_id !== threadId || binding?.thread_key !== threadKey) {
+      throw new Error('Workjet supervisor binding returned an uncorrelated or unsuccessful receipt.');
+    }
+    return { action, commandId, projectId, binding: { contract, projectId, threadId, threadKey } };
   }
 
   if (action === 'project.list') {
@@ -13977,6 +14100,14 @@ async function workjetProjectControl(request = {}) {
   }
 
   throw new Error(`Unsupported Workjet project control action: ${action}`);
+}
+
+async function requireWorkjetSupervisorDataPlane() {
+  if (!state.commandBus?.dispatch || !state.db?.collection?.('business_commands')) {
+    throw new Error('Workjet supervisor control is not ready.');
+  }
+  await state.sync?.startCollection?.('business_commands');
+  return {};
 }
 
 async function requireWorkjetProjectDataPlane() {

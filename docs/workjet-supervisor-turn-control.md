@@ -1,0 +1,11 @@
+# Workjet supervisor turn control
+
+The existing `CodeThread` UUID, registered by `ctox.workjet.project.supervisor.bind`, is the only supervisor execution identity. These controls do not create a transfer session, coding session, working copy, provider, or model grant.
+
+- `ctox.workjet.project.supervisor.turn.submit`: `{project_id, thread_id, goal}`. The authenticated project owner submits a bounded internal goal through the existing `threads.ai.request` producer. Its accepted `business_os.chat.task` has the exact registered `business-os/threads/<UUID>` route. A repeated control command returns the original receipt and creates no second message/turn.
+- `ctox.workjet.project.supervisor.turn.watch`: `{project_id, thread_id, target_command_id}`. One bounded snapshot of the canonical native command and linked durable queue task. The admitted native envelope supplies ownership, because audit projections redact actor identity. The command type, original payload, project, UUID, route, and queue link must all agree. Native results above 64 KiB are marked truncated rather than silently represented as complete.
+- `ctox.workjet.project.supervisor.turn.cancel`: `{project_id, thread_id, target_command_id, reason}`. Uses the existing `ctox.command.cancel` path and verifies its native receipt. Only that owner's exact bound turn can be addressed. A new cancellation cannot overwrite a terminal result; a replay retains the original cancellation receipt.
+
+Results use `ctox.workjet.supervisor_turn.v1` and contain the native binding and turn (`command_id`, `task_id`, `thread_id`, `thread_key`, `execution_phase`, `status`, `queue_status`, `attempt`, `terminal`, bounded result/error). Submit also identifies its native message. Cancellation includes the child command receipt and `side_effects_may_have_started`; `worker_interrupt_acknowledged` is false. This cancels durable admission/result state, and does not claim that a running worker acknowledged an interrupt or that prior side effects were undone.
+
+The browser/desktop adapter must use the existing authenticated Shell/WebRTC command plane. It must correlate both the outer receipt and the returned native identity. No HTTP/MCP data fallback is introduced. Browser integration, native installation, and a real same-supervisor model turn remain separate delivery/acceptance work until verified.

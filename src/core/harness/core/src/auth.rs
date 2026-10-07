@@ -554,14 +554,28 @@ fn load_auth(
     enable_ctox_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<Option<CodexAuth>> {
+    load_auth_with_client(
+        codex_home,
+        enable_ctox_api_key_env,
+        auth_credentials_store_mode,
+        crate::default_client::create_client,
+    )
+}
+
+fn load_auth_with_client(
+    codex_home: &Path,
+    enable_ctox_api_key_env: bool,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    create_client: impl Fn() -> CodexHttpClient,
+) -> std::io::Result<Option<CodexAuth>> {
     let build_auth = |auth_dot_json: AuthDotJson, storage_mode| {
-        let client = crate::default_client::create_client();
+        let client = create_client();
         CodexAuth::from_auth_dot_json(codex_home, auth_dot_json, storage_mode, client)
     };
 
     // API key via env var takes precedence over any other auth method.
     if enable_ctox_api_key_env && let Some(api_key) = read_ctox_api_key_from_env() {
-        let client = crate::default_client::create_client();
+        let client = create_client();
         return Ok(Some(CodexAuth::from_api_key_with_client(
             api_key.as_str(),
             client,
@@ -1052,19 +1066,22 @@ mod native_account_binding_tests {
     use super::*;
 
     fn account(id: &str) -> CodexAuth {
+        use base64::Engine as _;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "https://api.openai.com/auth": {"chatgpt_account_id": id}
+            }))
+            .unwrap(),
+        );
+        // Storage serializes raw_jwt and parses it again on load. This token
+        // exercises that format, with no usable credential or real signature.
+        let jwt = format!("e30.{payload}.test-placeholder");
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         if let CodexAuth::Chatgpt(inner) = &auth {
-            inner
-                .state
-                .auth_dot_json
-                .lock()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .tokens
-                .as_mut()
-                .unwrap()
-                .account_id = Some(id.to_owned());
+            let mut state = inner.state.auth_dot_json.lock().unwrap();
+            let tokens = state.as_mut().unwrap().tokens.as_mut().unwrap();
+            tokens.account_id = Some(id.to_owned());
+            tokens.id_token = parse_chatgpt_jwt_claims(&jwt).unwrap();
         }
         auth
     }
@@ -1131,6 +1148,35 @@ mod native_account_binding_tests {
         .unwrap();
         assert!(manager.current_runtime_account_guard().is_err());
         assert_eq!(manager.runtime_account_binding(), Some("native-account"));
+    }
+
+    #[test]
+    fn native_storage_binding_rejects_invalid_api_key_and_ephemeral_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let mode = AuthCredentialsStoreMode::File;
+        let native = account("native-account").get_current_auth_json().unwrap();
+        save_auth(root.path(), &native, mode).unwrap();
+        let manager = AuthManager::from_account_bound_storage(root.path().into(), mode).unwrap();
+
+        std::fs::write(root.path().join("auth.json"), b"invalid-json").unwrap();
+        assert!(manager.current_runtime_account_guard().is_err());
+        login_with_api_key(root.path(), "test-placeholder", mode).unwrap();
+        assert!(manager.current_runtime_account_guard().is_err());
+
+        save_auth(root.path(), &native, mode).unwrap();
+        assert!(manager.current_runtime_account_guard().is_ok());
+        save_auth(
+            root.path(),
+            &account("foreign-account").get_current_auth_json().unwrap(),
+            AuthCredentialsStoreMode::Ephemeral,
+        )
+        .unwrap();
+        // A still-populated manager must observe ephemeral precedence without
+        // refreshing its cache or constructing a new network client.
+        assert!(manager.auth_cached().is_some());
+        assert!(manager.current_runtime_account_guard().is_err());
+        logout(root.path(), AuthCredentialsStoreMode::Ephemeral).unwrap();
+        assert!(manager.current_runtime_account_guard().is_ok());
     }
 
     #[test]
@@ -1343,7 +1389,20 @@ impl AuthManager {
             ));
         }
         if let Some(mode) = self.runtime_account_storage {
-            let current = load_auth(&self.codex_home, false, mode)?;
+            // Re-read the actual credential source, including ephemeral-store
+            // precedence, on every poll. The HTTP client has no authority role
+            // in this check; rebuilding its TLS trust roots per block is costly.
+            let client = match auth.auth.as_ref() {
+                Some(CodexAuth::Chatgpt(current)) => current.client().clone(),
+                Some(CodexAuth::ChatgptAuthTokens(current)) => current.state.client.clone(),
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "native provider account is unavailable",
+                    ));
+                }
+            };
+            let current = load_auth_with_client(&self.codex_home, false, mode, || client.clone())?;
             if current
                 .as_ref()
                 .and_then(CodexAuth::get_account_id)

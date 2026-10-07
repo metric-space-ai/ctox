@@ -1,5 +1,11 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+Native checkpoint handoff uses the existing admitted control-only WebRTC pool
+for signed 8KiB blocks, with current source disclosure and target receive checks.
+The same-UID `ctox sync handoff-copy` control socket carries only identifiers and
+a final local-copy result. It carries no checkpoint payload or browser business
+data. See [the integration boundary](ctox-sync-handoff-integration.md#protected-native-checkpoint-copy)
+for limits, account guards, cancellation and remaining Core-resume work.
 ### CLI app command admission
 
 CLI app create/modify and app-bench requests persist and enqueue the real coding
@@ -815,8 +821,18 @@ The shell's scoped collection facade preserves this subscription option.
 Consumers that only need a change hint use
 `collection.$.subscribe(listener, { invalidateOnly: true })`. This emits
 `{ collectionName, invalidated: true }` after subscription and debounces store,
-loader-generation and projected-window changes. It performs no initial query,
-snapshot read or document materialization. The listener runs its own bounded
+loader-generation and projected-window changes. When every trigger in the
+burst identifies its rows, the event also carries `changes: [{ id, rev?, deleted? }]`.
+Local and pushed document writes include known revision/deletion metadata;
+other-tab and ID-only loader invalidations retain IDs without inventing
+unknown metadata. New IDs notify even when no cached window contains them.
+Any unnamed trigger (including collection clear, resync or loader replacement)
+omits `changes` for the entire burst, requiring the normal full refresh. A
+result window's `documentIds` are membership, not a complete changed-row set,
+so they alone also retain that fallback. A
+consumer may fetch only named rows through its existing authorized query and
+patch its view; hints alone are neither row payloads nor permission receipts.
+Subscribing performs no initial query, snapshot read or document materialization. The listener runs its own bounded
 query; the hint alone confirms neither readiness nor read permission. The
 option also passes through scoped, maintenance and permission-guarded shell
 collection facades. Unsubscribing retires the timer, listeners and foreground
@@ -1514,7 +1530,13 @@ the tested boundaries and outstanding production onboarding.
   `migration_strategies` from the same `collections.schema.json` used by the
   browser. It executes the supported declarative operations, verifies every
   source envelope in the target version, and only then permits stale-table
-  cleanup. A missing strategy is tolerated only when the old source table is
+  cleanup. Packaged cockpit collections opt into the same native mechanism:
+  `business_commands`, `ctox_queue_tasks`, `ctox_runs`, `workjet_computers` and
+  `workjet_projects`. Their JSON schemas and every intermediate strategy must
+  agree with `schema.js` and the native contract. The project v0→v1 identity
+  step preserves owners, configuration, revisions, timestamps and tombstones;
+  optional project configuration fields do not invent defaults. A missing
+  strategy is tolerated only when the old source table is
   absent or empty; persisted old rows make bring-up fail closed. The browser
   half deliberately does NOT run `migrationStrategies` (`addCollections`
   ignores the field); the browser copy is treated as a replica — the

@@ -29,7 +29,7 @@ pub(crate) fn resolve_source_handoff(
     policy: &Connection,
     capture_id: &str,
 ) -> Result<SourceHandoffFacts> {
-    resolve(root, policy, capture_id, false).map(|(facts, _)| facts)
+    resolve(root, policy, capture_id, false, true).map(|(facts, _)| facts)
 }
 
 /// Only explicit native reauthorization may bind a historical capture to a
@@ -39,7 +39,7 @@ pub(crate) fn resolve_reauthorized_source(
     policy: &Connection,
     capture_id: &str,
 ) -> Result<(SourceHandoffFacts, serde_json::Value)> {
-    resolve(root, policy, capture_id, true)
+    resolve(root, policy, capture_id, true, true)
 }
 
 pub(crate) fn validate_policy_advance(
@@ -50,11 +50,24 @@ pub(crate) fn validate_policy_advance(
     source_policy::validate_advance(prior, revision, current)
 }
 
+/// A physical chunk guard resolves native policy and manifest identity without
+/// rehashing the entire checkpoint per 8KiB poll. Enrollment still verifies
+/// every blob/journal, and ingestion/durable receipts verify them again.
+pub(crate) fn resolve_current_source_metadata(
+    root: &Path,
+    policy: &Connection,
+    capture_id: &str,
+    reauthorized: bool,
+) -> Result<SourceHandoffFacts> {
+    resolve(root, policy, capture_id, reauthorized, false).map(|(facts, _)| facts)
+}
+
 fn resolve(
     root: &Path,
     policy: &Connection,
     capture_id: &str,
     reauthorized: bool,
+    verify_contents: bool,
 ) -> Result<(SourceHandoffFacts, serde_json::Value)> {
     ensure!(identifier(capture_id), "invalid native capture ID");
     let row = policy
@@ -166,7 +179,11 @@ fn resolve(
         "native source workspace assignment changed"
     );
     let store = ctox_sync::checkpoint::CheckpointStore::open(store_path.clone(), 64 * 1024 * 1024)?;
-    let manifest = store.load(&row.12)?;
+    let manifest = if verify_contents {
+        store.load(&row.12)?
+    } else {
+        store.load_manifest(&row.12)?
+    };
     ensure!(
         manifest.sequence == u64::try_from(row.13)?
             && manifest.session.scope_id == spec.scope_id
