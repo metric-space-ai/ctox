@@ -7,6 +7,49 @@ const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_COMPUTER_CONTROL_MAX_RESULTS');
 const controlEnd = appSource.indexOf('async function waitForSyncBridgeReady', controlStart);
 const controlSource = appSource.slice(controlStart, controlEnd);
+test('computer list opts into bounded operational details without changing legacy replies or owner filtering', async () => {
+  const gpu = { kind: 'gpu', model: 'A4500', vram_gib: 20 };
+  const own = { id: 'gpu3', display_name: 'gpu3', hosting_mode: 'workstation',
+    status: 'assigned', capabilities: ['gpu'], capability_config: [gpu], agentless: false,
+    owner_user_id: 'owner-1', self_hosted_colocation: false, private_key: 'never-project' };
+  const foreign = { ...own, id: 'foreign', owner_user_id: 'other-owner' };
+  const deleted = { ...own, id: 'deleted', is_deleted: true };
+  const records = [own, foreign, deleted];
+  const commands = [];
+  const collection = { find({ selector }) { return { async exec() {
+    return records.filter((record) => Object.entries(selector).every(
+      ([key, condition]) => record[key] === condition.$eq));
+  } }; } };
+  const context = {
+    state: { session: { id: 'owner-1' },
+      db: { collection: (name) => name === 'workjet_computers' ? collection : {} },
+      sync: { async startCollection() { return { async awaitInSync() {} }; } },
+      commandBus: { async dispatch(command) { commands.push(command); return { status: 'completed' }; } },
+    },
+    actorContext: (session) => ({ id: session.id }), newId: () => 'id',
+    waitForSyncBridgeReady: async () => {}, window: { setTimeout }, setTimeout,
+  };
+  vm.runInNewContext(`${controlSource}\nglobalThis.__control = workjetComputerControl;`, context);
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  const legacy = plain(await context.__control({ action: 'computer.list' }));
+  assert.equal(legacy.computers.length, 1);
+  assert.equal(legacy.computers[0].id, 'gpu3');
+  assert.equal('capabilityConfig' in legacy.computers[0], false);
+  assert.equal('agentless' in legacy.computers[0], false);
+  const detailed = plain(await context.__control({ action: 'computer.list', includeOperationalDetails: true }));
+  assert.deepEqual(detailed.computers, [{ ...legacy.computers[0], capabilityConfig: [gpu], agentless: false }]);
+  assert.equal('private_key' in detailed.computers[0], false);
+  for (const command of commands) {
+    assert.equal(command.command_type, 'ctox.workjet.computer.list');
+    assert.deepEqual(plain(command.payload), { limit: 100 });
+    assert.equal(command.client_context.actor.id, 'owner-1');
+  }
+  await assert.rejects(context.__control({ action: 'computer.list', includeOperationalDetails: 'yes' }),
+    /Invalid Workjet computer includeOperationalDetails/);
+  own.capability_config = [{ ...gpu, private_key: 'secret' }];
+  await assert.rejects(context.__control({ action: 'computer.list', includeOperationalDetails: true }),
+    /Unsupported Workjet computer payload field/);
+});
 
 test('Workjet guest computer control is installed and WebRTC/RxDB-only', () => {
   assert.match(appSource, /globalThis\.workjetComputerControl = workjetComputerControl/);
