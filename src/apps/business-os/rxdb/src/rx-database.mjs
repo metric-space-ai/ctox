@@ -439,9 +439,26 @@ class CtoxRxCollection {
           : { collectionName: this.name, invalidated: true });
       }, OBSERVABLE_DEBOUNCE_MS);
     };
+    // Revisions this subscription already reported. A refreshed window or a
+    // materialized read that brings a row back with the same revision is not
+    // a change: re-announcing it made every consumer re-read, which refreshed
+    // the window again (thesen 07.10.2026: shell feeds re-read their windows
+    // several times per second and a long-lived tab held ~40 % CPU).
+    const reportedRevisions = new Map();
     const note = (changes) => {
       if (Array.isArray(changes)) {
-        for (const change of changes) if (change?.id) pendingChanges.set(String(change.id), change);
+        let fresh = 0;
+        for (const change of changes) {
+          if (!change?.id) continue;
+          const id = String(change.id);
+          const revision = `${change.rev || ''}|${change.deleted === true}`;
+          if (change.rev && reportedRevisions.get(id) === revision) continue;
+          if (reportedRevisions.size >= REPORTED_REVISION_LIMIT) reportedRevisions.clear();
+          reportedRevisions.set(id, revision);
+          pendingChanges.set(id, change);
+          fresh += 1;
+        }
+        if (!fresh) return;
       } else {
         pendingUnknown = true;
       }
@@ -1439,6 +1456,8 @@ export const ctoxRxdbTestInternals = {
   normalizeSort,
   sortDocuments,
 };
+
+const REPORTED_REVISION_LIMIT = 20_000;
 
 // Storage change events carry the written documents (`success`: id -> stored
 // document). External events from other tabs carry only ids: preserve those

@@ -75,6 +75,9 @@ for (const mode of ['direct', 'control-plane', 'maintenance-scope', 'permission-
     assert.equal(hints.length, 2, mode + ': burst store changes must coalesce to one hint');
     assert.deepEqual(hints[1].changes, [{id:'a', rev:'6-a', deleted:false}],
       mode + ': a store hint names the changed row and its latest revision, never its fields');
+    for (const observer of observers) observer({success:{a:{...row, _rev:'6-a'}}});
+    await wait();
+    assert.equal(hints.length, 2, mode + ': a row coming back with an already reported revision is not a change');
     collection.notifyQueryWindowChange();
     await wait();
     assert.equal(hints.length, 3, mode + ': projected-window changes must invalidate without canonical writes');
