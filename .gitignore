@@ -109,6 +109,7 @@ tmp_intersolar_*.js
 !/docs/ctox-rxdb.md
 !/docs/ctox-sync-production-readiness-95.md
 !/docs/ctox-sync-production-readiness-runbooks.md
+!/docs/ctox-sync-feldbefund-20261007-thesen-start-stream-limit.md
 !/docs/core_runtime_state_machine.md
 !/docs/pilot-monitoring.md
 !/docs/harness-operating-model.md
