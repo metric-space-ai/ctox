@@ -5122,7 +5122,7 @@ fn actor_role(session: &BusinessOsSession) -> String {
         .to_owned()
 }
 
-fn actor_payload(session: &BusinessOsSession) -> Value {
+pub(super) fn actor_payload(session: &BusinessOsSession) -> Value {
     json!({
         "id": actor_id(session),
         "display_name": actor_display_name(session),

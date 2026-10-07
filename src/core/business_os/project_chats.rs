@@ -16,6 +16,7 @@ use std::path::Path;
 
 mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
+pub(in crate::business_os) mod supervisor_turns;
 pub(super) use privacy::{
     command_access_check, document_visible_from_connections, document_visible_to_actor,
     has_restricted_reference, VisibilityReadContext,
@@ -63,7 +64,7 @@ struct ChatPayload {
 }
 
 pub(super) fn is_command(command_type: &str) -> bool {
-    matches!(
+    supervisor_turns::is_command(command_type) || matches!(
         command_type,
         "ctox.workjet.project.chat.ensure"
             | "ctox.workjet.project.supervisor.bind"
