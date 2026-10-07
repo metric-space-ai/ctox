@@ -98,6 +98,31 @@ test('closing during a read drops completion, retries and late invalidations', a
   assert.equal(after, 0); assert.equal(timer.jobs.size, 0);
   assert.equal(Object.keys(c.listeners).length, 0);
 });
+test('named changes accumulate per key; an unnamed event or a failure reloads in full', async () => {
+  const c = collections(); const timer = clock(); const calls = [];
+  const reader = createCollectionReloader({ collections: c.result, ...timer,
+    reload: async (keys, changesByKey) => {
+      calls.push([keys, changesByKey]);
+      if (calls.length === 2) throw Object.assign(new Error('timeout'), { failedKeys: ['leads'] });
+    },
+  });
+  c.listeners.leads({ changes: [{ id: 'a', rev: '1' }] });
+  c.listeners.leads({ changes: [{ id: 'b', rev: '2' }, { id: 'a', rev: '3' }] });
+  await timer.run();
+  const named = calls[0][1].get('leads');
+  assert.deepEqual([...named.keys()].sort(), ['a', 'b']);
+  assert.equal(named.get('a').rev, '3', 'the latest revision of a row wins');
+  c.listeners.leads({ changes: [{ id: 'c', rev: '1' }] });
+  c.listeners.sources();
+  c.listeners.leads();
+  await timer.run();
+  assert.equal(calls[1][1].get('leads'), null, 'an unnamed event turns the key into a full reload');
+  assert.equal(calls[1][1].get('sources'), null);
+  await timer.run();
+  assert.deepEqual(calls[2][0], ['leads']);
+  assert.equal(calls[2][1].get('leads'), null, 'a failed read retries in full');
+  reader.dispose();
+});
 test('a missing shell invalidation API fails without falling back to find().$', () => {
   const c = collections(); c.result.leads = { find: c.result.leads.find };
   assert.throws(() => createCollectionReloader({ collections: c.result, reload: () => {} }), /shell collection invalidation API/);
@@ -390,6 +415,37 @@ try {
     assert.equal(leadReads, 2, 'one paged load (first page + empty next page), not one per caller');
     assert.equal(state.leadListRows.length, 1);
     assert.equal(state.leadListLoad, null, 'the shared load is released when it settles');
+  });
+  await test('named lead changes patch only changed rows; known revisions fetch nothing', async () => {
+    const byIdQueries = [];
+    const leadB = { id: 'lead_b', _rev: '1-b', name: 'Neu', campaign: 'K', updated_at_ms: 2, contacts: [], selected_contact_ids: [] };
+    const { reads, existingLead } = setup({ leads: async query => {
+      const ids = query.selector?.id?.$in;
+      if (ids) {
+        byIdQueries.push(ids);
+        return ids.map(id => id === 'lead_b' ? leadB : { ...existingLead, _rev: '2-a', name: 'Firma neu' })
+          .map(doc => ({ toJSON: () => structuredClone(doc) }));
+      }
+      return query.selector?.id?.$gt ? [] : [{ toJSON: () => leadListRow(existingLead) }];
+    } });
+    await hooks.reload(['leads']);
+    reads.length = 0;
+    const named = changes => new Map([['leads', new Map(changes.map(change => [change.id, change]))]]);
+    // Our own refreshed window reports the revision we already hold: no read.
+    await hooks.reload(['leads'], named([{ id: 'lead_a', rev: '1-a', deleted: false }]));
+    assert.equal(reads.length, 0, 'a known revision is not a change');
+    // A changed revision fetches exactly that row and patches it in.
+    await hooks.reload(['leads'], named([{ id: 'lead_a', rev: '2-a', deleted: false }]));
+    assert.deepEqual(byIdQueries.at(-1), ['lead_a']);
+    assert.equal(state.leadListRows.find(row => row.id === 'lead_a')._rev, '2-a');
+    // A new lead is fetched and added; a deleted one is removed without a read.
+    await hooks.reload(['leads'], named([{ id: 'lead_b', rev: '1-b', deleted: false }]));
+    assert.deepEqual(byIdQueries.at(-1), ['lead_b']);
+    assert.deepEqual(state.leadListRows.map(row => row.id).sort(), ['lead_a', 'lead_b']);
+    const before = byIdQueries.length;
+    await hooks.reload(['leads'], named([{ id: 'lead_b', rev: '2-b', deleted: true }]));
+    assert.equal(byIdQueries.length, before, 'a deletion needs no read');
+    assert.deepEqual(state.leadListRows.map(row => row.id), ['lead_a']);
   });
   await test('a closed or recovered binding cannot apply its delayed documents', async () => {
     const blocked = deferred(); setup({ sources: () => blocked.promise });
