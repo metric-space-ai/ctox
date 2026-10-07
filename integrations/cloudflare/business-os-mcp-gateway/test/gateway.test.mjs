@@ -276,6 +276,133 @@ test("managed ctox.dev read-only token blocks upsert_record at the gateway", asy
   assert.equal(routed, false);
 });
 
+function scopedManagedAuth(policy) {
+  return {
+    ok: true,
+    context: {
+      channel: "ctox_dev_managed_mcp", surface: "business_os_mcp",
+      actor: "ctox-dev:user:owner_1", workspace: "tenant:tenant_1",
+      client_id: "ctox-dev:mcp-token:scoped-client", role: "chef",
+      auth_source: "ctox_dev_managed_mcp_token"
+    },
+    policy: { allowReads: true, allowWrites: false, allowedTools: [], deniedTools: [], ...policy }
+  };
+}
+
+function scopedManagedRequest(tool, collection, overrides = {}) {
+  return new Request("https://mcp.ctox.dev/mcp/welsch.ctox.dev", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer ctox_mcp_scope_test",
+      "x-ctox-mcp-gateway-context": JSON.stringify({
+        actor: "spoofed", workspace: "spoofed",
+        managed_policy: { allowReads: true, allowedCollections: [] }
+      })
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name: tool, arguments: {
+        collection, record_id: "private_1", query: "private", limit: 1,
+        _context: { managed_policy: { allowReads: true, allowedCollections: [] } }
+      } }
+    }),
+    ...overrides
+  });
+}
+
+const scopedAuthEnv = {
+  CTOX_MANAGED_MCP_AUTH_URL: "https://ctox.dev/api/managed-mcp/client-auth",
+  MCP_REQUIRE_CLIENT_IDENTITY: "true"
+};
+
+test("managed collection scope denies all foreign record tools before routing", async () => {
+  let routed = 0;
+  globalThis.fetch = async () => Response.json(scopedManagedAuth({
+    allowedCollections: ["workjet_projects", "workjet_working_copies"]
+  }));
+  const env = { ...scopedAuthEnv, BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
+    routed += 1;
+    return Response.json({ result: { private_record: true } });
+  }) };
+  for (const tool of ["business_os.query_records", "business_os.search_records",
+    "business_os.get_record", "business_os.get_record_context", "business_os.get_command_status"]) {
+    const response = await handleRequest(scopedManagedRequest(tool, "business_commands"), env);
+    assert.equal(response.status, 403, tool);
+    assert.equal((await response.json()).error.data.field, "allowedCollections", tool);
+  }
+  assert.equal(routed, 0);
+});
+
+test("managed collection scope survives the authenticated header and native envelope", async () => {
+  const session = new BusinessOsMcpSession({}, {});
+  let forwarded;
+  globalThis.fetch = async () => Response.json(scopedManagedAuth({
+    allowedCollections: ["workjet_projects", "workjet_working_copies"]
+  }));
+  session.socket = { send: (text) => {
+    forwarded = JSON.parse(text);
+    session.handleSocketMessage(JSON.stringify({
+      type: "mcp_response", request_id: forwarded.request_id,
+      status: 200, body: JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } })
+    }));
+  } };
+  const response = await handleRequest(scopedManagedRequest("business_os.get_record_context", "workjet_projects"), {
+    ...scopedAuthEnv,
+    BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding((request) => session.fetch(request))
+  });
+  assert.equal(response.status, 200);
+  assert.equal(forwarded.context.actor, "ctox-dev:user:owner_1");
+  assert.equal(forwarded.context.client_id, "ctox-dev:mcp-token:scoped-client");
+  assert.deepEqual(forwarded.context.managed_policy.allowedCollections,
+    ["workjet_projects", "workjet_working_copies"]);
+  assert.equal(forwarded.context.managed_policy.allowReads, true);
+  assert.equal(session.pending.size, 0);
+});
+
+test("managed collection scope rejects a mixed batch without forwarding any read", async () => {
+  let routed = 0;
+  globalThis.fetch = async () => Response.json(scopedManagedAuth({ allowedCollections: ["workjet_projects"] }));
+  const calls = ["workjet_projects", "business_commands"].map((collection, id) => ({
+    jsonrpc: "2.0", id, method: "tools/call",
+    params: { name: "business_os.query_records", arguments: { collection, limit: 1 } }
+  }));
+  const response = await handleRequest(scopedManagedRequest("business_os.query_records", "workjet_projects", {
+    body: JSON.stringify(calls)
+  }), { ...scopedAuthEnv, BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
+    routed += 1; return Response.json({ ok: true });
+  }) });
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).error.data.field, "allowedCollections");
+  assert.equal(routed, 0);
+});
+
+test("managed collection scope never turns missing or malformed lists into unrestricted reads", async () => {
+  let routed = 0;
+  for (const allowedCollections of [undefined, null, "business_commands", [false], ["business_commands", false]]) {
+    globalThis.fetch = async () => Response.json(scopedManagedAuth({ allowedCollections }));
+    const response = await handleRequest(scopedManagedRequest("business_os.query_records", "business_commands"), {
+      ...scopedAuthEnv, BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
+        routed += 1; return Response.json({ ok: true });
+      })
+    });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.data.field, "allowedCollections");
+  }
+  assert.equal(routed, 0);
+});
+
+test("managed collection scope preserves an explicitly unrestricted collection list", async () => {
+  let routed = 0;
+  globalThis.fetch = async () => Response.json(scopedManagedAuth({ allowedCollections: [] }));
+  const response = await handleRequest(scopedManagedRequest("business_os.query_records", "business_commands"), {
+    ...scopedAuthEnv, BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
+      routed += 1; return Response.json({ ok: true });
+    })
+  });
+  assert.equal(response.status, 200);
+  assert.equal(routed, 1);
+});
+
 test("managed app-development tokens are limited to their single module", async () => {
   let routed = 0;
   globalThis.fetch = async () => new Response(

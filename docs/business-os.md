@@ -260,6 +260,21 @@ cto1-example-business-os
 https://mcp.ctox.dev/mcp/cto1.example.com
 ```
 
+Managed record reads carry the effective tenant/token policy in the trusted
+WebSocket request context as `managed_policy` (`allowReads`,
+`allowedCollections`). Native `query_records`, `search_records`, `get_record`
+and `get_record_context` enforce that scope before reading the store, in
+addition to the instance policy and actor/record visibility checks. Caller
+`_context` values cannot replace it. Missing or malformed managed scopes deny
+record reads; local and signed internal command sessions keep their existing
+policy paths. An explicit empty collection list retains the managed policy's
+unrestricted-list meaning, subject to the native instance policy.
+
+Context expansion returns empty lists for related collections outside the
+managed client scope, rather than reading them. Gateway/control-plane delivery
+must include the intersected effective policy before a managed client can pass
+installed acceptance; native tests do not prove the gateway deployed it.
+
 The companion external-agent skill is stored at:
 
 ```text
