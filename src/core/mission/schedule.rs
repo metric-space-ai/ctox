@@ -418,8 +418,6 @@ pub fn ensure_task_with_calendar(
     validate_cron_expr(&request.cron_expr)?;
     calendar.validate()?;
     let conn = open_schedule_db(root)?;
-    let now = now_iso_string();
-    let next_run_at = next_run_after(&request.cron_expr, &calendar, now_utc())?;
     let existing_task_id: Option<String> = conn
         .query_row(
             r#"
@@ -432,6 +430,22 @@ pub fn ensure_task_with_calendar(
             |row| row.get(0),
         )
         .optional()?;
+    if let Some(task_id) = existing_task_id.as_deref() {
+        let task = load_task(&conn, task_id)?.context("ensured schedule disappeared")?;
+        if task.enabled
+            && task.cron_expr == request.cron_expr.trim()
+            && task.prompt == request.prompt.trim()
+            && task.skill == request.skill
+            && task.calendar == calendar
+        {
+            // Reconciliation is not a reschedule. In particular, an overdue
+            // task must remain due when its unchanged configuration is ensured.
+            // Retain both timestamps and run history as well as its deadline.
+            return Ok(task);
+        }
+    }
+    let now = now_iso_string();
+    let next_run_at = next_run_after(&request.cron_expr, &calendar, now_utc())?;
     if let Some(task_id) = existing_task_id {
         conn.execute(
             r#"
