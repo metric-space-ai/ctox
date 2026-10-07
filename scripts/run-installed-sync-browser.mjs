@@ -28,7 +28,14 @@ const stop = async () => {
     await Promise.race([server.close().catch(() => {}), new Promise(r => setTimeout(r, 5000))]);
   }
   if (browserPid && browserPgid === browserPid) {
-    try { process.kill(-browserPgid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
+    try { process.kill(-browserPgid, 'SIGKILL'); }
+    catch (e) { if (e.code !== 'ESRCH') receipt.browserCleanupError = e.code || e.name; }
+    receipt.browserGroupAbsent = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try { process.kill(-browserPgid, 0); }
+      catch (e) { if (e.code === 'ESRCH') receipt.browserGroupAbsent = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
   }
 };
 const deadline = setTimeout(() => { receipt.deadlineReached = true; save(); void stop(); }, 3000000);
@@ -58,6 +65,9 @@ try {
     try { process.kill(browserPid, 0); receipt.browserProcessAbsent = false; }
     catch (error) { receipt.browserProcessAbsent = error.code === 'ESRCH'; }
   }
+  receipt.pass = Boolean(receipt.pass && receipt.nativeGroupsStopped
+    && receipt.browserGroupAbsent && receipt.browserProcessAbsent
+    && !receipt.interrupted && !receipt.deadlineReached && !receipt.browserCleanupError);
   save();
 }
 console.log(JSON.stringify({ receipt: join(out, 'receipt.json'), pass: receipt.pass, terminal: receipt.terminal }));
