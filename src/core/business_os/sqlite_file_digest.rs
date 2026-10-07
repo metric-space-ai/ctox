@@ -7,8 +7,9 @@
 //! https://www.sqlite.org/howtocorrupt.html (section 2.2)
 
 use anyhow::{ensure, Context, Result};
-use rusqlite::{ffi, Connection};
+use rusqlite::{ffi, Connection, OpenFlags};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 
 struct MainFile<'a> {
     file: *mut ffi::sqlite3_file,
@@ -95,4 +96,15 @@ pub(super) fn sqlite_file_sha256(connection: &Connection) -> Result<(u64, String
         "SQLite file changed size during digest"
     );
     Ok((size as u64, format!("{:x}", digest.finalize())))
+}
+
+/// Backups are caller-selected paths and can alias an already-open live inode.
+/// Even the rejected-backup hash must use SQLite's inode/descriptor bookkeeping.
+pub(super) fn sqlite_path_sha256(path: &Path) -> Result<(u64, String)> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open SQLite physical digest {}", path.display()))?;
+    sqlite_file_sha256(&connection)
 }

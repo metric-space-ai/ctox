@@ -23,7 +23,7 @@ use super::rxdb_peer::{
     migrate_additive_native_rxdb_collection_versions, repair_stale_rxdb_collection_schema_versions,
     rxdb_collection_version_table_name, sqlite_quote_identifier, sqlite_table_exists,
 };
-use super::sqlite_file_digest::sqlite_file_sha256;
+use super::sqlite_file_digest::{sqlite_file_sha256, sqlite_path_sha256};
 use super::store::{now_ms, rxdb_store_path, RXDB_STORE_FILE};
 use anyhow::{anyhow, Context};
 use base64::Engine;
@@ -1048,7 +1048,7 @@ pub fn restore_native_rxdb_immutable_backup(root: &Path, backup: &Path) -> anyho
         anyhow::bail!("{reason}");
     }
     let live_path = rxdb_store_path(root);
-    let (backup_bytes, backup_sha256) = file_sha256(backup)?;
+    let (backup_bytes, backup_sha256) = sqlite_path_sha256(backup)?;
     if let Some(conn) = guard.exclusive.as_ref() {
         // wal_checkpoint cannot run inside BEGIN EXCLUSIVE; end the transaction
         // first. locking_mode=EXCLUSIVE keeps other connections out until drop.
@@ -1120,7 +1120,7 @@ fn refuse_restore(
         .get("sha256")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let (_bytes, backup_sha256) = file_sha256(backup)?;
+    let (_bytes, backup_sha256) = sqlite_path_sha256(backup)?;
     if recorded_backup != backup_sha256 {
         return Ok(Some(format!(
             "refusing native RxDB restore: backup identity does not match pinned provenance (pinned {recorded_backup}, backup {backup_sha256})"
@@ -1235,7 +1235,7 @@ fn replace_sqlite_store(live_path: &Path, backup: &Path) -> anyhow::Result<()> {
     let preserved = live_path.with_extension("sqlite3.pre-restore");
     let live_sidecars = sqlite_sidecar_paths(live_path);
     let preserved_sidecars = sqlite_sidecar_paths(&preserved);
-    let (_backup_bytes, backup_sha256) = file_sha256(backup)?;
+    let (_backup_bytes, backup_sha256) = sqlite_path_sha256(backup)?;
 
     if live_path.is_file() && preserved.is_file() {
         let (_bytes, live_sha) = file_sha256(live_path)?;
@@ -1836,11 +1836,46 @@ mod tests {
         assert_eq!(inventory["file_sha256"], json!(expected.1));
         exclusive.execute_batch("ROLLBACK;")?;
         assert_eq!(sqlite_file_sha256(&exclusive)?, expected);
+        assert_eq!(sqlite_path_sha256(&path)?, expected);
         assert!(
             !another_process_can_lock_sqlite_main(&path)?,
             "restore digest must keep exclusive kernel locks"
         );
         drop(exclusive);
+        assert!(another_process_can_lock_sqlite_main(&path)?);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn rejected_backup_alias_preserves_exclusive_restore_kernel_locks() -> anyhow::Result<()> {
+        let (root, path, _) = wal_inventory_fixture()?;
+        backup_native_rxdb_immutable_store(root.path(), None)?;
+        let writer = open_rxdb_sqlite(&path)?;
+        writer.execute_batch(
+            "CREATE TABLE not_in_backup (id INTEGER PRIMARY KEY);
+             INSERT INTO not_in_backup VALUES (1);
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )?;
+        drop(writer);
+
+        let alias = root.path().join("backup-alias.sqlite3");
+        fs::hard_link(&path, &alias)?;
+        let guard = acquire_exclusive_native_rxdb_writer(root.path())?;
+        assert!(!another_process_can_lock_sqlite_main(&path)?);
+        // A caller can pass the live pathname or a different hardlink as backup.
+        // Identity refusal must not drop the live guard's kernel locks before
+        // the caller unwinds; the old raw backup hash did exactly that.
+        for backup in [&path, &alias] {
+            let refusal = refuse_restore(root.path(), backup, guard.exclusive.as_ref())?
+                .context("changed live image must not match the pinned backup")?;
+            assert!(refusal.contains("backup identity does not match pinned provenance"));
+            assert!(
+                !another_process_can_lock_sqlite_main(&path)?,
+                "rejected backup digest must retain the live restore lock"
+            );
+        }
+        drop(guard);
         assert!(another_process_can_lock_sqlite_main(&path)?);
         Ok(())
     }
