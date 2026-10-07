@@ -245,6 +245,13 @@ export async function runAcceptance(browser, configPath) {
         const name = `ctox-installed-acceptance-${goal}-${randomUUID()}`;
         A = await attach(a, origin, await native.invite('A'), name + '-a');
         B = await attach(b, origin, await native.invite('B'), name + '-b');
+        const probe = { id: `acceptance-${name}-connected`, target_type: 'acceptance',
+          label: 'live-WebRTC-baseline', updated_at_ms: Date.now() };
+        await write(A, [probe]); await converge(native, B, [probe]);
+        receipt.steps.push('Live baseline: A write persisted natively and reached B over WebRTC before any fault');
+        const health = await native.cli(['business-os', 'rxdb', 'status', '--json', '--root', config.root]);
+        receipt.measured.nativeHealth = { running: health.running, replicationUp: health.replicationUp,
+          stages: health.health_stages, heartbeat: health.heartbeat };
         if (goal === 5) {
           receipt.criterion = { runs: 3, documentsPerRun: 200, offlineMs: 30000, maxLocalWriteMs: 200, maxCatchupMs: 10000 };
           receipt.measured.runs = [];
