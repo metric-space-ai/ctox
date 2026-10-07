@@ -116,6 +116,11 @@ pub(super) fn assert_native_source_handoff_enrollment(
     }).unwrap();
     registry
         .with_policy(|tx| {
+            enrollment::validate_source_decision(root, tx, &config, &identity, &request)
+        })
+        .expect("exact disclosure grant must preserve native source authority");
+    registry
+        .with_policy(|tx| {
             // The persistent trigger is visible to the gate's independent connection.
             tx.execute_batch(
                 "CREATE TRIGGER fail_native_handoff_audit BEFORE INSERT ON business_events
