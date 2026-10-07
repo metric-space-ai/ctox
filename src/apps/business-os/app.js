@@ -1,17 +1,17 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261007-shell-v2-pull-error-v459';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261007-shell-v2-pull-error-v459';
-import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-pull-error-v459';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-pull-error-v459';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-pull-error-v459';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-pull-error-v459';
-import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-pull-error-v459';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261007-shell-v2-computer-capabilities';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261007-shell-v2-computer-capabilities';
+import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-computer-capabilities';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-computer-capabilities';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-computer-capabilities';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-computer-capabilities';
+import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-computer-capabilities';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261007-shell-v2-pull-error-v459';
+} from './shared/app-lifecycle.js?v=20261007-shell-v2-computer-capabilities';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -20,20 +20,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261007-shell-v2-pull-error-v459';
+} from './shared/permissions.js?v=20261007-shell-v2-computer-capabilities';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261007-shell-v2-pull-error-v459';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261007-shell-v2-pull-error-v459';
+} from './shared/branding.js?v=20261007-shell-v2-computer-capabilities';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261007-shell-v2-computer-capabilities';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261007-shell-v2-pull-error-v459';
+} from './shared/presentation.js?v=20261007-shell-v2-computer-capabilities';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -44,9 +44,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261007-shell-v2-pull-error-v459';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261007-shell-v2-pull-error-v459';
-import { createDocumentsFacade } from './shared/documents.js?v=20261007-shell-v2-pull-error-v459';
+} from './shared/shell-permissions-ui.js?v=20261007-shell-v2-computer-capabilities';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261007-shell-v2-computer-capabilities';
+import { createDocumentsFacade } from './shared/documents.js?v=20261007-shell-v2-computer-capabilities';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -54,16 +54,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261007-shell-v2-pull-error-v459';
+} from './shared/maintenance-state.js?v=20261007-shell-v2-computer-capabilities';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261007-shell-v2-pull-error-v459';
+} from './shared/workspace-session.js?v=20261007-shell-v2-computer-capabilities';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261007-shell-v2-pull-error-v459';
+} from './shared/taskbar-pins.js?v=20261007-shell-v2-computer-capabilities';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -71,10 +71,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261007-shell-v2-pull-error-v459';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261007-shell-v2-computer-capabilities';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261007-shell-v2-pull-error-v459';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261007-shell-v2-pull-error-v459';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261007-shell-v2-computer-capabilities';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261007-shell-v2-computer-capabilities';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -82,8 +82,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261007-shell-v2-pull-error-v459';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261007-shell-v2-pull-error-v459';
+} from './shared/startup-deadlines.js?v=20261007-shell-v2-computer-capabilities';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261007-shell-v2-computer-capabilities';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -101,7 +101,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261007-shell-v2-pull-error-v459';
+const APP_BUILD = '20261007-shell-v2-computer-capabilities';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13296,6 +13296,8 @@ async function workjetComputerControl(request = {}) {
       'displayName',
       'hostingMode',
       'capabilities',
+      'capabilityConfig',
+      'agentless',
       'selfHostedColocation',
       'colocationConfirmation',
     ]));
@@ -13331,7 +13333,14 @@ async function workjetComputerControl(request = {}) {
     if (colocationConfirmation !== undefined) {
       payload.colocation_confirmation = colocationConfirmation;
     }
-    await state.commandBus.dispatch({
+    if (request.capabilityConfig !== undefined) {
+      payload.capability_config = boundedWorkjetOperationalCapabilities(request.capabilityConfig);
+    }
+    if (request.agentless !== undefined) {
+      if (typeof request.agentless !== 'boolean') throw new Error('Invalid Workjet agentless flag.');
+      payload.agentless = request.agentless;
+    }
+    const receipt = await state.commandBus.dispatch({
       id: commandId,
       command_id: commandId,
       module: 'ctox',
@@ -13343,6 +13352,21 @@ async function workjetComputerControl(request = {}) {
         actor: actorContext(state.session),
       },
     }, { until: 'terminal', timeoutMs: WORKJET_COMPUTER_CONTROL_TIMEOUT_MS });
+    // Typed grants are confirmed by their correlated native receipt, never by an old projection.
+    if (payload.capability_config !== undefined || payload.agentless !== undefined) {
+      const native = completedWorkjetComputerResult(receipt, commandId)?.computer;
+      if (!native || native.id !== computerId || native.owner_user_id !== ownerUserId
+        || native.status !== 'assigned'
+        || (payload.agentless !== undefined && native.agentless !== payload.agentless)
+        || (payload.capability_config !== undefined
+          && JSON.stringify(boundedWorkjetOperationalCapabilities(native.capability_config))
+            !== JSON.stringify(payload.capability_config))) {
+        throw new Error('Workjet capability grant was not confirmed by the native command.');
+      }
+      const confirmed = boundedWorkjetComputerResult(native);
+      if (!confirmed) throw new Error('Invalid native Workjet capability result.');
+      return { action: 'computer.assign', computer: confirmed };
+    }
     const computer = await waitForProjectedWorkjetComputer(
       computerId,
       ownerUserId,
@@ -13351,6 +13375,41 @@ async function workjetComputerControl(request = {}) {
       WORKJET_COMPUTER_CONTROL_TIMEOUT_MS,
     );
     return { action: 'computer.assign', computer };
+  }
+
+  if (action === 'computer.endpoint.upsert' || action === 'computer.endpoint.disable') {
+    const upsert = action === 'computer.endpoint.upsert';
+    assertWorkjetComputerPayloadKeys(request, new Set(upsert
+      ? ['action', 'commandId', 'computerId', 'endpointRef', 'connection']
+      : ['action', 'commandId', 'endpointRef']));
+    const commandId = boundedWorkjetComputerText(request.commandId, 'commandId', 128);
+    const endpointRef = boundedWorkjetComputerText(request.endpointRef, 'endpointRef', 128);
+    const payload = { endpoint_ref: endpointRef };
+    if (upsert) {
+      payload.computer_id = boundedWorkjetComputerText(request.computerId, 'computerId', 160);
+      payload.connection = boundedWorkjetComputerEndpoint(request.connection);
+    }
+    const receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: upsert
+        ? 'ctox.workjet.computer.endpoint.upsert'
+        : 'ctox.workjet.computer.endpoint.disable',
+      record_id: endpointRef,
+      payload,
+      client_context: {
+        source: 'workjet-computer-control',
+        actor: actorContext(state.session),
+      },
+    }, { until: 'terminal', timeoutMs: WORKJET_COMPUTER_CONTROL_TIMEOUT_MS });
+    const endpoint = completedWorkjetComputerResult(receipt, commandId)?.endpoint;
+    if (!endpoint || endpoint.id !== endpointRef || endpoint.owner_user_id !== ownerUserId
+      || endpoint.enabled !== upsert
+      || (upsert && endpoint.computer_id !== payload.computer_id)) {
+      throw new Error('Workjet endpoint change was not confirmed by the native command.');
+    }
+    return { action, endpointRef, computerId: endpoint.computer_id, enabled: endpoint.enabled };
   }
 
   if (action === 'computer.unassign') {
@@ -13380,6 +13439,115 @@ async function workjetComputerControl(request = {}) {
   }
 
   throw new Error(`Unsupported Workjet computer control action: ${action}`);
+}
+
+function completedWorkjetComputerResult(receipt, commandId) {
+  if (receipt?.ok !== true || receipt.status !== 'completed' || receipt.command_id !== commandId
+    || receipt.result?.ok !== true) {
+    throw new Error('Workjet computer command did not complete successfully.');
+  }
+  return receipt.result;
+}
+
+function workjetComputerInteger(value, label, max) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) {
+    throw new Error(`Invalid Workjet computer ${label}.`);
+  }
+  return value;
+}
+
+function boundedWorkjetOperationalCapabilities(value) {
+  if (!Array.isArray(value) || value.length > 3) {
+    throw new Error('Invalid Workjet operational capabilities.');
+  }
+  const kinds = new Set();
+  const capabilities = value.map((descriptor) => {
+    if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) {
+      throw new Error('Invalid Workjet operational capability.');
+    }
+    const kind = descriptor.kind;
+    if (kinds.has(kind)) throw new Error('Duplicate Workjet operational capability.');
+    kinds.add(kind);
+    const text = (key, max = 128) => boundedWorkjetComputerText(descriptor[key], key, max);
+    const integer = (key, max) => workjetComputerInteger(descriptor[key], key, max);
+    if (kind === 'build') {
+      assertWorkjetComputerPayloadKeys(descriptor, new Set([
+        'kind', 'ssh_endpoint_ref', 'slots', 'jobs', 'lane_root', 'disk_floor_gib', 'toolchains',
+      ]));
+      if (!Array.isArray(descriptor.toolchains) || descriptor.toolchains.length < 1
+        || descriptor.toolchains.length > 16) throw new Error('Invalid Workjet build toolchains.');
+      return { kind, ssh_endpoint_ref: text('ssh_endpoint_ref'),
+        slots: integer('slots', 32), jobs: integer('jobs', 64), lane_root: text('lane_root', 4096),
+        disk_floor_gib: integer('disk_floor_gib', 4294967295),
+        toolchains: [...new Set(descriptor.toolchains.map((tool) =>
+          boundedWorkjetComputerText(tool, 'toolchain', 128)))].sort() };
+    }
+    if (kind === 'storage') {
+      assertWorkjetComputerPayloadKeys(descriptor, new Set([
+        'kind', 'endpoint_ref', 'protocol', 'root', 'quota_gib', 'purposes',
+      ]));
+      if (!['ssh', 'smb', 'nfs'].includes(descriptor.protocol)
+        || !Array.isArray(descriptor.purposes) || descriptor.purposes.length < 1
+        || descriptor.purposes.length > 3
+        || descriptor.purposes.some((purpose) => !['artifacts', 'backups', 'exchange'].includes(purpose))) {
+        throw new Error('Invalid Workjet storage protocol or purposes.');
+      }
+      return { kind, endpoint_ref: text('endpoint_ref'), protocol: descriptor.protocol,
+        root: text('root', 4096), quota_gib: descriptor.quota_gib === null ? null
+          : integer('quota_gib', Number.MAX_SAFE_INTEGER),
+        purposes: [...new Set(descriptor.purposes)].sort() };
+    }
+    if (kind === 'gpu') {
+      assertWorkjetComputerPayloadKeys(descriptor, new Set(['kind', 'model', 'vram_gib']));
+      return { kind, model: text('model', 256), vram_gib: integer('vram_gib', 4294967295) };
+    }
+    throw new Error('Unsupported Workjet operational capability.');
+  });
+  return capabilities.sort((left, right) => left.kind.localeCompare(right.kind));
+}
+
+function boundedWorkjetComputerEndpoint(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Workjet computer endpoint.');
+  }
+  const protocol = value.protocol;
+  const ssh = protocol === 'ssh';
+  if (!ssh && protocol !== 'smb') throw new Error('Unsupported Workjet endpoint protocol.');
+  assertWorkjetComputerPayloadKeys(value, new Set(ssh
+    ? ['protocol', 'host', 'port', 'username', 'root', 'host_key_sha256',
+      'host_key_algorithm', 'private_key', 'passphrase']
+    : ['protocol', 'host', 'port', 'username', 'root', 'share', 'password']));
+  const reference = (candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error('Workjet credentials must reference the native Secret Store.');
+    }
+    assertWorkjetComputerPayloadKeys(candidate, new Set(['scope', 'name']));
+    return {
+      scope: boundedWorkjetComputerText(candidate.scope, 'credential scope', 128),
+      name: boundedWorkjetComputerText(candidate.name, 'credential name', 128),
+    };
+  };
+  const connection = { protocol,
+    host: boundedWorkjetComputerText(value.host, 'host', 253),
+    port: workjetComputerInteger(value.port, 'port', 65535),
+    username: boundedWorkjetComputerText(value.username, 'username', 256),
+    root: boundedWorkjetComputerText(value.root, 'root', 4096) };
+  if (ssh) {
+    connection.host_key_sha256 = boundedWorkjetComputerText(value.host_key_sha256, 'host key', 80);
+    connection.private_key = reference(value.private_key);
+    connection.passphrase = value.passphrase == null ? null : reference(value.passphrase);
+    if (value.host_key_algorithm != null) {
+      if (!['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384',
+        'ecdsa-sha2-nistp521', 'rsa-sha2-256', 'rsa-sha2-512'].includes(value.host_key_algorithm)) {
+        throw new Error('Unsupported Workjet SSH host-key algorithm.');
+      }
+      connection.host_key_algorithm = value.host_key_algorithm;
+    }
+  } else {
+    connection.share = boundedWorkjetComputerText(value.share, 'share', 128);
+    connection.password = reference(value.password);
+  }
+  return connection;
 }
 
 async function requireWorkjetComputerDataPlane() {

@@ -120,3 +120,134 @@ test('Workjet guest computer control rejects managed hosts and gates co-location
   assert.equal(unassigned.computer.status, 'unassigned');
   assert.deepEqual((await invoke({ action: 'computer.list' })).computers, []);
 });
+
+function capabilityControlFixture(receiptTransform = (receipt) => receipt) {
+  const commands = [];
+  const context = {
+    state: {
+      session: { id: 'owner-1' },
+      db: { collection: () => ({}) },
+      sync: { async startCollection() { return {}; } },
+      commandBus: {
+        async dispatch(command) {
+          commands.push(JSON.parse(JSON.stringify(command)));
+          const payload = command.payload;
+          const computer = {
+            id: payload.computer_id, owner_user_id: 'owner-1', display_name: payload.display_name,
+            hosting_mode: payload.hosting_mode, status: 'assigned', self_hosted_colocation: false,
+            capability_config: payload.capability_config, agentless: payload.agentless,
+            capabilities: payload.capability_config?.map((entry) => entry.kind) || [],
+          };
+          return receiptTransform({
+            ok: true, status: 'completed', command_id: command.command_id,
+            result: { ok: true, computer, endpoint: {
+              id: payload.endpoint_ref, owner_user_id: 'owner-1',
+              computer_id: payload.computer_id || 'nas-1',
+              enabled: command.command_type.endsWith('.upsert'),
+            } },
+          });
+        },
+      },
+    },
+    actorContext: (session) => ({ id: session.id }),
+    newId: () => 'command',
+    waitForSyncBridgeReady: async () => {},
+    window: { setTimeout }, setTimeout,
+  };
+  vm.runInNewContext(`${controlSource}\nglobalThis.__control = workjetComputerControl;`, context);
+  return { commands,
+    invoke: async (request) => JSON.parse(JSON.stringify(await context.__control(request))) };
+}
+
+const storageGrant = { kind: 'storage', endpoint_ref: 'endpoint-nas', protocol: 'ssh',
+  root: '/volume1/artifacts', quota_gib: null, purposes: ['exchange', 'artifacts', 'artifacts'] };
+const nasAssignment = { action: 'computer.assign', commandId: 'assign-nas', computerId: 'nas-1',
+  displayName: 'NAS', hostingMode: 'self_hosted', capabilities: [], selfHostedColocation: false,
+  agentless: true, capabilityConfig: [storageGrant] };
+const sshEndpoint = { protocol: 'ssh', host: 'nas.example.test', port: 22, username: 'admin',
+  root: '/volume1/artifacts', host_key_sha256: 'SHA256:example-pin',
+  private_key: { scope: 'computer-access', name: 'nas-key' }, passphrase: null };
+const endpointRequest = { action: 'computer.endpoint.upsert', commandId: 'endpoint-save',
+  computerId: 'nas-1', endpointRef: 'endpoint-nas', connection: sshEndpoint };
+
+test('typed NAS grant uses the native command receipt without fabricating an agent connection', async () => {
+  const { commands, invoke } = capabilityControlFixture();
+  const response = await invoke(nasAssignment);
+  assert.deepEqual(response.computer.capabilities, ['storage']);
+  assert.equal(response.computer.id, 'nas-1');
+  assert.equal(commands[0].payload.agentless, true);
+  assert.deepEqual(commands[0].payload.capability_config[0].purposes, ['artifacts', 'exchange']);
+  assert.equal(commands[0].client_context.actor.id, 'owner-1');
+});
+
+test('typed capability confirmation rejects failed, foreign, mismatched and uncorrelated receipts', async () => {
+  const transforms = [
+    (receipt) => ({ ...receipt, ok: false }),
+    (receipt) => ({ ...receipt, status: 'failed' }),
+    (receipt) => ({ ...receipt, command_id: 'other-command' }),
+    (receipt) => ({ ...receipt, result: { ...receipt.result, ok: false } }),
+    (receipt) => { receipt.result.computer.owner_user_id = 'foreign'; return receipt; },
+    (receipt) => { receipt.result.computer.capability_config = []; return receipt; },
+    (receipt) => { receipt.result.computer.agentless = false; return receipt; },
+  ];
+  for (const transform of transforms) {
+    await assert.rejects(capabilityControlFixture(transform).invoke(nasAssignment), /not confirm|did not complete/);
+  }
+});
+
+test('endpoint enrollment forwards only credential references and exposes a confirmed binding', async () => {
+  const { commands, invoke } = capabilityControlFixture();
+  assert.deepEqual(await invoke(endpointRequest), {
+    action: 'computer.endpoint.upsert', endpointRef: 'endpoint-nas', computerId: 'nas-1', enabled: true,
+  });
+  assert.equal(commands[0].command_type, 'ctox.workjet.computer.endpoint.upsert');
+  assert.deepEqual(commands[0].payload.connection.private_key, { scope: 'computer-access', name: 'nas-key' });
+  assert.deepEqual(await invoke({ action: 'computer.endpoint.disable', commandId: 'disable-endpoint',
+    endpointRef: 'endpoint-nas' }), {
+    action: 'computer.endpoint.disable', endpointRef: 'endpoint-nas', computerId: 'nas-1', enabled: false,
+  });
+});
+
+test('inline credentials, unknown descriptor fields and ownership injection never reach command dispatch', async () => {
+  const { commands, invoke } = capabilityControlFixture();
+  const requests = [
+    { ...endpointRequest, connection: { ...sshEndpoint, private_key: 'private-key-bytes' } },
+    { ...endpointRequest, connection: { ...sshEndpoint, private_key: { ...sshEndpoint.private_key, value: 'secret' } } },
+    { ...endpointRequest, connection: { ...sshEndpoint, password: 'secret' } },
+    { ...endpointRequest, ownerUserId: 'foreign' },
+    { ...nasAssignment, capabilityConfig: [{ ...storageGrant, password: 'secret' }] },
+    { ...nasAssignment, capabilityConfig: [storageGrant, storageGrant] },
+    { ...nasAssignment, agentless: 'true' },
+  ];
+  for (const request of requests) await assert.rejects(invoke(request));
+  assert.equal(commands.length, 0);
+});
+
+test('endpoint confirmation rejects a changed owner, binding, result or command identity', async () => {
+  const transforms = [
+    (receipt) => ({ ...receipt, command_id: 'different' }),
+    (receipt) => { receipt.result.endpoint.owner_user_id = 'foreign'; return receipt; },
+    (receipt) => { receipt.result.endpoint.computer_id = 'other-computer'; return receipt; },
+    (receipt) => { receipt.result.endpoint.enabled = false; return receipt; },
+  ];
+  for (const transform of transforms) {
+    await assert.rejects(capabilityControlFixture(transform).invoke(endpointRequest), /not confirm|did not complete/);
+  }
+});
+
+test('build/GPU descriptors and SMB references retain their typed native shape', async () => {
+  const { commands, invoke } = capabilityControlFixture();
+  await invoke({ ...nasAssignment, hostingMode: 'workstation', agentless: false,
+    capabilityConfig: [
+      { kind: 'gpu', model: 'Test GPU', vram_gib: 20 },
+      { kind: 'build', ssh_endpoint_ref: 'endpoint-build', slots: 3, jobs: 6,
+        lane_root: '/srv/build-lane', disk_floor_gib: 60, toolchains: ['rust-stable', 'node-24'] },
+    ] });
+  assert.deepEqual(commands[0].payload.capability_config.map((entry) => entry.kind), ['build', 'gpu']);
+  assert.deepEqual(commands[0].payload.capability_config[0].toolchains, ['node-24', 'rust-stable']);
+  await invoke({ ...endpointRequest, connection: { protocol: 'smb', host: 'nas.example.test',
+    port: 445, username: 'admin', root: '/artifacts', share: 'build',
+    password: { scope: 'computer-access', name: 'nas-password' } } });
+  assert.deepEqual(commands[1].payload.connection.password,
+    { scope: 'computer-access', name: 'nas-password' });
+});
