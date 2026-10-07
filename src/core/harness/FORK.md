@@ -25,6 +25,12 @@ remain evaluated per call. No credential, account, policy or permit is cached:
 current-account storage and issuer/publication guards still revalidate each poll.
 The actual captured-checkpoint regression is the transfer-path verifier.
 
+Current-account guards also reuse their retained HTTP transport while rebuilding
+auth from the current credential backend. This avoids repeatedly loading TLS
+trust roots for a check that performs no network I/O. Ephemeral precedence,
+malformed-store errors, API-key denial and external account/logout detection
+remain on the shared storage loader path and have native guard regressions.
+
 ## 2026-09 Exact-turn interrupt receipts
 
 The V2 `turn/interrupt` handler preserves the supplied turn ID and submits
