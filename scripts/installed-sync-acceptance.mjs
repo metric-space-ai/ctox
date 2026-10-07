@@ -234,7 +234,14 @@ export async function runAcceptance(browser, configPath) {
     native.peer = native.start('isolated-native-peer', ['business-os', 'peer', 'start', '--root', config.root]);
     native.start('isolated-static-shell', ['business-os', 'serve', '--addr', `127.0.0.1:${config.port}`]);
     for (const goal of config.goals) {
-      const receipt = { goal, revisions, hosts: [config.host], steps: [], measured: {}, criterion: {}, pass: false,
+      const criteria = {
+        5: { runs: 3, documentsPerRun: 200, offlineMs: 30000, maxLocalWriteMs: 200, maxCatchupMs: 10000 },
+        6: { cachedDocuments: 10000, changedServerDocuments: 50, maxTransferredDocuments: 50,
+          separateLocalAndCatchupTimes: true, backlogMustReachZero: true },
+        7: { clockOffsetsMs: [-600000, 600000], noFalseClockError: true, distinctFieldMerge: true,
+          sameFieldConflictBothValues: true, staleRevisionTypedUnapplied: true },
+      };
+      const receipt = { goal, revisions, hosts: [config.host], steps: [], measured: {}, criterion: criteria[goal], pass: false,
         artifacts: [], clientType: 'Installed canonical DB+sync modules in real Chromium; not a Shell UI acceptance',
         transport: 'webrtc', customerWrites: false };
       receipts.push(receipt);
@@ -251,7 +258,7 @@ export async function runAcceptance(browser, configPath) {
         receipt.steps.push('Live baseline: A write persisted natively and reached B over WebRTC before any fault');
         const health = await native.cli(['business-os', 'rxdb', 'status', '--json', '--root', config.root]);
         receipt.measured.nativeHealth = { running: health.running, replicationUp: health.replicationUp,
-          stages: health.health_stages, heartbeat: health.heartbeat };
+          stages: health.health_stages, heartbeatFresh: health.heartbeat?.fresh };
         if (goal === 5) {
           receipt.criterion = { runs: 3, documentsPerRun: 200, offlineMs: 30000, maxLocalWriteMs: 200, maxCatchupMs: 10000 };
           receipt.measured.runs = [];
