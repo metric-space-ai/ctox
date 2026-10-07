@@ -6,11 +6,38 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, Weak},
 };
-static GRAPH: Mutex<Option<Weak<NativeSession>>> = Mutex::new(None);
+static GRAPH: Mutex<GraphState> = Mutex::new(GraphState {
+    active: None,
+    next_id: 0,
+});
+struct ActiveSession {
+    weak: Weak<NativeSession>,
+    ctx: usize,
+    id: u64,
+}
+struct GraphState {
+    active: Option<ActiveSession>,
+    next_id: u64,
+}
+impl GraphState {
+    fn retire(&mut self, id: u64) {
+        if self.active.as_ref().is_some_and(|active| active.id == id) {
+            let active = self.active.take().unwrap();
+            // Native context ownership lives in GraphState, not in the Arc.
+            // Every reclaim happens while GRAPH is held, including when the
+            // last Arc has entered Drop but has not acquired GRAPH yet.
+            #[cfg(voxtral_native)]
+            unsafe {
+                ctox_voxtral_free(active.ctx as *mut std::ffi::c_void)
+            };
+        }
+    }
+}
 #[derive(Debug)]
 pub struct NativeSession {
     root: std::path::PathBuf,
     ctx: usize,
+    id: u64,
 }
 #[cfg(voxtral_native)]
 unsafe extern "C" {
@@ -32,7 +59,11 @@ pub fn load(root: &Path) -> Result<Arc<NativeSession>> {
     let mut guard = GRAPH
         .lock()
         .map_err(|_| Error::Unsupported("native graph lock poisoned"))?;
-    if let Some(active) = guard.as_ref().and_then(Weak::upgrade) {
+    if let Some(active) = guard
+        .active
+        .as_ref()
+        .and_then(|active| active.weak.upgrade())
+    {
         if active.root == root {
             return Ok(active);
         }
@@ -41,6 +72,12 @@ pub fn load(root: &Path) -> Result<Arc<NativeSession>> {
         return Err(Error::Unsupported(
             "another native Voxtral model is active in this process",
         ));
+    }
+    // An expired Weak can mean Drop is waiting for this mutex. Reclaim the
+    // old context here before loading its replacement. Delayed Drop observes
+    // a different generation and therefore cannot free the replacement.
+    if let Some(id) = guard.active.as_ref().map(|active| active.id) {
+        guard.retire(id);
     }
     #[cfg(not(voxtral_native))]
     {
@@ -58,21 +95,28 @@ pub fn load(root: &Path) -> Result<Arc<NativeSession>> {
         if ctx.is_null() {
             return Err(Error::Unsupported("native Voxtral model load failed"));
         }
+        guard.next_id = guard
+            .next_id
+            .checked_add(1)
+            .expect("native session generation exhausted");
+        let id = guard.next_id;
         let session = Arc::new(NativeSession {
             root: root.into(),
             ctx: ctx as usize,
+            id,
         });
-        *guard = Some(Arc::downgrade(&session));
+        guard.active = Some(ActiveSession {
+            weak: Arc::downgrade(&session),
+            ctx: ctx as usize,
+            id,
+        });
         Ok(session)
     }
 }
 impl Drop for NativeSession {
     fn drop(&mut self) {
-        #[cfg(voxtral_native)]
-        if let Ok(_guard) = GRAPH.lock() {
-            // SAFETY: session owns this context and the global lock serializes
-            // generation/free. No strong reference remains when Drop runs.
-            unsafe { ctox_voxtral_free(self.ctx as *mut std::ffi::c_void) };
+        if let Ok(mut guard) = GRAPH.lock() {
+            guard.retire(self.id);
         }
     }
 }
@@ -144,6 +188,28 @@ fn encode_wav(samples: &[f32]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn delayed_last_drop_cannot_free_replacement_generation() {
+        let mut state = GraphState {
+            active: Some(ActiveSession {
+                weak: Weak::new(),
+                ctx: 0,
+                id: 1,
+            }),
+            next_id: 1,
+        };
+        state.retire(1); // concurrent loader reclaims expired predecessor
+        assert!(state.active.is_none());
+        state.active = Some(ActiveSession {
+            weak: Weak::new(),
+            ctx: 0,
+            id: 2,
+        });
+        state.retire(1); // predecessor's delayed Drop arrives after replacement
+        assert_eq!(state.active.as_ref().unwrap().id, 2);
+        state.retire(2);
+        assert!(state.active.is_none());
+    }
     #[test]
     fn generated_wave_header_and_pcm_are_consistent() {
         let wav = encode_wav(&[0.0, 1.0, -1.0]).unwrap();

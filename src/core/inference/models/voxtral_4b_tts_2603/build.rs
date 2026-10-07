@@ -1,4 +1,16 @@
 use std::{env, path::PathBuf, process::Command};
+fn resolve_executable(name: &str) -> PathBuf {
+    let path = PathBuf::from(name);
+    let path = if path.components().count() > 1 {
+        path
+    } else {
+        env::split_paths(&env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join(name))
+            .find(|candidate| candidate.is_file())
+            .expect("selected nvcc is not on PATH")
+    };
+    path.canonicalize().expect("cannot resolve selected nvcc")
+}
 fn run(cmd: &mut Command) {
     let status = cmd.status().expect("native Voxtral compiler unavailable");
     assert!(
@@ -39,6 +51,30 @@ fn main() {
         !requested || cuda,
         "CUDA feature requested but nvcc unavailable or disabled"
     );
+    let toolkit = if cuda {
+        let compiler = resolve_executable(&nvcc);
+        let home = compiler
+            .parent()
+            .and_then(|bin| bin.parent())
+            .expect("nvcc must live in toolkit/bin")
+            .to_path_buf();
+        if let Some(configured) = env::var_os("CTOX_CUDA_HOME") {
+            assert_eq!(
+                PathBuf::from(configured)
+                    .canonicalize()
+                    .expect("invalid CTOX_CUDA_HOME"),
+                home,
+                "CTOX_CUDA_HOME must match the selected nvcc toolkit"
+            );
+        }
+        assert!(
+            home.join("include/cuda_runtime.h").is_file(),
+            "selected nvcc toolkit headers missing"
+        );
+        Some(home)
+    } else {
+        None
+    };
     let mut objects = Vec::new();
     for name in [
         "voxtral_tts",
@@ -56,7 +92,9 @@ fn main() {
         let mut cc = Command::new(env::var("CC").unwrap_or_else(|_| "cc".into()));
         cc.args(["-O3", "-std=c11", "-D_GNU_SOURCE", "-fPIC", "-c"]);
         if cuda {
-            cc.arg("-DUSE_CUDA");
+            cc.arg("-DUSE_CUDA")
+                .arg("-I")
+                .arg(toolkit.as_ref().unwrap().join("include"));
         }
         if os == "macos" {
             cc.arg("-DUSE_BLAS");
@@ -79,8 +117,11 @@ fn main() {
             .arg(&obj));
         objects.push(obj);
         println!("cargo:rustc-cfg=voxtral_cuda");
-        let cuda_home = env::var("CTOX_CUDA_HOME").unwrap_or_else(|_| "/usr/local/cuda".into());
-        println!("cargo:rustc-link-search=native={cuda_home}/lib64");
+        let cuda_home = toolkit.as_ref().unwrap();
+        println!(
+            "cargo:rustc-link-search=native={}/lib64",
+            cuda_home.display()
+        );
         for lib in ["cublas", "cudart", "stdc++"] {
             println!("cargo:rustc-link-lib={lib}");
         }
