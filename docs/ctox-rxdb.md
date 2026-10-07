@@ -1815,7 +1815,7 @@ Demand-query admission distinguishes a verified collection-policy denial from
 an unavailable authority lookup. Only `COLLECTION_AUTHORITY_UNAVAILABLE` is
 retried inside that bounded admission window; invalid credentials and replaced
 peer/token generations remain immediate denials. Preparatory collection checks
-and NativeBusinessData document views use read-only deferred WAL snapshots of
+and NativeBusinessData document views use read-only deferred snapshots of
 the existing encrypted issuer and native stores, without reserving a SQLite
 writer or holding the process master-key mutex. They never initialize missing
 issuer state, cache plaintext or grant a publication permit. Concurrent
