@@ -82,7 +82,7 @@ use crate::inference::supervisor;
 const DEFAULT_RUNTIME_ROOT: &str = "runtime/scraping";
 // Scrape repairs are maintenance behind the work that triggered them. At
 // "high" ten repair tasks spawned by one adapter reconciliation held four
-// customer research tasks (priority normal) for half an hour (thesen,
+// customer research tasks (priority normal) for half an hour (field report,
 // 07.09.2026), so repairs queue below normal work.
 const DEFAULT_QUEUE_PRIORITY: &str = "low";
 const DEFAULT_REPAIR_SKILL: &str = "universal-scraping";
@@ -415,7 +415,7 @@ pub(crate) struct ScrapeExecutionOutcome {
     pub(crate) records_found: i64,
     pub(crate) fields_extracted: Vec<String>,
     /// The extracted values themselves, compact and bounded, so an agent
-    /// can use what a run found without reading run files (THESEN
+    /// can use what a run found without reading run files (field report
     /// 07.10.2026: agents read the shared latest_records.json instead).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) records_preview: Option<Value>,

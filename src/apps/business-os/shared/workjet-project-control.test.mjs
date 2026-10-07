@@ -20,7 +20,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 4);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 5);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -217,6 +217,114 @@ test('Workjet project create/list is idempotent across optional copies and compu
   );
 });
 
+function projectConfigurationFixture(changeReceipt = () => {}) {
+  const commands = [];
+  const state = {
+    session: { id: 'owner-1' },
+    db: { collection: () => ({}) },
+    sync: { async startCollection() { return {}; } },
+    commandBus: {
+      async dispatch(command) {
+        commands.push(command);
+        const project = {
+          id: command.payload.project_id, name: command.payload.name,
+          owner_user_id: 'owner-1', status: 'active', created_at_ms: 1_700_000_000_000,
+        };
+        for (const field of ['description', 'repo_url', 'public_url', 'info', 'jour_fixe']) {
+          if (Object.hasOwn(command.payload, field) && command.payload[field] !== null) {
+            project[field] = command.payload[field];
+          }
+        }
+        const receipt = {
+          command_id: command.id, target_record_id: command.payload.project_id,
+          status: 'completed', ok: true,
+          result: { ok: true, collection: 'workjet_projects', project },
+        };
+        changeReceipt(receipt, state);
+        return receipt;
+      },
+    },
+  };
+  const context = { state, actorContext: (session) => ({ id: session.id }), URL };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return {
+    commands,
+    invoke: async (request) => JSON.parse(JSON.stringify(await context.invoke(request))),
+  };
+}
+
+function projectConfigurationRequest(extra = {}) {
+  return {
+    action: 'project.configure', commandId: 'project-config-1',
+    projectId: 'project-1', title: 'CTOX', ...extra,
+  };
+}
+
+test('project configuration forwards bounded metadata and returns native fields to Workjet', async () => {
+  const fixture = projectConfigurationFixture();
+  const result = await fixture.invoke(projectConfigurationRequest({
+    repoUrl: 'https://github.com/metric-space-ai/ctox', publicUrl: 'https://ctox.dev',
+    info: { description: 'Durable work', goal: 'All projects usable\nPersist after reopen', phase: 'delivery', status: 'active' },
+    jourFixe: { weekday: 3, time: '09:30' },
+  }));
+  const command = JSON.parse(JSON.stringify(fixture.commands[0]));
+  assert.equal(command.command_type, 'ctox.workjet.project.upsert');
+  assert.equal(command.record_id, 'project-1');
+  assert.equal(command.client_context.actor.id, 'owner-1');
+  assert.deepEqual(command.payload, {
+    project_id: 'project-1', name: 'CTOX',
+    repo_url: 'https://github.com/metric-space-ai/ctox', public_url: 'https://ctox.dev',
+    info: { description: 'Durable work', goal: 'All projects usable\nPersist after reopen', phase: 'delivery', status: 'active' },
+    jour_fixe: { weekday: 3, time: '09:30', timezone: 'Europe/Berlin' },
+  });
+  assert.equal(result.action, 'project.configure');
+  assert.equal(result.project.repoUrl, command.payload.repo_url);
+  assert.equal(result.project.publicUrl, command.payload.public_url);
+  assert.deepEqual(result.project.info, command.payload.info);
+  assert.deepEqual(result.project.jourFixe, command.payload.jour_fixe);
+  assert.equal('ownerUserId' in result.project, false);
+});
+
+test('configuration preserves omission versus explicit null at the command boundary', async () => {
+  const omitted = projectConfigurationFixture();
+  await omitted.invoke(projectConfigurationRequest());
+  assert.deepEqual(Object.keys(omitted.commands[0].payload).sort(), ['name', 'project_id']);
+  const cleared = projectConfigurationFixture();
+  await cleared.invoke(projectConfigurationRequest({ repoUrl: null, publicUrl: null, info: null, jourFixe: null }));
+  for (const key of ['repo_url', 'public_url', 'info', 'jour_fixe']) {
+    assert.equal(cleared.commands[0].payload[key], null);
+  }
+});
+
+test('project configuration rejects forged authority and invalid metadata before dispatch', async () => {
+  for (const extra of [
+    { ownerUserId: 'foreign' }, { owner_user_id: 'foreign' }, { archived: false },
+    { repoUrl: 'https://user:password@example.org/project' }, { publicUrl: 'javascript:alert(1)' },
+    { info: { administrator: true } }, { jourFixe: { weekday: 0, time: '09:30' } },
+    { jourFixe: { weekday: 3, time: '24:00' } }, { jourFixe: { weekday: 3, time: '09:30', owner: 'foreign' } },
+  ]) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest(extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('project configuration rejects wrong receipts, foreign projects and session replacement', async () => {
+  for (const mutate of [
+    (receipt) => { receipt.command_id = 'other-command'; },
+    (receipt) => { receipt.target_record_id = 'other-project'; },
+    (receipt) => { receipt.result.collection = 'other-collection'; },
+    (receipt) => { receipt.result.project.owner_user_id = 'foreign'; },
+    (receipt) => { receipt.result.project.id = 'other-project'; },
+    (receipt) => { receipt.result.project.name = 'other-title'; },
+    (receipt) => { receipt.status = 'failed'; },
+    (receipt, state) => { state.session = { id: 'owner-1' }; },
+  ]) {
+    const fixture = projectConfigurationFixture(mutate);
+    await assert.rejects(fixture.invoke(projectConfigurationRequest()), /uncorrelated|session changed/);
+  }
+});
+
 function nativeProjectListFixture({ start, dispatch, exec } = {}) {
   const starts = [];
   const commands = [];
@@ -241,7 +349,9 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
           assert.ok(query.signal instanceof AbortSignal);
           reads.push({ name, query });
           return { async exec() { return exec ? exec(name, query, peer)
-            : rows[name].slice(query.skip || 0, (query.skip || 0) + query.limit); } };
+            : rows[name].filter((row) => Object.entries(query.selector).every(([field, condition]) => (
+              condition.$in ? condition.$in.includes(row[field]) : row[field] === condition.$eq
+            ))).slice(query.skip || 0, (query.skip || 0) + query.limit); } };
         },
       },
     };
@@ -261,20 +371,129 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
       assert.equal(options.until, 'terminal');
       assert.equal(options.sync_queue_tasks, false);
       assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 29_000);
-      const nativeCount = rows.workjet_projects.filter((row) => row.is_deleted !== true).length;
+      const nativeRows = rows.workjet_projects.filter((row) => row.owner_user_id === 'owner-1'
+        && row.status === 'active' && row.is_deleted !== true && row._deleted !== true);
+      const nativeCount = nativeRows.length;
       const receipt = { command_id: command.id, status: 'completed', ok: true,
         result: { ok: true, collection: 'workjet_projects',
-          count: Math.min(nativeCount, 100), truncated: nativeCount > 100 } };
+          count: Math.min(nativeCount, 100), truncated: nativeCount > 100,
+          project_ids: nativeRows.slice(0, 100).map((row) => row.id) } };
       return dispatch ? dispatch(receipt, state) : receipt;
     } },
   };
   let sequence = 0;
   const context = { state, actorContext: (session) => ({ id: session.id }),
-    newId: () => `list-${++sequence}`, AbortController, setTimeout, clearTimeout };
+    newId: () => `list-${++sequence}`, AbortController, URL, setTimeout, clearTimeout };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return { state, context, starts, commands, reads, rows, peers,
-    invoke: async () => JSON.parse(JSON.stringify(await context.invoke({ action: 'project.list' }))) };
+    invoke: async (request = {}) => JSON.parse(JSON.stringify(await context.invoke({ action: 'project.list', ...request }))) };
 }
+
+test('project list preserves the strict legacy shape until configuration is explicitly requested', async () => {
+  const fixture = nativeProjectListFixture();
+  Object.assign(fixture.rows.workjet_projects[0], {
+    created_at_ms: 1_700_000_000_000,
+    description: 'Native description', repo_url: 'https://example.test/repo',
+    public_url: 'https://example.test', info: { goal: 'Saved native goal' },
+    jour_fixe: { weekday: 1, time: '09:00', timezone: 'Europe/Berlin' },
+  });
+  const legacy = await fixture.invoke();
+  assert.deepEqual(Object.keys(legacy.projects[0]).sort(), ['createdAt', 'id', 'title', 'workingCopies']);
+  assert.deepEqual(await fixture.invoke({ includeConfiguration: false }), legacy);
+  const enhanced = await fixture.invoke({ includeConfiguration: true });
+  assert.equal(enhanced.projects[0].repoUrl, 'https://example.test/repo');
+  assert.equal(enhanced.projects[0].publicUrl, 'https://example.test');
+  assert.deepEqual(enhanced.projects[0].info, { goal: 'Saved native goal' });
+  assert.deepEqual(enhanced.projects[0].jourFixe, { weekday: 1, time: '09:00', timezone: 'Europe/Berlin' });
+  assert.deepEqual(enhanced.projects[0].workingCopies, legacy.projects[0].workingCopies);
+  assert.ok(fixture.commands.every(({ command }) => !Object.hasOwn(command.payload, 'includeConfiguration')));
+});
+
+test('sixteen projected owner rows with four archived return exactly twelve active projects', async () => {
+  const fixture = nativeProjectListFixture({ exec: (name) => fixture.rows[name] });
+  fixture.rows.workjet_projects = Array.from({ length: 16 }, (_, index) => ({
+    id: `project-${index}`, name: `Project ${index}`,
+    status: index < 12 ? 'active' : 'archived', owner_user_id: 'owner-1',
+  }));
+  fixture.rows.workjet_projects.push({
+    id: 'foreign-active', name: 'Foreign', status: 'active', owner_user_id: 'owner-2',
+  });
+  const result = await fixture.invoke();
+  assert.equal(result.count, 12);
+  assert.equal(result.projects.length, 12);
+  assert.deepEqual(new Set(result.projects.map((project) => project.id)),
+    new Set(Array.from({ length: 12 }, (_, index) => `project-${index}`)));
+  assert.equal(fixture.rows.workjet_projects.length, 17, 'archives and foreign rows stay intact');
+  assert.equal(fixture.reads.find(({ name }) => name === 'workjet_projects').query.selector.status.$eq, 'active');
+});
+
+test('a two-project replication gap reloads only the missing active native identities', async () => {
+  const missingIds = ['71462c13-b395-402f-b6c8-788b405783e7', 'a93f348f-miltonticket'];
+  const fixture = nativeProjectListFixture({ exec: (name, query) => {
+    if (name !== 'workjet_projects') return [];
+    return query.selector.id
+      ? fixture.rows.workjet_projects.filter((row) => query.selector.id.$in.includes(row.id))
+      : fixture.rows.workjet_projects.slice(0, 10);
+  } });
+  fixture.rows.workjet_projects = Array.from({ length: 16 }, (_, index) => ({
+    id: index < 10 ? `project-${index}` : missingIds[index - 10] || `archived-${index}`,
+    name: index === 10 ? 'greppy.xyz' : index === 11 ? 'miltonticket.app' : `Project ${index}`,
+    status: index < 12 ? 'active' : 'archived', owner_user_id: 'owner-1',
+  }));
+  const result = await fixture.invoke();
+  assert.equal(result.count, 12);
+  assert.equal(result.projects.length, 12);
+  assert.ok(missingIds.every((id) => result.projects.some((project) => project.id === id)));
+  const projectReads = fixture.reads.filter(({ name }) => name === 'workjet_projects');
+  assert.equal(projectReads.length, 2);
+  assert.deepEqual(Array.from(projectReads[1].query.selector.id.$in), missingIds);
+  assert.equal(projectReads[1].query.selector.status.$eq, 'active');
+  assert.equal(projectReads[1].query.limit, 2);
+  assert.notEqual(projectReads[0].query.requireRevision, projectReads[1].query.requireRevision);
+  assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+});
+
+test('malformed native identity windows cannot trigger projection or repair reads', async () => {
+  for (const ids of [null, {}, [], ['native-project', 'native-project'], [7], ['bad\u0000id']]) {
+    const fixture = nativeProjectListFixture({ dispatch: (receipt) => {
+      receipt.result.project_ids = ids;
+      return receipt;
+    } });
+    await assert.rejects(fixture.invoke(), (error) => error.code === 'WORKJET_PROJECT_LIST_UNCONFIRMED');
+    assert.equal(fixture.reads.length, 0);
+  }
+});
+
+test('repair reads preserve the first query generation and shared deadline', async () => {
+  for (const mode of ['generation', 'actor', 'deadline', 'foreign', 'archived']) {
+    let now = 10_000;
+    const fixture = nativeProjectListFixture({ exec: (name, query, peer) => {
+      if (name !== 'workjet_projects' || !query.selector.id) return [];
+      if (mode === 'generation') peer.generation = 'generation-2';
+      if (mode === 'actor') fixture.state.session = { id: 'owner-2' };
+      if (mode === 'deadline') now = 39_000;
+      return [{ ...fixture.rows.workjet_projects[0],
+        ...(mode === 'foreign' ? { owner_user_id: 'owner-2' } : {}),
+        ...(mode === 'archived' ? { status: 'archived' } : {}),
+      }];
+    } });
+    fixture.context.Date = class extends Date { static now() { return now; } };
+    await assert.rejects(fixture.invoke(), (error) => (
+      /generation changed|session changed/.test(error.message)
+      || error.code === 'WORKJET_PROJECT_TIMEOUT'
+      || error.code === 'WORKJET_PROJECT_LIST_INCOMPLETE'
+    ));
+    assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+  }
+});
+
+test('project list rejects malformed configuration negotiation before native dispatch', async () => {
+  const fixture = nativeProjectListFixture();
+  for (const value of ['true', 1, null, {}]) {
+    await assert.rejects(fixture.invoke({ includeConfiguration: value }), /includeConfiguration/);
+  }
+  assert.equal(fixture.commands.length, 0);
+});
 
 test('project list starts all bridges concurrently and skips historical command replication', async () => {
   const waiting = [];
@@ -305,8 +524,8 @@ test('each project list requires new native authority and accepts a confirmed em
 
 test('nonempty native project counts cannot confirm empty or partial projections', async () => {
   for (const projectedCount of [0, 8]) {
-    const fixture = nativeProjectListFixture({ exec: (name) => name === 'workjet_projects'
-      ? fixture.rows.workjet_projects.slice(0, projectedCount) : [] });
+    const fixture = nativeProjectListFixture({ exec: (name, query) => name === 'workjet_projects'
+      ? (query.selector.id ? [] : fixture.rows.workjet_projects.slice(0, projectedCount)) : [] });
     fixture.rows.workjet_projects = Array.from({ length: 16 }, (_, index) => ({
       id: `project-${index}`, name: `Project ${index}`, status: 'active', owner_user_id: 'owner-1',
     }));
@@ -348,6 +567,7 @@ test('a truncated native window cannot be delivered as a complete project list',
 test('a native zero count cannot confirm extra or discarded projection rows', async () => {
   const stale = nativeProjectListFixture({ dispatch: (receipt) => {
     receipt.result.count = 0;
+    receipt.result.project_ids = [];
     return receipt;
   } });
   await assert.rejects(stale.invoke(), (error) => error.code === 'WORKJET_PROJECT_LIST_INCOMPLETE');
@@ -361,7 +581,7 @@ test('identity remains fenced through final project serialization', async () => 
   const fixture = nativeProjectListFixture({ exec: (name) => name === 'workjet_projects'
     ? [{ toJSON() {
       if (++reads === 2) fixture.state.session = { id: 'owner-2' };
-      return { id: 'native-project', name: 'Native project', owner_user_id: 'owner-1' };
+      return { id: 'native-project', name: 'Native project', owner_user_id: 'owner-1', status: 'active' };
     } }] : [] });
   await assert.rejects(fixture.invoke(), /session changed/);
   assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));

@@ -7669,6 +7669,29 @@ button.shell-window-header-meta:focus-visible,
   animation: none;
 }
 
+/* Workjet turbine: the rotor turns while the system starts. */
+.startup-logo-rotor {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: startup-rotor-spin 2.4s linear infinite;
+}
+
+.workspace-startup-loader:has(.startup-error-card:not([hidden])) .startup-logo-rotor {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-logo-rotor {
+    animation: none;
+  }
+}
+
+@keyframes startup-rotor-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .startup-progress-bar,
 .startup-progress-bar.is-error {
   background: var(--accent) !important;
