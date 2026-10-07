@@ -3,7 +3,10 @@ use crate::plugins::replication_webrtc::collection_authority::COLLECTION_AUTHORI
 
 async fn authority_pool(
     name: &str,
-) -> (StdArc<RxWebRTCReplicationPool<MockHandler>>, StdArc<MockHandler>) {
+) -> (
+    StdArc<RxWebRTCReplicationPool<MockHandler>>,
+    StdArc<MockHandler>,
+) {
     let collection = crate::rx_collection::test_support::test_collection_named(name).await;
     collection
         .insert(serde_json::json!({ "id": "protected-row", "age": 1 }))
@@ -64,11 +67,30 @@ fn assert_admission_error(response: &WebRTCResponse, method: &str, code: &str, r
     assert_eq!(result["code"], code);
     assert_eq!(result["retryable"], retryable);
     assert_eq!(result["phase"], "replication-io");
-    assert_eq!(result["collection"], response.collection.as_deref().unwrap());
-    assert_eq!(result["direction"], if method == "masterWrite" { "push" } else { "pull" });
-    assert!(result.get("documents").is_none(), "denied admission cannot expose rows");
-    assert!(result.get("checkpoint").is_none(), "denied admission cannot confirm a checkpoint");
-    assert!(!result.is_array(), "denied write cannot acknowledge an empty conflict list");
+    assert_eq!(
+        result["collection"],
+        response.collection.as_deref().unwrap()
+    );
+    assert_eq!(
+        result["direction"],
+        if method == "masterWrite" {
+            "push"
+        } else {
+            "pull"
+        }
+    );
+    assert!(
+        result.get("documents").is_none(),
+        "denied admission cannot expose rows"
+    );
+    assert!(
+        result.get("checkpoint").is_none(),
+        "denied admission cannot confirm a checkpoint"
+    );
+    assert!(
+        !result.is_array(),
+        "denied write cannot acknowledge an empty conflict list"
+    );
     assert!(!result.to_string().contains("private-authority-detail"));
 }
 
@@ -87,7 +109,10 @@ async fn master_pull_recovers_after_transient_collection_authority() {
     }));
     let response = authority_response(handler.as_ref(), name, "masterChangesSince").await;
     assert_eq!(checks.load(Ordering::SeqCst), 3);
-    assert_eq!(handler.collection_authority_checks.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        handler.collection_authority_checks.load(Ordering::SeqCst),
+        3
+    );
     assert_eq!(response.result["documents"][0]["id"], "protected-row");
     assert!(response.result.get("checkpoint").is_some());
     assert!(response.result.get("code").is_none());
@@ -105,7 +130,9 @@ async fn master_rpcs_exhaust_unavailable_authority_without_rows_or_acknowledgeme
         ))
     }));
     for method in ["masterChangesSince", "masterWrite"] {
-        handler.collection_authority_checks.store(0, Ordering::SeqCst);
+        handler
+            .collection_authority_checks
+            .store(0, Ordering::SeqCst);
         let response = authority_response(handler.as_ref(), name, method).await;
         assert_admission_error(&response, method, "COLLECTION_AUTHORITY_UNAVAILABLE", true);
         assert_eq!(
@@ -122,10 +149,15 @@ async fn master_rpcs_reject_policy_denial_without_retry() {
     let (pool, handler) = authority_pool(name).await;
     *handler.collection_authority.lock() = Some(StdArc::new(|_, _| Ok(false)));
     for method in ["masterChangesSince", "masterWrite"] {
-        handler.collection_authority_checks.store(0, Ordering::SeqCst);
+        handler
+            .collection_authority_checks
+            .store(0, Ordering::SeqCst);
         let response = authority_response(handler.as_ref(), name, method).await;
         assert_admission_error(&response, method, "RC_WEBRTC_PEER", false);
-        assert_eq!(handler.collection_authority_checks.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            handler.collection_authority_checks.load(Ordering::SeqCst),
+            1
+        );
     }
     pool.cancel().await;
 }
@@ -141,10 +173,15 @@ async fn master_rpcs_do_not_retry_other_authority_errors() {
         ))
     }));
     for method in ["masterChangesSince", "masterWrite"] {
-        handler.collection_authority_checks.store(0, Ordering::SeqCst);
+        handler
+            .collection_authority_checks
+            .store(0, Ordering::SeqCst);
         let response = authority_response(handler.as_ref(), name, method).await;
         assert_admission_error(&response, method, "AUTHORITY_CORRUPT", false);
-        assert_eq!(handler.collection_authority_checks.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            handler.collection_authority_checks.load(Ordering::SeqCst),
+            1
+        );
     }
     pool.cancel().await;
 }
@@ -165,6 +202,9 @@ async fn master_pull_stops_when_policy_denies_during_availability_retry() {
     let response = authority_response(handler.as_ref(), name, "masterChangesSince").await;
     assert_admission_error(&response, "masterChangesSince", "RC_WEBRTC_PEER", false);
     assert_eq!(checks.load(Ordering::SeqCst), 2);
-    assert_eq!(handler.collection_authority_checks.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        handler.collection_authority_checks.load(Ordering::SeqCst),
+        2
+    );
     pool.cancel().await;
 }

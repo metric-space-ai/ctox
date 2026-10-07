@@ -3199,13 +3199,20 @@ async fn master_collection_authorization_error<H: WebRTCConnectionHandler>(
             .await
         {
             Ok(true) => return None,
-            Ok(false) => ("RC_WEBRTC_PEER", "peer is not authorized for collection", false),
+            Ok(false) => (
+                "RC_WEBRTC_PEER",
+                "peer is not authorized for collection",
+                false,
+            ),
             Err(error) => {
                 // Authority errors can contain private store/credential details.
                 // Publish and log only the stable code and routing collection.
                 let retryable = error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE";
                 return Some(collection_authorization_error_result(
-                    collection, method, error.code(), "native collection authority check failed",
+                    collection,
+                    method,
+                    error.code(),
+                    "native collection authority check failed",
                     retryable,
                 ));
             }
@@ -3233,7 +3240,9 @@ fn collection_authorization_error_result(
         _ => "unknown",
     };
     replication_error_result(
-        code, "replication-io", direction,
+        code,
+        "replication-io",
+        direction,
         serde_json::json!({
             "collection": collection,
             "message": message,
@@ -4276,7 +4285,8 @@ mod tests {
         }
 
         fn is_collection_authorized_for_peer(&self, peer: &MockPeer, collection: &str) -> bool {
-            self.collection_authorization_for_peer(peer, collection).unwrap_or(false)
+            self.collection_authorization_for_peer(peer, collection)
+                .unwrap_or(false)
         }
 
         fn collection_authorization_for_peer(
@@ -4284,7 +4294,8 @@ mod tests {
             peer: &MockPeer,
             collection: &str,
         ) -> crate::rx_error::RxResult<bool> {
-            self.collection_authority_checks.fetch_add(1, Ordering::SeqCst);
+            self.collection_authority_checks
+                .fetch_add(1, Ordering::SeqCst);
             if !self.is_peer_current(peer) {
                 return Ok(false);
             }

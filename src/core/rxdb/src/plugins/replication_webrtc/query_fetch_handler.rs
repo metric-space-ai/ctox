@@ -598,7 +598,8 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
     };
 
     let authorized = if registry.check_authorized(&peer_identity, &request.collection_name) {
-        match authorize_collection_for_peer(handler.as_ref(), &peer, &request.collection_name).await {
+        match authorize_collection_for_peer(handler.as_ref(), &peer, &request.collection_name).await
+        {
             Ok(authorized) => authorized,
             Err(error) => {
                 let retryable = error.code() == "COLLECTION_AUTHORITY_UNAVAILABLE";
