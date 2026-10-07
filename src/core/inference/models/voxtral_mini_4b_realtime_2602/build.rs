@@ -169,6 +169,7 @@ fn link_ggml(base: &PathBuf) {
             if line.starts_with("CUDA_cudart_LIBRARY:")
                 || line.starts_with("CUDA_cublas_LIBRARY:")
                 || line.starts_with("CUDA_cublasLt_LIBRARY:")
+                || line.starts_with("CUDA_cuda_driver_LIBRARY:")
             {
                 if let Some((_, path)) = line.split_once('=') {
                     if let Some(dir) = std::path::Path::new(path).parent() {
@@ -180,6 +181,8 @@ fn link_ggml(base: &PathBuf) {
         println!("cargo:rustc-link-lib=dylib=cudart");
         println!("cargo:rustc-link-lib=dylib=cublas");
         println!("cargo:rustc-link-lib=dylib=cublasLt");
+        // ggml CUDA virtual-memory pools call the driver API in addition to cudart.
+        println!("cargo:rustc-link-lib=dylib=cuda");
     }
 
     let blas = base.join("ggml-blas");
