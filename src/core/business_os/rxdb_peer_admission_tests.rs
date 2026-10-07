@@ -229,7 +229,7 @@ fn current_owner_epoch_role_and_active_state_remain_definitive_denials() -> anyh
 
     for change in [
         "UPDATE business_users SET capability_epoch = capability_epoch + 1 WHERE user_id = ?1",
-        "UPDATE business_users SET role = 'viewer' WHERE user_id = ?1",
+        "UPDATE business_users SET role = 'user' WHERE user_id = ?1",
         "UPDATE business_users SET active = 0 WHERE user_id = ?1",
     ] {
         let root = tempfile::tempdir()?;
