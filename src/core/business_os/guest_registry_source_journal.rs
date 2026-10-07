@@ -279,6 +279,75 @@ pub(super) fn persist_core_configuration(
     Ok(artifact)
 }
 
+pub(super) fn validate_session_state(
+    spec: &ExecutionSpec,
+    state: &ctox_core::NativeSessionState,
+) -> Result<()> {
+    ensure!(
+        spec.harness == ctox_core::native_harness_name()
+            && spec.harness_version == ctox_core::native_harness_version()
+            && spec.session_id == state.session_id().to_string()
+            && spec.model_id == state.model()
+            && spec.model_route_id == "openai"
+            && spec.model_route_id == state.provider_id()
+            && !state.as_bytes().is_empty()
+            && state.as_bytes().len() <= 64 * 1024 * 1024,
+        "native session state differs from admitted producer"
+    );
+    Ok(())
+}
+
+pub(super) fn persist_session_state(
+    policy: &Connection,
+    store: &ctox_sync::checkpoint::CheckpointStore,
+    spec: &ExecutionSpec,
+    receipt: &NativeSourceJournalReceipt,
+    state: &ctox_core::NativeSessionState,
+) -> Result<ctox_sync::contracts::ArtifactRef> {
+    validate_session_state(spec, state)?;
+    let matches: bool = policy.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_native_source_journals
+         WHERE capture_id=?1 AND job_id=?2 AND session_id=?3 AND spec_json=?4)",
+        rusqlite::params![
+            receipt.capture_id,
+            spec.job_id,
+            spec.session_id,
+            serde_json::to_string(spec)?
+        ],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        matches && receipt.job_id == spec.job_id && receipt.session_id == spec.session_id,
+        "native session state belongs to another capture"
+    );
+    let artifact = ctox_sync::contracts::ArtifactRef {
+        sha256: artifact_ref_for(state.as_bytes()).sha256,
+        size_bytes: state.as_bytes().len() as u64,
+    };
+    store.ingest_blob(&artifact, std::io::Cursor::new(state.as_bytes()))?;
+    policy.execute(
+        "INSERT INTO business_native_source_session_states
+         (capture_id,format_version,artifact_sha256,artifact_size_bytes)
+         VALUES (?1,1,?2,?3) ON CONFLICT(capture_id) DO NOTHING",
+        rusqlite::params![
+            receipt.capture_id,
+            artifact.sha256,
+            i64::try_from(artifact.size_bytes)?
+        ],
+    )?;
+    let exact: bool = policy.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_native_source_session_states
+         WHERE capture_id=?1 AND format_version=1 AND artifact_sha256=?2 AND artifact_size_bytes=?3)",
+        rusqlite::params![receipt.capture_id, artifact.sha256, i64::try_from(artifact.size_bytes)?],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        exact,
+        "native session state publication conflicts; reconcile"
+    );
+    Ok(artifact)
+}
+
 impl NativeGuestExecution {
     /// Only an actual Core journal reader and the exact retired producer can
     /// enter this worker -> account -> policy -> controller publication path.
@@ -287,6 +356,7 @@ impl NativeGuestExecution {
         source: &crate::channels::NativeProviderCaptureOwner,
         journal: &ctox_core::NativeJournalReader,
         configuration: &ctox_core::ThreadConfigSnapshot,
+        session_state: &ctox_core::NativeSessionState,
     ) -> Result<NativeSourceJournalReceipt> {
         ensure!(
             source.matches_provider(&self.provider),
@@ -296,6 +366,7 @@ impl NativeGuestExecution {
             self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
                 verify()?;
                 core_configuration_bytes(&self.binding.spec, configuration)?;
+                validate_session_state(&self.binding.spec, session_state)?;
                 let bytes = journal.read_bytes(PortableJournalLimits::default().max_bytes)?;
                 let (store, store_root, store_identity) =
                     source_store(&entry.assignment.destination.import_parent)?;
@@ -316,6 +387,7 @@ impl NativeGuestExecution {
                     &receipt,
                     configuration,
                 )?;
+                persist_session_state(policy, &store, &self.binding.spec, &receipt, session_state)?;
                 ensure!(
                     private_directory(&store_root)? == store_identity,
                     "native source artifact store changed; reconcile"

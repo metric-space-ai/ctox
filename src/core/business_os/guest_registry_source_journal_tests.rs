@@ -3,6 +3,7 @@
 //! Journal storage regressions on the actual native policy store.
 //! Source/quorum/producer inputs remain fixtures; this is not model or handoff acceptance.
 use super::*;
+use std::time::Duration;
 
 fn journal_fixture(session: &str, message: &str) -> Vec<u8> {
     let timestamp = "2026-10-07T02:00:00.123Z";
@@ -262,6 +263,97 @@ fn native_source_journal_rejects_symlinked_or_public_artifact_directories() {
     assert!(
         super::super::source_journal::source_store(&assignment.destination.import_parent).is_err()
     );
+}
+
+#[test]
+fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_capture() {
+    let (root, registry, assignment) = fixture();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (configuration, state, journal_bytes) = runtime.block_on(async {
+        let home = root.path().join("isolated-core-home");
+        std::fs::create_dir(&home).unwrap();
+        let mut config = ctox_core::config::ConfigBuilder::default().codex_home(home.clone()).build().await.unwrap();
+        config.cwd = assignment.destination.import_parent.clone();
+        let auth = Arc::new(ctox_core::AuthManager::new(home, false, config.cli_auth_credentials_store_mode));
+        let manager = ctox_core::ThreadManager::new(
+            &config, auth, ctox_protocol::protocol::SessionSource::Exec,
+            ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig::default(),
+        );
+        let started = tokio::time::timeout(Duration::from_secs(15), manager.start_thread(config)).await.unwrap().unwrap();
+        assert!(started.thread.capture_native_state().await.is_err());
+        let journal = started.thread.retain_native_journal().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), started.thread.shutdown_and_wait()).await.unwrap().unwrap();
+        let (configuration, state) = started.thread.capture_native_state().await.unwrap();
+        assert_eq!(state.session_id(), started.thread_id);
+        let journal_bytes = journal.read_bytes(64 * 1024 * 1024).unwrap();
+        (configuration, state, journal_bytes)
+    });
+    let (mut spec, ownership) = source_spec();
+    spec.session_id = state.session_id().to_string();
+    spec.model_id = configuration.model.clone();
+    let (store, store_root, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
+    let (receipt, artifact) = registry
+        .with_policy(|tx| {
+            let receipt = super::super::source_journal::persist(
+                tx,
+                &store,
+                &store_root,
+                &assignment.destination,
+                &spec,
+                &ownership,
+                "fixture-policy",
+                &journal_bytes,
+            )?;
+            let artifact = super::super::source_journal::persist_session_state(
+                tx, &store, &spec, &receipt, &state,
+            )?;
+            Ok((receipt, artifact))
+        })
+        .unwrap();
+    let repeated = registry
+        .with_policy(|tx| {
+            super::super::source_journal::persist_session_state(tx, &store, &spec, &receipt, &state)
+        })
+        .unwrap();
+    assert_eq!(artifact, repeated);
+    let mut foreign = spec.clone();
+    foreign.session_id = uuid::Uuid::new_v4().to_string();
+    assert!(registry
+        .with_policy(|tx| {
+            super::super::source_journal::persist_session_state(
+                tx, &store, &foreign, &receipt, &state,
+            )
+        })
+        .is_err());
+    drop(store);
+    let (store, _, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    store
+        .open_blob(&artifact)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, state.as_bytes());
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(parsed["sessionId"], spec.session_id);
+    assert_eq!(parsed["provider"]["conversationId"], spec.session_id);
+    assert_eq!(parsed["targetAuthority"], "reauthorization-required");
+    registry.with_policy(|tx| {
+        tx.execute("UPDATE business_native_source_session_states SET artifact_sha256=?1 WHERE capture_id=?2",
+            rusqlite::params!["a".repeat(64),receipt.capture_id])?;
+        Ok(())
+    }).unwrap();
+    assert!(registry
+        .with_policy(|tx| {
+            super::super::source_journal::persist_session_state(tx, &store, &spec, &receipt, &state)
+        })
+        .is_err());
 }
 
 fn configuration_fixture(cwd: &Path) -> ctox_core::ThreadConfigSnapshot {

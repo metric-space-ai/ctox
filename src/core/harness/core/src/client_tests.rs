@@ -24,6 +24,73 @@ use serde_json::json;
 use tokio::sync::oneshot;
 
 #[test]
+fn native_session_state_model_client_keeps_completed_cache_and_discards_turn_credentials() {
+    let client = test_model_client(SessionSource::Exec);
+    let session_id = client.state.conversation_id;
+    {
+        let mut turn = client.new_session();
+        turn.turn_state
+            .set("fixture-private-turn-routing-token".into())
+            .unwrap();
+        turn.websocket_session.last_request = Some(test_responses_request(Vec::new()));
+        let (sender, receiver) = oneshot::channel();
+        sender
+            .send(LastResponse {
+                response_id: "actual-received-response".into(),
+                items_added: Vec::new(),
+            })
+            .unwrap();
+        turn.websocket_session.last_response_rx = Some(receiver);
+    }
+    let captured = client.native_continuation_state(session_id).unwrap();
+    assert_eq!(
+        captured["lastResponse"]["responseId"],
+        "actual-received-response"
+    );
+    assert!(captured["lastRequest"].is_object());
+    assert_eq!(captured["transportConnection"], "reconnect-required");
+    assert!(
+        !captured
+            .to_string()
+            .contains("fixture-private-turn-routing-token")
+    );
+    assert!(client.native_continuation_state(ThreadId::new()).is_err());
+    assert_eq!(
+        captured,
+        client.native_continuation_state(session_id).unwrap()
+    );
+}
+
+#[test]
+fn native_session_state_model_client_rejects_unfinished_or_lost_response_receipt() {
+    for lost in [false, true] {
+        let client = test_model_client(SessionSource::Exec);
+        let session_id = client.state.conversation_id;
+        let (sender, receiver) = oneshot::channel::<LastResponse>();
+        {
+            let mut turn = client.new_session();
+            turn.websocket_session.last_response_rx = Some(receiver);
+        }
+        assert!(client.native_continuation_state(session_id).is_err());
+        if lost {
+            drop(sender);
+            assert!(client.native_continuation_state(session_id).is_err());
+        } else {
+            sender
+                .send(LastResponse {
+                    response_id: "completed-after-wait".into(),
+                    items_added: Vec::new(),
+                })
+                .unwrap();
+            assert_eq!(
+                client.native_continuation_state(session_id).unwrap()["lastResponse"]["responseId"],
+                "completed-after-wait"
+            );
+        }
+    }
+}
+
+#[test]
 fn required_initial_tool_is_the_only_visible_required_tool_before_its_call() {
     let tools = vec![
         json!({"type": "function", "name": "exec_command"}),

@@ -177,6 +177,14 @@ impl CodexThread {
         self.codex.rollout_materialization_pending().await
     }
 
+    /// Actual source state after successful session-loop and recorder shutdown.
+    /// A closed channel, path claim or caller-provided JSON cannot construct it.
+    pub async fn capture_native_state(
+        &self,
+    ) -> std::io::Result<(ThreadConfigSnapshot, crate::NativeSessionState)> {
+        self.codex.capture_native_state().await
+    }
+
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
     }

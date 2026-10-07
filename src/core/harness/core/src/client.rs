@@ -324,6 +324,46 @@ impl ModelClient {
         }
     }
 
+    /// Export actual completed request/response continuity, never auth or a
+    /// socket. The Core owner must certify quiescence before calling this.
+    pub(crate) fn native_continuation_state(
+        &self,
+        expected_session: ThreadId,
+    ) -> std::io::Result<Value> {
+        if self.state.conversation_id != expected_session
+            || self.state.provider.wire_api != crate::WireApi::Responses
+        {
+            return Err(std::io::Error::other(
+                "native model client identity/transport differs",
+            ));
+        }
+        let mut cached = self
+            .state
+            .cached_websocket_session
+            .lock()
+            .map_err(|_| std::io::Error::other("native model client state unavailable"))?;
+        if let Some(receiver) = cached.last_response_rx.as_mut() {
+            let response = receiver.try_recv().map_err(|_| {
+                std::io::Error::other("native model response has no completed receipt")
+            })?;
+            cached.last_response = Some(response);
+            cached.last_response_rx = None;
+        }
+        Ok(serde_json::json!({
+            "conversationId": self.state.conversation_id,
+            "wireApi": self.state.provider.wire_api,
+            "websocketsEnabled": self.state.responses_websockets_enabled_by_feature,
+            "httpFallback": self.state.disable_websockets.load(Ordering::Relaxed),
+            "lastRequest": cached.last_request,
+            "lastResponse": cached.last_response.as_ref().map(|response| serde_json::json!({
+                "responseId": response.response_id,
+                "itemsAdded": response.items_added
+            })),
+            "transportConnection": "reconnect-required",
+            "turnRoutingToken": "not-transferable"
+        }))
+    }
+
     fn take_cached_websocket_session(&self) -> WebsocketSession {
         let mut cached_websocket_session = self
             .state

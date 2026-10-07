@@ -162,6 +162,27 @@ configuration or full checkpoints by migration. No transport contract changes
 or disclosure grants are introduced by this private artifact.
 
 
+The same checked owner now exports a sealed native session-state artifact
+from the actual stopped Core Session, rather than constructing provider state
+from journal syntax. It retains the actual post-compaction history, reference
+context, token usage and previous-turn settings, instructions/tools, and the
+ModelClient's completed request/response cache and fallback state. Capture
+requires successful session-loop termination, the recorder receipt and no
+active turn. Pending or lost response receipts reject export. Settings and
+state are captured together under the Core state lock and then published under
+the existing native guards. The existing CheckpointStore holds the bytes;
+`business_native_source_session_states` associates their reference with the
+exact journal capture.
+
+These bytes are protected model-visible content and may contain private
+instructions or response IDs. AuthManager, dependency environment, approval
+grants, sockets and per-turn routing tokens are excluded. Transfer must use
+the authorized protected consumer; target-local credentials, workspace and
+execution rights must be resolved again. The source snapshot preserves input
+for actual continuation but does not prove upstream response retention or
+target restoration. External effects remain unknown; legacy captures gain
+no synthetic state or permission.
+
 Native capture retires model execution. If the existing continuity mechanism
 requests another turn, its durable refresh demand remains pending rather than
 invoking this retired producer or creating a replacement. Ordinary producers
