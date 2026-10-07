@@ -450,7 +450,8 @@ class CtoxRxCollection {
     const unsubscribe = this.observe((event) => note(storageEventChanges(event)));
     const unsubscribeLoader = this.subscribeDemandLoaderChange(() => note(null), true);
     const unsubscribeWindow = this.subscribeQueryWindowChange((change) => note(
-      Array.isArray(change?.changes) ? change.changes : documentIdChanges(change?.documentIds),
+      // Result-window membership does not identify removed or unseen changes.
+      Array.isArray(change?.changes) ? change.changes : null,
     ));
     note(null);
     return {

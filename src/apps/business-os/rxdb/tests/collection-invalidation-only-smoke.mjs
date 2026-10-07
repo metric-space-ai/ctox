@@ -96,7 +96,8 @@ for (const mode of ['direct', 'control-plane', 'maintenance-scope', 'permission-
       mode + ': other-tab ids survive without invented revisions or deletion states');
     collection.notifyQueryWindowChange({documentIds:['c']});
     await wait();
-    assert.deepEqual(hints[5].changes, [{id:'c'}], mode + ': id-only window hints retain their known rows');
+    assert.equal(hints[5].changes, undefined,
+      mode + ': window member ids cannot certify the complete changed-row set');
     for (const observer of observers) observer({success:{a:{...row, _deleted:true}}});
     collection.notifyQueryWindowChange();
     await wait();

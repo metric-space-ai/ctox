@@ -824,10 +824,12 @@ Consumers that only need a change hint use
 loader-generation and projected-window changes. When every trigger in the
 burst identifies its rows, the event also carries `changes: [{ id, rev?, deleted? }]`.
 Local and pushed document writes include known revision/deletion metadata;
-other-tab and ID-only window/loader invalidations retain IDs without inventing
+other-tab and ID-only loader invalidations retain IDs without inventing
 unknown metadata. New IDs notify even when no cached window contains them.
 Any unnamed trigger (including collection clear, resync or loader replacement)
 omits `changes` for the entire burst, requiring the normal full refresh. A
+result window's `documentIds` are membership, not a complete changed-row set,
+so they alone also retain that fallback. A
 consumer may fetch only named rows through its existing authorized query and
 patch its view; hints alone are neither row payloads nor permission receipts.
 Subscribing performs no initial query, snapshot read or document materialization. The listener runs its own bounded
