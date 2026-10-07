@@ -17,7 +17,13 @@ import { PROJECTED_QUERY_WINDOW_MAX_ROWS } from './query-projection-cache.mjs';
 
 export const DEFAULT_WINDOW_LIMIT = 200;
 export const DEFAULT_QUERY_WINDOW_REVALIDATE_MS = 30_000;
-const CONTROL_PLANE_QUERY_REVALIDATE_MS = 1000;
+// Command and queue ledgers were re-fetched whenever a read found its window
+// older than 1 s — polling that, with eight busy workers and several shell
+// feeds, kept a Business OS tab re-reading windows several times per second
+// (thesen 07.10.2026). Remote writes now invalidate the affected windows
+// directly (pushed master changes), so an untracked window may age 5 s;
+// commands the user is actively tracking keep the 250 ms revalidation.
+const CONTROL_PLANE_QUERY_REVALIDATE_MS = 5000;
 const TRACKED_CONTROL_PLANE_QUERY_REVALIDATE_MS = 250;
 const ACTIVE_COMMAND_STORAGE_KEY = 'ctox.businessOs.activeCommandIds.v1';
 const EMPTY_QUERY_WINDOW_REVALIDATE_MS = 5000;
