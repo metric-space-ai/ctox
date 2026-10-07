@@ -182,6 +182,21 @@
     }
   },
   "isolated_checkpoint_probe": {
+    "portable_clock_repair": {
+      "status": "pending_postmerge_image_build",
+      "clocksource": "acpi_pm",
+      "kernel_parameter_reference": "https://www.kernel.org/doc/html/v6.8/admin-guide/kernel-parameters.html",
+      "setup_sha256": "2ac5d274f3f9acf649605adc97410aa4c83bfa49c8c560890a132e881a11b976",
+      "source_base_sha256": "2ae4513a1ec913ba21d66bbcbe3c5a88a56824b7415c7f2ec1c1b8d2d9c89667",
+      "retained_native_sha256": "113b92756e094c8bdaf7ce120dbc76d57d1a4891b0548a9df6610723cdf35f3c",
+      "ordinary_retry_run": "o04-guest-observation-retry-20261007T073845Z",
+      "ordinary_retry_status": "failed",
+      "ordinary_retry_result": "Two correlated native capture failures, then a transport timeout; owned target QEMU 876192 reaped. No ordinary continuation pass.",
+      "kernel_evidence": "Recovered stopped-target logs show source TSC calibration 2495.957 MHz, a 40 ms watchdog skew at 06:24:56 UTC and fallback to HPET before the source checkpoint.",
+      "causality": "Clock instability is observed; whether the portable ACPI PM timer fixes TCG capture latency remains for actual postmerge image/restore validation.",
+      "clocksource_verification_disabled": false,
+      "product_enrollment_p2p_restore_accepted": false
+    },
     "status": "real_two_host_component_passed_with_bounded_settle",
     "source_capture": {
       "receipt_run": "o04-guest-checkpoint-component-20261007T055534Z",

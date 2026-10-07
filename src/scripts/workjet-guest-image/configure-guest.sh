@@ -55,20 +55,24 @@ finally:
 # cold boot. Xorg still uses the real DRM device and graphical VT.
 grub = pathlib.Path('/etc/default/grub.d/99-ctox-serial-console.cfg')
 grub.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-grub.write_text('''ctox_without_console() {
+grub.write_text('''ctox_without_guest_overrides() {
     set -f
     for ctox_argument in $1; do
         case "$ctox_argument" in
-            console=*) : ;;
+            console=*|clocksource=*) : ;;
             *) printf '%s ' "$ctox_argument" ;;
         esac
     done
 }
-GRUB_CMDLINE_LINUX_DEFAULT=$(ctox_without_console "$GRUB_CMDLINE_LINUX_DEFAULT")
-ctox_linux=$(ctox_without_console "$GRUB_CMDLINE_LINUX")
-GRUB_CMDLINE_LINUX="$ctox_linux console=ttyS0,115200n8 fbcon=map:1"
+# A stopped KVM guest can resume under TCG. Its source TSC may become
+# unstable and HPET fallback is costly to emulate. Use the common ACPI PM
+# timer from boot; retain clocksource verification and all timeout guards.
+# ref: Linux v6.8 admin-guide/kernel-parameters.html, clocksource=
+GRUB_CMDLINE_LINUX_DEFAULT=$(ctox_without_guest_overrides "$GRUB_CMDLINE_LINUX_DEFAULT")
+ctox_linux=$(ctox_without_guest_overrides "$GRUB_CMDLINE_LINUX")
+GRUB_CMDLINE_LINUX="$ctox_linux console=ttyS0,115200n8 fbcon=map:1 clocksource=acpi_pm"
 unset ctox_linux
-unset -f ctox_without_console
+unset -f ctox_without_guest_overrides
 ''')
 grub.chmod(0o644)
 PY
@@ -136,6 +140,16 @@ if [ "${1-}" = --desktop-only ]; then
     exit 0
 fi
 
+
+if [ "${1-}" = --clock-only ]; then
+    [ "$#" -eq 1 ]
+    [ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-555140a08-v10 ]
+    [ "$(id -u ctox-desktop)" = 1500 ]
+    [ ! -e /etc/ctox/guest-startup.json ]
+    configure_boot
+    rm /etc/ctox-image-build.marker
+    exit 0
+fi
 
 if [ "${1-}" = --boot-only ]; then
     [ "$#" -eq 1 ]
