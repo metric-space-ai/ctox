@@ -53,6 +53,18 @@ fn fixture(applied: bool) -> anyhow::Result<(TempDir, BusinessCommand)> {
     Ok((root, command))
 }
 
+fn project_projection_table(conn: &Connection) -> anyhow::Result<String> {
+    // The shared fixture creates the current schema, whose version may advance.
+    // Require exactly one table so the guard cannot silently query a stale one.
+    let mut statement = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'ctox_business_os__workjet_projects__v%'",
+    )?;
+    let tables = statement.query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    anyhow::ensure!(tables.len() == 1, "expected one current project fixture table: {tables:?}");
+    Ok(tables.into_iter().next().unwrap())
+}
+
 #[test]
 fn domain_receipt_replay_recovers_current_source_without_reapplying() -> anyhow::Result<()> {
     let (root, command) = fixture(true)?;
@@ -71,9 +83,10 @@ fn domain_receipt_replay_recovers_current_source_without_reapplying() -> anyhow:
         |row| row.get(0),
     )?;
     let rxdb = Connection::open(rxdb_store_path(root.path()))?;
-    rxdb.execute_batch(
-        "CREATE TRIGGER refuse_domain_projection BEFORE INSERT ON ctox_business_os__workjet_projects__v0
-         BEGIN SELECT RAISE(ABORT, 'domain projection unavailable'); END;")?;
+    let table = project_projection_table(&rxdb)?;
+    rxdb.execute_batch(&format!(
+        "CREATE TRIGGER refuse_domain_projection BEFORE INSERT ON {table}
+         BEGIN SELECT RAISE(ABORT, 'domain projection unavailable'); END;"))?;
     assert!(accept_rxdb_business_command(root.path(), document(&command)).is_err());
     assert_eq!(
         channels::business_command_projection(root.path(), "cmd-domain-recovery")?
@@ -206,8 +219,9 @@ fn domain_receipt_preserves_tombstones_and_removes_obsolete_projection_fields() 
     )?;
     accept_rxdb_business_command(root.path(), document(&command))?;
     let rxdb = Connection::open(rxdb_store_path(root.path()))?;
+    let table = project_projection_table(&rxdb)?;
     let (deleted, raw): (bool, String) = rxdb.query_row(
-        "SELECT deleted,data FROM ctox_business_os__workjet_projects__v0 WHERE id='domain-project'",
+        &format!("SELECT deleted,data FROM {table} WHERE id='domain-project'"),
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
