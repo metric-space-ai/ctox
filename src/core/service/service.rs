@@ -20329,6 +20329,7 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("max_output_tokens")
         || normalized.contains("incomplete response returned")
         || normalized.contains("too many requests")
+        || normalized.contains("token plan usage limit")
         || normalized.contains("rate limit")
         || normalized.contains("rate_limit")
         || normalized.contains("http 429")
@@ -40991,6 +40992,9 @@ Use shell tools to create or update these files."
             Some(30)
         );
         assert!(runtime_error_is_transient_api_failure("database is locked"));
+        assert!(runtime_error_is_transient_api_failure(
+            "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)"
+        ));
         assert_eq!(failed_worker_route_status(false, false, true), "pending");
     }
 

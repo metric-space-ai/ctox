@@ -2193,6 +2193,16 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
     {
         return Some(300);
     }
+    // MiniMax answers short bursts above the Token Plan's parallel-agent
+    // allowance with "402 Payment Required: The Token Plan usage limit has
+    // been reached ... (2067)" although the 5h/weekly windows are far from
+    // used (thesen 07.10.2026: 2% of the 5h window). Treated as terminal it
+    // bumped the mission failure counter, the threshold deferred the mission
+    // and the queue lease stayed held with no worker — six research tasks per
+    // daemon restart sat dead until a manual release. It is a rate limit.
+    if lower.contains("token plan usage limit") {
+        return Some(120);
+    }
     if lower.contains("database is locked")
         || lower.contains("database is busy")
         || lower.contains("sqlite_busy")
@@ -2776,6 +2786,13 @@ mod tests {
             ),
             Some(60)
         );
+    }
+
+    #[test]
+    fn minimax_token_plan_burst_limit_gets_rate_limit_cooldown() {
+        let error = "direct session error: ErrorEvent { message: \"unexpected status 402 Payment Required: The Token Plan usage limit has been reached. To avoid interruption, please upgrade your plan or buy credits and turn on auto consumption. (2067), url: https://llm.ctox.dev/v1/responses\", codex_error_info: Some(Other) }";
+
+        assert_eq!(hard_runtime_blocker_retry_cooldown_secs(error), Some(120));
     }
 
     #[test]
