@@ -103,6 +103,14 @@ pub enum McpConfirmationState {
     Rejected,
 }
 
+/// Effective tenant/token read scope carried only by the authenticated gateway.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedMcpCollectionReadScope {
+    pub allow_reads: bool,
+    pub allowed_collections: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct McpChannelRequestContext {
     pub channel: String,
@@ -116,6 +124,9 @@ pub struct McpChannelRequestContext {
     pub trusted_role: Option<String>,
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub trusted_role_source: Option<String>,
+    // Caller arguments and persisted contexts cannot manufacture gateway scope.
+    #[serde(skip)]
+    pub trusted_managed_read_scope: Option<ManagedMcpCollectionReadScope>,
 }
 
 impl McpChannelRequestContext {
@@ -2081,6 +2092,7 @@ pub fn query_records(
 ) -> anyhow::Result<BusinessOsMcpList<BusinessOsRecordSummary>> {
     context.validate()?;
     ensure_non_empty("collection", collection)?;
+    enforce_managed_collection_read_scope(context, collection)?;
     enforce_collection_policy(root, collection)?;
     let public_crew = crew_read_is_public(root, context, collection)?;
     let limit = bounded_limit(limit);
@@ -4416,6 +4428,7 @@ pub fn get_record(
     context.validate()?;
     ensure_non_empty("record_id", record_id)?;
     ensure_non_empty("collection", collection)?;
+    enforce_managed_collection_read_scope(context, collection)?;
     enforce_collection_policy(root, collection)?;
     let public_crew = crew_read_is_public(root, context, collection)?;
     let payload = if mcp_app_collection_uses_rxdb_authority(collection) {
@@ -4451,6 +4464,7 @@ pub fn get_command_status(
 ) -> anyhow::Result<BusinessOsMcpRecordResponse> {
     context.validate()?;
     ensure_non_empty("command_id", command_id)?;
+    enforce_managed_collection_read_scope(context, "business_commands")?;
     enforce_collection_policy(root, "business_commands")?;
     let resolved_command_id;
     let command_id = if let Some(request_id) = command_id.strip_prefix("mcp-request:") {
@@ -4545,6 +4559,7 @@ pub fn list_record_activity(
     context.validate()?;
     ensure_non_empty("collection", collection)?;
     ensure_non_empty("record_id", record_id)?;
+    enforce_managed_collection_read_scope(context, collection)?;
     let limit = bounded_limit(limit);
     let mut items = Vec::new();
     for activity_collection in [
@@ -6967,6 +6982,40 @@ fn enforce_module_policy(root: &Path, module_id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn managed_collection_read_allowed(
+    context: &McpChannelRequestContext,
+    collection: &str,
+) -> anyhow::Result<bool> {
+    if context.trusted_role_source.as_deref() != Some("ctox_dev_managed_mcp_token") {
+        return Ok(true);
+    }
+    let scope = context.trusted_managed_read_scope.as_ref().ok_or_else(|| {
+        policy_denied(
+            "managed MCP record read requires an authenticated client scope",
+            "managed_client_scope",
+        )
+    })?;
+    Ok(scope.allow_reads
+        && (scope.allowed_collections.is_empty()
+            || scope
+                .allowed_collections
+                .iter()
+                .any(|allowed| allowed == collection)))
+}
+
+fn enforce_managed_collection_read_scope(
+    context: &McpChannelRequestContext,
+    collection: &str,
+) -> anyhow::Result<()> {
+    if !managed_collection_read_allowed(context, collection)? {
+        return Err(policy_denied(
+            "collection read is outside this managed MCP client scope",
+            "managed_client_scope",
+        ));
+    }
+    Ok(())
+}
+
 fn enforce_collection_policy(root: &Path, collection: &str) -> anyhow::Result<()> {
     let policy = mcp_policy(root);
     if !policy.allowed_collections.is_empty()
@@ -7321,6 +7370,22 @@ fn context_from_arguments_with_trusted_gateway_context(
             }
         },
         trusted_role,
+        trusted_managed_read_scope: trusted_gateway_context
+            .filter(|gateway| {
+                string_field(gateway, "auth_source").as_deref()
+                    == Some("ctox_dev_managed_mcp_token")
+                    && string_field(gateway, "channel").as_deref() == Some("ctox_dev_managed_mcp")
+            })
+            .and_then(|gateway| gateway.get("managed_policy"))
+            .map(|policy| {
+                serde_json::from_value(policy.clone()).map_err(|_| {
+                    BusinessOsMcpError::validation(
+                        "managed_client_scope",
+                        "authenticated managed MCP read scope is malformed",
+                    )
+                })
+            })
+            .transpose()?,
         trusted_role_source: trusted_gateway_context
             .and_then(|context| string_field(context, "auth_source")),
     };
@@ -7647,6 +7712,15 @@ fn related_records(
     record_id: &str,
     limit: usize,
 ) -> anyhow::Result<BusinessOsMcpList<BusinessOsRecordSummary>> {
+    // Context expansion must not inspect collections outside the base client's scope.
+    if !managed_collection_read_allowed(context, collection)? {
+        return Ok(BusinessOsMcpList {
+            ok: true,
+            count: 0,
+            limit,
+            items: Vec::new(),
+        });
+    }
     let mut items = query_records(root, context, collection, Some(MAX_LIMIT))?.items;
     items.retain(|record| record_references_id(&record.data, record_id));
     sort_records_desc(&mut items);
@@ -9244,6 +9318,7 @@ mod tests {
             confirmation_state: McpConfirmationState::NotRequired,
             trusted_role: None,
             trusted_role_source: None,
+            trusted_managed_read_scope: None,
         }
     }
 
@@ -15885,6 +15960,258 @@ mod tests {
                 .and_then(|value| value.get("actor"))
                 .and_then(Value::as_str),
             Some("ctox-dev:user:user_1")
+        );
+        Ok(())
+    }
+
+    fn managed_client_read_scope_gateway(policy: Value) -> Value {
+        serde_json::json!({
+            "channel": "ctox_dev_managed_mcp",
+            "surface": "business_os_mcp",
+            "actor": "ctox-dev:user:owner_1",
+            "workspace": "tenant:tenant_1",
+            "client_id": "ctox-dev:mcp-token:scoped-client",
+            "auth_source": "ctox_dev_managed_mcp_token",
+            "role": "chef",
+            "managed_policy": policy
+        })
+    }
+
+    fn managed_client_read_scope_fixture(root: &Path) -> anyhow::Result<()> {
+        for (collection, documents) in [
+            (
+                "customer_accounts",
+                serde_json::json!([{
+                    "id": "acct_1", "name": "Allowed account", "updated_at_ms": 10
+                }]),
+            ),
+            (
+                "business_commands",
+                serde_json::json!([{
+                    "id": "cmd_private", "command_id": "cmd_private",
+                    "module": "customers", "command_type": "customers.create_followup",
+                    "record_id": "acct_1", "status": "accepted", "updated_at_ms": 20
+                }]),
+            ),
+            (
+                "ctox_queue_tasks",
+                serde_json::json!([{
+                    "id": "task_private", "title": "Private related run",
+                    "payload": {"record_id": "acct_1"}, "updated_at_ms": 30
+                }]),
+            ),
+        ] {
+            store::push_collection_records(
+                root,
+                serde_json::json!({
+                    "collection": collection, "documents": documents
+                }),
+            )?;
+        }
+        assert_eq!(
+            query_records(
+                root,
+                &test_context("business_os.query_records"),
+                "business_commands",
+                Some(1)
+            )?
+            .count,
+            1,
+            "foreign collection must be populated"
+        );
+        Ok(())
+    }
+
+    fn managed_client_read_scope_rpc(
+        root: &Path,
+        gateway: &Value,
+        tool: &str,
+        mut arguments: Value,
+    ) -> Value {
+        // A caller attempts to widen the persisted grant. The envelope wins.
+        arguments["_context"] = serde_json::json!({
+            "auth_source": "ctox_dev_managed_mcp_token", "role": "chef",
+            "managed_policy": {"allowReads": true, "allowedCollections": []}
+        });
+        let response = handle_gateway_message(
+            root,
+            &serde_json::json!({
+                "type": "mcp_request", "request_id": "scope-regression",
+                "context": gateway,
+                "body": serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": tool, "arguments": arguments}
+                }).to_string()
+            })
+            .to_string(),
+        );
+        let envelope: Value = serde_json::from_str(&response).unwrap();
+        serde_json::from_str(envelope["body"].as_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn managed_client_read_scope_denies_all_four_populated_foreign_record_tools(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        managed_client_read_scope_fixture(temp.path())?;
+        let gateway = managed_client_read_scope_gateway(serde_json::json!({
+            "allowReads": true,
+            "allowedCollections": ["workjet_projects", "workjet_working_copies"]
+        }));
+        for tool in [
+            "business_os.query_records",
+            "business_os.search_records",
+            "business_os.get_record",
+            "business_os.get_record_context",
+        ] {
+            let rpc = managed_client_read_scope_rpc(
+                temp.path(),
+                &gateway,
+                tool,
+                serde_json::json!({
+                    "collection": "business_commands", "record_id": "cmd_private", "query": "private", "limit": 1
+                }),
+            );
+            assert!(rpc.get("result").is_none(), "{tool}: {rpc}");
+            assert_eq!(
+                rpc.pointer("/error/data/field").and_then(Value::as_str),
+                Some("managed_client_scope"),
+                "{tool}: {rpc}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn managed_client_read_scope_allows_base_record_without_foreign_context_expansion(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        managed_client_read_scope_fixture(temp.path())?;
+        let gateway = managed_client_read_scope_gateway(serde_json::json!({
+            "allowReads": true, "allowedCollections": ["customer_accounts"]
+        }));
+        for tool in [
+            "business_os.query_records",
+            "business_os.search_records",
+            "business_os.get_record",
+            "business_os.get_record_context",
+        ] {
+            let rpc = managed_client_read_scope_rpc(
+                temp.path(),
+                &gateway,
+                tool,
+                serde_json::json!({
+                    "collection": "customer_accounts", "record_id": "acct_1", "query": "Allowed", "limit": 1
+                }),
+            );
+            assert!(rpc.get("error").is_none(), "{tool}: {rpc}");
+            let result: Value = serde_json::from_str(
+                rpc.pointer("/result/content/0/text")
+                    .and_then(Value::as_str)
+                    .expect("result JSON"),
+            )?;
+            if tool == "business_os.get_record_context" {
+                assert_eq!(result["record"]["id"], "acct_1");
+                for related in ["commands", "runs", "approvals", "activity"] {
+                    assert_eq!(result[related]["count"], 0, "{related}: {result}");
+                }
+            } else if tool.ends_with("get_record") {
+                assert_eq!(result["record"]["id"], "acct_1");
+            } else {
+                assert_eq!(result["count"], 1);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn managed_client_read_scope_missing_or_malformed_policy_fails_closed() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        managed_client_read_scope_fixture(temp.path())?;
+        for policy in [
+            Value::Null,
+            serde_json::json!({"allowReads": true}),
+            serde_json::json!({"allowReads": true, "allowedCollections": [false]}),
+        ] {
+            let mut gateway = managed_client_read_scope_gateway(policy.clone());
+            if policy.is_null() {
+                gateway.as_object_mut().unwrap().remove("managed_policy");
+            }
+            let rpc = managed_client_read_scope_rpc(
+                temp.path(),
+                &gateway,
+                "business_os.query_records",
+                serde_json::json!({"collection": "business_commands", "limit": 1}),
+            );
+            assert!(rpc.get("result").is_none(), "{rpc}");
+            assert_eq!(
+                rpc.pointer("/error/data/field").and_then(Value::as_str),
+                Some("managed_client_scope")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn managed_client_read_scope_disabled_reads_deny_even_an_allowed_collection(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        managed_client_read_scope_fixture(temp.path())?;
+        let gateway = managed_client_read_scope_gateway(serde_json::json!({
+            "allowReads": false, "allowedCollections": ["business_commands"]
+        }));
+        let rpc = managed_client_read_scope_rpc(
+            temp.path(),
+            &gateway,
+            "business_os.get_record",
+            serde_json::json!({"collection": "business_commands", "record_id": "cmd_private"}),
+        );
+        assert_eq!(
+            rpc.pointer("/error/data/field").and_then(Value::as_str),
+            Some("managed_client_scope")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn managed_client_read_scope_explicit_unrestricted_policy_preserves_existing_reads(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        managed_client_read_scope_fixture(temp.path())?;
+        let gateway = managed_client_read_scope_gateway(serde_json::json!({
+            "allowReads": true, "allowedCollections": []
+        }));
+        let rpc = managed_client_read_scope_rpc(
+            temp.path(),
+            &gateway,
+            "business_os.query_records",
+            serde_json::json!({"collection": "business_commands", "limit": 1}),
+        );
+        assert!(rpc.get("error").is_none(), "{rpc}");
+        Ok(())
+    }
+
+    #[test]
+    fn managed_client_read_scope_denies_before_opening_the_record_store() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let gateway = managed_client_read_scope_gateway(serde_json::json!({
+            "allowReads": true, "allowedCollections": ["workjet_projects"]
+        }));
+        let context = context_from_arguments_with_trusted_gateway_context(
+            "business_os.query_records",
+            &Value::Null,
+            Some(&gateway),
+        )?;
+        assert!(query_records(temp.path(), &context, "business_commands", Some(1)).is_err());
+        assert!(
+            !temp.path().join("runtime").exists(),
+            "denied query must not open the store"
+        );
+        let restored: McpChannelRequestContext =
+            serde_json::from_value(serde_json::to_value(&context)?)?;
+        assert!(
+            restored.trusted_managed_read_scope.is_none(),
+            "persistence cannot restore trusted scope"
         );
         Ok(())
     }

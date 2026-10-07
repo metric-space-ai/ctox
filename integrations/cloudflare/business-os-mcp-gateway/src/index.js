@@ -716,10 +716,13 @@ export async function authorizeCtoxDevManagedMcpClient(request, env = {}, instan
     };
   }
   context.instance_id = instanceId;
+  const policy = normalizeManagedMcpPolicy(payload.policy);
+  // Only introspection supplies this scope, never client headers or arguments.
+  context.managed_policy = policy;
   return {
     ok: true,
     context,
-    policy: normalizeManagedMcpPolicy(payload.policy)
+    policy
   };
 }
 
@@ -932,6 +935,9 @@ function sanitizeGatewayContext(value) {
       context[key] = clean;
     }
   }
+  if (context.auth_source === "ctox_dev_managed_mcp_token" && value.managed_policy) {
+    context.managed_policy = normalizeManagedMcpPolicy(value.managed_policy);
+  }
   const scopes = stringList(value.scopes).slice(0, 32);
   if (scopes.length > 0) {
     context.scopes = scopes;
@@ -1009,6 +1015,10 @@ async function enforceMcpClientPolicy(request, policy) {
     if (!moduleDecision.ok) {
       return moduleDecision;
     }
+    const collectionDecision = managedCollectionPolicyDecision(tool, argumentsValue, policy);
+    if (!collectionDecision.ok) {
+      return collectionDecision;
+    }
   }
   return { ok: true };
 }
@@ -1046,6 +1056,30 @@ function managedToolPolicyDecision(tool, policy) {
   }
   return { ok: true };
 }
+
+function managedCollectionPolicyDecision(tool, argumentsValue, policy) {
+  if (policy.allowedCollections.length === 0) return { ok: true };
+  const implicitCollection = tool === "business_os.get_command_status" ? "business_commands" : "";
+  if (!implicitCollection && !COLLECTION_SCOPED_TOOLS.has(tool)) return { ok: true };
+  const collection = implicitCollection || cleanContextValue(argumentsValue.collection);
+  if (!collection || !policy.allowedCollections.includes(collection)) {
+    return {
+      ok: false,
+      message: "Managed MCP token does not allow this collection",
+      field: "allowedCollections"
+    };
+  }
+  return { ok: true };
+}
+
+const COLLECTION_SCOPED_TOOLS = new Set([
+  "business_os.query_records",
+  "business_os.search_records",
+  "business_os.get_record",
+  "business_os.get_record_context",
+  "business_os.list_record_activity",
+  "business_os.upsert_record"
+]);
 
 function managedModulePolicyDecision(tool, argumentsValue, policy) {
   if (policy.allowedModules.length === 0) {
@@ -1139,9 +1173,18 @@ function normalizeManagedMcpPolicy(value) {
     allowExternalEffects: booleanOr(source.allowExternalEffects, false),
     rateLimitPerMinute: integerBetween(source.rateLimitPerMinute, 1, 600, 60),
     allowedModules: stringList(source.allowedModules).slice(0, 50),
+    allowedCollections: normalizedManagedCollectionScope(source.allowedCollections),
     allowedTools: stringList(source.allowedTools).slice(0, 50),
     deniedTools: stringList(source.deniedTools).slice(0, 50)
   };
+}
+
+function normalizedManagedCollectionScope(value) {
+  // Missing/malformed constraints must not normalize into an unrestricted list.
+  if (!Array.isArray(value) || value.length > 50 || value.some((item) => !isValidContextValue(item))) {
+    return ["__ctox_no_access__"];
+  }
+  return [...new Set(value)];
 }
 
 function booleanOr(value, fallback) {
