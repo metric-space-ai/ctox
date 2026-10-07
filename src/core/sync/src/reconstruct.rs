@@ -77,6 +77,66 @@ impl Isolation {
 }
 
 impl CheckpointStore {
+    /// Import an explicitly named, hash-verified checkpoint bundle into a
+    /// private bare repository, then reconstruct without the source host or
+    /// any remote fetch. The caller still owns target policy and admission.
+    pub async fn reconstruct_workspace_from_bundle(
+        &self,
+        digest: &str,
+        bundle: &crate::contracts::ArtifactRef,
+        target: &Path,
+    ) -> io::Result<CheckpointManifest> {
+        let manifest = self.load(digest)?;
+        if !manifest.pending_effects.is_empty() {
+            return Err(invalid("session requires external-effect reconciliation"));
+        }
+        if !crate::checkpoint::artifacts(&manifest).any(|a| a == bundle) {
+            return Err(invalid("Git bundle is not part of this checkpoint"));
+        }
+        let isolation = Isolation::new()?;
+        let bundle_path = isolation._dir.path().join("workspace.bundle");
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&bundle_path)?;
+        io::copy(&mut self.open_blob(bundle)?, &mut file)?;
+        drop(file);
+        let repository = isolation._dir.path().join("repository");
+        fs::create_dir(&repository)?;
+        let object_format = match manifest.workspace_state.base_commit.len() {
+            40 => "sha1",
+            64 => "sha256",
+            _ => return Err(invalid("unsupported checkpoint Git object format")),
+        };
+        git(
+            &isolation,
+            &repository,
+            None,
+            &[
+                "init",
+                "--bare",
+                "--quiet",
+                "--object-format",
+                object_format,
+                "--template",
+                path_to_utf8(&isolation.template)?,
+            ],
+            4096,
+        )
+        .await?;
+        git(
+            &isolation,
+            &repository,
+            None,
+            &["bundle", "unbundle", path_to_utf8(&bundle_path)?],
+            MAX_GIT_INDEX_LISTING_BYTES,
+        )
+        .await?;
+        self.reconstruct_workspace(digest, &repository, target)
+            .await
+    }
+
     /// Reconstruct a Git worktree from a verified checkpoint and a local
     /// repository that already contains the exact base commit objects.
     pub async fn reconstruct_workspace(

@@ -325,7 +325,7 @@ test('project configuration rejects wrong receipts, foreign projects and session
   }
 });
 
-function nativeProjectListFixture({ start, dispatch, exec } = {}) {
+function nativeProjectListFixture({ start, dispatch, exec, ownerUserId = 'owner-1' } = {}) {
   const starts = [];
   const commands = [];
   const reads = [];
@@ -344,7 +344,7 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
       collection: {
         demandLoader: {},
         find(query) {
-          assert.equal(query.selector.owner_user_id.$eq, 'owner-1');
+          assert.equal(query.selector.owner_user_id.$eq, ownerUserId);
           assert.match(query.requireRevision, /^cmd_workjet_project_list_/);
           assert.ok(query.signal instanceof AbortSignal);
           reads.push({ name, query });
@@ -371,11 +371,11 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
       assert.equal(options.until, 'terminal');
       assert.equal(options.sync_queue_tasks, false);
       assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 29_000);
-      const nativeRows = rows.workjet_projects.filter((row) => row.owner_user_id === 'owner-1'
+      const nativeRows = rows.workjet_projects.filter((row) => row.owner_user_id === ownerUserId
         && row.status === 'active' && row.is_deleted !== true && row._deleted !== true);
       const nativeCount = nativeRows.length;
       const receipt = { command_id: command.id, status: 'completed', ok: true,
-        result: { ok: true, collection: 'workjet_projects',
+        result: { ok: true, collection: 'workjet_projects', owner_user_id: ownerUserId,
           count: Math.min(nativeCount, 100), truncated: nativeCount > 100,
           project_ids: nativeRows.slice(0, 100).map((row) => row.id) } };
       return dispatch ? dispatch(receipt, state) : receipt;
@@ -451,6 +451,85 @@ test('a two-project replication gap reloads only the missing active native ident
   assert.equal(projectReads[1].query.limit, 2);
   assert.notEqual(projectReads[0].query.requireRevision, projectReads[1].query.requireRevision);
   assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+});
+
+test('a verified alias lists twelve owner projects and repairs missing rows without changing its actor', async () => {
+  const fixture = nativeProjectListFixture({ exec: (name, query) => {
+    if (name !== 'workjet_projects') return fixture.rows[name];
+    return query.selector.id
+      ? fixture.rows[name].filter((row) => query.selector.id.$in.includes(row.id))
+      : fixture.rows[name].slice(0, 10);
+  } });
+  fixture.state.session = { id: 'michael.welsch@metric-space.ai' };
+  fixture.rows.workjet_projects = Array.from({ length: 16 }, (_, index) => ({
+    id: `project-${index}`, name: `Project ${index}`,
+    status: index < 12 ? 'active' : 'archived', owner_user_id: 'owner-1',
+  }));
+  fixture.rows.workjet_projects.push({
+    id: 'foreign-active', name: 'Foreign', status: 'active', owner_user_id: 'owner-2',
+  });
+  fixture.rows.workjet_working_copies[0].project_id = 'project-0';
+  fixture.rows.workjet_working_copies.push({
+    id: 'foreign-copy', project_id: 'project-0', computer_id: 'foreign',
+    path: 'guest://foreign', status: 'active', owner_user_id: 'owner-2',
+  });
+  const before = JSON.stringify(fixture.rows);
+  const result = await fixture.invoke();
+  assert.equal(result.count, 12);
+  assert.deepEqual(result.projects.map(({ id }) => id).sort(),
+    Array.from({ length: 12 }, (_, index) => `project-${index}`).sort());
+  assert.deepEqual(result.projects.find(({ id }) => id === 'project-0').workingCopies.map(({ id }) => id),
+    ['native-copy']);
+  assert.ok(fixture.reads.every(({ query }) => query.selector.owner_user_id.$eq === 'owner-1'));
+  const repair = fixture.reads.find(({ query }) => query.selector.id);
+  assert.deepEqual(Array.from(repair.query.selector.id.$in), ['project-10', 'project-11']);
+  assert.equal(fixture.commands[0].command.client_context.actor.id, 'michael.welsch@metric-space.ai');
+  assert.equal(fixture.commands[0].command.record_id, 'michael.welsch@metric-space.ai');
+  assert.equal(fixture.state.session.id, 'michael.welsch@metric-space.ai');
+  assert.equal(JSON.stringify(fixture.rows), before, 'owners, archives and working copies are unchanged');
+});
+
+test('an unrelated actor receives zero projects even when projections contain another owner', async () => {
+  const fixture = nativeProjectListFixture({ ownerUserId: 'foreign-user', exec: (name) => fixture.rows[name] });
+  fixture.state.session = { id: 'foreign-user' };
+  assert.deepEqual(await fixture.invoke(), { action: 'project.list', projects: [], count: 0, truncated: false });
+  assert.ok(fixture.reads.every(({ query }) => query.selector.owner_user_id.$eq === 'foreign-user'));
+});
+
+test('invalid confirmed owners fail before reads and requests cannot choose an owner', async () => {
+  for (const owner of [null, undefined, {}, [], 7, '', ' owner-1', 'owner-1 ', 'bad\u0000id', 'x'.repeat(257)]) {
+    const fixture = nativeProjectListFixture({ dispatch: (receipt) => {
+      receipt.result.owner_user_id = owner;
+      return receipt;
+    } });
+    await assert.rejects(fixture.invoke(), (error) => error.code === 'WORKJET_PROJECT_LIST_UNCONFIRMED');
+    assert.equal(fixture.reads.length, 0);
+  }
+  for (const request of [{ ownerUserId: 'owner-2' }, { owner_user_id: 'owner-2' }]) {
+    const fixture = nativeProjectListFixture();
+    await assert.rejects(fixture.invoke(request), /Unsupported Workjet project payload field/);
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('a confirmed owner never replaces the original alias session fence during a repair read', async () => {
+  const fixture = nativeProjectListFixture({ exec: (name, query) => {
+    if (name !== 'workjet_projects' || !query.selector.id) return [];
+    fixture.state.session.id = 'owner-1';
+    return fixture.rows.workjet_projects;
+  } });
+  fixture.state.session = { id: 'michael.welsch@metric-space.ai' };
+  await assert.rejects(fixture.invoke(), /session changed/);
+  assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+});
+
+test('legacy native receipts retain the authenticated actor scope without guessing an alias', async () => {
+  const fixture = nativeProjectListFixture({ dispatch: (receipt) => {
+    delete receipt.result.owner_user_id;
+    return receipt;
+  } });
+  assert.equal((await fixture.invoke()).count, 1);
+  assert.ok(fixture.reads.every(({ query }) => query.selector.owner_user_id.$eq === 'owner-1'));
 });
 
 test('malformed native identity windows cannot trigger projection or repair reads', async () => {
