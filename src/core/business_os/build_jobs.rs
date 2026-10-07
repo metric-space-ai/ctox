@@ -317,7 +317,8 @@ fn submit(
     timeout_seconds: u32,
     public: Option<PublicBase>,
 ) -> Result<BuildJob> {
-    identifier(&actor.owner)?;
+    // Native actor IDs are opaque SQL identities, not lane path components.
+    let lane_owner = format!("native-{:x}", Sha256::digest(actor.owner.as_bytes()));
     identifier(task_id)?;
     ensure!(
         (1..=86400).contains(&timeout_seconds),
@@ -389,7 +390,7 @@ fn submit(
     )?;
     let plan = build_lane_runner::plan(
         &target.config,
-        &actor.owner,
+        &lane_owner,
         task_id,
         &job_id,
         &delivery.source_id,
