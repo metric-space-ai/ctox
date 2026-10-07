@@ -632,6 +632,7 @@ export async function mount(ctx) {
   state.syncPending = true;
   state.syncError = '';
   state.syncMessage = navigator.onLine === false ? 'Keine Netzwerkverbindung' : 'Daten werden verbunden';
+  state.collectionReadErrors = new Map();
   state.syncWaitingCollections = new Set(REPLICATED_COLLECTIONS);
   const handleOffline = () => {
     state.syncPending = false;
@@ -1598,7 +1599,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   const requested = [...new Set(keys)].filter((key) => collections[key]);
   let leadChanges = null;
   const previousLeads = state.leadHydrationBindingGeneration === bindingGeneration ? listLeads() : [];
-  const results = await Promise.all(requested.map(async (key) => {
+  const outcomes = await Promise.allSettled(requested.map(async (key) => {
     const collection = collections[key];
     if (key === 'leads') {
       leadChanges = await loadLeadList(collection, previousLeads);
@@ -1611,6 +1612,25 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
   // results per collection: a newer source read must not discard a lead read.
   if (bindingGeneration !== state.collectionBindingGeneration) return;
   const applied = (state.reloadAngewendetJeSammlung ||= new Map());
+  const readErrors = (state.collectionReadErrors ||= new Map());
+  const failures = [];
+  const results = [];
+  for (let index = 0; index < outcomes.length; index++) {
+    const key = requested[index];
+    if (lauf < (applied.get(key) || 0)) continue;
+    const outcome = outcomes[index];
+    if (outcome.status === 'fulfilled') {
+      results.push(outcome.value);
+      readErrors.delete(key);
+    } else {
+      // Keep the last complete data, but never present a rejected read as
+      // empty/successful. One failed collection must not discard healthy reads.
+      applied.set(key, lauf);
+      readErrors.set(key, String(outcome.reason?.message || outcome.reason));
+      failures.push(key);
+    }
+  }
+  try {
   const fresh = new Map(results.filter(([key]) => lauf >= (applied.get(key) || 0)));
   for (const key of fresh.keys()) applied.set(key, lauf);
   if (!fresh.size) return;
@@ -1695,6 +1715,13 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
     state.selectedLeadId = selectedCampaignLeads[0]?.id || '';
   }
   void loadSelectedLeadDetails();
+  } finally {
+    if (failures.length) {
+      throw Object.assign(new Error('Daten konnten nicht geladen werden: ' + failures.join(', ')), {
+        code: 'OUTBOUND_COLLECTION_READ_FAILED', failedKeys: failures,
+      });
+    }
+  }
 }
 
 function listLeads() { return state.leadListRows || state.leads; }
@@ -1928,7 +1955,12 @@ function renderSyncLine() {
   const line = state.ctx.host.querySelector('[data-sync-line]');
   if (!line) return;
   const waiting = state.syncWaitingCollections.size;
-  if (state.syncPending) {
+  if (state.collectionReadErrors?.size) {
+    const labels = { leads: 'Leads', sources: 'Quellen', adapters: 'Adapter', imports: 'Kampagnen', researchPolicies: 'Einstellungen' };
+    const failed = [...state.collectionReadErrors.keys()].map(key => labels[key] || key).join(', ');
+    line.innerHTML = `${escapeHtml(failed)} konnten nicht geladen werden. Der vorhandene Stand bleibt erhalten. <button class="leadgen-approve-link" data-action="retry-sync">Neu verbinden</button>`;
+    line.className = 'is-error';
+  } else if (state.syncPending) {
     line.textContent = `${state.syncMessage || 'Daten werden verbunden'} (${REPLICATED_COLLECTIONS.length - waiting}/${REPLICATED_COLLECTIONS.length})`;
     line.className = 'is-syncing';
   } else if (state.syncError) {
@@ -13772,6 +13804,7 @@ export const __leadgenOutboundTestHooks = {
   freitextBestaetigungAusstehend,
   vermerkPruefungErledigt,
   reload,
+  renderSyncLine,
   bindCollections,
   recoverCommandChannel,
   scheduleCollectionReload,

@@ -74,6 +74,19 @@ test('failed reads retain their keys and retry with bounded backoff, including n
   assert.deepEqual(calls, [['sources'], ['sources', 'leads']]);
   reader.dispose();
 });
+test('partial failures retry only rejected collections without reloading healthy sources', async () => {
+  const c = collections(); const timer = clock(); const calls = [];
+  const reader = createCollectionReloader({ collections: c.result, ...timer,
+    reload: async keys => {
+      calls.push(keys);
+      if (calls.length === 1) throw Object.assign(new Error('loader missing'), { failedKeys: ['leads'] });
+    },
+  });
+  reader.request(['sources', 'leads']); await timer.run();
+  await timer.run();
+  assert.deepEqual(calls, [['sources', 'leads'], ['leads']]);
+  reader.dispose();
+});
 test('closing during a read drops completion, retries and late invalidations', async () => {
   const c = collections(); const timer = clock(); const blocked = deferred(); let after = 0;
   const reader = createCollectionReloader({ collections: c.result, ...timer,
@@ -137,6 +150,7 @@ try {
       selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
       researchPolicyLoaded: true, researchPolicy: 'saved', researchPolicyDraft: 'unsaved',
       syncPending: false, syncWaitingCollections: new Set(),
+      collectionReadErrors: new Map(),
     });
     return { reads, existingLead };
   }
@@ -164,6 +178,47 @@ try {
       assert.equal(state.selectedLeadId, 'lead_a');
       assert.equal(state.researchPolicyDraft, 'unsaved');
     }
+  });
+  await test('rejected lead reads preserve full data and publish healthy collections with an explicit error', async () => {
+    let failed = true;
+    const { existingLead } = setup({
+      sources: async () => [{ toJSON: () => ({ id: 'source_b', label: 'New source', enabled: true }) }],
+      leads: async query => {
+        if (failed) throw Error('QUERY_GENERATION_REQUIRED: strict demand read has no loader');
+        return query.selector.id?.$gt ? [] : [{ toJSON: () => leadListRow(existingLead) }];
+      },
+    });
+    const line = { innerHTML: '', textContent: '', className: '' };
+    state.ctx.host.querySelector = () => line;
+    state.syncPending = true;
+    await assert.rejects(hooks.reload(['sources', 'leads']), error => {
+      assert.deepEqual(error.failedKeys, ['leads']); return true;
+    });
+    assert.equal(state.sources[0].id, 'source_b', 'healthy source read is not discarded');
+    assert.equal(state.leads[0], existingLead, 'a rejected query cannot erase saved full details');
+    assert.equal(state.leadListRows, null, 'a rejected query is never an empty list');
+    assert.deepEqual([...state.collectionReadErrors.keys()], ['leads']);
+    hooks.renderSyncLine();
+    assert.match(line.innerHTML, /Leads konnten nicht geladen werden/);
+    assert.equal(line.className, 'is-error', 'read failure takes priority over the sync spinner');
+    failed = false;
+    await hooks.reload(['leads']);
+    assert.equal(state.collectionReadErrors.size, 0);
+    hooks.renderSyncLine();
+    assert.equal(line.className, 'is-syncing', 'current success clears only its own failure');
+  });
+  await test('an older rejected read cannot invalidate a newer successful collection read', async () => {
+    const blocked = deferred(); let reads = 0;
+    setup({ sources: async () => {
+      if (++reads === 1) return blocked.promise;
+      return [{ toJSON: () => ({ id: 'new', label: 'Current', enabled: true }) }];
+    } });
+    const old = hooks.reload(['sources']);
+    await hooks.reload(['sources']);
+    blocked.reject(Error('obsolete loader generation'));
+    await old;
+    assert.equal(state.sources[0].id, 'new');
+    assert.equal(state.collectionReadErrors.size, 0, 'obsolete failure is not a current error');
   });
   await test('pagination retrieves all leads, not just the default 200-window', async () => {
     const rows = Array.from({ length: 351 }, (_, i) => ({ id: 'lead_' + String(i).padStart(4, '0'), campaign: 'K', updated_at_ms: i, _rev: '1-' + i }));

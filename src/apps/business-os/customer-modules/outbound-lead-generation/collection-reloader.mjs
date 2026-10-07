@@ -34,7 +34,8 @@ export function createCollectionReloader({
       failures = 0;
     } catch (error) {
       if (!closed) {
-        for (const key of requested) pending.add(key);
+        const failedKeys = Array.isArray(error?.failedKeys) ? error.failedKeys : requested;
+        for (const key of failedKeys) if (requested.includes(key)) pending.add(key);
         failures += 1;
         delay = Math.min(60000, 2000 * 2 ** Math.min(failures - 1, 5));
         try { onError(error, requested); } catch { /* reporting cannot lose the retry */ }
