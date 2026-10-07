@@ -15577,22 +15577,27 @@ mod tests {
         seed_mcp_correlated_status(root, "cmd_original", "local-original", &context)?;
         // A latest-record window cannot find the original, and returning these
         // unrelated prompts would exceed the MCP response budget.
-        let documents: Vec<_> = (0..20)
-            .map(|index| {
+        // Seed already-observed command projections, rather than submit new
+        // commands to the execution ingress merely to exercise a status read.
+        let conn = store::open_store(root)?;
+        for index in 0..20 {
+            let command_id = format!("cmd_newer_{index}");
+            store::upsert_business_record(
+                &conn,
+                "business_commands",
+                &command_id,
+                1000 + index,
                 serde_json::json!({
-                    "id": format!("cmd_newer_{index}"),
-                    "updated_at_ms": 1000 + index,
+                    "command_id": command_id,
+                    "module": "tickets",
+                    "command_type": "ctox.coding.turn",
+                    "status": "failed",
                     "payload": {"prompt": "x".repeat(20000)},
-                })
-            })
-            .collect();
-        store::push_collection_records(
-            root,
-            serde_json::json!({
-                "collection": "business_commands", "documents": documents,
-            }),
-        )?;
+                }),
+            )?;
+        }
         let recent = store::pull_latest_collection_records(root, "business_commands", Some(16))?;
+        assert_eq!(recent["documents"].as_array().unwrap().len(), 16);
         assert!(serde_json::to_vec(&recent)?.len() > 262144);
         assert!(recent["documents"]
             .as_array()
