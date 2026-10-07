@@ -144,6 +144,7 @@ enum AuxiliaryHandler<P> {
 struct RegisteredAuxiliaryRequest<P> {
     handler: AuxiliaryHandler<P>,
     public_identity: bool,
+    native_control: bool,
 }
 struct AuxiliaryAnswer {
     result: Value,
@@ -180,7 +181,8 @@ impl<P> RegisteredAuxiliaryRequest<P> {
 struct AuxiliaryPublicationGuard<H: WebRTCConnectionHandler> {
     pool: std::sync::Weak<RxWebRTCReplicationPool<H>>,
     peer: H::Peer,
-    capability: String,
+    // None is available only to an explicitly registered native control handler.
+    capability: Option<String>,
     native: Arc<dyn super::webrtc_types::WebRTCPublicationGuard>,
 }
 impl<H: WebRTCConnectionHandler> super::webrtc_types::WebRTCPublicationGuard
@@ -206,12 +208,17 @@ impl<H: WebRTCConnectionHandler> super::webrtc_types::WebRTCPublicationGuard
                 || !*alive
                 || pool.canceled.load(Ordering::SeqCst)
                 || !pool.connection_handler.is_peer_current(&self.peer)
-                || self.capability.is_empty()
-                || pool
-                    .connection_handler
-                    .peer_capability_token(&self.peer)
-                    .as_deref()
-                    != Some(self.capability.as_str())
+                || match &self.capability {
+                    Some(capability) => {
+                        capability.is_empty()
+                            || pool
+                                .connection_handler
+                                .peer_capability_token(&self.peer)
+                                .as_deref()
+                                != Some(capability.as_str())
+                    }
+                    None => !pool.is_peer_ready_for_control(&self.peer),
+                }
             {
                 return Err(denied());
             }
@@ -553,6 +560,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             RegisteredAuxiliaryRequest {
                 handler: AuxiliaryHandler::Plain(handler),
                 public_identity: false,
+                native_control: false,
             },
         );
     }
@@ -564,13 +572,18 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         method: impl Into<String>,
         handler: AuxiliaryRequestHandler,
     ) -> Result<(), RxError> {
-        self.register_auxiliary(method.into(), AuxiliaryHandler::Plain(handler), false)
+        self.register_auxiliary(
+            method.into(),
+            AuxiliaryHandler::Plain(handler),
+            false,
+            false,
+        )
     }
 
     async fn send_auxiliary_response(
         self: &Arc<Self>,
         peer: &H::Peer,
-        capability: String,
+        capability: Option<String>,
         response: WebRTCResponse,
         publication: Option<Arc<dyn super::webrtc_types::WebRTCPublicationGuard>>,
     ) -> Result<(), RxError> {
@@ -611,7 +624,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
                 })),
             ));
         }
-        self.register_auxiliary(method, AuxiliaryHandler::Plain(handler), true)
+        self.register_auxiliary(method, AuxiliaryHandler::Plain(handler), true, false)
     }
 
     /// The exact accepted connection is passed by value. Never resolve a
@@ -621,7 +634,41 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         method: impl Into<String>,
         handler: GuardedAuxiliaryRequestHandler<H::Peer>,
     ) -> Result<(), RxError> {
-        self.register_auxiliary(method.into(), AuxiliaryHandler::Guarded(handler), false)
+        self.register_auxiliary(
+            method.into(),
+            AuxiliaryHandler::Guarded(handler),
+            false,
+            false,
+        )
+    }
+
+    /// Native control hosts have no Business OS capability token. This mode
+    /// still requires both room handshakes and an exact current connection,
+    /// plus a mandatory host-supplied cryptographic/policy publication guard.
+    /// Wire fields and ordinary collection handlers cannot select this mode.
+    pub fn register_guarded_native_control_handler(
+        &self,
+        method: impl Into<String>,
+        handler: GuardedAuxiliaryRequestHandler<H::Peer>,
+    ) -> Result<(), RxError> {
+        let method = method.into();
+        if !method.starts_with("ctox.sync.")
+            || method.ends_with(".identity.v1")
+            || !self.collections.is_empty()
+            || self.connection_handler.is_data_client()
+            || !matches!(
+                self.connection_handler.local_peer_role(),
+                NativePeerRole::CtoxInstance | NativePeerRole::WorkjetExecutor
+            )
+        {
+            return Err(new_rx_error(
+                "RC_WEBRTC_CONTROL",
+                Some(serde_json::json!({
+                    "message": "guarded native control requires a native control-only pool"
+                })),
+            ));
+        }
+        self.register_auxiliary(method, AuxiliaryHandler::Guarded(handler), false, true)
     }
 
     fn register_auxiliary(
@@ -629,6 +676,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         method: String,
         handler: AuxiliaryHandler<H::Peer>,
         public_identity: bool,
+        native_control: bool,
     ) -> Result<(), RxError> {
         let mut handlers = self.auxiliary_request_handlers.lock();
         if handlers.contains_key(&method) {
@@ -645,6 +693,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             RegisteredAuxiliaryRequest {
                 handler,
                 public_identity,
+                native_control,
             },
         );
         Ok(())
@@ -1552,7 +1601,11 @@ where
                         handler.peer_capability_token(&peer).unwrap_or_default()
                     };
                     pool_clone.spawn_auxiliary_tracked(async move {
-                        let publication_capability = capability_token.clone();
+                        let publication_capability = if auxiliary.native_control {
+                            None
+                        } else {
+                            Some(capability_token.clone())
+                        };
                         let answer = auxiliary
                             .answer(
                                 peer.clone(),
@@ -4446,7 +4499,7 @@ mod tests {
         let guard = AuxiliaryPublicationGuard {
             pool: StdArc::downgrade(&pool),
             peer: peer.clone(),
-            capability: "capability-a".into(),
+            capability: Some("capability-a".into()),
             native: answer.publication.unwrap(),
         };
         let mut published = 0;
@@ -4504,6 +4557,120 @@ mod tests {
             .is_err());
         assert_eq!(published, 1);
         pool.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn guarded_native_control_requires_both_handshakes_and_exact_connection() {
+        use super::super::webrtc_types::WebRTCPublicationGuard;
+        let handler = MockHandler::new();
+        let pool = RxWebRTCReplicationPool::new_multi(Vec::new(), handler.clone());
+        let alive = StdArc::new(PlMutex::new(true));
+        let fixture = alive.clone();
+        pool.register_guarded_native_control_handler(
+            "ctox.sync.fixture.v1",
+            StdArc::new(move |_, capability, _| {
+                assert!(capability.is_empty());
+                let current = fixture.clone();
+                Box::pin(async move {
+                    Ok(GuardedAuxiliaryResponse {
+                        result: Value::Null,
+                        publication: StdArc::new(AuxiliaryAuthority(current)),
+                    })
+                })
+            }),
+        )
+        .unwrap();
+        let installed = pool
+            .auxiliary_request_handlers
+            .lock()
+            .get("ctox.sync.fixture.v1")
+            .unwrap()
+            .clone();
+        assert!(installed.native_control);
+        assert!(
+            !installed.public_identity,
+            "native policy RPC cannot bypass room admission"
+        );
+        let peer = MockPeer("route".into(), 1);
+        let guard = AuxiliaryPublicationGuard {
+            pool: StdArc::downgrade(&pool),
+            peer: peer.clone(),
+            capability: None,
+            native: StdArc::new(AuxiliaryAuthority(alive.clone())),
+        };
+        let mut bytes = 0;
+        assert!(guard
+            .with_current(&mut || {
+                bytes += 1;
+                Ok(())
+            })
+            .is_err());
+        pool.mark_peer_admitted(&peer, false);
+        assert!(guard
+            .with_current(&mut || {
+                bytes += 1;
+                Ok(())
+            })
+            .is_err());
+        pool.mark_peer_admitted(&peer, true);
+        guard
+            .with_current(&mut || {
+                bytes += 1;
+                Ok(())
+            })
+            .unwrap();
+        let ordinary = AuxiliaryPublicationGuard {
+            pool: StdArc::downgrade(&pool),
+            peer: peer.clone(),
+            capability: Some(String::new()),
+            native: StdArc::new(AuxiliaryAuthority(alive.clone())),
+        };
+        assert!(ordinary
+            .with_current(&mut || {
+                bytes += 1;
+                Ok(())
+            })
+            .is_err());
+        *alive.lock() = false;
+        assert!(guard
+            .with_current(&mut || {
+                bytes += 1;
+                Ok(())
+            })
+            .is_err());
+        *alive.lock() = true;
+        handler.retired.lock().insert(peer);
+        assert!(guard
+            .with_current(&mut || {
+                bytes += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(bytes, 1);
+        pool.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn native_control_registration_rejects_collection_and_public_identity_modes() {
+        let collection = crate::rx_collection::test_support::test_collection_named(
+            "native_control_registration",
+        )
+        .await;
+        let pool = RxWebRTCReplicationPool::new(collection, MockHandler::new());
+        let guarded: GuardedAuxiliaryRequestHandler<MockPeer> =
+            StdArc::new(|_, _, _| Box::pin(async { Err("fixture".into()) }));
+        assert!(pool
+            .register_guarded_native_control_handler("ctox.sync.fixture.v1", guarded.clone())
+            .is_err());
+        pool.cancel().await;
+        let control = RxWebRTCReplicationPool::new_multi(Vec::new(), MockHandler::new());
+        assert!(control
+            .register_guarded_native_control_handler("ctox.business_data.fixture", guarded.clone())
+            .is_err());
+        assert!(control
+            .register_guarded_native_control_handler("ctox.sync.fixture.identity.v1", guarded)
+            .is_err());
+        control.cancel().await;
     }
 
     #[tokio::test]
@@ -4580,7 +4747,7 @@ mod tests {
         let error = pool
             .send_auxiliary_response(
                 &peer,
-                "capability".into(),
+                Some("capability".into()),
                 WebRTCResponse {
                     id: "private-response".into(),
                     result: answer.result,
@@ -4614,7 +4781,7 @@ mod tests {
         let guard = AuxiliaryPublicationGuard {
             pool: StdArc::downgrade(&pool),
             peer,
-            capability: "capability".into(),
+            capability: Some("capability".into()),
             native: StdArc::new(AuxiliaryAuthority(StdArc::new(PlMutex::new(true)))),
         };
         let lifecycle = pool.cancel_lifecycle.lock().await;

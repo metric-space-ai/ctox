@@ -46,6 +46,7 @@ where
         .build()?;
     let mut descriptor = None;
     let mut guest_host = None;
+    let mut handoff_host = None;
     runtime.block_on(async {
         let database = create_rx_database(RxDatabaseCreator {
             name: format!("ctox-execution-{}", config.node_id()),
@@ -125,6 +126,10 @@ where
             options,
             stop,
             |ready, authority, peer| {
+                handoff_host = Some(
+                    crate::business_os::NativeHandoffHost::start(root, peer.pool())
+                        .map_err(io::Error::other)?,
+                );
                 guest_host = guests::Host::start(root, ipc.path(), authority.clone(), peer)
                     .map_err(io::Error::other)?;
                 descriptor = Some(
@@ -145,6 +150,7 @@ where
         )
         .await
         .map_err(|error| anyhow::anyhow!("native Sync host failed ({:?})", error.kind()));
+        drop(handoff_host.take());
         drop(guest_host.take());
         let closed = database
             .close()

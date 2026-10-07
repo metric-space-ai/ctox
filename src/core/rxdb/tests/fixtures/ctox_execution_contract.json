@@ -71,6 +71,17 @@
       "nodeId": "u64",
       "generation": "u64"
     },
+    "SessionHandoffRequest": {
+      "issuerIdentity": "string",
+      "phase": "SessionHandoffPhase",
+      "bindingDigest": "string",
+      "audience": "string",
+      "nonce": "string",
+      "spec": "ExecutionSpec",
+      "checkpointDigest": "string",
+      "checkpointSequence": "u64",
+      "ownership": "ExecutionOwnership"
+    },
     "SessionHandoffPermit": {
       "version": "u32",
       "bindingDigest": "string",
@@ -161,6 +172,14 @@
     }
   },
   "unions": {
+    "SessionHandoffWireRequest": {
+      "probe": { "request": "SessionHandoffRequest" },
+      "authorize": { "request": "SessionHandoffRequest", "challenge": "string" }
+    },
+    "SessionHandoffWireReply": {
+      "challenge": { "challenge": "string" },
+      "authorized": { "permit": "SessionHandoffPermit" }
+    },
     "SyncHostMember": {
       "voter": { "nodeId": "u64" },
       "worker": { "member": "WorkerMembership" }
