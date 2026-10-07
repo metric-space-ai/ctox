@@ -607,7 +607,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     voice_id: None,
                 })?;
                 let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
-                file.write_all(&speech.audio)?;
+                std::io::Write::write_all(&mut file, &speech.audio)?;
                 println!("{}", serde_json::json!({
                     "model":speech.model, "elapsed_ms":speech.elapsed_ms,
                     "input_characters":speech.input_characters, "audio_bytes":speech.audio.len(),
