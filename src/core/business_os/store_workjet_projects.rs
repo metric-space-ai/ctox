@@ -795,7 +795,10 @@ pub(crate) mod tests {
         let conn = open_store(root.path())?;
         let persisted = outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?
             .context("project persisted")?;
-        assert_eq!(persisted["info"]["goal"], "Usable projects\nPersist after reopening");
+        assert_eq!(
+            persisted["info"]["goal"],
+            "Usable projects\nPersist after reopening"
+        );
         drop(conn);
         let projected = load_rxdb_collection_record(root.path(), PROJECTS_COLLECTION, "project-1")?
             .context("project projected")?;
