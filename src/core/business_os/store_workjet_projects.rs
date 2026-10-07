@@ -929,8 +929,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn signed_email_alias_does_not_rewrite_project_or_working_copy_owners(
-    ) -> anyhow::Result<()> {
+    fn signed_email_alias_does_not_rewrite_project_or_working_copy_owners() -> anyhow::Result<()> {
         let root = tempdir()?;
         create_workjet_rxdb_projection_tables(root.path())?;
         let email = "michael.welsch@metric-space.ai";
