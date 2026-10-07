@@ -209,8 +209,14 @@ async fn file(sftp: &RawSftpSession, root: &str, path: &str, flags: OpenFlags) -
             path,
             flags,
             FileAttributes {
+                size: None,
+                uid: None,
+                user: None,
+                gid: None,
+                group: None,
                 permissions: Some(0o600),
-                ..Default::default()
+                atime: None,
+                mtime: None,
             },
         )
         .await?
@@ -287,9 +293,17 @@ impl StorageConnection for SshStorage {
             let handle = file(&sftp, &root, &path, OpenFlags::READ | OpenFlags::WRITE).await?;
             sftp.fsetstat(
                 &handle,
+                // FileAttributes::default requests root ownership, directory
+                // permissions and epoch timestamps. Truncation changes only size.
                 FileAttributes {
                     size: Some(length),
-                    ..Default::default()
+                    uid: None,
+                    user: None,
+                    gid: None,
+                    group: None,
+                    permissions: None,
+                    atime: None,
+                    mtime: None,
                 },
             )
             .await?;
