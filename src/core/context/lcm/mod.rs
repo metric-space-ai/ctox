@@ -1,5 +1,8 @@
 mod mission_state;
 mod runtime_support;
+mod worker_runs;
+pub use worker_runs::{run_register_worker_run, WorkerRunInput};
+pub(crate) use worker_runs::projected_worker_run_id;
 pub(crate) use mission_state::drain_pending_mission_state_clobbers;
 #[cfg(test)]
 pub(crate) use mission_state::drain_pending_mission_state_clobbers_for_test;
@@ -1205,6 +1208,7 @@ impl LcmEngine {
         ))?;
         self.ensure_schema_upgrades()?;
         self.ensure_worker_attempt_finalization_schema()?;
+        self.ensure_worker_run_identity_schema()?;
         self.ensure_task_execution_progress_schema()?;
         migrate_empty_mission_split_brain_with(&self.conn)?;
         Ok(())

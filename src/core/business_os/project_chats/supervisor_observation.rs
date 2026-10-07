@@ -102,12 +102,29 @@ pub(super) fn page(
     } else {
         None
     };
+    let registered_run: Option<String> = if table(&tx, "worker_run_identities")? {
+        tx.query_row(
+            "SELECT r.run_id FROM worker_run_identities r
+             WHERE r.attempt_id=?1 AND EXISTS (
+                SELECT 1 FROM json_each(r.task_ids_json) WHERE value=?2)",
+            rusqlite::params![attempt_id, task_id], |row| row.get(0),
+        ).optional()?
+    } else { None };
+    // A legacy finalization retains its historical run key. For a new registered
+    // attempt, the exact native task binding must match before exposing its ID.
+    let registered_attempt: bool = if table(&tx, "worker_run_identities")? {
+        tx.query_row("SELECT EXISTS(SELECT 1 FROM worker_run_identities WHERE attempt_id=?1)",
+            [&attempt_id], |row| row.get(0))?
+    } else { false };
+    ensure!(!registered_attempt || registered_run.is_some(),
+        "native run belongs to another task");
+    let run_id = registered_run.or_else(||
+        (!registered_attempt && run.is_some()).then(|| attempt_id.clone()));
     result.attempt = Some(wire::AttemptRef {
         attempt_id: attempt_id.clone(),
-        // ctox_runs.id is this persisted finalization key. Before that row
-        // exists, no run_id is claimed, even though the attempt is real.
-        run_id: run.as_ref().map(|_| attempt_id.clone()),
+        run_id,
         attempt_index: ordinal(attempt_index)?,
+        // A historical start is not proof that a worker remains live.
         status: run.as_ref().map(|r| r.0.clone()),
         started_at_ms: started.as_deref().map(millis).transpose()?,
         finished_at_ms: run
