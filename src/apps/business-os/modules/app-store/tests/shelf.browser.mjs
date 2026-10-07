@@ -7,7 +7,7 @@ import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const output = process.argv[process.argv.indexOf('--output-dir') + 1];
 assert.ok(process.argv.includes('--output-dir') && output, '--output-dir is required');
 mkdirSync(output, { recursive: true });
@@ -22,9 +22,9 @@ const html = `<!doctype html><html lang="de" data-theme="dark" data-shell-style=
 <script type="module">
 import { mount } from '/modules/app-store/index.js';
 const catalog = { modules: [], templates: [], marketplace: [
-  { id:'fixture-calendar', title:'Offline Calendar', category:'Business', description:'Cached calendar', version:'1', status:'installed' },
-  { id:'fixture-mail', title:'Offline Mail', category:'Business', description:'Cached mail', version:'1', status:'installed' },
-  { id:'fixture-notes', title:'Offline Notes', category:'Business', description:'Cached notes', version:'1', status:'installed' },
+  { id:'fixture-calendar', title:'Offline Calendar', category:'Business', description:'Cached calendar', version:'1.0.0', download_url:'/fixture-unused.zip', status:'installed' },
+  { id:'fixture-mail', title:'Offline Mail', category:'Business', description:'Cached mail', version:'1.0.0', download_url:'/fixture-unused.zip', status:'installed' },
+  { id:'fixture-notes', title:'Offline Notes', category:'Business', description:'Cached notes', version:'1.0.0', download_url:'/fixture-unused.zip', status:'installed' },
 ]};
 let cleanup, frame;
 document.querySelector('#open').onclick = async () => {
@@ -61,13 +61,14 @@ const server = http.createServer((req, res) => {
   } catch { res.writeHead(404); res.end(); }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-let browser, context;
-const pageErrors = [];
+let browser, context, page;
+const pageErrors = [], consoleMessages = [];
 try {
   browser = await chromium.launch({ headless:true, chromiumSandbox:true,
     args:['--disable-gpu', '--enable-unsafe-swiftshader'] });
   context = await browser.newContext({ viewport:{width:1280,height:900}, reducedMotion:'no-preference' });
-  const page = await context.newPage();
+  page = await context.newPage();
+  page.on('console', message => { if (message.type() === 'warning' || message.type() === 'error') consoleMessages.push(message.text()); });
   page.on('pageerror', error => pageErrors.push(error.message));
   // Preserve the actual framebuffer solely to measure rendered box pixels.
   // Shadows are black; non-black opaque pixels demonstrate actual box art,
@@ -121,6 +122,17 @@ try {
   assert.deepEqual(pageErrors, []);
   writeFileSync(path.join(output,'result.json'),JSON.stringify({first,reopened,offlineCachedItems:3,pageErrors},null,2)+'\n');
   console.log('SHELF_BROWSER_PASS ' + JSON.stringify({first,reopened,offlineCachedItems:3}));
+} catch (error) {
+  await page?.screenshot({path:path.join(output,'failure.png')});
+  const surface = await page?.evaluate(() => {
+    const canvas = document.querySelector('[data-shelf-canvas]');
+    return { text:document.body.innerText.slice(0,1500), canvasRect:canvas?.getBoundingClientRect().toJSON(),
+      gl:!!canvas?.fixtureGl, pixels:window.boxPixels?.() };
+  }).catch(() => null);
+  const failure = { error:error.message, pageErrors, consoleMessages, surface };
+  writeFileSync(path.join(output,'failure.json'),JSON.stringify(failure,null,2)+'\n');
+  console.log('SHELF_BROWSER_FAILURE '+JSON.stringify(failure));
+  throw error;
 } finally {
   await context?.close();
   await browser?.close();
