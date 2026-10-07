@@ -166,22 +166,43 @@ impl Statistics {
             return None;
         }
         self.last_report = Some(process_elapsed);
+        Some(self.snapshot(process_elapsed))
+    }
+
+    fn snapshot(&self, process_elapsed: Duration) -> serde_json::Value {
         let categories = CATEGORY_NAMES
             .into_iter()
             .zip(self.measurements.iter())
             .map(|(name, measurements)| (name, measurements))
             .collect::<std::collections::BTreeMap<_, _>>();
-        Some(serde_json::json!({
+        serde_json::json!({
             "schema": "ctox.authority_fence_metrics.v1",
+            "pid": std::process::id(),
+            "observed": self.measurements.iter().any(|sample| sample.completed_attempts > 0),
             "process_elapsed_us": u64::try_from(process_elapsed.as_micros()).unwrap_or(u64::MAX),
             "bucket_upper_us": BUCKET_UPPER_US,
             "categories": categories,
-        }))
+        })
     }
 }
 
 static PROCESS_STARTED: OnceLock<Instant> = OnceLock::new();
 static STATISTICS: OnceLock<Mutex<Statistics>> = OnceLock::new();
+
+/// Read the current process aggregate without acquiring authority, opening
+/// SQLite, initializing measurements or consuming the journal report interval.
+/// The daemon heartbeat carries this value to external status readers; a CLI
+/// process must never substitute its own empty aggregate for the daemon's.
+pub(crate) fn snapshot() -> serde_json::Value {
+    let elapsed = PROCESS_STARTED.get().map(Instant::elapsed).unwrap_or_default();
+    match STATISTICS.get() {
+        Some(statistics) => statistics
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .snapshot(elapsed),
+        None => Statistics::default().snapshot(elapsed),
+    }
+}
 
 impl Drop for FenceTiming {
     fn drop(&mut self) {
@@ -214,6 +235,38 @@ impl Drop for FenceTiming {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_snapshot_distinguishes_unobserved_from_failed_acquisition() {
+        let mut statistics = Statistics::default();
+        let before = statistics.snapshot(Duration::ZERO);
+        assert_eq!(before["observed"], false);
+        assert_eq!(before["pid"], std::process::id());
+        assert_eq!(before["categories"].as_object().unwrap().len(), 3);
+        assert!(before["categories"]["issuer_publication"]["stages"].as_object().unwrap().is_empty());
+        statistics.record(Category::IssuerPublication, false, Duration::from_micros(7), [None; 5]);
+        let after = statistics.snapshot(Duration::from_secs(1));
+        assert_eq!(after["observed"], true);
+        assert_eq!(after["categories"]["issuer_publication"]["completed_attempts"], 1);
+        assert_eq!(after["categories"]["issuer_publication"]["successful_callbacks"], 0);
+        assert!(after["categories"]["issuer_publication"]["stages"].as_object().unwrap().is_empty());
+        assert_eq!(after.as_object().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn status_snapshot_preserves_counters_and_does_not_consume_journal_throttle() {
+        let mut statistics = Statistics::default();
+        assert!(statistics.report(Duration::from_secs(1)).is_some());
+        let mut holds = [None; 5];
+        holds[2] = Some(Duration::from_micros(123));
+        statistics.record(Category::NativeReadPublication, true, Duration::from_micros(150), holds);
+        let current = statistics.snapshot(Duration::from_secs(2));
+        assert_eq!(current["categories"]["native_read_publication"]["stages"]["core"]["total_us"], 123);
+        assert_eq!(statistics.last_report, Some(Duration::from_secs(1)));
+        assert!(statistics.report(Duration::from_secs(2)).is_none());
+        let next = statistics.report(Duration::from_secs(16)).unwrap();
+        assert_eq!(next["categories"], current["categories"]);
+    }
 
     #[test]
     fn failed_acquisitions_count_attempts_without_inventing_zero_length_holds() {
