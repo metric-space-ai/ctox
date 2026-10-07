@@ -229,7 +229,11 @@ pub(super) fn handle_workjet_project_list_command(
         "owner_user_id",
         &owner_user_id,
     )?;
-    projects.retain(|project| project.get("is_deleted").and_then(Value::as_bool) != Some(true));
+    projects.retain(|project| {
+        project.get("is_deleted").and_then(Value::as_bool) != Some(true)
+            && project.get("_deleted").and_then(Value::as_bool) != Some(true)
+            && project.get("status").and_then(Value::as_str) == Some("active")
+    });
     projects.sort_by(|left, right| {
         right
             .get("updated_at_ms")
@@ -243,10 +247,21 @@ pub(super) fn handle_workjet_project_list_command(
     });
     let truncated = projects.len() > limit;
     let count = projects.len().min(limit);
+    let project_ids = projects
+        .iter()
+        .take(limit)
+        .map(|project| {
+            project
+                .get("id")
+                .and_then(Value::as_str)
+                .context("active Workjet project has no id")
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(serde_json::json!({
         "ok": true,
         "collection": PROJECTS_COLLECTION,
         "count": count,
+        "project_ids": project_ids,
         "truncated": truncated,
     }))
 }
@@ -1088,6 +1103,71 @@ pub(crate) mod tests {
             "project-1"
         )?
         .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn project_list_returns_only_twelve_active_ids_from_sixteen_owner_rows() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        for index in 0..16 {
+            handle_workjet_project_upsert_command(
+                root.path(),
+                &command(
+                    "ctox.workjet.project.upsert",
+                    json!({
+                        "project_id": format!("project-{index:02}"),
+                        "name": format!("Project {index}"),
+                        "archived": index >= 12,
+                    }),
+                ),
+                "owner-1",
+            )?;
+        }
+        handle_workjet_project_upsert_command(
+            root.path(),
+            &command(
+                "ctox.workjet.project.upsert",
+                json!({"project_id": "foreign-active", "name": "Foreign"}),
+            ),
+            "owner-2",
+        )?;
+        let listed = handle_workjet_project_list_command(
+            root.path(),
+            &command("ctox.workjet.project.list", json!({"limit": 12})),
+            "owner-1",
+        )?;
+        assert_eq!(listed["count"], 12);
+        assert_eq!(listed["truncated"], false);
+        assert!(listed.get("projects").is_none());
+        let mut ids: Vec<_> = listed["project_ids"]
+            .as_array()
+            .context("active id window missing")?
+            .iter()
+            .map(|id| id.as_str().context("invalid project id"))
+            .collect::<anyhow::Result<_>>()?;
+        ids.sort();
+        let expected: Vec<_> = (0..12).map(|index| format!("project-{index:02}")).collect();
+        assert_eq!(ids, expected);
+        let bounded = handle_workjet_project_list_command(
+            root.path(),
+            &command("ctox.workjet.project.list", json!({"limit": 10})),
+            "owner-1",
+        )?;
+        assert_eq!(bounded["count"], 10);
+        assert_eq!(bounded["project_ids"].as_array().unwrap().len(), 10);
+        assert_eq!(bounded["truncated"], true);
+        let conn = open_store(root.path())?;
+        assert_eq!(
+            outbound_load_records_by_string_field(
+                &conn,
+                PROJECTS_COLLECTION,
+                "owner_user_id",
+                "owner-1",
+            )?
+            .len(),
+            16,
+            "archived rows remain durable",
+        );
         Ok(())
     }
 

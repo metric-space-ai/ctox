@@ -349,7 +349,9 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
           assert.ok(query.signal instanceof AbortSignal);
           reads.push({ name, query });
           return { async exec() { return exec ? exec(name, query, peer)
-            : rows[name].slice(query.skip || 0, (query.skip || 0) + query.limit); } };
+            : rows[name].filter((row) => Object.entries(query.selector).every(([field, condition]) => (
+              condition.$in ? condition.$in.includes(row[field]) : row[field] === condition.$eq
+            ))).slice(query.skip || 0, (query.skip || 0) + query.limit); } };
         },
       },
     };
@@ -369,10 +371,13 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
       assert.equal(options.until, 'terminal');
       assert.equal(options.sync_queue_tasks, false);
       assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 29_000);
-      const nativeCount = rows.workjet_projects.filter((row) => row.is_deleted !== true).length;
+      const nativeRows = rows.workjet_projects.filter((row) => row.owner_user_id === 'owner-1'
+        && row.status === 'active' && row.is_deleted !== true && row._deleted !== true);
+      const nativeCount = nativeRows.length;
       const receipt = { command_id: command.id, status: 'completed', ok: true,
         result: { ok: true, collection: 'workjet_projects',
-          count: Math.min(nativeCount, 100), truncated: nativeCount > 100 } };
+          count: Math.min(nativeCount, 100), truncated: nativeCount > 100,
+          project_ids: nativeRows.slice(0, 100).map((row) => row.id) } };
       return dispatch ? dispatch(receipt, state) : receipt;
     } },
   };
@@ -402,6 +407,84 @@ test('project list preserves the strict legacy shape until configuration is expl
   assert.deepEqual(enhanced.projects[0].jourFixe, { weekday: 1, time: '09:00', timezone: 'Europe/Berlin' });
   assert.deepEqual(enhanced.projects[0].workingCopies, legacy.projects[0].workingCopies);
   assert.ok(fixture.commands.every(({ command }) => !Object.hasOwn(command.payload, 'includeConfiguration')));
+});
+
+test('sixteen projected owner rows with four archived return exactly twelve active projects', async () => {
+  const fixture = nativeProjectListFixture({ exec: (name) => fixture.rows[name] });
+  fixture.rows.workjet_projects = Array.from({ length: 16 }, (_, index) => ({
+    id: `project-${index}`, name: `Project ${index}`,
+    status: index < 12 ? 'active' : 'archived', owner_user_id: 'owner-1',
+  }));
+  fixture.rows.workjet_projects.push({
+    id: 'foreign-active', name: 'Foreign', status: 'active', owner_user_id: 'owner-2',
+  });
+  const result = await fixture.invoke();
+  assert.equal(result.count, 12);
+  assert.equal(result.projects.length, 12);
+  assert.deepEqual(new Set(result.projects.map((project) => project.id)),
+    new Set(Array.from({ length: 12 }, (_, index) => `project-${index}`)));
+  assert.equal(fixture.rows.workjet_projects.length, 17, 'archives and foreign rows stay intact');
+  assert.equal(fixture.reads.find(({ name }) => name === 'workjet_projects').query.selector.status.$eq, 'active');
+});
+
+test('a two-project replication gap reloads only the missing active native identities', async () => {
+  const missingIds = ['71462c13-b395-402f-b6c8-788b405783e7', 'a93f348f-miltonticket'];
+  const fixture = nativeProjectListFixture({ exec: (name, query) => {
+    if (name !== 'workjet_projects') return [];
+    return query.selector.id
+      ? fixture.rows.workjet_projects.filter((row) => query.selector.id.$in.includes(row.id))
+      : fixture.rows.workjet_projects.slice(0, 10);
+  } });
+  fixture.rows.workjet_projects = Array.from({ length: 16 }, (_, index) => ({
+    id: index < 10 ? `project-${index}` : missingIds[index - 10] || `archived-${index}`,
+    name: index === 10 ? 'greppy.xyz' : index === 11 ? 'miltonticket.app' : `Project ${index}`,
+    status: index < 12 ? 'active' : 'archived', owner_user_id: 'owner-1',
+  }));
+  const result = await fixture.invoke();
+  assert.equal(result.count, 12);
+  assert.equal(result.projects.length, 12);
+  assert.ok(missingIds.every((id) => result.projects.some((project) => project.id === id)));
+  const projectReads = fixture.reads.filter(({ name }) => name === 'workjet_projects');
+  assert.equal(projectReads.length, 2);
+  assert.deepEqual(Array.from(projectReads[1].query.selector.id.$in), missingIds);
+  assert.equal(projectReads[1].query.selector.status.$eq, 'active');
+  assert.equal(projectReads[1].query.limit, 2);
+  assert.notEqual(projectReads[0].query.requireRevision, projectReads[1].query.requireRevision);
+  assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+});
+
+test('malformed native identity windows cannot trigger projection or repair reads', async () => {
+  for (const ids of [null, {}, [], ['native-project', 'native-project'], [7], ['bad\u0000id']]) {
+    const fixture = nativeProjectListFixture({ dispatch: (receipt) => {
+      receipt.result.project_ids = ids;
+      return receipt;
+    } });
+    await assert.rejects(fixture.invoke(), (error) => error.code === 'WORKJET_PROJECT_LIST_UNCONFIRMED');
+    assert.equal(fixture.reads.length, 0);
+  }
+});
+
+test('repair reads preserve the first query generation and shared deadline', async () => {
+  for (const mode of ['generation', 'actor', 'deadline', 'foreign', 'archived']) {
+    let now = 10_000;
+    const fixture = nativeProjectListFixture({ exec: (name, query, peer) => {
+      if (name !== 'workjet_projects' || !query.selector.id) return [];
+      if (mode === 'generation') peer.generation = 'generation-2';
+      if (mode === 'actor') fixture.state.session = { id: 'owner-2' };
+      if (mode === 'deadline') now = 39_000;
+      return [{ ...fixture.rows.workjet_projects[0],
+        ...(mode === 'foreign' ? { owner_user_id: 'owner-2' } : {}),
+        ...(mode === 'archived' ? { status: 'archived' } : {}),
+      }];
+    } });
+    fixture.context.Date = class extends Date { static now() { return now; } };
+    await assert.rejects(fixture.invoke(), (error) => (
+      /generation changed|session changed/.test(error.message)
+      || error.code === 'WORKJET_PROJECT_TIMEOUT'
+      || error.code === 'WORKJET_PROJECT_LIST_INCOMPLETE'
+    ));
+    assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+  }
 });
 
 test('project list rejects malformed configuration negotiation before native dispatch', async () => {
@@ -441,8 +524,8 @@ test('each project list requires new native authority and accepts a confirmed em
 
 test('nonempty native project counts cannot confirm empty or partial projections', async () => {
   for (const projectedCount of [0, 8]) {
-    const fixture = nativeProjectListFixture({ exec: (name) => name === 'workjet_projects'
-      ? fixture.rows.workjet_projects.slice(0, projectedCount) : [] });
+    const fixture = nativeProjectListFixture({ exec: (name, query) => name === 'workjet_projects'
+      ? (query.selector.id ? [] : fixture.rows.workjet_projects.slice(0, projectedCount)) : [] });
     fixture.rows.workjet_projects = Array.from({ length: 16 }, (_, index) => ({
       id: `project-${index}`, name: `Project ${index}`, status: 'active', owner_user_id: 'owner-1',
     }));
@@ -484,6 +567,7 @@ test('a truncated native window cannot be delivered as a complete project list',
 test('a native zero count cannot confirm extra or discarded projection rows', async () => {
   const stale = nativeProjectListFixture({ dispatch: (receipt) => {
     receipt.result.count = 0;
+    receipt.result.project_ids = [];
     return receipt;
   } });
   await assert.rejects(stale.invoke(), (error) => error.code === 'WORKJET_PROJECT_LIST_INCOMPLETE');
@@ -497,7 +581,7 @@ test('identity remains fenced through final project serialization', async () => 
   const fixture = nativeProjectListFixture({ exec: (name) => name === 'workjet_projects'
     ? [{ toJSON() {
       if (++reads === 2) fixture.state.session = { id: 'owner-2' };
-      return { id: 'native-project', name: 'Native project', owner_user_id: 'owner-1' };
+      return { id: 'native-project', name: 'Native project', owner_user_id: 'owner-1', status: 'active' };
     } }] : [] });
   await assert.rejects(fixture.invoke(), /session changed/);
   assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
