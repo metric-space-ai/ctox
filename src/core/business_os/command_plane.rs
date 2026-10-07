@@ -1270,7 +1270,9 @@ impl CentralCommandPolicyRequirement {
                 BusinessOsPermission::DataRead,
             ))
         } else if command_type == "ctox.workjet.project.supervisor.turn.watch" {
-            Some(CommandPolicyRequirement::workspace(BusinessOsPermission::DataRead))
+            Some(CommandPolicyRequirement::workspace(
+                BusinessOsPermission::DataRead,
+            ))
         } else if super::project_chats::is_command(command_type) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataWrite,
@@ -1710,7 +1712,9 @@ fn dispatch_business_command(
             match super::project_chats::supervisor_turns::control(root, command, session) {
                 Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
-                    None, serde_json::json!({"ok":false,"error":error.to_string()}), error,
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
                 )),
             }
         }

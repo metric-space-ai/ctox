@@ -64,16 +64,17 @@ struct ChatPayload {
 }
 
 pub(super) fn is_command(command_type: &str) -> bool {
-    supervisor_turns::is_command(command_type) || matches!(
-        command_type,
-        "ctox.workjet.project.chat.ensure"
-            | "ctox.workjet.project.supervisor.bind"
-            | "ctox.workjet.project.worker.add"
-            | "ctox.workjet.project.worker.remove"
-            | "ctox.workjet.project.chat.create"
-            | "ctox.workjet.worker_profile.bind"
-            | "ctox.workjet.worker_profile.unbind"
-    )
+    supervisor_turns::is_command(command_type)
+        || matches!(
+            command_type,
+            "ctox.workjet.project.chat.ensure"
+                | "ctox.workjet.project.supervisor.bind"
+                | "ctox.workjet.project.worker.add"
+                | "ctox.workjet.project.worker.remove"
+                | "ctox.workjet.project.chat.create"
+                | "ctox.workjet.worker_profile.bind"
+                | "ctox.workjet.worker_profile.unbind"
+        )
 }
 
 pub(super) fn is_owned_collection(collection: &str) -> bool {
