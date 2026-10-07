@@ -73,6 +73,40 @@ handoff binding enrollment, protected checkpoint transport and original-session
 target resume are subsequent production connections under #183. Enrollment
 alone does not start QEMU or establish two-host restoration.
 
+## Native queue producer connection
+
+The foreground service retains the registry created by its configured Sync
+host and passes that registry to the ordinary queue turn producer, after the
+existing external Crew executor has had its turn. An already-scoped Business
+OS MCP chat task can select an enrolled guest from its canonical command
+thread and the actual active Crew attempt. Queue metadata cannot select a guest,
+profile, account or controller.
+
+Selection checks the canonical command/task link, unchanged payload hash,
+nonterminal command, current Crew lease and member, and the enrolled
+project/chat/profile relationship. Group chats resolve through the active
+profile's Crew member; another member's enrollment does not authorize it.
+The same proof runs again on the held worker and policy transactions during
+admission, binding installation and protected guest callbacks. Replaced command
+scope, reassigned profile, expired/replaced lease, revoked controller and
+changed policy fail closed.
+
+The producer uses the existing durable account-bound native factory. It checks
+the exact host-owned transport and command assignment before and after startup,
+then installs the registry's native admission owner. It does not create or
+clone another Sync peer. Native mode still requires its pinned direct ChatGPT
+account and existing selected model; it cannot substitute a proxy, local model,
+external executor or worker-profile route. Unenrolled tasks and canonical
+external-executor commands retain their existing execution owners. Tasks that
+have no existing signed Business OS MCP scope do not acquire one from guest
+enrollment.
+
+This connects the first-turn production producer only. It grants no checkpoint
+disclosure, target receipt or target execution. An already-bound guest cannot
+start a replacement provider session without lifecycle reconciliation.
+Source/target handoff enrollment, complete artifact capture, authorized
+checkpoint transport and continuation of the original session remain open.
+
 ## Native producer ownership before the capture transition
 
 Source inspection at CTOX `5f2d52c362c628b0eea673c7eda8fe60d6e9be70`

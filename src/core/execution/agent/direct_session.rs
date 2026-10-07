@@ -1087,7 +1087,6 @@ impl PersistentSession {
         persona: Option<&str>,
         registry: std::sync::Arc<crate::business_os::NativeGuestRegistry>,
         guest_id: &str,
-        guest_peer: &ctox_sync::native::NativeSyncSession,
     ) -> Result<Self> {
         let context = crate::business_os::mcp_channel::verify_internal_command_session_token(
             root,
@@ -1099,6 +1098,11 @@ impl PersistentSession {
             .unwrap_or(BUSINESS_OS_MCP_DEFAULT_ADDR);
         let token = crate::business_os::mcp_channel::mcp_operator_auth_token(root)?;
         let config = business_os_mcp_thread_config(addr, &token, command_session_token)?;
+        anyhow::ensure!(
+            registry.select_command_context(root, &context)?.as_deref() == Some(guest_id),
+            "native guest differs from the current command assignment"
+        );
+        registry.require_live_transport()?;
         let mut session = Self::start_with_native_mode(
             root,
             settings,
@@ -1120,12 +1124,16 @@ impl PersistentSession {
             current == context,
             "native guest command authority changed during startup"
         );
+        anyhow::ensure!(
+            registry.select_command_context(root, &current)?.as_deref() == Some(guest_id),
+            "native guest command assignment changed during startup"
+        );
+        registry.require_live_transport()?;
         session.native_command_context = Some(current);
         session.native_command_session_token = Some(command_session_token.to_owned());
         session.require_native_provider_admission(registry.admission(guest_id)?)?;
-        // Install the guarded source on the retained native peer, before any
-        // model turn can observe a guest. Wire claims cannot create this owner.
-        registry.attach_frame_transport(guest_peer)?;
+        // The service host already owns the guarded source on its exact peer.
+        // Cloning this registry does not prolong a stopped native transport.
         session.native_guest_registry = Some((registry, guest_id.to_owned()));
         Ok(session)
     }

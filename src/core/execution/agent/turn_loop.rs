@@ -68,6 +68,9 @@ pub(crate) struct ChatTurnSessionOptions {
     pub(crate) worker_attempt: Option<WorkerAttemptContext>,
     /// Native worker lease, never a model-provided task or thread selector.
     pub(crate) queue_turn_lease: Option<crate::channels::QueueTurnLeaseFence>,
+    /// Only the foreground service can supply its live host-owned registry.
+    #[cfg(unix)]
+    pub(crate) native_guest_registry: Option<Arc<crate::business_os::NativeGuestRegistry>>,
 }
 
 struct ToolFreeSemanticSummarizer {
@@ -789,13 +792,49 @@ where
     let mut owned_session = if session.is_none() {
         if options.enable_business_os_mcp {
             emit("session-business-os-mcp");
+            let command_token = options
+                .business_os_mcp_command_session
+                .as_deref()
+                .context("Business OS MCP session is missing its signed command scope")?;
+            #[cfg(unix)]
+            let native_guest = options
+                .native_guest_registry
+                .as_ref()
+                .map(|registry| {
+                    let context =
+                        crate::business_os::mcp_channel::verify_internal_command_session_token(
+                            root,
+                            command_token,
+                        )?;
+                    Ok::<_, anyhow::Error>((
+                        registry,
+                        registry.select_command_context(root, &context)?,
+                    ))
+                })
+                .transpose()?;
+            #[cfg(unix)]
+            if let Some((registry, Some(guest_id))) = native_guest {
+                Some(PersistentSession::start_native_guest_with_business_os_mcp(
+                    root,
+                    &operator_settings,
+                    command_token,
+                    options.crew_persona.as_deref(),
+                    Arc::clone(registry),
+                    &guest_id,
+                )?)
+            } else {
+                Some(PersistentSession::start_with_business_os_mcp(
+                    root,
+                    &operator_settings,
+                    command_token,
+                    options.crew_persona.as_deref(),
+                )?)
+            }
+            #[cfg(not(unix))]
             Some(PersistentSession::start_with_business_os_mcp(
                 root,
                 &operator_settings,
-                options
-                    .business_os_mcp_command_session
-                    .as_deref()
-                    .context("Business OS MCP session is missing its signed command scope")?,
+                command_token,
                 options.crew_persona.as_deref(),
             )?)
         } else if options.disable_mcp_servers || options.base_instructions.is_some() {

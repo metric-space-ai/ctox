@@ -5,6 +5,8 @@
 //! registers a guest. Provider, policy and controller guards remain held through
 //! synchronous publication; a receipt or cached readiness is never authority.
 
+#[path = "guest_registry_command.rs"]
+mod command;
 #[path = "guest_registry_frames.rs"]
 mod frames;
 #[cfg(test)]
@@ -58,6 +60,8 @@ impl NativeGuestRegistry {
     }
 }
 fn validate_provider(
+    worker: &Connection,
+    policy: &Connection,
     facts: &NativeProviderFacts,
     destination: &GuestRestoreDestination,
 ) -> Result<()> {
@@ -86,6 +90,14 @@ fn validate_provider(
             == Some(facts.attempt_id.as_str()),
         "native guest command does not belong to actual worker attempt"
     );
+    ensure!(
+        provenance
+            .pointer("/crew_binding/task_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|task| facts.routing_attempts.iter().any(|(key, _)| key == task)),
+        "native guest command task differs from the actual worker lease"
+    );
+    command::validate_command(worker, policy, provenance, destination)?;
     Ok(())
 }
 impl NativeGuestAdmissionOwner for NativeGuestAdmissionResolver {
@@ -166,7 +178,7 @@ impl NativeGuestAdmissionOwner for NativeGuestAdmissionResolver {
             let entry = registration
                 .lock()
                 .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
-            validate_provider(facts, &entry.assignment.destination)?;
+            validate_provider(tx, policy, facts, &entry.assignment.destination)?;
             let destination = self.registry.admission_destination(policy, &entry)?;
             ensure!(
                 expected.is_none_or(|expected| expected == &destination),
@@ -690,26 +702,7 @@ impl NativeGuestRegistry {
                         == entry.import_identity,
                     "native import parent replaced"
                 );
-                let provenance = facts
-                    .command_provenance
-                    .as_ref()
-                    .context("provider has no verified native command")?;
-                ensure!(
-                    provenance
-                        .get("expires_at_ms")
-                        .and_then(serde_json::Value::as_u64)
-                        .is_some_and(|expiry| u128::from(expiry) > super::store::now_ms()),
-                    "native guest command authority expired or has no lifetime"
-                );
-                ensure!(
-                    provenance.get("actor").and_then(serde_json::Value::as_str)
-                        == Some(entry.assignment.destination.human_owner_id.as_str()),
-                    "provider principal differs from guest owner"
-                );
-                ensure!(
-                    facts.checkpoint_contract.is_some(),
-                    "provider has no native account/harness contract"
-                );
+                validate_provider(worker_tx, policy_tx, facts, &entry.assignment.destination)?;
                 apply(worker_tx, &entry.assignment)
             })
         })
@@ -996,35 +989,36 @@ impl NativeGuestExecution {
         self.registry
             .verify_runtime_root(self.provider.runtime_root())?;
         let entry = self.registry.registration(&self.guest_id)?;
-        self.provider.with_live_provider_transaction(|_, facts, _| {
-            self.registry.with_policy(|tx| {
-                let mut entry = entry
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
-                ensure!(
-                    !entry.revoked && entry.execution.is_none(),
-                    "native guest execution already bound or revoked"
-                );
-                validate_provider(facts, &entry.assignment.destination)?;
-                ensure!(
-                    self.registry.admission_destination(tx, &entry)? == self.binding.admission,
-                    "native policy/controller differs from actual admitted job"
-                );
-                ensure!(
-                    facts.binding_id == self.binding.provider_binding_id
-                        && self.binding.spec.scope_id == entry.assignment.scope_id,
-                    "native binding changed during admission"
-                );
-                ensure!(
-                    private_directory(&entry.assignment.destination.import_parent)?
-                        == entry.import_identity,
-                    "native import parent replaced"
-                );
-                entry.execution = Some(self.binding.clone());
-                entry.provider = Some(self.provider.clone());
-                Ok(())
+        self.provider
+            .with_live_provider_transaction(|worker_tx, facts, _| {
+                self.registry.with_policy(|tx| {
+                    let mut entry = entry
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+                    ensure!(
+                        !entry.revoked && entry.execution.is_none(),
+                        "native guest execution already bound or revoked"
+                    );
+                    validate_provider(worker_tx, tx, facts, &entry.assignment.destination)?;
+                    ensure!(
+                        self.registry.admission_destination(tx, &entry)? == self.binding.admission,
+                        "native policy/controller differs from actual admitted job"
+                    );
+                    ensure!(
+                        facts.binding_id == self.binding.provider_binding_id
+                            && self.binding.spec.scope_id == entry.assignment.scope_id,
+                        "native binding changed during admission"
+                    );
+                    ensure!(
+                        private_directory(&entry.assignment.destination.import_parent)?
+                            == entry.import_identity,
+                        "native import parent replaced"
+                    );
+                    entry.execution = Some(self.binding.clone());
+                    entry.provider = Some(self.provider.clone());
+                    Ok(())
+                })
             })
-        })
     }
 
     fn with_current<T>(
@@ -1125,7 +1119,7 @@ impl NativeGuestExecution {
             );
             let verify = || {
                 verify_worker_current(worker_tx, facts)?;
-                validate_provider(facts, &entry.assignment.destination)
+                validate_provider(worker_tx, tx, facts, &entry.assignment.destination)
             };
             verify()?;
             // Capture a destination clone so the checker can be borrowed
@@ -1140,7 +1134,7 @@ impl NativeGuestExecution {
             let destination = entry.assignment.destination.clone();
             let verify = || {
                 verify_worker_current(worker_tx, facts)?;
-                validate_provider(facts, &destination)
+                validate_provider(worker_tx, tx, facts, &destination)
             };
             let result = apply(&mut entry, &verify, tx)?;
             if let Err(error) = verify() {

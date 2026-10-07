@@ -8,6 +8,9 @@ use ctox_sync::authority::{Job, Receipt, Request, WorkerMembership};
 use serde_json::json;
 use std::{future::Future, pin::Pin};
 
+#[path = "guest_registry_command_tests.rs"]
+mod command_tests;
+
 fn enrollment_control_fixture() -> (tempfile::TempDir, Arc<NativeGuestRegistry>, PathBuf, String) {
     let (root, registry, assignment) = fixture();
     // The component fixture's virgin enrollment has no provider/process. Start
@@ -296,7 +299,7 @@ fn fixture() -> (
         &conn,
         "workjet_worker_profile_bindings",
         &profile,
-        json!({"owner_user_id":"owner","worker_profile_id":"profile","computer_id":"computer","status":"active","is_deleted":false}),
+        json!({"owner_user_id":"owner","worker_profile_id":"profile","computer_id":"computer","crew_member_id":"crew-pico","status":"active","is_deleted":false}),
     );
     let member =
         super::super::project_chats::stable_id("workjet_member", &["owner", "project", "profile"]);
@@ -334,41 +337,101 @@ fn fixture() -> (
         .unwrap();
     (directory, registry, assignment)
 }
-fn facts() -> NativeProviderFacts {
-    NativeProviderFacts {
-        schema: "ctox.native.worker_provider_preparation.v1",
-        binding_id: "fixture-binding".into(),
-        worker_id: "worker".into(),
-        attempt_id: "attempt".into(),
-        routing_attempts: vec![("task".into(), 1)],
-        provider_session_id: uuid::Uuid::new_v4().to_string(),
-        model_id: "model".into(),
-        model_provider_id: None,
-        api_provider_id: None,
-        command_provenance: Some(
-            json!({"actor":"owner","expires_at_ms":super::super::store::now_ms()+60_000,
-            "crew_binding":{"attempt_id":"attempt"}}),
-        ),
-        checkpoint_contract: Some(crate::channels::NativeProviderCheckpointContract {
-            harness: "fixture".into(),
-            harness_version: "fixture".into(),
-            model_route_id: "fixture".into(),
-            gateway_account_id: "fixture".into(),
-        }),
-    }
-}
-fn worker_store() -> Connection {
-    // ctox-allow-direct-state-write: isolated policy component fixture only
-    let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        "CREATE TABLE communication_routing_state (
-        message_key TEXT, route_status TEXT, lease_owner TEXT, lease_worker_id TEXT,
-        attempt INTEGER, lease_expires_at TEXT)",
+fn worker_store(root: &Path) -> (Connection, NativeProviderFacts, String) {
+    // Use real command intake, lease, Crew attempt and signed command authority.
+    // The provider/account contract remains a component fixture, not model proof.
+    let (capability, _) = super::super::store::issue_business_os_capability_token_for_managed_user(
+        root,
+        "owner",
+        "Owner",
+        "admin",
+        super::super::store::now_ms(),
     )
     .unwrap();
-    conn.execute("INSERT INTO communication_routing_state VALUES ('task','leased','ctox-service','worker',1,?1)",
-        [(chrono::Utc::now()+chrono::Duration::seconds(60)).to_rfc3339()]).unwrap();
-    conn
+    super::super::store::accept_rxdb_business_command_with_origin(
+        root,
+        json!({"id":"guest-command","module":"outbound-lead-generation",
+            "command_type":"business_os.chat.task","record_id":"lead-a",
+            "payload":{"instruction":"Inspect assigned chat","mode":"data","thread_id":"thread"},
+            "client_context":{"capability_token":capability}}),
+        super::super::store::CommandOrigin::ReplicatedPeer,
+    )
+    .unwrap();
+    let conn = Connection::open(crate::paths::core_db(root)).unwrap();
+    let task: String = conn
+        .query_row(
+            "SELECT task_id FROM business_command_task_links WHERE command_id='guest-command'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    // ctox-allow-direct-state-write: isolated authoritative lease fixture
+    conn.execute("UPDATE communication_routing_state SET crew_assigned_member_id='crew-pico' WHERE message_key=?1", [&task]).unwrap();
+    crate::channels::lease_queue_task(root, &task, "ctox-service").unwrap();
+    crate::channels::record_queue_lease_worker(root, &[task.clone()], "ctox-service", "worker")
+        .unwrap();
+    crate::crew::prepare_attempt(
+        root,
+        &[task.clone()],
+        "ctox-service",
+        "attempt",
+        Some("thread"),
+        &json!({}),
+        None,
+        "Inspect assigned chat",
+        None,
+    )
+    .unwrap()
+    .expect("actual Crew attempt");
+    let command = crate::channels::business_command_projection(root, "guest-command").unwrap();
+    let token = super::super::mcp_channel::issue_internal_command_session_token(
+        root,
+        "guest-command",
+        command["payload_hash"].as_str().unwrap(),
+        "owner",
+        "admin",
+        "guest-workspace",
+        &json!({}),
+    )
+    .unwrap();
+    let token = super::super::mcp_channel::bind_internal_command_session_to_crew_attempt(
+        root,
+        &token,
+        "attempt",
+        "guest-work",
+    )
+    .unwrap();
+    let context =
+        super::super::mcp_channel::verify_internal_command_session_token(root, &token).unwrap();
+    let attempt = conn
+        .query_row(
+            "SELECT attempt FROM communication_routing_state WHERE message_key=?1",
+            [&task],
+            |row| row.get(0),
+        )
+        .unwrap();
+    (
+        conn,
+        NativeProviderFacts {
+            schema: "ctox.native.worker_provider_preparation.v1",
+            binding_id: "fixture-binding".into(),
+            worker_id: "worker".into(),
+            attempt_id: "attempt".into(),
+            routing_attempts: vec![(task, attempt)],
+            provider_session_id: uuid::Uuid::new_v4().to_string(),
+            model_id: "model".into(),
+            model_provider_id: None,
+            api_provider_id: None,
+            command_provenance: Some(context),
+            checkpoint_contract: Some(crate::channels::NativeProviderCheckpointContract {
+                harness: "fixture".into(),
+                harness_version: "fixture".into(),
+                model_route_id: "fixture".into(),
+                gateway_account_id: "fixture".into(),
+            }),
+        },
+        token,
+    )
 }
 #[test]
 fn native_registry_enrollment_uses_canonical_owner_project_profile_and_chat() {
@@ -421,20 +484,20 @@ fn native_registry_denies_foreign_worker_root_before_publication() {
         registry: Arc::clone(&registry),
         guest_id: assignment.destination.guest_id.clone(),
     };
-    let mut worker = worker_store();
+    let (mut worker, facts, _) = worker_store(&registry.runtime_root);
     let tx = worker
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
     let mut published = false;
     assert!(resolver
-        .with_current_destination(&tx, foreign.path(), &facts(), None, &mut |_| {
+        .with_current_destination(&tx, foreign.path(), &facts, None, &mut |_| {
             published = true;
             Ok(())
         })
         .is_err());
     assert!(!published);
     resolver
-        .with_current_destination(&tx, &registry.runtime_root, &facts(), None, &mut |_| {
+        .with_current_destination(&tx, &registry.runtime_root, &facts, None, &mut |_| {
             published = true;
             Ok(())
         })
@@ -478,11 +541,10 @@ fn native_registry_policy_writer_cannot_interleave_and_revocation_denies_publica
         registry: Arc::clone(&registry),
         guest_id: assignment.destination.guest_id.clone(),
     };
-    let mut worker = worker_store();
+    let (mut worker, facts, _) = worker_store(&registry.runtime_root);
     let tx = worker
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
-    let facts = facts();
     let mut destination = None;
     resolver
         .with_current_destination(&tx, &registry.runtime_root, &facts, None, &mut |current| {
@@ -571,10 +633,10 @@ fn native_registry_replaced_policy_store_or_import_parent_never_invokes_callback
         registry: Arc::clone(&registry),
         guest_id: assignment.destination.guest_id,
     };
-    let mut worker = worker_store();
+    let (mut worker, facts, _) = worker_store(&registry.runtime_root);
     let tx = worker.transaction().unwrap();
     assert!(resolver
-        .with_current_destination(&tx, &registry.runtime_root, &facts(), None, &mut |_| {
+        .with_current_destination(&tx, &registry.runtime_root, &facts, None, &mut |_| {
             invoked = true;
             Ok(())
         })
@@ -651,11 +713,11 @@ fn native_registry_archived_project_removed_member_or_expired_worker_deny_callba
             registry: registry.clone(),
             guest_id: assignment.destination.guest_id,
         };
-        let mut worker = worker_store();
+        let (mut worker, facts, _) = worker_store(&registry.runtime_root);
         let tx = worker.transaction().unwrap();
         let mut invoked = false;
         assert!(resolver
-            .with_current_destination(&tx, &registry.runtime_root, &facts(), None, &mut |_| {
+            .with_current_destination(&tx, &registry.runtime_root, &facts, None, &mut |_| {
                 invoked = true;
                 Ok(())
             })
@@ -667,7 +729,7 @@ fn native_registry_archived_project_removed_member_or_expired_worker_deny_callba
         registry: registry.clone(),
         guest_id: assignment.destination.guest_id,
     };
-    let mut worker = worker_store();
+    let (mut worker, facts, _) = worker_store(&registry.runtime_root);
     worker
         .execute(
             "UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z'",
@@ -677,7 +739,7 @@ fn native_registry_archived_project_removed_member_or_expired_worker_deny_callba
     let tx = worker.transaction().unwrap();
     let mut invoked = false;
     assert!(resolver
-        .with_current_destination(&tx, &registry.runtime_root, &facts(), None, &mut |_| {
+        .with_current_destination(&tx, &registry.runtime_root, &facts, None, &mut |_| {
             invoked = true;
             Ok(())
         })
