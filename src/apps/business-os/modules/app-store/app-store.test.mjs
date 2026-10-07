@@ -685,7 +685,7 @@ test('center column carries the canonical grammar and the shelf contract', () =>
   assert.doesNotMatch(html, /data-apps-count/);
   // Shelf: vendored three-based library loaded lazily with a list fallback;
   // scroll rides the pane well, never the window.
-  assert.match(js, /import\('\.\.\/\.\.\/vendor\/store-shelf\/store-shelf\.mjs'\)/);
+  assert.match(js, /import\('\.\.\/\.\.\/vendor\/store-shelf\/store-shelf\.mjs\?v=[^']+'\)/);
   assert.match(js, /shelfUnavailable/);
   assert.match(js, /const REDUCED_MOTION_QUERY = '\(prefers-reduced-motion: reduce\)'/);
   assert.match(js, /const shelfMode = shouldUseShelf\(cardsMode, state\.shelfUnavailable, prefersReducedMotion\(\)\)/);
