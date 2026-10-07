@@ -53,6 +53,12 @@ Actions:
 }
 ```
 
+`credentialRef` contains only the two typed account-locator fields shown above,
+never credentials. The tool preserves that exact reference when redacting its
+strict receipt, so the emitted binding can be returned unchanged. Generic MCP
+records remain subject to full credential redaction; unknown receipt fields
+are rejected before publication.
+
 The source instance must equal the authenticated gateway workspace. All three
 model references must name the source environment, and model/provider names
 must match. Repository URLs are HTTPS without embedded credentials, queries
