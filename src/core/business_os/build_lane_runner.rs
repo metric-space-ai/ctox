@@ -103,15 +103,23 @@ priority=$(awk -v owner={owner} '$1 == owner {{ print $2; exit }}' "$root/priori
 [[ "$priority" =~ ^[012]$ ]] || priority=2
 ticket="$root/wait/$priority-$(date +%s%N)-native-{task_id}-{run_id}"
 touch -- "$ticket"
-first=$(LC_ALL=C ls -1 "$root/wait" | LC_ALL=C sort | head -1)
-[[ "$first" == "${{ticket##*/}}" ]] || exit 75
+deadline=$((SECONDS + {timeout}))
 leased=0
-for ((slot=1; slot<={slots}; slot++)); do
-    exec 9>"$root/slot-$slot.lock"
-    if flock -n 9; then leased=1; break; fi
-    exec 9>&-
+while [[ "$leased" == 0 ]]; do
+    first=$(LC_ALL=C ls -1 "$root/wait" | LC_ALL=C sort | head -1)
+    if [[ "$first" == "${{ticket##*/}}" ]]; then
+        for ((slot=1; slot<={slots}; slot++)); do
+            exec 9>"$root/slot-$slot.lock"
+            if flock -n 9; then leased=1; break; fi
+            exec 9>&-
+        done
+    fi
+    [[ "$leased" == 0 ]] || break
+    (( SECONDS < deadline )) || exit 75
+    sleep 0.25
 done
-[[ "$leased" == 1 ]] || exit 75
+remaining=$((deadline - SECONDS))
+(( remaining > 0 )) || exit 75
 rm -f -- "$ticket"
 ticket=""
 printf '%s\n' "$slot" > "$run/slot"
@@ -124,7 +132,7 @@ mkdir -- "$TMPDIR"
 export CARGO_TARGET_DIR="$target"
 export CARGO_BUILD_JOBS={jobs} RUST_TEST_THREADS={jobs} CMAKE_BUILD_PARALLEL_LEVEL={jobs}
 export MAKEFLAGS='-j{jobs}'
-timeout --signal=TERM --kill-after=10s {timeout}s {command}
+timeout --signal=TERM --kill-after=10s "$remaining"s {command}
 {delimiter}
 chmod 700 "$run/job.sh"
 # setsid detaches the session; all descriptors are redirected before returning.
@@ -257,7 +265,8 @@ mod tests {
         )
         .unwrap();
         launch(&second);
-        assert_eq!(wait_file(&format!("{}/exit", second.run_dir)).trim(), "75");
+        assert_eq!(wait_file(&format!("{}/exit", second.run_dir)).trim(), "0");
+        assert_eq!(wait_file(&format!("{}/slot", second.run_dir)).trim(), "1");
         assert_eq!(wait_file(&format!("{}/exit", first.run_dir)).trim(), "124");
         let third = plan(
             &grant,
@@ -329,7 +338,9 @@ mod tests {
         .unwrap();
         fs::create_dir_all(&job.source_dir).unwrap();
         launch(&job);
-        let status = wait_file(&format!("{}/exit", job.run_dir));
+        wait_file(&format!("{}/started", job.run_dir));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!std::path::Path::new(&format!("{}/exit", job.run_dir)).exists());
         use std::io::Write;
         holder
             .stdin
@@ -338,11 +349,12 @@ mod tests {
             .write_all(b"release\n")
             .unwrap();
         assert!(holder.wait().unwrap().success());
-        assert_eq!(status.trim(), "75");
+        assert_eq!(wait_file(&format!("{}/exit", job.run_dir)).trim(), "0");
+        assert_eq!(wait_file(&format!("{}/slot", job.run_dir)).trim(), "1");
     }
 
     #[test]
-    fn higher_priority_queue_blocks_unknown_owner_and_tmp_stays_on_lane() {
+    fn higher_priority_queue_waits_until_deadline_and_tmp_stays_on_lane() {
         let (_dir, grant) = fixture();
         fs::create_dir_all(format!("{}/wait", grant.lane_root)).unwrap();
         let queued = format!("{}/wait/0-0000000000000000000-prototype", grant.lane_root);
@@ -354,11 +366,14 @@ mod tests {
             "blocked",
             "source",
             &["true".into()],
-            10,
+            1,
         )
         .unwrap();
         fs::create_dir_all(&blocked.source_dir).unwrap();
         launch(&blocked);
+        wait_file(&format!("{}/started", blocked.run_dir));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!std::path::Path::new(&format!("{}/exit", blocked.run_dir)).exists());
         assert_eq!(wait_file(&format!("{}/exit", blocked.run_dir)).trim(), "75");
         assert!(!std::path::Path::new(&format!("{}/slot", blocked.run_dir)).exists());
         fs::remove_file(queued).unwrap();
