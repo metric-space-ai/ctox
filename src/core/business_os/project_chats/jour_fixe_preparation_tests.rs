@@ -160,6 +160,12 @@ fn replay_after_admission_before_schedule_receipt_retains_metadata_and_one_turn(
 fn latest_meeting_read_is_empty_without_creating_a_meeting_table() -> anyhow::Result<()> {
     let root = fixture()?;
     assert_eq!(latest(root.path())?["meeting"], Value::Null);
+    rejected(read(
+        root.path(),
+        "owner",
+        "explicit-missing-meeting",
+        json!({"project_id":"project","meeting_id":"missing-meeting"}),
+    ));
     let exists: bool = open_store(root.path())?.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_jour_fixe_meetings')", [], |r| r.get(0))?;
     assert!(!exists);
     Ok(())

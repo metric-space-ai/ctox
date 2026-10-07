@@ -208,6 +208,10 @@ pub(in crate::business_os) fn read(
     );
     let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_jour_fixe_meetings')", [], |r| r.get(0))?;
     if !exists {
+        ensure!(
+            query.meeting_id.is_none(),
+            "meeting unavailable to this project owner"
+        );
         return Ok(json!({"ok":true,"meeting":null}));
     }
     let raw: Option<(String, Option<String>)> = if let Some(id) = &query.meeting_id {
