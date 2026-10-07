@@ -8670,7 +8670,7 @@ mod tests {
         fs::write(specialized_dir.join("target.json"), "{}")?;
 
         let (resolved_dir, resolved_script) = outbound_find_bundled_scrape_target_dir(
-            unavailable.path(),
+            temp.path(),
             "google.de",
             "google-de",
             Some("https://www.google.de/"),
