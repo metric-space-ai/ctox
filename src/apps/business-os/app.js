@@ -14454,12 +14454,12 @@ function boundedWorkjetProjectMetadata(request) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new Error('Invalid Workjet project info.');
       }
-      assertWorkjetProjectPayloadKeys(value, new Set(['description', 'goal', 'phase', 'status']));
+      assertWorkjetProjectPayloadKeys(value, new Set(['summary', 'description', 'goal', 'phase', 'status']));
       const info = {};
-      for (const [field, limit] of [['description', 4096], ['goal', 4096], ['phase', 128], ['status', 128]]) {
+      for (const [field, limit] of [['summary', 4096], ['description', 4096], ['goal', 4096], ['phase', 128], ['status', 128]]) {
         if (Object.hasOwn(value, field) && value[field] !== null) {
           const text = value[field];
-          const multiline = field === 'description' || field === 'goal';
+          const multiline = field === 'summary' || field === 'description' || field === 'goal';
           if (typeof text !== 'string' || [...text.trim()].length > limit
             || (multiline ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u : /[\u0000-\u001f\u007f]/u).test(text)) {
             throw new Error(`Invalid Workjet project info.${field}.`);

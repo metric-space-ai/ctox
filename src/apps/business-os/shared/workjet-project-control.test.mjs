@@ -297,6 +297,21 @@ test('configuration preserves omission versus explicit null at the command bound
   }
 });
 
+test('project info summary follows the same configuration corpus as native upsert', async () => {
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-project-configuration-v1.json', import.meta.url), 'utf8'));
+  for (const info of corpus.valid) {
+    const fixture = projectConfigurationFixture();
+    const result = await fixture.invoke(projectConfigurationRequest({ info }));
+    assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].payload.info)), info);
+    assert.deepEqual(result.project.info, info);
+  }
+  for (const info of corpus.invalid) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ info })));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
 test('project configuration rejects forged authority and invalid metadata before dispatch', async () => {
   for (const extra of [
     { ownerUserId: 'foreign' }, { owner_user_id: 'foreign' }, { archived: false },
