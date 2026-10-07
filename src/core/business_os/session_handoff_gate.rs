@@ -295,7 +295,12 @@ impl SessionHandoffGate for NativeSessionHandoffGate {
                 }
                 self.authorize_with_conn(conn, request, identity)
             })();
-            audit_decision(conn, request, identity, &decision)?;
+            if let Err(audit_denial) = audit_decision(conn, request, identity, &decision) {
+                // An allowed decision can never escape an audit failure. If
+                // authority was already unavailable, preserve that denial:
+                // absent/blank stores cannot also persist their own failure.
+                return Err(decision.err().unwrap_or(audit_denial));
+            }
             decision
         })
     }
@@ -409,6 +414,11 @@ mod tests {
                 gateway_account_id TEXT NOT NULL,
                 model_id TEXT NOT NULL
             );
+            CREATE TABLE business_events (
+                event_id TEXT PRIMARY KEY, collection TEXT NOT NULL,
+                record_id TEXT NOT NULL, command_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL, observed_at_ms INTEGER NOT NULL
+            );
             CREATE TABLE business_permission_grants (
                 active INTEGER, permission TEXT, scope_type TEXT, scope_id TEXT,
                 subject_type TEXT, subject_id TEXT
@@ -521,11 +531,22 @@ mod tests {
         fixture
             .conn
             .execute(
-                "UPDATE business_session_handoff_bindings SET source_identity=?1",
+                "UPDATE business_session_handoff_bindings SET side='target',
+                 target_identity=?1,target_principal_user_id='alice'",
                 [identity.public_identity()],
             )
             .unwrap();
-        let mut request = request(&fixture, SessionHandoffPhase::Disclose);
+        // These minimal fixtures isolate issuer/store fencing on the Receive
+        // phase. Disclosure provenance is exercised through the actual Core
+        // capture regression in guest_registry_source_handoff_tests.
+        fixture
+            .conn
+            .execute(
+                "UPDATE business_permission_grants SET permission=?1",
+                [BusinessOsPermission::SessionHandoffReceive.as_str()],
+            )
+            .unwrap();
+        let mut request = request(&fixture, SessionHandoffPhase::Receive);
         request.issuer_identity = identity.public_identity();
         let path = business_os_store_path(root.path());
         fixture
@@ -623,7 +644,7 @@ mod tests {
         fixture
             .writer
             .execute(
-                "UPDATE business_session_handoff_bindings SET source_identity=?1, revision=4",
+                "UPDATE business_session_handoff_bindings SET target_identity=?1, revision=4",
                 [rotated.public_identity()],
             )
             .unwrap();
