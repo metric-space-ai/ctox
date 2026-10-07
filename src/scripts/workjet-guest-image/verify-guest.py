@@ -67,6 +67,9 @@ def main():
     out = args.out.resolve()
     if any(c in str(out) for c in ",\n\r"):
         raise ValueError("private QEMU socket paths cannot contain keyval delimiters")
+    # Multiple guest CPUs contend on the single TCG execution thread.
+    # Keep KVM's two vCPUs; explicit software emulation uses one.
+    vcpus = 1 if args.accel == "tcg" else 2
     # Explicit software emulation needs longer cold-boot/shutdown windows.
     # The whole probe still has one 600s deadline and always reaps its child.
     boot_timeout = 360 if args.accel == "tcg" else 120
@@ -76,6 +79,7 @@ def main():
     receipt = dict(schema="ctox.guest_image_component_probe.v1", scope="isolated image/endpoint only",
                    owner_thread="01a0879f-fa04-7a72-a9be-f471c2df5471",
                    guest_id=guest_id, acceleration=args.accel,
+                   vcpus=vcpus,
                    base_sha256=args.sha256, started=time.time(),
                    boot_timeout_seconds=boot_timeout, desktop_settle_seconds=desktop_settle,
                    shutdown_timeout_seconds=shutdown_timeout,
@@ -109,7 +113,7 @@ def main():
         qmp_listener, guest_listener = listener("qmp.sock"), listener("guest.sock")
         command = ["/usr/bin/qemu-system-x86_64", "-machine", "pc", "-accel",
                    "kvm" if args.accel == "kvm" else "tcg,thread=single",
-                   "-m", "4096", "-smp", "2", "-fw_cfg",
+                   "-m", "4096", "-smp", str(vcpus), "-fw_cfg",
                    "name=opt/org.ctox/guest-startup,file=" + str(startup),
                    "-nodefaults", "-no-user-config", "-display", "none",
                    "-serial", "file:" + str(out / "boot-serial.log"),
