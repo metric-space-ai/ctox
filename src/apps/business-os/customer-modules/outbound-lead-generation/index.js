@@ -29,6 +29,7 @@ import { createCollectionReloader } from './collection-reloader.mjs';
 import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } from './lead-list-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
+import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -1632,7 +1633,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
       // Keep the last complete data, but never present a rejected read as
       // empty/successful. One failed collection must not discard healthy reads.
       applied.set(key, lauf);
-      readErrors.set(key, String(outcome.reason?.message || outcome.reason));
+      readErrors.set(key, readErrorEntry(readErrors.get(key), outcome.reason));
       failures.push(key);
     }
   }
@@ -1725,7 +1726,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration) {
     if (failures.length) {
       throw Object.assign(new Error('Daten konnten nicht geladen werden: ' + failures.join(', ')), {
         code: 'OUTBOUND_COLLECTION_READ_FAILED', failedKeys: failures,
-        details: Object.fromEntries(failures.map(key => [key, readErrors.get(key)])),
+        details: Object.fromEntries(failures.map(key => [key, readErrors.get(key)?.message])),
       });
     }
   }
@@ -1965,12 +1966,13 @@ function renderSyncLine() {
   const line = state.ctx.host.querySelector('[data-sync-line]');
   if (!line) return;
   const waiting = state.syncWaitingCollections.size;
-  if (state.collectionReadErrors?.size) {
+  const visibleErrors = visibleReadErrorKeys(state.collectionReadErrors);
+  if (visibleErrors.length) {
     const labels = { leads: 'Leads', sources: 'Quellen', adapters: 'Adapter', imports: 'Kampagnen', researchPolicies: 'Einstellungen' };
-    const failed = [...state.collectionReadErrors.keys()].map(key => labels[key] || key).join(', ');
+    const failed = visibleErrors.map(key => labels[key] || key).join(', ');
     line.innerHTML = `${escapeHtml(failed)} konnten nicht geladen werden. Der vorhandene Stand bleibt erhalten. <button class="leadgen-approve-link" data-action="retry-sync">Neu verbinden</button>`;
     line.className = 'is-error';
-  } else if (state.syncPending) {
+  } else if (state.syncPending || state.collectionReadErrors?.size) {
     line.textContent = `${state.syncMessage || 'Daten werden verbunden'} (${REPLICATED_COLLECTIONS.length - waiting}/${REPLICATED_COLLECTIONS.length})`;
     line.className = 'is-syncing';
   } else if (state.syncError) {
@@ -12306,7 +12308,10 @@ function setzeHtmlWennGeaendert(element, html) {
 // „Noch keine Leads importiert“ da, obwohl 12 Kampagnen gleich kamen.
 function emptyCollectionText(keys, loadingText, emptyText, errorText) {
   // A failed read is not a pending read, even while other collections reconnect.
-  if (keys.some(key => state.collectionReadErrors?.has(key))) return errorText;
+  // A transient failure during a CTOX (re)start stays "loading" for a grace period.
+  const visibleErrors = visibleReadErrorKeys(state.collectionReadErrors);
+  if (keys.some(key => visibleErrors.includes(key))) return errorText;
+  if (keys.some(key => state.collectionReadErrors?.has(key))) return loadingText;
   if (keys.every(key => state.reloadAngewendetJeSammlung?.has(key))) return emptyText;
   if (state.syncError) return errorText;
   return datenLadenNoch() ? loadingText : emptyText;
