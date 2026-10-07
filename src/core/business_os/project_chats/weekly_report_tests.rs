@@ -5,8 +5,33 @@ use crate::mission::schedule;
 use chrono::{DateTime, Duration, Utc};
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 
+#[test]
+fn weekly_report_does_not_invent_an_owner_from_a_project_or_thread() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let conn = open_store(root.path())?;
+    assert_eq!(
+        conn.execute("DELETE FROM business_users WHERE user_id='owner'", [])?,
+        1
+    );
+    drop(conn);
+    crate::business_os::reconcile_project_reports(root.path())?;
+    assert!(schedule::list_tasks(root.path())?.is_empty());
+    assert_eq!(count(root.path(), THREADS)?, 1);
+    assert_eq!(count(root.path(), "user_thread_messages")?, 0);
+    Ok(())
+}
+
 fn fixture() -> anyhow::Result<TempDir> {
     let root = supervisor_turns::fixture()?;
+    // Automatic work revalidates a persisted active user. The shared control
+    // fixture has only project/thread records and a trusted local actor.
+    let _ = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Project owner",
+        "admin",
+        store::now_ms() as i64,
+    )?;
     patch_project(root.path(), |v| {
         v["jour_fixe"] = json!({"weekday":1,"time":"13:00","timezone":"Europe/Berlin"})
     })?;
@@ -156,10 +181,10 @@ fn weekly_report_revoked_user_or_conflicting_history_cannot_use_an_old_schedule(
         let first = task(root.path())?;
         let conn = open_store(root.path())?;
         if inactive {
-            conn.execute(
-                "UPDATE business_users SET active=0 WHERE user_id='owner'",
-                [],
-            )?;
+            assert_eq!(
+                conn.execute("UPDATE business_users SET active=0 WHERE user_id='owner'", [])?,
+                1
+            );
         } else {
             let mut thread = outbound_load_record(&conn, THREADS, THREAD)?.unwrap();
             thread["source_record_id"] = json!("another-project");
