@@ -75,6 +75,68 @@ PY
     update-grub
 }
 
+configure_desktop() {
+cat > /usr/local/libexec/ctox-wait-x11 <<'WAIT'
+#!/bin/sh
+set -eu
+# Bounded startup only, no reconnect/watch/restart loop. systemd owns the unit.
+read -r started ignored < /proc/uptime
+deadline=$((${started%%.*} + 180))
+while :; do
+    if /usr/bin/timeout --signal=TERM --kill-after=1s 3s /usr/bin/xdpyinfo -display :0 >/dev/null 2>&1; then
+        printf '%s\n' 'CTOX X11 readiness confirmed'
+        exit 0
+    fi
+    read -r now ignored < /proc/uptime
+    [ "${now%%.*}" -lt "$deadline" ] || break
+    sleep 1
+done
+printf '%s\n' 'CTOX X11 readiness deadline exceeded' >&2
+exit 1
+WAIT
+chmod 0755 /usr/local/libexec/ctox-wait-x11
+cat > /etc/systemd/system/ctox-desktop.service <<'UNIT'
+[Unit]
+Description=CTOX isolated XFCE worker desktop
+Requires=ctox-xorg.service
+BindsTo=ctox-xorg.service
+After=ctox-xorg.service
+[Service]
+Type=simple
+User=ctox-desktop
+Group=ctox-desktop
+RuntimeDirectory=ctox-user
+RuntimeDirectoryMode=0700
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/run/ctox-desktop/Xauthority
+Environment=XDG_RUNTIME_DIR=/run/ctox-user
+Environment=HOME=/home/ctox-desktop
+ExecStartPre=/usr/local/libexec/ctox-wait-x11
+ExecStart=/usr/bin/dbus-run-session -- /usr/bin/xfce4-session
+StandardOutput=journal+console
+StandardError=journal+console
+Restart=no
+TimeoutStartSec=190
+TimeoutStopSec=10
+KillMode=control-group
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
+if [ "${1-}" = --desktop-only ]; then
+    [ "$#" -eq 1 ]
+    [ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-555140a08-v9 ]
+    [ "$(id -u ctox-desktop)" = 1500 ]
+    [ ! -e /etc/ctox/guest-startup.json ]
+    [ -f /etc/systemd/system/ctox-xorg.service ]
+    [ -f /etc/systemd/system/ctox-guest-desktop.service ]
+    configure_desktop
+    rm /etc/ctox-image-build.marker
+    exit 0
+fi
+
+
 if [ "${1-}" = --boot-only ]; then
     [ "$#" -eq 1 ]
     [ "$(cat /etc/ctox-image-build.marker)" = workjet-noble-amd64-20260926-ctox-555140a08-v8 ]
@@ -194,18 +256,7 @@ chmod 0600 /run/ctox-desktop/Xauthority
 
 unset cookie
 AUTH
-cat > /usr/local/libexec/ctox-wait-x11 <<'WAIT'
-#!/bin/sh
-set -eu
-# Bounded startup only, no reconnect/watch/restart loop. systemd owns the unit.
-attempt=0
-while [ "$attempt" -lt 30 ]; do
-    if /usr/bin/xdpyinfo -display :0 >/dev/null 2>&1; then exit 0; fi
-    attempt=$((attempt + 1))
-    sleep 1
-done
-exit 1
-WAIT
+configure_desktop
 chmod 0755 /usr/local/libexec/ctox-prepare-xauthority /usr/local/libexec/ctox-wait-x11
 cat > /etc/systemd/system/ctox-xorg.service <<'UNIT'
 [Unit]
@@ -226,31 +277,7 @@ KillMode=control-group
 [Install]
 WantedBy=multi-user.target
 UNIT
-cat > /etc/systemd/system/ctox-desktop.service <<'UNIT'
-[Unit]
-Description=CTOX isolated XFCE worker desktop
-Requires=ctox-xorg.service
-BindsTo=ctox-xorg.service
-After=ctox-xorg.service
-[Service]
-Type=simple
-User=ctox-desktop
-Group=ctox-desktop
-RuntimeDirectory=ctox-user
-RuntimeDirectoryMode=0700
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/run/ctox-desktop/Xauthority
-Environment=XDG_RUNTIME_DIR=/run/ctox-user
-Environment=HOME=/home/ctox-desktop
-ExecStartPre=/usr/local/libexec/ctox-wait-x11
-ExecStart=/usr/bin/dbus-run-session -- /usr/bin/xfce4-session
-Restart=no
-TimeoutStartSec=40
-TimeoutStopSec=10
-KillMode=control-group
-[Install]
-WantedBy=multi-user.target
-UNIT
+
 cat > /etc/systemd/system/ctox-guest-desktop.service <<'UNIT'
 [Unit]
 Description=CTOX bounded native guest desktop endpoint

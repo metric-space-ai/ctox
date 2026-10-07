@@ -142,6 +142,19 @@
     "Consistent portable checkpoint and real two-host continuation with old-owner fencing and independent durable copies"
   ],
   "approval_scope": "Claude authorized acquisition/build of this fixed Ubuntu input and source-bound recipe plus bounded real guest/two-host verification on2026-10-06. This record supplies no controller/effect authority and is not acceptance evidence. Shared-image deletion, credentials/admin bypass and substituting force-stop for a consistent checkpoint remain outside scope.",
+  "pending_desktop_startup_repair": {
+    "status": "source_fix_pending_postmerge_image_build",
+    "candidate_id": "workjet-noble-amd64-20260926-ctox-555140a08-v9",
+    "setup_sha256": "c8f962b60ecd461789cc24b3d94c53eef62b187438c824f66b9c47e3b630279d",
+    "mode": "--desktop-only",
+    "backing_raw_sha256": "3aab612b59e7c0d2532af1c269d3cf8df9d867b89cb55f1adcf097852c406c5a",
+    "observed_failure": "V8 TCG syslog records ctox-desktop.service start-pre timeout and SIGTERM after its 40-second limit. Xorg.0.log shows initialization from monotonic645.5 through689.967, including software GL initialization. XFCE never started.",
+    "repair": "Require a successful authenticated xdpyinfo query within a finite180-second monotonic deadline. Bound each query to3seconds plus1second kill grace; systemd retains control-group cleanup and a190-second start cap. Report readiness failure to journal and serial console.",
+    "preserved_guards": "Fresh guest assignment, real modesetting display, fixed desktop UID/Xauthority, required Xorg/native dependencies, no automatic restart, native session rejection and owned-child cleanup.",
+    "derivation": "Create a new stopped private overlay over the exact V8 RAW, apply only the shared desktop unit/readiness helper through the exact V9 marker and --desktop-only, verify native113b unchanged and no assigned startup JSON, then fsync a new standalone RAW and record its actual identity. No APT or user/native rebuild.",
+    "product_enrollment_p2p_restore_accepted": false,
+    "next_native_rebuild": "Include Architecture PR314, PR322 and PR327 in the exact host/native source; the retained555 guest-side component artifact is not relabeled as that newer source."
+  },
   "component_probes": {
     "kvm": {
       "host": "gpu3",
@@ -162,9 +175,19 @@
       "mandatory_boot_mounts_succeeded": true,
       "framebuffer_damage_work_warnings_observed": false,
       "owned_qemu_reaped": true,
-      "retry_status": "pending_after_followup_merge",
+      "retry_status": "failed",
+      "retry_receipt_run": "o04-guest-tcg-window-20261007T033916Z",
+      "retry_source_commit": "44b34f5abc5209f7bb6287b938a44c3d1e9a88d0",
       "retry_boot_timeout_seconds": 900,
-      "retry_probe_timeout_seconds": 1200
+      "retry_probe_timeout_seconds": 1200,
+      "retry_owned_qemu_reaped": true,
+      "retry_startup_service_succeeded": true,
+      "retry_xorg_unit_started": true,
+      "retry_desktop_unit_failed": true,
+      "retry_native_endpoint_dependency_failed": true,
+      "retry_graphical_target_reached": true,
+      "retry_actual_frame": "1280x800 black diagnostic frame; no XFCE/native endpoint acceptance",
+      "next_action": "Read the stopped private overlay logs and repair the desktop startup cause; no third timeout-only retry."
     },
     "product_enrollment_p2p_restore_accepted": false
   }
