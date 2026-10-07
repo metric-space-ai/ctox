@@ -442,10 +442,16 @@ export function createDemandLoadingTransport({
     };
   }
 
+  // The native peer rejects an over-limit fetch twice: as the RPC response to
+  // the request (a plain "CODE: message" error without a retryable flag) and as
+  // a retryable rxdb.query.error frame. The response arrives first, so a check
+  // that required `retryable` never retried and handed the failure to the app
+  // (thesen 07.10.2026). These two codes are always retryable on the peer.
   function isRetryableQueryStreamLimit(error) {
     const code = String(error?.code || '');
     const message = String(error?.message || '');
-    return Boolean(error?.retryable) && (code === 'STREAM_LIMIT_EXCEEDED' || message.includes('STREAM_LIMIT_EXCEEDED'));
+    return code === 'STREAM_LIMIT_EXCEEDED' || message.startsWith('STREAM_LIMIT_EXCEEDED:')
+      || (Boolean(error?.retryable) && message.includes('STREAM_LIMIT_EXCEEDED'));
   }
 
   function isRetryableQueryFetch(error) {
@@ -458,8 +464,8 @@ export function createDemandLoadingTransport({
   function isRetryableQueryRateLimited(error) {
     const code = String(error?.code || '');
     const message = String(error?.message || '');
-    return Boolean(error?.retryable)
-      && (code === 'RATE_LIMITED' || message.includes('RATE_LIMITED'));
+    return code === 'RATE_LIMITED' || message.startsWith('RATE_LIMITED:')
+      || (Boolean(error?.retryable) && message.includes('RATE_LIMITED'));
   }
 
   function isRetryableQueryPeerUnavailable(error) {
