@@ -14,7 +14,7 @@
 //! not a retained fence for later asynchronous protected-byte publication.
 //!
 //! What this adapter deliberately does not do: it does not fabricate a
-//! binding (enrollment is a separate authorized act), it does not infer
+//! binding (the local operator enrolls from an actual source capture), it does not infer
 //! account or workspace entitlement from a reachable model route or a sole
 //! configured account, and it does not consume checkpoint bytes. The
 //! operational transfer consumer that must call `SessionHandoffTransfer` is
@@ -224,6 +224,19 @@ impl SessionHandoffGate for NativeSessionHandoffGate {
         // Do not initialize/migrate stores or let separate reads straddle
         // revocation. The signature is made before either fence is released.
         self.with_current_authority(|conn, identity| {
+            if request.phase == SessionHandoffPhase::Disclose {
+                #[cfg(unix)]
+                {
+                    let config = crate::sync_host::handoff_configuration(&self.root)
+                        .map_err(|_| deny("host_unavailable"))?;
+                    super::session_handoff_enrollment::validate_source_decision(
+                        &self.root, conn, &config, identity, request,
+                    )
+                    .map_err(|_| deny("source_authority_changed"))?;
+                }
+                #[cfg(not(unix))]
+                return Err(deny("source_authority_unavailable"));
+            }
             self.authorize_with_conn(conn, request, identity)
         })
     }
