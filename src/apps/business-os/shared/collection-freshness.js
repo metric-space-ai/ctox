@@ -1,4 +1,4 @@
-import { collectionFreshnessFromDiagnostics } from './sync-contract.js?v=20261007-shell-v2-workjet-active-project-list';
+import { collectionFreshnessFromDiagnostics } from './sync-contract.js?v=20261007-shell-v2-workjet-supervisor-binding';
 
 // A warning changes the interpretation of cached data, not its availability.
 export function renderCollectionFreshnessWarning(warning, { collections = [], diagnostics, language = 'de' } = {}) {

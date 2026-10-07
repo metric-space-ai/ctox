@@ -44,9 +44,10 @@ pub(super) fn apply(
     let payload: BindPayload = serde_json::from_value(command.payload.clone())?;
     let project = owned_project(conn, &payload.project_id, owner, true)?;
     let project_id = text(&project, "id")?;
-    let thread_id = uuid::Uuid::parse_str(&payload.thread_id)
-        .context("thread_id must be the existing CodeThread UUID")?
-        .to_string();
+    let uuid = uuid::Uuid::parse_str(&payload.thread_id)
+        .context("thread_id must be the existing CodeThread UUID")?;
+    ensure!(!uuid.is_nil(), "thread_id cannot be a nil UUID");
+    let thread_id = uuid.to_string();
     ensure!(thread_id == payload.thread_id, "thread_id must be a canonical UUID");
     let binding = SupervisorBinding {
         project_id: project_id.to_owned(),

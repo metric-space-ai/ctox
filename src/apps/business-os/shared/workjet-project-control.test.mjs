@@ -826,3 +826,61 @@ test('Workjet does not dispatch after session replacement during data-plane read
   await assert.rejects(fixture.invoke(projectChatRequest()), /session changed/);
   assert.equal(fixture.commands.length, 0);
 });
+
+const supervisorThread = 'cc6cfe73-2824-4360-9daf-3b3efb079931';
+function supervisorBindingFixture(change = () => {}) {
+  const commands = [];
+  const state = {
+    session: { id: 'owner-1' }, db: { collection: () => ({}) },
+    sync: { async startCollection() { return {}; } },
+    commandBus: { async dispatch(command, options) {
+      commands.push({ command, options });
+      const receipt = {
+        command_id: command.id, status: 'completed', ok: true,
+        target_record_id: command.record_id, payload: command.payload,
+        result: { ok: true, contract: 'ctox.workjet.supervisor_binding.v1', binding: {
+          project_id: command.payload.project_id, thread_id: command.payload.thread_id,
+          thread_key: `business-os/threads/${command.payload.thread_id}`,
+        } },
+      };
+      change(receipt, state);
+      return receipt;
+    } },
+  };
+  const context = { state, actorContext: session => ({ id: session.id }), URL };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
+}
+function supervisorBindingRequest(extra = {}) {
+  return { action: 'project.supervisor.bind', commandId: 'bind-1', projectId: 'project-1', threadId: supervisorThread, ...extra };
+}
+test('supervisor registration uses authenticated command plane and returns the existing UUID', async () => {
+  const fixture = supervisorBindingFixture();
+  const result = await fixture.invoke(supervisorBindingRequest());
+  const { command, options } = JSON.parse(JSON.stringify(fixture.commands[0]));
+  assert.equal(command.command_type, 'ctox.workjet.project.supervisor.bind');
+  assert.equal(command.client_context.actor.id, 'owner-1');
+  assert.deepEqual(command.payload, { project_id: 'project-1', thread_id: supervisorThread });
+  assert.equal(options.until, 'terminal');
+  assert.deepEqual(result.binding, {
+    contract: 'ctox.workjet.supervisor_binding.v1', projectId: 'project-1',
+    threadId: supervisorThread, threadKey: `business-os/threads/${supervisorThread}`,
+  });
+});
+test('supervisor registration rejects fabricated input and uncorrelated native results', async () => {
+  for (const extra of [{ ownerUserId: 'foreign' }, { threadId: 'fake-session' }, { threadId: '00000000-0000-0000-0000-000000000000' }]) {
+    const fixture = supervisorBindingFixture();
+    await assert.rejects(fixture.invoke(supervisorBindingRequest(extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const mutate of [
+    receipt => { receipt.command_id = 'foreign'; },
+    receipt => { receipt.result.binding.project_id = 'foreign'; },
+    receipt => { receipt.result.binding.thread_key = 'made-up'; },
+    receipt => { receipt.payload = { ...receipt.payload, thread_id: 'foreign' }; },
+    receipt => { receipt.status = 'pending'; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) {
+    await assert.rejects(supervisorBindingFixture(mutate).invoke(supervisorBindingRequest()));
+  }
+});
