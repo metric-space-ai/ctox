@@ -186,7 +186,7 @@
       "status": "pending_postmerge_image_build",
       "clocksource": "acpi_pm",
       "kernel_parameter_reference": "https://www.kernel.org/doc/html/v6.8/admin-guide/kernel-parameters.html",
-      "setup_sha256": "2ac5d274f3f9acf649605adc97410aa4c83bfa49c8c560890a132e881a11b976",
+      "setup_sha256": "1d25bb32499f4754fb007a06ef015d7438219a23ad908320d8fcca6a0fee730d",
       "source_base_sha256": "2ae4513a1ec913ba21d66bbcbe3c5a88a56824b7415c7f2ec1c1b8d2d9c89667",
       "retained_native_sha256": "113b92756e094c8bdaf7ce120dbc76d57d1a4891b0548a9df6610723cdf35f3c",
       "ordinary_retry_run": "o04-guest-observation-retry-20261007T073845Z",

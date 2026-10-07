@@ -59,7 +59,7 @@ grub.write_text('''ctox_without_guest_overrides() {
     set -f
     for ctox_argument in $1; do
         case "$ctox_argument" in
-            console=*|clocksource=*) : ;;
+            console=*|clocksource=*|fbcon=*) : ;;
             *) printf '%s ' "$ctox_argument" ;;
         esac
     done
