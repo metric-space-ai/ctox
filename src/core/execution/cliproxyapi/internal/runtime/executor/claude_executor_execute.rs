@@ -1776,7 +1776,8 @@ impl ClaudeSubscriptionAccountPool {
         body: Vec<u8>,
         stream: bool,
     ) -> Result<ClaudePooledExecutionOutcome, ClaudeAccountPoolError> {
-        self.execute_inner(Some(target), model, body, stream).await
+        self.execute_inner(Some(target), model, body, stream, None)
+            .await
     }
 
     pub async fn execute_configured(
@@ -1785,13 +1786,50 @@ impl ClaudeSubscriptionAccountPool {
         body: Vec<u8>,
         stream: bool,
     ) -> Result<ClaudePooledExecutionOutcome, ClaudeAccountPoolError> {
-        self.execute_inner(None, model, body, stream).await
+        self.execute_inner(None, model, body, stream, None).await
+    }
+
+    /// Builds caller context only after selecting the actual account, and
+    /// rebuilds it for each failover attempt. Headers and the original body
+    /// remain request-owned; they cannot supply a selected auth identity.
+    pub async fn execute_configured_with_request_context(
+        &self,
+        model: &str,
+        body: Vec<u8>,
+        stream: bool,
+        original_body: &[u8],
+        headers: &Headers,
+    ) -> Result<ClaudePooledExecutionOutcome, ClaudeAccountPoolError> {
+        self.execute_inner(None, model, body, stream, Some((original_body, headers)))
+            .await
     }
 
     pub async fn execute_stream_configured(
         &self,
         model: &str,
         body: Vec<u8>,
+    ) -> Result<ClaudePooledStreamExecutionOutcome, ClaudeAccountPoolError> {
+        self.execute_stream_configured_inner(model, body, None)
+            .await
+    }
+
+    /// Streaming counterpart with the same account-local context boundary.
+    pub async fn execute_stream_configured_with_request_context(
+        &self,
+        model: &str,
+        body: Vec<u8>,
+        original_body: &[u8],
+        headers: &Headers,
+    ) -> Result<ClaudePooledStreamExecutionOutcome, ClaudeAccountPoolError> {
+        self.execute_stream_configured_inner(model, body, Some((original_body, headers)))
+            .await
+    }
+
+    async fn execute_stream_configured_inner(
+        &self,
+        model: &str,
+        body: Vec<u8>,
+        request_context: Option<(&[u8], &Headers)>,
     ) -> Result<ClaudePooledStreamExecutionOutcome, ClaudeAccountPoolError> {
         let mut remaining = self.candidates.clone();
         let mut attempted_auth_ids = Vec::new();
@@ -1815,8 +1853,23 @@ impl ClaudeSubscriptionAccountPool {
                 .and_then(|targets| targets.get(&selected.auth_id))
                 .cloned()
                 .ok_or(ClaudeAccountPoolError::Configuration)?;
+            let context = request_context.map(|(original_body, headers)| {
+                ClaudeExecutionRequestContext::from_provider_request(
+                    selected.auth_id.clone(),
+                    headers.clone(),
+                    original_body,
+                    &body,
+                    Default::default(),
+                    Default::default(),
+                )
+            });
             match executor
-                .execute_stream_for_model(target, Some(model), body.clone())
+                .execute_stream_for_model_with_context(
+                    target,
+                    Some(model),
+                    body.clone(),
+                    context.as_ref(),
+                )
                 .await
             {
                 Ok(outcome) => {
@@ -1859,6 +1912,7 @@ impl ClaudeSubscriptionAccountPool {
         model: &str,
         body: Vec<u8>,
         stream: bool,
+        request_context: Option<(&[u8], &Headers)>,
     ) -> Result<ClaudePooledExecutionOutcome, ClaudeAccountPoolError> {
         let mut remaining = self.candidates.clone();
         let mut attempted_auth_ids = Vec::new();
@@ -1883,8 +1937,24 @@ impl ClaudeSubscriptionAccountPool {
                 .cloned()
                 .or_else(|| fallback_target.clone())
                 .ok_or(ClaudeAccountPoolError::Configuration)?;
+            let context = request_context.map(|(original_body, headers)| {
+                ClaudeExecutionRequestContext::from_provider_request(
+                    selected.auth_id.clone(),
+                    headers.clone(),
+                    original_body,
+                    &body,
+                    Default::default(),
+                    Default::default(),
+                )
+            });
             match executor
-                .execute_for_model(target, Some(model), body.clone(), stream)
+                .execute_for_model_with_context(
+                    target,
+                    Some(model),
+                    body.clone(),
+                    stream,
+                    context.as_ref(),
+                )
                 .await
             {
                 Ok(outcome) => {
@@ -2310,6 +2380,204 @@ mod tests {
         serde_json::to_vec(&serde_json::json!({"id":"msg-alias","type":"message","content":[{"type":"tool_use","id":"call","name":alias,"input":{}}]})).unwrap()
     }
 
+    const CONFIGURED_CONTEXT_SSE: &[u8] = b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-context\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"sonnet\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n\
+data: {\"type\":\"message_stop\"}\n\n";
+
+    fn configured_context_body(input: &str, stream: bool) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "model": "sonnet", "input": input, "stream": stream,
+            "metadata": { "user_id": serde_json::json!({
+                "device_id": "0".repeat(64),
+                "account_uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "session_id": "11111111-2222-4333-8444-555555555555"
+            }).to_string() }
+        }))
+        .unwrap()
+    }
+
+    fn configured_context_headers(session: &str) -> Headers {
+        Headers::from([
+            (
+                "User-Agent".into(),
+                vec!["claude-cli/2.1.280 (external, cli)".into()],
+            ),
+            ("X-App".into(), vec!["cli".into()]),
+            ("Anthropic-Beta".into(), vec!["claude-code-20250219".into()]),
+            ("x-claude-code-session-id".into(), vec![session.into()]),
+            ("x-claude-code-agent-id".into(), vec!["writer".into()]),
+        ])
+    }
+
+    #[tokio::test]
+    async fn configured_context_responses_isolates_parallel_sessions_and_reuses_continuation() {
+        use crate::sdk::api::handlers::openai::openai_responses_handlers::{
+            OpenAiResponsesClaudeHandler, OpenAiResponsesRouteResponse,
+        };
+        let first = thread_fixture_transport(vec![200, 200, 200], CONFIGURED_CONTEXT_SSE);
+        let second = thread_fixture_transport(vec![200], CONFIGURED_CONTEXT_SSE);
+        let (pool, _) = thread_fixture_pool(first.clone(), second.clone(), None);
+        let handler = OpenAiResponsesClaudeHandler::new(Arc::new(pool));
+        let body_a = configured_context_body("request-a", false);
+        let body_b = configured_context_body("request-b", false);
+        let headers_a = configured_context_headers("session-a");
+        let headers_b = configured_context_headers("session-b");
+        let (a, b) = tokio::join!(
+            handler.handle_route_with_headers(&body_a, &headers_a),
+            handler.handle_route_with_headers(&body_b, &headers_b),
+        );
+        for response in [
+            a,
+            b,
+            handler.handle_route_with_headers(&body_a, &headers_a).await,
+        ] {
+            let OpenAiResponsesRouteResponse::Buffered(response) = response else {
+                panic!("expected buffered Responses reply");
+            };
+            assert_eq!(response.status(), 200);
+        }
+        let sessions = first.session_ids.lock().unwrap();
+        let bodies = first.bodies.lock().unwrap();
+        assert_eq!(sessions.len(), 3);
+        let a_sessions = bodies
+            .iter()
+            .zip(sessions.iter())
+            .filter(|(body, _)| String::from_utf8_lossy(body).contains("request-a"))
+            .map(|(_, session)| session)
+            .collect::<Vec<_>>();
+        let b_sessions = bodies
+            .iter()
+            .zip(sessions.iter())
+            .filter(|(body, _)| String::from_utf8_lossy(body).contains("request-b"))
+            .map(|(_, session)| session)
+            .collect::<Vec<_>>();
+        assert_eq!(a_sessions.len(), 2);
+        assert_eq!(b_sessions.len(), 1);
+        assert_eq!(a_sessions[0], a_sessions[1]);
+        assert_ne!(a_sessions[0], b_sessions[0]);
+        assert!(second.authorizations.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn configured_context_responses_keeps_session_on_401_refresh_replay() {
+        use crate::sdk::api::handlers::openai::openai_responses_handlers::{
+            OpenAiResponsesClaudeHandler, OpenAiResponsesRouteResponse,
+        };
+        let first = thread_fixture_transport(vec![401, 200], CONFIGURED_CONTEXT_SSE);
+        let second = thread_fixture_transport(vec![200], CONFIGURED_CONTEXT_SSE);
+        let (pool, _) = thread_fixture_pool(first.clone(), second.clone(), None);
+        let handler = OpenAiResponsesClaudeHandler::new(Arc::new(pool));
+        let response = handler
+            .handle_route_with_headers(
+                &configured_context_body("request-refresh", false),
+                &configured_context_headers("session-refresh"),
+            )
+            .await;
+        let OpenAiResponsesRouteResponse::Buffered(response) = response else {
+            panic!("expected buffered Responses reply");
+        };
+        assert_eq!(response.status(), 200);
+        let sessions = first.session_ids.lock().unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0], sessions[1]);
+        assert_eq!(
+            *first.authorizations.lock().unwrap(),
+            ["Bearer access-old", "Bearer access-new"]
+        );
+        assert!(second.authorizations.lock().unwrap().is_empty());
+    }
+
+    struct ConfiguredContextStreamTransport {
+        status: u16,
+        sessions: Mutex<Vec<String>>,
+    }
+
+    impl ClaudeMessagesStreamingTransport for ConfiguredContextStreamTransport {
+        fn execute_stream<'a>(
+            &'a self,
+            request: &'a ClaudeMessagesRequest,
+            _timeout: Duration,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            ClaudeMessagesStreamResponse,
+                            ClaudeMessagesTransportFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.sessions
+                    .lock()
+                    .unwrap()
+                    .push(request.fingerprint().session_id().to_owned());
+                let (sender, receiver) = mpsc::channel(1);
+                if self.status == 200 {
+                    sender
+                        .try_send(Ok(CONFIGURED_CONTEXT_SSE.to_vec()))
+                        .unwrap();
+                }
+                drop(sender);
+                Ok(ClaudeMessagesStreamResponse::new(
+                    self.status,
+                    None,
+                    receiver,
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_context_responses_stream_retains_session_on_real_account_failover() {
+        use crate::sdk::api::handlers::openai::openai_responses_handlers::{
+            OpenAiResponsesClaudeHandler, OpenAiResponsesRouteResponse,
+        };
+        let first_stream = Arc::new(ConfiguredContextStreamTransport {
+            status: 429,
+            sessions: Mutex::new(Vec::new()),
+        });
+        let second_stream = Arc::new(ConfiguredContextStreamTransport {
+            status: 200,
+            sessions: Mutex::new(Vec::new()),
+        });
+        let (pool, cooldowns) = thread_fixture_pool(
+            thread_fixture_transport(vec![200], CONFIGURED_CONTEXT_SSE),
+            thread_fixture_transport(vec![200], CONFIGURED_CONTEXT_SSE),
+            Some((first_stream.clone(), second_stream.clone())),
+        );
+        let handler = OpenAiResponsesClaudeHandler::new(Arc::new(pool));
+        let response = handler
+            .handle_route_with_headers(
+                &configured_context_body("request-stream", true),
+                &configured_context_headers("session-stream"),
+            )
+            .await;
+        let OpenAiResponsesRouteResponse::Stream(mut stream) = response else {
+            panic!("expected streaming Responses reply");
+        };
+        let mut output = Vec::new();
+        while let Some(chunk) = stream.next_chunk().await {
+            output.extend(chunk);
+        }
+        assert!(String::from_utf8_lossy(&output).contains("response.completed"));
+        let first_sessions = first_stream.sessions.lock().unwrap();
+        let second_sessions = second_stream.sessions.lock().unwrap();
+        assert_eq!(first_sessions.len(), 1);
+        assert_eq!(second_sessions.len(), 1);
+        assert_eq!(first_sessions[0], second_sessions[0]);
+        let records = cooldowns.0.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].auth_id, "account-a");
+        assert_eq!(
+            records[0].last_error.as_ref().unwrap().http_status,
+            Some(429)
+        );
+    }
     #[tokio::test]
     async fn candidate_claude_thread_alias_unary_restores_names_after_create() {
         let transport = thread_fixture_transport(vec![200, 200], &alias_response_body());
