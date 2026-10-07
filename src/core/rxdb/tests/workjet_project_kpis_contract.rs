@@ -32,4 +32,12 @@ fn prompted_kpis_roundtrip_keeps_source_computation_and_freshness() {
         serde_json::to_value(project).unwrap(),
         fixture["valid_cases"][0]["value"]
     );
+    for case in fixture["valid_cases"].as_array().unwrap() {
+        if case["type"] == "KpiSnapshot" {
+            let snapshot: contract::KpiSnapshot =
+                serde_json::from_value(case["value"].clone()).unwrap();
+            snapshot.validate().unwrap();
+            assert_eq!(serde_json::to_value(snapshot).unwrap(), case["value"]);
+        }
+    }
 }

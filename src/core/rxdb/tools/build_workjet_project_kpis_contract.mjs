@@ -26,6 +26,7 @@ for (const [name, type] of Object.entries(spec.types)) {
   rust += '#[serde(deny_unknown_fields)]\n' + `pub(crate) struct ${name} {\n`;
   for (const [field, f] of Object.entries(type.fields)) {
     if (f.optional) rust += '#[serde(default, skip_serializing_if = "Option::is_none")]\n';
+    if (f.type === 'f64' && !f.optional) rust += '#[serde(serialize_with = "serialize_wire_number")]\n';
     rust += `pub(crate) ${field}: ${f.optional ? `Option<${f.type}>` : f.type},\n`;
   }
   rust += `}\nimpl WireValidate for ${name} { fn validate(&self) -> Result<(), String> {\n`;
@@ -34,7 +35,7 @@ for (const [name, type] of Object.entries(spec.types)) {
     rust += 'value.validate()?;\n';
     const expr = { min_chars:'value.chars().count()', max_chars:'value.chars().count()', min_items:'value.len()', max_items:'value.len()', minimum:'*value', maximum:'*value' };
     for (const [key, op] of Object.entries({min_chars:'<',max_chars:'>',min_items:'<',max_items:'>',minimum:'<',maximum:'>'})) {
-      if (f[key] === undefined) continue;
+      if (f[key] === undefined || (f.type === 'u64' && key === 'minimum' && f[key] === 0)) continue;
       const bound = f.type === 'f64' && ['minimum','maximum'].includes(key) ? Number(f[key]).toFixed(1) : String(f[key]);
       rust += `if ${expr[key]} ${op} ${bound} { return Err(${JSON.stringify(name+'.'+field+' violates '+key)}.into()); }\n`;
     }
@@ -49,6 +50,13 @@ rust += '_ => Err("unknown contract type".into()),\n} }\n';
 const rulesJson = JSON.stringify(spec.rules);
 rust += `\nfn rules() -> &'static serde_json::Value { static RULES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new(); RULES.get_or_init(|| serde_json::from_str(r#"${rulesJson}"#).expect("generated KPI rules")) }\n`;
 rust += String.raw`
+// JSON/JS has one numeric type. Preserve integral measurements as integers,
+// avoiding a representation-only change (1284 -> 1284.0) on native persistence.
+fn serialize_wire_number<S: serde::Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    if !value.is_finite() { return Err(serde::ser::Error::custom("non-finite measurement")); }
+    if value.abs()<=9_007_199_254_740_991.0 && value.fract()==0.0 { serializer.serialize_i64(*value as i64) }
+    else { serializer.serialize_f64(*value) }
+}
 fn at<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let mut cursor = value;
     for key in path.split('.') { cursor = cursor.get(key)?; }

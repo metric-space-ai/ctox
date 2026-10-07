@@ -193,6 +193,7 @@ pub(crate) struct SourceEvidence {
     pub(crate) snapshot_revision: String,
     pub(crate) evidence_ref: String,
     pub(crate) observed_at_ms: i64,
+    #[serde(serialize_with = "serialize_wire_number")]
     pub(crate) value: f64,
 }
 impl WireValidate for SourceEvidence {
@@ -390,6 +391,7 @@ pub(crate) struct KpiSnapshot {
     pub(crate) kpi_id: String,
     pub(crate) prompt_revision: u64,
     pub(crate) label: String,
+    #[serde(serialize_with = "serialize_wire_number")]
     pub(crate) value: f64,
     pub(crate) unit: String,
     pub(crate) display_value: String,
@@ -578,9 +580,6 @@ impl WireValidate for ProjectKpis {
         {
             let value = &self.revision;
             value.validate()?;
-            if *value < 0 {
-                return Err("ProjectKpis.revision violates minimum".into());
-            }
         }
         {
             let value = &self.items;
@@ -630,9 +629,6 @@ impl WireValidate for ConfigureKpisRequest {
         {
             let value = &self.expected_revision;
             value.validate()?;
-            if *value < 0 {
-                return Err("ConfigureKpisRequest.expected_revision violates minimum".into());
-            }
         }
         {
             let value = &self.prompts;
@@ -700,9 +696,6 @@ impl WireValidate for ResolveKpiRequest {
         {
             let value = &self.expected_revision;
             value.validate()?;
-            if *value < 0 {
-                return Err("ResolveKpiRequest.expected_revision violates minimum".into());
-            }
         }
         validate_rules(
             "ResolveKpiRequest",
@@ -766,6 +759,21 @@ fn rules() -> &'static serde_json::Value {
     RULES.get_or_init(|| serde_json::from_str(r#"{"PromptInput":{"nonblank":["kpi_id","prompt"]},"KpiPrompt":{"nonblank":["kpi_id","prompt"]},"Computation":{"lte":[["window_start_ms","window_end_ms"]],"unique":[{"field":"input_keys"}]},"Freshness":{"lt":[["calculated_at_ms","refresh_at_ms"]],"lte":[["refresh_at_ms","fresh_until_ms"]]},"KpiSnapshot":{"unique":[{"field":"sources","key":"source_key"}],"every_eq":[{"field":"sources","key":"project_id","target":"project_id"}],"every_lte":[{"field":"sources","key":"observed_at_ms","target":"freshness.calculated_at_ms"}],"calculate":true},"KpiResult":{"state_fields":{"field":"status","states":{"resolving":{"forbidden":["snapshot","reason_code","message"]},"ready":{"required":["snapshot"],"forbidden":["reason_code","message"]},"stale":{"required":["snapshot","reason_code","message"]},"missing_source":{"required":["reason_code","message"],"forbidden":["snapshot"]},"failed":{"required":["reason_code","message"],"forbidden":["snapshot"]}}}},"KpiRecord":{"eq":[["prompt.kpi_id","result.snapshot.kpi_id"],["prompt.revision","result.snapshot.prompt_revision"]]},"ProjectKpis":{"unique":[{"field":"items","key":"prompt.kpi_id"}],"every_eq":[{"field":"items","key":"result.snapshot.project_id","target":"project_id"}]},"ConfigureKpisRequest":{"unique":[{"field":"prompts","key":"kpi_id"}]}}"#).expect("generated KPI rules"))
 }
 
+// JSON/JS has one numeric type. Preserve integral measurements as integers,
+// avoiding a representation-only change (1284 -> 1284.0) on native persistence.
+fn serialize_wire_number<S: serde::Serializer>(
+    value: &f64,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    if !value.is_finite() {
+        return Err(serde::ser::Error::custom("non-finite measurement"));
+    }
+    if value.abs() <= 9_007_199_254_740_991.0 && value.fract() == 0.0 {
+        serializer.serialize_i64(*value as i64)
+    } else {
+        serializer.serialize_f64(*value)
+    }
+}
 fn at<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let mut cursor = value;
     for key in path.split('.') {
