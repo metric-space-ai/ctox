@@ -7,8 +7,14 @@ computers never receive that connection's Owner bearer or a model secret.
 Its native checks require the persisted active source Owner/Admin, current
 `CtoxTaskCreate` and `IntegrationsManage` policy, the source owner's active
 project and its exact repository, and an assigned non-agentless workstation or
-self-hosted computer belonging to that owner. Browser capability chips and the
-Cargo build adapter are not worker permissions. Unknown native users cannot
+self-hosted computer belonging to that owner with a valid typed native `build`
+entry in `capability_config`. Missing, storage-only or malformed settings deny
+issue/claim/revalidation/renewal; removing or changing that build configuration
+fences an existing permit. The native capability contract has no separate
+enabled/ready flag: its validated operational configuration is eligibility;
+the existing build adapter still probes endpoint readiness, acquires its slot
+and checks resource floors before execution. Browser capability chips alone
+are not worker permissions. Unknown native users cannot
 be created by a claimed MCP actor, and command-scoped sessions cannot admit
 independent workers.
 

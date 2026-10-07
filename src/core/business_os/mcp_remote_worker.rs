@@ -446,6 +446,20 @@ fn current_authority(
             ),
         "worker target is not a current assigned computer of this owner"
     );
+    // Use the operational native contract, never the browser's capability
+    // chips. Runtime availability and slot acquisition remain the build
+    // adapter's responsibility; this is the durable eligibility check.
+    use super::super::computer_capabilities::{validate_capabilities, ComputerCapability};
+    let mut capabilities: Vec<ComputerCapability> =
+        serde_json::from_value(computer["capability_config"].clone())
+            .context("worker target has no valid native build capability configuration")?;
+    validate_capabilities(&mut capabilities, false)?;
+    anyhow::ensure!(
+        capabilities
+            .iter()
+            .any(|capability| matches!(capability, ComputerCapability::Build(_))),
+        "worker target has no current native build capability"
+    );
     let fingerprint = format!(
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(&serde_json::json!({

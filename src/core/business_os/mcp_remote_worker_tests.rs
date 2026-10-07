@@ -42,7 +42,10 @@ fn fixture() -> anyhow::Result<tempfile::TempDir> {
         "computer-1",
         json!({"id":"computer-1",
         "owner_user_id":"owner","status":"assigned","is_deleted":false,"agentless":false,
-        "hosting_mode":"workstation","capability_epoch":1}),
+        "hosting_mode":"workstation","capability_epoch":1,
+        "capability_config":[{"kind":"build","ssh_endpoint_ref":"build-endpoint-1",
+            "slots":1,"jobs":2,"lane_root":"/build-lane","disk_floor_gib":60,
+            "toolchains":["rust"]}]}),
     )?;
     Ok(root)
 }
@@ -73,6 +76,54 @@ fn operation(action: &str, receipt: &Value, execution: Option<&str>) -> Value {
         args["execution_id"] = json!(execution);
     }
     args
+}
+
+#[test]
+fn remote_worker_requires_typed_build_capability_and_fences_its_removal() -> anyhow::Result<()> {
+    let storage = json!([{"kind":"storage","endpoint_ref":"storage-endpoint-1",
+        "protocol":"ssh","root":"/artifacts","quota_gib":null,"purposes":["artifacts"]}]);
+    let invalid_build = json!([{"kind":"build","ssh_endpoint_ref":"build-endpoint-1",
+        "slots":0,"jobs":2,"lane_root":"/build-lane","disk_floor_gib":60,
+        "toolchains":["rust"]}]);
+    for config in [Value::Null, json!([]), storage, invalid_build] {
+        let root = fixture()?;
+        let permit = issue(root.path())?;
+        let claimed = call(
+            root.path(),
+            "owner",
+            operation("claim", &permit, Some("execution-1")),
+        )?;
+        let conn = store::open_store(root.path())?;
+        let mut computer =
+            store::outbound_load_record(&conn, "workjet_computers", "computer-1")?.unwrap();
+        // Presentation chips cannot replace a removed/malformed native grant.
+        computer["capabilities"] = json!(["build", "codex"]);
+        computer["capability_config"] = config;
+        record(root.path(), "workjet_computers", "computer-1", computer)?;
+        assert!(issue(root.path()).is_err());
+        assert!(call(
+            root.path(),
+            "owner",
+            operation("claim", &permit, Some("execution-1"))
+        )
+        .is_err());
+        assert!(call(
+            root.path(),
+            "owner",
+            operation("revalidate", &claimed, Some("execution-1"))
+        )
+        .is_err());
+        let mut renew = operation("renew", &claimed, Some("execution-1"));
+        renew["renewal_sequence"] = json!(1);
+        renew["ttl_seconds"] = json!(300);
+        assert!(call(root.path(), "owner", renew).is_err());
+        // Reducing authority still works after the build grant disappears.
+        assert_eq!(
+            call(root.path(), "owner", operation("revoke", &claimed, None))?["state"],
+            "revoked"
+        );
+    }
+    Ok(())
 }
 
 #[test]
