@@ -175,7 +175,7 @@ pub(super) fn assert_native_source_handoff_enrollment(
             )?)
         })
         .unwrap();
-    let foreign_role = if role == "member" { "owner" } else { "member" };
+    let foreign_role = if role == "user" { "admin" } else { "user" };
     registry
         .with_policy(|tx| {
             tx.execute(

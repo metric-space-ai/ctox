@@ -464,13 +464,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
             )
         })
         .unwrap();
-    super::source_handoff_tests::assert_native_source_handoff_enrollment(
-        root.path(),
-        &registry,
-        &receipt,
-        &spec,
-        &ownership,
-    );
+
     let manifest = store.load(&checkpoint.digest).unwrap();
     assert_eq!(manifest.session.session_id, spec.session_id);
     assert_eq!(manifest.session.gateway_account_id, spec.gateway_account_id);
@@ -618,6 +612,15 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
             })
             .is_err(),
         "exact retry cannot replace the first checkpoint"
+    );
+    // Handoff grant/regrant tests intentionally advance native policy epochs.
+    // Run after capture retry checks, before explicit workspace revocation.
+    super::source_handoff_tests::assert_native_source_handoff_enrollment(
+        root.path(),
+        &registry,
+        &receipt,
+        &spec,
+        &ownership,
     );
     super::super::workspaces::revoke_workspace_assignment(
         root.path(),
