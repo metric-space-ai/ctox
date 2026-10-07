@@ -263,3 +263,180 @@ fn native_source_journal_rejects_symlinked_or_public_artifact_directories() {
         super::super::source_journal::source_store(&assignment.destination.import_parent).is_err()
     );
 }
+
+fn configuration_fixture(cwd: &Path) -> ctox_core::ThreadConfigSnapshot {
+    ctox_core::ThreadConfigSnapshot {
+        model: "model".into(),
+        model_provider_id: "openai".into(),
+        service_tier: None,
+        approval_policy: ctox_protocol::protocol::AskForApproval::Never,
+        approvals_reviewer: ctox_protocol::config_types::ApprovalsReviewer::User,
+        sandbox_policy: ctox_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        cwd: cwd.to_path_buf(),
+        ephemeral: false,
+        reasoning_effort: None,
+        personality: None,
+        session_source: ctox_protocol::protocol::SessionSource::Exec,
+    }
+}
+
+#[test]
+fn native_source_core_configuration_reopens_exact_settings_and_cannot_replace_a_capture() {
+    let (root, registry, assignment) = fixture();
+    let (spec, ownership) = source_spec();
+    let (store, store_root, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
+    let configuration = configuration_fixture(&assignment.destination.import_parent);
+    let bytes = journal_fixture(&spec.session_id, "fixture");
+    let (receipt, artifact) = registry
+        .with_policy(|tx| {
+            let receipt = super::super::source_journal::persist(
+                tx,
+                &store,
+                &store_root,
+                &assignment.destination,
+                &spec,
+                &ownership,
+                "fixture-policy",
+                &bytes,
+            )?;
+            let artifact = super::super::source_journal::persist_core_configuration(
+                tx,
+                &store,
+                &spec,
+                &receipt,
+                &configuration,
+            )?;
+            Ok((receipt, artifact))
+        })
+        .unwrap();
+    let again = registry
+        .with_policy(|tx| {
+            super::super::source_journal::persist_core_configuration(
+                tx,
+                &store,
+                &spec,
+                &receipt,
+                &configuration,
+            )
+        })
+        .unwrap();
+    assert_eq!(artifact, again);
+    let mut changed = configuration.clone();
+    changed.reasoning_effort = Some(ctox_protocol::openai_models::ReasoningEffort::High);
+    assert!(registry
+        .with_policy(
+            |tx| super::super::source_journal::persist_core_configuration(
+                tx, &store, &spec, &receipt, &changed
+            )
+        )
+        .is_err());
+    let mut foreign = spec.clone();
+    foreign.session_id = "22222222-2222-2222-2222-222222222222".into();
+    assert!(registry
+        .with_policy(
+            |tx| super::super::source_journal::persist_core_configuration(
+                tx,
+                &store,
+                &foreign,
+                &receipt,
+                &configuration
+            )
+        )
+        .is_err());
+    drop(store);
+    let (reopened, _, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
+    use std::io::Read;
+    let mut original = Vec::new();
+    reopened
+        .open_blob(&artifact)
+        .unwrap()
+        .read_to_end(&mut original)
+        .unwrap();
+    assert_eq!(
+        original,
+        super::super::source_journal::core_configuration_bytes(&spec, &configuration).unwrap()
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    assert_eq!(parsed["sessionId"], spec.session_id);
+    assert_eq!(parsed["reasoningEffort"], serde_json::Value::Null);
+    assert_eq!(parsed["providerContinuation"], "unresolved");
+    assert_eq!(parsed["externalEffects"], "unknown");
+    assert!(parsed.get("credentials").is_none() && parsed.get("commandSessionToken").is_none());
+    let conn = super::super::super::store::open_store(root.path()).unwrap();
+    let hash: String = conn.query_row("SELECT artifact_sha256 FROM business_native_source_core_configurations WHERE capture_id=?1",rusqlite::params![receipt.capture_id],|row|row.get(0)).unwrap();
+    assert_eq!(hash, artifact.sha256);
+    for table in [
+        "business_session_handoff_bindings",
+        "business_permission_grants",
+    ] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "Core settings do not grant {table}");
+    }
+}
+
+#[test]
+fn native_source_core_configuration_denies_foreign_provider_or_workspace_before_artifacts() {
+    let (root, registry, assignment) = fixture();
+    let (spec, ownership) = source_spec();
+    let (store, store_root, _) =
+        super::super::source_journal::source_store(&assignment.destination.import_parent).unwrap();
+    let bytes = journal_fixture(&spec.session_id, "fixture");
+    let receipt = registry
+        .with_policy(|tx| {
+            super::super::source_journal::persist(
+                tx,
+                &store,
+                &store_root,
+                &assignment.destination,
+                &spec,
+                &ownership,
+                "fixture-policy",
+                &bytes,
+            )
+        })
+        .unwrap();
+    for mutation in ["model", "provider", "ephemeral", "relative", "missing"] {
+        let mut configuration = configuration_fixture(&assignment.destination.import_parent);
+        match mutation {
+            "model" => configuration.model = "foreign-model".into(),
+            "provider" => configuration.model_provider_id = "ctox_core_api".into(),
+            "ephemeral" => configuration.ephemeral = true,
+            "relative" => configuration.cwd = PathBuf::from("relative"),
+            "missing" => configuration.cwd = assignment.destination.import_parent.join("missing"),
+            _ => unreachable!(),
+        }
+        assert!(
+            registry
+                .with_policy(
+                    |tx| super::super::source_journal::persist_core_configuration(
+                        tx,
+                        &store,
+                        &spec,
+                        &receipt,
+                        &configuration
+                    )
+                )
+                .is_err(),
+            "{mutation}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_dir(store_root.join("blobs")).unwrap().count(),
+        1
+    );
+    let conn = super::super::super::store::open_store(root.path()).unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM business_native_source_core_configurations",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+}

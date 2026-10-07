@@ -141,6 +141,27 @@ generation and admission policy revision. A retry returns the same receipt only
 for identical bytes and bindings; conflicting input requires reconciliation.
 Receipts and progress events contain identifiers/hashes, never journal payloads.
 
+The capture owner also reads the final `ThreadConfigSnapshot` from that same
+retained Core thread after checked client shutdown, before draining its owned
+runtime. Failed shutdown never invokes the exporter; export failure still drains
+the runtime and rejects capture. Model/provider/ephemeral state must match the
+admitted native producer; the source workspace must be an existing canonical
+directory. The bounded private Core-configuration artifact preserves actual
+model, reasoning/personality, approval/sandbox, service-tier and session-source
+settings. It includes only the admitted account reference, never authentication
+material or command-session credentials. Its metadata is associated with the
+same capture in `business_native_source_core_configurations`; exact retry
+succeeds and changed configuration cannot overwrite it.
+
+This configuration is source input, not proof of a remote provider checkpoint.
+It explicitly retains unresolved provider continuation and unknown external
+effects. Its source workspace is not target path authorization. Target-local
+account/workspace resolution, permissions and native resume must still establish
+the actual continuation. Older journal-only captures are not promoted into
+configuration or full checkpoints by migration. No transport contract changes
+or disclosure grants are introduced by this private artifact.
+
+
 Native capture retires model execution. If the existing continuity mechanism
 requests another turn, its durable refresh demand remains pending rather than
 invoking this retired producer or creating a replacement. Ordinary producers

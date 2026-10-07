@@ -180,6 +180,105 @@ pub(super) fn persist(
     })
 }
 
+/// Actual Core configuration captured after checked producer shutdown. This
+/// exports settings, not credentials, remote provider state or resume permission.
+pub(super) fn core_configuration_bytes(
+    spec: &ExecutionSpec,
+    configuration: &ctox_core::ThreadConfigSnapshot,
+) -> Result<Vec<u8>> {
+    ensure!(
+        spec.harness == ctox_core::native_harness_name()
+            && spec.harness_version == ctox_core::native_harness_version()
+            && spec.model_route_id == "openai"
+            && configuration.model_provider_id == spec.model_route_id
+            && configuration.model == spec.model_id
+            && !configuration.ephemeral,
+        "native Core configuration differs from admitted producer"
+    );
+    ensure!(
+        configuration.cwd.is_absolute()
+            && configuration.cwd.is_dir()
+            && std::fs::canonicalize(&configuration.cwd)? == configuration.cwd,
+        "native Core workspace is unavailable or not canonical"
+    );
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "format": "ctox-native-core-configuration",
+        "version": 1,
+        "sessionId": spec.session_id,
+        "harness": spec.harness,
+        "harnessVersion": spec.harness_version,
+        "modelRouteId": configuration.model_provider_id,
+        "gatewayAccountId": spec.gateway_account_id,
+        "modelId": configuration.model,
+        "sourceWorkspace": configuration.cwd,
+        "serviceTier": configuration.service_tier,
+        "approvalPolicy": configuration.approval_policy,
+        "approvalsReviewer": configuration.approvals_reviewer,
+        "sandboxPolicy": configuration.sandbox_policy,
+        "reasoningEffort": configuration.reasoning_effort,
+        "personality": configuration.personality,
+        "sessionSource": configuration.session_source,
+        "providerContinuation": "unresolved",
+        "externalEffects": "unknown"
+    }))?;
+    ensure!(
+        bytes.len() <= 65536,
+        "native Core configuration exceeds capture budget"
+    );
+    Ok(bytes)
+}
+
+pub(super) fn persist_core_configuration(
+    policy: &Connection,
+    store: &ctox_sync::checkpoint::CheckpointStore,
+    spec: &ExecutionSpec,
+    receipt: &NativeSourceJournalReceipt,
+    configuration: &ctox_core::ThreadConfigSnapshot,
+) -> Result<ctox_sync::contracts::ArtifactRef> {
+    let bytes = core_configuration_bytes(spec, configuration)?;
+    let matches: bool = policy.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_native_source_journals
+         WHERE capture_id=?1 AND job_id=?2 AND session_id=?3 AND spec_json=?4)",
+        rusqlite::params![
+            receipt.capture_id,
+            spec.job_id,
+            spec.session_id,
+            serde_json::to_string(spec)?
+        ],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        matches && receipt.job_id == spec.job_id && receipt.session_id == spec.session_id,
+        "native Core configuration belongs to another capture"
+    );
+    let artifact = ctox_sync::contracts::ArtifactRef {
+        sha256: artifact_ref_for(&bytes).sha256,
+        size_bytes: bytes.len() as u64,
+    };
+    store.ingest_blob(&artifact, std::io::Cursor::new(bytes))?;
+    policy.execute(
+        "INSERT INTO business_native_source_core_configurations
+         (capture_id,format_version,artifact_sha256,artifact_size_bytes)
+         VALUES (?1,1,?2,?3) ON CONFLICT(capture_id) DO NOTHING",
+        rusqlite::params![
+            receipt.capture_id,
+            artifact.sha256,
+            i64::try_from(artifact.size_bytes)?
+        ],
+    )?;
+    let exact: bool = policy.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_native_source_core_configurations
+         WHERE capture_id=?1 AND format_version=1 AND artifact_sha256=?2 AND artifact_size_bytes=?3)",
+        rusqlite::params![receipt.capture_id, artifact.sha256, i64::try_from(artifact.size_bytes)?],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        exact,
+        "native Core configuration publication conflicts; reconcile"
+    );
+    Ok(artifact)
+}
+
 impl NativeGuestExecution {
     /// Only an actual Core journal reader and the exact retired producer can
     /// enter this worker -> account -> policy -> controller publication path.
@@ -187,6 +286,7 @@ impl NativeGuestExecution {
         &self,
         source: &crate::channels::NativeProviderCaptureOwner,
         journal: &ctox_core::NativeJournalReader,
+        configuration: &ctox_core::ThreadConfigSnapshot,
     ) -> Result<NativeSourceJournalReceipt> {
         ensure!(
             source.matches_provider(&self.provider),
@@ -195,6 +295,7 @@ impl NativeGuestExecution {
         source.with_current_capture_transaction(|worker, facts| {
             self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
                 verify()?;
+                core_configuration_bytes(&self.binding.spec, configuration)?;
                 let bytes = journal.read_bytes(PortableJournalLimits::default().max_bytes)?;
                 let (store, store_root, store_identity) =
                     source_store(&entry.assignment.destination.import_parent)?;
@@ -207,6 +308,13 @@ impl NativeGuestExecution {
                     &self.binding.ownership,
                     &self.binding.admission.policy_revision,
                     &bytes,
+                )?;
+                persist_core_configuration(
+                    policy,
+                    &store,
+                    &self.binding.spec,
+                    &receipt,
+                    configuration,
                 )?;
                 ensure!(
                     private_directory(&store_root)? == store_identity,
