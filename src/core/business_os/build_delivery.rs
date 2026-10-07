@@ -342,11 +342,29 @@ if manifest["repository"] is not None:
         require(len(revision)==40 and all(c in "0123456789abcdef" for c in revision), "invalid public revision")
     environment={k:v for k,v in os.environ.items() if not k.startswith("GIT_") and k!="SSH_AUTH_SOCK"}
     environment.update(GIT_CONFIG_NOSYSTEM="1",GIT_CONFIG_GLOBAL="/dev/null",GIT_TERMINAL_PROMPT="0")
-    def git(*args):
-        subprocess.run(["git","-c","credential.helper=","-c","core.hooksPath=/dev/null","-C",str(stage),*args],
-            env=environment,stdin=subprocess.DEVNULL,check=True,timeout=300)
-    git("init","-q")
-    git("fetch","-q","--no-tags","https://github.com/"+manifest["repository"]+".git",manifest["base"])
+    def git(*args,directory=stage,check=True):
+        return subprocess.run(["git","-c","credential.helper=","-c","core.hooksPath=/dev/null","-C",str(directory),*args],
+            env=environment,stdin=subprocess.DEVNULL,stderr=None if check else subprocess.DEVNULL,
+            check=check,timeout=300)
+    mirrors=root/"git-mirrors"
+    owned_directory(mirrors)
+    mirror_key=hashlib.sha256(manifest["repository"].encode()).hexdigest()
+    mirror=mirrors/mirror_key
+    owned_directory(mirror)
+    mirror_lock_path=locks/("github-"+mirror_key+".lock")
+    require(not mirror_lock_path.is_symlink(), "unsafe mirror lock")
+    with mirror_lock_path.open("a") as mirror_lock:
+        try: fcntl.flock(mirror_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: sys.exit(75)
+        if not (mirror/"HEAD").exists(): git("init","-q","--bare",directory=mirror)
+        reference="refs/heads/ctox-base-"+manifest["base"]
+        if git("cat-file","-e",manifest["base"]+"^{commit}",directory=mirror,check=False).returncode:
+            git("fetch","-q","--no-tags","https://github.com/"+manifest["repository"]+".git",
+                manifest["base"],directory=mirror)
+        git("update-ref",reference,manifest["base"],directory=mirror)
+        git("symbolic-ref","HEAD",reference,directory=mirror)
+        # Independent objects survive mirror cleanup; no alternates or hardlinks.
+        git("clone","-q","--no-checkout","--no-hardlinks",str(mirror),str(stage),directory=mirrors)
     bundle=incoming/"commits.bundle"
     if manifest["head"]!=manifest["base"]:
         require(bundle.is_file() and not bundle.is_symlink(), "commit bundle absent")
@@ -585,5 +603,36 @@ mod tests {
         assert_eq!(String::from_utf8(listing.stdout).unwrap(), "dirty\n");
         assert!(first.prepare_script.contains("credential.helper="));
         assert!(first.prepare_script.contains("core.hooksPath=/dev/null"));
+        // Preseed a trusted mirror fixture. This exercises actual offline
+        // checkout/bundle/overlay reconstruction, not GitHub network availability.
+        let mirror_key = format!("{:x}", Sha256::digest(b"metric-space-ai/ctox"));
+        let mirror = Path::new(&grant.lane_root)
+            .join("git-mirrors")
+            .join(mirror_key);
+        fs::create_dir_all(&mirror).unwrap();
+        git(&mirror, &["init", "-q", "--bare"]);
+        git(
+            &mirror,
+            &[
+                "fetch",
+                "-q",
+                root.to_str().unwrap(),
+                &snapshot.public_base.as_ref().unwrap().revision,
+            ],
+        );
+        upload(&first);
+        let result = prepare(&first);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let target = Path::new(&first.source_dir);
+        assert_eq!(
+            fs::read(target.join("committed-later")).unwrap(),
+            b"local commit"
+        );
+        assert_eq!(fs::read(target.join("dirty")).unwrap(), b"dirty bytes");
+        assert!(target.join(".git").is_dir());
     }
 }

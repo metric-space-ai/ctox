@@ -9,7 +9,9 @@ Those remain the native adapter's responsibility.
 
 Public GitHub sources upload only the frozen overlay, local-commit bundle and
 manifest. The host fetches the previously proved anonymous base directly from
-GitHub, without client Git configuration or authentication. Private sources
+GitHub through an exclusively locked bare mirror, without client Git configuration
+or authentication. Published trees copy independent Git objects, so later mirror
+cleanup cannot break an admitted source. Private sources
 upload their complete frozen tree, excluding Git metadata and ignored files.
 The package outlives the original source capture. Filename lists are NUL framed.
 
