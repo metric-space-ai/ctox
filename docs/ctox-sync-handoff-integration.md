@@ -19,6 +19,28 @@ The production target currently decodes the protected Core artifact before
 workspace preparation and still returns `resumed:false`. Connecting authorized
 execution admission to the prepared workspace remains the next #183 slice.
 
+## Source effect observation
+
+The retired native producer now queries its actual execution authority before
+artifact publication, outside worker/account/policy/controller locks. A
+foreign job, changed ownership generation, stopped job, inconsistent
+pending/completed set or oversized effect inventory rejects capture.
+The source reacquires its current capture and policy guards after the await
+and matches any registered guest effect to the exact retained process and
+controller generation.
+
+The protected `native-effect-state.json` artifact records the observed pending
+quorum IDs and the registered process identity. Those IDs also remain pending
+in the checkpoint manifest, alongside the existing unknown-external-effects
+entry. Neither a completed Core turn, an empty quorum set nor a child stop
+observation clears that entry. Observing effects does not stop QEMU between
+bounded agent turns.
+
+This is reconciliation input, not a clean-effect certificate or atomic quorum
+fence through the subsequent Git capture. Actual guest state transfer and
+authoritative reconciliation of shell/MCP/guest side effects remain required
+before target Core execution can be activated.
+
 Source audit: CTOX `a1b5e04f90333ba18f78fcca270c81b373e534b8`,
 Workjet `f0ad31f297b921d7f96c054abf118840d0939789` (2026-09-20).
 This records the remaining production integration for issue #183. It is not
