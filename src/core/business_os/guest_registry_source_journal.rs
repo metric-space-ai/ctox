@@ -41,6 +41,14 @@ pub(super) fn source_store(
             Err(error) => return Err(error.into()),
         }
         private_directory(path)?;
+        // The blob fsync cannot make a newly created store directory durable.
+        // Persist each directory and its parent before policy metadata commits.
+        std::fs::File::open(path)?.sync_all()?;
+        std::fs::File::open(
+            path.parent()
+                .context("native source directory has no parent")?,
+        )?
+        .sync_all()?;
     }
     let identity = private_directory(&root)?;
     let store = ctox_sync::checkpoint::CheckpointStore::open(
