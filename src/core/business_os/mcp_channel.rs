@@ -3478,8 +3478,8 @@ fn call_tool_inner(
     if tool_name.starts_with("appsec_") {
         compact_appsec_durable_projection_for_mcp(&mut result);
     }
-    let result = if tool_name == mcp_remote_worker::TOOL {
-        mcp_remote_worker::redact_receipt(result)?
+    let result = if tool_name == remote_worker::TOOL {
+        remote_worker::redact_receipt(result)?
     } else {
         redact_mcp_response(result)
     };
