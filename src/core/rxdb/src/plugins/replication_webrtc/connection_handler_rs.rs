@@ -5685,7 +5685,18 @@ mod tests {
         assert!(!handler
             .collection_authorization_for_peer(&peer, "records")
             .unwrap());
-        let replacement = install_test_connection(&handler, "auth-result", 2).await;
+        {
+            let _lifecycle = handler.peer_lifecycle.lock();
+            handler
+                .peers
+                .lock()
+                .get_mut("auth-result")
+                .expect("fixture peer remains registered")
+                .generation = 2;
+        }
+        let replacement = handler
+            .connection_for_peer("auth-result")
+            .expect("replacement generation is current");
         assert!(!handler
             .collection_authorization_for_peer(&peer, "records")
             .unwrap());
