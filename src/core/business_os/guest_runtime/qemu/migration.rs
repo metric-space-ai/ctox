@@ -20,6 +20,8 @@ pub(super) enum MigrationPhase {
     Fresh,
     Exporting,
     Exported,
+    FinishingExport,
+    FinishedExport,
     Incoming,
     Restoring,
     Restored,
@@ -144,6 +146,24 @@ impl QemuProcess {
         .context("QEMU memory export exceeded its deadline")??;
         self.migration = MigrationPhase::Exported;
         Ok(result)
+    }
+
+    /// Flush/close the source disk through QEMU's normal quit path, then
+    /// confirm this exact child exited successfully before copying its disk.
+    /// Uncertain quit/exit cannot be retried or promoted to a clean checkpoint.
+    pub(in crate::business_os::guest_runtime) async fn finish_memory_export(
+        &mut self,
+    ) -> Result<ExitStatus> {
+        ensure!(
+            self.migration == MigrationPhase::Exported,
+            "QEMU export is not complete"
+        );
+        self.migration = MigrationPhase::FinishingExport;
+        self.monitor()?.quit().await?;
+        let status = self.wait_for_exit().await?;
+        ensure!(status.success(), "QEMU source did not exit cleanly");
+        self.migration = MigrationPhase::FinishedExport;
+        Ok(status)
     }
 
     /// The descriptor must come from the native protected staging owner.

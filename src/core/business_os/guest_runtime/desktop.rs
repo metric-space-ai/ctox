@@ -116,8 +116,9 @@ impl RetainedQemuDesktop {
         Ok(endpoint)
     }
 
-    /// Retire live desktop access, pause and save actual RAM/device state.
-    /// Disk copying is allowed only after the caller confirms this child exits.
+    /// Retire live desktop access, pause and save actual RAM/device state,
+    /// then quit/reap this exact source cleanly before allowing disk copying.
+    /// This is not authoritative reconciliation of external application effects.
     pub(in crate::business_os) async fn save_memory_live(
         &mut self,
         expected: &GuestLiveEndpoint,
@@ -126,7 +127,12 @@ impl RetainedQemuDesktop {
         self.validate_live_endpoint(expected).await?;
         self.phase = DesktopPhase::EndpointUnavailable;
         self.process.pause().await?;
-        self.process.save_memory(output).await
+        let memory = self.process.save_memory(output).await?;
+        self.process.finish_memory_export().await?;
+        self.phase = DesktopPhase::Stopped;
+        self.driver = None;
+        self.endpoint_id = None;
+        Ok(memory)
     }
 
     /// One bootstrap attempt. Failure/cancellation retains the process; it never

@@ -441,7 +441,10 @@ async fn real_memory_export_and_incoming_restore_stay_paused_until_explicit_resu
             "exported source could execute again"
         );
         ensure!(source.status().await?.status == "postmigrate");
-        source.stop().await?;
+        ensure!(
+            source.finish_memory_export().await?.success(),
+            "source quit was not clean"
+        );
         ensure!(
             source.child.try_wait()?.is_some(),
             "source disk writer was not reaped"

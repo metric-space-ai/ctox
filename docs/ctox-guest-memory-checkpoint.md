@@ -10,8 +10,10 @@ retires live desktop access, pauses the child and saves RAM/device state through
 a native-owned private Unix socket. The process owner records the exact stream
 length and SHA256. Export succeeds only after QEMU reports completed migration
 and the source is stopped in postmigrate. The source cannot resume through this
-owner after an export attempt. The caller must confirm that exact child's exit
-before copying its writable overlay or completing the process effect.
+owner after an export attempt. The retained desktop then uses QMP quit and
+confirms that exact child exited successfully before returning memory metadata.
+Only then may its writable overlay be copied. An uncertain/failed quit or a
+forced stop cannot supply a successful machine checkpoint or clean-effect claim.
 
 `RetainedQemuDesktop::spawn_incoming` uses `-S -incoming defer`.
 `load_memory` verifies the entire native-owned readonly stream before feeding
