@@ -74,6 +74,19 @@ test('failed reads retain their keys and retry with bounded backoff, including n
   assert.deepEqual(calls, [['sources'], ['sources', 'leads']]);
   reader.dispose();
 });
+test('partial failures retry only rejected collections without reloading healthy sources', async () => {
+  const c = collections(); const timer = clock(); const calls = [];
+  const reader = createCollectionReloader({ collections: c.result, ...timer,
+    reload: async keys => {
+      calls.push(keys);
+      if (calls.length === 1) throw Object.assign(new Error('loader missing'), { failedKeys: ['leads'] });
+    },
+  });
+  reader.request(['sources', 'leads']); await timer.run();
+  await timer.run();
+  assert.deepEqual(calls, [['sources', 'leads'], ['leads']]);
+  reader.dispose();
+});
 test('closing during a read drops completion, retries and late invalidations', async () => {
   const c = collections(); const timer = clock(); const blocked = deferred(); let after = 0;
   const reader = createCollectionReloader({ collections: c.result, ...timer,
@@ -128,15 +141,27 @@ try {
       } }),
     }]));
     Object.assign(state, {
-      ctx: { host: { querySelector: () => null } },
+      ctx: { host: { querySelector: () => null }, sync: {
+        leaseCollection: async (name, reason, options) => {
+          assert.equal(name, 'outbound_lead_generation_leads');
+          assert.equal(options.forceDirect, true);
+          const replication = {
+            awaitQueryReady: async () => 'native-generation',
+            collectionQueryGenerationToken: () => 'native-generation',
+          };
+          return { bridge: { state: replication }, release: async () => {} };
+        },
+      } },
       collections: db, sources: [], adapters: [], imports: [], leads: [existingLead], leadListRows: null,
       recipientEligibilityReady: new Set(['lead_a']), selectedDetailLoadingKey: '', selectedDetailRequestedKey: '',
       fullLeadReadSequence: 0, fullLeadAppliedSequence: new Map(),
       collectionBindingGeneration: 1, leadHydrationBindingGeneration: 1, reloadAngewendetJeSammlung: new Map(),
+      uiMounted: true,
       sourceToggleIntent: new Map(), pendingLeadPatches: new Map(),
       selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
       researchPolicyLoaded: true, researchPolicy: 'saved', researchPolicyDraft: 'unsaved',
       syncPending: false, syncWaitingCollections: new Set(),
+      collectionReadErrors: new Map(),
     });
     return { reads, existingLead };
   }
@@ -164,6 +189,47 @@ try {
       assert.equal(state.selectedLeadId, 'lead_a');
       assert.equal(state.researchPolicyDraft, 'unsaved');
     }
+  });
+  await test('rejected lead reads preserve full data and publish healthy collections with an explicit error', async () => {
+    let failed = true;
+    const { existingLead } = setup({
+      sources: async () => [{ toJSON: () => ({ id: 'source_b', label: 'New source', enabled: true }) }],
+      leads: async query => {
+        if (failed) throw Error('QUERY_GENERATION_REQUIRED: strict demand read has no loader');
+        return query.selector.id?.$gt ? [] : [{ toJSON: () => leadListRow(existingLead) }];
+      },
+    });
+    const line = { innerHTML: '', textContent: '', className: '' };
+    state.ctx.host.querySelector = selector => selector === '[data-sync-line]' ? line : null;
+    state.syncPending = true;
+    await assert.rejects(hooks.reload(['sources', 'leads']), error => {
+      assert.deepEqual(error.failedKeys, ['leads']); return true;
+    });
+    assert.equal(state.sources[0].id, 'source_b', 'healthy source read is not discarded');
+    assert.equal(state.leads[0], existingLead, 'a rejected query cannot erase saved full details');
+    assert.equal(state.leadListRows, null, 'a rejected query is never an empty list');
+    assert.deepEqual([...state.collectionReadErrors.keys()], ['leads']);
+    hooks.renderSyncLine();
+    assert.match(line.innerHTML, /Leads konnten nicht geladen werden/);
+    assert.equal(line.className, 'is-error', 'read failure takes priority over the sync spinner');
+    failed = false;
+    await hooks.reload(['leads']);
+    assert.equal(state.collectionReadErrors.size, 0);
+    hooks.renderSyncLine();
+    assert.equal(line.className, 'is-syncing', 'current success clears only its own failure');
+  });
+  await test('an older rejected read cannot invalidate a newer successful collection read', async () => {
+    const blocked = deferred(); let reads = 0;
+    setup({ sources: async () => {
+      if (++reads === 1) return blocked.promise;
+      return [{ toJSON: () => ({ id: 'new', label: 'Current', enabled: true }) }];
+    } });
+    const old = hooks.reload(['sources']);
+    await hooks.reload(['sources']);
+    blocked.reject(Error('obsolete loader generation'));
+    await old;
+    assert.equal(state.sources[0].id, 'new');
+    assert.equal(state.collectionReadErrors.size, 0, 'obsolete failure is not a current error');
   });
   await test('pagination retrieves all leads, not just the default 200-window', async () => {
     const rows = Array.from({ length: 351 }, (_, i) => ({ id: 'lead_' + String(i).padStart(4, '0'), campaign: 'K', updated_at_ms: i, _rev: '1-' + i }));
@@ -213,18 +279,22 @@ try {
   });
   await test('selected detail reads coalesce live changes and hydrate the latest selection once', async () => {
     const blocked = deferred(), latest = deferred(); const ids = [];
+    const firstStarted = deferred(), latestStarted = deferred();
     setup({ leads: query => {
       ids.push(query.selector.id.$in);
+      (ids.length === 1 ? firstStarted : latestStarted).resolve();
       return ids.length === 1 ? blocked.promise : latest.promise;
     } });
     state.leads = []; state.leadListRows = [{ id: 'a', _rev: '1-a' }, { id: 'b', _rev: '1-b' }];
     state.selectedLeadId = 'a'; state.recipientEligibilityReady = new Set(['a', 'b']);
     const first = hooks.loadSelectedLeadDetails();
+    await firstStarted.promise;
     for (let i = 0; i < 10; i++) await hooks.loadSelectedLeadDetails();
     state.selectedLeadId = 'b'; await hooks.loadSelectedLeadDetails();
     assert.deepEqual(ids, [['a']], 'no overlapping full reads');
     blocked.resolve([{ toJSON: () => ({ id: 'a', _rev: '1-a', contacts: [] }) }]);
     await first;
+    await latestStarted.promise;
     assert.deepEqual(ids, [['a'], ['b']], 'latest selection is read after the first finishes');
     latest.resolve([{ toJSON: () => ({ id: 'b', _rev: '1-b', contacts: [], evidence: [{ quote: 'latest' }] }) }]);
     await new Promise(resolve => setImmediate(resolve));
@@ -359,5 +429,11 @@ try {
     }
   });
 } finally {
+  const state = (await import(pathToFileURL(join(fixture, 'modules', 'olg', 'index.js')).href)).__leadgenOutboundTestHooks.testState();
+  state.uiMounted = false;
+  state.selectedLeadId = '';
+  state.collectionBindingGeneration++;
+  for (const timer of state.sperrpruefungNeu?.values?.() || []) clearTimeout(timer);
+  state.sperrpruefungNeu?.clear?.();
   rmSync(fixture, { recursive: true, force: true });
 }
