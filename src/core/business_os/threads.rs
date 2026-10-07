@@ -1126,9 +1126,28 @@ fn create_note(
         .unwrap_or_else(|| "note".to_owned());
     let thread_id = thread_id_for_command(command, &source);
     ensure_existing_thread_participant_or_admin(root, session, &thread_id)?;
+    let existing_thread = load_record(root, "user_threads", &thread_id)?;
     let title = first_string_field(&command.payload, &["title", "subject"])
+        .or_else(|| {
+            existing_thread
+                .as_ref()
+                .and_then(|thread| non_empty_string(thread, "title"))
+        })
         .or_else(|| source_string(&source, "label"))
         .unwrap_or_else(|| "Notiz".to_owned());
+    let thread_kind = existing_thread
+        .as_ref()
+        .and_then(|thread| non_empty_string(thread, "kind"))
+        .unwrap_or_else(|| message_kind.clone());
+    let thread_status = existing_thread
+        .as_ref()
+        .and_then(|thread| non_empty_string(thread, "status"))
+        .unwrap_or_else(|| "open".to_owned());
+    // Addressing a note or mention does not assign or reopen its source work.
+    let assigned_user_id = existing_thread
+        .as_ref()
+        .map(|thread| value_string(thread, "assigned_user_id"))
+        .unwrap_or_default();
     let target_user_ids = target_user_ids(&command.payload);
     let actor = actor_id(session);
     let participants = participant_set(root, &thread_id, [actor.as_str()], target_user_ids.iter());
@@ -1143,19 +1162,12 @@ fn create_note(
         &conn,
         &thread_id,
         &title,
-        if message_kind == "mention" {
-            "mention"
-        } else {
-            "note"
-        },
-        "open",
+        &thread_kind,
+        &thread_status,
         &participants,
         &source,
         &session,
-        target_user_ids
-            .first()
-            .map(String::as_str)
-            .unwrap_or_default(),
+        &assigned_user_id,
         Some(&message_id),
         now,
         0,
@@ -3810,10 +3822,6 @@ fn refresh_thread_states(
             thread_status.as_str(),
             "archived" | "completed" | "closed" | "cancelled" | "canceled"
         );
-        if unread_count > 0 && actionable_thread && !machine_work {
-            attention_reasons.push("Ungelesen".to_owned());
-            attention_score = 40;
-        }
         if pending_reviewers.contains(&user_id) {
             attention_reasons.push("Freigabe nötig".to_owned());
             attention_score = attention_score.max(80);
@@ -3821,10 +3829,6 @@ fn refresh_thread_states(
         if unread_mentions.contains(&user_id) && actionable_thread {
             attention_reasons.push("Erwähnung".to_owned());
             attention_score = attention_score.max(60);
-        }
-        if assigned_user_id == user_id && actionable_thread && !machine_work {
-            attention_reasons.push("Zugewiesen".to_owned());
-            attention_score = attention_score.max(50);
         }
         if open_handoff_targets.contains(&user_id) {
             attention_reasons.push("Übergabe an dich".to_owned());
@@ -3837,6 +3841,16 @@ fn refresh_thread_states(
         if latest_ctox_failed && assigned_user_id == user_id {
             attention_reasons.push("Fehlgeschlagen".to_owned());
             attention_score = attention_score.max(70);
+        }
+        // Generic reasons are a fallback, so the concrete action stays first.
+        if attention_reasons.is_empty() && actionable_thread && !machine_work {
+            if assigned_user_id == user_id {
+                attention_reasons.push("Zugewiesen".to_owned());
+                attention_score = 50;
+            } else if unread_count > 0 {
+                attention_reasons.push("Ungelesen".to_owned());
+                attention_score = 40;
+            }
         }
 
         let state_id = thread_state_id(&user_id, thread_id);
@@ -6036,6 +6050,102 @@ mod tests {
     }
 
     #[test]
+    fn addressed_note_preserves_thread_assignment_and_source_state() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "bob", "Bob", "user")?;
+        seed_threads_user(temp.path(), "alice", "Alice", "user")?;
+        let thread_id = "thread-note-preserved-source";
+        {
+            let conn = store::open_store(temp.path())?;
+            store::upsert_business_record(
+                &conn,
+                "user_threads",
+                thread_id,
+                42,
+                json!({
+                    "id": thread_id,
+                    "thread_id": thread_id,
+                    "title": "Existing case",
+                    "kind": "case",
+                    "status": "blocked",
+                    "participant_ids": ["bob", "alice"],
+                    "owner_user_id": "bob",
+                    "assigned_user_id": "bob",
+                    "created_at_ms": 42,
+                    "updated_at_ms": 42
+                }),
+            )?;
+        }
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-note-preserved-source",
+                "module": "threads",
+                "command_type": "threads.note.create",
+                "record_id": thread_id,
+                "payload": {
+                    "thread_id": thread_id,
+                    "message_id": "msg-note-preserved-source",
+                    "message_type": "mention",
+                    "body": "@Alice please check the existing case.",
+                    "target_user_ids": ["alice"],
+                    "source_context": {"module": "threads", "record_type": "case", "record_id": "case-note-preserved"}
+                },
+                "client_context": {"actor": {"id": "bob", "display_name": "Bob", "role": "user"}}
+            }),
+        )?;
+        let thread = load_record(temp.path(), "user_threads", thread_id)?
+            .context("existing source thread")?;
+        assert_eq!(value_string(&thread, "title"), "Existing case");
+        assert_eq!(value_string(&thread, "kind"), "case");
+        assert_eq!(value_string(&thread, "status"), "blocked");
+        assert_eq!(value_string(&thread, "assigned_user_id"), "bob");
+        assert_eq!(
+            thread.get("created_at_ms").and_then(Value::as_i64),
+            Some(42)
+        );
+        let alice_id = thread_state_id("alice", thread_id);
+        let alice =
+            load_record(temp.path(), "user_thread_states", &alice_id)?.context("mention state")?;
+        assert_eq!(
+            array_strings(alice.get("attention_reasons")),
+            vec!["Erwähnung".to_owned()]
+        );
+        assert_eq!(alice.get("unread_count").and_then(Value::as_i64), Some(1));
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-note-preserved-mark-read",
+                "module": "threads",
+                "command_type": "threads.notification.mark_read",
+                "record_id": "notif_msg-note-preserved-source_alice",
+                "payload": {"notification_id": "notif_msg-note-preserved-source_alice"},
+                "client_context": {"actor": {"id": "alice", "display_name": "Alice", "role": "user"}}
+            }),
+        )?;
+        let alice = load_record(temp.path(), "user_thread_states", &alice_id)?
+            .context("read mention state")?;
+        assert!(array_strings(alice.get("attention_reasons")).is_empty());
+        assert_eq!(alice.get("unread_count").and_then(Value::as_i64), Some(0));
+        assert_eq!(
+            alice.get("attention_score").and_then(Value::as_i64),
+            Some(0)
+        );
+        let bob = load_record(
+            temp.path(),
+            "user_thread_states",
+            &thread_state_id("bob", thread_id),
+        )?
+        .context("source assignee state")?;
+        assert_eq!(
+            array_strings(bob.get("attention_reasons")),
+            vec!["Blockiert".to_owned()]
+        );
+        assert_eq!(bob.get("attention_score").and_then(Value::as_i64), Some(70));
+        Ok(())
+    }
+
+    #[test]
     fn approval_request_requires_active_reviewer_and_blocks_self_review() -> anyhow::Result<()> {
         let temp = tempdir()?;
         seed_threads_user(temp.path(), "junior", "Junior", "user")?;
@@ -6506,9 +6616,10 @@ mod tests {
                     "reviewer_user_id": "lead",
                     "target_module": "ctox",
                     "target_record_id": "case-central-policy",
-                    "target_command_type": "ctox.coding_agent.execute",
+                    "target_command_type": "ctox.coding.turn",
                     "target_payload": {
-                        "args": ["status"]
+                        "module_id": "threads",
+                        "prompt": "Update the Threads app."
                     },
                     "source_context": {
                         "module": "threads",
@@ -6564,6 +6675,14 @@ mod tests {
         .context("approval")?;
         assert_eq!(value_string(&approval, "status"), "pending");
         assert_eq!(value_string(&approval, "approved_command_id"), "");
+        assert_eq!(
+            collection_document_count(temp.path(), "ctox_queue_tasks")?,
+            0
+        );
+        assert!(
+            !temp.path().join("coding-agents").exists(),
+            "policy denial must precede sidecar extraction"
+        );
         Ok(())
     }
 
