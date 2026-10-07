@@ -827,6 +827,8 @@ mod tests {
                 protoc: program.clone(),
                 node: program,
                 libclang_dir: "/lib".into(),
+                library_dirs: Vec::new(),
+                protoc_include: None,
                 ctox_prep: None,
             },
             source_head: "b".repeat(40),

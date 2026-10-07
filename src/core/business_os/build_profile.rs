@@ -20,6 +20,10 @@ pub(crate) struct RustBuildProfile {
     pub protoc: String,
     pub node: String,
     pub libclang_dir: String,
+    #[serde(default)]
+    pub library_dirs: Vec<String>,
+    #[serde(default)]
+    pub protoc_include: Option<String>,
     pub ctox_prep: Option<String>,
 }
 
@@ -67,6 +71,17 @@ impl RustBuildProfile {
             absolute(path)?;
             ensure!(!path.contains(':'), "colon in profile PATH");
         }
+        ensure!(
+            self.library_dirs.len() <= 16,
+            "too many compiler library directories"
+        );
+        for path in &self.library_dirs {
+            absolute(path)?;
+            ensure!(!path.contains(':'), "colon in compiler library directory");
+        }
+        if let Some(path) = &self.protoc_include {
+            absolute(path)?;
+        }
         if let Some(path) = &self.ctox_prep {
             absolute(path)?;
         }
@@ -75,7 +90,7 @@ impl RustBuildProfile {
 
     pub(crate) fn environment(&self) -> Result<Vec<String>> {
         self.validate()?;
-        Ok(vec![
+        let mut environment = vec![
             format!("HOME={}", self.home),
             format!("PATH={}", self.bin_dirs.join(":")),
             format!("RUSTC={}", self.rustc),
@@ -83,7 +98,15 @@ impl RustBuildProfile {
             format!("CXX={}", self.cxx),
             format!("PROTOC={}", self.protoc),
             format!("LIBCLANG_PATH={}", self.libclang_dir),
-        ])
+            format!("CLANG_PATH={}", self.cc),
+        ];
+        if !self.library_dirs.is_empty() {
+            environment.push(format!("LD_LIBRARY_PATH={}", self.library_dirs.join(":")));
+        }
+        if let Some(path) = &self.protoc_include {
+            environment.push(format!("PROTOC_INCLUDE={path}"));
+        }
+        Ok(environment)
     }
 
     /// Hash actual compiler assets, their resolved paths/version output, and
@@ -160,13 +183,19 @@ fn connection(root: &Path) -> Result<rusqlite::Connection> {
     Ok(conn)
 }
 
-const PROBE: &str = r##"import hashlib,json,os,pathlib,subprocess,sys
+const PROBE: &str = r##"import hashlib,json,os,pathlib,signal,subprocess,sys
+def expired(*args): raise TimeoutError("compiler probe deadline")
+signal.signal(signal.SIGALRM,expired); signal.alarm(7)
 profile=json.load(sys.stdin)
 env={"HOME":profile["home"],"PATH":":".join(profile["bin_dirs"])}
 env.update({"RUSTC":profile["rustc"],"CC":profile["cc"],"CXX":profile["cxx"],"PROTOC":profile["protoc"],"LIBCLANG_PATH":profile["libclang_dir"]})
+if profile["library_dirs"]: env["LD_LIBRARY_PATH"]=":".join(profile["library_dirs"])
+if profile["protoc_include"]: env["PROTOC_INCLUDE"]=profile["protoc_include"]
 def output(command):
     return subprocess.check_output(command,env=env,stderr=subprocess.STDOUT,timeout=2).decode("utf-8")
 programs={k:profile[k] for k in ("rustc","cargo","cc","cxx","protoc","node")}
+for key in ("rustc","cargo"):
+    if pathlib.Path(programs[key]).resolve(strict=True).name=="rustup": raise RuntimeError("use direct compiler binaries, not context-sensitive rustup shims")
 versions={k:output([v,"-vV" if k=="rustc" else "--version"]) for k,v in programs.items()}
 sysroot=pathlib.Path(output([profile["rustc"],"--print","sysroot"]).strip()).resolve(strict=True)
 assets=set(programs.values())
@@ -174,14 +203,21 @@ assets.add(str(sysroot/"bin"/"rustc"))
 assets.update(str(p) for pattern in ("librustc_driver*","libLLVM*") for p in (sysroot/"lib").glob(pattern))
 clang=pathlib.Path(profile["libclang_dir"]).resolve(strict=True)
 assets.update(str(p) for p in clang.glob("libclang.*"))
+for name in profile["library_dirs"]:
+    directory=pathlib.Path(name).resolve(strict=True)
+    assets.update(str(p) for p in directory.glob("*.so*") if p.is_file())
+if profile["protoc_include"]:
+    directory=pathlib.Path(profile["protoc_include"]).resolve(strict=True)
+    assets.update(str(p) for p in directory.rglob("*.proto") if p.is_file())
 if profile["ctox_prep"]: assets.add(profile["ctox_prep"])
-rows=[]
+rows=[]; digests={}
 for name in sorted(assets):
     path=pathlib.Path(name).resolve(strict=True)
     if not path.is_file(): raise RuntimeError("compiler asset is not a regular file")
-    with path.open("rb") as stream:
-        digest=hashlib.file_digest(stream,"sha256").hexdigest()
-    rows.append([name,str(path),digest])
+    key=str(path)
+    if key not in digests:
+        with path.open("rb") as stream: digests[key]=hashlib.file_digest(stream,"sha256").hexdigest()
+    rows.append([name,key,digests[key]])
 if not any("libclang." in row[0] for row in rows): raise RuntimeError("profile has no libclang")
 payload={"profile":profile,"versions":versions,"assets":rows}
 print(hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).hexdigest())
@@ -218,6 +254,8 @@ mod tests {
             protoc: path.clone(),
             node: path,
             libclang_dir: dir.path().join("lib").to_str().unwrap().into(),
+            library_dirs: Vec::new(),
+            protoc_include: None,
             ctox_prep: None,
         };
         profile.validate()?;

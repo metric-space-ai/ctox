@@ -3,7 +3,7 @@
 The CLI `ctox build-job --input <private-json-file>` authenticates a current unbound Business OS Owner/Admin capability. The JSON envelope is `{"capability_token":"…","request":{"action":"…"}}`. The file must be a private regular file of at most 1 MiB; tokens are never saved in jobs or sent to the build computer. Device-bound capabilities require their existing proof-of-possession path and are rejected here.
 
 Actions:
-- `profile`: `computer_id` and a typed Rust profile (`name`, `home`, `bin_dirs`, absolute `rustc/cargo/cc/cxx/protoc/node/libclang_dir`, optional absolute `ctox_prep`). Profiles live in native SQLite, owner/computer scoped; they require an assigned matching build grant.
+- `profile`: `computer_id` and a typed Rust profile (`name`, `home`, `bin_dirs`, absolute `rustc/cargo/cc/cxx/protoc/node/libclang_dir`, optional absolute `ctox_prep`, typed `library_dirs` and `protoc_include`). Profiles live in native SQLite, owner/computer scoped; they require an assigned matching build grant.
 - `submit`: `source_root`, existing `staging_root` outside the source, `toolchain`, optional opaque `computer_id`, stable `task_id`, explicit `timeout_seconds` (1–86400), optional `public_base` with anonymous GitHub repository/revision, and `recipe`.
 - `step` / `status`: `job_id`. `list` accepts an optional `after_job_id` and returns at most 100 owner jobs.
 
@@ -13,7 +13,7 @@ Selection reads the existing native registry and observes the granted prototype 
 
 Admission freezes tracked and nonignored untracked source (including local edits) into the caller's disposable staging volume. Public mode first verifies that the chosen base is anonymously advertised by GitHub, then sends a commit bundle and overlay. Private mode sends the complete frozen tree. No GitHub bearer or Git credential configuration is copied.
 
-The target identity hashes the actual compiler assets, version output and typed profile together with source identity. Before launch the compiler fingerprint is checked again. Endpoint/grant/credential fingerprints and the original owner's revocation epoch are retained; changed authority requires a new job rather than rebinding an old one.
+Rustc/Cargo must be direct binaries; context-sensitive rustup shims are rejected. The compiler probe has a seven-second deadline. The target identity hashes actual compiler/library assets, version output and typed profile together with source identity. Before launch the compiler fingerprint is checked again. Endpoint/grant/credential fingerprints and the original owner's revocation epoch are retained; changed authority requires a new job rather than rebinding an old one.
 
 Each step sends at most four 512 KiB chunks or advances one remote stage. Every acknowledged chunk is checkpointed before the next send. Restart after a lost response compares the same bytes/script/run. Source preparation and the build are detached with deadlines. Binary logs are read in 64 KiB cursor pages, written/fsynced locally and replayed idempotently. Completion waits for explicit exit status and drains the remaining log. SQL claims are fenced by owner, revision, generation and token, and released before a normal step returns.
 
