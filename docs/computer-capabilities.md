@@ -31,6 +31,17 @@ SSH/SMB connection details and SecretStore references; Transfer owns IO and
 job lifecycle. NFS is explicitly unsupported in this endpoint increment.
 This capability contract contains no credentials.
 
+## Workjet projection
+
+The existing WebRTC computer-list control can request `includeOperationalDetails: true`.
+Only that opt-in reply includes bounded `capabilityConfig` and a persisted boolean
+`agentless`. Legacy list and assignment replies retain their original shape. The
+Shell advertises `workjetComputerControl.supportsOperationalDetails`; Desktop omits
+the optional flag for older Shells, retaining one normal authorized list request.
+Owner filtering, native command admission and all grant policy remain unchanged.
+Endpoint connection records, credential references and secret values are not added
+to this projection. GPU labels come from the typed saved model and VRAM values.
+
 ## Typed descriptors
 
 ```json
