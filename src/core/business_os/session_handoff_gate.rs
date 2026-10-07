@@ -18,8 +18,12 @@
 //! it does not infer
 //! account or workspace entitlement from a reachable model route or a sole
 //! configured account, and it does not consume checkpoint bytes. The
-//! operational transfer consumer that must call `SessionHandoffTransfer` is
-//! still absent; see `docs/ctox-sync-handoff-integration.md`.
+//! native phase RPC is installed by the live Sync host; the protected byte
+//! consumer remains absent. See `docs/ctox-sync-handoff-integration.md`.
+
+#[cfg(unix)]
+#[path = "session_handoff_transport.rs"]
+pub(crate) mod transport;
 
 use super::policy::{BusinessOsActor, BusinessOsPermission, BusinessOsScope, BusinessOsScopeType};
 use super::store::{business_os_store_path, now_ms};
@@ -280,36 +284,43 @@ impl NativeSessionHandoffGate {
         identity: &SigningIdentity,
         request: &SessionHandoffGateRequest,
     ) -> Result<SessionHandoffPermit, SessionHandoffDenial> {
-        let decision = (|| {
-            // Resolve the basic binding, exact grant and pinned issuer first.
-            let permit = self.authorize_with_conn(conn, request, identity)?;
-            #[cfg(unix)]
-            {
-                let config = crate::sync_host::handoff_configuration(&self.root)
-                    .map_err(|_| deny("host_unavailable"))?;
-                match request.phase {
-                    SessionHandoffPhase::Disclose => {
-                        super::session_handoff_enrollment::validate_source_decision(
-                            &self.root, conn, &config, identity, request,
-                        )
-                        .map_err(|_| deny("source_authority_changed"))?
-                    }
-                    SessionHandoffPhase::Receive | SessionHandoffPhase::Resume => {
-                        super::session_handoff_enrollment::target::validate_target_decision(
-                            &self.root, conn, &config, identity, request,
-                        )
-                        .map_err(|_| deny("target_authority_changed"))?
-                    }
-                }
-            }
-            #[cfg(not(unix))]
-            return Err(deny("native_authority_unavailable"));
-            Ok(permit)
-        })();
+        let decision = self.resolve_fenced(conn, identity, request);
         if let Err(error) = audit_decision(conn, request, identity, &decision) {
             return Err(decision.err().unwrap_or(error));
         }
         decision
+    }
+
+    fn resolve_fenced(
+        &self,
+        conn: &Connection,
+        identity: &SigningIdentity,
+        request: &SessionHandoffGateRequest,
+    ) -> Result<SessionHandoffPermit, SessionHandoffDenial> {
+        // Resolve the basic binding, exact grant and pinned issuer first.
+        let permit = self.authorize_with_conn(conn, request, identity)?;
+        #[cfg(unix)]
+        {
+            let config = crate::sync_host::handoff_configuration(&self.root)
+                .map_err(|_| deny("host_unavailable"))?;
+            match request.phase {
+                SessionHandoffPhase::Disclose => {
+                    super::session_handoff_enrollment::validate_source_decision(
+                        &self.root, conn, &config, identity, request,
+                    )
+                    .map_err(|_| deny("source_authority_changed"))?
+                }
+                SessionHandoffPhase::Receive | SessionHandoffPhase::Resume => {
+                    super::session_handoff_enrollment::target::validate_target_decision(
+                        &self.root, conn, &config, identity, request,
+                    )
+                    .map_err(|_| deny("target_authority_changed"))?
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        return Err(deny("native_authority_unavailable"));
+        Ok(permit)
     }
 }
 impl SessionHandoffGate for NativeSessionHandoffGate {

@@ -7,7 +7,10 @@
     "CTOX_SYNC_IPC_MAX_FRAME_BYTES": 65536,
     "CTOX_SYNC_IPC_DEADLINE_MILLIS": 10000,
     "CTOX_SYNC_SESSION_HANDOFF_METHOD": "ctox.sync.session_handoff.authorize.v1",
-    "CTOX_SYNC_SESSION_HANDOFF_PERMIT_VERSION": 1
+    "CTOX_SYNC_SESSION_HANDOFF_PERMIT_VERSION": 1,
+    "CTOX_SYNC_SESSION_HANDOFF_REQUEST_KIND": "session-handoff-request-v1",
+    "CTOX_SYNC_SESSION_HANDOFF_REPLY_KIND": "session-handoff-reply-v1",
+    "CTOX_SYNC_SESSION_HANDOFF_MAX_WIRE_BYTES": 32768
   },
 
   "copyTypes": ["SyncHostTiming"],
@@ -70,6 +73,17 @@
     "ExecutionOwnership": {
       "nodeId": "u64",
       "generation": "u64"
+    },
+    "SessionHandoffRequest": {
+      "issuerIdentity": "string",
+      "phase": "SessionHandoffPhase",
+      "bindingDigest": "string",
+      "audience": "string",
+      "nonce": "string",
+      "spec": "ExecutionSpec",
+      "checkpointDigest": "string",
+      "checkpointSequence": "u64",
+      "ownership": "ExecutionOwnership"
     },
     "SessionHandoffPermit": {
       "version": "u32",
@@ -161,6 +175,14 @@
     }
   },
   "unions": {
+    "SessionHandoffWireRequest": {
+      "probe": { "request": "SessionHandoffRequest" },
+      "authorize": { "request": "SessionHandoffRequest", "challenge": "string" }
+    },
+    "SessionHandoffWireReply": {
+      "challenge": { "challenge": "string" },
+      "authorized": { "permit": "SessionHandoffPermit" }
+    },
     "SyncHostMember": {
       "voter": { "nodeId": "u64" },
       "worker": { "member": "WorkerMembership" }

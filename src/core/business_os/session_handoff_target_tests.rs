@@ -141,6 +141,7 @@ pub(crate) fn save_configuration(root: &Path, config: &HostConfiguration) {
 pub(crate) struct GateFixture {
     pub root: tempfile::TempDir,
     pub identity: std::sync::Arc<SigningIdentity>,
+    pub source: SigningIdentity,
     pub request: SessionHandoffGateRequest,
 }
 pub(crate) fn gate_fixture() -> GateFixture {
@@ -298,6 +299,7 @@ pub(crate) fn gate_fixture() -> GateFixture {
     GateFixture {
         root,
         identity: identity.clone(),
+        source,
         request: SessionHandoffGateRequest {
             issuer_identity: identity.public_identity(),
             phase: SessionHandoffPhase::Receive,

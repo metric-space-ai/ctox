@@ -3,29 +3,11 @@
 //! takeover proceeds without the responsible instance's current, signed
 //! decision. Production policy and checkpoint-stream wiring remain required.
 use super::auth::session_handoff::verify_fresh_session_handoff_permit;
-use crate::contracts::{
-    ExecutionOwnership, ExecutionSpec, SessionHandoffPermit, SessionHandoffPhase,
-};
+use crate::contracts::SessionHandoffPermit;
+pub use crate::contracts::SessionHandoffRequest as SessionHandoffGateRequest;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt;
 use std::sync::Arc;
-
-/// One phase authorization request evaluated against current native policy.
-/// `nonce` is caller-fresh per evaluation; permits are never reused as proof
-/// of current authorization.
-#[derive(Debug, Clone)]
-pub struct SessionHandoffGateRequest {
-    /// Resolve from trusted enrollment, never from the returned permit or peer payload.
-    pub issuer_identity: String,
-    pub phase: SessionHandoffPhase,
-    pub binding_digest: String,
-    pub audience: String,
-    pub nonce: String,
-    pub spec: ExecutionSpec,
-    pub checkpoint_digest: String,
-    pub checkpoint_sequence: u64,
-    pub ownership: ExecutionOwnership,
-}
 
 /// A stable, typed policy denial. Reason codes are identifiers for audit and
 /// operators; they never carry journal payloads, secrets or credentials.

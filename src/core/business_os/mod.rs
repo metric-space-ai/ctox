@@ -111,9 +111,9 @@ mod store_workjet_sessions;
 mod support;
 mod threads;
 mod worker_profile_bindings;
-pub mod workjet_transfer_git;
 #[path = "workjet_jour_fixe_contract.generated.rs"]
 pub(crate) mod workjet_jour_fixe_contract;
+pub mod workjet_transfer_git;
 
 pub(crate) use app_runtime::inspect_module as inspect_app_runtime_module;
 pub use browser_control::browser_context_capture;
@@ -161,6 +161,8 @@ pub(crate) use guest_registry::target_handoff::configure_repository as configure
 pub use session_handoff_gate::native_session_handoff_gate;
 #[cfg(unix)]
 pub(crate) use session_handoff_gate::native_source_offer;
+#[cfg(unix)]
+pub(crate) use session_handoff_gate::transport::NativeHandoffHost;
 pub use session_handoff_gate::NativeSessionHandoffGate;
 
 pub(crate) use external_sql_sync::start_background_sync;
