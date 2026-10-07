@@ -96,6 +96,15 @@ function createController(container) {
     if (event.target.closest('button')) overflow.open = false;
   };
   doc.addEventListener('click', outside);
+  const positionMenu = () => {
+    if (!overflow.open) return;
+    menu.style.transform = '';
+    const box = menu.getBoundingClientRect();
+    const shift = box.left < 8 ? 8 - box.left
+      : box.right > view.innerWidth - 8 ? view.innerWidth - 8 - box.right : 0;
+    menu.style.transform = shift ? 'translateX(' + shift + 'px)' : '';
+  };
+  overflow.addEventListener('toggle', positionMenu);
   overflow.addEventListener('keydown', escape);
   menu.addEventListener('click', closeAfterLaunch);
   function dispose() {
@@ -103,6 +112,7 @@ function createController(container) {
     if (frame !== null) view.cancelAnimationFrame(frame);
     resize.disconnect();
     doc.removeEventListener('click', outside);
+    overflow.removeEventListener('toggle', positionMenu);
     overflow.removeEventListener('keydown', escape);
     menu.removeEventListener('click', closeAfterLaunch);
     controllers.delete(container);
