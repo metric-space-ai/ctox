@@ -68,10 +68,10 @@ replaced assignments fail closed and require reconciliation.
 
 Registrations belong to this daemon lifetime. Restart does not resurrect a
 live provider/process from a persisted claim; abandoned import directories
-need explicit reconciliation. The provider turn producer, source/target
-handoff binding enrollment, protected checkpoint transport and original-session
-target resume are subsequent production connections under #183. Enrollment
-alone does not start QEMU or establish two-host restoration.
+need explicit reconciliation. The first-turn producer connection is described below. Source/target handoff
+binding enrollment, protected checkpoint transport and original-session target
+resume remain production connections under #183. Enrollment alone does not
+start QEMU or establish two-host restoration.
 
 ## Native queue producer connection
 
@@ -107,26 +107,23 @@ start a replacement provider session without lifecycle reconciliation.
 Source/target handoff enrollment, complete artifact capture, authorized
 checkpoint transport and continuation of the original session remain open.
 
-## Native producer ownership before the capture transition
+## Native producer lifetime
 
-Source inspection at CTOX `5f2d52c362c628b0eea673c7eda8fe60d6e9be70`
-(2026-10-06) identifies three separate lifetime boundaries:
+The production first-turn connection preserves three separate owners:
 
 - `service::run_foreground` retains the configured `sync_host::ServiceHost`
-  for daemon lifetime. The host exposes its running `execution_authority`;
-  no production caller currently connects that authority to
-  `NativeGuestRegistry::new`.
-- The regular chat producer in `execution::agent::turn_loop` calls
-  `PersistentSession::start_with_business_os_mcp`. The separate
-  `start_native_guest_with_business_os_mcp` entry point has no production
-  caller. It requires an independently enrolled registry assignment and a
-  retained native peer; a signed command token alone cannot supply those.
-- `PersistentSession::run_turn_async` owns `NativeProviderTurnOwner` locally.
-  On every return, its destructor revokes the live binding and removes the
-  registry entry. The retained `NativeGuestExecution` observation handle
-  does not extend that authority. A later turn is also expressly rejected
-  until lifecycle reconciliation. Passing that handle to capture after the
-  turn would therefore fail current-authority checks.
+  for daemon lifetime. Guest configuration makes that same host construct its
+  registry and attach the source to its actual native peer.
+- `execution::agent::turn_loop` calls
+  `start_native_guest_with_business_os_mcp` only for an enrolled, currently
+  scoped chat/Crew assignment. A signed command token alone cannot supply
+  that assignment or keep a stopped host peer live.
+- `PersistentSession::run_turn_async` owns `NativeProviderTurnOwner`. An
+  exact successful TurnComplete can retire that owner into a distinct capture
+  owner retained by the persistent session; other returns revoke it. A
+  `NativeGuestExecution` observation handle cannot extend provider authority.
+  A subsequent turn requires lifecycle reconciliation, rather than creating
+  a replacement provider session under the old guest assignment.
 
 Checked shutdown now reaches the public persistent-session owner and its
 review callers. It establishes checked teardown only. It neither transfers
@@ -194,8 +191,8 @@ owner. Later reads repeat authority and journal checks.
 This supplies actual journal input only. It does not establish provider resume,
 capture every attachment or VM file, reconcile effects, enroll the handoff,
 publish protected bytes or reconstruct a target. No checkpoint is published with
-an empty or fabricated provider-state blob. The native factory still needs its
-explicit production lifecycle caller.
+an empty or fabricated provider-state blob. The first-turn factory now has its
+queue caller; the complete checkpoint capture and handoff consumer remain open.
 
 Four added recorder regressions exercise real writer retention and path
 replacement, post-shutdown mutation, failed writer shutdown and deferred-thread
@@ -224,8 +221,8 @@ the original provider record. Ordinary producers do not gain this authority, and
 the subsequent-turn reconciliation refusal remains.
 
 This implements the native source ownership transition and its explicit
-quiescence boundary. It does not connect the native factory to service startup
-or invoke CheckpointStore::capture. The returned handle is not fresh Raft
+quiescence boundary. The first-turn queue connection supplies a producer, but
+does not yet invoke CheckpointStore::capture. The returned handle is not fresh Raft
 ownership, complete artifact/provider export, handoff enrollment, effects
 reconciliation, protected-byte publication or target-resume certification.
 Those production consumers and acceptance requirements remain open.
