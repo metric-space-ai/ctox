@@ -32,6 +32,8 @@ projected `records` and a `complete` boolean. Match criteria retain the existing
 company/person selector whitelist and indexed exact lookup. Each used CRM
 collection has one required read-only transaction for the entire batch;
 transactions across different collections are not a single atomic snapshot.
+Optional lookup indexes are prepared for all collections before those read
+transactions begin, so a rollback-journal reader cannot block later index DDL.
 
 There are 1–50 requests, at most 16 exact and 16 fuzzy selectors per request,
 1–32 explicit output field paths and a result limit of 1–50. Across the whole

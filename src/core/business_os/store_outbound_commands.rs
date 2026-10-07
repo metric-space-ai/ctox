@@ -1978,13 +1978,19 @@ fn outbound_sellify_batch_lookup(root: &Path, payload: &Value) -> anyhow::Result
             );
         }
     }
-    let mut snapshots = BTreeMap::new();
+    // Prepare every collection's indexes before any required read snapshot.
+    // An earlier read transaction can block index DDL on rollback-journal DBs.
     for (entity, fields) in &indexed_fields {
         let (collection, _) = sellify_lookup_spec(entity)?;
         let fields = fields.iter().map(String::as_str).collect::<Vec<_>>();
+        super::store::prepare_rxdb_collection_lookup_indexes(root, collection, &fields)?;
+    }
+    let mut snapshots = BTreeMap::new();
+    for entity in indexed_fields.keys() {
+        let (collection, _) = sellify_lookup_spec(entity)?;
         snapshots.insert(
             entity.clone(),
-            super::store::required_rxdb_collection_read_connection(root, collection, &fields)?,
+            super::store::required_rxdb_collection_read_connection(root, collection, &[])?,
         );
     }
     let mut results = Vec::with_capacity(requests.len());
@@ -7109,6 +7115,36 @@ mod tests {
     }
 
     #[test]
+    fn sellify_batch_prepares_both_indexes_before_read_snapshots() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        sellify_batch_fixture(temp.path())?;
+        let db = super::super::store::rxdb_store_path(temp.path());
+        {
+            let conn = Connection::open(&db)?;
+            conn.pragma_update(None, "journal_mode", "DELETE")?;
+        }
+        let result = outbound_sellify_lookup(
+            temp.path(),
+            &serde_json::json!({"batch":[
+                {"key":"company", "entity":"company", "selectors":[{"field":"contact_id","value":"1"}], "fields":["name"]},
+                {"key":"people", "entity":"person", "selectors":[{"field":"contact_id","value":"1"}], "fields":["name"]}
+            ]}),
+        )?;
+        assert_eq!(result["results"][1]["records"].as_array().unwrap().len(), 2);
+        let conn = Connection::open(&db)?;
+        for collection in ["sellify_companies", "sellify_people"] {
+            let table = format!("ctox_business_os__{collection}__v0");
+            let indexes: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND instr(sql, ?2)>0",
+                params![table, "json_extract(data, '$.contact_id')"],
+                |row| row.get(0),
+            )?;
+            assert!(indexes > 0, "{collection} index must precede read snapshots");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn sellify_batch_limit_detects_overlapping_selectors_without_a_false_complete(
     ) -> anyhow::Result<()> {
         let temp = tempdir()?;
@@ -7184,7 +7220,7 @@ mod tests {
         person["key"] = serde_json::json!("person");
         person["entity"] = serde_json::json!("person");
         assert!(
-            outbound_sellify_lookup(temp.path(), &serde_json::json!({"batch":[valid,person]}))
+            outbound_sellify_lookup(unavailable.path(), &serde_json::json!({"batch":[valid,person]}))
                 .is_err(),
             "missing second collection must not return a successful partial batch"
         );
