@@ -13740,7 +13740,8 @@ async function workjetProjectControl(request = {}) {
     }
     const requestType = meetingRead ? 'ReadMeetingRequest' : configuring ? 'ConfigureKpisRequest' : 'ReadKpisRequest';
     const validate = meetingRead ? validateJourFixeValue : validateProjectKpiValue;
-    validate(requestType, payload);
+    const requestValidation = validate(requestType, payload);
+    if (requestValidation.ok !== true) throw new TypeError(requestValidation.error);
     if (configuring) payload.prompts = payload.prompts.map(prompt => {
       assertWorkjetProjectPayloadKeys(prompt, new Set(['kpi_id', 'prompt']));
       return { kpi_id: prompt.kpi_id, prompt: prompt.prompt };
@@ -13769,7 +13770,8 @@ async function workjetProjectControl(request = {}) {
     }
     if (!meetingRead) {
       const kpis = receipt.result.kpis;
-      validateProjectKpiValue('ProjectKpis', kpis);
+      const kpiValidation = validateProjectKpiValue('ProjectKpis', kpis);
+      if (kpiValidation.ok !== true) throw new TypeError(kpiValidation.error);
       if (kpis.project_id !== projectId || !Number.isSafeInteger(kpis.revision)) {
         throw new Error('Workjet KPI result belongs to another project or revision.');
       }
@@ -13780,7 +13782,8 @@ async function workjetProjectControl(request = {}) {
       throw new Error('Workjet explicitly requested meeting was not confirmed.');
     }
     if (meeting !== null) {
-      validateJourFixeValue('Meeting', meeting);
+      const meetingValidation = validateJourFixeValue('Meeting', meeting);
+      if (meetingValidation.ok !== true) throw new TypeError(meetingValidation.error);
       if (meeting.project_id !== projectId || !Number.isSafeInteger(meeting.revision)
         || !Number.isSafeInteger(meeting.deck_revision)
         || (payload.meeting_id !== undefined && meeting.id !== payload.meeting_id)) {
