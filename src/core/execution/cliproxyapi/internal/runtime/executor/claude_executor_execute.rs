@@ -2414,7 +2414,7 @@ data: {\"type\":\"message_stop\"}\n\n";
 
     #[tokio::test]
     async fn configured_context_responses_isolates_parallel_sessions_and_reuses_continuation() {
-        use crate::sdk::api::handlers::openai::{
+        use crate::sdk::api::handlers::openai::openai_responses_handlers::{
             OpenAiResponsesClaudeHandler, OpenAiResponsesRouteResponse,
         };
         let first = thread_fixture_transport(vec![200, 200, 200], CONFIGURED_CONTEXT_SSE);
@@ -2463,7 +2463,7 @@ data: {\"type\":\"message_stop\"}\n\n";
 
     #[tokio::test]
     async fn configured_context_responses_keeps_session_on_401_refresh_replay() {
-        use crate::sdk::api::handlers::openai::{
+        use crate::sdk::api::handlers::openai::openai_responses_handlers::{
             OpenAiResponsesClaudeHandler, OpenAiResponsesRouteResponse,
         };
         let first = thread_fixture_transport(vec![401, 200], CONFIGURED_CONTEXT_SSE);
@@ -2534,7 +2534,7 @@ data: {\"type\":\"message_stop\"}\n\n";
 
     #[tokio::test]
     async fn configured_context_responses_stream_retains_session_on_real_account_failover() {
-        use crate::sdk::api::handlers::openai::{
+        use crate::sdk::api::handlers::openai::openai_responses_handlers::{
             OpenAiResponsesClaudeHandler, OpenAiResponsesRouteResponse,
         };
         let first_stream = Arc::new(ConfiguredContextStreamTransport {
