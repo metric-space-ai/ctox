@@ -432,9 +432,7 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             // Transfer status is read-only and must remain usable while the
             // queue has a writer. The foreground worker owns its durable queue.
             // Neither operation needs startup migrations or CLI ledger writes.
-            "transfer"
-                if matches!(args.get(1).map(String::as_str), Some("run" | "status")) =>
-            {
+            "transfer" if matches!(args.get(1).map(String::as_str), Some("run" | "status")) => {
                 return true;
             }
             // Knowledge commands are routed to the daemon-owned IPC handler

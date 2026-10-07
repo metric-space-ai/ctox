@@ -68,6 +68,9 @@ fn transfer_status_reads_under_a_writer_without_creating_cli_ledger() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(ledger_tables, 0, "status must not initialize a CLI audit ledger");
+    assert_eq!(
+        ledger_tables, 0,
+        "status must not initialize a CLI audit ledger"
+    );
     writer.execute_batch("ROLLBACK;").unwrap();
 }
