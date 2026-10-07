@@ -36,7 +36,7 @@ impl server::Handler for Handler {
         user: &str,
         key: &PublicKey,
     ) -> anyhow::Result<server::Auth> {
-        if user == "fixture" && key == &self.public_key {
+        if user == "fixture" && key.key_data() == self.public_key.key_data() {
             self.authenticated.store(true, Ordering::Release);
             Ok(server::Auth::Accept)
         } else {
