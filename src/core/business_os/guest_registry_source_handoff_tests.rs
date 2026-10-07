@@ -20,7 +20,9 @@ pub(super) fn assert_native_source_handoff_enrollment(
 ) {
     crate::sync_host::handle_command(root, &["init".into()]).unwrap();
     let identity = crate::sync_host::signing_identity(root).unwrap();
-    let target = new_identity();
+    let target_root = tempfile::tempdir().unwrap();
+    crate::sync_host::handle_command(target_root.path(), &["init".into()]).unwrap();
+    let target = crate::sync_host::signing_identity(target_root.path()).unwrap();
     let third = new_identity();
     let config = ctox_sync::host_config::HostConfiguration {
         version: 1,
@@ -68,7 +70,9 @@ pub(super) fn assert_native_source_handoff_enrollment(
     let mut input = enrollment::SourceHandoffEnrollment {
         capture_id: receipt.capture_id.clone(),
         target_node_id: 2,
-        target_instance_id: "operator-selected-target-instance".into(),
+        target_instance_id: crate::business_os::store::sync_connection_config(target_root.path())
+            .unwrap()
+            .instance_id,
         target_principal_user_id: "owner".into(),
         repository_id: "operator-selected-repository".into(),
         target_working_copy_id: "target-copy".into(),
@@ -410,6 +414,14 @@ pub(super) fn assert_native_source_handoff_enrollment(
             enrollment::validate_source_decision(root, tx, &config, &identity, &request)
         })
         .expect("exact disclosure grant must preserve native source authority");
+    enrollment::target::tests::assert_actual_source_target_enrollment(
+        root,
+        target_root.path(),
+        &config,
+        spec,
+        &first.binding_id,
+        &input,
+    );
     registry
         .with_policy(|tx| {
             // The persistent trigger is visible to the gate's independent connection.
