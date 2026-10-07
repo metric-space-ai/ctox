@@ -342,6 +342,7 @@ impl WebRTCRsConnectionHandler {
 }
 
 pub type CollectionAuthzHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
+pub type CollectionAuthzResultHook = Arc<dyn Fn(&str, &str) -> RxResult<bool> + Send + Sync>;
 pub type CollectionEagerPullHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 pub type CollectionLiveChangeHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 pub type DocumentReadFilter = Arc<dyn Fn(&Value) -> bool + Send + Sync>;
@@ -1181,6 +1182,7 @@ pub struct WebRTCRsConnectionHandler {
     /// the peer presented at handshake (captured into `peer_capability_tokens`).
     /// `None` => no enforcement (default), so replication behavior is unchanged.
     collection_authz: Arc<Mutex<Option<CollectionAuthzHook>>>,
+    collection_authz_result: Arc<Mutex<Option<CollectionAuthzResultHook>>>,
     collection_eager_pull: Arc<Mutex<Option<CollectionEagerPullHook>>>,
     collection_live_change: Arc<Mutex<Option<CollectionLiveChangeHook>>>,
     collection_write_authz: Arc<Mutex<Option<CollectionAuthzHook>>>,
@@ -1356,6 +1358,7 @@ impl WebRTCRsConnectionHandler {
             pending_offers: Mutex::new(HashMap::new()),
             backpressure: Arc::new(Mutex::new(HashMap::new())),
             collection_authz: Arc::new(Mutex::new(None)),
+            collection_authz_result: Arc::new(Mutex::new(None)),
             collection_eager_pull: Arc::new(Mutex::new(None)),
             collection_live_change: Arc::new(Mutex::new(None)),
             collection_write_authz: Arc::new(Mutex::new(None)),
@@ -1378,7 +1381,14 @@ impl WebRTCRsConnectionHandler {
     /// #12c: install the per-collection read-authz hook. Set once right after
     /// construction, before any peer connects. `None` disables enforcement.
     pub fn set_collection_authz(&self, hook: Option<CollectionAuthzHook>) {
+        *self.collection_authz_result.lock() = None;
         *self.collection_authz.lock() = hook;
+    }
+
+    /// Install before room admission; unavailable authority still denies all
+    /// boolean replication paths, while demand reads can wait within a bound.
+    pub fn set_collection_authz_result(&self, hook: CollectionAuthzResultHook) {
+        *self.collection_authz_result.lock() = Some(hook);
     }
 
     /// Install a server-authoritative gate for ordinary masterChangesSince
@@ -2486,12 +2496,27 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     /// unchanged). When installed, an unknown peer maps to an empty token so the
     /// hook still decides (it treats an empty/invalid token as least privilege).
     fn is_collection_authorized_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
+        self.collection_authorization_for_peer(peer, collection)
+            .unwrap_or(false)
+    }
+
+    fn collection_authorization_for_peer(
+        &self,
+        peer: &Self::Peer,
+        collection: &str,
+    ) -> RxResult<bool> {
+        let result_hook = self.collection_authz_result.lock().clone();
         let hook = self.collection_authz.lock().clone();
-        self.evaluate_current_peer_policy(peer, |token| match hook {
-            None => true,
-            Some(check) => check(token, collection),
+        self.evaluate_current_peer_policy(peer, |token| {
+            if let Some(check) = result_hook {
+                return check(token, collection);
+            }
+            Ok(match hook {
+                None => true,
+                Some(check) => check(token, collection),
+            })
         })
-        .unwrap_or(false)
+        .unwrap_or(Ok(false))
     }
 
     fn is_eager_collection_pull_authorized_for_peer(
@@ -5633,6 +5658,56 @@ mod tests {
         // Removing enforcement returns to fail-open.
         handler.set_collection_authz(None);
         assert!(handler.is_collection_authorized_for_peer(&other, "anything"));
+        handler.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn collection_authority_result_retains_denial_and_generation_fences() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = install_test_connection(&handler, "auth-result", 1).await;
+        handler.set_peer_capability_token(&peer, "valid".into());
+        handler.set_collection_authz_result(Arc::new(|token, _| {
+            if token == "valid" {
+                Err(new_rx_error("COLLECTION_AUTHORITY_UNAVAILABLE", None))
+            } else {
+                Ok(false)
+            }
+        }));
+        assert_eq!(
+            handler
+                .collection_authorization_for_peer(&peer, "records")
+                .unwrap_err()
+                .code(),
+            "COLLECTION_AUTHORITY_UNAVAILABLE"
+        );
+        assert!(!handler.is_collection_authorized_for_peer(&peer, "records"));
+        handler.set_peer_capability_token(&peer, "invalid".into());
+        assert!(!handler
+            .collection_authorization_for_peer(&peer, "records")
+            .unwrap());
+        {
+            let _lifecycle = handler.peer_lifecycle.lock();
+            handler
+                .peers
+                .lock()
+                .get_mut("auth-result")
+                .expect("fixture peer remains registered")
+                .generation = 2;
+        }
+        let replacement = handler
+            .connection_for_peer("auth-result")
+            .expect("replacement generation is current");
+        assert!(!handler
+            .collection_authorization_for_peer(&peer, "records")
+            .unwrap());
+        handler.set_peer_capability_token(&replacement, "valid".into());
+        handler.set_collection_authz(None);
+        assert!(handler
+            .collection_authorization_for_peer(&replacement, "records")
+            .unwrap());
+        assert!(!handler
+            .collection_authorization_for_peer(&peer, "records")
+            .unwrap());
         handler.close().await.unwrap();
     }
 

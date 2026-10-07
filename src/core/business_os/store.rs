@@ -18472,11 +18472,23 @@ pub(super) fn webrtc_capability_allows_collection_permission(
     collection: &str,
     permission: BusinessOsPermission,
 ) -> bool {
+    check_webrtc_collection_permission(root, token, collection, permission).unwrap_or(false)
+}
+
+/// Missing/invalid credentials are policy denials. Issuer/store unavailability
+/// must not be presented as a permanent denial to a bounded demand query.
+pub(super) fn check_webrtc_collection_permission(
+    root: &Path,
+    token: &str,
+    collection: &str,
+    permission: BusinessOsPermission,
+) -> anyhow::Result<bool> {
     // Ordinary callers may need schema setup; do it before issuer authority.
     // Publication callers use the borrowed APIs on their already-held policy.
-    if with_store_connection(root, |_| Ok(())).is_err() {
-        return false;
+    if token.trim().is_empty() {
+        return Ok(false);
     }
+    with_store_connection(root, |_| Ok(()))?;
     with_current_webrtc_capability_signer(root, |secret| {
         with_store_connection(root, |conn| {
             Ok(
@@ -18491,7 +18503,6 @@ pub(super) fn webrtc_capability_allows_collection_permission(
             )
         })
     })
-    .unwrap_or(false)
 }
 
 pub(super) fn capability_allows_workspace_permission(

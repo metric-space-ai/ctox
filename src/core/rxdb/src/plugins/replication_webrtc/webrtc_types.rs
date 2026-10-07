@@ -256,6 +256,16 @@ pub trait WebRTCConnectionHandler: Send + Sync {
         true
     }
 
+    /// A failed authority lookup is distinct from a verified policy denial.
+    /// Generic handlers retain their existing boolean authorization behavior.
+    fn collection_authorization_for_peer(
+        &self,
+        peer: &Self::Peer,
+        collection: &str,
+    ) -> crate::rx_error::RxResult<bool> {
+        Ok(self.is_collection_authorized_for_peer(peer, collection))
+    }
+
     /// The remote peer advertised `CTOX_FRAME_DEFLATE_CAPABILITY`: framed
     /// transfers to it may be deflate-compressed. Generic handlers ignore it.
     fn enable_frame_compression_for_peer(&self, _peer: &Self::Peer) {}

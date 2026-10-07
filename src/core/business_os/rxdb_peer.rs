@@ -2956,20 +2956,20 @@ async fn run_native_peer(
             });
         // Server-authoritative exact per-collection read authz. Missing,
         // expired, revoked, or stale-epoch capabilities fail closed.
-        let collection_authz: Option<CollectionAuthzHook> =
-            if store::collection_authz_enabled(&root) {
-                let authz_root = root.clone();
-                Some(std::sync::Arc::new(move |token: &str, collection: &str| {
-                    store::webrtc_capability_allows_collection_permission(
-                        &authz_root,
-                        token,
-                        collection,
-                        crate::business_os::policy::BusinessOsPermission::DataRead,
-                    )
-                }))
-            } else {
-                None
-            };
+        let collection_authz_enabled = store::collection_authz_enabled(&root);
+        let collection_authz: Option<CollectionAuthzHook> = if collection_authz_enabled {
+            let authz_root = root.clone();
+            Some(std::sync::Arc::new(move |token: &str, collection: &str| {
+                store::webrtc_capability_allows_collection_permission(
+                    &authz_root,
+                    token,
+                    collection,
+                    crate::business_os::policy::BusinessOsPermission::DataRead,
+                )
+            }))
+        } else {
+            None
+        };
         let collection_write_authz: Option<CollectionAuthzHook> = {
             let write_authz_root = root.clone();
             Some(std::sync::Arc::new(move |token: &str, collection: &str| {
@@ -3038,6 +3038,28 @@ async fn run_native_peer(
                 bringup_timeout: Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
             },
             |pool| {
+                if collection_authz_enabled {
+                    let authz_root = root.clone();
+                    pool.connection_handler
+                        .set_collection_authz_result(Arc::new(move |token, collection| {
+                            store::check_webrtc_collection_permission(
+                                &authz_root,
+                                token,
+                                collection,
+                                crate::business_os::policy::BusinessOsPermission::DataRead,
+                            )
+                            .map_err(|_| {
+                                rxdb::rx_error::RxError::Standard {
+                                    code: "COLLECTION_AUTHORITY_UNAVAILABLE".into(),
+                                    message:
+                                        "native collection authority is temporarily unavailable"
+                                            .into(),
+                                    url: String::new(),
+                                    parameters: json!({}),
+                                }
+                            })
+                        }));
+                }
                 // Phase 4: register demand-fetch file SOURCES on the pool's file
                 // fetch registry so `rxdb.file.fetch` actually serves bytes for
                 // the file-bearing chunk collections (without a source the
