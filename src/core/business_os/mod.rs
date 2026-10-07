@@ -6,6 +6,7 @@ mod ats_gates;
 mod backup_restore;
 mod browser_control;
 mod browser_runtime;
+pub mod build_job_store;
 pub mod build_lane_runner;
 pub(crate) mod build_ssh;
 mod capability;
