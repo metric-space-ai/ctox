@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "AGPL-3.0-only"
-description = "Bare-metal CTOX native port scaffold for engineai/Voxtral-4B-TTS-2603."
+description = "Native CPU/CUDA text-to-WAV graph for engineai/Voxtral-4B-TTS-2603."
 build = "build.rs"
 
 [workspace]
@@ -16,6 +16,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "ctox-voxtral-tts-inspect"
 path = "src/main.rs"
+
+[[bin]]
+name = "ctox-voxtral-tts-synthesize"
+path = "src/synthesize.rs"
 
 [features]
 default = []

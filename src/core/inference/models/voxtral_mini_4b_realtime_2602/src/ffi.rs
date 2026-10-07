@@ -565,6 +565,12 @@ extern "C" {
     pub fn ggml_new_graph(ctx: *mut ggml_context) -> *mut ggml_cgraph;
     pub fn ggml_graph_size(gf: *mut ggml_cgraph) -> c_int;
     pub fn ggml_graph_n_nodes(gf: *mut ggml_cgraph) -> c_int;
+    pub fn ggml_graph_node(gf: *mut ggml_cgraph, index: c_int) -> *mut ggml_tensor;
+    pub fn ggml_backend_sched_get_tensor_backend(
+        sched: *mut ggml_backend_sched,
+        node: *mut ggml_tensor,
+    ) -> ggml_backend_t;
+
     pub fn ggml_graph_overhead_custom(size: size_t, grads: bool) -> size_t;
     pub fn ggml_graph_get_tensor(gf: *const ggml_cgraph, name: *const c_char) -> *mut ggml_tensor;
     pub fn ggml_get_data(t: *const ggml_tensor) -> *mut c_void;

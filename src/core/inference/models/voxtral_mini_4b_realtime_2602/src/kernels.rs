@@ -9,6 +9,16 @@ pub enum VoxtralSttBackend {
 }
 
 impl VoxtralSttBackend {
+    /// Compiled capability, not model readiness or successful GPU admission.
+    pub fn is_available(self) -> bool {
+        match self {
+            Self::Cpu => crate::GGML_CPU_ENABLED,
+            Self::Metal => crate::GGML_METAL_ENABLED,
+            Self::Cuda => crate::GGML_CUDA_ENABLED,
+            Self::Wgsl => false,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Cpu => "cpu-rust-reference",
@@ -25,6 +35,24 @@ pub trait KernelBackend {
     fn add_inplace(&mut self, a: &mut [f32], b: &[f32]) -> Result<()>;
     fn silu_inplace(&mut self, x: &mut [f32]) -> Result<()>;
     fn gelu_inplace(&mut self, x: &mut [f32]) -> Result<()>;
+}
+
+#[cfg(test)]
+mod backend_tests {
+    use super::*;
+
+    #[test]
+    fn capability_does_not_advertise_uncompiled_gpu_backends() {
+        assert_eq!(
+            VoxtralSttBackend::Cuda.is_available(),
+            crate::GGML_CUDA_ENABLED
+        );
+        assert_eq!(
+            VoxtralSttBackend::Metal.is_available(),
+            crate::GGML_METAL_ENABLED
+        );
+        assert!(!VoxtralSttBackend::Wgsl.is_available());
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

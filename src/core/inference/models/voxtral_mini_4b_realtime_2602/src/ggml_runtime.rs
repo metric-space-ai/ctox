@@ -25,6 +25,17 @@ pub struct GgmlVoxtralRuntime {
     ctx: GgmlSession,
     backend: VoxtralSttBackend,
     max_decode_tokens: usize,
+    stream_decoder: Option<StreamDecoder>,
+}
+
+struct StreamDecoder {
+    position: i32,
+    token: i32,
+    output: Vec<i32>,
+    prefetched: bool,
+    ended: bool,
+    seen_text: bool,
+    consecutive_pad: usize,
 }
 
 struct GgmlModel {
@@ -111,6 +122,7 @@ struct GgmlSession {
     mel_filters_cpu: Vec<f32>,
     mel_plan: audio::MelSpectrogramPlan,
     time_emb_cpu: Vec<f32>,
+    decoder_diagnostics: crate::stt::DecoderDiagnostics,
 }
 
 struct MetaContext {
@@ -143,6 +155,7 @@ impl GgmlVoxtralRuntime {
             ctx,
             backend,
             max_decode_tokens: 256,
+            stream_decoder: None,
         })
     }
 
@@ -192,6 +205,110 @@ impl GgmlVoxtralRuntime {
                 tokens.len()
             );
             Ok(text)
+        }
+    }
+
+    pub fn decoder_diagnostics(&self) -> crate::stt::DecoderDiagnostics {
+        self.ctx.decoder_diagnostics.clone()
+    }
+
+    pub fn start_stream(&mut self) {
+        self.ctx.decoder_diagnostics = Default::default();
+        unsafe { self.ctx.clear_kv_cache() };
+
+        self.stream_decoder = Some(StreamDecoder {
+            position: (VOX_N_LEFT_PAD_TOKENS + VOX_N_DELAY_TOKENS) as i32,
+            token: VOX_TOKEN_STREAMING_PAD,
+            output: Vec::new(),
+            prefetched: false,
+            ended: false,
+            seen_text: false,
+            consecutive_pad: 0,
+        });
+    }
+
+    /// Decoder KV persists. The causal encoder is recomputed over the bounded
+    /// utterance; previously generated decoder tokens are never replayed.
+    pub fn stream_samples(&mut self, samples: &[f32], final_audio: bool) -> Result<String> {
+        if samples.is_empty() {
+            return Err(Error::InvalidFormat("stream contains no audio"));
+        }
+        let state = self
+            .stream_decoder
+            .as_ref()
+            .ok_or(Error::InvalidFormat("stream not opened"))?;
+        if state.ended {
+            return Ok(self.model.decode_tokens(&state.output));
+        }
+        // Hold one audio token behind capture: STFT uses a centred 400-sample
+        // window, so its incomplete tail must not enter persistent decoder KV.
+        let available = if final_audio {
+            usize::MAX
+        } else {
+            VOX_N_LEFT_PAD_TOKENS + samples.len() / VOX_RAW_AUDIO_LENGTH_PER_TOK - 1
+        };
+        if !final_audio && available <= state.position as usize {
+            return Ok(self.model.decode_tokens(&state.output));
+        }
+        let padded = audio::pad_audio_streaming(
+            samples,
+            VOX_N_LEFT_PAD_TOKENS,
+            if final_audio {
+                VOX_N_RIGHT_PAD_TOKENS
+            } else {
+                0
+            },
+        );
+        let mel = self.ctx.mel_plan.compute(&padded);
+        let frames = padded.len() / VOX_HOP_LENGTH;
+        let mut logits = vec![0.0f32; VOX_VOCAB_SIZE];
+        unsafe {
+            self.ctx
+                .run_encoder_chunked(&self.model, mel.as_ptr(), frames as i32)?;
+            self.ctx.run_adapter(&self.model)?;
+            let state = self.stream_decoder.as_mut().unwrap();
+            let limit = available.min(self.ctx.dec_seq_len as usize) as i32;
+            if !state.prefetched && limit > state.position {
+                let mut prefix = vec![VOX_TOKEN_STREAMING_PAD; state.position as usize];
+                prefix[0] = VOX_TOKEN_BOS;
+                self.ctx
+                    .run_decoder_prefill(&self.model, &prefix, &mut logits)?;
+                state.prefetched = true;
+            }
+            while state.position < limit && state.output.len() < self.max_decode_tokens {
+                self.ctx.run_decoder_step(
+                    &self.model,
+                    state.token,
+                    state.position,
+                    state.position,
+                    &mut logits,
+                )?;
+                state.position += 1;
+                state.token = argmax(&logits) as i32;
+                if state.token == VOX_TOKEN_EOS {
+                    state.ended = true;
+                    break;
+                }
+                state.output.push(state.token);
+                if state.token == VOX_TOKEN_STREAMING_PAD {
+                    state.consecutive_pad += 1;
+                } else {
+                    state.consecutive_pad = 0;
+                    state.seen_text |= state.token >= self.model.tokenizer_num_special_tokens;
+                }
+                if final_audio && state.seen_text && state.consecutive_pad >= VOX_N_RIGHT_PAD_TOKENS
+                {
+                    state.ended = true;
+                    break;
+                }
+            }
+            if state.output.len() >= self.max_decode_tokens
+                && state.position < limit
+                && !state.ended
+            {
+                return Err(Error::Unsupported("stream decode token limit reached"));
+            }
+            Ok(self.model.decode_tokens(&state.output))
         }
     }
 
@@ -492,6 +609,7 @@ impl GgmlSession {
             mel_filters_cpu: Vec::new(),
             mel_plan: audio::MelSpectrogramPlan::default(),
             time_emb_cpu: compute_time_embedding(VOX_N_DELAY_TOKENS as f32, VOX_DEC_DIM),
+            decoder_diagnostics: Default::default(),
         };
         unsafe {
             ctx.allocate_persistent()?;
@@ -991,13 +1109,32 @@ impl GgmlSession {
                 ));
             }
 
+            let stage = Instant::now();
             let meta = MetaContext::new(GGML_DEFAULT_GRAPH_SIZE * 4)?;
             let gf = self.build_decoder_step_graph(model, meta.ctx, position, audio_pos);
+            self.decoder_diagnostics.graph_build_us += stage.elapsed().as_micros() as u64;
+            let stage = Instant::now();
             ffi::ggml_backend_sched_reset(self.sched_dec_step);
+
             if !ffi::ggml_backend_sched_alloc_graph(self.sched_dec_step, gf) {
                 return Err(Error::Runtime(
                     "decoder step graph allocation failed".into(),
                 ));
+            }
+            self.decoder_diagnostics.graph_allocate_us += stage.elapsed().as_micros() as u64;
+            if self.has_accel && self.decoder_diagnostics.steps == 0 {
+                for index in 0..ffi::ggml_graph_n_nodes(gf) {
+                    let node = ffi::ggml_graph_node(gf, index);
+                    let backend =
+                        ffi::ggml_backend_sched_get_tensor_backend(self.sched_dec_step, node);
+                    if !backend.is_null() && backend == self.backend_cpu {
+                        *self
+                            .decoder_diagnostics
+                            .host_scheduled_ops
+                            .entry((*node).op)
+                            .or_default() += 1;
+                    }
+                }
             }
 
             let tok_t = graph_tensor(gf, "token_id");
@@ -1028,18 +1165,24 @@ impl GgmlSession {
                 );
             }
 
+            let stage = Instant::now();
             check_status(
                 ffi::ggml_backend_sched_graph_compute(self.sched_dec_step, gf),
                 "decoder step graph compute",
             )?;
+            self.decoder_diagnostics.compute_us += stage.elapsed().as_micros() as u64;
+            let stage = Instant::now();
             ffi::ggml_backend_tensor_get(
                 self.decoder_logits,
                 logits_out.as_mut_ptr() as *mut c_void,
                 0,
                 VOX_VOCAB_SIZE * std::mem::size_of::<f32>(),
             );
+            self.decoder_diagnostics.readback_us += stage.elapsed().as_micros() as u64;
+            self.decoder_diagnostics.steps += 1;
             self.kv_used += 1;
             ffi::ggml_backend_sched_reset(self.sched_dec_step);
+
             Ok(())
         }
     }
@@ -1724,9 +1867,17 @@ fn init_weight_backend(backend: VoxtralSttBackend) -> (ffi::ggml_backend_t, bool
             }
             (init_cpu_backend(), false)
         }
-        VoxtralSttBackend::Cpu | VoxtralSttBackend::Wgsl | VoxtralSttBackend::Cuda => {
-            (init_cpu_backend(), false)
+        VoxtralSttBackend::Cuda => {
+            #[cfg(ctox_ggml_cuda)]
+            unsafe {
+                // Device 0 is relative to the supervisor's admitted devices.
+                let cuda = ffi::ggml_backend_cuda_init(0);
+                return (cuda, !cuda.is_null());
+            }
+            #[cfg(not(ctox_ggml_cuda))]
+            (ptr::null_mut(), false)
         }
+        VoxtralSttBackend::Cpu | VoxtralSttBackend::Wgsl => (init_cpu_backend(), false),
     }
 }
 
@@ -1736,6 +1887,17 @@ fn init_compute_backend(
     threads: i32,
 ) -> (ffi::ggml_backend_t, ffi::ggml_backend_t, bool) {
     match backend {
+        VoxtralSttBackend::Cuda if prefer_accel => {
+            #[cfg(ctox_ggml_cuda)]
+            unsafe {
+                let cuda = ffi::ggml_backend_cuda_init(0);
+                if !cuda.is_null() {
+                    let cpu = init_cpu_backend_with_threads(threads);
+                    return (cuda, cpu, true);
+                }
+            }
+            (ptr::null_mut(), ptr::null_mut(), false)
+        }
         VoxtralSttBackend::Metal if prefer_accel => {
             #[cfg(target_os = "macos")]
             unsafe {

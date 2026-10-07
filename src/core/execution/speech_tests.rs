@@ -119,11 +119,35 @@ fn missing_saved_voice_fails_before_provider_transport() {
 #[tokio::test]
 async fn unavailable_streaming_fails_before_transport() {
     let root = tempfile::tempdir().unwrap();
+    // Local streaming is now implemented. Explicitly disable its runtime
+    // selection to keep testing the unavailable-backend preflight boundary.
+    let mut state =
+        crate::inference::runtime_state::load_or_resolve_runtime_state(root.path()).unwrap();
+    state.transcription.enabled = false;
+    crate::inference::runtime_state::persist_runtime_state(root.path(), &state).unwrap();
     let gateway = SpeechGateway::from_root(root.path()).unwrap();
     assert!(!gateway.status().streaming_stt_selected);
     assert!(matches!(
         gateway.open_transcription(PcmFormat::default()).await,
         Err(SpeechError::UnsupportedBackend)
+    ));
+}
+
+#[tokio::test]
+async fn selected_local_stream_without_runtime_reports_local_transport_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let mut state =
+        crate::inference::runtime_state::load_or_resolve_runtime_state(root.path()).unwrap();
+    state.transcription.enabled = true;
+    state.transcription.configured_model = Some("engineai/Voxtral-Mini-4B-Realtime-2602".into());
+    crate::inference::runtime_state::persist_runtime_state(root.path(), &state).unwrap();
+    let gateway = SpeechGateway::from_root(root.path()).unwrap();
+    assert!(gateway.status().streaming_stt_selected);
+    // No runtime socket exists under this isolated root. Selection is not
+    // readiness and its failure must never become a provider rejection.
+    assert!(matches!(
+        gateway.open_transcription(PcmFormat::default()).await,
+        Err(SpeechError::Transport)
     ));
 }
 
