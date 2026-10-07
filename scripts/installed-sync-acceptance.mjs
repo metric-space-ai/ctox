@@ -350,7 +350,8 @@ async function metrics(page) {
 /** The admitted host launcher passes its OWN browser; two contexts keep separate IndexedDB caches. */
 export async function runAcceptance(browser, configPath) {
   const config = validateConfig(JSON.parse(readFileSync(configPath)), configPath);
-  const output = resolve(config.output); invariant(inside(config.acceptanceBase, output), 'Evidence escaped owned staging');
+  const output = resolve(`${config.output}-${Date.now()}-${process.pid}`);
+  invariant(inside(config.acceptanceBase, output), 'Evidence escaped owned staging');
   mkdirSync(output, { recursive: false, mode: 0o700 });
   const native = new OwnedNative(config, output), contexts = [], receipts = [];
   const started = performance.now();
@@ -492,14 +493,14 @@ export async function runAcceptance(browser, configPath) {
           const visibleBothValues = [...receipt.measured.sameField.A.conflicts,
             ...receipt.measured.sameField.B.conflicts].some(record => {
               const text = JSON.stringify(record);
-              return text.includes('same-field-A') && text.includes('same-field-B');
+              return text.includes(id) && text.includes('same-field-A') && text.includes('same-field-B');
             });
           receipt.measured.sameFieldBothValuesVisible = visibleBothValues;
           receipt.pass = receipt.measured.clock.every(row => row.converged &&
             !JSON.stringify(row.metrics.conflicts).includes('clock_skew_detected')) &&
             receipt.measured.distinctFieldMerge && visibleBothValues &&
             receipt.measured.staleRevision.unapplied &&
-            (staleResponse.conflictingId || Boolean(staleResponse.errorCode));
+            staleResponse.conflictArray && staleResponse.conflictingId;
         }
         receipt.steps.push('Installed runtime opened, real native peer and two separate Chromium contexts used');
       } catch (error) {
