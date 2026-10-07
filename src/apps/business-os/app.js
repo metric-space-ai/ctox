@@ -13837,6 +13837,7 @@ async function workjetProjectControl(request = {}) {
       validateSupervisorExecutionValue('ExecutionPage', page);
       if (receipt.result.execution_contract !== SUPERVISOR_EXECUTION_SCHEMA
         || page.command_id !== turn.command_id || page.task_id !== turn.task_id
+        || page.events.length > (payload.execution_page.limit ?? 25)
         || (payload.execution_page.attempt_id !== undefined
           && page.attempt?.attempt_id !== payload.execution_page.attempt_id)) {
         throw new Error('Workjet execution page does not match the authorized supervisor turn.');

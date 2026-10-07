@@ -187,6 +187,12 @@
         "started_at_ms": 1,
         "finished_at_ms": 2
       }
+    },
+    {
+      "type": "ExecutionPageRequest",
+      "value": {
+        "attempt_id": "﻿"
+      }
     }
   ],
   "invalid_cases": [
@@ -238,6 +244,18 @@
         "raw_metadata": {
           "secret": "x"
         }
+      }
+    },
+    {
+      "type": "ExecutionPageRequest",
+      "value": {
+        "attempt_id": ""
+      }
+    },
+    {
+      "type": "ExecutionPageRequest",
+      "value": {
+        "__proto__": {}
       }
     }
   ]
