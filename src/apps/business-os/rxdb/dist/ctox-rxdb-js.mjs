@@ -7626,7 +7626,7 @@ function createDemandLoadingTransport({
   function isRetryableQueryStreamLimit(error) {
     const code = String(error?.code || "");
     const message = String(error?.message || "");
-    return Boolean(error?.retryable) && (code === "STREAM_LIMIT_EXCEEDED" || message.includes("STREAM_LIMIT_EXCEEDED"));
+    return code === "STREAM_LIMIT_EXCEEDED" || message.startsWith("STREAM_LIMIT_EXCEEDED:") || Boolean(error?.retryable) && message.includes("STREAM_LIMIT_EXCEEDED");
   }
   function isRetryableQueryFetch(error) {
     return isRetryableQueryStreamLimit(error) || isRetryableQueryRateLimited(error) || isQueryAckTimeout(error) || isRetryableQueryPeerUnavailable(error);
@@ -7634,7 +7634,7 @@ function createDemandLoadingTransport({
   function isRetryableQueryRateLimited(error) {
     const code = String(error?.code || "");
     const message = String(error?.message || "");
-    return Boolean(error?.retryable) && (code === "RATE_LIMITED" || message.includes("RATE_LIMITED"));
+    return code === "RATE_LIMITED" || message.startsWith("RATE_LIMITED:") || Boolean(error?.retryable) && message.includes("RATE_LIMITED");
   }
   function isRetryableQueryPeerUnavailable(error) {
     const message = String(error?.message || "");
