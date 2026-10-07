@@ -2379,6 +2379,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         tx_event,
         agent_status_tx,
         InitialHistory::New,
+        None,
         SessionSource::Exec,
         skills_manager,
         plugins_manager,

@@ -11,6 +11,8 @@ pub(crate) mod accounts;
 mod command;
 #[path = "guest_registry_source_checkpoint.rs"]
 mod source_checkpoint;
+#[path = "guest_registry_source_effects.rs"]
+mod source_effects;
 #[path = "guest_registry_source_handoff.rs"]
 pub(crate) mod source_handoff;
 #[path = "guest_registry_source_journal.rs"]

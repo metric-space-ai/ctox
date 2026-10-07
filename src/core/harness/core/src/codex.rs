@@ -381,6 +381,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) conversation_history: InitialHistory,
+    pub(crate) native_state: Option<crate::NativeSessionState>,
     pub(crate) session_source: SessionSource,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
@@ -433,6 +434,7 @@ impl Codex {
             mcp_manager,
             file_watcher,
             conversation_history,
+            native_state,
             session_source,
             agent_control,
             dynamic_tools,
@@ -442,6 +444,13 @@ impl Codex {
             user_shell_override,
             parent_trace: _,
         } = args;
+        if let Some(native) = native_state.as_ref() {
+            native
+                .validate_target(&config, &conversation_history)
+                .map_err(|_| {
+                    CodexErr::Fatal("native target identity or configuration differs".into())
+                })?;
+        }
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -617,6 +626,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
+            native_state,
             session_source_clone,
             skills_manager,
             plugins_manager,
@@ -1481,6 +1491,7 @@ impl Session {
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
+        native_state: Option<crate::NativeSessionState>,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
@@ -1500,6 +1511,20 @@ impl Session {
             ));
         }
 
+        let native_payload = native_state
+            .map(crate::NativeSessionState::import_payload)
+            .transpose()?;
+        if let Some(payload) = native_payload.as_ref() {
+            anyhow::ensure!(
+                payload.collaboration_mode.model()
+                    == session_configuration.collaboration_mode.model()
+                    && payload.provider.websockets_enabled
+                        == ws_version_from_features(config.as_ref())
+                    && serde_json::to_value(&payload.dynamic_tools)?
+                        == serde_json::to_value(&session_configuration.dynamic_tools)?,
+                "native target model or tools differ"
+            );
+        }
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
@@ -2046,8 +2071,12 @@ impl Session {
                 ));
             }
         }
-        sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
-            .await;
+        // Native continuity must be imported before any turn session can take
+        // its cache. Startup prewarm otherwise takes an empty client session.
+        if native_payload.is_none() {
+            sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
+                .await;
+        }
         let session_start_source = match &initial_history {
             InitialHistory::Resumed(_) => ctox_hooks::SessionStartSource::Resume,
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -2057,6 +2086,32 @@ impl Session {
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
+        if let Some(payload) = native_payload {
+            // No submission loop exists yet; the returned manager cannot expose
+            // this thread or start a turn before the entire import succeeds.
+            sess.services
+                .model_client
+                .import_native_continuation(&payload.provider)?;
+            let mut state = sess.state.lock().await;
+            state.replace_history(payload.history, payload.reference_context);
+            state.set_token_info(payload.token_usage);
+            state.set_previous_turn_settings(payload.previous_turn.map(|p| PreviousTurnSettings {
+                model: p.model,
+                realtime_active: p.realtime_active,
+            }));
+            state.server_reasoning_included = payload.server_reasoning_included;
+            state.mcp_dependency_prompted = payload.mcp_dependency_prompted.into_iter().collect();
+            state.active_connector_selection =
+                payload.active_connector_selection.into_iter().collect();
+            state.session_configuration.base_instructions = payload.base_instructions;
+            state.session_configuration.developer_instructions = payload.developer_instructions;
+            state.session_configuration.user_instructions = payload.user_instructions;
+            state.session_configuration.compact_prompt = payload.compact_prompt;
+            state.session_configuration.collaboration_mode = payload.collaboration_mode;
+            state.session_configuration.model_reasoning_summary = payload.reasoning_summary;
+            // Target cwd, sandbox, approval grants, credentials, dependency env,
+            // MCP transports and tool authority retain their fresh local owners.
+        }
         {
             let mut state = sess.state.lock().await;
             state.set_pending_session_start_source(Some(session_start_source));

@@ -1,5 +1,46 @@
 # Native session handoff integration boundary
 
+## Core import primitive
+
+The trusted native execution owner can now call
+`ThreadManager::resume_thread_from_native_checkpoint` with a strictly decoded
+checkpoint, fresh target configuration/authentication and a private mutable
+copy of the original journal. The imported Core retains the original thread
+ID, compacted history and completed provider response chain. Import starts no
+turn and grants no permissions; model sampling requires a subsequent explicit
+submission. The manager rejects concurrent creation and cannot be reused for
+another import or ordinary startup.
+
+The actual Core regression captures a completed model turn, shuts down the
+source, imports into a fresh target home/workspace and runs the next turn. Only
+the model endpoint is mocked. This does not prove current native account,
+policy, quorum ownership, effect reconciliation or independent-host acceptance.
+The production target currently decodes the protected Core artifact before
+workspace preparation and still returns `resumed:false`. Connecting authorized
+execution admission to the prepared workspace remains the next #183 slice.
+
+## Source effect observation
+
+The retired native producer now queries its actual execution authority before
+artifact publication, outside worker/account/policy/controller locks. A
+foreign job, changed ownership generation, stopped job, inconsistent
+pending/completed set or oversized effect inventory rejects capture.
+The source reacquires its current capture and policy guards after the await
+and matches any registered guest effect to the exact retained process and
+controller generation.
+
+The protected `native-effect-state.json` artifact records the observed pending
+quorum IDs and the registered process identity. Those IDs also remain pending
+in the checkpoint manifest, alongside the existing unknown-external-effects
+entry. Neither a completed Core turn, an empty quorum set nor a child stop
+observation clears that entry. Observing effects does not stop QEMU between
+bounded agent turns.
+
+This is reconciliation input, not a clean-effect certificate or atomic quorum
+fence through the subsequent Git capture. Actual guest state transfer and
+authoritative reconciliation of shell/MCP/guest side effects remain required
+before target Core execution can be activated.
+
 Source audit: CTOX `a1b5e04f90333ba18f78fcca270c81b373e534b8`,
 Workjet `f0ad31f297b921d7f96c054abf118840d0939789` (2026-09-20).
 This records the remaining production integration for issue #183. It is not
@@ -110,7 +151,7 @@ after expiry/failure; this is not an automatic retry or general crash recovery.
 This connects production checkpoint sending and local durable ingestion.
 It creates no Raft DATA receipt, ownership transfer, clean-effect witness or
 Core activation. Target workspace preparation is connected below; original-session
-Core resume remains open.
+Core activation remains open.
 Remote policy revocation cannot atomically recall already authorized bytes:
 the source sees a signed target Receive decision valid for at most 60 seconds,
 while the honest target rechecks its own current grant before each request and
@@ -130,8 +171,11 @@ host lifetime and exact target policy remain mandatory. Local reconstruction
 does not require the source host to remain reachable after its protected copy;
 transport still requires the exact authenticated source connection.
 
-Both current Receive and Execute grants are required. Preparation uses only the
-hash-verified `native-workspace.bundle` artifact in the enrolled checkpoint.
+Both current Receive and Execute grants are required. Before staging, preparation strictly decodes the hash-verified
+`native-session-state.json` against the enrolled session, harness version,
+model and provider. This rejects malformed or foreign Core state without
+certifying clean effects. Git reconstruction uses only the hash-verified
+`native-workspace.bundle` artifact in the enrolled checkpoint.
 The shared kernel imports it into an isolated bare repository with configuration,
 hooks and command deadlines bounded as for normal reconstruction. It fetches no
 remote objects or credentials. The exact checkpoint base is required; staged and
