@@ -10,7 +10,9 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(voxtral_native)");
     println!("cargo:rustc-check-cfg=cfg(voxtral_cuda)");
     println!("cargo:rerun-if-changed=vendor/voxtral-tts.c");
-    println!("cargo:rerun-if-env-changed=NVCC");
+    for key in ["NVCC", "CC", "AR", "CTOX_CUDA_HOME"] {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
     println!("cargo:rerun-if-env-changed=CTOX_CUDA_SM");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_TTS_BUILD_CUDA");
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();

@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn synthesize_fails_until_graph_is_wired() {
+    fn synthesize_fails_without_loaded_artifacts() {
         let model = VoxtralTtsModel::new(VoxtralTtsConfig::default(), VoxtralTtsBackend::Cpu);
         let err = model
             .synthesize(&SpeechRequest {

@@ -1,16 +1,11 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
-//! Bare-metal CTOX native port scaffold for `engineai/Voxtral-4B-TTS-2603`.
+//! Native text-to-audio graph for CTOX's `engineai/Voxtral-4B-TTS-2603` alias.
 //!
-//! Scope of this seed:
-//! - no external crates;
-//! - pure Rust CPU reference kernels;
-//! - raw mmap/safetensors header support;
-//! - kernel source layout for Metal/CUDA/WGSL backends;
-//! - model constants and shape contracts matching Voxtral Realtime 4B.
-//!
-//! The full model graph is intentionally split into small modules so each C file
-//! can be ported one-for-one while keeping platform-specific kernels isolated.
+//! The production candidate uses the pinned model-local MIT C graph and native
+//! CUDA kernels, with Rust artifact validation and serialized warm sessions.
+//! Earlier Rust reference modules remain correctness/scaffold material; Metal
+//! and WGSL graph requests fail closed. See README.md for actual limitations.
 
 pub mod audio;
 pub mod bf16;
