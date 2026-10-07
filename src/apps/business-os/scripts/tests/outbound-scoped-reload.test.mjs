@@ -160,7 +160,7 @@ try {
       sourceToggleIntent: new Map(), pendingLeadPatches: new Map(),
       selectedCampaign: 'K', selectedLeadId: 'lead_a', selectedLeadIds: new Set(['lead_a']),
       researchPolicyLoaded: true, researchPolicy: 'saved', researchPolicyDraft: 'unsaved',
-      syncPending: false, syncWaitingCollections: new Set(),
+      syncPending: false, syncError: '', syncWaitingCollections: new Set(),
       collectionReadErrors: new Map(),
     });
     return { reads, existingLead };
@@ -218,6 +218,37 @@ try {
     hooks.renderSyncLine();
     assert.equal(line.className, 'is-syncing', 'current success clears only its own failure');
   });
+  await test('empty lists show a failed read, then confirmed emptiness despite other pending collections', async () => {
+    let failed = true;
+    setup({ leads: async () => { if (failed) throw Error('remote request token timeout'); return []; }, imports: async () => [] });
+    Object.assign(state, { leads: [], leadListRows: null, imports: [], selectedCampaign: '', selectedLeadId: '',
+      selectedLeadIds: new Set(), syncPending: true, kampagnenHtml: '', leadsHtml: '' });
+    const campaignBody = { innerHTML: '', scrollTop: 0, childElementCount: 0 };
+    const leadBody = { innerHTML: '', scrollTop: 0, childElementCount: 0, querySelector: () => null };
+    state.ctx.host.querySelector = selector => {
+      if (selector === '[data-campaigns-pane]') return { querySelector: key => key === '[data-campaigns-body]' ? campaignBody : null };
+      if (selector === '[data-leads-pane]') return { querySelector: key => key === '[data-leads-body]' ? leadBody : null };
+      return null;
+    };
+    const render = () => { hooks.renderCampaigns(); hooks.renderCenter(); };
+    render();
+    assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
+    assert.match(leadBody.innerHTML, /Leads werden geladen/);
+    await assert.rejects(hooks.reload(['leads', 'imports']), /remote request token timeout/);
+    render();
+    assert.match(campaignBody.innerHTML, /Kampagnen konnten nicht geladen werden/);
+    assert.match(leadBody.innerHTML, /Leads konnten nicht geladen werden/);
+    assert.doesNotMatch(leadBody.innerHTML + campaignBody.innerHTML, /werden geladen|Noch keine/);
+    failed = false;
+    await hooks.reload(['leads']);
+    state.collectionReadErrors.set('adapters', 'unrelated provider collection failed');
+    render();
+    assert.match(campaignBody.innerHTML, /Noch keine Kampagne/);
+    assert.match(leadBody.innerHTML, /Noch keine Leads importiert/);
+    assert.doesNotMatch(leadBody.innerHTML + campaignBody.innerHTML, /werden geladen|konnten nicht geladen/);
+    assert.equal(state.syncPending, true, 'confirmed list results do not claim all collections are ready');
+  });
+
   await test('a hung non-lead query times out without discarding current lead results', async () => {
     let signal;
     setup({ adapters: async () => new Promise(() => {}) });
