@@ -304,6 +304,7 @@ fn remote_worker_current_computer_project_and_revoke_checked_after_claim() -> an
         ),
         ("workjet_computers", "computer-1", "agentless", json!(true)),
         ("workjet_computers", "computer-1", "_deleted", json!(true)),
+        ("workjet_computers", "computer-1", "is_deleted", json!(true)),
         ("workjet_projects", "project-1", "status", json!("archived")),
         (
             "workjet_projects",
@@ -328,8 +329,32 @@ fn remote_worker_current_computer_project_and_revoke_checked_after_claim() -> an
         let conn = store::open_store(root.path())?;
         let mut current = store::outbound_load_record(&conn, collection, record_id)?.unwrap();
         current[pointer] = value;
-        drop(conn);
-        record(root.path(), collection, record_id, current)?;
+        if pointer == "_deleted" {
+            // The production upsert intentionally resets transport tombstones.
+            // Exercise an actual native deletion, including its canonical column.
+            assert_eq!(
+                conn.execute(
+                    "UPDATE business_records SET deleted=1,payload_json=?3
+                 WHERE collection=?1 AND record_id=?2",
+                    rusqlite::params![collection, record_id, serde_json::to_string(&current)?],
+                )?,
+                1
+            );
+            let deleted: (i64, i64) = conn.query_row(
+                "SELECT deleted,json_extract(payload_json,'$._deleted')
+                 FROM business_records WHERE collection=?1 AND record_id=?2",
+                rusqlite::params![collection, record_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(
+                deleted,
+                (1, 1),
+                "native tombstone fixture was not installed"
+            );
+        } else {
+            drop(conn);
+            record(root.path(), collection, record_id, current)?;
+        }
         assert!(
             call(
                 root.path(),
