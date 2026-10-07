@@ -7143,10 +7143,28 @@ mod tests {
                 .is_err(),
             "missing store is not completed empty"
         );
+        sellify_batch_fixture(temp.path())?;
+        let over_requests = (0..51)
+            .map(|index| {
+                let mut request = valid.clone();
+                request["key"] = serde_json::json!(format!("lead-{index}"));
+                request
+            })
+            .collect::<Vec<_>>();
+        let over_selectors = (0..30)
+            .map(|index| {
+                serde_json::json!({
+                    "key":format!("lead-{index}"), "entity":"company",
+                    "selectors":vec![serde_json::json!({"field":"contact_id","value":"1"});8],
+                    "fields":["name"]
+                })
+            })
+            .collect::<Vec<_>>();
         for invalid in [
             serde_json::json!({"batch":[]}),
             serde_json::json!({"batch":[{"key":"a","entity":"company","fuzzy_selectors":[{"field":"name","value":"A"}],"fields":["name"]}]}),
-            serde_json::json!({"batch":vec![valid.clone();51]}),
+            serde_json::json!({"batch":over_requests}),
+            serde_json::json!({"batch":over_selectors}),
             serde_json::json!({"batch":[{"key":"a","entity":"company","fuzzy_selectors":vec![serde_json::json!({"field":"name","value":"Firma"});9],"fields":["name"]}]}),
             serde_json::json!({"batch":[valid.clone(),valid.clone()]}),
             serde_json::json!({"batch":[{"key":"a","entity":"company","selectors":[],"fields":["name"]}]}),
@@ -7157,8 +7175,9 @@ mod tests {
         ] {
             assert!(outbound_sellify_lookup(temp.path(), &invalid).is_err());
         }
+        let unavailable = tempdir()?;
         super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
-            temp.path(),
+            unavailable.path(),
             "sellify_companies",
         )?;
         let mut person = valid.clone();
@@ -8651,7 +8670,7 @@ mod tests {
         fs::write(specialized_dir.join("target.json"), "{}")?;
 
         let (resolved_dir, resolved_script) = outbound_find_bundled_scrape_target_dir(
-            temp.path(),
+            unavailable.path(),
             "google.de",
             "google-de",
             Some("https://www.google.de/"),
