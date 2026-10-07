@@ -131,7 +131,9 @@ def main():
     probe_timeout = 1200 if args.accel == "tcg" else 600
     boot_timeout = 900 if args.accel == "tcg" else 120
     desktop_settle = 30 if args.accel == "tcg" else 10
-    shutdown_timeout = 120 if args.accel == "tcg" else 45
+    # Actual restored TCG guests need about 116s for ordinary service teardown;
+    # the previous 120s bound also expired after filesystems had unmounted.
+    shutdown_timeout = 180 if args.accel == "tcg" else 45
     guest_id = source["guest_id"] if source else "o04-" + args.accel + "-" + str(uuid.uuid4())
     receipt = dict(schema="ctox.guest_image_component_probe.v1", scope="isolated image/endpoint only",
                    owner_thread="01a0879f-fa04-7a72-a9be-f471c2df5471",
@@ -373,6 +375,7 @@ def main():
             receipt["status"] = "checkpoint_captured"
             return
         monitor("system_powerdown")
+        shutdown_started = time.monotonic()
         try:
             code = proc.wait(timeout=shutdown_timeout)
             assertion("guest_acpi_powerdown", exit=code)
@@ -382,6 +385,8 @@ def main():
         except subprocess.TimeoutExpired:
             receipt["guest_graceful_powerdown"] = False
             raise RuntimeError("ACPI powerdown did not complete; no consistent checkpoint claimed")
+        finally:
+            receipt["shutdown_wait_seconds"] = time.monotonic() - shutdown_started
         receipt["status"] = "component_passed"
     except BaseException as e:
         receipt.update(status="failed", error=str(e))
