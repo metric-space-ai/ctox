@@ -33,11 +33,15 @@ export function validateConfig(config, configPath) {
   invariant(marker.owner === OWNER && marker.synthetic === true && marker.source === config.source,
     'Fresh synthetic authority marker required; DR/customer restores are forbidden');
   invariant(!/thesen|welsch/i.test(root), 'Customer paths may not be fault targets');
+  invariant(inside(root, realpathSync(join(root, 'runtime'))), 'State must stay inside the synthetic prefix');
   const binary = realpathSync(config.binary);
+  invariant(inside(root, binary), 'Execute the installed prefix binary, not another service');
   invariant(digest(binary) === config.binarySha256, 'Installed shared binary checksum mismatch');
   invariant(Number.isInteger(config.port) && config.port >= 19000 && config.port <= 29999,
     'Use an isolated loopback listener, never a production service port');
-  invariant(config.goals.every(n => [5, 6, 7].includes(n)), 'Only assigned sync goals supported');
+  invariant(Array.isArray(config.goals) && config.goals.length > 0 && config.goals.length <= 3 &&
+    new Set(config.goals).size === config.goals.length && config.goals.every(n => [5, 6, 7].includes(n)),
+    'Only distinct assigned sync goals supported');
   return { ...config, root, binary, acceptanceBase: base };
 }
 
