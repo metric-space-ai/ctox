@@ -1379,7 +1379,7 @@ function bindCollections() {
     },
     onError: (error) => {
       render();
-      console.warn('[outbound-lead-generation] Nachladen fehlgeschlagen, neuer Versuch', { message: error?.message || String(error), collections: error?.details });
+      console.warn('[outbound-lead-generation] Nachladen fehlgeschlagen, neuer Versuch', error?.message || String(error), JSON.stringify(error?.details || {}));
     },
   });
 }
