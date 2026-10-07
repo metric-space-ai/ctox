@@ -996,6 +996,19 @@ impl NativeSessionCapture {
         })
     }
 
+    /// Persist private source input before the service retires the worker lease.
+    /// The receipt grants no disclosure, target receipt or provider resume.
+    pub(crate) fn persist_source_journal(
+        self,
+    ) -> Result<crate::business_os::NativeSourceJournalReceipt> {
+        self.verify_command_authority()?;
+        let receipt = self
+            .execution
+            .persist_source_journal(&self.source, &self.journal)?;
+        self.verify_command_authority()?;
+        Ok(receipt)
+    }
+
     fn verify_command_authority(&self) -> Result<()> {
         let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
             &self.root,
@@ -1670,6 +1683,11 @@ impl PersistentSession {
             "persistent session shutdown ownership is missing"
         );
         Ok(())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn is_native_guest(&self) -> bool {
+        self.native_guest_registry.is_some()
     }
 
     /// Consume the actual native producer. No capture authority escapes a

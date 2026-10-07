@@ -9,6 +9,9 @@
 pub(crate) mod accounts;
 #[path = "guest_registry_command.rs"]
 mod command;
+#[path = "guest_registry_source_journal.rs"]
+mod source_journal;
+pub(crate) use source_journal::NativeSourceJournalReceipt;
 #[path = "guest_registry_frames.rs"]
 mod frames;
 #[cfg(test)]

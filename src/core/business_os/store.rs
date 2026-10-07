@@ -27194,6 +27194,32 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             PRIMARY KEY(owner_user_id, worker_profile_id)
         );
 
+        CREATE TABLE IF NOT EXISTS business_native_source_journals (
+            capture_id TEXT PRIMARY KEY,
+            guest_id TEXT NOT NULL,
+            controller_id TEXT NOT NULL,
+            controller_generation INTEGER NOT NULL CHECK(controller_generation > 0),
+            owner_user_id TEXT NOT NULL,
+            worker_profile_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            source_instance_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            ownership_generation INTEGER NOT NULL CHECK(ownership_generation > 0),
+            spec_json TEXT NOT NULL,
+            ownership_json TEXT NOT NULL,
+            policy_revision TEXT NOT NULL,
+            journal_format TEXT NOT NULL,
+            journal_version INTEGER NOT NULL,
+            journal_sha256 TEXT NOT NULL,
+            journal_size_bytes INTEGER NOT NULL CHECK(journal_size_bytes > 0 AND journal_size_bytes <= 67108864),
+            journal_record_count INTEGER NOT NULL CHECK(journal_record_count > 0 AND journal_record_count <= 100000),
+            journal_bytes BLOB NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            UNIQUE(job_id, session_id, ownership_generation)
+        );
+
         CREATE TABLE IF NOT EXISTS business_session_handoff_bindings (
             binding_id TEXT PRIMARY KEY,
             binding_digest TEXT NOT NULL,

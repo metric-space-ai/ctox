@@ -764,6 +764,29 @@ where
     )
 }
 
+#[cfg(unix)]
+fn persist_owned_native_journal(
+    owned: &mut Option<PersistentSession>,
+    emit: &mut impl FnMut(&str),
+) -> Result<bool> {
+    if owned
+        .as_ref()
+        .is_some_and(PersistentSession::is_native_guest)
+    {
+        emit("native-source-quiesce");
+        let producer = owned.take().context("native source producer is missing")?;
+        let receipt = producer
+            .quiesce_native_capture()?
+            .persist_source_journal()?;
+        emit(&format!(
+            "native-source-journal-persisted capture={} session={} sha256={}",
+            receipt.capture_id, receipt.session_id, receipt.journal_sha256
+        ));
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 pub(crate) fn run_chat_turn_with_events_extended_guarded_with_options<F>(
     root: &Path,
     db_path: &Path,
@@ -980,6 +1003,8 @@ where
                     options.queue_turn_lease.as_ref(),
                 )?,
         };
+        #[cfg(unix)]
+        persist_owned_native_journal(&mut owned_session, &mut emit)?;
         emit("persist-assistant-turn");
         persist_successful_assistant_with_retry(
             db_path,
@@ -1271,6 +1296,10 @@ where
                 options.queue_turn_lease.as_ref(),
             )?,
     };
+    #[cfg(unix)]
+    let native_journal_persisted = persist_owned_native_journal(&mut owned_session, &mut emit)?;
+    #[cfg(not(unix))]
+    let native_journal_persisted = false;
     emit("persist-assistant-turn");
     persist_successful_assistant_with_retry(
         db_path,
@@ -1334,7 +1363,9 @@ where
     )?;
     let refresh_now = !due_refreshes.is_empty();
     record_refresh_telemetry(conversation_id, reply_chars, refresh_now);
-    let continuity_stats = if refresh_now {
+    // Native capture has retired this producer. Keep the existing durable
+    // refresh demand pending; neither reuse it nor create a replacement session.
+    let continuity_stats = if refresh_now && !native_journal_persisted {
         emit(&format!(
             "continuity-refresh reason={} kinds={}",
             trigger_reason,
@@ -1365,7 +1396,11 @@ where
             )?,
         }
     } else {
-        emit("continuity-refresh-skipped");
+        emit(if refresh_now && native_journal_persisted {
+            "continuity-refresh-deferred-native-capture"
+        } else {
+            "continuity-refresh-skipped"
+        });
         Default::default()
     };
     let budget_snapshot = refresh_budget_snapshot(conversation_id);
