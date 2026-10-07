@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261007-shell-v2-workjet-supervisor-binding';
-=======
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261007-query-startup-coalescing';
->>>>>>> origin/main
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
