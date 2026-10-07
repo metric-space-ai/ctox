@@ -1126,9 +1126,28 @@ fn create_note(
         .unwrap_or_else(|| "note".to_owned());
     let thread_id = thread_id_for_command(command, &source);
     ensure_existing_thread_participant_or_admin(root, session, &thread_id)?;
+    let existing_thread = load_record(root, "user_threads", &thread_id)?;
     let title = first_string_field(&command.payload, &["title", "subject"])
+        .or_else(|| {
+            existing_thread
+                .as_ref()
+                .and_then(|thread| non_empty_string(thread, "title"))
+        })
         .or_else(|| source_string(&source, "label"))
         .unwrap_or_else(|| "Notiz".to_owned());
+    let thread_kind = existing_thread
+        .as_ref()
+        .and_then(|thread| non_empty_string(thread, "kind"))
+        .unwrap_or_else(|| message_kind.clone());
+    let thread_status = existing_thread
+        .as_ref()
+        .and_then(|thread| non_empty_string(thread, "status"))
+        .unwrap_or_else(|| "open".to_owned());
+    // Addressing a note or mention does not assign or reopen its source work.
+    let assigned_user_id = existing_thread
+        .as_ref()
+        .map(|thread| value_string(thread, "assigned_user_id"))
+        .unwrap_or_default();
     let target_user_ids = target_user_ids(&command.payload);
     let actor = actor_id(session);
     let participants = participant_set(root, &thread_id, [actor.as_str()], target_user_ids.iter());
@@ -1143,19 +1162,12 @@ fn create_note(
         &conn,
         &thread_id,
         &title,
-        if message_kind == "mention" {
-            "mention"
-        } else {
-            "note"
-        },
-        "open",
+        &thread_kind,
+        &thread_status,
         &participants,
         &source,
         &session,
-        target_user_ids
-            .first()
-            .map(String::as_str)
-            .unwrap_or_default(),
+        &assigned_user_id,
         Some(&message_id),
         now,
         0,
@@ -2453,7 +2465,8 @@ fn project_ctox_command_document(
     let session = session_from_actor(actor.clone());
     let now = document_updated_at_ms(command).max(task.map(document_updated_at_ms).unwrap_or(0));
     let source = ctox_source_context(command, task, &command_id);
-    let thread_id = ctox_thread_id(root, command, task, &source, &command_id);
+    let thread_id = existing_ctox_command_source_thread(root, command, task, &source, &command_id)?
+        .unwrap_or_else(|| ctox_thread_id(root, command, task, &source, &command_id));
     let mut participants = participant_set(
         root,
         &thread_id,
@@ -3809,10 +3822,6 @@ fn refresh_thread_states(
             thread_status.as_str(),
             "archived" | "completed" | "closed" | "cancelled" | "canceled"
         );
-        if unread_count > 0 && actionable_thread && !machine_work {
-            attention_reasons.push("Ungelesen".to_owned());
-            attention_score = 40;
-        }
         if pending_reviewers.contains(&user_id) {
             attention_reasons.push("Freigabe nötig".to_owned());
             attention_score = attention_score.max(80);
@@ -3820,10 +3829,6 @@ fn refresh_thread_states(
         if unread_mentions.contains(&user_id) && actionable_thread {
             attention_reasons.push("Erwähnung".to_owned());
             attention_score = attention_score.max(60);
-        }
-        if assigned_user_id == user_id && actionable_thread && !machine_work {
-            attention_reasons.push("Zugewiesen".to_owned());
-            attention_score = attention_score.max(50);
         }
         if open_handoff_targets.contains(&user_id) {
             attention_reasons.push("Übergabe an dich".to_owned());
@@ -3836,6 +3841,16 @@ fn refresh_thread_states(
         if latest_ctox_failed && assigned_user_id == user_id {
             attention_reasons.push("Fehlgeschlagen".to_owned());
             attention_score = attention_score.max(70);
+        }
+        // Generic reasons are a fallback, so the concrete action stays first.
+        if attention_reasons.is_empty() && actionable_thread && !machine_work {
+            if assigned_user_id == user_id {
+                attention_reasons.push("Zugewiesen".to_owned());
+                attention_score = 50;
+            } else if unread_count > 0 {
+                attention_reasons.push("Ungelesen".to_owned());
+                attention_score = 40;
+            }
         }
 
         let state_id = thread_state_id(&user_id, thread_id);
@@ -4023,6 +4038,54 @@ fn ctox_thread_id(
     )
 }
 
+fn existing_ctox_command_source_thread(
+    root: &Path,
+    command: &Value,
+    task: Option<&Value>,
+    source: &Value,
+    command_id: &str,
+) -> anyhow::Result<Option<String>> {
+    if source_string(source, "module").as_deref() != Some("ctox")
+        || source_string(source, "record_type").as_deref() != Some("command")
+        || source_string(source, "record_id").as_deref() != Some(command_id)
+    {
+        return Ok(None);
+    }
+    let Some(legacy_record_id) = non_empty_string(command, "record_id")
+        .or_else(|| task.and_then(|task| non_empty_string(task, "id")))
+        .filter(|record_id| record_id != command_id)
+    else {
+        return Ok(None);
+    };
+    let mut legacy_source = source.clone();
+    legacy_source["record_id"] = json!(legacy_record_id);
+    let legacy_thread_id = ctox_thread_id(root, command, task, &legacy_source, command_id);
+    let link_id = format!(
+        "link_{}_business_commands_{}",
+        slug_part(&legacy_thread_id),
+        slug_part(command_id)
+    );
+    let Some(link) = load_record(root, "user_thread_links", &link_id)? else {
+        return Ok(None);
+    };
+    // An exact native command link proves this command already owns history
+    // in the legacy thread. Reproject its source there without moving notes,
+    // personal state, or folding a new command into the actor's old thread.
+    if value_string(&link, "command_id") != command_id
+        || value_string(&link, "thread_id") != legacy_thread_id
+        || value_string(&link, "link_role") != "ctox_command"
+    {
+        return Ok(None);
+    }
+    let Some(thread) = load_record(root, "user_threads", &legacy_thread_id)? else {
+        return Ok(None);
+    };
+    Ok((value_string(&thread, "kind") == "ctox_task"
+        && value_string(&thread, "source_module") == "ctox"
+        && value_string(&thread, "source_record_type") == "command")
+        .then_some(legacy_thread_id))
+}
+
 fn ctox_source_context(command: &Value, task: Option<&Value>, fallback_id: &str) -> Value {
     let payload_context = command
         .get("payload")
@@ -4071,7 +4134,15 @@ fn ctox_source_context(command: &Value, task: Option<&Value>, fallback_id: &str)
     let record_id = source_string(&payload_context, "record_id")
         .or_else(|| selection.and_then(|selection| non_empty_string(selection, "record_id")))
         .or_else(|| client_context.and_then(|context| non_empty_string(context, "record_id")))
-        .or_else(|| non_empty_string(command, "record_id"))
+        .or_else(|| {
+            // CTOX control commands can target an actor or project through
+            // record_id. The command source must point to the command itself.
+            if module == "ctox" && record_type == "command" && command_has_identity {
+                first_string_field(command, &["command_id", "id"])
+            } else {
+                non_empty_string(command, "record_id")
+            }
+        })
         .or_else(|| task.and_then(|task| non_empty_string(task, "id")))
         .unwrap_or_else(|| fallback_id.to_owned());
     let label = source_string(&payload_context, "label")
@@ -4085,12 +4156,16 @@ fn ctox_source_context(command: &Value, task: Option<&Value>, fallback_id: &str)
         .unwrap_or_else(|| fallback_id.to_owned());
     let deep_link = source_string(&payload_context, "deep_link")
         .or_else(|| client_context.and_then(|context| non_empty_string(context, "deep_link")))
-        .unwrap_or_else(|| {
-            format!(
+        .unwrap_or_else(|| match (module.as_str(), record_type.as_str()) {
+            ("ctox", "command") => format!("#ctox?command_id={}", slug_part(&record_id)),
+            ("ctox", "queue_task" | "ctox_task" | "task") => {
+                format!("#ctox?task_id={}", slug_part(&record_id))
+            }
+            _ => format!(
                 "#{module}?record={}&record_type={}",
                 slug_part(&record_id),
                 slug_part(&record_type)
-            )
+            ),
         });
     json!({
         "module": module,
@@ -5975,6 +6050,102 @@ mod tests {
     }
 
     #[test]
+    fn addressed_note_preserves_thread_assignment_and_source_state() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "bob", "Bob", "user")?;
+        seed_threads_user(temp.path(), "alice", "Alice", "user")?;
+        let thread_id = "thread-note-preserved-source";
+        {
+            let conn = store::open_store(temp.path())?;
+            store::upsert_business_record(
+                &conn,
+                "user_threads",
+                thread_id,
+                42,
+                json!({
+                    "id": thread_id,
+                    "thread_id": thread_id,
+                    "title": "Existing case",
+                    "kind": "case",
+                    "status": "blocked",
+                    "participant_ids": ["bob", "alice"],
+                    "owner_user_id": "bob",
+                    "assigned_user_id": "bob",
+                    "created_at_ms": 42,
+                    "updated_at_ms": 42
+                }),
+            )?;
+        }
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-note-preserved-source",
+                "module": "threads",
+                "command_type": "threads.note.create",
+                "record_id": thread_id,
+                "payload": {
+                    "thread_id": thread_id,
+                    "message_id": "msg-note-preserved-source",
+                    "message_type": "mention",
+                    "body": "@Alice please check the existing case.",
+                    "target_user_ids": ["alice"],
+                    "source_context": {"module": "threads", "record_type": "case", "record_id": "case-note-preserved"}
+                },
+                "client_context": {"actor": {"id": "bob", "display_name": "Bob", "role": "user"}}
+            }),
+        )?;
+        let thread = load_record(temp.path(), "user_threads", thread_id)?
+            .context("existing source thread")?;
+        assert_eq!(value_string(&thread, "title"), "Existing case");
+        assert_eq!(value_string(&thread, "kind"), "case");
+        assert_eq!(value_string(&thread, "status"), "blocked");
+        assert_eq!(value_string(&thread, "assigned_user_id"), "bob");
+        assert_eq!(
+            thread.get("created_at_ms").and_then(Value::as_i64),
+            Some(42)
+        );
+        let alice_id = thread_state_id("alice", thread_id);
+        let alice =
+            load_record(temp.path(), "user_thread_states", &alice_id)?.context("mention state")?;
+        assert_eq!(
+            array_strings(alice.get("attention_reasons")),
+            vec!["Erwähnung".to_owned()]
+        );
+        assert_eq!(alice.get("unread_count").and_then(Value::as_i64), Some(1));
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-note-preserved-mark-read",
+                "module": "threads",
+                "command_type": "threads.notification.mark_read",
+                "record_id": "notif_msg-note-preserved-source_alice",
+                "payload": {"notification_id": "notif_msg-note-preserved-source_alice"},
+                "client_context": {"actor": {"id": "alice", "display_name": "Alice", "role": "user"}}
+            }),
+        )?;
+        let alice = load_record(temp.path(), "user_thread_states", &alice_id)?
+            .context("read mention state")?;
+        assert!(array_strings(alice.get("attention_reasons")).is_empty());
+        assert_eq!(alice.get("unread_count").and_then(Value::as_i64), Some(0));
+        assert_eq!(
+            alice.get("attention_score").and_then(Value::as_i64),
+            Some(0)
+        );
+        let bob = load_record(
+            temp.path(),
+            "user_thread_states",
+            &thread_state_id("bob", thread_id),
+        )?
+        .context("source assignee state")?;
+        assert_eq!(
+            array_strings(bob.get("attention_reasons")),
+            vec!["Blockiert".to_owned()]
+        );
+        assert_eq!(bob.get("attention_score").and_then(Value::as_i64), Some(70));
+        Ok(())
+    }
+
+    #[test]
     fn approval_request_requires_active_reviewer_and_blocks_self_review() -> anyhow::Result<()> {
         let temp = tempdir()?;
         seed_threads_user(temp.path(), "junior", "Junior", "user")?;
@@ -6445,9 +6616,10 @@ mod tests {
                     "reviewer_user_id": "lead",
                     "target_module": "ctox",
                     "target_record_id": "case-central-policy",
-                    "target_command_type": "ctox.coding_agent.execute",
+                    "target_command_type": "ctox.coding.turn",
                     "target_payload": {
-                        "args": ["status"]
+                        "module_id": "threads",
+                        "prompt": "Update the Threads app."
                     },
                     "source_context": {
                         "module": "threads",
@@ -6503,6 +6675,14 @@ mod tests {
         .context("approval")?;
         assert_eq!(value_string(&approval, "status"), "pending");
         assert_eq!(value_string(&approval, "approved_command_id"), "");
+        assert_eq!(
+            collection_document_count(temp.path(), "ctox_queue_tasks")?,
+            0
+        );
+        assert!(
+            !temp.path().join("coding-agents").exists(),
+            "policy denial must precede sidecar extraction"
+        );
         Ok(())
     }
 
@@ -7300,6 +7480,209 @@ mod tests {
             "business_chats",
             &json!({ "id": "chat-bob", "owner_user_id": "alice", "title": "Jetzt meins" }),
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_command_projection_uses_command_identity_for_actor_scoped_targets() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let now = now_ms();
+        let conn = store::open_store(temp.path())?;
+        for command_id in ["cmd-workjet-list-1", "cmd-workjet-list-2"] {
+            store::upsert_business_record(
+                &conn,
+                "business_commands",
+                command_id,
+                now,
+                json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "module": "ctox",
+                    "command_type": "ctox.workjet.project.list",
+                    "record_id": "alice",
+                    "status": "completed",
+                    "payload": { "title": command_id },
+                    "client_context": {
+                        "source": "workjet-project-control",
+                        "actor": { "id": "alice", "display_name": "Alice", "role": "user" }
+                    }
+                }),
+            )?;
+        }
+        drop(conn);
+        project_ctox_relevance(temp.path(), 0, 0, 50)?;
+
+        for command_id in ["cmd-workjet-list-1", "cmd-workjet-list-2"] {
+            let thread_id = format!("thread_ctox_command_{command_id}");
+            let thread = load_record(temp.path(), "user_threads", &thread_id)?
+                .context("each Workjet command needs its own source thread")?;
+            assert_eq!(value_string(&thread, "source_record_id"), command_id);
+            assert_eq!(value_string(&thread, "source_record_type"), "command");
+            assert_eq!(
+                value_string(&thread, "source_deep_link"),
+                format!("#ctox?command_id={command_id}")
+            );
+            let link_id = format!("link_{thread_id}_business_commands_{command_id}");
+            let link = load_record(temp.path(), "user_thread_links", &link_id)?
+                .context("command source link")?;
+            assert_eq!(value_string(&link, "source_record_id"), command_id);
+            assert_eq!(value_string(&link, "command_id"), command_id);
+        }
+        assert!(load_record(temp.path(), "user_threads", "thread_ctox_command_alice")?.is_none());
+        assert_eq!(
+            project_ctox_relevance(temp.path(), 0, 0, 50)?.changed_count,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_command_source_preserves_explicit_app_and_task_context() {
+        let command = json!({
+            "id": "cmd-control",
+            "module": "ctox",
+            "record_id": "alice",
+            "payload": { "source_context": {
+                "module": "ctox", "record_type": "queue_task", "record_id": "task-source"
+            }}
+        });
+        let source = ctox_source_context(&command, None, "cmd-control");
+        assert_eq!(value_string(&source, "record_id"), "task-source");
+        assert_eq!(value_string(&source, "record_type"), "queue_task");
+        assert_eq!(
+            value_string(&source, "deep_link"),
+            "#ctox?task_id=task-source"
+        );
+        let selected = json!({
+            "id": "cmd-control",
+            "module": "ctox",
+            "record_id": "alice",
+            "client_context": { "scope": { "selection": {
+                "record_type": "command", "record_id": "cmd-selected"
+            }}}
+        });
+        let source = ctox_source_context(&selected, None, "cmd-control");
+        assert_eq!(value_string(&source, "record_id"), "cmd-selected");
+        assert_eq!(
+            value_string(&source, "deep_link"),
+            "#ctox?command_id=cmd-selected"
+        );
+        let business = json!({
+            "id": "cmd-business", "module": "support", "record_id": "case-1"
+        });
+        let source = ctox_source_context(&business, None, "cmd-business");
+        assert_eq!(value_string(&source, "record_id"), "case-1");
+    }
+
+    #[test]
+    fn ctox_command_source_repairs_legacy_link_without_moving_history() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let now = now_ms();
+        let legacy_thread_id = "thread_ctox_command_alice";
+        let legacy_command_id = "cmd-workjet-legacy";
+        let legacy_link_id =
+            format!("link_{legacy_thread_id}_business_commands_{legacy_command_id}");
+        let conn = store::open_store(temp.path())?;
+        store::upsert_business_record(
+            &conn,
+            "user_threads",
+            legacy_thread_id,
+            now,
+            json!({
+                "id": legacy_thread_id,
+                "thread_id": legacy_thread_id,
+                "kind": "ctox_task",
+                "source_module": "ctox",
+                "source_record_type": "command",
+                "source_record_id": "alice",
+                "participant_ids": ["alice"],
+                "watcher_user_ids": ["bob"],
+                "owner_user_id": "alice",
+                "created_at_ms": 42,
+                "snoozed_until_ms": now + 1000
+            }),
+        )?;
+        store::upsert_business_record(
+            &conn,
+            "user_thread_links",
+            &legacy_link_id,
+            now,
+            json!({
+                "id": legacy_link_id,
+                "thread_id": legacy_thread_id,
+                "command_id": legacy_command_id,
+                "link_role": "ctox_command",
+                "source_record_id": "alice"
+            }),
+        )?;
+        store::upsert_business_record(
+            &conn,
+            "user_thread_messages",
+            "manual-note",
+            now,
+            json!({
+                "id": "manual-note",
+                "thread_id": legacy_thread_id,
+                "author_user_id": "alice",
+                "body": "Keep this existing note",
+                "created_at_ms": now,
+                "updated_at_ms": now
+            }),
+        )?;
+        for command_id in [legacy_command_id, "cmd-workjet-new"] {
+            store::upsert_business_record(
+                &conn,
+                "business_commands",
+                command_id,
+                now,
+                json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "module": "ctox",
+                    "command_type": "ctox.workjet.project.list",
+                    "record_id": "alice",
+                    "status": "completed",
+                    "payload": { "title": command_id },
+                    "client_context": { "actor": {
+                        "id": "alice", "display_name": "Alice", "role": "user"
+                    }}
+                }),
+            )?;
+        }
+        drop(conn);
+        project_ctox_relevance(temp.path(), 0, 0, 50)?;
+        let thread = load_record(temp.path(), "user_threads", legacy_thread_id)?
+            .context("legacy thread remains")?;
+        assert_eq!(value_string(&thread, "source_record_id"), legacy_command_id);
+        assert_eq!(thread["created_at_ms"], 42);
+        assert_eq!(thread["snoozed_until_ms"], now + 1000);
+        assert_eq!(thread["watcher_user_ids"], json!(["bob"]));
+        let link = load_record(temp.path(), "user_thread_links", &legacy_link_id)?
+            .context("legacy command link remains")?;
+        assert_eq!(value_string(&link, "source_record_id"), legacy_command_id);
+        assert_eq!(value_string(&link, "thread_id"), legacy_thread_id);
+        let note = load_record(temp.path(), "user_thread_messages", "manual-note")?
+            .context("existing note remains")?;
+        assert_eq!(value_string(&note, "body"), "Keep this existing note");
+        assert_eq!(value_string(&note, "thread_id"), legacy_thread_id);
+        assert!(load_record(
+            temp.path(),
+            "user_threads",
+            "thread_ctox_command_cmd-workjet-legacy"
+        )?
+        .is_none());
+        let new = load_record(
+            temp.path(),
+            "user_threads",
+            "thread_ctox_command_cmd-workjet-new",
+        )?
+        .context("new command is separate from legacy actor thread")?;
+        assert_eq!(value_string(&new, "source_record_id"), "cmd-workjet-new");
+        assert_eq!(
+            project_ctox_relevance(temp.path(), 0, 0, 50)?.changed_count,
+            0
+        );
         Ok(())
     }
 
