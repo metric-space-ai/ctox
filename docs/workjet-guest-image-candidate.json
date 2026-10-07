@@ -244,6 +244,13 @@
       "diagnostic_actual_shutdown_wait_seconds": 115.50935082207434,
       "diagnostic_graceful_powerdown": true,
       "diagnostic_owned_qemu_reaped": true,
+      "plain_cli_capture_failure_after_settle": {
+        "receipt_run": "o04-guest-shutdown-pr345-20261007T070106Z",
+        "source_commit": "61139a65840f0a8a9247d55bbcc8642ec6cb90c7",
+        "status": "failed",
+        "error": "The native first capture still returned a framed failure after the bounded 30-second restore settle; no ordinary CLI pass claimed.",
+        "next_observation_policy": "Restored TCG only: at most three read-only observe_session attempts, two-second gaps, fresh correlated request IDs. Record each framed failure; never retry input, a timeout/EOF, invalid correlation or malformed PNG."
+      },
       "next_plain_cli_shutdown_timeout_seconds": 180,
       "next_action": "After the shutdown-margin follow-up merges, rerun the ordinary CLI without a diagnostic override. Production enrollment, protected P2P and distributed owner fencing remain unaccepted."
     },
