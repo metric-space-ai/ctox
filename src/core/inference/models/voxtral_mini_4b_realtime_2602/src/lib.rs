@@ -21,9 +21,10 @@ pub use error::{Error, Result};
 pub use kernels::{CpuBackend, KernelBackend, VoxtralSttBackend};
 pub use stt::{
     inspect_gguf, shape_contract, TranscriptionRequest, TranscriptionResponse,
-    VoxtralSttArtifactInspection, VoxtralSttConfig, VoxtralSttModel,
+    VoxtralSttArtifactInspection, VoxtralSttConfig, VoxtralSttModel, VoxtralSttStream,
 };
 
 pub const GGML_BLAS_ENABLED: bool = cfg!(ctox_ggml_blas);
 pub const GGML_CPU_ENABLED: bool = !cfg!(ctox_ggml_unavailable);
+pub const GGML_CUDA_ENABLED: bool = !cfg!(ctox_ggml_unavailable) && cfg!(ctox_ggml_cuda);
 pub const GGML_METAL_ENABLED: bool = !cfg!(ctox_ggml_unavailable) && cfg!(target_os = "macos");
