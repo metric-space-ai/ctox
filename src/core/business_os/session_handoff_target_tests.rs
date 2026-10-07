@@ -527,6 +527,22 @@ pub(crate) fn assert_actual_source_target_enrollment(
         serde_json::json!({"owner_user_id":"owner","project_id":"project",
         "worker_profile_id":"target-profile","group_chat_id":"thread","status":"active","is_deleted":false}),
     );
+    assert_eq!(
+        gate.authorize(&request).unwrap_err().reason_code,
+        "target_authority_changed"
+    );
+    // Returning to active creates a new durable membership revision. It must
+    // require a fresh target challenge rather than resurrect an old permit.
+    assert!(enroll_now(&retry_encoded).is_err());
+    let member_challenge = super::challenge(target_root, &config, &target_key).unwrap();
+    let member_offer =
+        crate::business_os::native_source_offer(source_root, binding, &member_challenge).unwrap();
+    let member_encoded =
+        serde_json::json!({"offer":member_offer,"workerProfileId":"target-profile"}).to_string();
+    assert_eq!(
+        enroll_now(&member_encoded).unwrap().binding_revision,
+        renewed.binding_revision + 1
+    );
     assert!(gate.authorize(&request).is_ok());
     policy.execute("UPDATE business_permission_grants SET active=0 WHERE permission='ctox.session_handoff.receive'",[]).unwrap();
     request.phase = SessionHandoffPhase::Receive;
@@ -562,6 +578,7 @@ pub(crate) fn assert_actual_source_target_enrollment(
     assert!(!payloads.contains(&challenge));
     assert!(!payloads.contains(&renewed_challenge));
     assert!(!payloads.contains(&retry_challenge));
+    assert!(!payloads.contains(&member_challenge));
     assert!(!payloads.contains("target-native-workspace"));
     assert!(!payloads.contains("actual-native-workspace"));
 }
