@@ -15,5 +15,12 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 url = "2"
 
-[dev-dependencies]
 tempfile = "3"
+russh = { version = "=0.64.1", default-features = false, features = ["ring", "rsa"] }
+russh-sftp = "=2.1.1"
+# SSPI 0.23 does not handle the enum variant added by picky-krb 0.12.5.
+picky-krb = "=0.12.4"
+smb = { path = "vendor/smb", default-features = false, features = ["single_threaded", "sign", "encrypt"] }
+
+
+[dev-dependencies]

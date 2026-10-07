@@ -583,6 +583,7 @@ mod tests {
             request: DownloadRequest {
                 id: "lifecycle".into(),
                 sources: vec![],
+                storage: None,
                 peer_source: None,
                 sha256: "a".repeat(64),
                 size: 1,

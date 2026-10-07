@@ -144,6 +144,7 @@ exclude = [
     "src/core/sync",
     "src/core/transfers",
     "src/core/transfers/aria2-rust",
+    "src/core/transfers/vendor/smb",
     "src/tools/appsec-pentest",
     "src/tools/doc-stack",
     "src/tools/google-fetch",

@@ -64,6 +64,7 @@ fn assert_active_peer_drained(explicit: bool) {
             sources: vec![],
             sha256: "a".repeat(64),
             size: 1,
+            storage: None,
             peer_source: Some(PeerSource {
                 instance_id: "source".into(),
                 public_key: "source-key".into(),

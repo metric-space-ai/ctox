@@ -100,6 +100,7 @@ fn fixture() -> (Host, DownloadRequest) {
         sources: vec![],
         sha256: "a".repeat(64),
         size: 7,
+        storage: None,
         peer_source: Some(ctox_transfers::PeerSource {
             instance_id: "source".into(),
             public_key: "source-key".into(),
