@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261007-shell-v2-pull-error-v459';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261007-shell-v2-computer-capabilities';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
