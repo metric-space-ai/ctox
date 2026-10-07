@@ -265,6 +265,11 @@ pub(super) fn assert_native_source_handoff_enrollment(
     );
     regrant();
     let foreign_workspace = tempfile::tempdir_in(root).unwrap();
+    std::fs::set_permissions(
+        foreign_workspace.path(),
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+    )
+    .unwrap();
     crate::business_os::configure_native_guest_assignments(
         root,
         &computer,
@@ -279,7 +284,7 @@ pub(super) fn assert_native_source_handoff_enrollment(
             worker_profile_id: profile.clone(),
             project_id: project.clone(),
             working_copy_id: copy.clone(),
-            native_workspace: foreign_workspace.path().into(),
+            native_workspace: std::fs::canonicalize(foreign_workspace.path()).unwrap(),
         }],
     )
     .unwrap();
