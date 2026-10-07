@@ -936,6 +936,7 @@ pub(crate) struct PersistentSession {
 pub(crate) struct NativeSessionCapture {
     source: crate::channels::NativeProviderCaptureOwner,
     journal: ctox_core::NativeJournalReader,
+    configuration: Option<ctox_core::ThreadConfigSnapshot>,
     execution: crate::business_os::NativeGuestExecution,
     thread_id: String,
     root: PathBuf,
@@ -1002,9 +1003,13 @@ impl NativeSessionCapture {
         self,
     ) -> Result<crate::business_os::NativeSourceJournalReceipt> {
         self.verify_command_authority()?;
-        let receipt = self
-            .execution
-            .persist_source_journal(&self.source, &self.journal)?;
+        let receipt = self.execution.persist_source_journal(
+            &self.source,
+            &self.journal,
+            self.configuration
+                .as_ref()
+                .context("native capture has no final Core configuration")?,
+        )?;
         self.verify_command_authority()?;
         Ok(receipt)
     }
@@ -1731,14 +1736,15 @@ impl PersistentSession {
                 .context("actual native journal could not be retained")
             });
         let journal = match journal {
-            Ok(journal) => journal,
+            Ok(retained) => retained,
             Err(error) => {
                 let _ = self.shutdown_inner("failed native journal retention");
                 return Err(error);
             }
         };
-        let capture = NativeSessionCapture {
+        let mut capture = NativeSessionCapture {
             journal,
+            configuration: None,
             source: self
                 .native_capture_owner
                 .take()
@@ -1759,9 +1765,19 @@ impl PersistentSession {
                 .context("native capture has no verified command context")?,
         };
         let before = capture.with_current(|_, _| Ok(()));
-        let shutdown = self.shutdown_inner("quiescing native capture");
+        let shutdown = self.shutdown_inner_with("quiescing native capture", |runtime| {
+            runtime.block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS),
+                    actual_thread.config_snapshot(),
+                )
+                .await
+                .context("final native configuration capture timed out")
+            })
+        });
         before?;
-        shutdown?;
+        capture.configuration =
+            Some(shutdown?.context("native configuration has no shutdown owner")?);
         capture.with_current(|_, _| Ok(()))?;
         // Writer receipt alone cannot certify identity, syntax or bounded size.
         // A malformed/missing/changed journal never returns a capture owner.
@@ -3841,6 +3857,16 @@ impl Drop for PersistentSession {
 
 impl PersistentSession {
     fn shutdown_inner(&mut self, action: &str) -> Result<()> {
+        self.shutdown_inner_with(action, |_| Ok(())).map(|_| ())
+    }
+
+    /// A capture callback runs only after checked client shutdown, while the
+    /// exact owned runtime can still read final state from its retained Core thread.
+    fn shutdown_inner_with<T>(
+        &mut self,
+        action: &str,
+        after_shutdown: impl FnOnce(&tokio::runtime::Runtime) -> Result<T>,
+    ) -> Result<Option<T>> {
         // Take both owners before any branch. An orphaned client must still
         // be aborted, even when its runtime is absent.
         let client = self.client.take();
@@ -3849,7 +3875,7 @@ impl PersistentSession {
                 client.abort_now();
                 anyhow::bail!("persistent session runtime ownership is missing");
             }
-            return Ok(());
+            return Ok(None);
         };
         let tid = &self.thread_id;
         eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
@@ -3886,11 +3912,12 @@ impl PersistentSession {
                 "persistent session client ownership is missing"
             )),
         };
+        let result = result.and_then(|()| after_shutdown(&runtime).map(Some));
         // Cleanup always finishes its bounded runtime drain before returning
-        // the original client result. Runtime teardown cannot replace an error.
+        // the original client/capture result. Runtime teardown cannot replace an error.
         runtime.shutdown_timeout(Duration::from_secs(2));
         match &result {
-            Ok(()) => {
+            Ok(_) => {
                 eprintln!("[ctox direct-session] persistent session shut down thread_id={tid}")
             }
             Err(err) => eprintln!(
