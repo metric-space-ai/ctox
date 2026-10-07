@@ -335,6 +335,22 @@ fn install_process_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+/// Workers on thesen ended with a bare "disk I/O error" (07.10.2026) that names
+/// neither the database nor the system call. SQLite's own error log does:
+/// for I/O, open and corruption errors it reports the file, the failing call
+/// and errno. Only those classes are logged, so normal operation stays quiet.
+fn install_sqlite_error_log() {
+    fn log(code: std::os::raw::c_int, message: &str) {
+        // Primary result codes: IOERR 10, CORRUPT 11, CANTOPEN 14, NOTADB 26.
+        if matches!(code & 0xff, 10 | 11 | 14 | 26) {
+            eprintln!("[sqlite] error code={code} {message}");
+        }
+    }
+    // SAFETY: runs once at process start, before any SQLite connection exists;
+    // the callback never calls into SQLite and only writes to stderr.
+    let _ = unsafe { rusqlite::trace::config_log(Some(log)) };
+}
+
 fn main() -> anyhow::Result<()> {
     // Keep the generated argv0 aliases alive for the process lifetime. On
     // Linux, child tool executions re-enter this binary as
@@ -343,6 +359,7 @@ fn main() -> anyhow::Result<()> {
     let _arg0_dispatch = ctox_arg0::arg0_dispatch();
     limit_glibc_malloc_arenas();
     install_process_rustls_crypto_provider();
+    install_sqlite_error_log();
     raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The isolated guest endpoint owns no CTOX daemon database or CLI ledger.
