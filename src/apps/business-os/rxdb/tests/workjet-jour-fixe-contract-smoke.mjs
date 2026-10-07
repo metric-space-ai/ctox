@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { JOUR_FIXE_SCHEMA, JOUR_FIXE_VERSION, JOUR_FIXE_TYPES, JOUR_FIXE_COMMANDS, validateJourFixeValue } from '../../shared/workjet-jour-fixe-contract.generated.mjs';
+const fixture = JSON.parse(readFileSync(new URL('../../../../core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json', import.meta.url), 'utf8'));
+assert.equal(JOUR_FIXE_VERSION, fixture.contract_version);
+assert.equal(JOUR_FIXE_SCHEMA, fixture.schema);
+assert.deepEqual(JOUR_FIXE_TYPES, fixture.types);
+assert.deepEqual(JOUR_FIXE_COMMANDS, fixture.commands);
+for (const {type, value} of fixture.valid_cases) assert.equal(validateJourFixeValue(type, value).ok, true, type);
+for (const {type, value, reason} of fixture.invalid_cases) assert.equal(validateJourFixeValue(type, value).ok, false, reason);
+assert.throws(() => { JOUR_FIXE_TYPES.Meeting.fields.owner_user_id.type = 'bool'; }, TypeError);
+assert.equal(JOUR_FIXE_COMMANDS['ctox.workjet.jour_fixe.todos.confirm'].authorization, 'owner');
+console.log(`Jour fixe contract: ${fixture.valid_cases.length} valid / ${fixture.invalid_cases.length} rejected cases agree with native fixture`);
