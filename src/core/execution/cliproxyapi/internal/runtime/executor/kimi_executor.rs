@@ -174,6 +174,10 @@ impl KimiExecutor {
         self.apply_kimi_headers_with_auth(&mut upstream, &request, false);
         apply_custom_headers(&mut upstream.headers, &request.auth_attributes);
         let response = client.execute(upstream).await?;
+        crate::internal::api::account_selection::record_upstream_status(
+            response.status_code,
+            &response.body,
+        );
         if !(200..300).contains(&response.status_code) {
             return Err(plugin_error(KimiExecutorError::upstream(
                 response.status_code,
@@ -251,6 +255,10 @@ impl KimiExecutor {
         let mut response = client.execute_stream(upstream).await?;
         if !(200..300).contains(&response.status_code) {
             let error_body = collect_stream_body(&mut response.chunks).await;
+            crate::internal::api::account_selection::record_upstream_status(
+                response.status_code,
+                &error_body,
+            );
             return Err(plugin_error(KimiExecutorError::upstream(
                 response.status_code,
                 String::from_utf8_lossy(&error_body),
@@ -588,6 +596,10 @@ impl ProviderExecutor for KimiExecutor {
             };
             self.prepare_request(&mut upstream, &request.metadata, &request.attributes);
             let response = client.execute(upstream).await?;
+            crate::internal::api::account_selection::record_upstream_status(
+                response.status_code,
+                &response.body,
+            );
             Ok(ExecutorHttpResponse {
                 status_code: response.status_code,
                 headers: response.headers,

@@ -53,16 +53,35 @@ pub struct ManagementRuntimeEndpoint {
     pub listen_addr: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagementRuntimeStatus {
     pub schema: String,
     pub main_responses_gateway: ManagementRuntimeEndpoint,
     pub codex_subscription_gateway: ManagementRuntimeEndpoint,
     pub management_gateway: ManagementRuntimeEndpoint,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub active_provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub active_model: Option<String>,
+}
+
+impl Serialize for ManagementRuntimeStatus {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut value = serde_json::json!({
+            "schema": self.schema,
+            "main_responses_gateway": self.main_responses_gateway,
+            "codex_subscription_gateway": self.codex_subscription_gateway,
+            "management_gateway": self.management_gateway,
+            "active_provider": self.active_provider,
+            "active_model": self.active_model,
+            "features": { "account_selection": true }
+        });
+        if self.active_provider.is_none() {
+            value.as_object_mut().unwrap().remove("active_provider");
+        }
+        if self.active_model.is_none() {
+            value.as_object_mut().unwrap().remove("active_model");
+        }
+        value.serialize(serializer)
+    }
 }
 
 pub trait ManagementRuntimeStatusSource: Send + Sync {
@@ -816,6 +835,7 @@ mod tests {
         assert_eq!(source.0.load(Ordering::SeqCst), 1);
         let value: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(value["schema"], "ctox.cliproxyapi.runtime-status.v1");
+        assert_eq!(value["features"]["account_selection"], true);
         assert_eq!(value["main_responses_gateway"]["phase"], "ready");
         assert_eq!(
             value["codex_subscription_gateway"]["phase"],
