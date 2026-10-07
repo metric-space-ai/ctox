@@ -1,17 +1,17 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261007-shell-v2-sync-app-priority';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261007-shell-v2-sync-app-priority';
-import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-sync-app-priority';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-sync-app-priority';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-sync-app-priority';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-sync-app-priority';
-import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-sync-app-priority';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261007-shell-v2-workjet-release-copy';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261007-shell-v2-workjet-release-copy';
+import { CtoxResizer } from './shared/resizer.js?v=20261007-shell-v2-workjet-release-copy';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261007-shell-v2-workjet-release-copy';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261007-shell-v2-workjet-release-copy';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261007-shell-v2-workjet-release-copy';
+import { createAppActions } from './shared/app-actions.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261007-shell-v2-sync-app-priority';
+} from './shared/app-lifecycle.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -20,20 +20,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261007-shell-v2-sync-app-priority';
+} from './shared/permissions.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261007-shell-v2-sync-app-priority';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261007-shell-v2-sync-app-priority';
+} from './shared/branding.js?v=20261007-shell-v2-workjet-release-copy';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261007-shell-v2-sync-app-priority';
+} from './shared/presentation.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -44,9 +44,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261007-shell-v2-sync-app-priority';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261007-shell-v2-sync-app-priority';
-import { createDocumentsFacade } from './shared/documents.js?v=20261007-shell-v2-sync-app-priority';
+} from './shared/shell-permissions-ui.js?v=20261007-shell-v2-workjet-release-copy';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261007-shell-v2-workjet-release-copy';
+import { createDocumentsFacade } from './shared/documents.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -54,16 +54,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261007-shell-v2-sync-app-priority';
+} from './shared/maintenance-state.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261007-shell-v2-sync-app-priority';
+} from './shared/workspace-session.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261007-shell-v2-sync-app-priority';
+} from './shared/taskbar-pins.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -71,10 +71,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261007-shell-v2-sync-app-priority';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261007-shell-v2-workjet-release-copy';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261007-shell-v2-sync-app-priority';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261007-shell-v2-sync-app-priority';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261007-shell-v2-workjet-release-copy';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261007-shell-v2-workjet-release-copy';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -82,8 +82,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261007-shell-v2-sync-app-priority';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261007-shell-v2-sync-app-priority';
+} from './shared/startup-deadlines.js?v=20261007-shell-v2-workjet-release-copy';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261007-shell-v2-workjet-release-copy';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -101,7 +101,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261007-shell-v2-sync-app-priority';
+const APP_BUILD = '20261007-shell-v2-workjet-release-copy';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13368,10 +13368,10 @@ async function workjetComputerControl(request = {}) {
         || (payload.capability_config !== undefined
           && JSON.stringify(boundedWorkjetOperationalCapabilities(native.capability_config))
             !== JSON.stringify(payload.capability_config))) {
-        throw new Error('Workjet capability grant was not confirmed by the native command.');
+        throw new Error('Workjet access grant was not confirmed.');
       }
       const confirmed = boundedWorkjetComputerResult(native);
-      if (!confirmed) throw new Error('Invalid native Workjet capability result.');
+      if (!confirmed) throw new Error('Invalid Workjet access grant result.');
       return { action: 'computer.assign', computer: confirmed };
     }
     const computer = await waitForProjectedWorkjetComputer(
@@ -13414,7 +13414,7 @@ async function workjetComputerControl(request = {}) {
     if (!endpoint || endpoint.id !== endpointRef || endpoint.owner_user_id !== ownerUserId
       || endpoint.enabled !== upsert
       || (upsert && endpoint.computer_id !== payload.computer_id)) {
-      throw new Error('Workjet endpoint change was not confirmed by the native command.');
+      throw new Error('Workjet connection change was not confirmed.');
     }
     return { action, endpointRef, computerId: endpoint.computer_id, enabled: endpoint.enabled };
   }
@@ -13526,7 +13526,7 @@ function boundedWorkjetComputerEndpoint(value) {
     : ['protocol', 'host', 'port', 'username', 'root', 'share', 'password']));
   const reference = (candidate) => {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
-      throw new Error('Workjet credentials must reference the native Secret Store.');
+      throw new Error('Workjet credentials must reference the Secret Store.');
     }
     assertWorkjetComputerPayloadKeys(candidate, new Set(['scope', 'name']));
     return {
@@ -13884,7 +13884,7 @@ async function workjetProjectControl(request = {}) {
       throw new Error('Workjet project configuration returned an uncorrelated or unsuccessful receipt.');
     }
     const project = boundedWorkjetProjectResult(nativeProject, { includeConfiguration: true });
-    if (!project) throw new Error('Workjet project configuration returned no native project.');
+    if (!project) throw new Error('Workjet project configuration returned no project.');
     return { action, commandId, project };
   }
 
