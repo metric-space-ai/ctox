@@ -22,7 +22,11 @@ impl HashFunction for Hash {
 pub(super) fn run<S, F>(root: &Path, stop: S, started: F) -> Result<()>
 where
     S: std::future::Future<Output = io::Result<()>>,
-    F: FnOnce(HostStarted, Arc<dyn ctox_sync::authority::client::ExecutionAuthority>) -> Result<()>,
+    F: FnOnce(
+        HostStarted,
+        Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
+        Option<Arc<crate::business_os::NativeGuestRegistry>>,
+    ) -> Result<()>,
 {
     // This process lease precedes opening Raft/RxDB and outlives the Tokio
     // runtime, including blocking storage work during unwind or shutdown.
@@ -41,6 +45,7 @@ where
         .enable_all()
         .build()?;
     let mut descriptor = None;
+    let mut guest_host = None;
     runtime.block_on(async {
         let database = create_rx_database(RxDatabaseCreator {
             name: format!("ctox-execution-{}", config.node_id()),
@@ -112,21 +117,35 @@ where
                 live_change: None,
             },
         };
-        let result = ctox_sync::host_runtime::run_with_authority(
+        let result = ctox_sync::host_runtime::run_with_native_session(
             &config,
             root,
             ipc.path(),
             key,
             options,
             stop,
-            |ready, authority| {
-                descriptor =
-                    Some(DescriptorGuard::publish(root, &ready).map_err(io::Error::other)?);
-                started(ready, authority).map_err(io::Error::other)
+            |ready, authority, peer| {
+                guest_host = guests::Host::start(root, ipc.path(), authority.clone(), peer)
+                    .map_err(io::Error::other)?;
+                descriptor = Some(
+                    DescriptorGuard::publish(
+                        root,
+                        &ready,
+                        guest_host.as_ref().map(|host| host.endpoint.clone()),
+                    )
+                    .map_err(io::Error::other)?,
+                );
+                started(
+                    ready,
+                    authority,
+                    guest_host.as_ref().map(|host| host.registry.clone()),
+                )
+                .map_err(io::Error::other)
             },
         )
         .await
         .map_err(|error| anyhow::anyhow!("native Sync host failed ({:?})", error.kind()));
+        drop(guest_host.take());
         let closed = database
             .close()
             .await

@@ -65,6 +65,33 @@ where
     F: FnOnce(HostStarted, Arc<dyn ExecutionAuthority>) -> io::Result<()>,
     S: Future<Output = io::Result<()>>,
 {
+    run_with_native_session(
+        config,
+        root,
+        ipc_directory,
+        key,
+        options,
+        stop,
+        |ready, authority, _| started(ready, authority),
+    )
+    .await
+}
+
+/// Native owners borrow the already attached peer together with its authority.
+/// The callback must not create another peer or retain an unguarded publication.
+pub async fn run_with_native_session<F, S>(
+    config: &HostConfiguration,
+    root: &Path,
+    ipc_directory: &Path,
+    key: Arc<SigningIdentity>,
+    options: NativeSyncOptions,
+    stop: S,
+    started: F,
+) -> io::Result<()>
+where
+    F: FnOnce(HostStarted, Arc<dyn ExecutionAuthority>, &NativeSyncSession) -> io::Result<()>,
+    S: Future<Output = io::Result<()>>,
+{
     config.validate_key(&key)?;
     let expected = match config.local {
         HostMember::Voter { .. } => NativePeerRole::CtoxInstance,
@@ -98,13 +125,13 @@ where
             Arc<dyn ExecutionAuthority>,
             HostWaiting<'_>,
         ) = if let Some(options) = voter {
-            let host = session.attach_execution(options, key).await?;
-            (host.ipc_endpoint().to_path_buf(), host.node().clone(), Box::pin(host.wait_stopped()))
+            let host = Arc::clone(session.attach_execution(options, key).await?);
+            (host.ipc_endpoint().to_path_buf(), host.node().clone(), Box::pin(async move { host.wait_stopped().await }))
         } else {
-            let host = session.attach_worker(worker.expect("validated worker"), key).await?;
-            (host.ipc_endpoint().to_path_buf(), host.node().clone(), Box::pin(host.wait_stopped()))
+            let host = Arc::clone(session.attach_worker(worker.expect("validated worker"), key).await?);
+            (host.ipc_endpoint().to_path_buf(), host.node().clone(), Box::pin(async move { host.wait_stopped().await }))
         };
-        started(HostStarted { ipc_endpoint: endpoint, node_id: config.node_id(), scope_id: config.scope_id.clone() }, authority)?;
+        started(HostStarted { ipc_endpoint: endpoint, node_id: config.node_id(), scope_id: config.scope_id.clone() }, authority, &session)?;
         tokio::select! {
             result = stop => result,
             result = waiting => result.and(Err(io::Error::other("native execution listener or discovery stopped unexpectedly"))),

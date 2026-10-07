@@ -17,6 +17,8 @@ pub(crate) fn signing_identity_from_record(
 #[cfg(unix)]
 #[path = "sync_host/unix.rs"]
 mod unix;
+#[cfg(all(unix, test))]
+pub(crate) use unix::guests::serve_connection as serve_native_guest_enrollment;
 #[cfg(unix)]
 pub use unix::{handle_command, start_if_configured};
 
