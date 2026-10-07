@@ -1814,8 +1814,25 @@ than mapping errors ad hoc at each `map_err`:
 Demand-query admission distinguishes a verified collection-policy denial from
 an unavailable authority lookup. Only `COLLECTION_AUTHORITY_UNAVAILABLE` is
 retried inside that bounded admission window; invalid credentials and replaced
-peer/token generations remain immediate denials. The existing issuer fence is
-retained. Failed native reads of the current actor role/epoch or collection
+peer/token generations remain immediate denials. Preparatory collection checks
+and NativeBusinessData document views use read-only deferred snapshots of
+the existing encrypted issuer and native stores, without reserving a SQLite
+writer or holding the process master-key mutex. They never initialize missing
+issuer state, cache plaintext or grant a publication permit. Concurrent
+uncommitted writes are invisible to those snapshots. Final response/event
+publication still reacquires the current issuer and all native mutation fences,
+rechecks role/epoch, grants, parent visibility, fields and exact command-owner
+receipts, and holds them through the single bounded transport poll. A rotation
+or ownership change after preparation therefore prevents publication.
+
+Slow final fences (at least 2 ms) emit fixed, secrets-free timing fields at
+most once per 15 seconds: `issuer_hold_us` and native `elapsed_us`,
+`core_hold_us`, `policy_hold_us`, `projection_hold_us`. A null store hold means
+acquisition failed before that fence was held. These times cover acquisition
+through reader release; they are neither an admission decision nor a durable
+completion receipt. No actor, token, key, document or state-root value is logged.
+
+Failed native reads of the current actor role/epoch or collection
 grants propagate as unavailable authority rather than invalid credentials;
 missing/inactive actors, role/epoch mismatches and foreign signed tokens remain
 verified denials. Boolean publication gates still fail closed on lookup errors.
