@@ -22,9 +22,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = model.synthesize(&request)?;
     let first_ms = start.elapsed().as_millis();
     std::fs::write(&args[2], &output.audio)?;
+    // Preserve the first real result even if the separate warm call times out.
+    println!("{{\"stage\":\"first\",\"ok\":true,\"load_ms\":{load_ms},\"complete_audio_ms\":{first_ms},\"audio_bytes\":{},\"sample_rate\":24000,\"first_audio_streaming\":false}}", output.audio.len());
+    std::io::Write::flush(&mut std::io::stdout())?;
     let start = std::time::Instant::now();
     let second = model.synthesize(&request)?;
     let warm_ms = start.elapsed().as_millis();
-    println!("{{\"ok\":true,\"load_ms\":{load_ms},\"complete_audio_ms\":{first_ms},\"warm_complete_audio_ms\":{warm_ms},\"audio_bytes\":{},\"warm_audio_bytes\":{},\"sample_rate\":24000,\"first_audio_streaming\":false}}", output.audio.len(), second.audio.len());
+    println!("{{\"stage\":\"warm\",\"ok\":true,\"warm_complete_audio_ms\":{warm_ms},\"warm_audio_bytes\":{},\"sample_rate\":24000,\"first_audio_streaming\":false}}", second.audio.len());
     Ok(())
 }
