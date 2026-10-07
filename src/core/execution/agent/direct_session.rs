@@ -1092,17 +1092,17 @@ impl PersistentSession {
             root,
             command_session_token,
         )?;
+        anyhow::ensure!(
+            registry.select_command_context(root, &context)?.as_deref() == Some(guest_id),
+            "native guest differs from the current command assignment"
+        );
+        registry.require_live_transport()?;
         let addr = settings
             .get(BUSINESS_OS_MCP_ADDR_KEY)
             .map(String::as_str)
             .unwrap_or(BUSINESS_OS_MCP_DEFAULT_ADDR);
         let token = crate::business_os::mcp_channel::mcp_operator_auth_token(root)?;
         let config = business_os_mcp_thread_config(addr, &token, command_session_token)?;
-        anyhow::ensure!(
-            registry.select_command_context(root, &context)?.as_deref() == Some(guest_id),
-            "native guest differs from the current command assignment"
-        );
-        registry.require_live_transport()?;
         let mut session = Self::start_with_native_mode(
             root,
             settings,

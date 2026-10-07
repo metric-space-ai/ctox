@@ -13,10 +13,19 @@ fn native_guest_queue_selection_uses_real_signed_command_and_crew_attempt() {
         Some(assignment.destination.guest_id.clone())
     );
     // This fixture owns no native peer. Denial precedes model/harness startup.
-    assert!(crate::execution::agent::turn_loop::PersistentSession::start_native_guest_with_business_os_mcp(
+    let result = crate::execution::agent::turn_loop::PersistentSession::start_native_guest_with_business_os_mcp(
         root.path(), &Default::default(), &token, None, registry.clone(),
         &assignment.destination.guest_id,
-    ).is_err());
+    );
+    let error = result
+        .err()
+        .expect("missing native peer must deny before startup");
+    assert!(
+        error
+            .to_string()
+            .contains("native frame transport is not attached"),
+        "{error:#}"
+    );
     let foreign = tempfile::tempdir().unwrap();
     assert!(registry
         .select_command_context(foreign.path(), context)
