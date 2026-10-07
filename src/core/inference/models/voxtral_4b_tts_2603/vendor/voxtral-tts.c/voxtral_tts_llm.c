@@ -274,7 +274,9 @@ void tts_llm_forward(tts_ctx_t *ctx, const float *input_embed, float *out_hidden
  * Prefill (multiple tokens at once)
  * ======================================================================== */
 
-void tts_llm_prefill(tts_ctx_t *ctx, const float *embeds, int seq_len) {
+/* ref: voxtral_tts_llm.c:277-392 at be031f4cf04ef75a01377eedcccf33c1ffd41580.
+ * Retain the CPU batch implementation as the fallback and numerical reference. */
+void ctox_tts_llm_prefill_cpu(tts_ctx_t *ctx, const float *embeds, int seq_len) {
     /*
      * Process multiple tokens through the LLM (e.g., voice prompt + text).
      * embeds: [seq_len, 3072]
@@ -389,4 +391,21 @@ cleanup:
     free(attn_out); free(proj_out); free(gate); free(up); free(ffn_out);
     if (positions) free(positions);
     if (rope_freqs) free(rope_freqs);
+}
+
+void tts_llm_prefill(tts_ctx_t *ctx, const float *embeds, int seq_len) {
+#ifdef USE_CUDA
+    if (tts_cuda_available()) {
+        /* The existing causal single-token dispatcher also accepts prompt
+         * embeddings. Populate the same persistent CUDA KV cache in order;
+         * do not copy the unused CPU cache over the resulting GPU state.
+         * No new kernel or reduced-precision weight conversion is introduced. */
+        float unused_hidden[TTS_DEC_DIM];
+        for (int i = 0; i < seq_len; i++) {
+            tts_llm_forward(ctx, embeds + (size_t)i * TTS_DEC_DIM, unused_hidden);
+        }
+        return;
+    }
+#endif
+    ctox_tts_llm_prefill_cpu(ctx, embeds, seq_len);
 }
