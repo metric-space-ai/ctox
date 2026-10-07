@@ -105,7 +105,9 @@ fn test_time_creates_one_planned_meeting_and_the_registered_supervisor_turn() ->
     );
     assert!(queue.prompt.contains("JourFix"));
     assert!(queue.prompt.contains("Only the"));
-    assert!(crate::skill_store::load_skill_deliverable_contract(root.path(), "jour-fix")?.is_some());
+    assert!(
+        crate::skill_store::load_skill_deliverable_contract(root.path(), "jour-fix")?.is_some()
+    );
     assert!(queue
         .prompt
         .contains(meeting["meeting"]["id"].as_str().unwrap()));

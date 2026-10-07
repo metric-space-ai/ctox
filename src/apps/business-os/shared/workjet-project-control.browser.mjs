@@ -6,11 +6,18 @@ import { chromium } from 'playwright';
 const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const tests = readFileSync(new URL('./workjet-project-control.test.mjs', import.meta.url), 'utf8');
 const executionSource = readFileSync(new URL('./workjet-supervisor-execution-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const kpiSource = readFileSync(new URL('./workjet-project-kpis-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const meetingSource = readFileSync(new URL('./workjet-jour-fixe-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const meetingCorpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json', import.meta.url), 'utf8'));
+const meeting = meetingCorpus.valid_cases.find(item => item.type === 'Meeting').value;
 const start = app.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
 const end = app.indexOf('async function waitForSyncBridgeReady', start);
 const fixtureStart = tests.indexOf('function nativeProjectListFixture(');
 const fixtureEnd = tests.indexOf("test('project list starts", fixtureStart);
+const detailsStart = tests.indexOf('function nativeProjectDetailsFixture(');
+const detailsEnd = tests.indexOf("test('native KPI control reads", detailsStart);
 assert.ok(start >= 0 && end > start && fixtureStart >= 0 && fixtureEnd > fixtureStart);
+assert.ok(detailsStart >= 0 && detailsEnd > detailsStart);
 const output = process.argv.includes('--output-dir')
   ? path.resolve(process.argv[process.argv.indexOf('--output-dir') + 1]) : null;
 const browser = await chromium.launch({ headless: true,
@@ -20,7 +27,7 @@ try {
   const context = await browser.newContext();
   await context.route('**/*', (route) => route.abort());
   const page = await context.newPage();
-  const results = await page.evaluate(async ({ controlSource, fixtureSource, executionSource }) => {
+  const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, executionSource, kpiSource, meetingSource, meeting }) => {
     const assert = {
       ok(value) { if (!value) throw new Error('Expected truthy'); },
       equal(left, right) { if (left !== right) throw new Error(`Expected ${right}, got ${left}`); },
@@ -32,8 +39,10 @@ try {
     // Node regressions, using browser Promise/AbortSignal/timer implementations.
     const vm = { runInNewContext(code, scope) {
       scope.invoke = new Function('state', 'actorContext', 'newId', 'AbortController',
-        'setTimeout', 'clearTimeout', `${controlSource}\nreturn workjetProjectControl;`)(
+        'setTimeout', 'clearTimeout', 'PROJECT_KPIS_SCHEMA', 'validateProjectKpiValue',
+        'JOUR_FIXE_SCHEMA', 'validateJourFixeValue', `${controlSource}\nreturn workjetProjectControl;`)(
         scope.state, scope.actorContext, scope.newId, AbortController, setTimeout, clearTimeout,
+        scope.PROJECT_KPIS_SCHEMA, scope.validateProjectKpiValue, scope.JOUR_FIXE_SCHEMA, scope.validateJourFixeValue,
       );
     } };
     const fixture = new Function('assert', 'vm', 'controlSource',
@@ -138,9 +147,51 @@ try {
     assert.ok(foreignRejected);
     results.push('foreign native task page fails correlation');
 
+    // Keep generated validators in separate scopes, as in the app's ESM imports.
+    const { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } = new Function(`${kpiSource}\nreturn { PROJECT_KPIS_SCHEMA, validateProjectKpiValue };`)();
+    const { JOUR_FIXE_SCHEMA, validateJourFixeValue } = new Function(`${meetingSource}\nreturn { JOUR_FIXE_SCHEMA, validateJourFixeValue };`)();
+    const detailsFixture = new Function('assert', 'vm', 'controlSource', 'PROJECT_KPIS_SCHEMA',
+      'validateProjectKpiValue', 'JOUR_FIXE_SCHEMA', 'validateJourFixeValue',
+      `${detailsSource}\nreturn nativeProjectDetailsFixture;`)(assert, vm, controlSource,
+      PROJECT_KPIS_SCHEMA, validateProjectKpiValue, JOUR_FIXE_SCHEMA, validateJourFixeValue);
+    const details = detailsFixture();
+    const detailRequest = { commandId: 'details', projectId: 'project-1' };
+    const kpis = await details.invoke({ ...detailRequest, action: 'project.kpis.read' });
+    assert.equal(kpis.kpis.revision, 0);
+    assert.equal(kpis.kpis.items.length, 0);
+    results.push('browser KPI read uses the typed command receipt without a projection pull');
+    const configured = await details.invoke({ ...detailRequest, action: 'project.kpis.configure',
+      operationId: 'configuration', expectedRevision: 0, prompts: [{ kpi_id: 'visitors', prompt: 'Visitors per week' }] });
+    assert.equal(configured.kpis.items[0].result.status, 'missing_source');
+    assert.equal(details.commands[1].payload.operation_id, 'configuration');
+    const cleared = await details.invoke({ ...detailRequest, action: 'project.kpis.configure',
+      operationId: 'clear', expectedRevision: 1, prompts: [] });
+    assert.equal(cleared.kpis.revision, 2);
+    assert.equal(cleared.kpis.items.length, 0);
+    results.push('browser KPI configure and clear preserve the native revision and missing-source result');
+    const noMeeting = await details.invoke({ ...detailRequest, action: 'project.jour_fixe.meeting.read' });
+    assert.equal(noMeeting.meeting, null);
+    const meetingFixture = detailsFixture(receipt => {
+      receipt.result.meeting = structuredClone(meeting);
+      receipt.result.preparation_task_id = 'actual-preparation';
+    });
+    const foundMeeting = await meetingFixture.invoke({ ...detailRequest,
+      action: 'project.jour_fixe.meeting.read', meetingId: meeting.id });
+    assert.equal(foundMeeting.meeting.id, meeting.id);
+    assert.equal(foundMeeting.preparationTaskId, 'actual-preparation');
+    const foreignMeeting = detailsFixture(receipt => {
+      receipt.result.meeting = { ...structuredClone(meeting), project_id: 'foreign' };
+    });
+    let foreignMeetingRejected = false;
+    try { await foreignMeeting.invoke({ ...detailRequest, action: 'project.jour_fixe.meeting.read' }); }
+    catch { foreignMeetingRejected = true; }
+    assert.ok(foreignMeetingRejected);
+    results.push('browser meeting read preserves an actual native binding and rejects foreign scope');
+
     return results;
-  }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd), executionSource });
-  assert.equal(results.length, 9);
+  }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd),
+    detailsSource: tests.slice(detailsStart, detailsEnd), executionSource, kpiSource, meetingSource, meeting });
+  assert.equal(results.length, 12);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };

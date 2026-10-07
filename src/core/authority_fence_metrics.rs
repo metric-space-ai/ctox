@@ -198,7 +198,12 @@ pub(crate) fn snapshot() -> serde_json::Value {
         Some(statistics) => statistics
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .snapshot(PROCESS_STARTED.get().map(Instant::elapsed).unwrap_or_default()),
+            .snapshot(
+                PROCESS_STARTED
+                    .get()
+                    .map(Instant::elapsed)
+                    .unwrap_or_default(),
+            ),
         None => Statistics::default().snapshot(Duration::ZERO),
     }
 }
@@ -242,13 +247,30 @@ mod tests {
         assert_eq!(before["observed"], false);
         assert_eq!(before["pid"], std::process::id());
         assert_eq!(before["categories"].as_object().unwrap().len(), 3);
-        assert!(before["categories"]["issuer_publication"]["stages"].as_object().unwrap().is_empty());
-        statistics.record(Category::IssuerPublication, false, Duration::from_micros(7), [None; 5]);
+        assert!(before["categories"]["issuer_publication"]["stages"]
+            .as_object()
+            .unwrap()
+            .is_empty());
+        statistics.record(
+            Category::IssuerPublication,
+            false,
+            Duration::from_micros(7),
+            [None; 5],
+        );
         let after = statistics.snapshot(Duration::from_secs(1));
         assert_eq!(after["observed"], true);
-        assert_eq!(after["categories"]["issuer_publication"]["completed_attempts"], 1);
-        assert_eq!(after["categories"]["issuer_publication"]["successful_callbacks"], 0);
-        assert!(after["categories"]["issuer_publication"]["stages"].as_object().unwrap().is_empty());
+        assert_eq!(
+            after["categories"]["issuer_publication"]["completed_attempts"],
+            1
+        );
+        assert_eq!(
+            after["categories"]["issuer_publication"]["successful_callbacks"],
+            0
+        );
+        assert!(after["categories"]["issuer_publication"]["stages"]
+            .as_object()
+            .unwrap()
+            .is_empty());
         assert_eq!(after.as_object().unwrap().len(), 6);
     }
 
@@ -258,9 +280,17 @@ mod tests {
         assert!(statistics.report(Duration::from_secs(1)).is_some());
         let mut holds = [None; 5];
         holds[2] = Some(Duration::from_micros(123));
-        statistics.record(Category::NativeReadPublication, true, Duration::from_micros(150), holds);
+        statistics.record(
+            Category::NativeReadPublication,
+            true,
+            Duration::from_micros(150),
+            holds,
+        );
         let current = statistics.snapshot(Duration::from_secs(2));
-        assert_eq!(current["categories"]["native_read_publication"]["stages"]["core"]["total_us"], 123);
+        assert_eq!(
+            current["categories"]["native_read_publication"]["stages"]["core"]["total_us"],
+            123
+        );
         assert_eq!(statistics.last_report, Some(Duration::from_secs(1)));
         assert!(statistics.report(Duration::from_secs(2)).is_none());
         let next = statistics.report(Duration::from_secs(16)).unwrap();

@@ -78,3 +78,13 @@ claim refresh scheduling. The native supervisor resolver/tool, independently
 verified source adapters and bounded refresh scheduling remain the next slice.
 The Guest bridge must call these typed commands over the existing WebRTC route;
 there is no HTTP data endpoint. Installed acceptance is separate from checks.
+
+The shell's `workjetProjectControl` accepts `project.kpis.read` with
+`{commandId, projectId}` and `project.kpis.configure` with those keys plus
+`{operationId, expectedRevision, prompts:[{kpi_id,prompt}]}`. It maps the outer
+camelCase identifiers to the native request and returns
+`{action,commandId,projectId,contract,kpis}`. `kpis` is the shared `ProjectKpis`
+wire value, including its snake_case keys. Both actions use only the typed
+business command receipt, never a historical projection pull. Unknown authority
+fields, a changed configuration intent, a foreign receipt, invalid wire values
+and session/database replacement fail before exposing results.

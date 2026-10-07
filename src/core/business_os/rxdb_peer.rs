@@ -13488,7 +13488,10 @@ pub(in crate::business_os) mod tests {
           "observed":true, "process_elapsed_us":123456,
           "categories":{"issuer_publication":{"completed_attempts":7}}});
         let heartbeat = json!({"performance":{"authority_fences":daemon}});
-        assert_eq!(native_peer_performance_status(Some(&heartbeat), true)["authority_fences"], daemon);
+        assert_eq!(
+            native_peer_performance_status(Some(&heartbeat), true)["authority_fences"],
+            daemon
+        );
         assert!(native_peer_performance_status(Some(&heartbeat), false).is_null());
         assert!(native_peer_performance_status(None, true).is_null());
     }
