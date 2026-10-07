@@ -770,7 +770,10 @@ pub(crate) fn assert_native_checkpoint_path(
     // the peer publication callback remains controlled, not network acceptance.
     let copied = tempfile::tempdir().unwrap();
     let received = CheckpointStore::open(copied.path().into(), BLOB_LIMIT).unwrap();
+    let copy_started = std::time::Instant::now();
     let read_part = |artifact: Option<ArtifactRef>| {
+        let part_started = std::time::Instant::now();
+        let mut chunks = 0usize;
         let mut bytes = Vec::new();
         loop {
             let (sent, verified) = make_fetch(artifact.clone(), bytes.len() as u64);
@@ -788,18 +791,36 @@ pub(crate) fn assert_native_checkpoint_path(
                 .chunks_exact(2)
                 .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
                 .collect();
+            chunks += 1;
             target
                 .current(&local, |_, _| {
                     bytes.extend_from_slice(&chunk);
                     Ok(())
                 })
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "target ingestion failed: {error}; copy_ms={}, part_ms={}, bytes={}, chunks={}, original_permit_expired={}",
+                        copy_started.elapsed().as_millis(),
+                        part_started.elapsed().as_millis(),
+                        bytes.len(),
+                        chunks,
+                        target.original.expires_at_ms <= now_ms() as u64,
+                    )
+                });
             assert!(bytes.len() as u64 <= size_bytes);
             if bytes.len() as u64 == size_bytes {
                 break;
             }
             assert!(!chunk.is_empty(), "incomplete ranges must make progress");
         }
+        eprintln!(
+            "checkpoint component copy: blob={}, bytes={}, chunks={}, part_ms={}, copy_ms={}",
+            artifact.is_some(),
+            bytes.len(),
+            chunks,
+            part_started.elapsed().as_millis(),
+            copy_started.elapsed().as_millis(),
+        );
         bytes
     };
     let manifest_bytes = read_part(None);
