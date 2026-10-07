@@ -166,15 +166,21 @@ whole list rather than delivering a partial result.
 Missing authority, a replaced generation or a changed actor/database rejects
 the list; an authorized empty native result is valid.
 
-The correlated native receipt must confirm an integer project `count` within
-the 100-project limit and `truncated:false`. Missing/malformed completeness
-metadata rejects with `WORKJET_PROJECT_LIST_UNCONFIRMED`; truncation or a
-projected result whose length differs from that count rejects with
-`WORKJET_PROJECT_LIST_INCOMPLETE`. A projected zero is valid only when the
-native count is also zero. Successful responses include `count` and
-`truncated:false` alongside `action` and `projects`, so consumers can reject
-legacy unconfirmed responses and retain their cached gallery on failure. This
-confirmation describes projects; working copies keep their separate 500-row cap.
+Native counting and the shell projection include only owner-scoped projects
+with `status:active` and no deletion marker; archived projects remain stored.
+The correlated native receipt confirms an integer project `count` within the
+100-project limit, `truncated:false`, and a bounded `project_ids` window of
+active identities. Missing/malformed completeness metadata or malformed identity
+windows reject with `WORKJET_PROJECT_LIST_UNCONFIRMED`. Legacy count-only
+receipts remain compatible when the active projection is complete.
+Before rejecting a replication gap, the shell queries only the missing confirmed
+IDs through the same direct WebRTC query bridge with an owner/active selector,
+a fresh query revision, the original generation and the original deadline.
+Unresolved missing rows, extra active identities, changed authority or truncation
+still reject; there is no cached-data or HTTP fallback. A native zero count
+confirms only an empty active projection. Successful responses keep `count` and
+`truncated:false` alongside `action` and `projects`; working copies keep
+their separate 500-row cap.
 
 Collection acquisition, command completion and both queries share a 29-second
 deadline inside Workjet's existing 30-second desktop call. Timeout does not
@@ -327,15 +333,17 @@ denied request IDs stay denied; a new takeover needs a new request and permit.
 This path requires the original owner; unavailable-owner recovery is unresolved.
 No automatic backfill or inferred permission is authorized.
 
-Cutover remains blocked on the native policy adapter, authenticated transport
-wiring, authoritative binding/account/workspace resolution, post-await revocation
-fencing, and actual checkpoint transfer/resume integration. Added grant,
-migration, permit, cancellation and restored-state regressions are source-only
-and have not been compiled or executed. State serialization tests are not Raft
-disk-snapshot restart tests. Acceptance still requires the real native policy
-store and authenticated transport, pre-byte and mid-transfer revocation tests,
-restoration of populated stores, independent-host durability, and real provider
-continuation. No production-readiness or rollout claim follows from these edits.
+The production native adapter and source/target enrollment now resolve the
+actual principal, capture, provider assignment, workspace and enrolled peer.
+The configured native host installs a signed, connection-challenge-bound phase
+RPC with guarded response publication; see the integration boundary above.
+Checkpoint byte transfer, retained provider-account guards, cross-store/file
+mutation coordination and original-session target activation remain open.
+Earlier focused enrollment/adapter checks have run on gpu3; their receipts do
+not establish product acceptance. State serialization tests are not Raft
+disk-snapshot restart tests. Acceptance still requires restoration of populated
+stores, independent-host durability, real protected transfer and provider
+continuation. No production-readiness or rollout claim follows from phase RPC.
 
 ### Native transfer response publication
 

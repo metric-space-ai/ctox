@@ -1,6 +1,8 @@
 //! Bind execution-control requests and replies to configured peer keys and fresh request nonces.
 #[path = "auth/business_data_identity.rs"]
 pub mod business_data_identity;
+#[path = "auth/handoff_wire.rs"]
+pub mod handoff_wire;
 #[cfg(all(feature = "webrtc", unix))]
 pub(crate) mod route;
 #[path = "auth/session_handoff.rs"]
