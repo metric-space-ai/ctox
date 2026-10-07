@@ -92,7 +92,7 @@ fn supervisor_submit_replays_one_native_turn_and_one_message_in_the_existing_uui
     let replay = submit(root.path())?;
     assert_eq!(replay["result"], first["result"]);
     assert_eq!(count(root.path(), THREADS)?, 1);
-    assert_eq!(count(root.path(), "user_messages")?, 1);
+    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
     let changed = control(
         root.path(),
         "submit",
@@ -101,7 +101,7 @@ fn supervisor_submit_replays_one_native_turn_and_one_message_in_the_existing_uui
         json!({"project_id":"project","thread_id":THREAD,"goal":"Different intent"}),
     );
     assert!(rejected(changed));
-    assert_eq!(count(root.path(), "user_messages")?, 1);
+    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
     Ok(())
 }
 
@@ -143,7 +143,7 @@ fn supervisor_watch_uses_the_native_owner_and_queue_link_without_foreign_disclos
         "watch",
         foreign_thread
     )));
-    assert_eq!(count(root.path(), "user_messages")?, 1);
+    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
     Ok(())
 }
 
@@ -194,7 +194,7 @@ fn supervisor_cancel_uses_the_existing_native_receipt_and_preserves_terminal_his
         crate::mission::channels::business_command_projection(root.path(), target)?["status"],
         "cancelled"
     );
-    assert_eq!(count(root.path(), "user_messages")?, 1);
+    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
     Ok(())
 }
 
@@ -220,7 +220,7 @@ fn supervisor_controls_reject_forged_routes_external_executors_and_large_goals(
             "submit",
             request
         )));
-        assert_eq!(count(root.path(), "user_messages")?, 0);
+        assert_eq!(count(root.path(), "user_thread_messages")?, 0);
     }
     Ok(())
 }
@@ -257,7 +257,7 @@ fn supervisor_watch_refuses_a_native_turn_from_another_owned_thread() -> anyhow:
         "watch",
         observe(target)
     )));
-    assert_eq!(count(root.path(), "user_messages")?, 1);
+    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
     Ok(())
 }
 
@@ -269,6 +269,6 @@ fn archived_project_cannot_submit_a_new_supervisor_turn() -> anyhow::Result<()> 
     project["status"] = json!("archived");
     store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
     assert!(rejected(submit(root.path())));
-    assert_eq!(count(root.path(), "user_messages")?, 0);
+    assert_eq!(count(root.path(), "user_thread_messages")?, 0);
     Ok(())
 }
