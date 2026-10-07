@@ -75,6 +75,19 @@ Browser rendering/selection and the installed end-to-end review workflow still
 require their app integration and acceptance; source code and provenance alone
 do not establish product acceptance.
 
+## Own account profile and workspace authority
+
+The existing `ctox.business_os.user.upsert` command distinguishes an unchanged
+self-profile from assigning workspace authority. A signed active actor with
+`users.manage` may update their own persisted name/profile when both role and
+active state match the current native row. This path updates only name/profile
+and timestamps; it never rewrites role, active state or capability epoch. A
+concurrent demotion/deactivation makes its guarded SQL update fail closed.
+Creating/reactivating an Admin or Owner, changing an authority role, and editing
+another authority-bearing account still require the existing Owner
+`workspace.manage` decision. A claimed browser actor/role cannot replace the
+verified capability. There is no grant, token or global collection-access change.
+
 ## Operator coding presets and daemon readiness
 
 `ctox coding-agent models` reads the public `ctox.coding.models.v1`
