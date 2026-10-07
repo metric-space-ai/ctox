@@ -85,6 +85,8 @@
     "ctox.workjet.jour_fixe.meeting.read",
     "ctox.workjet.project.chat.create",
     "ctox.workjet.project.chat.ensure",
+    "ctox.workjet.project.kpis.configure",
+    "ctox.workjet.project.kpis.read",
     "ctox.workjet.project.list",
     "ctox.workjet.project.supervisor.bind",
     "ctox.workjet.project.supervisor.turn.cancel",

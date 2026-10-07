@@ -244,6 +244,15 @@ export const PROJECT_KPIS_TYPES = deepFreeze({
       }
     }
   },
+  "ReadKpisRequest": {
+    "fields": {
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      }
+    }
+  },
   "ConfigureKpisRequest": {
     "fields": {
       "operation_id": {
@@ -295,6 +304,10 @@ export const PROJECT_KPIS_TYPES = deepFreeze({
   }
 });
 export const PROJECT_KPIS_COMMANDS = deepFreeze({
+  "ctox.workjet.project.kpis.read": {
+    "request_type": "ReadKpisRequest",
+    "authorization": "owner"
+  },
   "ctox.workjet.project.kpis.configure": {
     "request_type": "ConfigureKpisRequest",
     "authorization": "owner"
@@ -444,7 +457,16 @@ export const PROJECT_KPIS_RULES = deepFreeze({
       }
     ]
   },
+  "ReadKpisRequest": {
+    "nonblank": [
+      "project_id"
+    ]
+  },
   "ConfigureKpisRequest": {
+    "nonblank": [
+      "operation_id",
+      "project_id"
+    ],
     "unique": [
       {
         "field": "prompts",
