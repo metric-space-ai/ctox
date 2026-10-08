@@ -160,10 +160,13 @@ distribution. A zero-price deal differs from no deal; both have zero proceeds.
 
 Refresh without resources or a registered supervisor records a blocked run.
 With both, it uses the existing native Threads/supervisor durable turn producer,
-not new unconstrained question workers or an HTTP path. There is at most one
-research admission per project/calendar month; repeated updates reuse it. An
-active turn is reused even across a month boundary. Changed proposals cannot
-start parallel research. No recurring schedule is activated by this feature.
+not new unconstrained question workers or an HTTP path. Each explicit manual
+refresh is keyed by the owner's command ID; retries are idempotent. At most one
+research turn per project is active. Updates reuse that turn while active;
+conflicting resource proposals are rejected while it runs. After terminal
+completion, a fresh command may start a new bounded turn in the same month,
+including a corrected proposal after a blocked result. No recurring schedule
+or automatic retry loop is activated by this feature.
 `refresh_due` is the next calendar month; each new run gets a rolling 60-month
 horizon, and all prior runs remain intact.
 

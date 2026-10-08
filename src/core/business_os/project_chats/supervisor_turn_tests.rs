@@ -146,15 +146,81 @@ fn exit_refresh_reconciles_terminal_before_mapping_commit() -> anyhow::Result<()
     )?;
     conn.execute("INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json,research_command_id) VALUES(?1,'project','owner',?2,?3)", params![run,raw,research])?;
     drop(conn);
-    let repaired = refresh("exit-race-reconcile")?;
-    ensure!(repaired["status"] == "completed", "{repaired}");
-    let state = &repaired["result"]["assessment"];
+    crate::business_os::workjet_exit_model::reconcile_research(root.path(), &research)?;
+    let conn = open_store(root.path())?;
+    let state = crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?;
     assert_eq!(state["status"], "blocked");
     assert!(state["result"].is_null());
     assert_eq!(state["history"].as_array().unwrap().len(), 2);
     assert_eq!(
-        refresh("exit-race-replay")?["result"]["assessment"]["history"],
+        {
+            crate::business_os::workjet_exit_model::reconcile_research(root.path(), &research)?;
+            crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?
+                ["history"]
+                .clone()
+        },
         state["history"]
+    );
+    Ok(())
+}
+
+#[test]
+fn exit_manual_refresh_after_blocked_terminal_admits_corrected_same_month_plan(
+) -> anyhow::Result<()> {
+    let root = super::weekly_reports::fixture()?;
+    let refresh = |id: &str, budget: f64| {
+        crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({"id":id,"module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":"project",
+        "payload":{"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":budget,"comparison_mode":"equal_resources"}},
+        "client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}}),
+        )
+    };
+    let first = refresh("exit-manual-first", 300.0)?;
+    ensure!(first["status"] == "completed", "{first}");
+    let conn = open_store(root.path())?;
+    let research: String = conn.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [],
+        |r| r.get(0),
+    )?;
+    let task =
+        crate::mission::channels::load_queue_task_for_business_os_command(root.path(), &research)?
+            .context("research queue")?;
+    crate::business_os::store::fail_business_command_from_queue_error(
+        root.path(),
+        &task.message_key,
+        "missing evidence",
+    )?;
+    assert_eq!(
+        crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?["status"],
+        "blocked"
+    );
+    let second = refresh("exit-manual-corrected", 400.0)?;
+    ensure!(second["status"] == "completed", "{second}");
+    assert_eq!(second["result"]["assessment"]["status"], "researching");
+    assert_ne!(
+        second["result"]["assessment"]["run_id"],
+        first["result"]["assessment"]["run_id"]
+    );
+    assert_eq!(
+        second["result"]["assessment"]["resource_proposal"]["monthly_budget_eur"],
+        400.0
+    );
+    let replay = refresh("exit-manual-corrected", 400.0)?;
+    assert_eq!(replay["result"], second["result"]);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE research_command_id IS NOT NULL",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        2
+    );
+    let active_reuse = refresh("exit-manual-active", 400.0)?;
+    assert_eq!(
+        active_reuse["result"]["assessment"]["run_id"],
+        second["result"]["assessment"]["run_id"]
     );
     Ok(())
 }

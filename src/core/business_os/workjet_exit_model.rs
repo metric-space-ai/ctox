@@ -2,7 +2,7 @@
 // License: AGPL-3.0-only
 
 //! Owner-gated immutable assessments. Refresh uses one existing durable
-//! supervisor turn per project/calendar month; queue admission is never E5.
+//! supervisor turn per explicit refresh; queue admission is never E5.
 use super::domain_effect::{AppliedDomainEffect, DomainEffectAdmission, DomainRecordRef};
 use super::store::{
     self, open_store, outbound_load_record, upsert_business_record, BusinessCommand, CommandOrigin,
@@ -241,6 +241,7 @@ fn admit_research(
     root: &Path,
     actor: &str,
     request: &Request,
+    refresh_id: &str,
 ) -> anyhow::Result<Option<(String, String)>> {
     let Some(resources) = request.resources.as_ref() else {
         return Ok(None);
@@ -256,11 +257,11 @@ fn admit_research(
         return Ok(None);
     };
     let as_of = request.as_of.as_deref().context("research date missing")?;
-    // A different proposal within the same month conflicts with the immutable
-    // native producer intent. It cannot start a second parallel research job.
+    // One explicit owner intent per command ID. Completed turns do not
+    // prevent a corrected proposal from starting a new bounded manual turn.
     let operation = stable_id(
         "workjet_exit_research",
-        &[&owner, &request.project_id, &as_of[..7]],
+        &[&owner, &request.project_id, refresh_id],
     );
     if exists(&conn)? {
         let active: Option<(String,String,String)> = conn.query_row(
@@ -278,15 +279,6 @@ fn admit_research(
                 );
                 return Ok(Some((run, command_id)));
             }
-        }
-        let prior:Option<(String,String,String)>=conn.query_row("SELECT run_id,research_command_id,assessment_json FROM workjet_exit_model_runs WHERE project_id=?1 AND json_extract(assessment_json,'$.as_of') LIKE ?2 AND research_command_id IS NOT NULL ORDER BY sequence DESC LIMIT 1",params![request.project_id,format!("{}%",&as_of[..7])],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        if let Some((run, command_id, raw)) = prior {
-            let previous: Value = serde_json::from_str(&raw)?;
-            ensure!(
-                previous["resource_proposal"] == serde_json::to_value(resources)?,
-                "a different proposal conflicts with this month's immutable research intent"
-            );
-            return Ok(Some((run, command_id)));
         }
     }
     drop(conn);
@@ -375,6 +367,23 @@ pub(super) fn handle_command(
     let admitted = admission.context("exit model mutation requires domain admission")?;
     let mut conn = open_store(root)?;
     let owner = super::workjet_project_kpis::require_project(&conn, actor, &request.project_id)?;
+    // Cross-process project admission fence covers active-turn inspection,
+    // durable queue admission and mapping commit. It never holds a SQLite
+    // transaction while the nested producer writes to the same store.
+    let _research_fence = if kind.ends_with(".refresh") {
+        let directory = root.join("state/workjet-exit-model-admission");
+        std::fs::create_dir_all(&directory)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(directory.join(stable_id("project", &[&owner, &request.project_id])))?;
+        file.lock()?;
+        Some(file)
+    } else {
+        None
+    };
     if kind.ends_with(".refresh") && request.resources.is_none() {
         request.resources = read_state(&conn, &request.project_id, &owner)?
             .get("resource_proposal")
@@ -401,7 +410,7 @@ pub(super) fn handle_command(
             request.inputs.is_none(),
             "refresh cannot accept numeric researched inputs"
         );
-        match admit_research(root, actor, &request)? {
+        match admit_research(root, actor, &request, operation_id(command)?)? {
             Some((run, research)) => (run, Some(research)),
             None => (
                 stable_id("exit_run", &[&owner, operation_id(command)?]),
