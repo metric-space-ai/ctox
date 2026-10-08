@@ -330,6 +330,23 @@ fn checkpoint_copy(root: &Path, binding: &str, operation: CheckpointControl<'_>)
         .await?
     })?;
     match response {
+        crate::business_os::NativeCheckpointCopyResponse::CopyPending {
+            checkpoint_digest,
+            verified_bytes,
+            partial_bytes,
+            total_bytes,
+        } if !route.is_empty()
+            && !take_over
+            && !enroll_guest
+            && !reconstruct
+            && guest_id.is_empty()
+            && !acknowledge
+            && protection_receipts.is_empty() =>
+        {
+            print(serde_json::json!({"copied":false,"pending":true,
+                "checkpointDigest":checkpoint_digest,"verifiedBytes":verified_bytes,
+                "partialBytes":partial_bytes,"totalBytes":total_bytes,"resumed":false}))
+        }
         crate::business_os::NativeCheckpointCopyResponse::GuestEnrolled {
             checkpoint_digest,
             guest_id: original_guest,
