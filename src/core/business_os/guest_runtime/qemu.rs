@@ -28,6 +28,7 @@ pub(in crate::business_os) use migration::QemuMemoryState;
 
 /// Resolved by the native image/lifecycle owner, never deserialized from a
 /// renderer or model request. Image provenance and host admission belong there.
+#[derive(Clone)]
 pub(in crate::business_os) struct PreparedQemuGuest {
     pub program: PathBuf,
     pub runtime_parent: PathBuf,

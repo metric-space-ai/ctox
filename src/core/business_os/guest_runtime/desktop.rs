@@ -7,6 +7,7 @@
 use super::channel::RemoteGuestDriver;
 use super::qemu::{PreparedQemuGuest, QemuMemoryState, QemuProcess};
 use super::{identifier, GuestDriver, GuestFrame, GuestInput};
+use super::{QuiescedQemuCheckpoint, StagedQemuCheckpoint};
 use anyhow::{ensure, Context, Result};
 use ctox_sync::guest_restore::GuestLiveEndpoint;
 use std::process::ExitStatus;
@@ -29,6 +30,7 @@ enum DesktopPhase {
 /// controller/execution ownership. This does not authenticate the caller.
 pub(in crate::business_os) struct RetainedQemuDesktop {
     process: QemuProcess,
+    config: PreparedQemuGuest,
     guest_id: String,
     process_instance_id: String,
     endpoint_id: Option<String>,
@@ -48,6 +50,7 @@ impl RetainedQemuDesktop {
         let process_instance_id = format!("qemu:{}:{}", process.pid(), uuid::Uuid::new_v4());
         Ok(Self {
             process,
+            config: config.clone(),
             guest_id,
             process_instance_id,
             endpoint_id: None,
@@ -72,6 +75,7 @@ impl RetainedQemuDesktop {
         let process_instance_id = format!("qemu:{}:{}", process.pid(), uuid::Uuid::new_v4());
         Ok(Self {
             process,
+            config: config.clone(),
             guest_id,
             process_instance_id,
             endpoint_id: None,
@@ -133,6 +137,58 @@ impl RetainedQemuDesktop {
         self.driver = None;
         self.endpoint_id = None;
         Ok(memory)
+    }
+
+    /// A clean source-child witness plus its exact assigned disk/profile.
+    /// The caller still owns current authority and external-effect reconciliation.
+    pub(in crate::business_os) async fn save_checkpoint_live(
+        &mut self,
+        expected: &GuestLiveEndpoint,
+        memory: &mut tokio::fs::File,
+    ) -> Result<QuiescedQemuCheckpoint> {
+        let state = self.save_memory_live(expected, memory).await?;
+        QuiescedQemuCheckpoint::after_clean_exit(
+            self.config.clone(),
+            self.guest_id.clone(),
+            expected.clone(),
+            state,
+        )
+    }
+
+    /// All RAM/disk/base/assignment checks precede spawning this paused child.
+    /// Retain the returned owner before awaiting load_checkpoint.
+    pub(in crate::business_os) fn spawn_checkpoint(
+        checkpoint: &mut StagedQemuCheckpoint,
+    ) -> Result<Self> {
+        checkpoint.prepare_spawn()?;
+        let owner = Self::spawn_incoming(
+            &checkpoint.config,
+            checkpoint.guest_id.clone(),
+            checkpoint.service_session.clone(),
+        )?;
+        checkpoint.target_instance_id = Some(owner.process_instance_id.clone());
+        Ok(owner)
+    }
+
+    /// No instructions run here. A separate activate_restored still requires
+    /// the caller's fresh authority and the original real service session.
+    pub(in crate::business_os) async fn load_checkpoint(
+        &mut self,
+        checkpoint: &mut StagedQemuCheckpoint,
+    ) -> Result<()> {
+        ensure!(
+            checkpoint.target_instance_id.as_deref() == Some(self.process_instance_id.as_str())
+                && self.config.memory_mib == checkpoint.config.memory_mib
+                && self.config.vcpus == checkpoint.config.vcpus
+                && self.guest_id == checkpoint.guest_id
+                && self.restored_session.as_deref() == Some(checkpoint.service_session.as_str())
+                && self.config.base_raw == checkpoint.config.base_raw
+                && self.config.overlay_qcow2 == checkpoint.config.overlay_qcow2,
+            "incoming machine owner differs from its completed staging"
+        );
+        let mut memory = tokio::fs::File::from_std(checkpoint.memory.try_clone()?);
+        self.load_memory(&mut memory, &checkpoint.memory_state)
+            .await
     }
 
     /// One bootstrap attempt. Failure/cancellation retains the process; it never
