@@ -13712,7 +13712,8 @@ async function workjetProjectControl(request = {}) {
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
-    'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish', 'project.jour_fixe.todos.revise',
+    'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
+    'project.jour_fixe.transcript.local_candidate', 'project.jour_fixe.todos.revise',
     'project.jour_fixe.comment.add'];
   const acquisition = supervisorActions.includes(action)
     ? requireWorkjetSupervisorDataPlane() : requireWorkjetProjectDataPlane();
@@ -13725,18 +13726,24 @@ async function workjetProjectControl(request = {}) {
     'project.jour_fixe.meeting.end': 'MeetingTransitionRequest',
     'project.jour_fixe.transcript.append': 'AppendTranscriptRequest',
     'project.jour_fixe.narration.local_publish': 'LocalNarrationRequest',
+    'project.jour_fixe.transcript.local_candidate': 'LocalTranscriptCandidateRequest',
     'project.jour_fixe.todos.revise': 'ProposeTodosRequest',
     'project.jour_fixe.comment.add': 'AddCommentRequest',
   };
   if (Object.hasOwn(meetingMutationTypes, action)) {
     const appending = action === 'project.jour_fixe.transcript.append';
     const localNarration = action === 'project.jour_fixe.narration.local_publish';
-    const nativeInstanceId = localNarration ? boundedWorkjetProjectText(state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', 128) : null;
+    const localCandidate = action === 'project.jour_fixe.transcript.local_candidate';
+    const nativeInstanceId = localNarration || localCandidate
+      ? boundedWorkjetProjectText(state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', localNarration ? 128 : 256) : null;
     const revising = action === 'project.jour_fixe.todos.revise';
     const commenting = action === 'project.jour_fixe.comment.add';
     const allowedKeys = new Set(['action', 'commandId', 'projectId', 'operationId', 'meetingId', 'expectedRevision']);
     if (appending) allowedKeys.add('turn');
     if (localNarration) for (const key of ['slideId', 'fileId', 'generationId', 'deckRevision', 'audioSha256', 'narrationTextSha256']) allowedKeys.add(key);
+      }
+    }
+    if (localCandidate) for (const key of ['requestId', 'deckRevision', 'text']) allowedKeys.add(key);
     if (revising) for (const key of ['proposalRevision', 'items']) allowedKeys.add(key);
     if (commenting) for (const key of ['commentId', 'slideId', 'deckRevision', 'x', 'y', 'text']) allowedKeys.add(key);
     assertWorkjetProjectPayloadKeys(request, allowedKeys);
@@ -13754,6 +13761,8 @@ async function workjetProjectControl(request = {}) {
       ...(localNarration ? { instance_id: nativeInstanceId, project_id: projectId, slide_id: request.slideId,
         file_id: request.fileId, generation_id: request.generationId, deck_revision: request.deckRevision,
         audio_sha256: request.audioSha256, narration_text_sha256: request.narrationTextSha256 } : {}),
+      ...(localCandidate ? { request_id: request.requestId, instance_id: nativeInstanceId,
+        project_id: projectId, deck_revision: request.deckRevision, text: request.text } : {}),
       ...(revising ? { proposal_revision: request.proposalRevision, items: request.items } : {}),
       ...(commenting ? { comment_id: request.commentId, slide_id: request.slideId,
         deck_revision: request.deckRevision, x: request.x, y: request.y, text: request.text } : {}),
@@ -13769,7 +13778,13 @@ async function workjetProjectControl(request = {}) {
     if (localNarration && ![payload.audio_sha256, payload.narration_text_sha256].every(hash => /^[a-f0-9]{64}$/.test(hash))) {
       throw new TypeError('Local narration requires exact lowercase SHA256 hashes.');
     }
+    if (localCandidate && (!payload.text.trim() || new TextEncoder().encode(payload.text).length > 4096)) {
+      throw new TypeError('Local transcript candidate exceeds the 4096-byte UTF-8 text budget.');
+    }
     const expectedPayload = JSON.parse(JSON.stringify(payload));
+    const candidateTextHash = localCandidate
+      ? [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(expectedPayload.text)))]
+        .map(byte => byte.toString(16).padStart(2, '0')).join('') : null;
     const sameValue = (left, right) => {
       if (left === right) return true;
       if (!left || !right || typeof left !== 'object' || typeof right !== 'object'
@@ -13781,7 +13796,7 @@ async function workjetProjectControl(request = {}) {
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
         || actorContext(state.session).id !== ownerUserId
-        || (localNarration && (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== nativeInstanceId)) {
+        || ((localNarration || localCandidate) && (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== nativeInstanceId)) {
         throw new Error('Workjet project session changed before the meeting mutation was delivered.');
       }
     };
@@ -13802,12 +13817,13 @@ async function workjetProjectControl(request = {}) {
     const mutation = receipt.result.mutation;
     const resultValidation = validateJourFixeValue('MeetingMutationReceipt', mutation);
     if (resultValidation.ok !== true) throw new TypeError(resultValidation.error);
-    const expectedState = action === 'project.jour_fixe.meeting.start' ? 'live'
+    const expectedState = action === 'project.jour_fixe.meeting.start' || localCandidate ? 'live'
       : action === 'project.jour_fixe.meeting.end' || revising ? 'review' : null;
     if (mutation.operation_id !== expectedPayload.operation_id || mutation.meeting_id !== expectedPayload.meeting_id
       || mutation.project_id !== projectId || mutation.revision !== expectedPayload.expected_revision + 1
       || (expectedState ? mutation.state !== expectedState : !(localNarration ? ['preparing', 'ready'] : ['live', 'review']).includes(mutation.state))
       || (localNarration ? mutation.changed_id !== expectedPayload.slide_id
+        : localCandidate ? mutation.changed_id !== receipt.result.local_candidate?.turn_id
         : appending ? mutation.changed_id !== expectedPayload.turn.id
         : commenting ? mutation.changed_id !== expectedPayload.comment_id : mutation.changed_id != null)
       || (revising ? mutation.todos_revision !== expectedPayload.proposal_revision : mutation.todos_revision != null)) {
@@ -13833,9 +13849,24 @@ async function workjetProjectControl(request = {}) {
         throw new Error('Workjet local narration receipt does not confirm native audio custody.');
       }
     }
+    if (localCandidate) {
+      const stored = receipt.result.local_candidate;
+      const shape = validateJourFixeValue('LocalTranscriptCandidateReceipt', stored);
+      if (shape.ok !== true) throw new TypeError(shape.error);
+      const nativeOwnerId = boundedWorkjetProjectText(receipt.result.owner_user_id, 'owner_user_id', 256);
+      if (stored.operation_id !== expectedPayload.operation_id || stored.request_id !== expectedPayload.request_id
+        || stored.instance_id !== nativeInstanceId || stored.project_id !== projectId
+        || stored.meeting_id !== expectedPayload.meeting_id || stored.deck_revision !== expectedPayload.deck_revision
+        || stored.owner_user_id !== nativeOwnerId || stored.revision !== mutation.revision
+        || stored.turn_id !== mutation.changed_id || stored.text_sha256 !== candidateTextHash
+        || stored.provider_verified !== false || stored.provenance !== 'authenticated_owner_local_candidate') {
+        throw new Error('Local transcript receipt does not confirm the exact Owner candidate and live scope.');
+      }
+    }
     return { action, commandId, projectId, contract: JOUR_FIXE_SCHEMA,
       mutation: JSON.parse(JSON.stringify(mutation)),
-      ...(localNarration ? { localNarration: JSON.parse(JSON.stringify(receipt.result.local_narration)) } : {}) };
+      ...(localNarration ? { localNarration: JSON.parse(JSON.stringify(receipt.result.local_narration)) } : {}),
+      ...(localCandidate ? { localCandidate: JSON.parse(JSON.stringify(receipt.result.local_candidate)) } : {}) };
   }
 
   if (['project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {

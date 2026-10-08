@@ -1315,6 +1315,276 @@ impl WireValidate for ReadMeetingRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum LocalTranscriptProvenance {
+    #[serde(rename = "authenticated_owner_local_candidate")]
+    AuthenticatedOwnerLocalCandidate,
+}
+impl WireValidate for LocalTranscriptProvenance {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LocalTranscriptCandidateRequest {
+    pub(crate) operation_id: String,
+    pub(crate) request_id: String,
+    pub(crate) instance_id: String,
+    pub(crate) project_id: String,
+    pub(crate) meeting_id: String,
+    pub(crate) deck_revision: u64,
+    pub(crate) expected_revision: u64,
+    pub(crate) text: String,
+}
+impl WireValidate for LocalTranscriptCandidateRequest {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.operation_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err(
+                    "LocalTranscriptCandidateRequest.operation_id violates min_chars".into(),
+                );
+            }
+            if value.chars().count() > 128 {
+                return Err(
+                    "LocalTranscriptCandidateRequest.operation_id violates max_chars".into(),
+                );
+            }
+        }
+        {
+            let value = &self.request_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("LocalTranscriptCandidateRequest.request_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("LocalTranscriptCandidateRequest.request_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.instance_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err(
+                    "LocalTranscriptCandidateRequest.instance_id violates min_chars".into(),
+                );
+            }
+            if value.chars().count() > 256 {
+                return Err(
+                    "LocalTranscriptCandidateRequest.instance_id violates max_chars".into(),
+                );
+            }
+        }
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("LocalTranscriptCandidateRequest.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("LocalTranscriptCandidateRequest.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.meeting_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("LocalTranscriptCandidateRequest.meeting_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("LocalTranscriptCandidateRequest.meeting_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.deck_revision;
+            value.validate()?;
+            if *value < 1 {
+                return Err(
+                    "LocalTranscriptCandidateRequest.deck_revision violates minimum".into(),
+                );
+            }
+        }
+        {
+            let value = &self.expected_revision;
+            value.validate()?;
+        }
+        {
+            let value = &self.text;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("LocalTranscriptCandidateRequest.text violates min_chars".into());
+            }
+            if value.chars().count() > 4096 {
+                return Err("LocalTranscriptCandidateRequest.text violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LocalTranscriptCandidateReceipt {
+    pub(crate) operation_id: String,
+    pub(crate) request_id: String,
+    pub(crate) instance_id: String,
+    pub(crate) project_id: String,
+    pub(crate) meeting_id: String,
+    pub(crate) deck_revision: u64,
+    pub(crate) owner_user_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) sequence: u64,
+    pub(crate) revision: u64,
+    pub(crate) text_sha256: String,
+    pub(crate) persisted_at_ms: i64,
+    pub(crate) provenance: LocalTranscriptProvenance,
+    pub(crate) provider_verified: bool,
+}
+impl WireValidate for LocalTranscriptCandidateReceipt {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.operation_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.operation_id violates min_chars".into(),
+                );
+            }
+            if value.chars().count() > 128 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.operation_id violates max_chars".into(),
+                );
+            }
+        }
+        {
+            let value = &self.request_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("LocalTranscriptCandidateReceipt.request_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("LocalTranscriptCandidateReceipt.request_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.instance_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.instance_id violates min_chars".into(),
+                );
+            }
+            if value.chars().count() > 256 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.instance_id violates max_chars".into(),
+                );
+            }
+        }
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("LocalTranscriptCandidateReceipt.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("LocalTranscriptCandidateReceipt.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.meeting_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("LocalTranscriptCandidateReceipt.meeting_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("LocalTranscriptCandidateReceipt.meeting_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.deck_revision;
+            value.validate()?;
+            if *value < 1 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.deck_revision violates minimum".into(),
+                );
+            }
+        }
+        {
+            let value = &self.owner_user_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.owner_user_id violates min_chars".into(),
+                );
+            }
+            if value.chars().count() > 256 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.owner_user_id violates max_chars".into(),
+                );
+            }
+        }
+        {
+            let value = &self.turn_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("LocalTranscriptCandidateReceipt.turn_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("LocalTranscriptCandidateReceipt.turn_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.sequence;
+            value.validate()?;
+            if *value < 1 {
+                return Err("LocalTranscriptCandidateReceipt.sequence violates minimum".into());
+            }
+        }
+        {
+            let value = &self.revision;
+            value.validate()?;
+            if *value < 1 {
+                return Err("LocalTranscriptCandidateReceipt.revision violates minimum".into());
+            }
+        }
+        {
+            let value = &self.text_sha256;
+            value.validate()?;
+            if value.chars().count() < 64 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.text_sha256 violates min_chars".into(),
+                );
+            }
+            if value.chars().count() > 64 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.text_sha256 violates max_chars".into(),
+                );
+            }
+        }
+        {
+            let value = &self.persisted_at_ms;
+            value.validate()?;
+            if *value < 0 {
+                return Err(
+                    "LocalTranscriptCandidateReceipt.persisted_at_ms violates minimum".into(),
+                );
+            }
+        }
+        {
+            let value = &self.provenance;
+            value.validate()?;
+        }
+        {
+            let value = &self.provider_verified;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MeetingMutationReceipt {
@@ -1707,6 +1977,19 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
         "ReadMeetingRequest" => serde_json::from_value::<ReadMeetingRequest>(value)
             .map_err(|e| e.to_string())?
             .validate(),
+        "LocalTranscriptProvenance" => serde_json::from_value::<LocalTranscriptProvenance>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "LocalTranscriptCandidateRequest" => {
+            serde_json::from_value::<LocalTranscriptCandidateRequest>(value)
+                .map_err(|e| e.to_string())?
+                .validate()
+        }
+        "LocalTranscriptCandidateReceipt" => {
+            serde_json::from_value::<LocalTranscriptCandidateReceipt>(value)
+                .map_err(|e| e.to_string())?
+                .validate()
+        }
         "MeetingMutationReceipt" => serde_json::from_value::<MeetingMutationReceipt>(value)
             .map_err(|e| e.to_string())?
             .validate(),

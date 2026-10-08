@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 116] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 117] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -380,6 +380,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 116] = [
     "ctox.workjet.jour_fixe.meeting.end",
     "ctox.workjet.jour_fixe.transcript.append",
     "ctox.workjet.jour_fixe.narration.local_publish",
+    "ctox.workjet.jour_fixe.transcript.local_candidate",
     "ctox.workjet.jour_fixe.todos.revise",
     "ctox.workjet.project.supervisor.turn.cancel",
     "ctox.workjet.project.chat.create",
@@ -1734,6 +1735,7 @@ fn dispatch_business_command(
         | "ctox.workjet.jour_fixe.meeting.end"
         | "ctox.workjet.jour_fixe.transcript.append"
         | "ctox.workjet.jour_fixe.narration.local_publish"
+        | "ctox.workjet.jour_fixe.transcript.local_candidate"
         | "ctox.workjet.jour_fixe.todos.revise"
         | "ctox.workjet.jour_fixe.comment.add" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;

@@ -93,6 +93,7 @@
     "ctox.workjet.jour_fixe.todos.propose",
     "ctox.workjet.jour_fixe.todos.revise",
     "ctox.workjet.jour_fixe.transcript.append",
+    "ctox.workjet.jour_fixe.transcript.local_candidate",
     "ctox.workjet.project.chat.create",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.kpis.configure",

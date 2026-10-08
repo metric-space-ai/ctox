@@ -166,11 +166,31 @@ impl TargetSpeechHost {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PublicationBoundary {
+    RuntimeIo,
+    NativeReply,
+}
+impl PublicationBoundary {
+    fn publish(
+        self,
+        peer_fence: impl FnOnce(&mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
+        publish: &mut dyn FnMut() -> RxResult<()>,
+    ) -> RxResult<()> {
+        match self {
+            Self::RuntimeIo => peer_fence(publish),
+            // RxDB's AuxiliaryPublicationGuard applies the exact peer fence
+            // around this callback. Reentering it here deadlocks before send.
+            Self::NativeReply => publish(),
+        }
+    }
+}
 struct Publication {
     server: Weak<Server>,
     policy: Arc<TargetPolicy>,
     peer: WebRTCRsConnection,
     object_id: Option<String>,
+    boundary: PublicationBoundary,
 }
 impl WebRTCPublicationGuard for Publication {
     fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
@@ -188,8 +208,11 @@ impl WebRTCPublicationGuard for Publication {
                     }
                 }
                 let pool = server.pool.upgrade().ok_or(Denial::RouteRetired)?;
-                pool.with_current_native_control_peer(&self.peer, publish)
-                    .map_err(|_| Denial::RouteRetired)?
+                self.boundary
+                    .publish(
+                        |publish| pool.with_current_native_control_peer(&self.peer, publish)?,
+                        publish,
+                    )
                     .map_err(|_| Denial::RouteRetired)
             })
             .map_err(|_| new_rx_error("CTOX_SPEECH_AUTHORITY_RETIRED", None))
@@ -268,12 +291,14 @@ impl Server {
         policy: Arc<TargetPolicy>,
         peer: WebRTCRsConnection,
         id: Option<String>,
+        boundary: PublicationBoundary,
     ) -> Arc<dyn WebRTCPublicationGuard> {
         Arc::new(Publication {
             server: Arc::downgrade(self),
             policy,
             peer,
             object_id: id,
+            boundary,
         })
     }
     fn entry(
@@ -320,7 +345,7 @@ impl Server {
             .map_err(|_| Denial::RouteRetired)??;
         Ok(GuardedAuxiliaryResponse {
             result,
-            publication: self.publication(policy, peer, id),
+            publication: self.publication(policy, peer, id, PublicationBoundary::NativeReply),
         })
     }
     async fn execute(
@@ -387,7 +412,12 @@ impl Server {
                     entries.insert(id.clone(), entry.clone());
                     Ok(())
                 })?;
-                let guard = self.publication(policy.clone(), peer.clone(), Some(id.clone()));
+                let guard = self.publication(
+                    policy.clone(),
+                    peer.clone(),
+                    Some(id.clone()),
+                    PublicationBoundary::RuntimeIo,
+                );
                 let socket = connect_runtime(&self.root, binding, guard.clone()).await;
                 let socket = match socket {
                     Ok(socket) => socket,
