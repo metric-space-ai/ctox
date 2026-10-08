@@ -79,6 +79,20 @@ fn speech_computer_malformed_operator_document_preserves_saved_route() {
         assert!(load_saved(root.path()).unwrap() == original);
     }
 }
+#[test]
+fn speech_computer_config_can_select_a_pin_without_an_ephemeral_route() {
+    let original = route(SpeechWorkload::Transcription);
+    let mut value = serde_json::to_value(&original).unwrap();
+    value.as_object_mut().unwrap().remove("native_peer_route");
+    let restored: SpeechComputerRoute = serde_json::from_value(value).unwrap();
+    assert!(restored.native_peer_route.is_empty());
+    assert_eq!(
+        restored.target_signing_identity,
+        original.target_signing_identity
+    );
+    assert!(validate_route(&restored, SpeechWorkload::Transcription, 10_000).is_ok());
+}
+
 use super::*;
 
 fn identity() -> ctox_sync::authority::auth::SigningIdentity {

@@ -30,6 +30,7 @@ const MAX_CONFIG_BYTES: u64 = 16 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct SpeechComputerRoute {
     pub scope_id: String,
+    #[serde(default)]
     pub native_peer_route: String,
     pub source_signing_identity: String,
     pub target_signing_identity: String,
@@ -81,8 +82,7 @@ fn validate_route(
         "invalid native speech scope"
     );
     anyhow::ensure!(
-        !route.native_peer_route.is_empty()
-            && route.native_peer_route.len() <= 256
+        route.native_peer_route.len() <= 256
             && route.native_peer_route.trim() == route.native_peer_route
             && !route.native_peer_route.chars().any(char::is_control),
         "invalid native speech peer"
@@ -222,6 +222,7 @@ impl crate::sync_host::NativeControlReplyVerifier for VerifiedReply {
 struct Client {
     current: Arc<Current>,
     channel: crate::sync_host::NativeControlChannel,
+    peer: crate::sync_host::NativeControlPeer,
 }
 impl Client {
     fn open(root: &Path, role: SpeechWorkload) -> Result<Self, SpeechError> {
@@ -244,7 +245,20 @@ impl Client {
             .map_err(|_| SpeechError::ConfigurationUnavailable)?;
         let channel =
             crate::sync_host::native_control_channel(root).map_err(|_| SpeechError::Transport)?;
-        Ok(Self { current, channel })
+        let peer = channel
+            .bind_identity(&current.route.target_signing_identity)
+            .map_err(|_| SpeechError::Transport)?
+            .ok_or(SpeechError::Transport)?;
+        if !current.route.native_peer_route.is_empty()
+            && peer.route() != current.route.native_peer_route
+        {
+            return Err(SpeechError::Transport);
+        }
+        Ok(Self {
+            current,
+            channel,
+            peer,
+        })
     }
 
     async fn call(&self, operation: Op) -> Result<Reply, SpeechError> {
@@ -274,8 +288,8 @@ impl Client {
         });
         let result = self
             .channel
-            .request(
-                &current.route.native_peer_route,
+            .request_on(
+                &self.peer,
                 &current.route.target_signing_identity,
                 METHOD,
                 envelope,
@@ -316,19 +330,12 @@ impl Client {
 /// Operator diagnostics await their configured host's existing peer before
 /// timing audio. Never retry a request whose effect may already have started.
 pub async fn wait_for_route(root: &Path, role: SpeechWorkload) -> Result<(), SpeechError> {
-    let client = Client::open(root, role)?;
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let ready = client
-            .current
-            .with_current(|_| {
-                Ok(client
-                    .channel
-                    .peer_connected(&client.current.route.native_peer_route)?)
-            })
-            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
-        if ready {
-            return Ok(());
+        match Client::open(root, role) {
+            Ok(_) => return Ok(()),
+            Err(SpeechError::Transport) => {}
+            Err(error) => return Err(error),
         }
         if Instant::now() >= deadline {
             return Err(SpeechError::TimedOut);
