@@ -436,10 +436,14 @@ pub(super) fn reconcile_research(root: &Path, research: &str) -> anyhow::Result<
     if canonical["execution_phase"] != "terminal" {
         return Ok(());
     }
-    let reply = canonical
-        .pointer("/result/outbound_text")
-        .and_then(Value::as_str)
-        .unwrap_or("{}");
+    let reply = if canonical["status"] == "completed" {
+        canonical
+            .pointer("/result/outbound_text")
+            .and_then(Value::as_str)
+            .unwrap_or("{}")
+    } else {
+        "{}"
+    };
     complete_research(root, research, reply)
 }
 
