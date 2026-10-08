@@ -42,6 +42,19 @@ fn original_target_guest_is_retained_once_and_cannot_become_a_fresh_job() {
     let (root, registry, fresh) = fixture();
     let (_, facts, _) = worker_store(root.path());
     let _workspace = grant_workspace(root.path(), &fresh);
+    // Workspace-only provisioning correctly revokes omitted provider grants.
+    // Independently provision the target's actual provider entitlement afterwards.
+    super::super::accounts::configure_provider_assignments(
+        root.path(),
+        "computer",
+        &[super::super::accounts::ProviderAssignmentInput {
+            owner_user_id: "owner".into(),
+            worker_profile_id: "profile".into(),
+            gateway_account_id: "fixture".into(),
+            model_id: "model".into(),
+        }],
+    )
+    .unwrap();
     let config = serde_json::json!({"version":1,"computerId":"computer",
         "requiredCapabilities":["fixture-requirement"]});
     crate::inference::runtime_env::set_runtime_env_value(
