@@ -412,7 +412,15 @@ mod tests {
             } else {
                 *extension = extension["proof"].clone();
             }
-            assert!(verify_proof(b"native-secret", &nonce, "command", "http://127.0.0.1:8788/mcp", &malformed, 101).is_err());
+            assert!(verify_proof(
+                b"native-secret",
+                &nonce,
+                "command",
+                "http://127.0.0.1:8788/mcp",
+                &malformed,
+                101
+            )
+            .is_err());
         }
         let mut changed = value;
         changed["capabilities"]["tools"]["listChanged"] = Value::Bool(true);
