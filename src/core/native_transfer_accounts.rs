@@ -68,10 +68,9 @@ impl NativeTransferAccount {
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
             "invalid native source pin"
         );
-        ensure!(
-            self.principal.authorization_epoch > 0,
-            "invalid native principal"
-        );
+        // Business OS capability epochs start at zero. Preserve the exact
+        // source-verified epoch; the positive local account generation above
+        // is a separate value. Current source policy still fences revocation.
         let device = self.principal.device.as_ref().ok_or_else(unavailable)?;
         ensure!(
             !device.pairing_id.is_empty()

@@ -378,6 +378,17 @@ impl NativeSyncSession {
             .expect("a started native session owns its pool")
     }
 
+    /// Borrows existing signed native discovery; retains no host authority.
+    #[cfg(unix)]
+    pub fn native_route_channel(
+        &self,
+    ) -> Option<std::sync::Weak<crate::authority::webrtc::WebRtcControlChannel>> {
+        self.resources.execution.as_ref().map(|host| match host {
+            ExecutionAttachment::Voter(host) => host.route_channel(),
+            ExecutionAttachment::Worker(host) => host.route_channel(),
+        })
+    }
+
     /// Typed data operations retain the same owned pool, not a replacement.
     pub fn pool_clone(&self) -> NativePool {
         self.pool().clone()
