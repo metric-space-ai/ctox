@@ -4312,10 +4312,21 @@ async function befehlAmServer(commandId) {
   }
 }
 
+const KAMPAGNENSTART_LADEPAKET = 40;
+
 async function startCampaignResearch(campaignName) {
   const campaign = String(campaignName || '').trim();
-  await ensureFullLeads(campaignListLeads(campaign).map((lead) => lead.id));
-  const leads = campaignLeads(campaign);
+  // Nur die startbaren Leads vollstaendig laden, in Paketen mit je eigenem
+  // Lesefenster. Vorher lud der Start alle 498 Leads der Kampagne (63 Achter-
+  // Abfragen) in einem 15-s-Fenster und brach mit "Daten konnten nicht
+  // rechtzeitig aus CTOX geladen werden" ab, obwohl nur 156 offen waren
+  // (thesen 08.10.2026). Die Listenzeilen tragen Recherche- und Freigabestatus.
+  const startbar = campaignResearchQueue(campaignListLeads(campaign));
+  for (let offset = 0; offset < startbar.length; offset += KAMPAGNENSTART_LADEPAKET) {
+    await ensureFullLeads(startbar.slice(offset, offset + KAMPAGNENSTART_LADEPAKET));
+  }
+  const startbarIds = new Set(startbar);
+  const leads = campaignLeads(campaign).filter((lead) => startbarIds.has(lead.id));
   return startScopedResearch(campaign, leads, {
     scope: 'campaign',
     title: `Kampagnenrecherche: ${campaign}`,
