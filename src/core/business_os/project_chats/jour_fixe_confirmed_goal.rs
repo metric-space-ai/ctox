@@ -112,6 +112,29 @@ pub(in crate::business_os) fn previous_goal_for_deck(root:&Path,meeting:&wire::M
     }
 }
 
+fn require_current_write_policy(policy:&Connection,actor:&str)->anyhow::Result<()> {
+    let role:Option<String>=policy.query_row("SELECT role FROM business_users WHERE user_id=?1 AND active=1",
+        [actor],|r|r.get(0)).optional()?;
+    let role=role.context("confirmation actor is no longer active")?;
+    let decision=super::super::store_policy::trusted_actor_policy_decision_with_conn(policy,actor,&role,
+        super::super::policy::BusinessOsPermission::DataWrite,
+        super::super::policy::BusinessOsScopeType::Workspace,None)?;
+    ensure!(decision.allowed,"current confirmation policy denied");
+    Ok(())
+}
+
+/// Called behind central authorization before returning a Core confirmation
+/// receipt. A historical Owner identity never substitutes for today's binding.
+pub(in crate::business_os) fn validate_recovery(root:&Path,policy:&Connection,
+    command:&BusinessCommand,actor:&str)->anyhow::Result<()> {
+    require_current_write_policy(policy,actor)?;
+    let id=command.payload["meeting_id"].as_str().context("confirmation meeting missing")?;
+    let draft=super::jour_fixe_owner::owned(policy,actor,command.record_id.as_deref(),id)?;
+    let meeting=overlay(root,draft)?;
+    ensure!(meeting.state==wire::MeetingState::Confirmed,"Core confirmation is unavailable");
+    Ok(())
+}
+
 pub(in crate::business_os) fn handle(root:&Path,command:&BusinessCommand,actor:&str,
     admission:&DomainEffectAdmission)->anyhow::Result<Value> {
     let mut payload=command.payload.clone();
@@ -133,6 +156,7 @@ pub(in crate::business_os) fn handle(root:&Path,command:&BusinessCommand,actor:&
     let core_tx=core.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let policy_tx=policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
     admission.validate_core_claim(&core_tx)?;
+    require_current_write_policy(&policy_tx,actor)?;
     let draft=super::jour_fixe_owner::owned(&policy_tx,actor,command.record_id.as_deref(),&request.meeting_id)?;
     let current=overlay_from_core(&core_tx,draft)?;
     let applied=admission.apply_in_transaction(&core_tx,|tx| {
