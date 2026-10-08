@@ -61,6 +61,15 @@ async fn actual_previous_core_input_requires_verified_native_owner_before_recapt
         "fresh/normal Core fabricated a previous-input witness"
     );
     source.thread.register_native_source_factory()?;
+    // Fresh quiet sessions defer their journal until the first real turn.
+    // Materialize through the actual recorder before capturing/restoring it.
+    source
+        .thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    assert!(!source.thread.rollout_materialization_pending().await);
     source.thread.shutdown_and_wait().await?;
     let (_, state) = source.thread.capture_native_state().await?;
     assert!(
