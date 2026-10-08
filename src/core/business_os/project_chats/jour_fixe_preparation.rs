@@ -106,8 +106,12 @@ pub(super) fn emit(
         state: wire::MeetingState::Planned,
         revision: 0,
         deck_revision: 0,
-        previous_goal: super::jour_fixe_confirmed_goal::previous_goal(root,
-            &route.owner_user_id,&route.project_id,&binding.thread_key)?,
+        previous_goal: super::jour_fixe_confirmed_goal::previous_goal(
+            root,
+            &route.owner_user_id,
+            &route.project_id,
+            &binding.thread_key,
+        )?,
         slides: vec![],
         comments: vec![],
         transcript: vec![],
@@ -261,10 +265,17 @@ pub(in crate::business_os) fn read(
         meeting.supervisor.ctox_thread_key == binding.thread_key,
         "meeting execution identity conflicts"
     );
-    let meeting=super::jour_fixe_confirmed_goal::overlay(root,meeting)?;
-    let current_goal=super::jour_fixe_confirmed_goal::previous_goal(root,
-        &owner,&query.project_id,&binding.thread_key)?;
-    let previous_goal_definition=super::jour_fixe_confirmed_goal::previous_goal_for_deck(root,&meeting)?;
-    Ok(json!({"ok":true,"meeting":meeting,"preparation_task_id":key,"current_goal":current_goal,
-        "previous_goal_definition":previous_goal_definition}))
+    let meeting = super::jour_fixe_confirmed_goal::overlay(root, meeting)?;
+    let current_goal = super::jour_fixe_confirmed_goal::previous_goal(
+        root,
+        &owner,
+        &query.project_id,
+        &binding.thread_key,
+    )?;
+    let previous_goal_definition =
+        super::jour_fixe_confirmed_goal::previous_goal_for_deck(root, &meeting)?;
+    Ok(
+        json!({"ok":true,"meeting":meeting,"preparation_task_id":key,"current_goal":current_goal,
+        "previous_goal_definition":previous_goal_definition}),
+    )
 }

@@ -300,7 +300,7 @@ pub(in crate::business_os) fn handle(
     admission: &DomainEffectAdmission,
 ) -> anyhow::Result<Value> {
     if command.command_type == "ctox.workjet.jour_fixe.todos.confirm" {
-        return super::jour_fixe_confirmed_goal::handle(root,command,actor,admission);
+        return super::jour_fixe_confirmed_goal::handle(root, command, actor, admission);
     }
     let (edit, payload) = parse(command)?;
     let (operation, id, expected) = edit.identity();
@@ -312,9 +312,12 @@ pub(in crate::business_os) fn handle(
     );
     // Serialize owner edits with Core confirmation. A confirmed list can never
     // be overwritten by a later Policy draft revision, even after lost ACK.
-    let mut core=Connection::open_with_flags(crate::paths::core_db(root),rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    let mut core = Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )?;
     core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    let core_tx=core.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let core_tx = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut conn = open_store(root)?;
     owned(&conn, actor, command.record_id.as_deref(), id)?;
     conn.execute_batch(OPERATIONS)?;
