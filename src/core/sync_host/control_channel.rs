@@ -165,14 +165,17 @@ fn with_once(
     publish: &mut dyn FnMut() -> RxResult<()>,
 ) -> RxResult<()> {
     let mut called = 0usize;
+    let mut publication_failed = false;
     guard.with_current(&mut || {
         called = called.saturating_add(1);
         if called != 1 {
             return Err(denied());
         }
-        publish()
+        let result = publish();
+        publication_failed |= result.is_err();
+        result
     })?;
-    if called != 1 {
+    if called != 1 || publication_failed {
         return Err(denied());
     }
     Ok(())
