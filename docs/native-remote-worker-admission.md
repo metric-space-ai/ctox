@@ -59,7 +59,10 @@ strict receipt, so the emitted binding can be returned unchanged. Generic MCP
 records remain subject to full credential redaction; unknown receipt fields
 are rejected before publication.
 
-The source instance must equal the authenticated gateway workspace. All three
+The source instance must equal the authenticated gateway instance_id route pin.
+The separately authenticated tenant/workspace stays bound as sourceWorkspaceId
+in the receipt and remains part of native policy and authority fencing. Missing
+instance pins and caller _context/serialized instance claims are rejected. All three
 model references must name the source environment, and model/provider names
 must match. Repository URLs are HTTPS without embedded credentials, queries
 or fragments; comparison normalizes host spelling and trailing `/`/`.git`.
@@ -176,9 +179,10 @@ not registered it, dispatch fails closed.
 Registration and resolution require the current native source Owner/Admin and
 `IntegrationsManage` policy, an assigned computer owned by that actor, and its
 valid typed build configuration. The record is scoped to the authenticated
-source owner and source CTOX workspace. Resolution returns contract
+source owner, exact authenticated source CTOX instance and separate workspace.
+Resolution returns contract
 `ctox.workjet.remote-worker-target.v1`, opaque `bindingId`, positive `revision`,
-`ownerUserId`, `sourceInstanceId`, exact `target`, `state`, `capabilityEpoch`
+`ownerUserId`, `sourceInstanceId`, `sourceWorkspaceId`, exact `target`, `state`, `capabilityEpoch`
 and `buildCapability`. Operational configuration is not a runtime readiness
 or free-slot observation.
 
