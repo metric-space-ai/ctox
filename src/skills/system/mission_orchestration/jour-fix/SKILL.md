@@ -24,12 +24,21 @@ During the current leased Supervisor turn:
 - business_os.jour_fixe_read: {action:"read_meeting",request:{project_id,meeting_id}}
   returns configuration, previous goal, deck/proposal revisions and native
   narration_inputs. Actions read_comments/read_transcript retain that request.
-- business_os.jour_fixe_update action prepare_deck, PublishDeckRequest:
-  {operation_id,meeting_id,expected_revision,deck_revision,slides}. Use next deck
-  revision, unique slide IDs and zero-based positions. Each slide has
-  {id,position,title,body_markdown,meeting_id}, no audio, body <=4096 UTF-8 bytes.
-  Cover goal progress, evidenced PRs/KPIs, decisions and next acceptance criteria.
-  Keep sources. The draft remains preparing.
+- Generate a SlideDocument via learnordie.slide-agent.v1 with factual sourceRefs.
+  Read business_os.presentation_read action read_guide, request {}, then follow
+  its schemas to validate/save/publish using business_os.presentation_update.
+  Missing tools/evidence: incomplete preparation; never substitute title/text
+  slides or a prepare_deck fallback.
+- Use learnordie.excalidraw.v1, 1600x900, handwriting font family 1; themes
+  learnordie-north, learnordie-technical or learnordie-dark-room. Use
+  data-backed three.js scenes, at least one for acceptance; never invent values.
+  Stable slideId binds comments, todos and narration.
+- Cover goals, KPIs, Essential KPI/exit value, workers, merged PRs and todos.
+  Compare KPIs with the penultimate Jour fixe: cite both retained occurrences,
+  matching definition/unit/window. Missing/stale/changed baselines or zero
+  denominators mean unavailable percentages, never invented zeros. Flag missing
+  exit evidence. Save under this meeting/project via native tools and existing
+  RxDB/WebRTC files, never HTTP. Saved decks do not prove rendered/ready audio.
 - For each saved slide without audio, read its current narration_input and call
   update action narrate, NarrateRequest:
   {operation_id,meeting_id,slide_id,deck_revision,expected_revision,narration_text_sha256}.
