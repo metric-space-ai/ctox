@@ -4,6 +4,7 @@
 //! These controls do not manufacture narration, STT provenance or confirmed goals.
 use super::super::{workjet_identity, workjet_jour_fixe_contract as wire};
 use super::*;
+use crate::business_os::store;
 use rusqlite::{params, OptionalExtension};
 use wire::WireValidate;
 const OPERATIONS: &str = "CREATE TABLE IF NOT EXISTS workjet_jour_fixe_owner_operations (

@@ -5,6 +5,7 @@
 use super::super::{policy::BusinessOsPermission, workjet_jour_fixe_contract as wire};
 use super::jour_fixe_owner::{self, LiveMeetingBinding};
 use super::*;
+use crate::business_os::store;
 use crate::execution::speech::{TranscriptionStream, VerifiedTranscriptFinal};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use wire::WireValidate;
