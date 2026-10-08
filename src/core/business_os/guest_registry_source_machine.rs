@@ -101,6 +101,7 @@ impl NativeGuestExecution {
         let mut observed = source_effects::SourceEffects::observe(self)?;
         let prepared = source.with_current_capture_transaction(|worker, facts| {
             self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
+                self.registry.require_live_transport()?;
                 verify()?;
                 let process = match (&entry.process_effect, &entry.registered_process) {
                     (None, None) => {
@@ -170,6 +171,7 @@ impl NativeGuestExecution {
         );
         source.with_current_capture_transaction(|worker, facts| {
             self.with_held_worker_policy(worker, facts, |entry, verify, _| {
+                self.registry.require_live_transport()?;
                 verify()?;
                 ensure!(
                     entry

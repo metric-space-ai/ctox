@@ -367,6 +367,7 @@ impl NativeGuestExecution {
         );
         // Verify local capture authority before querying quorum. No worker,
         // issuer or policy lock survives the remote authority await.
+        self.registry.require_live_transport()?;
         self.with_capture_authority(source, |_, _| Ok(()))?;
         #[cfg(target_os = "linux")]
         self.export_source_machine(source)?;
@@ -440,6 +441,7 @@ impl NativeGuestExecution {
         let mut current = source_effects::SourceEffects::observe(self)?;
         source.with_current_capture_transaction(|worker, facts| {
             self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
+                self.registry.require_live_transport()?;
                 verify()?;
                 current.verify_controller(entry)?;
                 ensure!(
