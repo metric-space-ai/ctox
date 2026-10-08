@@ -17,8 +17,9 @@ const MAX_INLINE_BYTES: usize = 192 * 1024;
 
 const GUIDE: &str =
     include_str!("../../skills/system/mission_orchestration/jour-fix-presentation/SKILL.md");
-const READ_ACTIONS: [&str; 5] = [
+const READ_ACTIONS: [&str; 6] = [
     "read_guide",
+    "read_history",
     "read_presentation",
     "read_slide",
     "read_document",
@@ -73,7 +74,7 @@ pub(super) fn read_descriptor() -> BusinessOsMcpToolDescriptor {
         action_schema("validate_document", json!({"document":{"type":"object"}}), &["document"]),
     ]});
     read_tool(READ_TOOL,
-        "Call read_guide first: it returns the authoring guide for Jour fixe presentations. Read the presentation (learnordie SlideDocument, schema learnordie.slide.v1) of this registered Supervisor's current Jour fixe meeting: read_presentation returns the manifest and a compact outline, read_slide one full slide including its canvas, read_document the whole document when it is small. validate_document checks a draft without storing it and returns issues with repair hints.",
+        "Call read_guide first: it returns the authoring guide for Jour fixe presentations. Read the presentation (learnordie SlideDocument, schema learnordie.slide.v1) of this registered Supervisor's current Jour fixe meeting: read_presentation returns the manifest and a compact outline, read_slide one full slide including its canvas, read_document the whole document when it is small. read_history lists this project's earlier meetings, newest first (index 1 = last, 2 = penultimate), with the scene data their presentations actually showed; it is the only source for comparisons with earlier meetings. validate_document checks a draft without storing it and returns issues with repair hints.",
         schema)
 }
 
@@ -245,6 +246,18 @@ fn read(
     let core_tx = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
     let policy_tx = policy.transaction_with_behavior(TransactionBehavior::Deferred)?;
     let scope = resolve(&core_tx, &policy_tx, context, trusted, arguments, false)?;
+    if action == "read_history" {
+        let limit = arguments["request"]["limit"]
+            .as_u64()
+            .unwrap_or(3)
+            .clamp(1, 6);
+        let history = history(&policy_tx, &scope.meeting, limit)?;
+        return bounded(
+            json!({"contract":wire::CONTRACT_SCHEMA,"meeting_id":scope.meeting.id,
+                "occurrences":history}),
+            "meeting history",
+        );
+    }
     drop(policy_tx);
     drop(core_tx);
     let Some(manifest) = scope.presentation else {
@@ -280,6 +293,59 @@ fn read(
             "document",
         ),
     }
+}
+
+/// Earlier meetings of the same project and owner, newest first, with the
+/// scene data their stored presentations showed. Missing presentations stay
+/// missing: there is no interpolation or estimate.
+fn history(
+    policy: &Connection,
+    meeting: &super::super::workjet_jour_fixe_contract::Meeting,
+    limit: u64,
+) -> anyhow::Result<Vec<Value>> {
+    let mut statement = policy.prepare(
+        "SELECT meeting_id,scheduled_at_ms,json_extract(metadata_json,'$.state') FROM workjet_jour_fixe_meetings
+         WHERE project_id=?1 AND owner_user_id=?2 AND meeting_id<>?3 AND scheduled_at_ms<?4
+         ORDER BY scheduled_at_ms DESC LIMIT ?5",
+    )?;
+    let rows = statement
+        .query_map(
+            params![
+                meeting.project_id,
+                meeting.owner_user_id,
+                meeting.id,
+                meeting.scheduled_at_ms,
+                limit as i64
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut occurrences = Vec::new();
+    for (index, (meeting_id, scheduled_at_ms, state)) in rows.into_iter().enumerate() {
+        let manifest = store_presentation::load_by_meeting(policy, &meeting_id)?;
+        let (presentation, scenes) = match &manifest {
+            Some(manifest) => {
+                let document: Value =
+                    serde_json::from_str(&store_presentation::current_document(policy, manifest)?)?;
+                (
+                    json!({"presentation_id":manifest.presentation_id,"revision":manifest.revision,
+                        "title":manifest.title,"updated_at_ms":manifest.updated_at_ms}),
+                    store_presentation::presented_scene_data(&document),
+                )
+            }
+            None => (Value::Null, Vec::new()),
+        };
+        occurrences.push(json!({"index":index+1,"meeting_id":meeting_id,
+            "scheduled_at_ms":scheduled_at_ms,"state":state,"presentation":presentation,
+            "scenes":scenes}));
+    }
+    Ok(occurrences)
 }
 
 fn write(
@@ -472,3 +538,7 @@ fn publish_deck(
         Some(trusted),
     )
 }
+
+#[cfg(test)]
+#[path = "mcp_workjet_presentation_tests.rs"]
+mod tests;

@@ -20,26 +20,32 @@ and once a slide has a canvas, the canvas becomes that slide's source of truth.
 
 1. `business_os.jour_fixe_read` `read_meeting` with `{project_id, meeting_id}`:
    configuration, previous confirmed goal, deck revision, meeting revision.
-2. `business_os.project_kpi` action `read` with `{project_id}`: KPI values and
-   the previous meeting's values. Use only stored values. Missing or stale
-   values are named on the slide as missing; never estimate or invent numbers.
-3. Collect evidence you may cite: merged PRs (number, title, URL), worker runs,
+2. `business_os.project_kpi` action `read` with `{project_id}`: the current KPI
+   values. It holds no history. Use only stored values; missing or stale values
+   are named on the slide as missing. Never estimate or invent numbers.
+3. `business_os.presentation_read` `read_history` with `{project_id,
+   meeting_id, limit}`: this project's earlier meetings, newest first
+   (`index` 1 = last, 2 = penultimate), with the scene data their presentations
+   actually showed. The binding comparison for every ±% is the **penultimate**
+   Regeltermin (`index` 2). If it is missing, or did not show that KPI, the
+   comparison is missing: show the current value without `previous` and say so.
+4. Collect evidence you may cite: merged PRs (number, title, URL), worker runs,
    decisions, open questions, comments and final transcript of the previous
    meeting. Every slide cites at least one source in `sourceRefs`.
-4. Draft the document and check it without storing:
+5. Draft the document and check it without storing:
    `business_os.presentation_read` `validate_document` `{document}`. Fix every
    `error` using its `repairHint`; warnings (layout budgets) are advice.
-5. Store it: `business_os.presentation_update` `create_presentation`
+6. Store it: `business_os.presentation_update` `create_presentation`
    `{operation_id, project_id, meeting_id, document}`. A meeting has exactly one
    presentation; later changes use `replace_document`, `apply_edits` or
    `save_canvas` with the current `expected_revision`.
-6. Derive the narration deck: `presentation_update` `publish_deck`
+7. Derive the narration deck: `presentation_update` `publish_deck`
    `{operation_id, project_id, meeting_id, presentation_revision,
    expected_meeting_revision, deck_revision}` with the meeting revision from
    step 1 and `deck_revision` = current deck revision + 1. This stores one
    meeting slide per presentation slide (same ids) exactly like `prepare_deck`;
    the speaker notes become the narration text.
-7. Narrate every slide with `business_os.jour_fixe_update` `narrate`, as the
+8. Narrate every slide with `business_os.jour_fixe_update` `narrate`, as the
    jour-fix skill describes (read the new meeting revision before each slide).
 
 Recover an uncertain write by repeating the same `operation_id` with the
@@ -55,8 +61,8 @@ Six to nine slides. Suggested order, adapt to the evidence:
 |---|---|---|---|
 | 1 | Titel | `title_statement` | Project, date, the one question this meeting must answer |
 | 2 | Ziel und Stand | `comparison_split` | Previous confirmed goal (left) against what is done (right) |
-| 3 | KPIs | `technical_figure_right` | `business.kpi-bars` scene with current vs. previous value, two to four bullets reading the deltas |
-| 4 | Exitwert | `technical_figure_right` | `business.trend` scene of the five-year exit value (E5) per Regeltermin, with target if configured |
+| 3 | KPIs | `technical_figure_right` | `business.kpi-bars` scene: current value against the penultimate Regeltermin, two to four bullets reading the deltas |
+| 4 | Exitwert | `technical_figure_right` | `business.trend` scene of the five-year exit value (E5) over the stored Regeltermine (`read_history`) plus today, with target if configured |
 | 5 | Worker-Aktivität | `technical_figure_left` | `business.kpi-bars` of merged PRs or runs per worker, one sentence of reading |
 | 6 | Gemergte PRs | `table_focus` | Table: PR, title, effect; each PR also as a `url` source |
 | 7 | Entscheidungen | `technical_one_column` | `callout` (tone `key`) per decision that needs the Owner |
@@ -129,7 +135,10 @@ Layouts and the block types they show well: `title_statement` and
 
 ## 3D scenes for numbers
 
-`business.kpi-bars` — current against previous Regeltermin:
+The values below only show the shape. A real deck carries the measured values
+and nothing else; never copy these numbers.
+
+`business.kpi-bars` — current against the penultimate Regeltermin:
 
 ```json
 {"id": "s-kpis-scene", "type": "scene3d", "sceneId": "business.kpi-bars",
@@ -142,7 +151,8 @@ Layouts and the block types they show well: `title_statement` and
    {"label": "Offene Bugs", "value": 9, "previous": 14, "better": "lower"}]}}
 ```
 
-One to eight items; `label` ≤48; `previous` optional (no delta without it);
+One to eight items; `label` ≤48; `previous` is the value shown at the
+penultimate Regeltermin and is omitted when that value is not stored (no delta then);
 `better` is `lower` for costs, bugs, latency. The scene computes the ±% itself;
 do not write percentages into labels.
 
@@ -156,7 +166,8 @@ do not write percentages into labels.
               {"label": "28.09.", "value": 4.4}, {"label": "12.10.", "value": 4.8}]}}
 ```
 
-Two to twenty-four points, `label` ≤24. Business scenes always need `data`;
+Two to twenty-four points, `label` ≤24, only stored or measured values; with
+fewer than two real points, leave the trend out and say why. Business scenes always need `data`;
 the lecture scenes (`modell.*`) take no data and do not belong in a Jour fixe.
 Put one scene per slide, in a `technical_figure_right` or `_left` layout.
 
@@ -186,7 +197,7 @@ they are, or change only notes and sources. Never overwrite the Owner's canvas.
 A canvas you write yourself (`save_canvas {slide_id, scene}`) is a
 `learnordie.excalidraw.v1` scene: `{version, width: 1600, height: 900,
 backgroundColor: "#fffef8", elements, files: {}}`. Text elements need `text`,
-`originalText`, `fontSize`, `fontFamily: 5` (handwriting); arrows and lines need
+`originalText`, `fontSize`, `fontFamily: 1` (the handwriting font); arrows and lines need
 `points`; a 3D scene is an `embeddable` with
 `customData.learnordie = {type: "scene3d", sceneId, data}` and
 `link: "https://learnordie.invalid/embed/<element id>"`. Prefer blocks.

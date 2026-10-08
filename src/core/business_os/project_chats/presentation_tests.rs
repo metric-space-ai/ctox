@@ -105,7 +105,7 @@ fn rejected(value: anyhow::Result<Value>) {
 fn canvas_scene(text: &str) -> String {
     json!({"version":"learnordie.excalidraw.v1","width":1600,"height":900,"backgroundColor":"#fffef8",
         "elements":[{"id":"note-1","type":"text","x":120,"y":140,"width":600,"height":60,
-            "text":text,"originalText":text,"fontSize":36,"fontFamily":5},
+            "text":text,"originalText":text,"fontSize":36,"fontFamily":1},
             {"id":"box-1","type":"rectangle","x":820,"y":300,"width":300,"height":180}],"files":{}})
     .to_string()
 }

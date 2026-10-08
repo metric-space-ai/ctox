@@ -21,7 +21,7 @@ pub(in crate::business_os) mod jour_fixe_owner;
 pub(in crate::business_os) mod jour_fixe_preparation;
 pub(in crate::business_os) mod jour_fixe_speech;
 pub(in crate::business_os) mod presentation;
-mod presentation_validator;
+pub(in crate::business_os) mod presentation_validator;
 mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
 mod supervisor_observation;

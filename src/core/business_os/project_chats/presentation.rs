@@ -241,6 +241,35 @@ pub(in crate::business_os) fn meeting_slides(
         .collect()
 }
 
+/// Every business scene with data in a stored document: scene3d blocks and,
+/// for slides the Owner drew on, scene3d embeds in the canvas. This is what a
+/// meeting actually showed; later decks compare against it.
+pub(in crate::business_os) fn presented_scene_data(document: &Value) -> Vec<Value> {
+    let mut scenes = Vec::new();
+    for slide in document["slides"].as_array().into_iter().flatten() {
+        let slide_id = slide["id"].clone();
+        let title = slide["title"].clone();
+        let canvas = slide["canvas"]["elements"].as_array();
+        if let Some(elements) = canvas {
+            for element in elements {
+                let embed = &element["customData"]["learnordie"];
+                if embed["type"] == "scene3d" && embed["data"].is_object() {
+                    scenes.push(json!({"slide_id":slide_id,"slide_title":title,
+                        "scene_id":embed["sceneId"],"caption":embed["caption"],"data":embed["data"]}));
+                }
+            }
+        } else {
+            for block in slide["blocks"].as_array().into_iter().flatten() {
+                if block["type"] == "scene3d" && block["data"].is_object() {
+                    scenes.push(json!({"slide_id":slide_id,"slide_title":title,
+                        "scene_id":block["sceneId"],"caption":block["caption"],"data":block["data"]}));
+                }
+            }
+        }
+    }
+    scenes
+}
+
 pub(in crate::business_os) struct NewRevision<'a> {
     pub(in crate::business_os) meeting: &'a meeting_wire::Meeting,
     pub(in crate::business_os) prior: Option<&'a wire::PresentationManifest>,
