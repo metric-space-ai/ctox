@@ -164,3 +164,28 @@ async fn existing_open_stream_does_not_authorize_browser_fabricated_speech() -> 
     assert!(result.is_err() || result.as_ref().is_ok_and(|v|v["status"]=="failed"),"{result:?}");
     assert_eq!(consumed(root.path())?,0);finish(stream,server).await
 }
+
+#[tokio::test]
+async fn final_domain_writer_rechecks_deck_after_native_staging() -> anyhow::Result<()> {
+    let root=super::jour_fixe_owner::fixture("live")?;
+    let token=owner_token(root.path())?;
+    let (mut stream,server)=bound(root.path(),&token).await?;
+    let receipt=final_receipt(&mut stream).await?;
+    stream.stage_final(root.path(),&token,receipt)?;
+    // Simulate a metadata change after the preparatory writer checked its
+    // snapshot but before the independent canonical command transaction.
+    let conn=open_store(root.path())?;
+    conn.execute_batch(r#"CREATE TRIGGER invalidate_deck_after_staging
+        AFTER UPDATE OF staged_json ON workjet_jour_fixe_speech_receipts
+        WHEN NEW.staged_json IS NOT NULL
+        BEGIN UPDATE workjet_jour_fixe_meetings
+          SET metadata_json=json_set(metadata_json,'$.slides[0].audio',NULL)
+          WHERE meeting_id=NEW.meeting_id; END;"#)?;
+    let result=submit_staged_final(root.path(),&token,stream.binding(),stream.stream_id());
+    assert!(result.is_err() || result.as_ref().is_ok_and(|v|v["status"]=="failed"),"{result:?}");
+    assert_eq!(consumed(root.path())?,0);
+    let meeting=super::jour_fixe_owner::saved(root.path())?;
+    assert!(meeting["slides"][0]["audio"].is_null());
+    assert!(meeting["transcript"].as_array().unwrap().is_empty());
+    finish(stream,server).await
+}

@@ -162,6 +162,9 @@ pub(super) fn consume_in_transaction(
     tx:&Connection,meeting:&wire::Meeting,command:&BusinessCommand,payload:&Value,
 )->anyhow::Result<()> {
     ensure!(meeting.state==wire::MeetingState::Live,"speech meeting is no longer live");
+    ensure!(!meeting.slides.is_empty() && meeting.slides.iter().all(|slide|
+        slide.meeting_id==meeting.id && slide.audio.is_some()),
+        "speech meeting deck is no longer available");
     let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
         AND name='workjet_jour_fixe_speech_receipts')",[],|r|r.get(0))?;
     ensure!(exists,"speech transcript has no native provenance");
