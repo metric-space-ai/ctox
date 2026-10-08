@@ -207,14 +207,16 @@ fn guarded_poll<T>(
 ) -> Poll<io::Result<T>> {
     let mut apply = Some(apply);
     let mut result = None;
+    let mut calls = 0;
     let authority = guard.with_current(&mut || {
+        calls += 1;
         let apply = apply
             .take()
             .ok_or_else(|| new_rx_error("CTOX_SPEECH_MULTIPLE_POLLS", None))?;
         result = Some(apply());
         Ok(())
     });
-    if authority.is_err() {
+    if authority.is_err() || calls != 1 {
         return Poll::Ready(Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "speech authority retired",

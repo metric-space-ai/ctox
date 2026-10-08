@@ -41,8 +41,9 @@ fn missing_or_repeated_guard_callback_cannot_publish_success() {
     impl WebRTCPublicationGuard for Invalid {
         fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
             if self.0 {
-                publish()?;
-                publish()?;
+                // A broken guard may swallow a callback failure.
+                let _ = publish();
+                let _ = publish();
             }
             Ok(())
         }
