@@ -132,6 +132,44 @@ fn empty_project_has_revision_zero_without_creating_native_state() -> anyhow::Re
 }
 
 #[test]
+fn read_uses_a_snapshot_while_the_writer_is_held() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let saved = configure(
+        root.path(),
+        "saved",
+        0,
+        json!([{"kpi_id":"k","prompt":"Active users"}]),
+    )?;
+    let mut writer = store::open_store(root.path())?;
+    let lock = writer.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let command: BusinessCommand = serde_json::from_value(json!({
+        "id":"direct-read", "module":"ctox", "type":"ctox.workjet.project.kpis.read",
+        "record_id":"project-1", "payload":{"project_id":"project-1"}
+    }))?;
+    assert_eq!(
+        handle_command(root.path(), &command, ALIAS, None)?,
+        saved["result"]
+    );
+    rejected(handle_command(root.path(), &command, FOREIGN, None));
+    lock.rollback()?;
+    Ok(())
+}
+
+#[test]
+fn read_does_not_create_a_missing_store() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    let command: BusinessCommand = serde_json::from_value(json!({
+        "id":"missing-store", "module":"ctox", "type":"ctox.workjet.project.kpis.read",
+        "record_id":"project-1", "payload":{"project_id":"project-1"}
+    }))?;
+    let path = store::business_os_store_path(root.path());
+    assert!(!path.exists());
+    assert!(handle_command(root.path(), &command, OWNER, None).is_err());
+    assert!(!path.exists(), "a KPI read must not initialize the database");
+    Ok(())
+}
+
+#[test]
 fn operation_replay_is_idempotent_and_conflicting_intent_does_not_mutate() -> anyhow::Result<()> {
     let root = fixture()?;
     let payload = configuration(

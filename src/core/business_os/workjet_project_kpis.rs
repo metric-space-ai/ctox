@@ -123,9 +123,16 @@ pub(super) fn handle_command(
         "ctox.workjet.project.kpis.read" => {
             let request: ReadKpisRequest = serde_json::from_value(payload(command)?)?;
             request.validate().map_err(anyhow::Error::msg)?;
-            let conn = open_store(root)?;
-            let owner = require_project(&conn, actor, &request.project_id)?;
-            let state = load(&conn, &request.project_id, &owner)?;
+            let mut reader = Connection::open_with_flags(
+                super::store::business_os_store_path(root),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?;
+            reader.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+            // Identity, project ownership and KPI state share a read snapshot;
+            // a read neither initializes the store nor takes its writer lock.
+            let snapshot = reader.transaction()?;
+            let owner = require_project(&snapshot, actor, &request.project_id)?;
+            let state = load(&snapshot, &request.project_id, &owner)?;
             Ok(json!({"ok":true,"kpis":state}))
         }
         "ctox.workjet.project.kpis.configure" => {
