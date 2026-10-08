@@ -339,10 +339,7 @@ fn run_id_is_exposed_only_from_the_canonical_durable_finalization_record() -> an
     let value = watch(root.path(), &turn, "finalization", Some(json!({})))?;
     assert_eq!(page(&value)["attempt"]["run_id"], saved.attempt_id);
     assert_eq!(page(&value)["attempt"]["attempt_id"], saved.attempt_id);
-    assert_eq!(
-        page(&value)["attempt"]["status"],
-        serde_json::to_value(saved)?["status"]
-    );
+    assert_eq!(page(&value)["attempt"]["status"], saved.status);
     Ok(())
 }
 
