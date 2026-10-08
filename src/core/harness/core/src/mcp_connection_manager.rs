@@ -369,6 +369,7 @@ impl ElicitationRequestManager {
 
 #[derive(Clone)]
 struct ManagedClient {
+    startup: crate::native_mcp_startup::NativeMcpStartupObservation,
     client: Arc<RmcpClient>,
     tools: Vec<ToolInfo>,
     tool_filter: ToolFilter,
@@ -457,12 +458,17 @@ impl AsyncManagedClient {
                     return Err(error.into());
                 }
 
+                let http_url = match &config.transport {
+                    McpServerTransportConfig::StreamableHttp { url, .. } => Some(url.clone()),
+                    _ => None,
+                };
                 let client =
                     Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
                 match start_server_task(
                     server_name,
                     client,
                     StartServerTaskParams {
+                        http_url,
                         startup_timeout: config
                             .startup_timeout_sec
                             .or(Some(DEFAULT_STARTUP_TIMEOUT)),
@@ -615,6 +621,26 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
     ) -> Self {
         Self::new_uninitialized(approval_policy)
+    }
+
+    pub(crate) async fn native_original_startup(
+        &self,
+    ) -> Result<Vec<crate::native_mcp_startup::NativeMcpStartupObservation>> {
+        anyhow::ensure!(
+            self.clients.len() <= 32,
+            "native MCP startup server bound exceeded"
+        );
+        let mut servers: Vec<_> = self.clients.iter().collect();
+        servers.sort_by_key(|(name, _)| *name);
+        let mut observations = Vec::with_capacity(servers.len());
+        for (_, client) in servers {
+            anyhow::ensure!(
+                client.startup_complete.load(Ordering::Acquire),
+                "native original MCP startup is still pending"
+            );
+            observations.push(client.client().await?.startup);
+        }
+        Ok(observations)
     }
 
     pub(crate) fn has_servers(&self) -> bool {
@@ -1336,6 +1362,7 @@ async fn start_server_task(
     params: StartServerTaskParams,
 ) -> Result<ManagedClient, StartupOutcomeError> {
     let StartServerTaskParams {
+        http_url,
         startup_timeout,
         tool_timeout,
         tool_filter,
@@ -1389,6 +1416,11 @@ async fn start_server_task(
         .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
         .is_some();
     let managed = ManagedClient {
+        startup: crate::native_mcp_startup::NativeMcpStartupObservation::from_original_initialize(
+            server_name.clone(),
+            http_url,
+            &initialize_result,
+        ),
         client: Arc::clone(&client),
         tools,
         tool_timeout: Some(tool_timeout),
@@ -1401,6 +1433,7 @@ async fn start_server_task(
 }
 
 struct StartServerTaskParams {
+    http_url: Option<String>,
     startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
     tool_timeout: Duration,
     tool_filter: ToolFilter,
