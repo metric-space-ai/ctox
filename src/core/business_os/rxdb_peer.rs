@@ -875,6 +875,7 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-checkpoint-generation-v2",
     "ctox-app-runtime-v1",
     "ctox-workjet-device-control-v1",
+    super::rxdb_peer_jour_fixe_speech::CAPABILITY,
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 /// Standby reconciliation is a safety net, not the normal data path. Runtime
@@ -3149,6 +3150,7 @@ async fn run_native_peer(
                 )?;
                 let workjet_device_root = root.clone();
                 super::rxdb_peer_transfer_publication::register(pool, &root)?;
+                super::rxdb_peer_jour_fixe_speech::register(pool, &root)?;
                 let business_data_root = root.clone();
 
                 let business_data_database = Arc::clone(&database);

@@ -1,21 +1,22 @@
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createAppActions } from './shared/app-actions.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261008-jour-fixe-speech-ingress';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-jour-fixe-speech-ingress';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-jour-fixe-speech-ingress';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-jour-fixe-speech-ingress';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-jour-fixe-speech-ingress';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-jour-fixe-speech-ingress';
+import { CtoxResizer } from './shared/resizer.js?v=20261008-jour-fixe-speech-ingress';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-jour-fixe-speech-ingress';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-jour-fixe-speech-ingress';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-jour-fixe-speech-ingress';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-jour-fixe-speech-ingress';
+import { createAppActions } from './shared/app-actions.js?v=20261008-jour-fixe-speech-ingress';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/app-lifecycle.js?v=20261008-jour-fixe-speech-ingress';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -24,20 +25,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/permissions.js?v=20261008-jour-fixe-speech-ingress';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/branding.js?v=20261008-jour-fixe-speech-ingress';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-jour-fixe-speech-ingress';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/presentation.js?v=20261008-jour-fixe-speech-ingress';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -48,9 +49,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createDocumentsFacade } from './shared/documents.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/shell-permissions-ui.js?v=20261008-jour-fixe-speech-ingress';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-jour-fixe-speech-ingress';
+import { createDocumentsFacade } from './shared/documents.js?v=20261008-jour-fixe-speech-ingress';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -58,16 +59,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/maintenance-state.js?v=20261008-jour-fixe-speech-ingress';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/workspace-session.js?v=20261008-jour-fixe-speech-ingress';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/taskbar-pins.js?v=20261008-jour-fixe-speech-ingress';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -75,10 +76,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-jour-fixe-speech-ingress';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-jour-fixe-speech-ingress';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-jour-fixe-speech-ingress';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -86,8 +87,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/startup-deadlines.js?v=20261008-jour-fixe-speech-ingress';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-jour-fixe-speech-ingress';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -105,7 +106,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261008-shell-v2-confirmed-todo-bridge';
+const APP_BUILD = '20261008-jour-fixe-speech-ingress';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13705,6 +13706,13 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
+  if (action === 'project.jour_fixe.speech') {
+    const sync = state.sync;
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
+    const result = await requestJourFixeSpeech(sync, instance, request);
+    if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync) throw new Error('Speech scope changed.');
+    return result;
+  }
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;

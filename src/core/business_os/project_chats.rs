@@ -32,7 +32,7 @@ pub(super) use privacy::{
 pub(crate) use weekly_reports::{emit_project_report, reconcile_project_reports};
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 pub(super) const CHATS: &str = "workjet_project_chats";
 pub(super) const MEMBERS: &str = "workjet_project_workers";
