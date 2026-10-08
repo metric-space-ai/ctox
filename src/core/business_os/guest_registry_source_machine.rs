@@ -14,8 +14,62 @@ struct State {
     desktop: super::super::guest_runtime::RetainedQemuDesktop,
     attempted: bool,
     entries: Option<Vec<WorkspaceEntry>>,
+    completion: Completion,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Completion {
+    Virgin,
+    Pending,
+    Completed,
 }
 impl SourceMachineCapture {
+    /// Successful opaque VM export is required; stop status or PID absence is insufficient.
+    pub(super) fn process_reconciled(&self, process: &GuestProcessEffect) -> Result<bool> {
+        ensure!(
+            self.matches(process) && !*self.retired.borrow(),
+            "source machine export retired or foreign"
+        );
+        let state = self
+            .state
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("source machine export busy or poisoned"))?;
+        Ok(state.entries.is_some() && state.completion == Completion::Completed)
+    }
+
+    pub(super) fn begin_reconciliation(&self, process: &GuestProcessEffect) -> Result<()> {
+        ensure!(
+            self.matches(process) && !*self.retired.borrow(),
+            "source machine export retired or foreign"
+        );
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("source machine export busy or poisoned"))?;
+        ensure!(
+            state.entries.is_some() && state.completion == Completion::Virgin,
+            "source machine has no complete export or effect completion is uncertain"
+        );
+        state.completion = Completion::Pending;
+        Ok(())
+    }
+
+    pub(super) fn finish_reconciliation(&self, process: &GuestProcessEffect) -> Result<()> {
+        ensure!(
+            self.matches(process) && !*self.retired.borrow(),
+            "source machine export retired or foreign"
+        );
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("source machine export busy or poisoned"))?;
+        ensure!(
+            state.entries.is_some() && state.completion == Completion::Pending,
+            "source machine effect completion changed"
+        );
+        state.completion = Completion::Completed;
+        Ok(())
+    }
+
     pub(super) fn retire(&self) {
         self.retired.send_replace(true);
     }
@@ -150,6 +204,7 @@ impl NativeGuestExecution {
                             desktop,
                             attempted: false,
                             entries: None,
+                            completion: Completion::Virgin,
                         }),
                     });
                     entry.source_machine = Some(Arc::clone(&capture));
@@ -261,6 +316,7 @@ mod tests {
                 desktop,
                 attempted: false,
                 entries: None,
+                completion: Completion::Virgin,
             }),
         };
         let (store, _, _) = source_journal::source_store(root.path())?;
@@ -271,6 +327,9 @@ mod tests {
         assert!(capture.matches(&process));
         assert!(Path::new(&format!("/proc/{pid}")).exists());
         assert!(capture.entries().is_err());
+        assert!(capture.begin_reconciliation(&process).is_err());
+        assert!(capture.finish_reconciliation(&process).is_err());
+        assert!(!capture.process_reconciled(&process)?);
         assert!(capture
             .export(&store, root.path())
             .unwrap_err()
