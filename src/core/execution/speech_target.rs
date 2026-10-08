@@ -30,6 +30,18 @@ use tokio::{io::ReadBuf, sync::Mutex as AsyncMutex};
 
 type Pool = RxWebRTCReplicationPool<WebRTCRsConnectionHandler>;
 const MAX_OBJECTS: usize = 64;
+// Bounded operator evidence: never include envelopes, text, PCM or credentials.
+fn denied_at(boundary: &'static str, reason: Denial) -> Denial {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema": "ctox.speech_denial.v1",
+            "boundary": boundary,
+            "reason": format!("{reason:?}"),
+        })
+    );
+    reason
+}
 struct OwnedTask(JoinHandle<Result<ReadyAudio, Denial>>);
 impl Drop for OwnedTask {
     fn drop(&mut self) {
@@ -149,6 +161,7 @@ impl TargetSpeechHost {
                             .is_some_and(|pool| pool.is_peer_ready_for_control(&entry.peer))
                         && entry.policy.with_current(|_| Ok(())).is_ok();
                     if !current {
+                        denied_at("object_reaper", Denial::RouteRetired);
                         if let Ok(mut entries) = server.entries.lock() {
                             if entries
                                 .get(&id)
@@ -308,7 +321,10 @@ impl Server {
         request: &VerifiedSpeechRequest,
     ) -> Result<Arc<Entry>, Denial> {
         let entries = self.entries.lock().map_err(|_| Denial::RouteRetired)?;
-        let entry = entries.get(id).cloned().ok_or(Denial::RouteRetired)?;
+        let entry = entries
+            .get(id)
+            .cloned()
+            .ok_or_else(|| denied_at("object_missing", Denial::RouteRetired))?;
         drop(entries);
         if entry.peer != *peer
             || entry.deadline <= Instant::now()
@@ -336,7 +352,12 @@ impl Server {
                 .map_err(|_| Denial::RouteRetired)??;
         let (answer, id) = match self.execute(&peer, &policy, &request).await {
             Ok(value) => value,
-            Err(reason) => (Reply::Denied { reason }, None),
+            Err(reason) => (
+                Reply::Denied {
+                    reason: denied_at("execute", reason),
+                },
+                None,
+            ),
         };
         let current = policy.clone();
         let signed = request.clone();
@@ -358,7 +379,9 @@ impl Server {
         let binding = &request.request().binding;
         match &request.request().operation {
             Op::OpenTranscription { .. } | Op::StartSynthesis { .. } => {
-                let admitted = policy.reserve_intent(request, &self.generation)?;
+                let admitted = policy
+                    .reserve_intent(request, &self.generation)
+                    .map_err(|reason| denied_at("reserve_intent", reason))?;
                 let id = match admitted {
                     IntentAdmission::Existing(id) => {
                         let entry = self.entry(&id, peer, request)?;
@@ -422,6 +445,7 @@ impl Server {
                 let socket = match socket {
                     Ok(socket) => socket,
                     Err(reason) => {
+                        denied_at("runtime_connect", reason);
                         *entry.work.lock().await = Work::Failed(reason);
                         entry.release();
                         return Err(reason);
