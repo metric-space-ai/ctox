@@ -14,8 +14,12 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+pub(in crate::business_os) mod jour_fixe_owner;
+pub(in crate::business_os) mod jour_fixe_preparation;
+pub(in crate::business_os) mod jour_fixe_speech;
 mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
+mod supervisor_observation;
 pub(in crate::business_os) mod supervisor_turns;
 mod weekly_reports;
 pub(super) use privacy::{
@@ -67,6 +71,10 @@ struct ChatPayload {
 
 pub(super) fn is_command(command_type: &str) -> bool {
     supervisor_turns::is_command(command_type)
+        || jour_fixe_owner::is_command(command_type)
+        || jour_fixe_owner::is_reserved_command(command_type)
+        || command_type == "ctox.workjet.jour_fixe.meeting.read"
+        || super::workjet_project_kpis::is_command(command_type)
         || matches!(
             command_type,
             "ctox.workjet.project.chat.ensure"

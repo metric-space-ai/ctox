@@ -67,7 +67,11 @@ fn project_command(collection: &str, document: &Value) -> bool {
     }) || document
         .get("command_type")
         .and_then(Value::as_str)
-        .is_some_and(|kind| is_command(kind) && kind.starts_with("ctox.workjet.project."))
+        .is_some_and(|kind| {
+            is_command(kind)
+                && (kind.starts_with("ctox.workjet.project.")
+                    || kind.starts_with("ctox.workjet.jour_fixe."))
+        })
 }
 
 // These existing projections form a bounded chain: run/event → queue →
@@ -407,10 +411,35 @@ pub(super) fn visible_in_store(
         }
     }
     if project_command(collection, document) {
-        let Some(project_id) = document["payload"]["project_id"].as_str() else {
-            return Some(false);
+        let meeting_edit = document["command_type"].as_str().is_some_and(|kind| {
+            super::jour_fixe_owner::is_command(kind)
+                || super::jour_fixe_owner::is_reserved_command(kind)
+        });
+        let project_id = if meeting_edit {
+            // The typed mutation names a meeting, not a caller-selected project.
+            // Resolve its current native binding; record_id alone grants nothing.
+            let Some(meeting_id) = document["payload"]["meeting_id"].as_str() else {
+                return Some(false);
+            };
+            let Ok((project, owner)) = conn.query_row(
+                "SELECT project_id,owner_user_id FROM workjet_jour_fixe_meetings WHERE meeting_id=?1",
+                [meeting_id], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)),
+            ) else { return Some(false); };
+            if owner != user_id
+                || document["record_id"]
+                    .as_str()
+                    .is_some_and(|id| id != project)
+            {
+                return Some(false);
+            }
+            project
+        } else {
+            let Some(project_id) = document["payload"]["project_id"].as_str() else {
+                return Some(false);
+            };
+            project_id.to_owned()
         };
-        if owned_project(conn, project_id, user_id, false).is_err() {
+        if owned_project(conn, &project_id, user_id, false).is_err() {
             return Some(false);
         }
     }

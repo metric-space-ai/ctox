@@ -587,6 +587,56 @@ export const JOUR_FIXE_TYPES = deepFreeze({
         "optional": true
       }
     }
+  },
+  "ReadMeetingRequest": {
+    "fields": {
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "optional": true,
+        "min_chars": 1,
+        "max_chars": 128
+      }
+    }
+  },
+  "MeetingMutationReceipt": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "revision": {
+        "type": "u64"
+      },
+      "state": {
+        "type": "MeetingState"
+      },
+      "changed_id": {
+        "type": "String",
+        "optional": true,
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "todos_revision": {
+        "type": "u64",
+        "optional": true
+      }
+    }
   }
 });
 export const JOUR_FIXE_COMMANDS = deepFreeze({
@@ -624,6 +674,10 @@ export const JOUR_FIXE_COMMANDS = deepFreeze({
   },
   "ctox.workjet.jour_fixe.todos.revise": {
     "request_type": "ProposeTodosRequest",
+    "authorization": "owner"
+  },
+  "ctox.workjet.jour_fixe.meeting.read": {
+    "request_type": "ReadMeetingRequest",
     "authorization": "owner"
   }
 });

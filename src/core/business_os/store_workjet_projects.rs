@@ -342,6 +342,7 @@ pub(super) fn handle_workjet_project_upsert_command(
             result: serde_json::json!({
                 "ok": true,
                 "collection": PROJECTS_COLLECTION,
+                "owner_user_id": owner_user_id,
                 "project": project,
                 "group_chat_id": group_chat_id,
             }),

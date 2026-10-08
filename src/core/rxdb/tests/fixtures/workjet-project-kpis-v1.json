@@ -14,6 +14,7 @@
     "KpiResult": {"fields":{"status":{"type":"KpiState"},"snapshot":{"type":"KpiSnapshot","optional":true},"reason_code":{"type":"String","min_chars":1,"max_chars":64,"optional":true},"message":{"type":"String","min_chars":1,"max_chars":256,"optional":true}}},
     "KpiRecord": {"fields":{"prompt":{"type":"KpiPrompt"},"result":{"type":"KpiResult"}}},
     "ProjectKpis": {"fields":{"project_id":{"type":"String","min_chars":1,"max_chars":128},"revision":{"type":"u64","minimum":0},"items":{"type":"Vec<KpiRecord>","max_items":3}}},
+    "ReadKpisRequest": {"fields":{"project_id":{"type":"String","min_chars":1,"max_chars":128}}},
     "ConfigureKpisRequest": {"fields":{"operation_id":{"type":"String","min_chars":1,"max_chars":128},"project_id":{"type":"String","min_chars":1,"max_chars":128},"expected_revision":{"type":"u64","minimum":0},"prompts":{"type":"Vec<PromptInput>","max_items":3}}},
     "ResolveKpiRequest": {"fields":{"operation_id":{"type":"String","min_chars":1,"max_chars":128},"project_id":{"type":"String","min_chars":1,"max_chars":128},"kpi_id":{"type":"String","min_chars":1,"max_chars":128},"prompt_revision":{"type":"u64","minimum":1},"expected_revision":{"type":"u64","minimum":0}}}
   },
@@ -26,13 +27,16 @@
     "KpiResult": {"state_fields":{"field":"status","states":{"resolving":{"forbidden":["snapshot","reason_code","message"]},"ready":{"required":["snapshot"],"forbidden":["reason_code","message"]},"stale":{"required":["snapshot","reason_code","message"]},"missing_source":{"required":["reason_code","message"],"forbidden":["snapshot"]},"failed":{"required":["reason_code","message"],"forbidden":["snapshot"]}}}},
     "KpiRecord": {"eq":[["prompt.kpi_id","result.snapshot.kpi_id"],["prompt.revision","result.snapshot.prompt_revision"]]},
     "ProjectKpis": {"unique":[{"field":"items","key":"prompt.kpi_id"}],"every_eq":[{"field":"items","key":"result.snapshot.project_id","target":"project_id"}]},
-    "ConfigureKpisRequest": {"unique":[{"field":"prompts","key":"kpi_id"}]}
+    "ReadKpisRequest": {"nonblank":["project_id"]},
+    "ConfigureKpisRequest": {"nonblank":["operation_id","project_id"],"unique":[{"field":"prompts","key":"kpi_id"}]}
   },
   "commands": {
+    "ctox.workjet.project.kpis.read": {"request_type":"ReadKpisRequest","authorization":"owner"},
     "ctox.workjet.project.kpis.configure": {"request_type":"ConfigureKpisRequest","authorization":"owner"},
     "ctox.workjet.project.kpi.resolve": {"request_type":"ResolveKpiRequest","authorization":"bound_project_supervisor","execution":"native_registered_metric_resolver","accepts_client_result":false}
   },
   "valid_cases": [
+    {"type":"ReadKpisRequest","value":{"project_id":"project-1"}},
     {"type":"ProjectKpis","value":{"project_id":"project-1","revision":4,"items":[{"prompt":{"kpi_id":"runs-7d","prompt":"Wie viele Agent-Runs liefen in den letzten 7 Tagen?","revision":2},"result":{"status":"ready","snapshot":{"project_id":"project-1","kpi_id":"runs-7d","prompt_revision":2,"label":"Runs · 7 T","value":1284,"unit":"runs","display_value":"1.284","sources":[{"source_key":"all-runs","kind":"native_metric","connection_id":"native-instance-1","metric_key":"agent_runs.total","project_id":"project-1","snapshot_revision":"watermark-42","evidence_ref":"native-metric-receipt-42","observed_at_ms":1791370800000,"value":1284}],"computation":{"recipe_id":"runs-7d-v1","revision":1,"operation":"identity","input_keys":["all-runs"],"window_start_ms":1790766000000,"window_end_ms":1791370800000},"freshness":{"calculated_at_ms":1791370801000,"refresh_at_ms":1791370861000,"fresh_until_ms":1791371101000}}}}]}},
     {"type":"KpiRecord","value":{"prompt":{"kpi_id":"visitors","prompt":"Besucher pro Woche","revision":1},"result":{"status":"missing_source","reason_code":"analytics_not_connected","message":"Analytics ist nicht verbunden."}}},
     {"type":"ConfigureKpisRequest","value":{"operation_id":"configure-1","project_id":"project-1","expected_revision":4,"prompts":[{"kpi_id":"runs-7d","prompt":"Wie viele Agent-Runs liefen in den letzten 7 Tagen?"}]}},
@@ -45,6 +49,9 @@
     {"type":"KpiSnapshot","value":{"project_id":"project-1","kpi_id":"runs-7d","prompt_revision":2,"label":"Runs · 7 T","value":10.5,"unit":"runs","display_value":"10,5","sources":[{"source_key":"a","kind":"native_metric","connection_id":"native-instance-1","metric_key":"agent_runs.total","project_id":"project-1","snapshot_revision":"watermark-42","evidence_ref":"native-metric-receipt-42","observed_at_ms":1791370800000,"value":10},{"source_key":"b","kind":"native_metric","connection_id":"native-instance-1","metric_key":"agent_runs.total","project_id":"project-1","snapshot_revision":"watermark-42","evidence_ref":"native-metric-receipt-42","observed_at_ms":1791370800000,"value":11}],"computation":{"recipe_id":"runs-7d-v1","revision":1,"operation":"average","input_keys":["a","b"],"window_start_ms":1790766000000,"window_end_ms":1791370800000},"freshness":{"calculated_at_ms":1791370801000,"refresh_at_ms":1791370861000,"fresh_until_ms":1791371101000}}}
   ],
   "invalid_cases": [
+    {"type":"ReadKpisRequest","value":{"project_id":" "},"reason":"Blank project identity"},
+    {"type":"ReadKpisRequest","value":{"project_id":"project-1","owner_user_id":"foreign"},"reason":"Owner authority is not caller input"},
+    {"type":"ConfigureKpisRequest","value":{"operation_id":" ","project_id":"project-1","expected_revision":0,"prompts":[]},"reason":"Operation identity cannot be blank"},
     {"type":"ConfigureKpisRequest","value":{"operation_id":"configure-1","project_id":"project-1","expected_revision":4,"prompts":[{"kpi_id":"runs-7d","prompt":"Wie viele Agent-Runs liefen in den letzten 7 Tagen?"}],"value":42},"reason":"Owner config cannot assert a result"},
     {"type":"ConfigureKpisRequest","value":{"operation_id":"configure-1","project_id":"project-1","expected_revision":4,"prompts":[{"kpi_id":"runs-7d","prompt":"Wie viele Agent-Runs liefen in den letzten 7 Tagen?"}],"owner_user_id":"forged"},"reason":"Owner identity comes from authority"},
     {"type":"ConfigureKpisRequest","value":{"operation_id":"configure-1","project_id":"project-1","expected_revision":4,"prompts":[{"kpi_id":"runs-7d","prompt":"Wie viele Agent-Runs liefen in den letzten 7 Tagen?"},{"kpi_id":"runs-7d","prompt":"Wie viele Agent-Runs liefen in den letzten 7 Tagen?"},{"kpi_id":"runs-7d","prompt":"Wie viele Agent-Runs liefen in den letzten 7 Tagen?"},{"kpi_id":"runs-7d","prompt":"Wie viele Agent-Runs liefen in den letzten 7 Tagen?"}]},"reason":"At most three KPI prompts"},

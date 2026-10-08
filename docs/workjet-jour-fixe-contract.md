@@ -2,8 +2,9 @@
 
 This is the shared wire contract requested in the 2026-10-07 project target picture.
 It enables the meeting UI and speech gateway work to proceed against the same
-fixture. This change defines types and validation, not live command handlers,
-persistence, a working meeting room, or installed product acceptance.
+fixture. Native T−2 h preparation scheduling, planned meeting metadata and an
+owner-scoped meeting read are implemented. Deck publication, live meeting
+mutations, confirmed goals and installed meeting acceptance remain follow-ups.
 
 Source: `src/core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json`.
 Generate both consumers with `node src/core/rxdb/tools/build_workjet_jour_fixe_contract.mjs`.
@@ -121,6 +122,25 @@ ctox schedule tick --task-id <id> --at <RFC3339-test-time>
 Use an isolated test root; this is an operator action and actually admits the
 report when due. Omitting `--task-id` with a test time is rejected. It uses the
 normal native command/receipt/queue path, without running the model in tests.
-This slice supplies the requested weekly report at the appointment. T−2 h deck
-preparation, the common JourFix skill/tools, meeting persistence and confirmed-goal
-installation remain the meeting-runtime follow-up described above.
+The weekly report runs at the appointment. The T−2 h preparation schedule and
+owner-scoped planned meeting read are described below. Live meeting and goal
+installation remain follow-ups.
+
+## Native preparation occurrence and owner read
+
+Reconciliation retains the report and creates one additional managed preparation
+schedule per authorized project. It uses the same timezone/calendar at T−2 h and
+preserves operator pauses. Clearing, archiving, deleting or losing authority
+stops both managed schedules. A due occurrence stores planned meeting metadata
+and admits one bounded turn to that project's registered supervisor. The native
+command receipt prevents a crash before the schedule receipt from duplicating
+the message or task. Replaying it never replaces later meeting metadata.
+
+`ctox.workjet.jour_fixe.meeting.read` accepts `ReadMeetingRequest`: project_id and
+optional meeting_id. Omitting the ID reads the latest occurrence, or null when
+none exists. An explicit ID must belong to that same currently owned active
+project and registered supervisor. Native metadata is read through the normal
+policy-gated command path; the command/result projections retain project privacy.
+Saving a preparation task never reports the deck as ready. TTS, native deck
+publication, final speech persistence and confirmed-goal tools remain required
+before the installed meeting acceptance can pass.
