@@ -106,7 +106,7 @@ pub(in crate::business_os) fn handle(root: &Path, command: &BusinessCommand,
             operation_id: request.operation_id.clone(), meeting_id: meeting.id.clone(), project_id: meeting.project_id.clone(),
             revision: meeting.revision, state: meeting.state, changed_id: Some(request_key.clone()), todos_revision: None,
         };
-        let result = json!({"ok":true,"contract":wire::CONTRACT_SCHEMA,"mutation":mutation,"local_candidate":receipt});
+        let result = json!({"ok":true,"contract":wire::CONTRACT_SCHEMA,"owner_user_id":meeting.owner_user_id,"mutation":mutation,"local_candidate":receipt});
         tx.execute("UPDATE workjet_jour_fixe_meetings SET metadata_json=?2 WHERE meeting_id=?1",
             params![meeting.id, metadata])?;
         tx.execute("INSERT INTO workjet_jour_fixe_local_candidates VALUES (?1,?2,?3,?4,?5)",
