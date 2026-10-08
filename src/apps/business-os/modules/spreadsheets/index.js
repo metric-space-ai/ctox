@@ -1728,9 +1728,20 @@ async function mountCtoxSpreadsheets(state, host, record, version) {
     handle.saving = false;
     state.saving = false;
     markSpreadsheetAsDirty(state);
+    // Font failures are load problems, not data problems: the editor frame has
+    // already logged what it asked for, so a reload is the honest retry.
+    const fontRequests = Array.isArray(error?.diagnostics?.fontRequests) ? error.diagnostics.fontRequests : [];
+    if (fontRequests.length) console.error('[spreadsheets] editor font requests', fontRequests);
+    // Asc.c_oAscError.ID.LoadingFontError in the vendored sdkjs. Kept inside
+    // the handler because scripts/office-notifications.browser.mjs evaluates
+    // this body on its own.
+    const LOADING_FONT_ERROR_CODE = -26;
+    const fontLoadFailed = code === String(LOADING_FONT_ERROR_CODE);
     state.ctx.notifications?.show?.({
       type: 'error', message, time: 0,
-      action: { label: state.t('close', 'Schließen'), callback: () => {} },
+      action: fontLoadFailed
+        ? { label: state.t('reloadEditor', 'Erneut laden'), callback: () => globalThis.location?.reload() }
+        : { label: state.t('close', 'Schließen'), callback: () => {} },
     });
     // No automatic retry after errors (in particular version conflicts).
   }

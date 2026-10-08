@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261008-shell-v2-toast-plain-text';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
