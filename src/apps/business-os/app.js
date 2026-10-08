@@ -13828,7 +13828,7 @@ async function workjetProjectControl(request = {}) {
       const goalValidation = validateJourFixeValue('GoalRef', confirmedGoal);
       if (goalValidation.ok !== true) throw new TypeError(goalValidation.error);
       if (!confirmedGoal.goal_id.trim() || confirmedGoal.revision !== expectedPayload.expected_goal_revision + 1) {
-        throw new Error('Workjet confirmation did not return the requested next native goal revision.');
+        throw new Error('Workjet confirmation did not return the requested next goal revision.');
       }
     }
     const expectedState = confirming ? 'confirmed' : action === 'project.jour_fixe.meeting.start' || localCandidate ? 'live'
@@ -13861,7 +13861,7 @@ async function workjetProjectControl(request = {}) {
         || audio.source_run_id !== expectedPayload.operation_id || audio.model !== 'owner-uploaded-local-audio'
         || audio.format !== 'wav' || audio.mime_type !== 'audio/wav' || audio.duration_ms < 1
         || audio.duration_ms > 300000 || audio.synthesis_duration_ms !== 0) {
-        throw new Error('Workjet local narration receipt does not confirm native audio custody.');
+        throw new Error('Workjet could not verify the saved narration audio.');
       }
     }
     if (localCandidate) {
