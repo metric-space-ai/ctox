@@ -615,6 +615,24 @@ fn apply_in_temp(
         observed_head == manifest.git.head,
         "{APPLY_HASH_MISMATCH}: observed HEAD differs from manifest"
     );
+    // Git records only the executable bit, and clone/apply also use the target
+    // process's umask. Restore the source's recorded regular-file permissions
+    // before comparing the exact file manifest. Never chmod a symlink target.
+    for entry in &manifest.files {
+        if entry.mode & 0o170000 == 0o100000 {
+            ensure_no_symlink_ancestor(temp_dir, Path::new(&entry.path))?;
+            let path = temp_dir.join(&entry.path);
+            let metadata = fs::symlink_metadata(&path)?;
+            ensure!(
+                metadata.is_file(),
+                "{APPLY_HASH_MISMATCH}: expected regular file {}",
+                entry.path
+            );
+            if regular_mode(&metadata) != entry.mode {
+                set_mode(&path, entry.mode)?;
+            }
+        }
+    }
     let observed_files = collect_manifest_files(temp_dir)?;
     ensure!(
         observed_files == manifest.files,
@@ -1719,6 +1737,47 @@ mod tests {
         );
         assert_eq!(manifest.git.patch_sha256, sha256_bytes(&[]));
         assert!(is_hash(&manifest.git.patch_sha256));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workjet_transfer_git_apply_preserves_tracked_permissions_and_index() {
+        let repo = repository();
+        git(repo.path(), &["config", "core.filemode", "true"]);
+        fs::write(repo.path().join("run.sh"), b"#!/bin/sh\necho before\n").unwrap();
+        set_mode(&repo.path().join("run.sh"), 0o755).unwrap();
+        git(repo.path(), &["add", "run.sh"]);
+        git(repo.path(), &["commit", "-m", "executable base"]);
+        fs::write(repo.path().join("tracked.txt"), b"staged\n").unwrap();
+        git(repo.path(), &["add", "tracked.txt"]);
+        fs::write(repo.path().join("tracked.txt"), b"unstaged\n").unwrap();
+        set_mode(&repo.path().join("tracked.txt"), 0o640).unwrap();
+        fs::write(repo.path().join("run.sh"), b"#!/bin/sh\necho after\n").unwrap();
+        set_mode(&repo.path().join("run.sh"), 0o644).unwrap();
+        fs::write(repo.path().join("staged-new.txt"), b"new\n").unwrap();
+        set_mode(&repo.path().join("staged-new.txt"), 0o600).unwrap();
+        git(repo.path(), &["add", "staged-new.txt"]);
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = root.path().join("artifacts");
+        let target = root.path().join("target");
+        let manifest = pack_git_working_copy(repo.path(), &artifacts).unwrap();
+        let report = apply_git_working_copy(&artifacts, &manifest, &target).unwrap();
+        assert_eq!(report.observed_manifest_sha256, manifest.manifest_sha256);
+        for entry in &manifest.files {
+            assert_eq!(manifest_file(&target, &entry.path).unwrap(), *entry);
+        }
+        for args in [
+            vec!["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            vec!["diff", "--binary", "--full-index"],
+            vec!["diff", "--cached", "--binary", "--full-index"],
+            vec!["write-tree"],
+        ] {
+            assert_eq!(
+                git_output(repo.path(), &args).unwrap().stdout,
+                git_output(&target, &args).unwrap().stdout,
+                "{args:?}"
+            );
+        }
     }
 
     #[test]
