@@ -39,12 +39,18 @@ Read current revision before changing intent. Retry an uncertain mutation with
 the same operation_id and identical request. Lease expiry or changed authority
 requires native recovery, never SQL or forged receipts.
 
-Retain narration text in the workspace. Only the approved native speech gateway
-may synthesize it. Missing model/credentials are named readiness failures, not
-permission for paid fallback. Publication needs authorized file references,
-actual narration/audio hashes and synthesis receipts. No narrate/publication or
-goal-confirmation tool is implemented in this slice: report those steps pending,
-do not simulate them or declare a draft ready.
+For every saved slide, call business_os.jour_fixe_update with action:"narrate"
+and NarrateRequest {operation_id,meeting_id,slide_id,deck_revision,
+expected_revision,narration_text_sha256}. The text hash names the exact stored
+slide body (at most4096 UTF-8 bytes); no model, text, audio or voice override is
+accepted. Read each updated meeting revision before the next slide. Only the
+configured native speech gateway generates audio. Native custody stores real
+WAV bytes, computes duration and binds its private producer receipt and hashes.
+The meeting becomes ready only after every slide has retained audio. Missing
+model/credentials or an uncertain interrupted synthesis are named readiness
+failures, never permission for a fallback or invented AudioRef. An uncertain
+operation is not automatically resynthesized; reuse its exact operation_id for
+recovery/readback. The Owner alone confirms the proposed goal.
 
 Comments bind to exact slide/deck revision. Partials are transient; only
 authenticated ordered final turns belong in the durable transcript. Preserve

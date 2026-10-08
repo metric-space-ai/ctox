@@ -214,7 +214,7 @@ fn uploaded_wav(
     Ok(bytes)
 }
 /// Duration is computed from RIFF/WAVE PCM frames, never caller metadata.
-pub(super) fn wav_duration(bytes: &[u8]) -> anyhow::Result<u64> {
+pub(in crate::business_os) fn wav_duration(bytes: &[u8]) -> anyhow::Result<u64> {
     ensure!(
         bytes.len() >= 44 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE",
         "local narration requires RIFF/WAVE audio"
@@ -270,7 +270,7 @@ pub(super) fn wav_duration(bytes: &[u8]) -> anyhow::Result<u64> {
     );
     Ok(ms)
 }
-fn persist(
+pub(in crate::business_os) fn persist(
     tx: &Connection,
     collection: &str,
     id: &str,
