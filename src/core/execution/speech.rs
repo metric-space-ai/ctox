@@ -5,6 +5,8 @@
 #[cfg(unix)]
 #[path = "speech_computer.rs"]
 pub mod computer;
+#[path = "speech_prepare.rs"]
+pub mod prepare;
 #[cfg(unix)]
 #[path = "speech_target.rs"]
 pub(crate) mod target;

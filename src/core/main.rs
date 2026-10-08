@@ -204,6 +204,7 @@ RUN / EXEC
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
   ctox runtime speech-status
+  ctox runtime speech-warmup
   ctox runtime speech-configure <speech-config.json>
   ctox runtime speech-computer-configure <routes.json>
   ctox runtime speech-computer-authorize <grants.json>
@@ -672,6 +673,11 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 anyhow::ensure!(args.len() == 3, "usage: ctox runtime speech-computer-authorize <grants.json>");
                 let config = execution::speech::target_policy::configure_from_file(&root, Path::new(&args[2]))?;
                 println!("{}", serde_json::to_string_pretty(&config)?);
+                Ok(())
+            }
+            Some("speech-warmup") => {
+                let ready = execution::speech::prepare::warm_local_runtime(&root)?;
+                println!("{}", serde_json::to_string_pretty(&ready)?);
                 Ok(())
             }
             Some("speech-status") => {
