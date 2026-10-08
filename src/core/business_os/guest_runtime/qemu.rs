@@ -203,6 +203,24 @@ fn prepare_command(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    // kill_on_drop cannot run after a daemon abort. Bind this child to the
+    // native spawning parent too; an abrupt parent exit is never a clean
+    // checkpoint or successful effect reconciliation.
+    // SAFETY: getpid reads identity. The pre-exec callback uses only
+    // async-signal-safe syscalls and errno conversion, with no allocation.
+    let parent_pid = unsafe { libc::getpid() };
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Close the race where the parent died before prctl was armed.
+            if libc::getppid() != parent_pid {
+                return Err(std::io::Error::from_raw_os_error(libc::ECHILD));
+            }
+            Ok(())
+        });
+    }
     Ok(command)
 }
 

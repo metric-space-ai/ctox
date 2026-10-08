@@ -553,3 +553,93 @@ async fn corrupt_memory_retires_incoming_attempt_without_executing_or_releasing_
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn real_qemu_cannot_survive_abrupt_native_parent_exit() -> Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    const CHILD_ROOT: &str = "CTOX_QEMU_PARENT_EXIT_TEST_ROOT";
+    const TEST: &str =
+        "business_os::guest_runtime::qemu::tests::real_qemu_cannot_survive_abrupt_native_parent_exit";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let root = PathBuf::from(root);
+        let input = config(&root)?;
+        real_disk(&input).await?;
+        let mut guest = QemuProcess::spawn_paused(&input, "isolated-parent-exit-guest")?;
+        guest.connect_monitor().await?;
+        ensure!(!guest.status().await?.running);
+        println!("VM_PARENT_EXIT_OWNED_QEMU {}", guest.pid());
+        std::io::stdout().flush()?;
+        // Deliberately bypass every Rust destructor, as SIGABRT does.
+        std::process::exit(0);
+    }
+    let root = tempfile::tempdir()?;
+    let child = Command::new(std::env::current_exe()?)
+        .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+        .env(CHILD_ROOT, root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let output = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
+        .await
+        .context("native parent fixture deadline")??;
+    ensure!(
+        output.status.success(),
+        "native parent fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    let pid: i32 = text
+        .lines()
+        .find_map(|line| line.strip_prefix("VM_PARENT_EXIT_OWNED_QEMU "))
+        .context("actual QEMU child identity missing")?
+        .parse()?;
+    // SAFETY: pidfd pins this exact process; an already-reaped PID is absent.
+    // It avoids signaling another process if a numeric PID is subsequently reused.
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if raw < 0 {
+        ensure!(
+            std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH),
+            "cannot observe QEMU parent-exit result"
+        );
+        return Ok(());
+    }
+    // SAFETY: successful pidfd_open returns a fresh descriptor owned here.
+    let fd = unsafe { OwnedFd::from_raw_fd(raw as i32) };
+    let mut event = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: event is a valid single pollfd; this wait is bounded.
+    let observed_exit =
+        unsafe { libc::poll(&mut event, 1, 5000) } > 0 && event.revents & libc::POLLIN != 0;
+    if !observed_exit {
+        let argv = std::fs::read(format!("/proc/{pid}/cmdline"))?;
+        let assigned = root.path().as_os_str().as_encoded_bytes();
+        ensure!(
+            argv.windows(assigned.len()).any(|part| part == assigned),
+            "numeric QEMU PID no longer belongs to this test; no signal sent"
+        );
+        // A failed regression must still retire only its exact owned child.
+        // SAFETY: this syscall targets our retained pidfd, with no siginfo.
+        let stopped = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                fd.as_raw_fd(),
+                libc::SIGKILL,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        ensure!(stopped == 0, "cannot retire failed owned parent-exit child");
+        // SAFETY: same live descriptor and bounded wait as above.
+        ensure!(
+            unsafe { libc::poll(&mut event, 1, 5000) } > 0,
+            "failed owned child did not exit"
+        );
+    }
+    ensure!(observed_exit, "QEMU survived abrupt native parent exit");
+    Ok(())
+}
