@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve, relative } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { browserTransportSnapshot } from './installed-sync-browser-transport.mjs';
 
 const OWNER = '01a087a0-169a-7e23-ba3d-71352256cbfb';
 const EXPECTED_SOURCE = 'b48220db385d53f07c8414c21f7ce22cdd8ff44d';
@@ -435,14 +436,19 @@ export function diagnosticScalars(value, depth = 0, field = '') {
 async function failureMetrics(page) {
   if (!page || page.isClosed()) return { available: false };
   let timer;
+  let transport = { available: false, reason: 'transport-unavailable' };
   try {
-    const raw = await Promise.race([metrics(page), new Promise((_, reject) => {
+    const [raw] = await Promise.race([Promise.all([
+      metrics(page),
+      page.evaluate(browserTransportSnapshot).then(value => { transport = value; })
+        .catch(() => {}),
+    ]), new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error('Failure snapshot deadline')), 4000);
     })]);
     return { available: true, diagnostics: diagnosticScalars(raw.diagnostics.slice(-12)),
       unsynced: diagnosticScalars(raw.unsynced), conflictCount: raw.conflicts.length,
-      wirePulls: diagnosticScalars(raw.wirePulls.slice(-12)) };
-  } catch { return { available: false }; }
+      wirePulls: diagnosticScalars(raw.wirePulls.slice(-12)), transport };
+  } catch { return { available: false, transport }; }
   finally { clearTimeout(timer); }
 }
 
