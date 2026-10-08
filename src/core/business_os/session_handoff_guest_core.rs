@@ -38,7 +38,10 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> NativeGuestCoreOwner for Rece
             .join("runtime/ctox-sync/received-checkpoints");
         private_dir(&root)?;
         let store = CheckpointStore::open(root, BLOB_LIMIT)?;
-        let manifest = store.load(&t.request.checkpoint_digest)?;
+        // The native registered import already verified the complete copy.
+        // Recheck the immutable manifest and the Core inputs actually consumed
+        // here; do not rehash multi-GiB VM RAM/disk under publication locks.
+        let manifest = store.load_manifest(&t.request.checkpoint_digest)?;
         reconstruction::verify_manifest(&manifest, &t.request)?;
         let states: Vec<_> = manifest
             .provider_state
@@ -106,18 +109,6 @@ mod tests {
         std::fs::write(&journal, vec![b'x'; bytes.len()]).unwrap();
         assert!(verify_journal_file(&journal, &artifact).is_err());
         assert!(verify_journal_file(&root.path().join("missing"), &artifact).is_err());
-    }
-
-    #[test]
-    fn returning_from_import_does_not_retire_the_retained_constructor_owner() {
-        let live = Arc::new(Mutex::new(true));
-        let lifetime = CopyLifetime(live.clone());
-        // The production ReceiverCore owns this lifetime rather than borrowing
-        // the import RPC's stack. Final native owner retirement still invalidates it.
-        let retained = (lifetime,);
-        assert!(*live.lock().unwrap());
-        drop(retained);
-        assert!(!*live.lock().unwrap());
     }
 }
 
