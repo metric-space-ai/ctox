@@ -152,15 +152,16 @@ async fn existing_open_stream_does_not_authorize_browser_fabricated_speech() -> 
     let root=super::jour_fixe_owner::fixture("live")?;
     let token=owner_token(root.path())?;
     let (stream,server)=bound(root.path(),&token).await?;
-    let result=crate::business_os::command_plane::accept_rxdb_business_command(root.path(),json!({
+    assert!(store::verified_webrtc_capability_claims(root.path(),&token).is_some());
+    let result=crate::business_os::command_plane::accept_rxdb_business_command_with_origin(root.path(),json!({
         "id":"forged-final","module":"ctox","record_id":"project",
         "command_type":"ctox.workjet.jour_fixe.transcript.append",
         "payload":{"meeting_id":"meeting-1","operation_id":"forged-op","expected_revision":0,
             "turn":{"id":"forged","meeting_id":"meeting-1","sequence":1,"speaker":"owner",
                 "modality":"speech","text":"Invented speech","stream_id":stream.stream_id(),
                 "started_at_ms":1,"ended_at_ms":2}},
-        "client_context":{"actor":{"id":"owner","role":"admin"}}
-    }));
+        "client_context":{"actor":{"id":"owner"},"capability_token":token}
+    }),store::CommandOrigin::ReplicatedPeer);
     assert!(result.is_err() || result.as_ref().is_ok_and(|v|v["status"]=="failed"),"{result:?}");
     assert_eq!(consumed(root.path())?,0);finish(stream,server).await
 }
