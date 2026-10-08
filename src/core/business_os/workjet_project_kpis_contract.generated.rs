@@ -73,11 +73,11 @@ impl WireValidate for KpiState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum SourceKind {
     #[serde(rename = "native_metric")]
-    NativeMetric,
+    Native,
     #[serde(rename = "github_metric")]
-    GithubMetric,
+    Github,
     #[serde(rename = "connected_metric")]
-    ConnectedMetric,
+    Connected,
 }
 impl WireValidate for SourceKind {
     fn validate(&self) -> Result<(), String> {
@@ -317,7 +317,7 @@ impl WireValidate for Computation {
         {
             let value = &self.input_keys;
             value.validate()?;
-            if value.len() < 1 {
+            if value.is_empty() {
                 return Err("Computation.input_keys violates min_items".into());
             }
             if value.len() > 8 {
@@ -465,7 +465,7 @@ impl WireValidate for KpiSnapshot {
         {
             let value = &self.sources;
             value.validate()?;
-            if value.len() < 1 {
+            if value.is_empty() {
                 return Err("KpiSnapshot.sources violates min_items".into());
             }
             if value.len() > 8 {

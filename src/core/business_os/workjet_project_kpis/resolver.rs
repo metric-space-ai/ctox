@@ -186,7 +186,7 @@ fn calculate(
         .enumerate()
         .map(|(i, v)| SourceEvidence {
             source_key: keys[i].clone(),
-            kind: SourceKind::NativeMetric,
+            kind: SourceKind::Native,
             connection_id: "native-core-command-ledger".into(),
             metric_key: if operation == Calculation::Percentage {
                 if i == 0 {
