@@ -50,6 +50,8 @@ mod project_crew_request;
 mod remote_worker;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
+#[path = "mcp_workjet_jour_fixe.rs"]
+mod workjet_jour_fixe;
 
 #[cfg(test)]
 pub(crate) fn workjet_dispatch_service_test_fixture() -> anyhow::Result<(tempfile::TempDir, String)>
@@ -838,7 +840,7 @@ fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bo
         string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
             && context["workjet_supervisor_only"] == true
     }) {
-        return tool_name == workjet_worker_dispatch::TOOL;
+        return matches!(tool_name, workjet_worker_dispatch::TOOL | workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL);
     }
     let restricted = context.is_some_and(|context| {
         string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
@@ -1441,6 +1443,8 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         project_crew_request::native_project_cancel_descriptor(),
         remote_worker::descriptor(),
         workjet_worker_dispatch::descriptor(),
+        workjet_jour_fixe::read_descriptor(),
+        workjet_jour_fixe::write_descriptor(),
         read_tool(
             "business_os.list_crew_executions",
             "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
@@ -3204,6 +3208,9 @@ fn call_tool_inner(
         remote_worker::TOOL => remote_worker::execute(root, &context, &arguments)?,
         workjet_worker_dispatch::TOOL => {
             workjet_worker_dispatch::execute(root, &context, &arguments, trusted_gateway_context)?
+        }
+        workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
+            workjet_jour_fixe::execute(root, &context, tool_name, &arguments, trusted_gateway_context)?
         }
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
@@ -7017,6 +7024,9 @@ fn enforce_argument_scope_policy(
             enforce_module_policy(root, "kundenpipeline")?;
             enforce_collection_policy(root, "kundenpipeline_entscheidungen")?;
         }
+        workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
+            enforce_module_policy(root, "ctox")?;
+        }
         "business_os.create_app" => {
             if let Ok(module_id) = app_module_id_from_arguments(
                 arguments,
@@ -7188,6 +7198,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "business_os.start_project_task"
         | "business_os.remote_worker_admission"
         | "business_os.workjet_worker_dispatch"
+        | "business_os.jour_fixe_update"
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
         | "business_os.claim_crew_execution"
@@ -7534,8 +7545,9 @@ fn enforce_internal_command_session_scope(
     }
     if context["workjet_supervisor_only"] == true {
         anyhow::ensure!(
-            tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "dispatch",
-            "supervisor session may only dispatch to its registered Workjet source"
+            (tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "dispatch")
+                || workjet_jour_fixe::allows(tool_name, arguments),
+            "tool/action is outside the restricted native supervisor session"
         );
         return Ok(());
     }

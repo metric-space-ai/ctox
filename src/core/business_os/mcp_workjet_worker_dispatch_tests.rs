@@ -102,7 +102,7 @@ pub(super) fn queued_supervisor(root: &Path) -> anyhow::Result<String> {
     anyhow::ensure!(changed == 1, "fixture actual routing lease missing");
     Ok(id)
 }
-fn session(root: &Path) -> anyhow::Result<(String, Value)> {
+pub(super) fn session(root: &Path) -> anyhow::Result<(String, Value)> {
     let id = queued_supervisor(root)?;
     let command = crate::channels::business_command_projection(root, &id)?;
     let token = issue_internal_command_session_token(

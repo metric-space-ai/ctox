@@ -5,36 +5,46 @@ description: Prepare the registered project supervisor's Jour fixe and record ow
 
 # JourFix
 
-Work only within the native meeting/project and registered supervisor named in
-the task. A title, browser payload or guessed UUID cannot authorize another
-project, speaker or supervisor. Use one explicit execution plan and complete
-its model-owned steps before ending the turn.
+Work only within the native meeting/project and registered Supervisor in the
+task. Titles or caller UUIDs cannot authorize another project or speaker. Use
+one explicit execution plan and complete its model-owned steps.
 
-Read the previous confirmed goal, project configuration, evidenced merged PRs,
-current KPI results, retained comments and final transcript. Mark missing or
-stale evidence. Never invent numeric metrics or completed work.
+Read the previous confirmed goal, configuration, evidenced merged PRs, KPIs,
+comments and final transcript. Name missing or stale evidence; never invent
+metrics or completed work. Prepare slides covering progress against goals, PR
+results, KPIs, owner decisions and next actions with acceptance criteria.
+Keep source references. Preparation authorizes no deployment, external message,
+grant change or unrelated delegated work.
 
-Prepare a bounded deck proposal and narration text in this task's workspace:
-progress against the goal, PR results, KPIs, open owner decisions, then proposed
-next actions with acceptance criteria. Preserve source references for each
-claim. The native speech gateway supplies audio; use only its approved backend.
-A missing credential/model is a named readiness failure, never permission for
-an automatic paid fallback or another tenant's account.
+During the currently leased native Supervisor turn, these restricted tools are
+available:
 
-When native meeting tools are available, publish a deck only with authorized
-file references, actual audio/narration hashes and synthesis receipts. Never
-report ready merely because a proposal was written or a task was admitted.
-If publication or speech tools are unavailable, retain the workspace proposal
-and state that native publication/audio remains pending. Do not mutate SQLite,
-RxDB, command state, queue state or goals through shell/SQL.
+- business_os.jour_fixe_read: {action:"read_comments",request:{project_id,meeting_id}}
+  or action:"read_transcript". Use the actual meeting ID, never a guessed UUID.
+- business_os.jour_fixe_update: {action:"prepare_deck",request:<PublishDeckRequest>}.
+  Supply operation_id, meeting_id, expected_revision, next deck_revision and
+  slides [{id,position,title,body_markdown,meeting_id}]. Positions start at zero;
+  IDs are unique. Omit audio. The saved draft remains preparing, not ready.
+- After the meeting enters review, the update tool accepts action:"propose_todos"
+  with ProposeTodosRequest: operation_id, meeting_id, expected_revision, next
+  proposal_revision, items [{id,title,acceptance,priority,owner,evidence_ids,
+  due_at_ms?}]. Each owner is explicit; evidence IDs come from this meeting.
+  A proposal is not a confirmed goal.
 
-Slide comments bind to the exact deck revision and position. Speech partials
-are transient; only authenticated final turns with stable stream/sequence and
-measured latency belong in the durable transcript. Preserve owner and
-supervisor turns. Propose the to-do list from those recorded inputs. Only the
-owner's explicit confirmation of the current proposal can install the next
-durable supervisor goal; a proposal, review or an empty response cannot.
+Read current revision before changing intent. Retry an uncertain mutation with
+the same operation_id and identical request. Lease expiry or changed authority
+requires native recovery, never SQL or forged receipts.
 
-No deployments, external messages, provider/grant changes or new delegated work
-are authorized by preparation. A later confirmed goal retains the normal native
-execution, permissions, completion review and recovery rules.
+Retain narration text in the workspace. Only the approved native speech gateway
+may synthesize it. Missing model/credentials are named readiness failures, not
+permission for paid fallback. Publication needs authorized file references,
+actual narration/audio hashes and synthesis receipts. No narrate/publication or
+goal-confirmation tool is implemented in this slice: report those steps pending,
+do not simulate them or declare a draft ready.
+
+Comments bind to exact slide/deck revision. Partials are transient; only
+authenticated ordered final turns belong in the durable transcript. Preserve
+both speakers and actual source runs and latency. Derive proposals from those
+inputs. Only the Owner's explicit confirmation of the current proposal installs
+the next durable Supervisor goal. Later work retains normal permissions,
+completion review and recovery. Never mutate SQLite/RxDB/queue/goals via shell.
