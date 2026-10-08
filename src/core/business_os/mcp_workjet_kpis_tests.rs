@@ -374,18 +374,13 @@ fn replacing_the_supervisor_immediately_stales_its_snapshot_without_a_writer() -
 fn global_write_policy_denies_recipe_binding_but_still_allows_snapshot_reads() -> anyhow::Result<()>
 {
     let (root, trusted) = fixture()?;
-    let mut settings = std::collections::BTreeMap::new();
-    settings.insert(
-        "CTOX_BUSINESS_OS_MCP_ALLOW_WRITES".to_owned(),
-        "false".to_owned(),
-    );
-    crate::inference::runtime_env::save_runtime_env_map(root.path(), &settings)?;
-    assert!(call(
-        root.path(),
-        &trusted,
-        args("project_tasks_completed", "denied", 1)
-    )
-    .is_err());
+    let mut settings = super::super::mcp_policy(root.path());
+    settings.allow_writes = false;
+    super::super::save_mcp_policy(root.path(), &settings)?;
+    let denied = call(root.path(), &trusted, args("project_tasks_completed", "denied", 1)).unwrap_err();
+    let policy = denied.downcast_ref::<BusinessOsMcpError>().context("typed write-policy error missing")?;
+    assert_eq!(policy.code, BusinessOsMcpErrorCode::PermissionDenied);
+    assert_eq!(policy.field.as_deref(), Some("CTOX_BUSINESS_OS_MCP_ALLOW_WRITES"));
     assert_eq!(read(root.path(), &trusted)?["kpis"]["revision"], 1);
     Ok(())
 }
@@ -393,13 +388,13 @@ fn global_write_policy_denies_recipe_binding_but_still_allows_snapshot_reads() -
 fn resolving_a_recipe_uses_write_policy_when_global_read_tools_are_disabled() -> anyhow::Result<()>
 {
     let (root, trusted) = fixture()?;
-    let mut settings = std::collections::BTreeMap::new();
-    settings.insert(
-        "CTOX_BUSINESS_OS_MCP_ALLOW_READS".to_owned(),
-        "false".to_owned(),
-    );
-    crate::inference::runtime_env::save_runtime_env_map(root.path(), &settings)?;
-    assert!(read(root.path(), &trusted).is_err());
+    let mut settings = super::super::mcp_policy(root.path());
+    settings.allow_reads = false;
+    super::super::save_mcp_policy(root.path(), &settings)?;
+    let denied = read(root.path(), &trusted).unwrap_err();
+    let policy = denied.downcast_ref::<BusinessOsMcpError>().context("typed read-policy error missing")?;
+    assert_eq!(policy.code, BusinessOsMcpErrorCode::PermissionDenied);
+    assert_eq!(policy.field.as_deref(), Some("CTOX_BUSINESS_OS_MCP_ALLOW_READS"));
     assert_eq!(
         call(
             root.path(),
