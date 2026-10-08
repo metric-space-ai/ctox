@@ -119,11 +119,35 @@ fn missing_saved_voice_fails_before_provider_transport() {
 #[tokio::test]
 async fn unavailable_streaming_fails_before_transport() {
     let root = tempfile::tempdir().unwrap();
+    // Local streaming is now implemented. Explicitly disable its runtime
+    // selection to keep testing the unavailable-backend preflight boundary.
+    let mut state =
+        crate::inference::runtime_state::load_or_resolve_runtime_state(root.path()).unwrap();
+    state.transcription.enabled = false;
+    crate::inference::runtime_state::persist_runtime_state(root.path(), &state).unwrap();
     let gateway = SpeechGateway::from_root(root.path()).unwrap();
     assert!(!gateway.status().streaming_stt_selected);
     assert!(matches!(
         gateway.open_transcription(PcmFormat::default()).await,
         Err(SpeechError::UnsupportedBackend)
+    ));
+}
+
+#[tokio::test]
+async fn selected_local_stream_without_runtime_reports_local_transport_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let mut state =
+        crate::inference::runtime_state::load_or_resolve_runtime_state(root.path()).unwrap();
+    state.transcription.enabled = true;
+    state.transcription.configured_model = Some("engineai/Voxtral-Mini-4B-Realtime-2602".into());
+    crate::inference::runtime_state::persist_runtime_state(root.path(), &state).unwrap();
+    let gateway = SpeechGateway::from_root(root.path()).unwrap();
+    assert!(gateway.status().streaming_stt_selected);
+    // No runtime socket exists under this isolated root. Selection is not
+    // readiness and its failure must never become a provider rejection.
+    assert!(matches!(
+        gateway.open_transcription(PcmFormat::default()).await,
+        Err(SpeechError::Transport)
     ));
 }
 
@@ -350,5 +374,76 @@ async fn event_backpressure_remains_an_explicit_terminal_error() {
     }
     assert_eq!(count, 32);
     assert_eq!(terminal, Some(SpeechError::Backpressure));
+    timeout(IO_TIMEOUT, server).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn verified_final_is_bound_to_its_actual_stream_and_consumed_once() {
+    let (endpoint1, server1) = fixture("normal").await;
+    let (endpoint2, server2) = fixture("normal").await;
+    let (mut first, second) = tokio::join!(start(&endpoint1), start(&endpoint2));
+    let stream_id = first.stream_id().to_owned();
+    assert!(Uuid::parse_str(&stream_id).is_ok());
+    assert_ne!(first.stream_id(), second.stream_id());
+    first.append_pcm(&[0; 640]).unwrap();
+    let partial = timeout(IO_TIMEOUT, first.next_verified_event())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match partial {
+        VerifiedTranscriptEvent::Partial {
+            stream_id: actual,
+            sequence,
+            text,
+            ..
+        } => {
+            assert_eq!(actual, stream_id);
+            assert_eq!(sequence, 1);
+            assert!(!text.is_empty());
+        }
+        _ => panic!("expected transient partial"),
+    }
+    first.finish_audio().unwrap();
+    let event = timeout(IO_TIMEOUT, first.next_verified_event())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match event {
+        VerifiedTranscriptEvent::Final(receipt) => {
+            assert_eq!(receipt.stream_id(), stream_id);
+            assert_eq!(receipt.sequence(), 2);
+            assert_eq!(receipt.text(), "Hallo Welt.");
+            assert_eq!(receipt.model(), MISTRAL_REALTIME_MODEL);
+            assert_eq!(receipt.audio_duration_ms(), 20);
+            assert!(receipt.finish_to_final_ms().unwrap() >= 40);
+        }
+        _ => panic!("expected producer final receipt"),
+    }
+    assert!(timeout(IO_TIMEOUT, first.next_verified_event())
+        .await
+        .unwrap()
+        .is_none());
+    second.cancel().await;
+    timeout(IO_TIMEOUT, server1).await.unwrap().unwrap();
+    timeout(IO_TIMEOUT, server2).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn verified_stream_preserves_provider_failure_instead_of_minting_a_final() {
+    let (endpoint, server) = fixture("error").await;
+    let mut stream = start(&endpoint).await;
+    stream.append_pcm(&[0; 640]).unwrap();
+    assert!(matches!(
+        timeout(IO_TIMEOUT, stream.next_verified_event())
+            .await
+            .unwrap(),
+        Some(Err(SpeechError::ProviderRejected { http_status: None }))
+    ));
+    assert!(timeout(IO_TIMEOUT, stream.next_verified_event())
+        .await
+        .unwrap()
+        .is_none());
     timeout(IO_TIMEOUT, server).await.unwrap().unwrap();
 }

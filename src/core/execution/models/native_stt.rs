@@ -8,7 +8,7 @@ use ctox_voxtral_mini_4b_realtime_2602::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -48,20 +48,30 @@ enum SttRuntime {
     MistralApi(MistralSttClient),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum LocalSttRequest {
+pub(crate) enum LocalSttRequest {
     TranscriptionCreate {
         model: Option<String>,
         file_base64: String,
         response_format: Option<String>,
     },
     RuntimeHealth,
+    TranscriptionOpen {
+        model: Option<String>,
+        sample_rate_hz: u32,
+    },
+    TranscriptionAppend {
+        pcm_base64: String,
+    },
+    TranscriptionFlush,
+    TranscriptionFinish,
+    TranscriptionCancel,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum LocalSttResponse {
+pub(crate) enum LocalSttResponse {
     Transcription {
         model: String,
         text: String,
@@ -78,6 +88,20 @@ enum LocalSttResponse {
     Error {
         code: String,
         message: String,
+    },
+    StreamReady {
+        model: String,
+    },
+    StreamUpdate {
+        sequence: u64,
+        text: Option<String>,
+        audio_duration_ms: u64,
+    },
+    TranscriptionFinal {
+        sequence: u64,
+        model: String,
+        text: String,
+        audio_duration_ms: u64,
     },
 }
 
@@ -137,6 +161,7 @@ pub fn doctor_json(root: &Path) -> serde_json::Value {
             "ggml_vendor_present": model_root.join("vendor/ggml/include/ggml.h").is_file(),
             "ggml_cpu_backend": ctox_voxtral_mini_4b_realtime_2602::GGML_CPU_ENABLED,
             "ggml_metal_backend": ctox_voxtral_mini_4b_realtime_2602::GGML_METAL_ENABLED,
+            "ggml_cuda_backend": ctox_voxtral_mini_4b_realtime_2602::GGML_CUDA_ENABLED,
             "ggml_blas_backend": ctox_voxtral_mini_4b_realtime_2602::GGML_BLAS_ENABLED,
             "model_artifacts_present": inspection.is_some(),
             "model_artifact_root": inspection.as_ref().map(|value| value.root.display().to_string()),
@@ -209,7 +234,9 @@ pub fn stt_realtime_smoke_json(root: &Path, audio_path: &Path) -> serde_json::Va
         f64::INFINITY
     };
     let batch_realtime_capable = realtime_factor <= 1.0;
-    let streaming_supported = runtime.streaming_supported();
+    // This operator smoke only calls the whole-file API. It must never certify
+    // streaming or sentence-end latency, even when streaming code is compiled.
+    let streaming_supported = false;
     let live_capable = streaming_supported && batch_realtime_capable;
     match result {
         Ok(output) => {
@@ -280,8 +307,16 @@ pub fn live_transcription_status_json(root: &Path) -> serde_json::Value {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let streaming_supported = configured_streaming_supported(root, engine_kind);
-    let local_enabled_for_live_meetings =
-        engine_kind == SttEngineKind::Local && streaming_supported && proof_batch_realtime;
+    let proof_latency_ready = proof
+        .as_ref()
+        .and_then(|v| v.get("sentence_end_to_transcript_ms"))
+        .and_then(Value::as_u64)
+        .is_some_and(|ms| ms <= 1500);
+    let local_enabled_for_live_meetings = engine_kind == SttEngineKind::Local
+        && streaming_supported
+        && proof_streaming_supported
+        && proof_batch_realtime
+        && proof_latency_ready;
     json!({
         "required_for_chat_reactivity": true,
         "engine": engine_kind.label(),
@@ -296,7 +331,7 @@ pub fn live_transcription_status_json(root: &Path) -> serde_json::Value {
         "local_live_disabled_reason": local_live_disabled_reason(
             engine_kind,
             streaming_supported,
-            proof_batch_realtime
+            proof_batch_realtime && proof_streaming_supported && proof_latency_ready
         ),
         "api_live_enabled": engine_kind == SttEngineKind::MistralApi && streaming_supported,
         "proof": proof
@@ -377,11 +412,11 @@ pub fn serve_socket(launch: NativeSttLaunch) -> Result<()> {
     let runtime = match configured_stt_engine(&launch.root) {
         SttEngineKind::Local => {
             let backend = default_backend_for_host(launch.compute_target);
-            let model = launch
-                .model_path
-                .as_ref()
-                .and_then(|path| VoxtralSttModel::from_gguf(path, backend).ok())
-                .unwrap_or_else(|| VoxtralSttModel::new(VoxtralSttConfig::default(), backend));
+            let model = match launch.model_path.as_ref() {
+                Some(path) => VoxtralSttModel::from_gguf(path, backend)
+                    .context("failed to load configured native Voxtral STT model")?,
+                None => VoxtralSttModel::new(VoxtralSttConfig::default(), backend),
+            };
             SttRuntime::Local(model)
         }
         SttEngineKind::MistralApi => {
@@ -408,6 +443,35 @@ fn handle_connection(
     let mut line = String::new();
     if reader.read_line(&mut line)? == 0 {
         return Ok(());
+    }
+    if let Ok(LocalSttRequest::TranscriptionOpen {
+        model,
+        sample_rate_hz,
+    }) = serde_json::from_str::<LocalSttRequest>(line.trim())
+    {
+        if sample_rate_hz != 16_000
+            || model
+                .as_deref()
+                .is_some_and(|m| !runtime.supports_request_model(m))
+        {
+            return write_stt_response(
+                &mut stream,
+                &LocalSttResponse::Error {
+                    code: "invalid_request".into(),
+                    message: "local stream requires Voxtral mono PCM16 at 16 kHz".into(),
+                },
+            );
+        }
+        let SttRuntime::Local(model) = &runtime else {
+            return write_stt_response(
+                &mut stream,
+                &LocalSttResponse::Error {
+                    code: "unsupported_backend".into(),
+                    message: "native streaming requires the local runtime".into(),
+                },
+            );
+        };
+        return handle_streaming_connection(stream, reader, model);
     }
     let response = match serde_json::from_str::<LocalSttRequest>(line.trim()) {
         Ok(LocalSttRequest::RuntimeHealth) => LocalSttResponse::RuntimeHealth {
@@ -470,16 +534,114 @@ fn handle_connection(
                 }
             }
         }
+        Ok(_) => LocalSttResponse::Error {
+            code: "invalid_request".into(),
+            message: "stream must be opened before audio".into(),
+        },
         Err(err) => LocalSttResponse::Error {
             code: "invalid_request".to_string(),
             message: err.to_string(),
         },
     };
-    let encoded = serde_json::to_vec(&response)?;
+    write_stt_response(&mut stream, &response)
+}
+
+fn write_stt_response(
+    stream: &mut crate::inference::local_transport::LocalStream,
+    response: &LocalSttResponse,
+) -> Result<()> {
+    let encoded = serde_json::to_vec(response)?;
     stream.write_all(&encoded)?;
     stream.write_all(b"\n")?;
     stream.flush()?;
     Ok(())
+}
+
+fn handle_streaming_connection(
+    mut stream: crate::inference::local_transport::LocalStream,
+    mut reader: BufReader<crate::inference::local_transport::LocalStream>,
+    model: &VoxtralSttModel,
+) -> Result<()> {
+    let mut decoder = match model.open_stream() {
+        Ok(decoder) => decoder,
+        Err(error) => {
+            return write_stt_response(
+                &mut stream,
+                &LocalSttResponse::Error {
+                    code: "backend_unavailable".into(),
+                    message: error.to_string(),
+                },
+            )
+        }
+    };
+    write_stt_response(
+        &mut stream,
+        &LocalSttResponse::StreamReady {
+            model: model.config().model.clone(),
+        },
+    )?;
+    let started = Instant::now();
+    let mut sequence = 0u64;
+    loop {
+        let mut line = String::new();
+        let read = (&mut reader).take(8193).read_line(&mut line)?;
+        if read == 0 {
+            return Ok(());
+        }
+        if read > 8192 || !line.ends_with('\n') || started.elapsed() > Duration::from_secs(120) {
+            return write_stt_response(
+                &mut stream,
+                &LocalSttResponse::Error {
+                    code: "invalid_request".into(),
+                    message: "stream message or session limit exceeded".into(),
+                },
+            );
+        }
+        sequence += 1;
+        let result: Result<LocalSttResponse> =
+            (|| match serde_json::from_str::<LocalSttRequest>(line.trim())? {
+                LocalSttRequest::TranscriptionAppend { pcm_base64 } => {
+                    let pcm = BASE64_STANDARD.decode(pcm_base64)?;
+                    let text = decoder.append_pcm(&pcm)?;
+                    Ok(LocalSttResponse::StreamUpdate {
+                        sequence,
+                        text,
+                        audio_duration_ms: decoder.audio_duration_ms(),
+                    })
+                }
+                LocalSttRequest::TranscriptionFlush => Ok(LocalSttResponse::StreamUpdate {
+                    sequence,
+                    text: Some(decoder.flush()?),
+                    audio_duration_ms: decoder.audio_duration_ms(),
+                }),
+                LocalSttRequest::TranscriptionFinish => Ok(LocalSttResponse::TranscriptionFinal {
+                    sequence,
+                    text: decoder.finish()?,
+                    model: model.config().model.clone(),
+                    audio_duration_ms: decoder.audio_duration_ms(),
+                }),
+                LocalSttRequest::TranscriptionCancel => anyhow::bail!("stream cancelled"),
+                _ => anyhow::bail!("invalid streaming request"),
+            })();
+        match result {
+            Ok(response) => {
+                let finished = matches!(response, LocalSttResponse::TranscriptionFinal { .. });
+                write_stt_response(&mut stream, &response)?;
+                if finished {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                return write_stt_response(
+                    &mut stream,
+                    &LocalSttResponse::Error {
+                        code: "transcription_failed".into(),
+                        message: error.to_string(),
+                    },
+                )
+            }
+        }
+    }
 }
 
 fn stt_runtime_for_smoke(root: &Path) -> Result<SttRuntime> {
@@ -538,9 +700,7 @@ fn configured_mistral_endpoint(root: &Path) -> String {
 
 fn configured_streaming_supported(root: &Path, engine_kind: SttEngineKind) -> bool {
     match engine_kind {
-        SttEngineKind::Local => {
-            bool_env_or_config(root, "CTOX_STT_LOCAL_STREAMING_SUPPORTED").unwrap_or(false)
-        }
+        SttEngineKind::Local => ctox_voxtral_mini_4b_realtime_2602::GGML_CPU_ENABLED,
         SttEngineKind::MistralApi => bool_env_or_config(root, "CTOX_MISTRAL_STT_REALTIME_ENABLED")
             .or_else(|| bool_env_or_config(root, "CTOX_STT_REALTIME_API_ENABLED"))
             .unwrap_or(false),
@@ -745,7 +905,7 @@ impl SttRuntime {
     }
 
     fn streaming_supported(&self) -> bool {
-        false
+        matches!(self, SttRuntime::Local(model) if model.transcription_graph_wired())
     }
 
     fn supports_request_model(&self, request_model: &str) -> bool {
@@ -840,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn live_transcription_defaults_to_batch_only_until_streaming_is_wired() {
+    fn live_transcription_requires_actual_streaming_latency_proof() {
         let root = std::env::temp_dir().join(format!(
             "ctox-voxtral-live-status-{}",
             std::time::SystemTime::now()
@@ -853,7 +1013,7 @@ mod tests {
         let status = live_transcription_status_json(&root);
         assert_eq!(
             status["streaming_supported"].as_bool(),
-            Some(false),
+            Some(ctox_voxtral_mini_4b_realtime_2602::GGML_CPU_ENABLED),
             "{status}"
         );
         assert_eq!(
@@ -863,7 +1023,11 @@ mod tests {
         );
         assert_eq!(
             status["local_live_disabled_reason"].as_str(),
-            Some("streaming_inference_not_wired"),
+            Some(if ctox_voxtral_mini_4b_realtime_2602::GGML_CPU_ENABLED {
+                "missing_realtime_proof"
+            } else {
+                "streaming_inference_not_wired"
+            }),
             "{status}"
         );
         std::fs::remove_dir_all(root).unwrap();

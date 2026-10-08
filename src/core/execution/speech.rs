@@ -6,6 +6,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fmt,
     io::Read,
@@ -13,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
+    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
@@ -23,6 +25,7 @@ use tokio_tungstenite::{
     },
     MaybeTlsStream, WebSocketStream,
 };
+use uuid::Uuid;
 
 const CONFIG_KEY: &str = "speech_gateway";
 pub const MISTRAL_REALTIME_MODEL: &str = "voxtral-mini-transcribe-realtime-2602";
@@ -32,6 +35,10 @@ const SESSION_TIMEOUT: Duration = Duration::from_secs(3600);
 const MAX_AUDIO_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+trait RuntimeSpeechIo: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> RuntimeSpeechIo for T {}
+type RuntimeSocket = Box<dyn RuntimeSpeechIo>;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -102,6 +109,44 @@ pub struct SpeechOutput {
     pub elapsed_ms: u64,
 }
 
+/// Producer provenance, not a meeting permission or a playable-audio verdict.
+/// Only `SpeechGateway::synthesize_verified` can construct this value. The
+/// native meeting adapter must still validate/store the audio through its file
+/// authority and derive duration from the actual bytes before publishing it.
+pub struct VerifiedSpeechOutput {
+    run_id: String,
+    text_sha256: String,
+    audio_sha256: String,
+    output: SpeechOutput,
+}
+
+impl VerifiedSpeechOutput {
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+    pub fn text_sha256(&self) -> &str {
+        &self.text_sha256
+    }
+    pub fn audio_sha256(&self) -> &str {
+        &self.audio_sha256
+    }
+    pub fn audio(&self) -> &[u8] {
+        &self.output.audio
+    }
+    pub fn format(&self) -> SpeechAudioFormat {
+        self.output.format
+    }
+    pub fn model(&self) -> &str {
+        &self.output.model
+    }
+    pub fn input_characters(&self) -> usize {
+        self.output.input_characters
+    }
+    pub fn elapsed_ms(&self) -> u64 {
+        self.output.elapsed_ms
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PcmFormat {
@@ -149,6 +194,55 @@ pub enum TranscriptEvent {
         finish_to_final_ms: Option<u64>,
         audio_duration_ms: u64,
     },
+}
+
+/// Non-deserializable final receipt minted only by an actual gateway stream.
+/// A caller must bind this stream ID to its authenticated meeting at open and
+/// revalidate that same authority before persisting the receipt. This value
+/// alone neither identifies the speaker nor authorizes any meeting mutation.
+#[derive(Debug)]
+pub struct VerifiedTranscriptFinal {
+    stream_id: String,
+    sequence: u64,
+    text: String,
+    model: String,
+    finish_to_final_ms: Option<u64>,
+    audio_duration_ms: u64,
+}
+
+impl VerifiedTranscriptFinal {
+    pub fn stream_id(&self) -> &str {
+        &self.stream_id
+    }
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+    pub fn finish_to_final_ms(&self) -> Option<u64> {
+        self.finish_to_final_ms
+    }
+    pub fn audio_duration_ms(&self) -> u64 {
+        self.audio_duration_ms
+    }
+}
+
+/// Partial text remains transient. Only the branded Final variant is suitable
+/// for native speech persistence; deserializing TranscriptEvent grants none.
+#[derive(Debug)]
+pub enum VerifiedTranscriptEvent {
+    Partial {
+        stream_id: String,
+        sequence: u64,
+        /// Delta, accumulated by the native/UI adapter within this stream.
+        text: String,
+        received_after_start_ms: u64,
+    },
+    Final(VerifiedTranscriptFinal),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -215,7 +309,20 @@ impl SpeechGateway {
             config: self.config.clone(),
             mistral_credential_present: mistral_key(&self.root).is_some(),
             mistral_voice_configured: self.config.voice_id.is_some(),
-            streaming_stt_selected: self.config.transcription == SpeechBackend::Mistral,
+            streaming_stt_selected: match self.config.transcription {
+                SpeechBackend::Mistral => true,
+                SpeechBackend::Runtime => {
+                    crate::inference::runtime_kernel::InferenceRuntimeKernel::resolve(&self.root)
+                        .ok()
+                        .is_some_and(|runtime| {
+                            runtime
+                                .binding_for_auxiliary_role(
+                                    crate::inference::engine::AuxiliaryRole::Stt,
+                                )
+                                .is_some()
+                        })
+                }
+            },
         }
     }
 
@@ -289,6 +396,20 @@ impl SpeechGateway {
         })
     }
 
+    /// Synthesize through the actual configured adapter and brand its result.
+    pub fn synthesize_verified(
+        &self,
+        request: &SpeechRequest,
+    ) -> Result<VerifiedSpeechOutput, SpeechError> {
+        let output = self.synthesize(request)?;
+        Ok(VerifiedSpeechOutput {
+            run_id: Uuid::new_v4().to_string(),
+            text_sha256: format!("{:x}", Sha256::digest(request.text.as_bytes())),
+            audio_sha256: format!("{:x}", Sha256::digest(&output.audio)),
+            output,
+        })
+    }
+
     /// Must run inside the daemon's existing Tokio runtime. No independent daemon or browser token.
     pub async fn open_transcription(
         &self,
@@ -296,7 +417,24 @@ impl SpeechGateway {
     ) -> Result<TranscriptionStream, SpeechError> {
         format.validate()?;
         if self.config.transcription != SpeechBackend::Mistral {
-            return Err(SpeechError::UnsupportedBackend);
+            let root = self.root.clone();
+            let binding = tokio::task::spawn_blocking(move || {
+                let runtime =
+                    crate::inference::runtime_kernel::InferenceRuntimeKernel::resolve(&root)
+                        .map_err(|_| SpeechError::ConfigurationUnavailable)?;
+                runtime
+                    .binding_for_auxiliary_role(crate::inference::engine::AuxiliaryRole::Stt)
+                    .cloned()
+                    .ok_or(SpeechError::UnsupportedBackend)
+            })
+            .await
+            .map_err(|_| SpeechError::ConfigurationUnavailable)??;
+            return TranscriptionStream::open_runtime(
+                binding.transport,
+                binding.request_model,
+                format,
+            )
+            .await;
         }
         let key = mistral_key(&self.root).ok_or(SpeechError::MissingCredential)?;
         let endpoint = format!(
@@ -373,6 +511,7 @@ enum Input {
 /// Owned bounded session. Drop aborts its sole task and drops the provider socket.
 /// Backpressure never silently discards microphone audio or builds an unbounded queue.
 pub struct TranscriptionStream {
+    stream_id: String,
     input: mpsc::Sender<Input>,
     events: mpsc::Receiver<Result<TranscriptEvent, SpeechError>>,
     terminal: Option<oneshot::Receiver<Result<(), SpeechError>>>,
@@ -382,6 +521,84 @@ pub struct TranscriptionStream {
 }
 
 impl TranscriptionStream {
+    async fn open_runtime(
+        transport: crate::inference::local_transport::LocalTransport,
+        model: String,
+        format: PcmFormat,
+    ) -> Result<Self, SpeechError> {
+        use crate::inference::local_transport::LocalTransport;
+        use crate::inference::native_stt::{LocalSttRequest, LocalSttResponse};
+        if format.sample_rate_hz != 16_000 {
+            return Err(SpeechError::InvalidRequest);
+        }
+        let socket: RuntimeSocket = match transport {
+            LocalTransport::UnixSocket { path } => {
+                #[cfg(unix)]
+                {
+                    Box::new(
+                        tokio::time::timeout(IO_TIMEOUT, tokio::net::UnixStream::connect(path))
+                            .await
+                            .map_err(|_| SpeechError::TimedOut)?
+                            .map_err(|_| SpeechError::Transport)?,
+                    )
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = path;
+                    return Err(SpeechError::UnsupportedBackend);
+                }
+            }
+            LocalTransport::NamedPipe { name } => {
+                #[cfg(windows)]
+                {
+                    Box::new(
+                        tokio::net::windows::named_pipe::ClientOptions::new()
+                            .open(LocalTransport::named_pipe_endpoint(&name))
+                            .map_err(|_| SpeechError::Transport)?,
+                    )
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = name;
+                    return Err(SpeechError::UnsupportedBackend);
+                }
+            }
+            LocalTransport::TcpLoopback { .. } => return Err(SpeechError::UnsupportedBackend),
+        };
+        let mut socket = BufReader::new(socket);
+        let ready = runtime_roundtrip(
+            &mut socket,
+            &LocalSttRequest::TranscriptionOpen {
+                model: Some(model.clone()),
+                sample_rate_hz: format.sample_rate_hz,
+            },
+        )
+        .await?;
+        if !matches!(ready, LocalSttResponse::StreamReady { model: ref actual } if actual == &model)
+        {
+            return Err(SpeechError::InvalidResponse);
+        }
+        let (input, rx) = mpsc::channel(8);
+        let (tx, events) = mpsc::channel(32);
+        let (done_tx, terminal) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let result =
+                tokio::time::timeout(SESSION_TIMEOUT, pump_runtime(socket, model, rx, &tx))
+                    .await
+                    .unwrap_or(Err(SpeechError::TimedOut));
+            let _ = done_tx.send(result);
+        });
+        Ok(Self {
+            stream_id: Uuid::new_v4().to_string(),
+            input,
+            events,
+            terminal: Some(terminal),
+            task,
+            format,
+            finished: false,
+        })
+    }
+
     async fn open(mut socket: Socket, format: PcmFormat) -> Result<Self, SpeechError> {
         let created = tokio::time::timeout(IO_TIMEOUT, receive_json(&mut socket))
             .await
@@ -411,6 +628,7 @@ impl TranscriptionStream {
             let _ = done_tx.send(result);
         });
         Ok(Self {
+            stream_id: Uuid::new_v4().to_string(),
             input,
             events,
             terminal: Some(terminal),
@@ -418,6 +636,11 @@ impl TranscriptionStream {
             format,
             finished: false,
         })
+    }
+
+    /// Bind to the verified native meeting before accepting its first PCM.
+    pub fn stream_id(&self) -> &str {
+        &self.stream_id
     }
 
     pub fn append_pcm(&self, pcm: &[u8]) -> Result<(), SpeechError> {
@@ -464,6 +687,41 @@ impl TranscriptionStream {
         }
     }
 
+    /// Preferred producer API for meeting persistence. The event is consumed
+    /// once from this stream's private gateway channel, never from caller JSON.
+    pub async fn next_verified_event(
+        &mut self,
+    ) -> Option<Result<VerifiedTranscriptEvent, SpeechError>> {
+        self.next_event().await.map(|result| {
+            result.map(|event| match event {
+                TranscriptEvent::Partial {
+                    sequence,
+                    text,
+                    received_after_start_ms,
+                } => VerifiedTranscriptEvent::Partial {
+                    stream_id: self.stream_id.clone(),
+                    sequence,
+                    text,
+                    received_after_start_ms,
+                },
+                TranscriptEvent::Final {
+                    sequence,
+                    text,
+                    model,
+                    finish_to_final_ms,
+                    audio_duration_ms,
+                } => VerifiedTranscriptEvent::Final(VerifiedTranscriptFinal {
+                    stream_id: self.stream_id.clone(),
+                    sequence,
+                    text,
+                    model,
+                    finish_to_final_ms,
+                    audio_duration_ms,
+                }),
+            })
+        })
+    }
+
     pub async fn cancel(mut self) {
         let _ = self.input.try_send(Input::Cancel);
         if tokio::time::timeout(Duration::from_secs(1), &mut self.task)
@@ -479,6 +737,133 @@ impl Drop for TranscriptionStream {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+async fn runtime_roundtrip(
+    socket: &mut BufReader<RuntimeSocket>,
+    request: &crate::inference::native_stt::LocalSttRequest,
+) -> Result<crate::inference::native_stt::LocalSttResponse, SpeechError> {
+    use crate::inference::native_stt::LocalSttResponse;
+    tokio::time::timeout(IO_TIMEOUT, async {
+        let mut bytes = serde_json::to_vec(request).map_err(|_| SpeechError::InvalidRequest)?;
+        bytes.push(b'\n');
+        socket
+            .get_mut()
+            .write_all(&bytes)
+            .await
+            .map_err(|_| SpeechError::Transport)?;
+        socket
+            .get_mut()
+            .flush()
+            .await
+            .map_err(|_| SpeechError::Transport)?;
+        let mut response = Vec::new();
+        loop {
+            let buffer = socket
+                .fill_buf()
+                .await
+                .map_err(|_| SpeechError::Transport)?;
+            if buffer.is_empty() {
+                return Err(SpeechError::Closed);
+            }
+            let length = buffer
+                .iter()
+                .position(|b| *b == b'\n')
+                .map(|n| n + 1)
+                .unwrap_or(buffer.len());
+            let complete = buffer[length - 1] == b'\n';
+            if response.len() + length > MAX_TEXT_BYTES {
+                return Err(SpeechError::InvalidResponse);
+            }
+            response.extend_from_slice(&buffer[..length]);
+            socket.consume(length);
+            if complete {
+                break;
+            }
+        }
+        let response: LocalSttResponse =
+            serde_json::from_slice(&response).map_err(|_| SpeechError::InvalidResponse)?;
+        if let LocalSttResponse::Error { code, .. } = response {
+            return Err(match code.as_str() {
+                "invalid_request" => SpeechError::InvalidRequest,
+                "unsupported_backend" | "backend_unavailable" => SpeechError::UnsupportedBackend,
+                _ => SpeechError::Transport,
+            });
+        }
+        Ok(response)
+    })
+    .await
+    .map_err(|_| SpeechError::TimedOut)?
+}
+
+async fn pump_runtime(
+    mut socket: BufReader<RuntimeSocket>,
+    model: String,
+    mut input: mpsc::Receiver<Input>,
+    events: &mpsc::Sender<Result<TranscriptEvent, SpeechError>>,
+) -> Result<(), SpeechError> {
+    use crate::inference::native_stt::{LocalSttRequest, LocalSttResponse};
+    let started = Instant::now();
+    let mut sequence = 0u64;
+    let mut event_sequence = 0u64;
+    let mut previous_text = String::new();
+    while let Some(command) = input.recv().await {
+        let (request, finish_mark) = match command {
+            Input::Audio(pcm) => (
+                LocalSttRequest::TranscriptionAppend {
+                    pcm_base64: BASE64.encode(pcm),
+                },
+                None,
+            ),
+            Input::Flush => (LocalSttRequest::TranscriptionFlush, None),
+            Input::Finish(mark) => (LocalSttRequest::TranscriptionFinish, Some(mark)),
+            Input::Cancel => return Ok(()),
+        };
+        sequence += 1;
+        match runtime_roundtrip(&mut socket, &request).await? {
+            LocalSttResponse::StreamUpdate {
+                sequence: actual,
+                text,
+                ..
+            } if actual == sequence && finish_mark.is_none() => {
+                if let Some(text) = text.filter(|t| t != &previous_text) {
+                    let delta = text
+                        .strip_prefix(&previous_text)
+                        .ok_or(SpeechError::InvalidResponse)?
+                        .to_owned();
+                    previous_text = text.clone();
+                    event_sequence += 1;
+                    events
+                        .try_send(Ok(TranscriptEvent::Partial {
+                            sequence: event_sequence,
+                            text: delta,
+                            received_after_start_ms: millis(started.elapsed()),
+                        }))
+                        .map_err(|_| SpeechError::Backpressure)?;
+                }
+            }
+            LocalSttResponse::TranscriptionFinal {
+                sequence: actual,
+                text,
+                model: actual_model,
+                audio_duration_ms,
+            } if actual == sequence && actual_model == model && finish_mark.is_some() => {
+                event_sequence += 1;
+                events
+                    .try_send(Ok(TranscriptEvent::Final {
+                        sequence: event_sequence,
+                        text,
+                        model,
+                        finish_to_final_ms: finish_mark.map(|mark| millis(mark.elapsed())),
+                        audio_duration_ms,
+                    }))
+                    .map_err(|_| SpeechError::Backpressure)?;
+                return Ok(());
+            }
+            _ => return Err(SpeechError::InvalidResponse),
+        }
+    }
+    Ok(())
 }
 
 async fn send_json(socket: &mut Socket, value: Value) -> Result<(), SpeechError> {
@@ -644,3 +1029,7 @@ pub async fn benchmark_pcm(root: &Path, pcm_path: &Path) -> anyhow::Result<Value
 #[cfg(test)]
 #[path = "speech_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "speech_runtime_tests.rs"]
+mod runtime_tests;

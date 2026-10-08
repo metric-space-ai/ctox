@@ -3,6 +3,7 @@ use super::*;
 use crate::{
     native_data_device::NativeDeviceKeyScope, native_transfer_routing::NativeTransferRouting,
 };
+use futures_util::StreamExt;
 use serde::Deserialize;
 use std::io::Read;
 
@@ -131,17 +132,27 @@ async fn enroll(
     // replaces them before any transfer payload is allowed.
     options.ice_servers = Vec::new();
     options.local_session_provider = Some(provider);
+    // Subscribe before joining: preserve even an immediate handshake rejection.
+    let (errors_tx, errors_rx) = tokio::sync::oneshot::channel();
     session_slot.starting = Some(tokio::spawn(async move {
-        Ok(Arc::new(
-            NativeSyncSession::start_data_client(options).await?,
-        ))
+        let session = NativeSyncSession::start_data_client_with_pool_setup(options, |pool| {
+            let _ = errors_tx.send(pool.error_subject.subscribe());
+            Ok(())
+        })
+        .await?;
+        Ok(Arc::new(session))
     }));
     session_slot.finish_start().await?;
     let session = session_slot
         .session
         .as_ref()
         .context("native pairing session missing")?;
-    let connection = tokio::time::timeout(Duration::from_secs(20), async {
+    let mut errors = errors_rx
+        .await
+        .context("native pairing diagnostics unavailable")?;
+    let mut errors_open = true;
+    let mut last_error = "none";
+    let readiness = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             host.require_new_target(&scope.target_id).await?;
             let pool = session.pool();
@@ -156,13 +167,48 @@ async fn enroll(
                     return Ok(connection);
                 }
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::select! {
+                error = errors.next(), if errors_open => match error {
+                    Some(error) => last_error = pairing_error_class(&error),
+                    None => errors_open = false,
+                },
+                _ = tokio::time::sleep(Duration::from_millis(20)) => {},
+            }
         }
     })
-    .await
-    .context("native pairing readiness timed out")??;
+    .await;
+    let connection = readiness.with_context(|| {
+        let transport = session.pool().connection_handler.frame_transport_status();
+        format!(
+            "native pairing readiness timed out (signaling_connected={}, signaling_joined={}, peers={}, open_data_channels={}, last_peer_error={})",
+            transport.signaling_socket_connected,
+            transport.signaling_join_accepted,
+            transport.peer_count,
+            transport.open_data_channels,
+            last_error,
+        )
+    })??;
     host.provision_from_session(scope, session, &connection)
         .await
+}
+
+/// Never print peer-controlled messages, parameters, or signaling URLs.
+/// Even forged codes resolve to fixed native literals.
+fn pairing_error_class(error: &rxdb::rx_error::RxError) -> &'static str {
+    match error
+        .parameters()
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("local_session_credentials_unavailable") => "local_session_credentials_unavailable",
+        Some("peer_authentication_failed") => "peer_authentication_failed",
+        _ => match error.code() {
+            "RC_WEBRTC_PROTOCOL" => "protocol_error",
+            "RC_WEBRTC_SIGNAL" => "signaling_error",
+            "RC_WEBRTC_PEER" => "peer_error",
+            _ => "other_peer_error",
+        },
+    }
 }
 
 /// An existing target (including its disconnect tombstone) cannot be replaced.
@@ -217,6 +263,29 @@ pub(crate) fn pair(
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn pairing_diagnostics_never_echo_private_error_payloads() {
+        use rxdb::rx_error::new_rx_error;
+        let secret = "private-invite-and-routing-credential";
+        for code in ["RC_WEBRTC_PROTOCOL", "RC_WEBRTC_PEER", secret] {
+            for detail in [
+                "local_session_credentials_unavailable",
+                "peer_authentication_failed",
+                secret,
+            ] {
+                let error = new_rx_error(
+                    code,
+                    Some(serde_json::json!({
+                        "code": detail, "message": secret, "url": secret, "capabilityToken": secret,
+                    })),
+                );
+                let class = pairing_error_class(&error);
+                assert!(!class.contains(secret));
+                assert!(!class.is_empty());
+            }
+        }
+    }
 
     fn invite(now: i64) -> serde_json::Value {
         serde_json::json!({"type":"ctox-business-os-invite","version":1,
