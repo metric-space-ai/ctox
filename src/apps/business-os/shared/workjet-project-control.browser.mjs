@@ -246,6 +246,20 @@ try {
     assert.equal(forgedOwner.commands.length, 0);
     results.push('browser Owner text rejects forged speech provenance before dispatch');
 
+    const localAudioRequest = ownerControl.request('project.jour_fixe.narration.local_publish');
+    const localAudio = await ownerControl.fixture().invoke(localAudioRequest);
+    assert.equal(localAudio.localNarration.audio.file_id, 'persisted-native-audio');
+    assert.equal(localAudio.localNarration.provider_verified, false);
+    assert.equal(localAudio.mutation.state, 'ready');
+    results.push('browser preserves local narration file custody without provider verification');
+    for (const mutate of [r => { r.result.local_narration.audio.sha256 = 'c'.repeat(64); },
+      r => { r.result.local_narration.provider_verified = true; },
+      (r, state) => { state.syncConfig.instance_id = 'biz_other'; }]) {
+      let denied = false;
+      try { await ownerControl.fixture(mutate).invoke(localAudioRequest); } catch { denied = true; }
+      assert.ok(denied);
+    }
+    results.push('browser rejects corrupted local narration and replaced native instance');
 
     const localRequest = ownerControl.request('project.jour_fixe.transcript.local_candidate', {
       requestId: 'helper:final:1', deckRevision: 1, text: 'Lokaler Kandidat.',
@@ -285,7 +299,7 @@ try {
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
     configurationSource: tests.slice(configurationStart, configurationEnd),
     executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 25);
+  assert.equal(results.length, 27);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };
