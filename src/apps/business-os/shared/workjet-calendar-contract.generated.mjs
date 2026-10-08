@@ -57,9 +57,44 @@ export const CALENDAR_TYPES = deepFreeze({
         "type": "u64"
       }
     }
+  },
+  "CalendarEventUpdate": {
+    "fields": {
+      "expected_revision": {
+        "type": "u64"
+      },
+      "event": {
+        "type": "CalendarEvent"
+      }
+    }
+  },
+  "CalendarEventDelete": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "expected_revision": {
+        "type": "u64"
+      }
+    }
   }
 });
-export const CALENDAR_COMMANDS = deepFreeze({});
+export const CALENDAR_COMMANDS = deepFreeze({
+  "ctox.workjet.calendar.event.create": {
+    "request_type": "CalendarEvent",
+    "authorization": "owner"
+  },
+  "ctox.workjet.calendar.event.update": {
+    "request_type": "CalendarEventUpdate",
+    "authorization": "owner"
+  },
+  "ctox.workjet.calendar.event.delete": {
+    "request_type": "CalendarEventDelete",
+    "authorization": "owner"
+  }
+});
 
 function deepFreeze(value) {
   if (value && typeof value === 'object') { Object.values(value).forEach(deepFreeze); Object.freeze(value); }

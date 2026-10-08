@@ -161,6 +161,52 @@ impl WireValidate for CalendarEvent {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CalendarEventUpdate {
+    pub(crate) expected_revision: u64,
+    pub(crate) event: CalendarEvent,
+}
+impl WireValidate for CalendarEventUpdate {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.expected_revision;
+            value.validate()?;
+        }
+        {
+            let value = &self.event;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CalendarEventDelete {
+    pub(crate) id: String,
+    pub(crate) expected_revision: u64,
+}
+impl WireValidate for CalendarEventDelete {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarEventDelete.id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("CalendarEventDelete.id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.expected_revision;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -168,6 +214,12 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "CalendarEvent" => serde_json::from_value::<CalendarEvent>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "CalendarEventUpdate" => serde_json::from_value::<CalendarEventUpdate>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "CalendarEventDelete" => serde_json::from_value::<CalendarEventDelete>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown contract type".into()),
