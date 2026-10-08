@@ -60,6 +60,10 @@ function buildContract({ fixture: fixtureName, rust: rustRel, js: jsRel, prefix,
       }
       rust += '}\n';
     }
+    for (const order of type.ordered_fields ?? []) {
+      if (!type.fields[order.before] || !type.fields[order.after]) throw new Error(name + ': unknown ordered field');
+      rust += `if self.${order.after} <= self.${order.before} { return Err(${JSON.stringify(name + '.' + order.after + ' must follow ' + order.before)}.into()); }\n`;
+    }
     rust += 'Ok(()) } }\n';
   }
   rust += '\n#[cfg(test)]\npub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {\nmatch kind {\n';
@@ -99,6 +103,9 @@ export function __VALIDATOR__(typeName, value) {
         if ((['minimum','min_chars','min_items'].includes(constraint) && metric < bound)
             || (['maximum','max_chars','max_items'].includes(constraint) && metric > bound)) throw new Error(at + ': ' + constraint);
       }
+    }
+    for (const order of shape.ordered_fields ?? []) {
+      if (value[order.after] <= value[order.before]) throw new Error(field + '.' + order.after + ': must follow ' + order.before);
     }
   }
   try { validate(typeName, value, typeName); return {ok:true}; }

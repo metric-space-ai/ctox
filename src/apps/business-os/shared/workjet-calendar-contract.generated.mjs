@@ -6,7 +6,8 @@ export const CALENDAR_TYPES = deepFreeze({
     "enum": [
       "local",
       "project_meeting",
-      "synced"
+      "synced",
+      "project_session"
     ]
   },
   "CalendarEvent": {
@@ -55,8 +56,38 @@ export const CALENDAR_TYPES = deepFreeze({
       },
       "revision": {
         "type": "u64"
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "session_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "account_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "external_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
       }
-    }
+    },
+    "ordered_fields": [
+      {
+        "before": "start_ms",
+        "after": "end_ms"
+      }
+    ]
   },
   "CalendarEventUpdate": {
     "fields": {
@@ -128,6 +159,9 @@ export function validateCalendarValue(typeName, value) {
         if ((['minimum','min_chars','min_items'].includes(constraint) && metric < bound)
             || (['maximum','max_chars','max_items'].includes(constraint) && metric > bound)) throw new Error(at + ': ' + constraint);
       }
+    }
+    for (const order of shape.ordered_fields ?? []) {
+      if (value[order.after] <= value[order.before]) throw new Error(field + '.' + order.after + ': must follow ' + order.before);
     }
   }
   try { validate(typeName, value, typeName); return {ok:true}; }

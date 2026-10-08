@@ -7,7 +7,8 @@
       "enum": [
         "local",
         "project_meeting",
-        "synced"
+        "synced",
+        "project_session"
       ]
     },
     "CalendarEvent": {
@@ -56,8 +57,38 @@
         },
         "revision": {
           "type": "u64"
+        },
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "session_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "account_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "external_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
         }
-      }
+      },
+      "ordered_fields": [
+        {
+          "before": "start_ms",
+          "after": "end_ms"
+        }
+      ]
     },
     "CalendarEventUpdate": {
       "fields": {
@@ -150,6 +181,40 @@
         "id": "evt_01",
         "expected_revision": 2
       }
+    },
+    {
+      "type": "CalendarEvent",
+      "value": {
+        "id": "session_01",
+        "calendar_id": "project-sessions",
+        "kind": "project_session",
+        "title": "Design review",
+        "start_ms": 1791373200000,
+        "end_ms": 1791376800000,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "location": "Room 2",
+        "revision": 1,
+        "project_id": "project_01",
+        "session_id": "session_01"
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "value": {
+        "id": "account_event_01",
+        "calendar_id": "calendar_01",
+        "kind": "synced",
+        "title": "Design review",
+        "start_ms": 1791373200000,
+        "end_ms": 1791376800000,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "location": "Room 2",
+        "revision": 1,
+        "account_id": "account_01",
+        "external_id": "provider_event_01"
+      }
     }
   ],
   "invalid_cases": [
@@ -226,6 +291,38 @@
       "reason": "update without an event",
       "value": {
         "expected_revision": 1
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "reason": "zero-duration event",
+      "value": {
+        "id": "evt_01",
+        "calendar_id": "local-default",
+        "kind": "local",
+        "title": "Design review",
+        "start_ms": 1791373200000,
+        "end_ms": 1791373200000,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "location": "Room 2",
+        "revision": 1
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "reason": "end before start",
+      "value": {
+        "id": "evt_01",
+        "calendar_id": "local-default",
+        "kind": "local",
+        "title": "Design review",
+        "start_ms": 1791373200000,
+        "end_ms": 1791373199999,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "location": "Room 2",
+        "revision": 1
       }
     }
   ]

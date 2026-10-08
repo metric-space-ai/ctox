@@ -59,6 +59,8 @@ pub(crate) enum CalendarKind {
     ProjectMeeting,
     #[serde(rename = "synced")]
     Synced,
+    #[serde(rename = "project_session")]
+    ProjectSession,
 }
 impl WireValidate for CalendarKind {
     fn validate(&self) -> Result<(), String> {
@@ -82,6 +84,14 @@ pub(crate) struct CalendarEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) notes: Option<String>,
     pub(crate) revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) external_id: Option<String>,
 }
 impl WireValidate for CalendarEvent {
     fn validate(&self) -> Result<(), String> {
@@ -156,6 +166,45 @@ impl WireValidate for CalendarEvent {
         {
             let value = &self.revision;
             value.validate()?;
+        }
+        if let Some(value) = &self.project_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarEvent.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("CalendarEvent.project_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.session_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarEvent.session_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("CalendarEvent.session_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.account_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarEvent.account_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("CalendarEvent.account_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.external_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarEvent.external_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("CalendarEvent.external_id violates max_chars".into());
+            }
+        }
+        if self.end_ms <= self.start_ms {
+            return Err("CalendarEvent.end_ms must follow start_ms".into());
         }
         Ok(())
     }
