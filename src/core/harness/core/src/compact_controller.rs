@@ -34,6 +34,10 @@ const DEFAULT_RESERVOIR_TARGET_CHARS: usize =
 const DEFAULT_ITERATIONS: usize = 2;
 const DEFAULT_BLOCK_CHARS: usize = 1800;
 const REVISED_TEXT_OVERFLOW_TOLERANCE: usize = 120;
+// MiniMax answered compaction stages with prose or tool-call markup (thesen
+// 08.10.2026: 30 unparsed stages in 10 hours, each a 240k-370k token call): the
+// stages run with the agent's system prompt, so the reply rule comes last.
+const STRUCTURED_REPLY_RULE: &str = "Reply with exactly one JSON object that matches the requested schema. No prose before or after it, no markdown, and no tool calls: this stage has no tools.";
 const ROUTE_VALUES: &[&str] = &[
     "story",
     "anchor",
@@ -859,6 +863,19 @@ fn normalize_text(value: &str) -> String {
 }
 
 fn structured_json_payload(value: &str) -> &str {
+    let fenced = fenced_json_payload(value);
+    if fenced.starts_with('{') {
+        return fenced;
+    }
+    // Prose before or after the object ("I'm consolidating ... {...}") made the
+    // whole stage fall back although the object itself was complete.
+    match (fenced.find('{'), fenced.rfind('}')) {
+        (Some(start), Some(end)) if start < end => &fenced[start..=end],
+        _ => fenced,
+    }
+}
+
+fn fenced_json_payload(value: &str) -> &str {
     let trimmed = value.trim();
     let Some(opening_end) = trimmed.find('\n') else {
         return trimmed;
@@ -1242,6 +1259,8 @@ fn build_screen_prompt(
             task.to_string()
         },
         "</NEXT_STEP>".to_string(),
+        String::new(),
+        STRUCTURED_REPLY_RULE.to_string(),
     ]
     .join("\n"))
 }
@@ -1282,6 +1301,8 @@ fn build_progress_prompt(
             task.to_string()
         },
         "</NEXT_STEP>".to_string(),
+        String::new(),
+        STRUCTURED_REPLY_RULE.to_string(),
     ]
     .join("\n"))
 }
@@ -1325,6 +1346,8 @@ fn build_iteration_prompt(
         "<ACTIVE_BLOCKS>".to_string(),
         serialized,
         "</ACTIVE_BLOCKS>".to_string(),
+        String::new(),
+        STRUCTURED_REPLY_RULE.to_string(),
     ]
     .join("\n"))
 }
@@ -1385,6 +1408,8 @@ fn build_output_prompt(
         "<FOCUS_BLOCKS>".to_string(),
         focus_serialized,
         "</FOCUS_BLOCKS>".to_string(),
+        String::new(),
+        STRUCTURED_REPLY_RULE.to_string(),
     ]
     .join("\n"))
 }
@@ -1443,6 +1468,8 @@ fn build_reprioritization_prompt(
         "<RECENT_USER_MESSAGES>".to_string(),
         recent_messages,
         "</RECENT_USER_MESSAGES>".to_string(),
+        String::new(),
+        STRUCTURED_REPLY_RULE.to_string(),
     ]
     .join("\n"))
 }
@@ -1958,6 +1985,30 @@ mod tests {
 
         assert_eq!(structured_json_payload(fenced), plain);
         assert_eq!(structured_json_payload(plain), plain);
+    }
+
+    #[test]
+    fn structured_json_payload_extracts_the_object_from_surrounding_prose() {
+        let prose = "I'm consolidating the narrative first.{\"summary\":\"kept\"} Done.";
+        assert_eq!(structured_json_payload(prose), "{\"summary\":\"kept\"}");
+        let markup = "]<]minimax[>[<tool_call>";
+        assert_eq!(structured_json_payload(markup), markup);
+    }
+
+    #[test]
+    fn every_compaction_stage_ends_with_the_structured_reply_rule() {
+        let history = (0..6)
+            .map(|index| format!("## Step {index}\n{}", "observed detail. ".repeat(40)))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let blocks = segment_context(&history, DEFAULT_BLOCK_CHARS);
+        for prompt in [
+            build_progress_prompt("next", "model-x", &blocks).unwrap(),
+            build_screen_prompt("next", 1000, 500, &blocks).unwrap(),
+            build_iteration_prompt("next", 1000, 1, 2000, &blocks).unwrap(),
+        ] {
+            assert!(prompt.trim_end().ends_with(STRUCTURED_REPLY_RULE));
+        }
     }
 
     #[test]

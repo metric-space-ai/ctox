@@ -3,13 +3,18 @@
 
 use crate::error::{Error, Result};
 use crate::options::OptionSet;
+#[cfg(unix)]
+use rustix::net::sockopt::{ip_tos, ipv6_tclass, set_ip_tos, set_ipv6_tclass};
 use rustix::net::sockopt::{
-    ip_tos, ipv6_tclass, set_ip_tos, set_ipv6_tclass, set_socket_recv_buffer_size, set_tcp_nodelay,
-    socket_recv_buffer_size, tcp_nodelay,
+    set_socket_recv_buffer_size, set_tcp_nodelay, socket_recv_buffer_size, tcp_nodelay,
 };
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "fuchsia"))]
 use rustix::net::sockopt::{set_tcp_quickack, tcp_quickack};
+#[cfg(unix)]
 use std::os::fd::AsFd;
+// rustix takes `AsSocket` handles on Windows (its `AsFd` is a blanket over it).
+#[cfg(windows)]
+use std::os::windows::io::AsSocket as AsFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -113,10 +118,16 @@ fn send_flags(fd: impl AsFd) -> Result<rustix::net::SendFlags> {
             .map_err(|e| Error::Other(format!("SO_NOSIGPIPE: {e}")))?;
         Ok(rustix::net::SendFlags::empty())
     }
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(all(unix, not(target_vendor = "apple")))]
     {
         let _ = fd;
         Ok(rustix::net::SendFlags::NOSIGNAL)
+    }
+    // Windows has no SIGPIPE; a closed peer already surfaces as an error.
+    #[cfg(windows)]
+    {
+        let _ = fd;
+        Ok(rustix::net::SendFlags::empty())
     }
 }
 
@@ -135,6 +146,7 @@ pub fn apply_recv_buffer(fd: impl AsFd, opts: &OptionSet) -> Result<usize> {
 }
 
 /// C++ `--dscp` (BitTorrent IP TOS: DSCP << 2). Default 0 = leave TOS alone.
+#[cfg(unix)]
 pub fn apply_dscp(fd: impl AsFd, opts: &OptionSet) -> Result<u8> {
     let dscp = opts.u64("dscp", 0).min(63) as u8;
     if dscp == 0 {
@@ -155,6 +167,14 @@ pub fn apply_dscp(fd: impl AsFd, opts: &OptionSet) -> Result<u8> {
             Ok(got)
         }
     }
+}
+
+/// Windows ignores IP_TOS without QoS policy and rustix has no IP_TOS there,
+/// so `--dscp` leaves TOS alone on Windows.
+#[cfg(windows)]
+pub fn apply_dscp(fd: impl AsFd, opts: &OptionSet) -> Result<u8> {
+    let _ = (fd, opts);
+    Ok(0)
 }
 
 /// C++ SocketCore::writeVector / SocketBuffer::send: writev of BufferEntry iovecs
@@ -184,6 +204,7 @@ pub async fn writev_all(stream: &tokio::net::TcpStream, bufs: &[&[u8]]) -> Resul
             .ready(Interest::WRITABLE)
             .await
             .map_err(|e| Error::Other(e.to_string()))?;
+        #[cfg(unix)]
         let r = stream.try_io(Interest::WRITABLE, || {
             match rustix::io::retry_on_intr(|| rustix::io::writev(stream, &iov)) {
                 Ok(n) => Ok(n),
@@ -193,6 +214,9 @@ pub async fn writev_all(stream: &tokio::net::TcpStream, bufs: &[&[u8]]) -> Resul
                 Err(e) => Err(std::io::Error::from(e)),
             }
         });
+        // No writev on Windows: tokio's WSASend-backed vectored write.
+        #[cfg(windows)]
+        let r = stream.try_write_vectored(&iov);
         match r {
             Ok(0) => return Err(Error::Other("writev eof".into())),
             Ok(n) => {
@@ -413,6 +437,7 @@ mod tests {
         assert!(got >= 65536, "SO_RCVBUF got {got} want >= 65536");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn set_dscp_tos_roundtrip() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
