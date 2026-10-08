@@ -192,7 +192,14 @@ pub(in crate::business_os) fn read(
     }
     let query: wire::ReadMeetingRequest = serde_json::from_value(payload)?;
     query.validate().map_err(anyhow::Error::msg)?;
-    let conn = open_store(root)?;
+    let mut reader = rusqlite::Connection::open_with_flags(
+        store::business_os_store_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    reader.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    // Ownership, metadata and Supervisor provenance share one read snapshot;
+    // read commands neither initialize a store nor acquire its writer lock.
+    let conn = reader.transaction()?;
     let owner = workjet_identity::owner_from_connection(&conn, actor)?;
     let project = owned_project(&conn, &query.project_id, &owner, true)?;
     ensure!(
@@ -230,14 +237,15 @@ pub(in crate::business_os) fn read(
         );
         return Ok(json!({"ok":true,"meeting":null}));
     };
+    ensure!(raw.len() <= 1024 * 1024, "meeting metadata exceeds native read budget");
     let meeting: wire::Meeting = serde_json::from_str(&raw)?;
     meeting.validate().map_err(anyhow::Error::msg)?;
     ensure!(
         meeting.project_id == query.project_id && meeting.owner_user_id == owner,
         "stored meeting ownership conflicts"
     );
-    let binding = supervisor_turns::binding(
-        root,
+    let binding = supervisor_turns::binding_from_connection(
+        &conn,
         &owner,
         &query.project_id,
         &meeting.supervisor.workjet_thread_id,
