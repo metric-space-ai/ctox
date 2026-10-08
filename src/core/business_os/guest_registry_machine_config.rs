@@ -60,6 +60,23 @@ impl NativeGuestMachineConfiguration {
         Ok(())
     }
     #[cfg(target_os = "linux")]
+    pub(super) fn image_program(&self) -> Result<PathBuf> {
+        self.validate()?;
+        let program = self.program.with_file_name("qemu-img");
+        let metadata = std::fs::symlink_metadata(&program)?;
+        ensure!(
+            std::fs::canonicalize(&program)? == program
+                && metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && (metadata.uid() == 0 || metadata.uid() == unsafe { libc::geteuid() })
+                && metadata.mode() & 0o022 == 0
+                && metadata.mode() & 0o111 != 0,
+            "native qemu-img sibling is not canonical, executable and operator-owned"
+        );
+        Ok(program)
+    }
+
+    #[cfg(target_os = "linux")]
     pub(super) fn prepared(
         &self,
         parent: PathBuf,

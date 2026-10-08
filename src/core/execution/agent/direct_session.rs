@@ -2398,6 +2398,8 @@ impl PersistentSession {
         } else {
             None
         };
+        #[cfg(target_os = "linux")]
+        let mut source_boot_ready = None;
         #[cfg(unix)]
         if let Some(admission) = native_provider_admission {
             let (registry, guest_id) = native_guest_registry.ok_or_else(|| {
@@ -2468,6 +2470,23 @@ impl PersistentSession {
             }
             // Observation handle only. Actual guest operations independently
             // revalidate provider/account/policy/controller and quorum ownership.
+            #[cfg(target_os = "linux")]
+            {
+                source_boot_ready = execution.start_configured_source().await.map_err(|error| {
+                    SessionPoisoned(format!(
+                        "native source guest boot requires reconciliation: {error}"
+                    ))
+                })?;
+            }
+            // Machine preparation/boot awaits cannot preserve old command authority.
+            let after_boot =
+                crate::business_os::mcp_channel::verify_internal_command_session_token(
+                    root, token,
+                )?;
+            anyhow::ensure!(
+                native_command_context == Some(&after_boot),
+                "native guest command changed during machine boot"
+            );
             execution.verify_turn_workspace(cwd)?;
             *native_guest_execution = Some(execution);
         }
@@ -2541,6 +2560,17 @@ impl PersistentSession {
             }
         }
 
+        #[cfg(target_os = "linux")]
+        if let Some(ready) = source_boot_ready {
+            if let Err(error) = ready.commit_started(&thread_id, &turn_id).await {
+                let terminal =
+                    interrupt_cancelled_queue_turn(client, seq, &thread_id, &turn_id).await;
+                return Err(SessionPoisoned(format!(
+                    "source guest actual turn binding failed: {error}; terminal_observed={terminal}"
+                ))
+                .into());
+            }
+        }
         // Event loop
         let mut reply_capture = DirectSessionReplyCapture::default();
         let mut completion_message: Option<String> = None;

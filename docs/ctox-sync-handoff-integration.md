@@ -78,6 +78,35 @@ prevents a successful production import/restore. Mac transport builds, including
 9228ec92437c with the nonce correction, cannot supply the current Linux-only
 machine witness. Real machine acceptance starts with an enrolled Linux source.
 
+## Fresh native source guest boot
+
+The first native-admitted queue turn now calls
+`NativeGuestExecution::start_configured_source` after actual quorum/provider
+admission and before its first Core `TurnStart`. With the optional typed
+`machine` configuration above, it requires a virgin source controller, reserves
+one actual `guest-process` effect through quorum `BeginEffect`, creates a private
+qcow2 disk with the canonical operator-owned `qemu-img` beside the configured
+QEMU program, and retains the real paused QEMU process before booting it. An
+existing runtime directory, imported target or uncertain attempt is rejected.
+
+Disk preparation and guest-service boot run outside worker, account, policy,
+SQLite and controller locks. After every machine await, fresh quorum ownership
+must still match the full accepted job; native provider/account/policy,
+controller and command authority are rechecked before publication and the real
+Core turn. The machine retains its own process/signal runtime through later
+desktop operations, source export and reaping. An opaque cancellation owner
+survives until the actual producer has bound the returned Core thread/turn;
+a failed or cancelled first turn retires and stops only its retained helper
+and child. Human stop uses the same owner and rejects foreign principals.
+A stop never completes the pending process effect or grants takeover.
+
+Omitting `machine` preserves ordinary native Core execution but supplies no VM
+readiness or capture witness. Configured startup failures poison the source
+attempt rather than falling back to another child or isolated Core. These
+connections do not certify Core/tool effects, original Core target activation,
+atomic remote revocation through QMP, or installed two-host continuation.
+The source unknown-external-effect marker remains authoritative.
+
 ## Core import primitive
 
 
