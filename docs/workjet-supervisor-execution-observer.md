@@ -21,9 +21,14 @@ Only an opted-in result adds `execution_contract` (constant
 - `attempt`: absent before a native worker has recorded an attempt. Its
   `attempt_id` comes from the task's persisted harness flow ledger, never from a
   queue ordinal or desktop chat ID. `attempt_index` is the separately recorded
-  ordinal. `run_id` stays absent until that attempt has a canonical durable
-  `worker_attempt_finalizations` row; its key is the source of `ctox_runs.id`.
-  This does not invent a separate harness run UUID.
+  ordinal. New native executions allocate an independent random `worker-run:`
+  identity in `worker_run_identities` before invoking the executor. The row binds
+  the exact attempt, work key, conversation, source and native task window.
+  `run_id` is exposed only for a matching task; it survives process restart and
+  remains the terminal `ctox_runs.id`. Admission and a historical start do not
+  prove current worker liveness or completion. Finalization recovery
+  does not allocate a second run. Historical attempts without this ledger retain
+  their finalization key, and an unregistered active attempt has no `run_id`.
 - `events`: at most 50 eligible safe events. IDs and insertion sequences are
   native ledger facts; raw thinking text, tool arguments, tool output and raw
   metadata are not returned. Titles are bounded to 256 characters.

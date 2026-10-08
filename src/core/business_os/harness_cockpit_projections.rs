@@ -1341,10 +1341,11 @@ fn project_runs(
                     retrospective = text;
                 }
             }
+            let run_id = crate::lcm::projected_worker_run_id(conn, &id)?;
             writer.upsert_source_projection(
-                "ctox_runs", &id, finished_ms,
+                "ctox_runs", &run_id, finished_ms,
                 json!({
-                    "id":id,"task_id":task,"command_id":command_id,"work_id":work,"crew_member_id":crew_member,
+                    "id":run_id,"task_id":task,"command_id":command_id,"work_id":work,"crew_member_id":crew_member,
                     "status":status,"agent_outcome":outcome,"started_at_ms":started_ms,"finished_at_ms":finished_ms,
                     "metrics":metrics,"review":review,"error_text":error,"resumable":resumable,
                     "retrospective":retrospective,"updated_at_ms":finished_ms
@@ -1461,6 +1462,7 @@ fn project_crew(
                 continue;
             };
             let scope: Value = serde_json::from_str(&scope)?;
+            let run = crate::lcm::projected_worker_run_id(conn, &run)?;
             writer.upsert_source_projection(
                 "ctox_crew_learnings",
                 &id,
