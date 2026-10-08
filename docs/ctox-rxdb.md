@@ -402,6 +402,12 @@ the required proof. Both initial pairing and reconnect retain their original
 account and signer checks for the probe as well as the challenged response;
 a supplied invalid nonce, missing signer, or changed authority still fails.
 
+Native transfer enrollment preserves the source-verified Business OS capability
+epoch exactly, including its initial value `0`. This revocation epoch is separate
+from the positive local account generation. Reopening does not normalize it;
+changed principals still require explicit account enrollment, and source policy
+and device checks continue to reject revoked or stale capabilities.
+
 ### Auth-assist command recovery
 
 `web_stack.auth_assist.request` represents an outstanding human login request.
