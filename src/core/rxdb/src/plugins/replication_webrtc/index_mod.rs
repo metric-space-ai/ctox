@@ -652,7 +652,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         handler: GuardedAuxiliaryRequestHandler<H::Peer>,
     ) -> Result<(), RxError> {
         let method = method.into();
-        if !method.starts_with("ctox.sync.")
+        if !(method.starts_with("ctox.sync.") || method == "ctox.native.speech.v1")
             || method.ends_with(".identity.v1")
             || !self.collections.is_empty()
             || self.connection_handler.is_data_client()
@@ -4738,8 +4738,17 @@ mod tests {
             .register_guarded_native_control_handler("ctox.business_data.fixture", guarded.clone())
             .is_err());
         assert!(control
-            .register_guarded_native_control_handler("ctox.sync.fixture.identity.v1", guarded)
+            .register_guarded_native_control_handler(
+                "ctox.sync.fixture.identity.v1",
+                guarded.clone()
+            )
             .is_err());
+        assert!(control
+            .register_guarded_native_control_handler("ctox.native.foreign.v1", guarded.clone())
+            .is_err());
+        assert!(control
+            .register_guarded_native_control_handler("ctox.native.speech.v1", guarded)
+            .is_ok());
         control.cancel().await;
     }
 
