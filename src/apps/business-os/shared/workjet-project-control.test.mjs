@@ -368,6 +368,7 @@ test('meeting read rejects foreign, malformed and uncorrelated confirmations', a
 });
 
 function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
+  const fixtureCrypto = typeof webcrypto === 'undefined' ? globalThis.crypto : webcrypto;
   const commands = [];
   const state = {
     session: { id: 'owner-alias' }, db: { collection: () => ({}) },
@@ -394,7 +395,7 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
         } },
       };
       if (local) {
-        const hash = [...new Uint8Array(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(payload.text)))]
+        const hash = [...new Uint8Array(await fixtureCrypto.subtle.digest('SHA-256', new TextEncoder().encode(payload.text)))]
           .map(byte => byte.toString(16).padStart(2, '0')).join('');
         receipt.result.owner_user_id = 'owner-1';
         receipt.result.local_candidate = {
@@ -409,7 +410,7 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
       return receipt;
     } },
   };
-  const context = { state, crypto: webcrypto, TextEncoder, actorContext: session => ({ id: session.id }), JOUR_FIXE_SCHEMA, validateJourFixeValue };
+  const context = { state, crypto: fixtureCrypto, TextEncoder, actorContext: session => ({ id: session.id }), JOUR_FIXE_SCHEMA, validateJourFixeValue };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
 }

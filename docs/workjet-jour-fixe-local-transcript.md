@@ -49,6 +49,16 @@ is a separate execution/persistence boundary; it must not manufacture gateway
 `AudioRef` or relax readiness. Native gateway STT remains on its private
 `VerifiedTranscriptFinal` path and uses modality `speech`.
 
+The Shell bridge exposes `project.jour_fixe.transcript.local_candidate` with
+`commandId`, `projectId`, `operationId`, `meetingId`, `expectedRevision`,
+`requestId`, `deckRevision`, `text`. It derives `instance_id` from its paired
+native sync configuration. The caller cannot select an instance or claim a
+provider. It checks unchanged session/database/instance, completed command
+identity, exact intent and a typed receipt including UTF-8 SHA256 before returning
+`localCandidate`. This supports verified canonical Owner aliases without
+inferring them in the browser. The fixture exercises real browser Web Crypto
+on an intercepted static secure origin; all other network requests are aborted.
+
 The single fixture in `src/core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json`
-generates both native and browser contracts. Desktop bridge/room wiring and
-installed signed-helper acceptance belong to Workjet Main/Models.
+generates both native and browser contracts. Desktop room wiring and installed
+signed-helper acceptance belong to Workjet Main/Models.
