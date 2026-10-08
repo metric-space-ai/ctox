@@ -256,8 +256,63 @@ pub fn record_harness_flow_event(
     root: &Path,
     request: RecordHarnessFlowEventRequest<'_>,
 ) -> Result<HarnessFlowEvent> {
-    let conn = open_event_connection(root)?;
-    ensure_event_schema(&conn)?;
+    with_event_writer(root, |conn| insert_harness_flow_event(root, conn, request))
+}
+
+/// Flow events arrive several times per second per worker (tool calls, token
+/// usage). Opening Core for each one parsed its whole schema and closing it
+/// freed it again: two of the busiest SQLite stacks on the customer on-prem
+/// host (08.10.2026). A worker thread keeps its writer while the database file
+/// stays the same; any failure drops it.
+type EventDbIdentity = Option<(u64, u64)>;
+
+thread_local! {
+    static EVENT_WRITERS: std::cell::RefCell<HashMap<PathBuf, (EventDbIdentity, Connection)>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+fn event_db_identity(db_path: &Path) -> EventDbIdentity {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata(db_path)
+            .ok()
+            .map(|meta| (meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = db_path;
+        None
+    }
+}
+
+fn with_event_writer<T>(root: &Path, write: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let identity = event_db_identity(&db_path);
+    let cached = EVENT_WRITERS.with(|writers| writers.borrow_mut().remove(&db_path));
+    let conn = match cached {
+        Some((cached_identity, conn)) if identity.is_some() && cached_identity == identity => conn,
+        _ => {
+            let conn = open_event_connection(root)?;
+            ensure_event_schema(&conn)?;
+            conn
+        }
+    };
+    let result = write(&conn);
+    let identity = event_db_identity(&db_path);
+    if result.is_ok() && identity.is_some() {
+        EVENT_WRITERS.with(|writers| {
+            writers.borrow_mut().insert(db_path, (identity, conn));
+        });
+    }
+    result
+}
+
+fn insert_harness_flow_event(
+    root: &Path,
+    conn: &Connection,
+    request: RecordHarnessFlowEventRequest<'_>,
+) -> Result<HarnessFlowEvent> {
     let created_at = Utc::now().to_rfc3339();
     let chain_key = chain_key(request.message_key, request.work_id, request.ticket_key);
     // Cockpit metadata comes from the caller's held lease or is resolved on
@@ -1652,6 +1707,64 @@ fn clip(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn phase_event(message_key: &str) -> RecordHarnessFlowEventRequest<'_> {
+        RecordHarnessFlowEventRequest {
+            event_kind: "worker.phase",
+            title: "Working",
+            body_text: "",
+            message_key: Some(message_key),
+            work_id: None,
+            ticket_key: None,
+            attempt_index: None,
+            metadata: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn flow_events_reuse_the_thread_writer_until_the_database_is_replaced() {
+        let root = tempfile::tempdir().expect("temp root");
+        std::fs::create_dir_all(root.path().join("runtime")).expect("runtime dir");
+        let db_path = root.path().join("runtime").join("ctox.sqlite3");
+        record_harness_flow_event(root.path(), phase_event("queue-a")).expect("first event");
+        let first = EVENT_WRITERS.with(|writers| {
+            writers
+                .borrow()
+                .get(&db_path)
+                .map(|(identity, conn)| (*identity, unsafe { conn.handle() } as usize))
+        });
+        record_harness_flow_event(root.path(), phase_event("queue-a")).expect("second event");
+        let second = EVENT_WRITERS.with(|writers| {
+            writers
+                .borrow()
+                .get(&db_path)
+                .map(|(identity, conn)| (*identity, unsafe { conn.handle() } as usize))
+        });
+        assert!(first.is_some());
+        assert_eq!(
+            first, second,
+            "the second event must reuse the cached writer"
+        );
+
+        // A replaced database file gets a fresh writer and its own schema.
+        // Moved aside, the old inode stays allocated and cannot be reused.
+        std::fs::rename(&db_path, db_path.with_extension("old")).expect("move database aside");
+        let _ = std::fs::remove_file(db_path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(db_path.with_extension("sqlite3-shm"));
+        record_harness_flow_event(root.path(), phase_event("queue-b"))
+            .expect("event after replace");
+        let events = load_flow_events(root.path(), Some("queue-b"), None, None, 20)
+            .expect("load events from the new database");
+        assert_eq!(events.len(), 1);
+        let replaced = EVENT_WRITERS.with(|writers| {
+            writers
+                .borrow()
+                .get(&db_path)
+                .map(|(identity, _)| *identity)
+        });
+        assert_ne!(replaced, first.map(|(identity, _)| identity));
+        EVENT_WRITERS.with(|writers| writers.borrow_mut().clear());
+    }
 
     #[test]
     fn worker_metrics_remain_scoped_to_their_message_chain() {
