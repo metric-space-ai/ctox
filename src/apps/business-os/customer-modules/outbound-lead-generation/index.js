@@ -30,6 +30,7 @@ import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } f
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
+import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -10398,6 +10399,26 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
       if (!['new', 'failed', 'needs_review'].includes(status)) return false;
       return !String(lead.payload?.observed_research_command_key || '').trim();
     });
+    // Leads ausserhalb des geladenen Listenfensters: sonst blieben sie auf
+    // "Läuft", obwohl ihr Vorgang laengst beendet ist (thesen 08.10.2026).
+    if (Date.now() - Number(state.fensterAbgleichAm || 0) >= IN_FLIGHT_SWEEP_INTERVAL_MS) {
+      state.fensterAbgleichAm = Date.now();
+      try {
+        const bekannt = new Set(pendingLeads.map((lead) => lead.id));
+        const ausserhalb = await inFlightLeadsOutsideWindow(async (query) => {
+          const docs = await withTimeout(
+            state.collections.leads.find(query).exec(),
+            'Laufende Leads konnten nicht geladen werden.',
+            30_000,
+          );
+          return (docs || []).map((doc) => doc?.toJSON?.() || doc);
+        }, bekannt);
+        for (const lead of ausserhalb) pendingLeads.push(normalizeLeadRecipientShape(lead));
+        abgleichDiagnose('fenster', { ausserhalb: ausserhalb.length });
+      } catch (error) {
+        console.warn('[olg-abgleich] laufende Leads ausserhalb des Fensters nicht geladen', error);
+      }
+    }
     abgleichDiagnose('befehle-laden', { offen: pendingLeads.length, laufend: pendingLeads.filter((lead) => researchInFlight(lead)).length });
     const commands = uniqueCommands(await demandResearchCommands(pendingLeads, { authoritative }));
     abgleichDiagnose('anwenden', { befehle: commands.length });

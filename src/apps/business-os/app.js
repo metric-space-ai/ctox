@@ -13786,7 +13786,7 @@ async function workjetProjectControl(request = {}) {
       || receipt.target_record_id !== projectId || receipt.result?.ok !== true
       || receipt.result.contract !== JOUR_FIXE_SCHEMA
       || !sameValue(receipt.payload, { ...expectedPayload, inbound_channel: 'ctox' })) {
-      throw new Error('Workjet native meeting command returned an uncorrelated or unsuccessful receipt.');
+      throw new Error('Für den Besprechungsauftrag liegt keine passende Erfolgsbestätigung vor.');
     }
     const mutation = receipt.result.mutation;
     const resultValidation = validateJourFixeValue('MeetingMutationReceipt', mutation);
@@ -13837,7 +13837,7 @@ async function workjetProjectControl(request = {}) {
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
         || actorContext(state.session).id !== ownerUserId) {
-        throw new Error('Workjet project session changed before the native project result was delivered.');
+        throw new Error('Die Projektsitzung hat sich vor der Antwort geändert.');
       }
     };
     assertCurrentIdentity();
@@ -13854,7 +13854,7 @@ async function workjetProjectControl(request = {}) {
           || value.some((prompt, index) => receipt.payload.prompts[index]?.kpi_id !== prompt.kpi_id
             || receipt.payload.prompts[index]?.prompt !== prompt.prompt)
         : receipt.payload?.[key] !== value)) {
-      throw new Error('Workjet native project command returned an uncorrelated or unsuccessful receipt.');
+      throw new Error('Für den Projektauftrag liegt keine passende Erfolgsbestätigung vor.');
     }
     if (!meetingRead) {
       const kpis = receipt.result.kpis;
@@ -13881,7 +13881,7 @@ async function workjetProjectControl(request = {}) {
     const result = { action, commandId, projectId, contract: JOUR_FIXE_SCHEMA, meeting: JSON.parse(JSON.stringify(meeting)) };
     if (receipt.result.preparation_task_id != null) {
       if (meeting === null || typeof receipt.result.preparation_task_id !== 'string') {
-        throw new Error('Workjet preparation task requires a confirmed meeting and a native task id.');
+        throw new Error('Die Vorbereitung benötigt eine bestätigte Besprechung und einen zugeordneten Auftrag.');
       }
       result.preparationTaskId = boundedWorkjetProjectText(receipt.result.preparation_task_id, 'preparationTaskId', 256);
     }
@@ -14018,7 +14018,7 @@ async function workjetProjectControl(request = {}) {
       }
       let sequence = payload.execution_page.cursor?.after_sequence ?? 0;
       for (const event of page.events) {
-        if (event.sequence <= sequence) throw new Error('Workjet execution events are not in native insertion order.');
+        if (event.sequence <= sequence) throw new Error('Die Ereignisse zur Ausführung sind nicht in der erwarteten Reihenfolge eingetroffen.');
         sequence = event.sequence;
       }
       const last = page.events.at(-1);

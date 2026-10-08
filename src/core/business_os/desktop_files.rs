@@ -24,6 +24,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
+#[path = "desktop_file_stream.rs"]
+mod stream;
+
 #[cfg(test)]
 pub(super) static DESKTOP_FILE_CHUNK_COMPLETENESS_CHECKS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -483,35 +486,39 @@ pub(super) async fn desktop_file_chunk_generation_is_complete(
     let Ok(expected_total_usize) = usize::try_from(expected_total) else {
         return false;
     };
-    let ids: Vec<String> = (0..expected_total_usize)
-        .map(|idx| format!("{file_id}_{generation_id}_{idx}"))
-        .collect();
-    let Ok(documents) = chunks
-        .storage_instance
-        .find_documents_by_id(&ids, false)
-        .await
-    else {
-        return false;
-    };
-    if documents.len() != expected_total_usize {
-        return false;
-    }
-    let mut seen_indices = HashSet::with_capacity(documents.len());
-    for document in documents {
-        if document.get("file_id").and_then(Value::as_str) != Some(file_id) {
-            return false;
-        }
-        if document.get("generation_id").and_then(Value::as_str) != Some(generation_id) {
-            return false;
-        }
-        if document.get("total").and_then(Value::as_u64) != Some(expected_total) {
-            return false;
-        }
-        let Some(idx) = document.get("idx").and_then(Value::as_u64) else {
+    // Verification must be bounded too: a republish must not hydrate the
+    // complete Base64 generation just to establish chunk presence.
+    for start in (0..expected_total_usize).step_by(stream::BATCH_CHUNKS) {
+        let end = start
+            .saturating_add(stream::BATCH_CHUNKS)
+            .min(expected_total_usize);
+        let ids: Vec<String> = (start..end)
+            .map(|idx| format!("{file_id}_{generation_id}_{idx}"))
+            .collect();
+        let Ok(documents) = chunks
+            .storage_instance
+            .find_documents_by_id(&ids, false)
+            .await
+        else {
             return false;
         };
-        if idx >= expected_total || !seen_indices.insert(idx) {
+        if documents.len() != ids.len() {
             return false;
+        }
+        let mut seen_indices = HashSet::with_capacity(documents.len());
+        for document in documents {
+            if document.get("file_id").and_then(Value::as_str) != Some(file_id)
+                || document.get("generation_id").and_then(Value::as_str) != Some(generation_id)
+                || document.get("total").and_then(Value::as_u64) != Some(expected_total)
+            {
+                return false;
+            }
+            let Some(idx) = document.get("idx").and_then(Value::as_u64) else {
+                return false;
+            };
+            if idx < start as u64 || idx >= end as u64 || !seen_indices.insert(idx) {
+                return false;
+            }
         }
     }
     true
@@ -658,9 +665,13 @@ pub(super) async fn upsert_desktop_file_with_parent(
     let (content_hash, content_generation_id, active_generation_id) = if policy
         == DesktopFileContentPolicy::Eager
     {
-        let bytes = fs::read(&path)
+        let mut content_file = fs::File::open(&path)
             .with_context(|| format!("failed to read desktop file {}", path.display()))?;
-        let content_hash = hex_sha256(&bytes);
+        let (hashed_size, content_hash) = stream::hash_and_rewind(&mut content_file)?;
+        anyhow::ensure!(
+            hashed_size == metadata.len(),
+            "desktop file changed while hashing"
+        );
         // Same content as the indexed generation (e.g. touch / metadata
         // change): keep the replicated generation and its chunks instead
         // of rotating a byte-identical copy through the data plane.
@@ -704,23 +715,21 @@ pub(super) async fn upsert_desktop_file_with_parent(
         } else {
             let generation_suffix = content_hash.get(..12).unwrap_or(content_hash.as_str());
             let generation_id = format!("gen_{now}_{generation_suffix}");
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            let total = encoded.len().div_ceil(DESKTOP_FILE_CHUNK_SIZE).max(1);
+            let total = expected_desktop_file_chunk_total(hashed_size);
             let chunks = database
                 .collection("desktop_file_chunks")
                 .context("desktop_file_chunks collection is not registered")?;
 
-            let chunk_payloads: Vec<&str> = if encoded.is_empty() {
-                vec![""]
-            } else {
-                encoded
-                    .as_bytes()
-                    .chunks(DESKTOP_FILE_CHUNK_SIZE)
-                    .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
-                    .collect()
-            };
-            let mut chunk_documents = Vec::with_capacity(chunk_payloads.len());
-            for (idx, data) in chunk_payloads.into_iter().enumerate() {
+            let mut materialized_hash = sha2::Sha256::new();
+            let mut materialized_size = 0_u64;
+            let mut chunk_documents = Vec::with_capacity(stream::BATCH_CHUNKS);
+            for idx in 0..total {
+                // 12KiB is divisible by three, so only the final Base64
+                // chunk has padding, exactly as in the existing format.
+                let bytes = stream::read_chunk(&mut content_file)?;
+                materialized_hash.update(&bytes);
+                materialized_size += bytes.len() as u64;
+                let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
                 let chunk_hash = hex_sha256(data.as_bytes());
                 chunk_documents.push(json!({
                     "id": format!("{file_id}_{generation_id}_{idx}"),
@@ -728,8 +737,8 @@ pub(super) async fn upsert_desktop_file_with_parent(
                     "generation_id": generation_id.clone(),
                     "content_hash": content_hash.clone(),
                     "content_hash_scheme": DESKTOP_FILE_CONTENT_HASH_SCHEME,
-                    "idx": idx as u64,
-                    "total": total as u64,
+                    "idx": idx,
+                    "total": total,
                     "encoding": "base64",
                     "data": data,
                     "chunk_hash": chunk_hash,
@@ -737,7 +746,23 @@ pub(super) async fn upsert_desktop_file_with_parent(
                     "size_bytes": data.len() as u64,
                     "created_at_ms": now,
                 }));
+                if chunk_documents.len() == stream::BATCH_CHUNKS {
+                    bulk_upsert_or_error(
+                        &chunks,
+                        std::mem::take(&mut chunk_documents),
+                        "upsert desktop file chunks",
+                    )
+                    .await?;
+                }
             }
+            // Partial batches may exist after failure, but no available file
+            // generation is published until both passes agree in full.
+            anyhow::ensure!(
+                stream::read_chunk(&mut content_file)?.is_empty()
+                    && materialized_size == hashed_size
+                    && format!("{:x}", materialized_hash.finalize()) == content_hash,
+                "desktop file changed while materializing"
+            );
             bulk_upsert_or_error(&chunks, chunk_documents, "upsert desktop file chunks").await?;
             (
                 content_hash,

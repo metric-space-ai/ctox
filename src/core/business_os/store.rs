@@ -27309,8 +27309,35 @@ fn upsert_business_record_tombstone(
     Ok(())
 }
 
+/// The projection-clock triggers once recounted the whole collection on every
+/// row write (COUNT(*) and SUM(deleted)). With ~400k cockpit event rows that
+/// kept business-os.sqlite3 write-locked 87-94 % of the time on the customer
+/// on-prem host (08.10.2026). They now maintain the counters incrementally; the
+/// recount below at schema setup keeps them exact. Replace old definitions.
+fn drop_counting_projection_clock_triggers(conn: &Connection) -> anyhow::Result<()> {
+    let counting: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'trigger' AND tbl_name = 'business_records'
+           AND name LIKE 'trg_business_records_projection_clock_%'
+           AND sql LIKE '%COUNT(*)%')",
+        [],
+        |row| row.get(0),
+    )?;
+    if counting {
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS trg_business_records_projection_clock_insert;
+             DROP TRIGGER IF EXISTS trg_business_records_projection_clock_update_same_collection;
+             DROP TRIGGER IF EXISTS trg_business_records_projection_clock_update_moved_old;
+             DROP TRIGGER IF EXISTS trg_business_records_projection_clock_update_moved_new;
+             DROP TRIGGER IF EXISTS trg_business_records_projection_clock_delete;",
+        )?;
+    }
+    Ok(())
+}
+
 fn migrate(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(super::domain_effect::SCHEMA)?;
+    drop_counting_projection_clock_triggers(conn)?;
     let schema = "
         CREATE TABLE IF NOT EXISTS business_records (
             collection TEXT NOT NULL,
@@ -27383,21 +27410,9 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             UPDATE business_records_projection_clock
             SET
                 version = version + 1,
-                row_count = (
-                    SELECT COUNT(*)
-                    FROM business_records
-                    WHERE collection = NEW.collection
-                ),
-                deleted_count = (
-                    SELECT COALESCE(SUM(deleted), 0)
-                    FROM business_records
-                    WHERE collection = NEW.collection
-                ),
-                latest_updated_at_ms = (
-                    SELECT COALESCE(MAX(updated_at_ms), 0)
-                    FROM business_records
-                    WHERE collection = NEW.collection
-                )
+                row_count = row_count + 1,
+                deleted_count = deleted_count + NEW.deleted,
+                latest_updated_at_ms = MAX(latest_updated_at_ms, NEW.updated_at_ms)
             WHERE collection = NEW.collection;
         END;
         CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_update_same_collection
@@ -27415,21 +27430,17 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             UPDATE business_records_projection_clock
             SET
                 version = version + 1,
-                row_count = (
-                    SELECT COUNT(*)
+                deleted_count = deleted_count + NEW.deleted - OLD.deleted,
+                latest_updated_at_ms = CASE
+                    WHEN NEW.updated_at_ms >= latest_updated_at_ms THEN NEW.updated_at_ms
+                    ELSE COALESCE((
+                    SELECT updated_at_ms
                     FROM business_records
                     WHERE collection = NEW.collection
-                ),
-                deleted_count = (
-                    SELECT COALESCE(SUM(deleted), 0)
-                    FROM business_records
-                    WHERE collection = NEW.collection
-                ),
-                latest_updated_at_ms = (
-                    SELECT COALESCE(MAX(updated_at_ms), 0)
-                    FROM business_records
-                    WHERE collection = NEW.collection
-                )
+                    ORDER BY updated_at_ms DESC
+                    LIMIT 1
+                ), 0)
+                END
             WHERE collection = NEW.collection;
         END;
         CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_update_moved_old
@@ -27447,21 +27458,15 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             UPDATE business_records_projection_clock
             SET
                 version = version + 1,
-                row_count = (
-                    SELECT COUNT(*)
+                row_count = row_count - 1,
+                deleted_count = deleted_count - OLD.deleted,
+                latest_updated_at_ms = COALESCE((
+                    SELECT updated_at_ms
                     FROM business_records
                     WHERE collection = OLD.collection
-                ),
-                deleted_count = (
-                    SELECT COALESCE(SUM(deleted), 0)
-                    FROM business_records
-                    WHERE collection = OLD.collection
-                ),
-                latest_updated_at_ms = (
-                    SELECT COALESCE(MAX(updated_at_ms), 0)
-                    FROM business_records
-                    WHERE collection = OLD.collection
-                )
+                    ORDER BY updated_at_ms DESC
+                    LIMIT 1
+                ), 0)
             WHERE collection = OLD.collection;
         END;
         CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_update_moved_new
@@ -27479,21 +27484,9 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             UPDATE business_records_projection_clock
             SET
                 version = version + 1,
-                row_count = (
-                    SELECT COUNT(*)
-                    FROM business_records
-                    WHERE collection = NEW.collection
-                ),
-                deleted_count = (
-                    SELECT COALESCE(SUM(deleted), 0)
-                    FROM business_records
-                    WHERE collection = NEW.collection
-                ),
-                latest_updated_at_ms = (
-                    SELECT COALESCE(MAX(updated_at_ms), 0)
-                    FROM business_records
-                    WHERE collection = NEW.collection
-                )
+                row_count = row_count + 1,
+                deleted_count = deleted_count + NEW.deleted,
+                latest_updated_at_ms = MAX(latest_updated_at_ms, NEW.updated_at_ms)
             WHERE collection = NEW.collection;
         END;
         CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_delete
@@ -27510,21 +27503,18 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             UPDATE business_records_projection_clock
             SET
                 version = version + 1,
-                row_count = (
-                    SELECT COUNT(*)
+                row_count = row_count - 1,
+                deleted_count = deleted_count - OLD.deleted,
+                latest_updated_at_ms = CASE
+                    WHEN OLD.updated_at_ms < latest_updated_at_ms THEN latest_updated_at_ms
+                    ELSE COALESCE((
+                    SELECT updated_at_ms
                     FROM business_records
                     WHERE collection = OLD.collection
-                ),
-                deleted_count = (
-                    SELECT COALESCE(SUM(deleted), 0)
-                    FROM business_records
-                    WHERE collection = OLD.collection
-                ),
-                latest_updated_at_ms = (
-                    SELECT COALESCE(MAX(updated_at_ms), 0)
-                    FROM business_records
-                    WHERE collection = OLD.collection
-                )
+                    ORDER BY updated_at_ms DESC
+                    LIMIT 1
+                ), 0)
+                END
             WHERE collection = OLD.collection;
         END;
         CREATE INDEX IF NOT EXISTS idx_business_records_accounting_invoices_due
@@ -43571,6 +43561,113 @@ pub(super) mod tests {
             observed, "free",
             "Business OS write lock held during Core reads"
         );
+        Ok(())
+    }
+
+    fn projection_clock_rows(conn: &Connection) -> anyhow::Result<Vec<(String, i64, i64, i64)>> {
+        Ok(conn
+            .prepare(
+                "SELECT collection, row_count, deleted_count, latest_updated_at_ms
+                 FROM business_records_projection_clock ORDER BY collection",
+            )?
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn recounted_projection_clock_rows(
+        conn: &Connection,
+    ) -> anyhow::Result<Vec<(String, i64, i64, i64)>> {
+        Ok(conn
+            .prepare(
+                "SELECT clock.collection,
+                        (SELECT COUNT(*) FROM business_records r WHERE r.collection = clock.collection),
+                        (SELECT COALESCE(SUM(deleted), 0) FROM business_records r WHERE r.collection = clock.collection),
+                        (SELECT COALESCE(MAX(updated_at_ms), 0) FROM business_records r WHERE r.collection = clock.collection)
+                 FROM business_records_projection_clock clock ORDER BY clock.collection",
+            )?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    #[test]
+    fn projection_clock_counts_incrementally_and_matches_a_full_recount() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let conn = open_store(temp.path())?;
+        let insert = |collection: &str, id: &str, deleted: i64, at: i64| {
+            conn.execute(
+                "INSERT INTO business_records(collection, record_id, rev, deleted, updated_at_ms, payload_json)
+                 VALUES (?1, ?2, 'r', ?3, ?4, '{}')",
+                params![collection, id, deleted, at],
+            )
+        };
+        insert("clock_a", "1", 0, 100)?;
+        insert("clock_a", "2", 1, 300)?;
+        insert("clock_a", "3", 0, 200)?;
+        insert("clock_b", "1", 0, 50)?;
+        // Update: deleted flag flips, the newest row moves backwards in time.
+        conn.execute(
+            "UPDATE business_records SET deleted = 0, updated_at_ms = 150
+             WHERE collection = 'clock_a' AND record_id = '2'",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE business_records SET deleted = 1, updated_at_ms = 400
+             WHERE collection = 'clock_a' AND record_id = '1'",
+            [],
+        )?;
+        // Move between collections, then delete the newest row.
+        conn.execute(
+            "UPDATE business_records SET collection = 'clock_b'
+             WHERE collection = 'clock_a' AND record_id = '3'",
+            [],
+        )?;
+        conn.execute(
+            "DELETE FROM business_records WHERE collection = 'clock_a' AND record_id = '1'",
+            [],
+        )?;
+        assert_eq!(
+            projection_clock_rows(&conn)?,
+            recounted_projection_clock_rows(&conn)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn migration_replaces_projection_clock_triggers_that_recount_the_collection(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let conn = open_store(temp.path())?;
+        conn.execute_batch(
+            "DROP TRIGGER trg_business_records_projection_clock_insert;
+             CREATE TRIGGER trg_business_records_projection_clock_insert
+             AFTER INSERT ON business_records
+             BEGIN
+                 UPDATE business_records_projection_clock
+                 SET row_count = (SELECT COUNT(*) FROM business_records WHERE collection = NEW.collection)
+                 WHERE collection = NEW.collection;
+             END;",
+        )?;
+        migrate(&conn)?;
+        let counting: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'trigger' AND name LIKE 'trg_business_records_projection_clock_%'
+               AND sql LIKE '%COUNT(*)%'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            counting, 0,
+            "a projection-clock trigger still recounts its collection"
+        );
+        let triggers: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'trigger' AND name LIKE 'trg_business_records_projection_clock_%'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(triggers, 5);
         Ok(())
     }
 

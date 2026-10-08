@@ -214,9 +214,14 @@ The target stages privately and verifies complete artifact hashes before
 publishing immutable blobs. It validates the manifest digest and full producer
 contract, then validates all contents and portable journals and fsyncs the copy
 before replying `copied:true,resumed:false`. A truncated, corrupt, timed-out or
-cancelled transfer yields no successful copy response. The temporary staging
-directory is dropped. Already verified immutable blobs may remain after a failed
-copy; their presence alone permits neither a receipt nor execution.
+cancelled transfer yields no successful copy response. Private incomplete ranges
+persist under the exact binding and checkpoint digest, with separate files per
+artifact hash (and manifest). They remain unverified until complete hash ingestion;
+they confer neither a receipt nor execution. Each retained file must be native-owned,
+0600, regular, unaliased and unchanged before writes. A corrupt completed prefix is
+discarded; corrupt CAS contents deny rather than being reused or overwritten.
+Already complete CAS blobs are fully reverified under the fresh target guard before
+skipping their network transfer. Other bindings/checkpoints cannot inherit a prefix.
 The native source's enrollment still verifies full contents; repeated physical
 policy checks use the manifest hash/identity instead of rehashing every blob
 for every block. Receive and durable-copy checks retain full verification.
@@ -224,8 +229,18 @@ for every block. Receive and durable-copy checks retain full verification.
 The operation is bounded to one local copy, 60 seconds, 4096 distinct artifacts,
 1GiB total, 8MiB manifest and 64MiB per blob. Each exchange has a 15-second bound.
 Local client disconnect retires the operation's shared publication fence;
-queued blocking work checks it before writing. A fresh operation is needed
-after expiry/failure; this is not an automatic retry or general crash recovery.
+queued blocking work checks it before writing. Copy stops fetching at 50 seconds
+and, if current authority still permits, returns `copied:false,pending:true` with
+`verifiedBytes`, `partialBytes` and `totalBytes` (null before the manifest is known).
+Partial bytes are durable ranges, not verified progress or a copy receipt. Repeat
+the same `handoff-copy` command to continue; it rechecks enrollment, account, policy
+and the admitted peer, and fetches every remaining range with fresh wire permits.
+A client disconnect or 60-second hard timeout can return no progress response;
+the same guarded continuation still works. No automatic retries or Core activation
+are started. The 60-second operation, 15-second exchange and all size limits stay
+in force, including for VM RAM/disk chunk artifacts. Immutable VM bases are provisioned
+independently and are never checkpoint blobs. Abandoned private ranges may be removed
+only by their owner's cleanup after the operation/host has stopped.
 
 This connects production checkpoint sending and local durable ingestion.
 It creates no Raft DATA receipt, ownership transfer, clean-effect witness or

@@ -14,6 +14,8 @@ mod guest_enrollment;
 mod guest_import;
 #[path = "session_handoff_guest_machine.rs"]
 mod guest_machine;
+#[path = "session_handoff_copy_progress.rs"]
+mod progress;
 #[path = "session_handoff_checkpoint_quorum.rs"]
 mod quorum;
 #[path = "session_handoff_reconstruction.rs"]
@@ -512,6 +514,10 @@ async fn exchange<H: WebRTCConnectionHandler + 'static>(
     );
     Ok(signed.verify_reply(reply.result, now_ms() as u64)?)
 }
+enum Part {
+    Complete(Vec<u8>),
+    Pending(u64),
+}
 async fn part<H: WebRTCConnectionHandler + 'static>(
     target: &Arc<Target<H::Peer>>,
     pool: &Arc<RxWebRTCReplicationPool<H>>,
@@ -519,12 +525,23 @@ async fn part<H: WebRTCConnectionHandler + 'static>(
     store: &Arc<CheckpointStore>,
     staging: &Path,
     artifact: Option<ArtifactRef>,
-) -> anyhow::Result<Vec<u8>> {
-    use std::io::Write;
-    let mut file = tempfile::NamedTempFile::new_in(staging)?;
-    let mut offset = 0;
+    deadline: tokio::time::Instant,
+) -> anyhow::Result<Part> {
+    let t = target.clone();
+    let directory = staging.to_path_buf();
+    let a = artifact.clone();
+    let mut file = tokio::task::spawn_blocking(move || {
+        t.current(&t.request, |_, _| {
+            progress::StagedPart::open(&directory, a.as_ref())
+        })
+    })
+    .await??;
+    let mut offset = file.offset;
     let mut expected_size = None;
     loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(Part::Pending(offset));
+        }
         let mut local = target.request.clone();
         local.nonce = fresh_nonce()?;
         let mut remote = local.clone();
@@ -537,8 +554,11 @@ async fn part<H: WebRTCConnectionHandler + 'static>(
             t.sign(SessionHandoffWireRequest::Probe { request: r }, &l)
         })
         .await??;
-        let SessionHandoffWireReply::Challenge { challenge } = exchange(pool, peer, &probe).await?
-        else {
+        let reply = match tokio::time::timeout_at(deadline, exchange(pool, peer, &probe)).await {
+            Ok(reply) => reply?,
+            Err(_) => return Ok(Part::Pending(offset)),
+        };
+        let SessionHandoffWireReply::Challenge { challenge } = reply else {
             anyhow::bail!("checkpoint challenge absent");
         };
         let t = target.clone();
@@ -562,14 +582,19 @@ async fn part<H: WebRTCConnectionHandler + 'static>(
             })
         })
         .await??;
+        let reply = match tokio::time::timeout_at(deadline, exchange(pool, peer, &fetch)).await {
+            Ok(reply) => reply?,
+            Err(_) => return Ok(Part::Pending(offset)),
+        };
         let SessionHandoffWireReply::Chunk {
             size_bytes, hex, ..
-        } = exchange(pool, peer, &fetch).await?
+        } = reply
         else {
             anyhow::bail!("checkpoint chunk absent");
         };
         anyhow::ensure!(
             size_bytes <= artifact.as_ref().map_or(MANIFEST_LIMIT, |a| a.size_bytes)
+                && artifact.as_ref().is_none_or(|a| size_bytes == a.size_bytes)
                 && size_bytes <= BLOB_LIMIT
                 && expected_size.is_none_or(|n| n == size_bytes),
             "checkpoint length changed"
@@ -584,10 +609,14 @@ async fn part<H: WebRTCConnectionHandler + 'static>(
             })
             .collect();
         let count = bytes.len() as u64;
+        anyhow::ensure!(
+            count > 0 || offset == size_bytes,
+            "checkpoint range made no progress"
+        );
         let t = target.clone();
         file = tokio::task::spawn_blocking(move || {
             t.current(&local, |_, _| {
-                file.write_all(&bytes)?;
+                file.append(&bytes, size_bytes)?;
                 Ok(())
             })?;
             Ok::<_, anyhow::Error>(file)
@@ -600,18 +629,10 @@ async fn part<H: WebRTCConnectionHandler + 'static>(
     }
     let t = target.clone();
     let store = store.clone();
-    let artifact = artifact.clone();
     tokio::task::spawn_blocking(move || {
         t.current(&t.request, |_, _| {
-            file.as_file_mut().seek(SeekFrom::Start(0))?;
-            if let Some(a) = artifact {
-                store.ingest_blob(&a, file.as_file_mut())?;
-                Ok(Vec::new())
-            } else {
-                let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes)?;
-                Ok(bytes)
-            }
+            file.finish(&store, artifact.as_ref(), &t.request.checkpoint_digest)
+                .map(Part::Complete)
         })
     })
     .await?
@@ -621,7 +642,10 @@ async fn copy<H: WebRTCConnectionHandler + 'static>(
     pool: Arc<RxWebRTCReplicationPool<H>>,
     peer: H::Peer,
     binding: String,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<CopyResponse> {
+    // Leave time for current-authority publication before the 60s operator
+    // bound. Every network exchange is also bounded by this deadline.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(50);
     let lifetime = CopyLifetime(Arc::new(Mutex::new(true)));
     let live = lifetime.0.clone();
     let guard_pool = pool.clone();
@@ -650,15 +674,26 @@ async fn copy<H: WebRTCConnectionHandler + 'static>(
             create_private(&root)?;
             create_private(&root.join("blobs"))?;
             create_private(&root.join("manifests"))?;
-            let staging = tempfile::Builder::new()
-                .prefix("checkpoint-")
-                .tempdir_in(&root)?;
+            let progress = root.join("copy-progress");
+            create_private(&progress)?;
+            let binding = progress.join(&t.request.binding_digest);
+            create_private(&binding)?;
+            let staging = binding.join(&t.request.checkpoint_digest);
+            create_private(&staging)?;
+            // Pending progress must retain newly created directory entries as
+            // well as the fsynced range file itself.
+            for directory in [&parent, &root, &progress, &binding, &staging] {
+                std::fs::File::open(directory)?.sync_all()?;
+            }
             let store = Arc::new(CheckpointStore::open(root, BLOB_LIMIT)?);
             Ok((store, staging))
         })
     })
     .await??;
-    let bytes = part(&target, &pool, &peer, &store, staging.path(), None).await?;
+    let bytes = match part(&target, &pool, &peer, &store, &staging, None, deadline).await? {
+        Part::Complete(bytes) => bytes,
+        Part::Pending(offset) => return copy_pending(&target, 0, offset, None).await,
+    };
     use sha2::{Digest, Sha256};
     anyhow::ensure!(
         format!("{:x}", Sha256::digest(&bytes)) == target.request.checkpoint_digest,
@@ -680,6 +715,7 @@ async fn copy<H: WebRTCConnectionHandler + 'static>(
     );
     let mut seen = std::collections::BTreeSet::new();
     let mut total = bytes.len() as u64;
+    let mut unique = Vec::new();
     for artifact in artifacts(&manifest) {
         anyhow::ensure!(
             artifact.size_bytes <= BLOB_LIMIT,
@@ -693,16 +729,37 @@ async fn copy<H: WebRTCConnectionHandler + 'static>(
                 total <= 1024 * 1024 * 1024 && seen.len() <= 4096,
                 "checkpoint exceeds receive budget"
             );
-            part(
+            unique.push(artifact.clone());
+        }
+    }
+    let mut verified_bytes = bytes.len() as u64;
+    for artifact in unique {
+        let t = target.clone();
+        let s = store.clone();
+        let a = artifact.clone();
+        let present = tokio::task::spawn_blocking(move || {
+            t.current(&t.request, |_, _| progress::verified(&s, &a))
+        })
+        .await??;
+        if !present {
+            match part(
                 &target,
                 &pool,
                 &peer,
                 &store,
-                staging.path(),
+                &staging,
                 Some(artifact.clone()),
+                deadline,
             )
-            .await?;
+            .await?
+            {
+                Part::Complete(_) => (),
+                Part::Pending(offset) => {
+                    return copy_pending(&target, verified_bytes, offset, Some(total)).await
+                }
+            }
         }
+        verified_bytes += artifact.size_bytes;
     }
     let t = target.clone();
     tokio::task::spawn_blocking(move || {
@@ -715,12 +772,33 @@ async fn copy<H: WebRTCConnectionHandler + 'static>(
             store.verify_durable_copy(&digest)?;
             // This confirms only this local immutable copy. It creates neither a
             // Raft DATA receipt nor clean-effect/ownership/Core resume evidence.
-            Ok(digest)
+            Ok(CopyResponse::Copied {
+                checkpoint_digest: digest,
+            })
         })
     })
     .await?
 }
 
+async fn copy_pending<P: Clone + Eq + Hash + Send + Sync + 'static>(
+    target: &Arc<Target<P>>,
+    verified_bytes: u64,
+    partial_bytes: u64,
+    total_bytes: Option<u64>,
+) -> anyhow::Result<CopyResponse> {
+    let t = target.clone();
+    tokio::task::spawn_blocking(move || {
+        t.current(&t.request, |_, _| {
+            Ok(CopyResponse::CopyPending {
+                checkpoint_digest: t.request.checkpoint_digest.clone(),
+                verified_bytes,
+                partial_bytes,
+                total_bytes,
+            })
+        })
+    })
+    .await?
+}
 #[cfg(test)]
 pub(crate) fn assert_native_checkpoint_path(
     source_root: &Path,
@@ -985,6 +1063,27 @@ pub(crate) fn assert_native_checkpoint_path(
         .unwrap();
     let (_, fresh) = make_fetch(None, 0);
     let pending = fetch_with_account(server.clone(), peer, fresh, auth.clone()).unwrap();
+    let progress_root = tempfile::tempdir().unwrap();
+    let staged_artifact = ArtifactRef {
+        sha256: "bb".repeat(32),
+        size_bytes: 4,
+    };
+    let mut staged = target
+        .current(&local, |_, _| {
+            let mut part =
+                progress::StagedPart::open(progress_root.path(), Some(&staged_artifact))?;
+            part.append(b"ab", 4)?;
+            Ok(part)
+        })
+        .unwrap();
+    drop(staged);
+    // A new operation reopens the durable prefix only under current authority.
+    staged = target
+        .current(&local, |_, _| {
+            progress::StagedPart::open(progress_root.path(), Some(&staged_artifact))
+        })
+        .unwrap();
+    assert_eq!(staged.offset, 2);
     std::fs::remove_file(home.path().join("auth.json")).unwrap();
     assert!(
         pending
@@ -999,6 +1098,7 @@ pub(crate) fn assert_native_checkpoint_path(
     assert!(
         target
             .current(&local, |_, _| {
+                staged.append(b"cd", 4)?;
                 writes += 1;
                 Ok(())
             })
@@ -1012,6 +1112,7 @@ pub(crate) fn assert_native_checkpoint_path(
     assert!(
         target
             .current(&local, |_, _| {
+                staged.append(b"cd", 4)?;
                 writes += 1;
                 Ok(())
             })
@@ -1019,6 +1120,12 @@ pub(crate) fn assert_native_checkpoint_path(
         "cancel fences queued blocking ingestion"
     );
     assert_eq!(writes, 0);
+    assert_eq!(
+        std::fs::metadata(progress_root.path().join(&staged_artifact.sha256))
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1047,13 +1154,7 @@ fn copy_only(reconstruct: &bool) -> bool {
 }
 impl CopyRequest {
     pub(crate) fn operation_timeout(&self) -> std::time::Duration {
-        // Full manifests permit up to 1 GiB of bounded chunks. The local
-        // command deadline is separate from every short-lived wire permit.
-        std::time::Duration::from_secs(if self.source_route.is_empty() {
-            60
-        } else {
-            30 * 60
-        })
+        std::time::Duration::from_secs(60)
     }
     fn valid_operation(&self) -> bool {
         if self.restore_guest {
@@ -1096,6 +1197,12 @@ pub(crate) enum CopyResponse {
         guest_id: String,
         guest_service_session_id: String,
         process_effect_id: String,
+    },
+    CopyPending {
+        checkpoint_digest: String,
+        verified_bytes: u64,
+        partial_bytes: u64,
+        total_bytes: Option<u64>,
     },
     GuestEnrolled {
         checkpoint_digest: String,
@@ -1257,9 +1364,7 @@ pub(super) fn listen(
                                 .connection_handler
                                 .connection_for_peer(&r.source_route)
                                 .ok_or_else(|| anyhow::anyhow!("checkpoint source unavailable"))?;
-                            let checkpoint_digest =
-                                copy(server.clone(), pool.clone(), peer, r.binding_digest).await?;
-                            Ok(CopyResponse::Copied { checkpoint_digest })
+                            copy(server.clone(), pool.clone(), peer, r.binding_digest).await
                         }
                     };
                     tokio::select! {
