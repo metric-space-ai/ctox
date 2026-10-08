@@ -86,10 +86,15 @@ impl HostEmbeddingLookup {
         }
         unsafe {
             if (*source).ne[2] != 1 || (*source).ne[3] != 1 {
-                return Err(Error::Unsupported("Voxtral embedding table must be two dimensional"));
+                return Err(Error::Unsupported(
+                    "Voxtral embedding table must be two dimensional",
+                ));
             }
             lookup.tensor = ffi::ggml_new_tensor_2d(
-                lookup.meta.ctx, (*source).type_, (*source).ne[0], (*source).ne[1],
+                lookup.meta.ctx,
+                (*source).type_,
+                (*source).ne[0],
+                (*source).ne[1],
             );
             if lookup.tensor.is_null() {
                 return Err(Error::Runtime("host embedding metadata unavailable".into()));
@@ -102,7 +107,10 @@ impl HostEmbeddingLookup {
             // One byte-identical copy; quantization and arithmetic remain the
             // same vendored CPU GET_ROWS implementation used before this fix.
             ffi::ggml_backend_tensor_get(
-                source, (*lookup.tensor).data, 0, ffi::ggml_nbytes(source),
+                source,
+                (*lookup.tensor).data,
+                0,
+                ffi::ggml_nbytes(source),
             );
         }
         Ok(lookup)
@@ -112,8 +120,12 @@ impl HostEmbeddingLookup {
 impl Drop for HostEmbeddingLookup {
     fn drop(&mut self) {
         unsafe {
-            if !self.buffer.is_null() { ffi::ggml_backend_buffer_free(self.buffer); }
-            if !self.backend.is_null() { ffi::ggml_backend_free(self.backend); }
+            if !self.buffer.is_null() {
+                ffi::ggml_backend_buffer_free(self.buffer);
+            }
+            if !self.backend.is_null() {
+                ffi::ggml_backend_free(self.backend);
+            }
         }
     }
 }
@@ -578,7 +590,9 @@ impl GgmlModel {
     }
 
     fn embedding_lookup_weight(&self) -> Tensor {
-        self.host_embedding_lookup.as_ref().map_or(self.tok_embeddings_weight, |lookup| lookup.tensor)
+        self.host_embedding_lookup
+            .as_ref()
+            .map_or(self.tok_embeddings_weight, |lookup| lookup.tensor)
     }
 
     fn decode_tokens(&mut self, tokens: &[i32]) -> String {
