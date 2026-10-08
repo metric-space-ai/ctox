@@ -213,7 +213,8 @@ fn store_alloc(mode: AllocMode) {
 pub(crate) fn pread_once(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
     #[cfg(unix)]
     {
-        rustix::io::retry_on_intr(|| rustix::io::pread(f, buf, off)).map_err(std::io::Error::from)
+        rustix::io::retry_on_intr(|| rustix::io::pread(f, &mut *buf, off))
+            .map_err(std::io::Error::from)
     }
     #[cfg(windows)]
     {
