@@ -388,6 +388,12 @@ transport regressions. These source tests are not two-host acceptance; final
 composed execution, dirty/untracked Git fidelity and reconnect/resume remain
 required before describing the worktree transfer as usable.
 
+`ctox transfer pair` observes peer errors from before signaling join. If its
+20-second readiness window expires, the operator error reports signaling
+connection/join, peer and open-channel counts, and the last bounded error class.
+Messages, arbitrary error parameters, invite secrets and routing URLs are never
+included. An open data channel alone does not establish bidirectional readiness.
+
 ### Auth-assist command recovery
 
 `web_stack.auth_assist.request` represents an outstanding human login request.
