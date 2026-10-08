@@ -8,6 +8,9 @@ use super::*;
 use rusqlite::{Connection, TransactionBehavior};
 use sha2::{Digest, Sha256};
 
+#[path = "mcp_remote_worker_target.rs"]
+mod target;
+
 pub(super) const TOOL: &str = "business_os.remote_worker_admission";
 const CONTRACT: &str = "ctox.workjet.remote-worker-admission.v1";
 
@@ -102,6 +105,7 @@ struct Receipt {
     contract: String,
     permit_id: String,
     owner_user_id: String,
+    source_workspace_id: String,
     authority_epoch: i64,
     authority_fingerprint: String,
     expires_at_ms: i64,
@@ -115,6 +119,10 @@ struct Receipt {
 /// Preserve only the typed, secret-free account locator in our own receipt.
 /// Generic records (including similarly named objects) retain normal redaction.
 pub(super) fn redact_receipt(value: Value) -> anyhow::Result<Value> {
+    // Target registrations carry no account reference and need no exemption.
+    if value.get("contract").and_then(Value::as_str) == Some(target::CONTRACT) {
+        return Ok(redact_mcp_response(value));
+    }
     let receipt: Receipt = serde_json::from_value(value)?;
     anyhow::ensure!(
         receipt.contract == CONTRACT,
@@ -130,9 +138,26 @@ pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(TOOL,
         "Issue, claim, revalidate, renew or revoke one source-native remote Workjet leaf-worker admission. Requires the current authenticated source Owner/Admin, owned active project and assigned computer. Revalidation returns through the source; the target receives no Owner bearer or model secret. Model references bind scope but do not replace the source gateway's current account grant.",
         serde_json::json!({"type":"object", "additionalProperties":false,
-            "required":["action","binding"],
+            "required":["action"],
             "properties": {
-                "action":{"type":"string","enum":["issue","claim","revalidate","renew","revoke"]},
+                "action":{"type":"string","enum":["issue","claim","revalidate","renew","revoke","enroll_target","register_target","resolve_target","revoke_target"]},
+                "target_environment_id":{"type":"string"},
+                "expected_revision":{"type":"integer","minimum":1},
+                "target":{"oneOf":[
+                    ref_schema(&["sourceEnvironmentId","targetEnvironmentId","targetConnectionId","targetInstanceId","targetComputerId"]),
+                    ref_schema(&["sourceEnvironmentId","targetEnvironmentId","targetConnectionId","targetInstanceId"])]},
+                "computer":{"type":"object","additionalProperties":false,
+                    "required":["displayName","hostingMode","buildCapability"],
+                    "properties":{"displayName":{"type":"string"},
+                        "hostingMode":{"type":"string","enum":["workstation","self_hosted"]},
+                        "buildCapability":{"type":"object","additionalProperties":false,
+                            "required":["ssh_endpoint_ref","slots","jobs","lane_root","disk_floor_gib","toolchains"],
+                            "properties":{"ssh_endpoint_ref":{"type":"string"},
+                                "slots":{"type":"integer","minimum":1,"maximum":32},
+                                "jobs":{"type":"integer","minimum":1,"maximum":64},
+                                "lane_root":{"type":"string"},
+                                "disk_floor_gib":{"type":"integer","minimum":1},
+                                "toolchains":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string"}}}}}},
                 "permit_id":{"type":"string"}, "execution_id":{"type":"string"},
                 "renewal_sequence":{"type":"integer","minimum":1},
                 "ttl_seconds":{"type":"integer","minimum":1,"maximum":300},
@@ -194,6 +219,9 @@ fn execute_checked(
             && matches!(context.trusted_role.as_deref(), Some("chef" | "admin")),
         "remote worker admission requires authenticated source Owner/Admin MCP authority"
     );
+    if target::handles(arguments) {
+        return target::execute(root, context, arguments);
+    }
     let request: Request = serde_json::from_value(arguments.clone()).map_err(|_| {
         BusinessOsMcpError::validation(
             "remote_worker_admission",
@@ -209,10 +237,11 @@ fn execute_checked(
     };
     validate_binding(binding)?;
     anyhow::ensure!(
-        binding.source_instance_id == context.workspace,
+        binding.source_instance_id == context.managed_source_instance()?,
         "remote worker source instance differs from authenticated source"
     );
     let mut conn = store::open_store(root)?;
+    conn.execute_batch(target::SCHEMA)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS workjet_remote_worker_admissions (
         permit_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, source_instance_id TEXT NOT NULL,
@@ -248,6 +277,7 @@ fn execute_checked(
                     contract: CONTRACT.to_owned(),
                     permit_id: uuid::Uuid::new_v4().to_string(),
                     owner_user_id: context.actor.clone(),
+                    source_workspace_id: context.workspace.clone(),
                     authority_epoch: epoch,
                     authority_fingerprint: fingerprint.clone(),
                     expires_at_ms: now + i64::from(*ttl_seconds) * 1000,
@@ -265,7 +295,7 @@ fn execute_checked(
             label(permit_id)?;
             let raw: String = tx.query_row(
                 "SELECT receipt_json FROM workjet_remote_worker_admissions WHERE permit_id=?1 AND owner_user_id=?2 AND source_instance_id=?3",
-                params![permit_id, context.actor, context.workspace], |row| row.get(0)).optional()?
+                params![permit_id, context.actor, context.managed_source_instance()?], |row| row.get(0)).optional()?
                 .context("worker permit is unavailable to this source owner")?;
             let receipt: Receipt = serde_json::from_str(&raw)?;
             verify_receipt(
@@ -359,6 +389,7 @@ fn verify_receipt(
     anyhow::ensure!(
         receipt.contract == CONTRACT
             && receipt.owner_user_id == context.actor
+            && receipt.source_workspace_id == context.workspace
             && &receipt.binding == binding,
         "worker permit immutable binding differs"
     );
@@ -382,7 +413,7 @@ fn verify_receipt(
     Ok(())
 }
 
-fn current_actor(
+pub(super) fn current_actor(
     conn: &Connection,
     context: &McpChannelRequestContext,
 ) -> anyhow::Result<(String, i64)> {
@@ -445,9 +476,28 @@ fn current_authority(
         repository_key(native_repo)? == repository_key(&binding.repository_url)?,
         "worker repository differs from native owned project"
     );
-    let computer =
-        store::outbound_load_record(conn, "workjet_computers", &binding.target_computer_id)?
-            .context("worker target computer is not registered")?;
+    let computer = current_computer(conn, context, &binding.target_computer_id)?;
+    let (target_binding_id, target_revision) = target::current_binding(conn, context, binding)?;
+    let fingerprint = format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&serde_json::json!({
+            "owner":context.actor,"epoch":epoch,"workspace":context.workspace,"instance":context.managed_source_instance()?,
+            "project":binding.project_id,"repository":repository_key(native_repo)?,
+            "computer":binding.target_computer_id,"hostingMode":computer["hosting_mode"],
+            "capabilityEpoch":computer["capability_epoch"],"capabilityConfig":computer["capability_config"],
+            "targetBindingId":target_binding_id,"targetRevision":target_revision
+        }))?)
+    );
+    Ok((epoch, fingerprint))
+}
+
+fn current_computer(
+    conn: &Connection,
+    context: &McpChannelRequestContext,
+    computer_id: &str,
+) -> anyhow::Result<Value> {
+    let computer = store::outbound_load_record(conn, "workjet_computers", computer_id)?
+        .context("worker target computer is not registered")?;
     anyhow::ensure!(
         computer["owner_user_id"] == context.actor
             && computer["status"] == "assigned"
@@ -474,16 +524,7 @@ fn current_authority(
             .any(|capability| matches!(capability, ComputerCapability::Build(_))),
         "worker target has no current native build capability"
     );
-    let fingerprint = format!(
-        "sha256:{:x}",
-        Sha256::digest(serde_json::to_vec(&serde_json::json!({
-            "owner":context.actor,"epoch":epoch,"instance":context.workspace,
-            "project":binding.project_id,"repository":repository_key(native_repo)?,
-            "computer":binding.target_computer_id,"hostingMode":computer["hosting_mode"],
-            "capabilityEpoch":computer["capability_epoch"],"capabilityConfig":computer["capability_config"]
-        }))?)
-    );
-    Ok((epoch, fingerprint))
+    Ok(computer)
 }
 
 fn label(value: &str) -> anyhow::Result<()> {
