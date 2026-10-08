@@ -203,12 +203,28 @@ fn replicated_foreign_capability_cannot_claim_the_alias_actor() -> anyhow::Resul
 #[test]
 fn alias_project_update_keeps_canonical_owner_and_private_chat_visibility() -> anyhow::Result<()> {
     let root = fixture()?;
-    let result = command_plane::accept_rxdb_business_command(
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let (token, _) = store::issue_business_os_capability_token_for_managed_user(
         root.path(),
-        json!({"id":"alias-edit","module":"ctox","command_type":"ctox.workjet.project.upsert","record_id":"p0","payload":{"project_id":"p0","name":"Updated"},"client_context":{"actor":{"id":ALIAS,"role":"admin"}}}),
+        ALIAS,
+        "Michael",
+        "admin",
+        now,
+    )?;
+    let result = store::accept_rxdb_business_command_with_origin(
+        root.path(),
+        json!({"id":"alias-edit","module":"ctox","command_type":"ctox.workjet.project.upsert","record_id":"p0","payload":{"project_id":"p0","name":"Updated","info":{"summary":"Saved via alias"}},"client_context":{"actor":{"id":ALIAS,"role":"admin"},"capability_token":token}}),
+        store::CommandOrigin::ReplicatedPeer,
     )?;
     assert_eq!(result["status"], "completed");
+    assert_eq!(result["result"]["owner_user_id"], OWNER);
     assert_eq!(result["result"]["project"]["owner_user_id"], OWNER);
+    assert_eq!(
+        result["result"]["project"]["info"]["summary"],
+        "Saved via alias"
+    );
     let chat_id = result["result"]["group_chat_id"]
         .as_str()
         .context("group chat")?;
@@ -234,6 +250,23 @@ fn alias_project_update_keeps_canonical_owner_and_private_chat_visibility() -> a
         ),
         Some(false)
     );
+    let (foreign_token, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        FOREIGN,
+        "Michael",
+        "admin",
+        now,
+    )?;
+    let denied = store::accept_rxdb_business_command_with_origin(
+        root.path(),
+        json!({"id":"foreign-alias-edit","module":"ctox","command_type":"ctox.workjet.project.upsert","record_id":"p0","payload":{"project_id":"p0","name":"Forged"},"client_context":{"actor":{"id":ALIAS,"role":"chef"},"capability_token":foreign_token}}),
+        store::CommandOrigin::ReplicatedPeer,
+    );
+    assert!(denied.is_err() || denied.as_ref().is_ok_and(|v| v["status"] == "failed"));
+    let saved =
+        store::outbound_load_record(&conn, "workjet_projects", "p0")?.context("saved project")?;
+    assert_eq!(saved["owner_user_id"], OWNER);
+    assert_eq!(saved["name"], "Updated");
     Ok(())
 }
 

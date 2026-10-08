@@ -6,10 +6,18 @@ use crate::business_os::{mcp_channel, store, threads, worker_profile_bindings};
 use std::sync::{Arc, Barrier};
 use tempfile::{tempdir, TempDir};
 
+#[path = "jour_fixe_owner_tests.rs"]
+mod jour_fixe_owner;
+#[path = "jour_fixe_preparation_tests.rs"]
+mod jour_fixe_preparation;
+#[path = "jour_fixe_speech_tests.rs"]
+mod jour_fixe_speech;
 #[path = "recovery_tests.rs"]
 mod recovery;
 #[path = "supervisor_tests.rs"]
 mod supervisor;
+#[path = "supervisor_observation_tests.rs"]
+mod supervisor_observation;
 #[path = "supervisor_turn_tests.rs"]
 mod supervisor_turns;
 #[path = "weekly_report_tests.rs"]

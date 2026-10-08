@@ -1917,6 +1917,18 @@ No actor, token, key, document or state-root value is logged. Historical slow-on
 samples cannot establish complete acquisition frequency. Issue #380 tracks
 installed WELSCH/THESEN measurement and acceptance.
 
+The same fixed-cardinality aggregate is available as
+`performance.authority_fences` in the native peer's existing five-second
+heartbeat and `ctox business-os rxdb status`. This makes measurements readable
+even when no matching journal entries are available. `pid` identifies the
+measured process; `observed:false` means no completed instrumented attempt has
+been recorded, not a zero-duration fence. Unacquired stages remain absent.
+Status reads neither reset counters nor consume the journal throttle, initialize
+SQLite, or take issuer/authority locks. An external CLI reads the daemon's fresh
+heartbeat rather than its own empty aggregate; a missing or stale heartbeat
+keeps performance unknown (`null`). Bind measurements to the heartbeat's PID,
+installed source/binary and freshness before calculating interval deltas.
+
 Failed native reads of the current actor role/epoch or collection
 grants propagate as unavailable authority rather than invalid credentials;
 missing/inactive actors, role/epoch mismatches and foreign signed tokens remain

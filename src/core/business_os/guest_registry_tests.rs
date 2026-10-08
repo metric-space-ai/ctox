@@ -4,6 +4,10 @@
 //! Canonical policy/controller component tests. The authority fixture rejects
 //! every operation: these tests cannot claim quorum, provider, guest or VM proof.
 use super::*;
+
+#[cfg(target_os = "linux")]
+#[path = "guest_registry_target_enrollment_tests.rs"]
+mod target_enrollment_tests;
 use ctox_sync::authority::{Job, Receipt, Request, WorkerMembership};
 use serde_json::json;
 use std::{future::Future, pin::Pin};

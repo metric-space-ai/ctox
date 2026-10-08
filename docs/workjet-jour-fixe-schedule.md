@@ -32,9 +32,25 @@ This command creates a schedule; the example is not a deployed skill or a
 registration tool. Older callers and stored rows keep UTC/zero-lead semantics
 and the previous serialized view. Invalid calendars fail before database effects.
 
-The next integration must authenticate the project owner and the real Workjet
-supervisor UUID/native execution binding, reconcile exactly one preparation
-schedule when configuration changes, pause it on archive, and deliver artifacts
-and comments to that same supervisor chat. This scheduler API alone does not
-prove that bridge, install a meeting skill, generate a deck/audio, or confirm a
-goal. Those remain subsequent native handlers against the merged v1 contract.
+The native project integration authenticates the project owner and registered
+Workjet supervisor binding, reconciles one preparation schedule on configuration
+change and pauses it on archive. Due preparation persists one occurrence's
+meeting metadata and submits a turn to that supervisor with the embedded
+JourFix skill; retries keep the same meeting and actual preparation-task ID.
+No database writer transaction spans supervisor execution.
+
+`ctox.workjet.jour_fixe.meeting.read` accepts `{project_id,meeting_id?}`. It
+rechecks the current project owner and supervisor binding and returns
+`{ok:true,meeting:null}` for an absent latest occurrence, or the shared `Meeting`
+with the actual `preparation_task_id`. An explicitly requested missing meeting
+is rejected. The shell bridge exposes `project.jour_fixe.meeting.read` with
+`{commandId,projectId,meetingId?}` and returns
+`{action,commandId,projectId,contract,meeting,preparationTaskId?}`. The meeting
+retains the shared snake_case wire fields and canonical owner; a verified alias
+is not substituted into the persisted meeting. A foreign or malformed receipt
+is rejected before the UI sees it.
+
+This preparation/read foundation does not generate a completed deck/audio,
+deliver comments or confirm a goal. Those remain subsequent native handlers
+against the shared v1 contract; source checks do not establish installed meeting
+acceptance.

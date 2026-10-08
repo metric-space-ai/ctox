@@ -1397,6 +1397,47 @@ fn failed_replay_leaves_a_cursor_so_the_next_pass_is_incremental() -> Result<()>
 }
 
 #[test]
+fn terminal_run_projection_keeps_the_identity_allocated_before_execution() -> Result<()> {
+    let (root, conn) = setup()?;
+    let db = crate::paths::core_db(root.path());
+    // This fixture normally uses a reduced legacy finalization table. Install
+    // the real LCM schema to exercise native run issuance and finalization.
+    conn.execute_batch("DROP TABLE worker_attempt_finalizations;")?;
+    let engine = crate::lcm::LcmEngine::open(&db, crate::lcm::LcmConfig::default())?;
+    let tasks = vec!["task".to_owned()];
+    let run_id = engine.register_worker_run(crate::lcm::WorkerRunInput {
+        attempt_id: "issued-attempt",
+        work_key: "work",
+        conversation_id: 42,
+        source_label: "queue",
+        task_ids: &tasks,
+    })?;
+    engine.begin_worker_attempt_finalization(crate::lcm::WorkerAttemptFinalizationInput {
+        attempt_id: "issued-attempt",
+        work_key: "work",
+        conversation_id: 42,
+        source_label: "queue",
+        agent_outcome: crate::lcm::AgentOutcome::Success,
+        reply_text: "saved result",
+        error_text: None,
+    })?;
+    conn.execute("UPDATE worker_attempt_finalizations SET status='succeeded',terminal_at=?1 WHERE attempt_id='issued-attempt'", [Utc::now().to_rfc3339()])?;
+    conn.execute(r#"INSERT INTO ctox_harness_flow_events VALUES('issued-start','worker.turn_started','Started','','task',NULL,NULL,'{"attempt_id":"issued-attempt"}',?1)"#, [Utc::now().to_rfc3339()])?;
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    project_runs(root.path(), &conn, &mut writer)?;
+    assert_eq!(record(root.path(), "ctox_runs", &run_id)?["id"], run_id);
+    assert!(record(root.path(), "ctox_runs", "issued-attempt").is_err());
+    project_runs(root.path(), &conn, &mut writer)?;
+    let count: i64 = writer.inner.source_connection().query_row(
+        "SELECT count(*) FROM business_records WHERE collection='ctox_runs' AND deleted=0",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
+#[test]
 fn fresh_writer_replay_keeps_unchanged_records_untouched() -> Result<()> {
     let (root, conn) = setup()?;
     conn.execute("INSERT INTO communication_routing_state(message_key,route_status,updated_at) VALUES('task','leased',?1)", [Utc::now().to_rfc3339()])?;

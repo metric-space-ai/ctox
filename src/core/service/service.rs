@@ -6910,6 +6910,18 @@ fn start_prompt_worker(
                         &mut session_options,
                     )?;
                     configure_business_os_app_file_system_scope(&root, &job, &mut session_options)?;
+                    // This branch executes admitted work. Finalization recovery above
+                    // never allocates a replacement run or invokes the model again.
+                    lcm::run_register_worker_run(
+                        &db_path,
+                        lcm::WorkerRunInput {
+                            attempt_id: &attempt_id,
+                            work_key: &attempt_work_key,
+                            conversation_id,
+                            source_label: &job.source_label,
+                            task_ids: &job.leased_message_keys,
+                        },
+                    )?;
                     if let Some(command_id) =
                         metadata_string(&job.queue_task_metadata, "business_os_command_id")
                     {

@@ -1326,6 +1326,7 @@ fn native_peer_performance_snapshot() -> Value {
         "browser_live": browser_live_metrics_snapshot(),
         "auxiliary_requests": auxiliary_request_metrics_snapshot(),
         "command_plane": COMMAND_PLANE_METRICS.snapshot(),
+        "authority_fences": crate::authority_fence_metrics::snapshot(),
         "rxdb_sqlite": rxdb::storage::sqlite::instance::sqlite_runtime_counters_snapshot(),
         "rxdb_subjects": {
             "schema": "ctox.rxdb.subjects.runtime_counters.v1",
@@ -13462,6 +13463,37 @@ pub(in crate::business_os) mod tests {
         assert_eq!(data["title"], "after copy");
         assert_eq!(data["inbound_channel"], "fixture");
         Ok(())
+    }
+
+    #[test]
+    fn native_peer_heartbeat_publishes_process_bound_authority_fence_aggregate() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = root.path().join("runtime/unopened.sqlite3");
+        write_native_peer_heartbeat(root.path(), "fence-status-test", &database_path)
+            .expect("write heartbeat without opening a database");
+        let heartbeat = read_native_peer_heartbeat(root.path()).expect("read heartbeat");
+        let metrics = &heartbeat["performance"]["authority_fences"];
+        assert_eq!(metrics["schema"], "ctox.authority_fence_metrics.v1");
+        assert_eq!(metrics["pid"], heartbeat["pid"]);
+        assert!(metrics["observed"].is_boolean());
+        assert_eq!(metrics["categories"].as_object().unwrap().len(), 3);
+        assert!(!database_path.exists(), "status must not initialize SQLite");
+    }
+
+    #[test]
+    fn native_peer_fence_status_uses_only_a_fresh_daemon_heartbeat() {
+        // An external CLI has no samples for the daemon. Preserve its exact
+        // aggregate, and report unknown (null) once the heartbeat is stale.
+        let daemon = json!({"schema":"ctox.authority_fence_metrics.v1", "pid":424242,
+          "observed":true, "process_elapsed_us":123456,
+          "categories":{"issuer_publication":{"completed_attempts":7}}});
+        let heartbeat = json!({"performance":{"authority_fences":daemon}});
+        assert_eq!(
+            native_peer_performance_status(Some(&heartbeat), true)["authority_fences"],
+            daemon
+        );
+        assert!(native_peer_performance_status(Some(&heartbeat), false).is_null());
+        assert!(native_peer_performance_status(None, true).is_null());
     }
 
     #[test]

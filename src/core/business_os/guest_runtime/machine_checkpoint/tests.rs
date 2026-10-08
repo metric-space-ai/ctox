@@ -2,6 +2,67 @@
 // License: AGPL-3.0-only
 
 use super::*;
+
+#[test]
+fn protected_guest_identity_uses_exact_metadata_and_rejects_ambiguous_or_invalid_names(
+) -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (store, original, _) = fixture(root.path())?;
+    let identity = ProtectedGuestIdentity::from_checkpoint(&store, &original)?;
+    ensure!(identity.guest_id() == "guest-o04" && identity.service_session() == "service-o04");
+    let metadata = original
+        .iter()
+        .find(|e| e.path == MACHINE_PATH)
+        .unwrap()
+        .clone();
+    let mut duplicate = original.clone();
+    duplicate.push(metadata.clone());
+    ensure!(ProtectedGuestIdentity::from_checkpoint(&store, &duplicate).is_err());
+    for field in [
+        "version",
+        "profile",
+        "guestId",
+        "guestServiceSession",
+        "memoryMib",
+        "vcpus",
+    ] {
+        let mut bytes = Vec::new();
+        store
+            .open_blob(&metadata.artifact)?
+            .read_to_end(&mut bytes)?;
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        value[field] = match field {
+            "version" => serde_json::json!(2),
+            "memoryMib" => serde_json::json!(0),
+            "vcpus" => serde_json::json!(3),
+            _ => serde_json::json!(""),
+        };
+        let bytes = serde_json::to_vec(&value)?;
+        let artifact = ArtifactRef {
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            size_bytes: bytes.len() as u64,
+        };
+        store.ingest_blob(&artifact, bytes.as_slice())?;
+        let mut entries = original.clone();
+        entries
+            .iter_mut()
+            .find(|e| e.path == MACHINE_PATH)
+            .unwrap()
+            .artifact = artifact;
+        ensure!(
+            ProtectedGuestIdentity::from_checkpoint(&store, &entries).is_err(),
+            "{field}"
+        );
+    }
+    let mut executable = original.clone();
+    executable
+        .iter_mut()
+        .find(|e| e.path == MACHINE_PATH)
+        .unwrap()
+        .executable = true;
+    ensure!(ProtectedGuestIdentity::from_checkpoint(&store, &executable).is_err());
+    Ok(())
+}
 use std::io::Write;
 
 fn file(path: &Path, bytes: &[u8]) -> Result<File> {
