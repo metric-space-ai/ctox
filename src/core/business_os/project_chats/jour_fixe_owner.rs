@@ -14,19 +14,21 @@ const MAX_METADATA_BYTES: usize = 1024 * 1024;
 
 pub(in crate::business_os) fn is_command(kind:&str)->bool {
     matches!(kind,"ctox.workjet.jour_fixe.meeting.start" | "ctox.workjet.jour_fixe.meeting.end"
-        | "ctox.workjet.jour_fixe.transcript.append" | "ctox.workjet.jour_fixe.todos.revise")
+        | "ctox.workjet.jour_fixe.transcript.append" | "ctox.workjet.jour_fixe.todos.revise"
+        | "ctox.workjet.jour_fixe.comment.add")
 }
 // A declared meeting tool without a handler must fail terminally, never fall
 // through into an ordinary model task or recursively queue another preparation.
 pub(in crate::business_os) fn is_reserved_command(kind:&str)->bool {
     matches!(kind,"ctox.workjet.jour_fixe.prepare" | "ctox.workjet.jour_fixe.deck.publish"
-        | "ctox.workjet.jour_fixe.comment.add" | "ctox.workjet.jour_fixe.todos.propose"
+        | "ctox.workjet.jour_fixe.todos.propose"
         | "ctox.workjet.jour_fixe.todos.confirm")
 }
 enum Edit {
     Start(wire::MeetingTransitionRequest),
     End(wire::MeetingTransitionRequest),
     Text(wire::AppendTranscriptRequest),
+    Comment(wire::AddCommentRequest),
     Revise(wire::ProposeTodosRequest),
 }
 impl Edit {
@@ -34,6 +36,7 @@ impl Edit {
         match self {
             Self::Start(v)|Self::End(v)=>(v.operation_id.as_str(),v.meeting_id.as_str(),v.expected_revision),
             Self::Text(v)=>(v.operation_id.as_str(),v.meeting_id.as_str(),v.expected_revision),
+            Self::Comment(v)=>(v.operation_id.as_str(),v.meeting_id.as_str(),v.expected_revision),
             Self::Revise(v)=>(v.operation_id.as_str(),v.meeting_id.as_str(),v.expected_revision),
         }
     }
@@ -57,6 +60,10 @@ fn parse(command:&BusinessCommand)->anyhow::Result<(Edit,Value)> {
         "ctox.workjet.jour_fixe.transcript.append"=>{
             let v:wire::AppendTranscriptRequest=serde_json::from_value(payload.clone())?;
             v.validate().map_err(anyhow::Error::msg)?; Edit::Text(v)
+        },
+        "ctox.workjet.jour_fixe.comment.add"=>{
+            let v:wire::AddCommentRequest=serde_json::from_value(payload.clone())?;
+            v.validate().map_err(anyhow::Error::msg)?; Edit::Comment(v)
         },
         "ctox.workjet.jour_fixe.todos.revise"=>{
             let v:wire::ProposeTodosRequest=serde_json::from_value(payload.clone())?;
@@ -218,6 +225,26 @@ pub(in crate::business_os) fn handle(
                 ensure!(turn.sequence==next && meeting.transcript.iter().all(|v|v.id!=turn.id),"transcript sequence or identity conflicts");
                 changed_id=Some(turn.id.clone());
                 meeting.transcript.push(turn.clone());
+            },
+            Edit::Comment(request)=>{
+                ensure!(matches!(meeting.state,wire::MeetingState::Live|wire::MeetingState::Review),
+                    "meeting does not accept slide comments");
+                ensure!(request.deck_revision>0 && request.deck_revision==meeting.deck_revision
+                    && meeting.slides.iter().any(|slide|slide.id==request.slide_id
+                        && slide.meeting_id==meeting.id),"comment slide or deck revision conflicts");
+                ensure!(!request.text.trim().is_empty()
+                    && meeting.comments.iter().all(|comment|comment.id!=request.comment_id)
+                    && meeting.slides.iter().all(|slide|slide.id!=request.comment_id)
+                    && meeting.transcript.iter().all(|turn|turn.id!=request.comment_id),
+                    "comment text or meeting evidence identity conflicts");
+                let comment=wire::Comment {
+                    id:request.comment_id.clone(),slide_id:request.slide_id.clone(),
+                    deck_revision:meeting.deck_revision,x:request.x,y:request.y,text:request.text.clone(),
+                    author_user_id:meeting.owner_user_id.clone(),created_at_ms:chrono::Utc::now().timestamp_millis(),
+                    supervisor_event_id:None,meeting_id:meeting.id.clone(),
+                };
+                comment.validate().map_err(anyhow::Error::msg)?;
+                changed_id=Some(comment.id.clone());meeting.comments.push(comment);
             },
             Edit::Revise(request)=>{
                 ensure!(meeting.state==wire::MeetingState::Review,"meeting is not in review");

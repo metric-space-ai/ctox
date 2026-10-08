@@ -13712,7 +13712,8 @@ async function workjetProjectControl(request = {}) {
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
-    'project.jour_fixe.transcript.append', 'project.jour_fixe.todos.revise'];
+    'project.jour_fixe.transcript.append', 'project.jour_fixe.todos.revise',
+    'project.jour_fixe.comment.add'];
   const acquisition = supervisorActions.includes(action)
     ? requireWorkjetSupervisorDataPlane() : requireWorkjetProjectDataPlane();
   const { projectBridge, workingCopyBridge } = listDeadline
@@ -13724,13 +13725,16 @@ async function workjetProjectControl(request = {}) {
     'project.jour_fixe.meeting.end': 'MeetingTransitionRequest',
     'project.jour_fixe.transcript.append': 'AppendTranscriptRequest',
     'project.jour_fixe.todos.revise': 'ProposeTodosRequest',
+    'project.jour_fixe.comment.add': 'AddCommentRequest',
   };
   if (Object.hasOwn(meetingMutationTypes, action)) {
     const appending = action === 'project.jour_fixe.transcript.append';
     const revising = action === 'project.jour_fixe.todos.revise';
+    const commenting = action === 'project.jour_fixe.comment.add';
     const allowedKeys = new Set(['action', 'commandId', 'projectId', 'operationId', 'meetingId', 'expectedRevision']);
     if (appending) allowedKeys.add('turn');
     if (revising) for (const key of ['proposalRevision', 'items']) allowedKeys.add(key);
+    if (commenting) for (const key of ['commentId', 'slideId', 'deckRevision', 'x', 'y', 'text']) allowedKeys.add(key);
     assertWorkjetProjectPayloadKeys(request, allowedKeys);
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
     const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
@@ -13744,6 +13748,8 @@ async function workjetProjectControl(request = {}) {
       expected_revision: request.expectedRevision,
       ...(appending ? { turn: request.turn } : {}),
       ...(revising ? { proposal_revision: request.proposalRevision, items: request.items } : {}),
+      ...(commenting ? { comment_id: request.commentId, slide_id: request.slideId,
+        deck_revision: request.deckRevision, x: request.x, y: request.y, text: request.text } : {}),
     };
     const validation = validateJourFixeValue(meetingMutationTypes[action], payload);
     if (validation.ok !== true) throw new TypeError(validation.error);
@@ -13790,7 +13796,8 @@ async function workjetProjectControl(request = {}) {
     if (mutation.operation_id !== expectedPayload.operation_id || mutation.meeting_id !== expectedPayload.meeting_id
       || mutation.project_id !== projectId || mutation.revision !== expectedPayload.expected_revision + 1
       || (expectedState ? mutation.state !== expectedState : !['live', 'review'].includes(mutation.state))
-      || (appending ? mutation.changed_id !== expectedPayload.turn.id : mutation.changed_id != null)
+      || (appending ? mutation.changed_id !== expectedPayload.turn.id
+        : commenting ? mutation.changed_id !== expectedPayload.comment_id : mutation.changed_id != null)
       || (revising ? mutation.todos_revision !== expectedPayload.proposal_revision : mutation.todos_revision != null)) {
       throw new Error('Workjet meeting mutation receipt does not confirm the requested operation.');
     }

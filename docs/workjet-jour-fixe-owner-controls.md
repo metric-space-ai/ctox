@@ -18,6 +18,12 @@ shared `ctox.workjet.jour_fixe.v1` fixture request types:
   This path rejects supervisor identity, speech modality, audio, STT run/stream
   and latency claims. Registered speech/supervisor production is a separate
   owned integration; storing owner text is not proof of a supervisor reply.
+- `ctox.workjet.jour_fixe.comment.add`: `AddCommentRequest`; live/review only,
+  an existing slide at the exact current deck revision, normalized pin and
+  nonempty text. The native canonical Owner and server timestamp are stored;
+  caller author/event assertions fail. Comment IDs cannot collide with another
+  item of meeting evidence. This persists feedback but does not claim a
+  Supervisor response or enqueue a model turn.
 - `ctox.workjet.jour_fixe.todos.revise`: `ProposeTodosRequest`; review only,
   an existing proposed list and its exact next proposal revision. Evidence IDs
   refer only to this meeting's slides/comments/transcript. The result remains
@@ -36,7 +42,7 @@ state. Runtime metadata writes are bounded to 1 MiB. Preparation and a ready
 state are not audio-file authorization; playback still uses the authorized
 file/chunk path.
 
-Comment delivery, bound-supervisor deck/proposal publication, registered audio
+Supervisor processing of comments, bound-supervisor deck/proposal publication, registered audio
 and speech, and confirmed to-dos becoming the Core supervisor goal remain
 separate required delivery work. Their declared command names fail terminally
 until their handlers land; they cannot fall through into recursive model tasks.
@@ -45,12 +51,15 @@ not establish installed meeting acceptance.
 
 ## Browser control
 
-`workjetProjectControl` exposes the same four Owner actions as
+`workjetProjectControl` exposes the same five Owner actions as
 `project.jour_fixe.meeting.start`, `project.jour_fixe.meeting.end`,
-`project.jour_fixe.transcript.append` and `project.jour_fixe.todos.revise`.
+`project.jour_fixe.transcript.append`, `project.jour_fixe.todos.revise` and
+`project.jour_fixe.comment.add`.
 All take `commandId`, `projectId`, `operationId`, `meetingId` and
 `expectedRevision`. Text append additionally takes the shared snake-case `turn`
 DTO; todo revision takes `proposalRevision` and the shared `items` DTOs.
+Comment add takes `commentId`, `slideId`, `deckRevision`, `x`, `y` and `text`.
+Its returned `changed_id` must exactly match the requested comment ID.
 The native payload uses `meeting_id` and routes through `record_id=projectId`;
 project ownership is resolved from the stored meeting, never a caller assertion.
 

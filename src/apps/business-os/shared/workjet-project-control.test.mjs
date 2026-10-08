@@ -378,6 +378,7 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
       const payload = { ...structuredClone(command.payload), inbound_channel: command.inbound_channel || 'ctox' };
       const append = command.command_type.endsWith('.transcript.append');
       const revise = command.command_type.endsWith('.todos.revise');
+      const comment = command.command_type.endsWith('.comment.add');
       const receipt = {
         command_id: command.id, target_record_id: command.record_id,
         payload, status: 'completed', ok: true,
@@ -386,6 +387,7 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
           project_id: command.record_id, revision: payload.expected_revision + 1,
           state: command.command_type.endsWith('.meeting.start') || append ? 'live' : 'review',
           ...(append ? { changed_id: payload.turn.id } : {}),
+          ...(comment ? { changed_id: payload.comment_id } : {}),
           ...(revise ? { todos_revision: payload.proposal_revision } : {}),
         } },
       };
@@ -405,6 +407,8 @@ function meetingOwnerRequest(action = 'project.jour_fixe.meeting.start', extra =
       id: 'owner-text', sequence: 1, speaker: 'owner', modality: 'text', text: 'Please verify persistence.',
       started_at_ms: 1000, ended_at_ms: 1001, meeting_id: 'meeting-1',
     } } : {}),
+    ...(action === 'project.jour_fixe.comment.add' ? { commentId: 'comment-1', slideId: 'slide-1',
+      deckRevision: 1, x: 0.25, y: 0.75, text: 'Please prioritize persistence.' } : {}),
     ...(action === 'project.jour_fixe.todos.revise' ? { proposalRevision: 2, items: [{
       id: 'todo-1', title: 'Verify persistence', acceptance: 'Save survives reopen',
       priority: 'P1', evidence_ids: ['owner-text'],
@@ -412,7 +416,7 @@ function meetingOwnerRequest(action = 'project.jour_fixe.meeting.start', extra =
 }
 
 test('meeting Owner controls preserve typed intent and compact native revision receipts', async () => {
-  for (const suffix of ['meeting.start', 'meeting.end', 'transcript.append', 'todos.revise']) {
+  for (const suffix of ['meeting.start', 'meeting.end', 'transcript.append', 'todos.revise', 'comment.add']) {
     const action = `project.jour_fixe.${suffix}`;
     const fixture = nativeMeetingOwnerFixture();
     const request = meetingOwnerRequest(action);
@@ -1394,4 +1398,23 @@ test('execution page cursor must match the ordered safe native event page', asyn
   ]) await assert.rejects(executionFixture(change).invoke(supervisorTurnRequest('watch', {
     executionPage: { attempt_id: 'native-attempt', cursor: { after_sequence: 5, after_event_id: 'prior-event' } },
   })));
+});
+
+test('slide comment rejects unsafe pins and claimed author before dispatch', async () => {
+  for (const extra of [{ x: -0.1 }, { y: 1.1 }, { x: NaN }, { y: Infinity },
+    { slideId: '' }, { commentId: '' }, { text: '' }, { author_user_id: 'owner' },
+    { supervisor_event_id: 'forged' }]) {
+    const fixture = nativeMeetingOwnerFixture();
+    await assert.rejects(fixture.invoke(meetingOwnerRequest('project.jour_fixe.comment.add', extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('slide comment receipt must confirm the same comment identity', async () => {
+  const request = meetingOwnerRequest('project.jour_fixe.comment.add');
+  for (const change of [receipt => { receipt.result.mutation.changed_id = 'foreign-comment'; },
+    receipt => { delete receipt.result.mutation.changed_id; },
+    receipt => { receipt.payload.slide_id = 'another-slide'; }]) {
+    await assert.rejects(nativeMeetingOwnerFixture(change).invoke(request));
+  }
 });
