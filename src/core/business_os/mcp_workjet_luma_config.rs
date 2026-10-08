@@ -16,6 +16,7 @@ const COLLECTION: &str = "workjet_luma_configuration";
 const RECORD_ID: &str = "instance";
 const DOCUMENT_SCHEMA_VERSION: i64 = 1;
 const MAX_CONFIGURATION_BYTES: usize = 1024 * 1024;
+const MAX_REVISION: u64 = 9_007_199_254_740_991;
 /// Keys that describe the whole instance. Anything else, notably `computers`
 /// and `selectedComputerId`, is refused so machine state cannot leak in.
 const INSTANCE_KEYS: &[&str] = &[
@@ -36,6 +37,10 @@ struct SaveRequest {
     configuration: Value,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadRequest {}
+
 pub(super) fn read_descriptor() -> BusinessOsMcpToolDescriptor {
     read_tool(
         READ_TOOL,
@@ -50,7 +55,7 @@ pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
         "Replace the instance-wide Luma configuration. expected_revision must equal the revision last read (0 for the first write). A stale revision returns a conflict with the current revision and writes nothing. Keys outside the instance-wide set, such as computers, are refused.",
         json!({"type":"object","additionalProperties":false,"required":["expected_revision","configuration"],
             "properties":{
-                "expected_revision":{"type":"integer","minimum":0},
+                "expected_revision":{"type":"integer","minimum":0,"maximum":MAX_REVISION},
                 "configuration":{"type":"object"}}}),
     )
 }
@@ -62,7 +67,11 @@ pub(super) fn execute(
     args: &Value,
 ) -> anyhow::Result<Value> {
     match tool_name {
-        READ_TOOL => read(root, context),
+        READ_TOOL => {
+            let _: ReadRequest = serde_json::from_value(args.clone())
+                .context("invalid Luma configuration read request")?;
+            read(root, context)
+        }
         WRITE_TOOL => save(root, context, args),
         _ => anyhow::bail!("unsupported Luma configuration tool"),
     }
@@ -79,7 +88,7 @@ fn read(root: &Path, context: &McpChannelRequestContext) -> anyhow::Result<Value
     Ok(match record {
         Some(record) => json!({
             "ok": true,
-            "revision": revision_of(&record),
+            "revision": revision_of(&record)?,
             "configuration": record["configuration"],
             "updated_at_ms": record["updated_at_ms"],
         }),
@@ -91,6 +100,10 @@ fn save(root: &Path, context: &McpChannelRequestContext, args: &Value) -> anyhow
     let request: SaveRequest =
         serde_json::from_value(args.clone()).context("invalid Luma configuration request")?;
     validate_configuration(&request.configuration)?;
+    anyhow::ensure!(
+        request.expected_revision <= MAX_REVISION,
+        "invalid Luma revision"
+    );
     let mut conn = Connection::open_with_flags(
         store::business_os_store_path(root),
         OpenFlags::SQLITE_OPEN_READ_WRITE,
@@ -100,7 +113,9 @@ fn save(root: &Path, context: &McpChannelRequestContext, args: &Value) -> anyhow
     require_workspace(&tx, context, BusinessOsPermission::RuntimeManage)?;
     let current_revision = store::outbound_load_record(&tx, COLLECTION, RECORD_ID)?
         .as_ref()
-        .map_or(0, revision_of);
+        .map(revision_of)
+        .transpose()?
+        .unwrap_or(0);
     if request.expected_revision != current_revision {
         return Ok(json!({
             "ok": false,
@@ -108,7 +123,10 @@ fn save(root: &Path, context: &McpChannelRequestContext, args: &Value) -> anyhow
             "revision": current_revision,
         }));
     }
-    let revision = current_revision + 1;
+    let revision = current_revision
+        .checked_add(1)
+        .filter(|revision| *revision <= MAX_REVISION)
+        .context("Luma configuration revision exhausted")?;
     store::upsert_business_record(
         &tx,
         COLLECTION,
@@ -125,8 +143,11 @@ fn save(root: &Path, context: &McpChannelRequestContext, args: &Value) -> anyhow
     Ok(json!({"ok": true, "revision": revision}))
 }
 
-fn revision_of(record: &Value) -> u64 {
-    record["revision"].as_u64().unwrap_or(0)
+fn revision_of(record: &Value) -> anyhow::Result<u64> {
+    record["revision"]
+        .as_u64()
+        .filter(|revision| *revision > 0 && *revision <= MAX_REVISION)
+        .context("invalid stored Luma configuration revision")
 }
 
 fn validate_configuration(value: &Value) -> anyhow::Result<()> {
@@ -173,6 +194,128 @@ fn require_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture() -> anyhow::Result<tempfile::TempDir> {
+        let root = tempfile::tempdir()?;
+        store::tests::seed_business_user(root.path(), "owner", "chef")?;
+        store::tests::seed_business_user(root.path(), "reader", "user")?;
+        save_mcp_policy(root.path(), &default_mcp_policy())?;
+        Ok(root)
+    }
+
+    fn call(
+        root: &Path,
+        tool: &str,
+        args: Value,
+        actor: &str,
+        role: &str,
+    ) -> anyhow::Result<Value> {
+        let gateway = json!({
+            "auth_source":"ctox_dev_managed_mcp_token", "channel":"ctox_dev_managed_mcp",
+            "surface":"workjet", "actor":actor, "role":role,
+            "workspace":"tenant:instance", "instance_id":"source-instance"
+        });
+        call_tool_inner(root, tool, args, Some(&gateway))
+    }
+
+    #[test]
+    fn instance_configuration_is_durable_and_stale_writers_cannot_replace_it() -> anyhow::Result<()>
+    {
+        let root = fixture()?;
+        let first =
+            json!({"workerProfiles":[], "managedSystemPrompt":"Shared instance instructions"});
+        assert_eq!(
+            call(root.path(), READ_TOOL, json!({}), "owner", "chef")?["revision"],
+            0
+        );
+        let saved = call(
+            root.path(),
+            WRITE_TOOL,
+            json!({"expected_revision":0, "configuration":first}),
+            "owner",
+            "chef",
+        )?;
+        assert_eq!(saved, json!({"ok":true,"revision":1}));
+        // A second client that read revision zero loses the compare-and-swap.
+        let stale = call(
+            root.path(),
+            WRITE_TOOL,
+            json!({"expected_revision":0, "configuration":{"managedSystemPrompt":"Stale client"}}),
+            "owner",
+            "chef",
+        )?;
+        assert_eq!(stale, json!({"ok":false,"conflict":true,"revision":1}));
+        // Every call opens a new connection; reading here proves committed persistence.
+        let read = call(root.path(), READ_TOOL, json!({}), "owner", "chef")?;
+        assert_eq!(read["configuration"], first);
+        assert!(read["updated_at_ms"].as_i64().is_some());
+        assert_eq!(
+            call(
+                root.path(),
+                WRITE_TOOL,
+                json!({"expected_revision":1,"configuration":{"managedSystemPrompt":"New instructions"}}),
+                "owner",
+                "chef"
+            )?["revision"],
+            2
+        );
+        assert_eq!(
+            call(root.path(), READ_TOOL, json!({}), "owner", "chef")?["configuration"]
+                ["managedSystemPrompt"],
+            "New instructions"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn instance_configuration_requires_runtime_authority_and_channel_scope() -> anyhow::Result<()> {
+        let root = fixture()?;
+        let args = json!({"expected_revision":0,"configuration":{"workerProfiles":[]}});
+        assert!(call(root.path(), WRITE_TOOL, args.clone(), "reader", "user").is_err());
+        assert!(call(root.path(), READ_TOOL, json!({}), "reader", "user").is_err());
+        // Arguments cannot manufacture authenticated authority.
+        assert!(call_tool_inner(
+            root.path(),
+            WRITE_TOOL,
+            json!({"expected_revision":0,"configuration":{},"trusted_role":"chef"}),
+            None
+        )
+        .is_err());
+        let mut policy = default_mcp_policy();
+        policy.allowed_collections = vec!["workjet_projects".to_string()];
+        save_mcp_policy(root.path(), &policy)?;
+        assert!(call(root.path(), READ_TOOL, json!({}), "owner", "chef").is_err());
+        assert!(call(root.path(), WRITE_TOOL, args, "owner", "chef").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn configuration_requests_reject_machine_state_unknown_fields_and_unsafe_revisions(
+    ) -> anyhow::Result<()> {
+        let root = fixture()?;
+        for args in [
+            json!({"expected_revision":0,"configuration":{"computers":[]}}),
+            json!({"expected_revision":0,"configuration":{},"computer_id":"other"}),
+            json!({"expected_revision":MAX_REVISION + 1,"configuration":{}}),
+        ] {
+            assert!(call(root.path(), WRITE_TOOL, args, "owner", "chef").is_err());
+        }
+        assert!(call(
+            root.path(),
+            READ_TOOL,
+            json!({"computer_id":"other"}),
+            "owner",
+            "chef"
+        )
+        .is_err());
+        assert_eq!(
+            call(root.path(), READ_TOOL, json!({}), "owner", "chef")?["revision"],
+            0
+        );
+        assert!(revision_of(&json!({"revision":-1})).is_err());
+        assert!(revision_of(&json!({"revision":MAX_REVISION + 1})).is_err());
+        Ok(())
+    }
 
     #[test]
     fn accepts_instance_wide_keys_only() {

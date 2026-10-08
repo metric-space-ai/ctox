@@ -7082,6 +7082,10 @@ fn enforce_argument_scope_policy(
         workjet_kpis::TOOL | workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
             enforce_module_policy(root, "ctox")?;
         }
+        workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
+            enforce_module_policy(root, "ctox")?;
+            enforce_collection_policy(root, "workjet_luma_configuration")?;
+        }
         "business_os.create_app" => {
             if let Ok(module_id) = app_module_id_from_arguments(
                 arguments,
