@@ -87,6 +87,7 @@
     "ctox.workjet.jour_fixe.meeting.end",
     "ctox.workjet.jour_fixe.meeting.read",
     "ctox.workjet.jour_fixe.meeting.start",
+    "ctox.workjet.jour_fixe.narration.local_publish",
     "ctox.workjet.jour_fixe.prepare",
     "ctox.workjet.jour_fixe.todos.confirm",
     "ctox.workjet.jour_fixe.todos.propose",
