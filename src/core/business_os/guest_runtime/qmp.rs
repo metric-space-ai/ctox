@@ -142,7 +142,59 @@ impl<S: AsyncRead + AsyncWrite + Unpin> QmpClient<S> {
         }
     }
 
+    pub(super) async fn migrate_local(
+        &mut self,
+        socket: &std::path::Path,
+        incoming: bool,
+    ) -> Result<(), QmpError> {
+        let Some(path) = socket.to_str().filter(|path| {
+            socket.is_absolute() && !path.contains(',') && !path.chars().any(char::is_control)
+        }) else {
+            return Err(QmpError::Unavailable);
+        };
+        let operation = if incoming {
+            "migrate-incoming"
+        } else {
+            "migrate"
+        };
+        if self
+            .command_with_arguments(operation, Some(json!({"uri": format!("unix:{path}")})))
+            .await?
+            .is_object()
+        {
+            Ok(())
+        } else {
+            self.usable = false;
+            Err(QmpError::UnknownOutcome)
+        }
+    }
+
+    pub(super) async fn migration_status(&mut self) -> Result<String, QmpError> {
+        let reply = self.command("query-migrate").await?;
+        match reply.get("status").and_then(Value::as_str) {
+            Some(status)
+                if !status.is_empty()
+                    && status.len() <= 64
+                    && !status.chars().any(char::is_control) =>
+            {
+                Ok(status.into())
+            }
+            _ => {
+                self.usable = false;
+                Err(QmpError::UnknownOutcome)
+            }
+        }
+    }
+
     async fn command(&mut self, operation: &'static str) -> Result<Value, QmpError> {
+        self.command_with_arguments(operation, None).await
+    }
+
+    async fn command_with_arguments(
+        &mut self,
+        operation: &'static str,
+        arguments: Option<Value>,
+    ) -> Result<Value, QmpError> {
         if !self.usable {
             return Err(QmpError::ConnectionUnusable);
         }
@@ -151,7 +203,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> QmpClient<S> {
         // Poison BEFORE the first await. If this future is dropped after a
         // partial write/read, a later call cannot reuse the uncertain stream.
         self.usable = false;
-        let result = tokio::time::timeout(self.timeout, self.exchange(operation, id)).await;
+        let result =
+            tokio::time::timeout(self.timeout, self.exchange(operation, id, arguments)).await;
         match result {
             Ok(Ok(value)) => {
                 self.usable = true;
@@ -165,9 +218,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> QmpClient<S> {
         }
     }
 
-    async fn exchange(&mut self, operation: &'static str, id: u64) -> Result<Value, QmpError> {
-        let mut request = serde_json::to_vec(&json!({"execute": operation, "id": id}))
-            .map_err(|_| QmpError::UnknownOutcome)?;
+    async fn exchange(
+        &mut self,
+        operation: &'static str,
+        id: u64,
+        arguments: Option<Value>,
+    ) -> Result<Value, QmpError> {
+        let mut value = json!({"execute": operation, "id": id});
+        if let Some(arguments) = arguments {
+            value["arguments"] = arguments;
+        }
+        let mut request = serde_json::to_vec(&value).map_err(|_| QmpError::UnknownOutcome)?;
         request.extend_from_slice(b"\r\n");
         self.stream
             .write_all(&request)

@@ -23,8 +23,12 @@ use tokio::process::{Child, Command};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
+mod migration;
+pub(in crate::business_os) use migration::QemuMemoryState;
+
 /// Resolved by the native image/lifecycle owner, never deserialized from a
 /// renderer or model request. Image provenance and host admission belong there.
+#[derive(Clone)]
 pub(in crate::business_os) struct PreparedQemuGuest {
     pub program: PathBuf,
     pub runtime_parent: PathBuf,
@@ -45,6 +49,15 @@ pub(in crate::business_os) enum QemuAcceleration {
     Tcg,
 }
 
+// PR_SET_PDEATHSIG follows the creating thread, including a retiring Tokio
+// blocking worker. A dedicated launch thread waits without polling for this
+// unique owner's drop, so worker retirement cannot kill a still-owned guest.
+// ref: https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html
+struct QemuSpawnParent {
+    _hold: std::sync::mpsc::Sender<()>,
+    _thread: std::thread::JoinHandle<()>,
+}
+
 pub(super) struct QemuProcess {
     child: Child,
     pid: u32,
@@ -54,6 +67,9 @@ pub(super) struct QemuProcess {
     guest_channel: Option<GuestChannel<UnixStream>>,
     // Dropped after the child. Only the private monitor directory is disposable.
     runtime: TempDir,
+    migration: migration::MigrationPhase,
+    // Last: retain the actual launch thread through child/resource teardown.
+    _spawn_parent: QemuSpawnParent,
 }
 
 pub(super) fn regular_file(path: &Path) -> Result<std::fs::Metadata> {
@@ -199,7 +215,52 @@ fn prepare_command(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    // kill_on_drop cannot run after a daemon abort. Bind this child to the
+    // native spawning parent too; an abrupt parent exit is never a clean
+    // checkpoint or successful effect reconciliation.
+    // SAFETY: getpid reads identity. The pre-exec callback uses only
+    // async-signal-safe syscalls and errno conversion, with no allocation.
+    let parent_pid = unsafe { libc::getpid() };
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Close the race where the parent died before prctl was armed.
+            if libc::getppid() != parent_pid {
+                return Err(std::io::Error::from_raw_os_error(libc::ECHILD));
+            }
+            Ok(())
+        });
+    }
     Ok(command)
+}
+
+fn spawn_child(mut command: Command) -> Result<(Child, QemuSpawnParent)> {
+    let runtime = tokio::runtime::Handle::try_current()
+        .context("native QEMU launch requires its retained runtime")?;
+    let (created, receive) = std::sync::mpsc::sync_channel(1);
+    let (hold, release) = std::sync::mpsc::channel::<()>();
+    let thread = std::thread::Builder::new()
+        .name("ctox-qemu-parent".into())
+        .spawn(move || {
+            let _runtime = runtime.enter();
+            if created.send(command.spawn()).is_ok() {
+                // The unique QemuProcess owns the only sender. No poller or
+                // external supervisor is needed; its drop releases this wait.
+                let _ = release.recv();
+            }
+        })
+        .context("native QEMU launch thread could not be started")?;
+    let parent = QemuSpawnParent {
+        _hold: hold,
+        _thread: thread,
+    };
+    let child = receive
+        .recv()
+        .context("native QEMU launch thread ended before returning its child")?
+        .context("QEMU could not be started")?;
+    Ok((child, parent))
 }
 
 fn chardev_socket_path<'a>(path: &'a Path, what: &str) -> Result<&'a str> {
@@ -219,6 +280,16 @@ impl QemuProcess {
     /// Creates the owner synchronously, before the first cancellable await.
     /// A successful return proves only process creation; call connect_monitor.
     pub(super) fn spawn_paused(config: &PreparedQemuGuest, guest_id: &str) -> Result<Self> {
+        Self::spawn(config, guest_id, false)
+    }
+
+    /// Restore starts with no guest instructions executed. The native caller
+    /// still needs a verified protected import and current execution authority.
+    pub(super) fn spawn_incoming(config: &PreparedQemuGuest, guest_id: &str) -> Result<Self> {
+        Self::spawn(config, guest_id, true)
+    }
+
+    fn spawn(config: &PreparedQemuGuest, guest_id: &str, incoming: bool) -> Result<Self> {
         ensure!(identifier(guest_id), "guest identity is invalid");
         ensure!(
             config.runtime_parent.is_absolute(),
@@ -251,13 +322,14 @@ impl QemuProcess {
         startup.sync_all()?;
         drop(startup);
         let mut command = prepare_command(config, &socket, &guest_socket, &startup_path)?;
+        if incoming {
+            command.args(["-incoming", "defer"]);
+        }
         let listener = UnixListener::bind(&socket)
             .map_err(|_| anyhow!("private QEMU monitor could not be bound"))?;
         let guest_listener = UnixListener::bind(&guest_socket)
             .map_err(|_| anyhow!("private guest channel could not be bound"))?;
-        let child = command
-            .spawn()
-            .map_err(|_| anyhow!("QEMU could not be started"))?;
+        let (child, spawn_parent) = spawn_child(command)?;
         let pid = child.id().context("QEMU child identity is unavailable")?;
         Ok(Self {
             child,
@@ -267,6 +339,12 @@ impl QemuProcess {
             guest_listener: Some(guest_listener),
             guest_channel: None,
             runtime,
+            migration: if incoming {
+                migration::MigrationPhase::Incoming
+            } else {
+                migration::MigrationPhase::Fresh
+            },
+            _spawn_parent: spawn_parent,
         })
     }
 
@@ -308,7 +386,12 @@ impl QemuProcess {
             let mut monitor = QmpClient::negotiate(stream, Duration::from_secs(5)).await?;
             let status = monitor.query_status().await?;
             ensure!(
-                !status.running && matches!(status.status.as_str(), "prelaunch" | "paused"),
+                !status.running
+                    && if self.migration == migration::MigrationPhase::Incoming {
+                        status.status == "inmigrate"
+                    } else {
+                        matches!(status.status.as_str(), "prelaunch" | "paused")
+                    },
                 "QEMU did not start paused"
             );
             Ok::<_, anyhow::Error>((monitor, status))
@@ -370,6 +453,13 @@ impl QemuProcess {
 
     /// Each input/effect call must remain inside the native authority fence.
     pub(super) async fn resume(&mut self) -> Result<()> {
+        ensure!(
+            matches!(
+                self.migration,
+                migration::MigrationPhase::Fresh | migration::MigrationPhase::Restored
+            ),
+            "QEMU migration is incomplete, retired or uncertain"
+        );
         Ok(self.monitor()?.resume().await?)
     }
 
