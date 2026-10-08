@@ -1,21 +1,21 @@
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-local-narration';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v2-local-narration';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v2-local-narration';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v2-local-narration';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v2-local-narration';
-import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v2-local-narration';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-shell-v2-local-narration';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-shell-v2-local-narration';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-shell-v2-local-narration';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-shell-v2-local-narration';
-import { createAppActions } from './shared/app-actions.js?v=20261008-shell-v2-local-narration';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { createAppActions } from './shared/app-actions.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261008-shell-v2-local-narration';
+} from './shared/app-lifecycle.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -24,20 +24,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261008-shell-v2-local-narration';
+} from './shared/permissions.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261008-shell-v2-local-narration';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-shell-v2-local-narration';
+} from './shared/branding.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261008-shell-v2-local-narration';
+} from './shared/presentation.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -48,9 +48,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261008-shell-v2-local-narration';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-shell-v2-local-narration';
-import { createDocumentsFacade } from './shared/documents.js?v=20261008-shell-v2-local-narration';
+} from './shared/shell-permissions-ui.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { createDocumentsFacade } from './shared/documents.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -58,16 +58,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261008-shell-v2-local-narration';
+} from './shared/maintenance-state.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261008-shell-v2-local-narration';
+} from './shared/workspace-session.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261008-shell-v2-local-narration';
+} from './shared/taskbar-pins.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -75,10 +75,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-shell-v2-local-narration';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-shell-v2-local-narration';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-shell-v2-local-narration';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-shell-v2-confirmed-todo-bridge';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -86,8 +86,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261008-shell-v2-local-narration';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-shell-v2-local-narration';
+} from './shared/startup-deadlines.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-shell-v2-confirmed-todo-bridge';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -105,7 +105,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261008-shell-v2-local-narration';
+const APP_BUILD = '20261008-shell-v2-confirmed-todo-bridge';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13713,7 +13713,7 @@ async function workjetProjectControl(request = {}) {
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
-    'project.jour_fixe.transcript.local_candidate', 'project.jour_fixe.todos.revise',
+    'project.jour_fixe.transcript.local_candidate', 'project.jour_fixe.todos.revise', 'project.jour_fixe.todos.confirm',
     'project.jour_fixe.comment.add'];
   const acquisition = supervisorActions.includes(action)
     ? requireWorkjetSupervisorDataPlane() : requireWorkjetProjectDataPlane();
@@ -13728,6 +13728,7 @@ async function workjetProjectControl(request = {}) {
     'project.jour_fixe.narration.local_publish': 'LocalNarrationRequest',
     'project.jour_fixe.transcript.local_candidate': 'LocalTranscriptCandidateRequest',
     'project.jour_fixe.todos.revise': 'ProposeTodosRequest',
+    'project.jour_fixe.todos.confirm': 'ConfirmTodosRequest',
     'project.jour_fixe.comment.add': 'AddCommentRequest',
   };
   if (Object.hasOwn(meetingMutationTypes, action)) {
@@ -13737,12 +13738,14 @@ async function workjetProjectControl(request = {}) {
     const nativeInstanceId = localNarration || localCandidate
       ? boundedWorkjetProjectText(state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', localNarration ? 128 : 256) : null;
     const revising = action === 'project.jour_fixe.todos.revise';
+    const confirming = action === 'project.jour_fixe.todos.confirm';
     const commenting = action === 'project.jour_fixe.comment.add';
     const allowedKeys = new Set(['action', 'commandId', 'projectId', 'operationId', 'meetingId', 'expectedRevision']);
     if (appending) allowedKeys.add('turn');
     if (localNarration) for (const key of ['slideId', 'fileId', 'generationId', 'deckRevision', 'audioSha256', 'narrationTextSha256']) allowedKeys.add(key);
     if (localCandidate) for (const key of ['requestId', 'deckRevision', 'text']) allowedKeys.add(key);
     if (revising) for (const key of ['proposalRevision', 'items']) allowedKeys.add(key);
+    if (confirming) for (const key of ['proposalRevision', 'expectedGoalRevision']) allowedKeys.add(key);
     if (commenting) for (const key of ['commentId', 'slideId', 'deckRevision', 'x', 'y', 'text']) allowedKeys.add(key);
     assertWorkjetProjectPayloadKeys(request, allowedKeys);
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
@@ -13762,11 +13765,16 @@ async function workjetProjectControl(request = {}) {
       ...(localCandidate ? { request_id: request.requestId, instance_id: nativeInstanceId,
         project_id: projectId, deck_revision: request.deckRevision, text: request.text } : {}),
       ...(revising ? { proposal_revision: request.proposalRevision, items: request.items } : {}),
+      ...(confirming ? { proposal_revision: request.proposalRevision, expected_goal_revision: request.expectedGoalRevision } : {}),
       ...(commenting ? { comment_id: request.commentId, slide_id: request.slideId,
         deck_revision: request.deckRevision, x: request.x, y: request.y, text: request.text } : {}),
     };
     const validation = validateJourFixeValue(meetingMutationTypes[action], payload);
     if (validation.ok !== true) throw new TypeError(validation.error);
+    if (confirming && (!Number.isSafeInteger(payload.expected_goal_revision)
+      || payload.expected_goal_revision < 0 || payload.expected_goal_revision === Number.MAX_SAFE_INTEGER)) {
+      throw new TypeError('Workjet confirmation requires a safe next goal revision.');
+    }
     if (appending && (payload.turn.meeting_id !== payload.meeting_id
       || payload.turn.speaker !== 'owner' || payload.turn.modality !== 'text'
       || ['audio', 'source_run_id', 'stream_id', 'sentence_end_latency_ms'].some(key => payload.turn[key] != null)
@@ -13815,16 +13823,25 @@ async function workjetProjectControl(request = {}) {
     const mutation = receipt.result.mutation;
     const resultValidation = validateJourFixeValue('MeetingMutationReceipt', mutation);
     if (resultValidation.ok !== true) throw new TypeError(resultValidation.error);
-    const expectedState = action === 'project.jour_fixe.meeting.start' || localCandidate ? 'live'
+    const confirmedGoal = confirming ? receipt.result.goal : null;
+    if (confirming) {
+      const goalValidation = validateJourFixeValue('GoalRef', confirmedGoal);
+      if (goalValidation.ok !== true) throw new TypeError(goalValidation.error);
+      if (!confirmedGoal.goal_id.trim() || confirmedGoal.revision !== expectedPayload.expected_goal_revision + 1) {
+        throw new Error('Workjet confirmation did not return the requested next native goal revision.');
+      }
+    }
+    const expectedState = confirming ? 'confirmed' : action === 'project.jour_fixe.meeting.start' || localCandidate ? 'live'
       : action === 'project.jour_fixe.meeting.end' || revising ? 'review' : null;
     if (mutation.operation_id !== expectedPayload.operation_id || mutation.meeting_id !== expectedPayload.meeting_id
       || mutation.project_id !== projectId || mutation.revision !== expectedPayload.expected_revision + 1
       || (expectedState ? mutation.state !== expectedState : !(localNarration ? ['preparing', 'ready'] : ['live', 'review']).includes(mutation.state))
-      || (localNarration ? mutation.changed_id !== expectedPayload.slide_id
+      || (confirming ? mutation.changed_id !== confirmedGoal.goal_id
+        : localNarration ? mutation.changed_id !== expectedPayload.slide_id
         : localCandidate ? mutation.changed_id !== receipt.result.local_candidate?.turn_id
         : appending ? mutation.changed_id !== expectedPayload.turn.id
         : commenting ? mutation.changed_id !== expectedPayload.comment_id : mutation.changed_id != null)
-      || (revising ? mutation.todos_revision !== expectedPayload.proposal_revision : mutation.todos_revision != null)) {
+      || (revising || confirming ? mutation.todos_revision !== expectedPayload.proposal_revision : mutation.todos_revision != null)) {
       throw new Error('Workjet meeting mutation receipt does not confirm the requested operation.');
     }
     if (localNarration) {
@@ -13863,6 +13880,7 @@ async function workjetProjectControl(request = {}) {
     }
     return { action, commandId, projectId, contract: JOUR_FIXE_SCHEMA,
       mutation: JSON.parse(JSON.stringify(mutation)),
+      ...(confirming ? { goal: JSON.parse(JSON.stringify(confirmedGoal)) } : {}),
       ...(localNarration ? { localNarration: JSON.parse(JSON.stringify(receipt.result.local_narration)) } : {}),
       ...(localCandidate ? { localCandidate: JSON.parse(JSON.stringify(receipt.result.local_candidate)) } : {}) };
   }

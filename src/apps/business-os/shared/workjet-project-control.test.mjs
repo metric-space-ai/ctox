@@ -381,6 +381,7 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
       const append = command.command_type.endsWith('.transcript.append');
       const local = command.command_type.endsWith('.transcript.local_candidate');
       const revise = command.command_type.endsWith('.todos.revise');
+      const confirm = command.command_type.endsWith('.todos.confirm');
       const narration = command.command_type.endsWith('.narration.local_publish');
       const comment = command.command_type.endsWith('.comment.add');
       const receipt = {
@@ -389,13 +390,18 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
         result: { ok: true, contract: JOUR_FIXE_SCHEMA, mutation: {
           operation_id: payload.operation_id, meeting_id: payload.meeting_id,
           project_id: command.record_id, revision: payload.expected_revision + 1,
-          state: narration ? 'ready' : command.command_type.endsWith('.meeting.start') || append || local ? 'live' : 'review',
+          state: confirm ? 'confirmed' : narration ? 'ready' : command.command_type.endsWith('.meeting.start') || append || local ? 'live' : 'review',
           ...(append ? { changed_id: payload.turn.id } : {}),
           ...(comment ? { changed_id: payload.comment_id } : {}),
           ...(narration ? { changed_id: payload.slide_id } : {}),
           ...(revise ? { todos_revision: payload.proposal_revision } : {}),
         } },
       };
+      if (confirm) {
+        receipt.result.goal = { goal_id: 'native-confirmed-goal', revision: payload.expected_goal_revision + 1 };
+        receipt.result.mutation.changed_id = receipt.result.goal.goal_id;
+        receipt.result.mutation.todos_revision = payload.proposal_revision;
+      }
       if (narration) {
         receipt.result.owner_user_id = 'native-owner';
         receipt.result.local_narration = { operation_id: payload.operation_id, instance_id: payload.instance_id,
@@ -439,6 +445,7 @@ function meetingOwnerRequest(action = 'project.jour_fixe.meeting.start', extra =
       deckRevision: 1, audioSha256: 'a'.repeat(64), narrationTextSha256: 'b'.repeat(64) } : {}),
     ...(action === 'project.jour_fixe.comment.add' ? { commentId: 'comment-1', slideId: 'slide-1',
       deckRevision: 1, x: 0.25, y: 0.75, text: 'Please prioritize persistence.' } : {}),
+    ...(action === 'project.jour_fixe.todos.confirm' ? { proposalRevision: 2, expectedGoalRevision: 0 } : {}),
     ...(action === 'project.jour_fixe.todos.revise' ? { proposalRevision: 2, items: [{
       id: 'todo-1', title: 'Verify persistence', acceptance: 'Save survives reopen',
       priority: 'P1', evidence_ids: ['owner-text'],
@@ -1547,4 +1554,42 @@ test('local narration rejects corrupted scope, bytes, provenance and replaced in
   r=>{r.result.mutation.state='live';},(r,state)=>{state.syncConfig.instance_id='biz_other';}]) {
   await assert.rejects(nativeMeetingOwnerFixture(mutate).invoke(request));
  }
+});
+
+
+test('Owner confirmation preserves all three native CAS revisions and returns the actual Core goal', async () => {
+  const request = meetingOwnerRequest('project.jour_fixe.todos.confirm', { expectedGoalRevision: 5 });
+  const fixture = nativeMeetingOwnerFixture();
+  const result = await fixture.invoke(request);
+  assert.deepEqual(fixture.commands[0].payload, { operation_id: request.operationId, meeting_id: request.meetingId,
+    expected_revision: 3, proposal_revision: 2, expected_goal_revision: 5 });
+  assert.equal(fixture.commands[0].record_id, request.projectId);
+  assert.equal(fixture.commands[0].command_type, 'ctox.workjet.jour_fixe.todos.confirm');
+  assert.deepEqual(result.goal, { goal_id: 'native-confirmed-goal', revision: 6 });
+  assert.equal(result.mutation.state, 'confirmed');
+  assert.equal(result.mutation.changed_id, result.goal.goal_id);
+  assert.equal(result.mutation.todos_revision, 2);
+});
+
+test('Owner confirmation rejects caller authority, replacement todos and unsafe goal revisions before dispatch', async () => {
+  for (const extra of [{ ownerUserId: 'foreign' }, { goal: { goal_id: 'invented' } }, { items: [] },
+    { expectedGoalRevision: -1 }, { expectedGoalRevision: Number.MAX_SAFE_INTEGER }, { expectedGoalRevision: '0' },
+    { expectedGoalRevision: null }, { proposalRevision: -1 }, { expectedRevision: Number.MAX_SAFE_INTEGER }]) {
+    const fixture = nativeMeetingOwnerFixture();
+    await assert.rejects(fixture.invoke(meetingOwnerRequest('project.jour_fixe.todos.confirm', extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('Owner confirmation rejects stale or substituted native goal and meeting receipts', async () => {
+  for (const change of [r => { delete r.result.goal; }, r => { r.result.goal.goal_id = ''; },
+    r => { r.result.goal.revision += 1; }, r => { r.result.goal.owner = 'forged'; },
+    r => { r.result.mutation.changed_id = 'other-goal'; }, r => { r.result.mutation.todos_revision += 1; },
+    r => { r.result.mutation.state = 'review'; }, r => { r.result.mutation.revision += 1; },
+    r => { r.payload.expected_goal_revision += 1; }, r => { r.payload.proposal_revision += 1; },
+    (r, state) => { state.session = { id: 'other-user' }; }]) {
+    const fixture = nativeMeetingOwnerFixture(change);
+    await assert.rejects(fixture.invoke(meetingOwnerRequest('project.jour_fixe.todos.confirm')));
+    assert.equal(fixture.commands.length, 1);
+  }
 });
