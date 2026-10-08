@@ -5524,7 +5524,7 @@ function renderModuleTab(target, options = {}) {
     <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
     ${target.id === 'threads' ? '<span class="module-tab-count" data-threads-attention hidden></span>' : ''}
-    ${lifecycle?.updateAvailable ? `<span class="module-tab-update" data-app-lifecycle-badge="${escapeHtml(target.id)}" title="${escapeHtml(lifecycle.title)}" aria-label="Update verfügbar"></span>` : ''}
+    ${lifecycle?.updateAvailable || lifecycle?.state === 'preview' ? `<span class="module-tab-update" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${lifecycle.updateAvailable ? 'Update verfügbar' : escapeHtml(lifecycle.text)}"></span>` : ''}
     ${status ? `<span class="module-tab-state">${escapeHtml(status)}</span>` : ''}
   `;
   button.setAttribute('aria-current', state.activeModule?.id === target.id ? 'page' : 'false');
