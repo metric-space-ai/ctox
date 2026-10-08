@@ -261,9 +261,9 @@ try {
       assert.ok(rejected);
     }
     const extraGoal = ownerControl.fixture();
-    let rejected = false;
-    try { await extraGoal.invoke({ ...confirmRequest, goal: { goal_id: 'forged' } }); } catch { rejected = true; }
-    assert.ok(rejected);
+    let forgedGoalRejected = false;
+    try { await extraGoal.invoke({ ...confirmRequest, goal: { goal_id: 'forged' } }); } catch { forgedGoalRejected = true; }
+    assert.ok(forgedGoalRejected);
     assert.equal(extraGoal.commands.length, 0);
     results.push('browser Owner confirmation rejects substituted proposals and invented goal authority');
 
