@@ -64,7 +64,7 @@ pub(super) fn binding(
     binding_from_connection(&conn, owner, project_id, thread_id, active)
 }
 
-pub(super) fn binding_from_connection(
+pub(in crate::business_os) fn binding_from_connection(
     conn: &Connection,
     owner: &str,
     project_id: &str,

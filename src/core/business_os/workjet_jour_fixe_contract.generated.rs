@@ -1384,6 +1384,230 @@ impl WireValidate for MeetingMutationReceipt {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NarrateRequest {
+    pub(crate) operation_id: String,
+    pub(crate) meeting_id: String,
+    pub(crate) slide_id: String,
+    pub(crate) deck_revision: u64,
+    pub(crate) expected_revision: u64,
+    pub(crate) narration_text_sha256: String,
+}
+impl WireValidate for NarrateRequest {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.operation_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NarrateRequest.operation_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NarrateRequest.operation_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.meeting_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NarrateRequest.meeting_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NarrateRequest.meeting_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.slide_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NarrateRequest.slide_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NarrateRequest.slide_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.deck_revision;
+            value.validate()?;
+            if *value < 1 {
+                return Err("NarrateRequest.deck_revision violates minimum".into());
+            }
+        }
+        {
+            let value = &self.expected_revision;
+            value.validate()?;
+        }
+        {
+            let value = &self.narration_text_sha256;
+            value.validate()?;
+            if value.chars().count() < 64 {
+                return Err("NarrateRequest.narration_text_sha256 violates min_chars".into());
+            }
+            if value.chars().count() > 64 {
+                return Err("NarrateRequest.narration_text_sha256 violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NarrationInput {
+    pub(crate) slide_id: String,
+    pub(crate) deck_revision: u64,
+    pub(crate) expected_revision: u64,
+    pub(crate) narration_text_sha256: String,
+}
+impl WireValidate for NarrationInput {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.slide_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NarrationInput.slide_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NarrationInput.slide_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.deck_revision;
+            value.validate()?;
+            if *value < 1 {
+                return Err("NarrationInput.deck_revision violates minimum".into());
+            }
+        }
+        {
+            let value = &self.expected_revision;
+            value.validate()?;
+        }
+        {
+            let value = &self.narration_text_sha256;
+            value.validate()?;
+            if value.chars().count() < 64 {
+                return Err("NarrationInput.narration_text_sha256 violates min_chars".into());
+            }
+            if value.chars().count() > 64 {
+                return Err("NarrationInput.narration_text_sha256 violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeNarrationReceipt {
+    pub(crate) operation_id: String,
+    pub(crate) instance_id: String,
+    pub(crate) project_id: String,
+    pub(crate) meeting_id: String,
+    pub(crate) slide_id: String,
+    pub(crate) deck_revision: u64,
+    pub(crate) owner_user_id: String,
+    pub(crate) revision: u64,
+    pub(crate) audio: AudioRef,
+    pub(crate) persisted_at_ms: i64,
+    pub(crate) provenance: AudioProvenance,
+    pub(crate) provider_verified: bool,
+}
+impl WireValidate for NativeNarrationReceipt {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.operation_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NativeNarrationReceipt.operation_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NativeNarrationReceipt.operation_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.instance_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NativeNarrationReceipt.instance_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NativeNarrationReceipt.instance_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NativeNarrationReceipt.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NativeNarrationReceipt.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.meeting_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NativeNarrationReceipt.meeting_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NativeNarrationReceipt.meeting_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.slide_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NativeNarrationReceipt.slide_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NativeNarrationReceipt.slide_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.deck_revision;
+            value.validate()?;
+            if *value < 1 {
+                return Err("NativeNarrationReceipt.deck_revision violates minimum".into());
+            }
+        }
+        {
+            let value = &self.owner_user_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NativeNarrationReceipt.owner_user_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("NativeNarrationReceipt.owner_user_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.revision;
+            value.validate()?;
+        }
+        {
+            let value = &self.audio;
+            value.validate()?;
+        }
+        {
+            let value = &self.persisted_at_ms;
+            value.validate()?;
+            if *value < 0 {
+                return Err("NativeNarrationReceipt.persisted_at_ms violates minimum".into());
+            }
+        }
+        {
+            let value = &self.provenance;
+            value.validate()?;
+        }
+        {
+            let value = &self.provider_verified;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum AudioProvenance {
     #[serde(rename = "native_gateway")]
@@ -1978,6 +2202,15 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "MeetingMutationReceipt" => serde_json::from_value::<MeetingMutationReceipt>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "NarrateRequest" => serde_json::from_value::<NarrateRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "NarrationInput" => serde_json::from_value::<NarrationInput>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "NativeNarrationReceipt" => serde_json::from_value::<NativeNarrationReceipt>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         "AudioProvenance" => serde_json::from_value::<AudioProvenance>(value)

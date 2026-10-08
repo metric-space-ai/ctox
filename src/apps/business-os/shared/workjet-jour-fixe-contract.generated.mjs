@@ -654,6 +654,112 @@ export const JOUR_FIXE_TYPES = deepFreeze({
       }
     }
   },
+  "NarrateRequest": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "slide_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "expected_revision": {
+        "type": "u64"
+      },
+      "narration_text_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      }
+    }
+  },
+  "NarrationInput": {
+    "fields": {
+      "slide_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "expected_revision": {
+        "type": "u64"
+      },
+      "narration_text_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      }
+    }
+  },
+  "NativeNarrationReceipt": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "instance_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "slide_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "owner_user_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "revision": {
+        "type": "u64"
+      },
+      "audio": {
+        "type": "AudioRef"
+      },
+      "persisted_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "provenance": {
+        "type": "AudioProvenance"
+      },
+      "provider_verified": {
+        "type": "bool"
+      }
+    }
+  },
   "AudioProvenance": {
     "enum": [
       "native_gateway",

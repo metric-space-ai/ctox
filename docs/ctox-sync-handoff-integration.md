@@ -123,9 +123,27 @@ The actual Core regression captures a completed model turn, shuts down the
 source, imports into a fresh target home/workspace and runs the next turn. Only
 the model endpoint is mocked. This does not prove current native account,
 policy, quorum ownership, effect reconciliation or independent-host acceptance.
-The production target currently decodes the protected Core artifact before
-workspace preparation and still returns `resumed:false`. Connecting authorized
-execution admission to the prepared workspace remains the next #183 slice.
+The protected receiver retains its actual target account/checkpoint owner
+after the import RPC returns. Native guest construction consumes that owner
+once and calls this Core primitive with the original UUID. The immutable
+import journal is separately verified and copied into a private working
+journal: Core appends only to that copy. State/history digests, file identity,
+the configured account/workspace, native receive/resume/controller/host guards
+and the complete original quorum job are rechecked around startup awaits.
+Unknown or foreign pending effects reject construction.
+
+Both source and target native constructors resolve an explicitly assigned
+host workspace before loading Core. An unassigned ordinary source chat keeps
+its caller workspace and gains no portable workspace/export authority;
+a protected target requires an assignment. Replacement, revocation, expired
+commands and foreign principals reject the assigned path.
+
+Construction submits no model turn. Protected target fresh Create remains
+rejected, and import/machine responses still report `resumed:false`. Original
+Owned-job admission, reuse of the retained target machine, authoritative
+source effect reconciliation and actual installed continuation remain the
+next #183 connections. Journal/registry regressions and source compilation
+do not establish those outcomes.
 
 ## Source effect observation
 

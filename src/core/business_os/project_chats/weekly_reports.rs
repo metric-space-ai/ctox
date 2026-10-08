@@ -66,6 +66,7 @@ pub(crate) fn reconcile_project_reports(root: &Path) -> anyhow::Result<()> {
     if !store::business_os_store_path(root).exists() {
         return Ok(());
     }
+    super::super::workjet_project_kpis::resolver::refresh_due(root)?;
     let conn = open_store(root)?;
     let exists: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_supervisor_bindings')",

@@ -46,13 +46,16 @@ pub(super) fn allows(tool: &str, args: &Value) -> bool {
         (
             READ_TOOL,
             Some("read_meeting" | "read_comments" | "read_transcript")
-        ) | (WRITE_TOOL, Some("prepare_deck" | "propose_todos"))
+        ) | (
+            WRITE_TOOL,
+            Some("prepare_deck" | "propose_todos" | "narrate")
+        )
     )
 }
 
 // Describe the very same bounded DTOs used by both wire consumers, rather than
 // maintaining a third, permissive copy of the meeting schema.
-fn schema(spec: &Value, kind: &str) -> Value {
+pub(super) fn schema(spec: &Value, kind: &str) -> Value {
     match kind {
         "String" => json!({"type":"string"}),
         "u64" => json!({"type":"integer","minimum":0,"maximum":9_007_199_254_740_991_u64}),
@@ -120,11 +123,11 @@ pub(super) fn read_descriptor() -> BusinessOsMcpToolDescriptor {
 }
 pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(WRITE_TOOL,
-        "Persist a deck draft (prepare_deck, PublishDeckRequest without audio) or a review todo proposal (propose_todos). Requires this registered Supervisor's signed current execution, exact meeting revision and stable operation_id. Drafts remain preparing; todos require an explicit owner and remain proposed. No audio publication, goal confirmation, SQL or independent work admission.",
-        descriptor_schema(&[("prepare_deck","PublishDeckRequest"),("propose_todos","ProposeTodosRequest")]))
+        "Persist a deck draft (prepare_deck, PublishDeckRequest without audio) or a review todo proposal (propose_todos). Requires this registered Supervisor's signed current execution, exact meeting revision and stable operation_id. Drafts remain preparing; todos require an explicit owner and remain proposed. narrate synthesizes the exact stored slide via the configured native gateway and freezes authorized WAV bytes, hashes and native provenance before setting ready. No caller text/audio/model, goal confirmation, SQL or independent work admission.",
+        descriptor_schema(&[("prepare_deck","PublishDeckRequest"),("propose_todos","ProposeTodosRequest"),("narrate","NarrateRequest")]))
 }
 
-fn bound_project(
+pub(super) fn bound_project(
     core: &Connection,
     policy: &Connection,
     context: &McpChannelRequestContext,
@@ -180,7 +183,7 @@ fn bound_project(
     );
     Ok((project, thread, thread_key))
 }
-fn current_meeting(
+pub(super) fn current_meeting(
     core: &Connection,
     policy: &Connection,
     context: &McpChannelRequestContext,
@@ -243,6 +246,9 @@ pub(super) fn execute(
         serde_json::to_vec(arguments)?.len() <= MAX_METADATA_BYTES,
         "meeting request exceeds native write budget"
     );
+    if tool == WRITE_TOOL && arguments["action"] == "narrate" {
+        return workjet_narration::execute(root, context, arguments, trusted);
+    }
     let writing = tool == WRITE_TOOL;
     // Core before Policy, matching the native execution/cancellation lock order.
     // Only a mutation holds a Core writer reservation while the Policy edit
@@ -299,7 +305,8 @@ pub(super) fn execute(
                 )?;
             return Ok(
                 json!({"contract":wire::CONTRACT_SCHEMA,"meeting":meeting,"project":project,
-                "previous_goal_definition":previous_goal_definition}),
+                "previous_goal_definition":previous_goal_definition,
+                "narration_inputs":workjet_narration::inputs(&meeting)}),
             );
         }
         return Ok(if section == "comments" {

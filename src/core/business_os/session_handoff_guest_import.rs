@@ -1,7 +1,8 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 //! Target import under the same live account/issuer/policy/guest owner.
-//! This completes import only. It cannot restore a VM or start a Core turn.
+//! This completes import and retains its owner for the original Core constructor.
+//! It cannot restore a VM or start a Core turn.
 use super::super::super::super::guest_registry::target_import::NativeGuestImportFence;
 use super::*;
 use ctox_sync::guest_restore::GuestRestoreDestination;
@@ -139,6 +140,13 @@ pub(super) async fn import<P: Clone + Eq + Hash + Send + Sync + 'static>(
             target.as_ref(),
         )
         .await?;
+    registry.retain_core_owner(
+        &guest_id,
+        Arc::new(guest_core::ReceiverCore {
+            target: target.clone(),
+            lifetime,
+        }),
+    )?;
     Ok(CopyResponse::GuestImported {
         checkpoint_digest: receipt.checkpoint_digest,
         guest_id: receipt.destination.guest_id,

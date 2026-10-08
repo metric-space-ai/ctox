@@ -50,6 +50,10 @@ mod project_crew_request;
 mod remote_worker;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
+#[path = "mcp_workjet_kpis.rs"]
+mod workjet_kpis;
+#[path = "mcp_workjet_narration.rs"]
+mod workjet_narration;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
 
@@ -845,6 +849,7 @@ fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bo
             workjet_worker_dispatch::TOOL
                 | workjet_jour_fixe::READ_TOOL
                 | workjet_jour_fixe::WRITE_TOOL
+                | workjet_kpis::TOOL
         );
     }
     let restricted = context.is_some_and(|context| {
@@ -1450,6 +1455,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         workjet_worker_dispatch::descriptor(),
         workjet_jour_fixe::read_descriptor(),
         workjet_jour_fixe::write_descriptor(),
+        workjet_kpis::descriptor(),
         read_tool(
             "business_os.list_crew_executions",
             "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
@@ -3204,7 +3210,11 @@ fn call_tool_inner(
         trusted_gateway_context,
     )?;
     enforce_internal_command_session_scope(tool_name, &arguments, trusted_gateway_context)?;
-    enforce_tool_policy(root, tool_name)?;
+    enforce_tool_policy_class(
+        root,
+        tool_name,
+        tool_policy_class_for_call(tool_name, &arguments),
+    )?;
     enforce_context_policy(root, &context)?;
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
@@ -3221,6 +3231,9 @@ fn call_tool_inner(
             &arguments,
             trusted_gateway_context,
         )?,
+        workjet_kpis::TOOL => {
+            workjet_kpis::execute(root, &context, &arguments, trusted_gateway_context)?
+        }
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
         }
@@ -6201,6 +6214,14 @@ fn dedupe_policy_values(values: Vec<String>) -> Vec<String> {
 }
 
 fn enforce_tool_policy(root: &Path, tool_name: &str) -> anyhow::Result<()> {
+    enforce_tool_policy_class(root, tool_name, tool_policy_class(tool_name))
+}
+
+fn enforce_tool_policy_class(
+    root: &Path,
+    tool_name: &str,
+    class: McpToolPolicyClass,
+) -> anyhow::Result<()> {
     let policy = mcp_policy(root);
     if !policy.enabled {
         return Err(anyhow::Error::new(BusinessOsMcpError {
@@ -6216,7 +6237,7 @@ fn enforce_tool_policy(root: &Path, tool_name: &str) -> anyhow::Result<()> {
             field: Some("CTOX_BUSINESS_OS_MCP_DENY_TOOLS".to_string()),
         }));
     }
-    match tool_policy_class(tool_name) {
+    match class {
         McpToolPolicyClass::Read if !policy.allow_reads => Err(policy_denied(
             "read tools are disabled by policy",
             "CTOX_BUSINESS_OS_MCP_ALLOW_READS",
@@ -7033,7 +7054,7 @@ fn enforce_argument_scope_policy(
             enforce_module_policy(root, "kundenpipeline")?;
             enforce_collection_policy(root, "kundenpipeline_entscheidungen")?;
         }
-        workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
+        workjet_kpis::TOOL | workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
             enforce_module_policy(root, "ctox")?;
         }
         "business_os.create_app" => {
@@ -7084,7 +7105,7 @@ fn enforce_argument_scope_policy(
         }
         _ => {}
     }
-    if tool_policy_class(tool_name) == McpToolPolicyClass::Read {
+    if tool_policy_class_for_call(tool_name, arguments) == McpToolPolicyClass::Read {
         enforce_business_os_mcp_policy(root, context, tool_name, arguments)?;
     }
     Ok(())
@@ -7197,6 +7218,14 @@ enum McpToolPolicyClass {
     ExternalEffect,
 }
 
+fn tool_policy_class_for_call(tool_name: &str, arguments: &Value) -> McpToolPolicyClass {
+    if tool_name == workjet_kpis::TOOL && arguments["action"] == "read" {
+        McpToolPolicyClass::Read
+    } else {
+        tool_policy_class(tool_name)
+    }
+}
+
 fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
     match tool_name {
         "business_os.approve" | "web_browser_automate" | "meeting.schedule" => {
@@ -7208,6 +7237,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "business_os.remote_worker_admission"
         | "business_os.workjet_worker_dispatch"
         | "business_os.jour_fixe_update"
+        | workjet_kpis::TOOL
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
         | "business_os.claim_crew_execution"
@@ -7555,7 +7585,8 @@ fn enforce_internal_command_session_scope(
     if context["workjet_supervisor_only"] == true {
         anyhow::ensure!(
             (tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "dispatch")
-                || workjet_jour_fixe::allows(tool_name, arguments),
+                || workjet_jour_fixe::allows(tool_name, arguments)
+                || workjet_kpis::allows(tool_name, arguments),
             "tool/action is outside the restricted native supervisor session"
         );
         return Ok(());
