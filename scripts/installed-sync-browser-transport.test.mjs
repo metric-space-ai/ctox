@@ -71,6 +71,20 @@ test('transport export bounds collections and rejects unexpected state strings a
   assert.equal(JSON.stringify(result).includes('NEVER_EXPORT'), false);
 });
 
+test('watchdog replacement transport is observed instead of its retired predecessor', () => {
+  const peer = {
+    getTransportStatus: () => ({ activePeerCount: 1 }),
+  };
+  const result = runInNewContext('(' + browserTransportSnapshot.toString() + ')()', {
+    __installedAcceptance: {
+      state: { peer: { getTransportStatus() { throw new Error('Retired transport must not be sampled'); } } },
+      latestReplicationState: { peer },
+    },
+  });
+  assert.equal(result.available, true);
+  assert.equal(result.activePeerCount, 1);
+});
+
 test('missing and throwing browser transports stay explicitly unavailable without exporting errors', () => {
   assert.deepEqual(plain(snapshot(null)), { available: false, reason: 'transport-unavailable' });
   const result = snapshot({ getTransportStatus() { throw new Error('Bearer NEVER_EXPORT'); } });

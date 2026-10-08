@@ -326,6 +326,7 @@ async function attach(context, origin, config, name, skewMs = 0, existingPage = 
     const runtime = db.rxdb;
     db.rxdb = { ...runtime, async replicateWebRTC(options) {
       const state = await runtime.replicateWebRTC(options);
+      if (options.collection.name === 'desktop_icons') session.latestReplicationState = state;
       const beforeFirstPeer = state.openPeerIds().length === 0;
       const request = state.requestMasterChangesSince.bind(state);
       state.requestMasterChangesSince = async (...args) => {

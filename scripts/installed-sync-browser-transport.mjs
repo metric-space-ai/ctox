@@ -3,7 +3,9 @@
  * Keep this function closure-free; export only bounded counters and known states.
  */
 export function browserTransportSnapshot() {
-  const peer = globalThis.__installedAcceptance?.state?.peer;
+  const session = globalThis.__installedAcceptance;
+  // A watchdog restart replaces the replication state; never inspect only its retired predecessor.
+  const peer = (session?.latestReplicationState || session?.state)?.peer;
   if (!peer?.getTransportStatus) return { available: false, reason: 'transport-unavailable' };
   try {
     const raw = peer.getTransportStatus({ includeDiagnostics: true });
