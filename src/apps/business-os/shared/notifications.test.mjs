@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createNotifications, normalizeSystemNotification } from './notifications.js';
+import { createNotifications, normalizeSystemNotification, toPlainText } from './notifications.js';
 
 test('normalizes a bounded Decision Hub system notification', () => {
   assert.deepEqual(normalizeSystemNotification({
@@ -61,5 +61,75 @@ test('delivers only the normalized payload through the Workjet mobile bridge', (
     });
   } finally {
     delete globalThis.workjetBusinessOsNotify;
+  }
+});
+
+function fakeDocument() {
+  const makeElement = () => {
+    const classes = new Set();
+    return {
+      children: [],
+      dataset: {},
+      id: '',
+      className: '',
+      textContent: '',
+      classList: {
+        add: (name) => classes.add(name),
+        contains: (name) => classes.has(name),
+      },
+      setAttribute() {},
+      addEventListener() {},
+      appendChild(child) { this.children.push(child); },
+      append(child) { this.children.push(child); },
+    };
+  };
+  return { createElement: makeElement };
+}
+
+function fakeContainer() {
+  const children = [];
+  return {
+    children,
+    get childElementCount() { return children.length; },
+    get firstElementChild() { return children[0] ?? null; },
+    appendChild(child) { children.push(child); },
+    querySelector: () => null,
+  };
+}
+
+test('toPlainText turns editor HTML fragments into readable text', () => {
+  assert.equal(
+    toPlainText('Fonts are not loaded.<br>Please contact your Document Server administrator.'),
+    'Fonts are not loaded. Please contact your Document Server administrator.',
+  );
+  assert.equal(toPlainText('Tom &amp; Jerry<br/><b>fett</b>'), 'Tom & Jerry fett');
+});
+
+test('shows an untranslated title key as the fallback title', () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = fakeDocument();
+  try {
+    const container = fakeContainer();
+    const notifications = createNotifications({ container, t: (key, fallback) => key });
+    notifications.show({ type: 'error', message: 'Gespeichert.', time: 0 });
+    assert.equal(container.children[0].children[1].children[0].textContent, 'Benachrichtigung');
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+test('repeated identical messages stack as one toast while it is visible', () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = fakeDocument();
+  try {
+    const container = fakeContainer();
+    const notifications = createNotifications({ container, t: (key, fallback) => fallback ?? key });
+    const first = notifications.show({ type: 'error', message: 'Fonts are not loaded.<br>Contact admin.', time: 0 });
+    const second = notifications.show({ type: 'error', message: 'Fonts are not loaded.<br>Contact admin.', time: 0 });
+    assert.equal(second, first);
+    assert.equal(container.children.length, 1);
+    assert.equal(container.children[0].children[1].children[1].textContent, 'Fonts are not loaded. Contact admin.');
+  } finally {
+    globalThis.document = previousDocument;
   }
 });

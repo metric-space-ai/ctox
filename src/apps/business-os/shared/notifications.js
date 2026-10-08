@@ -22,6 +22,29 @@ const DEFAULT_ICONS = {
   error: '×',
 };
 
+// Editor and Document Server messages are HTML fragments such as
+// "Fonts are not loaded.<br>Please contact …". Toasts show plain text only.
+export function toPlainText(value) {
+  return String(value ?? '')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Shell lookups return the key itself for untranslated labels, so a key that
+// comes back unchanged means "no translation" and the fallback wins.
+function translatedLabel(translate, key, fallback) {
+  const text = translate(key, fallback);
+  return text && text !== key ? text : fallback;
+}
+
 export function createNotifications({ container, t }) {
   if (!container) {
     throw new Error('notifications: container is required');
@@ -30,13 +53,24 @@ export function createNotifications({ container, t }) {
   let counter = 0;
 
   function show(options = {}) {
-    const id = `shell-toast-${Date.now()}-${++counter}`;
     const type = options.type && DEFAULT_ICONS[options.type] ? options.type : 'info';
     const time = Number.isFinite(options.time) ? options.time : DEFAULT_TIME_MS;
+    const titleText = toPlainText(options.title) || translatedLabel(translate, 'notificationsTitle', 'Benachrichtigung');
+    const messageText = toPlainText(options.message);
+    // The same message raised repeatedly (for example once per failed font
+    // load) shows once while it is on screen.
+    const fingerprint = `${type}\n${titleText}\n${messageText}`;
+    const duplicate = Array.from(container.children).find((element) => (
+      element.dataset?.fingerprint === fingerprint && !element.classList.contains('is-fading')
+    ));
+    if (duplicate) return duplicate.id;
+
+    const id = `shell-toast-${Date.now()}-${++counter}`;
 
     const toast = document.createElement('div');
     toast.className = `shell-toast shell-toast--${type}`;
     toast.id = id;
+    toast.dataset.fingerprint = fingerprint;
     toast.setAttribute('role', type === 'error' || type === 'warning' ? 'alert' : 'status');
     toast.setAttribute('aria-live', 'polite');
 
@@ -49,10 +83,10 @@ export function createNotifications({ container, t }) {
     content.className = 'shell-toast-content';
     const titleEl = document.createElement('div');
     titleEl.className = 'shell-toast-title';
-    titleEl.textContent = options.title || translate('notificationsTitle', 'Benachrichtigung');
+    titleEl.textContent = titleText;
     const bodyEl = document.createElement('div');
     bodyEl.className = 'shell-toast-body';
-    bodyEl.textContent = options.message || '';
+    bodyEl.textContent = messageText;
     content.appendChild(titleEl);
     content.appendChild(bodyEl);
     toast.appendChild(content);
@@ -61,7 +95,7 @@ export function createNotifications({ container, t }) {
       const actionBtn = document.createElement('button');
       actionBtn.type = 'button';
       actionBtn.className = 'shell-toast-action';
-      actionBtn.textContent = options.action.label || translate('openInModule', 'Öffnen');
+      actionBtn.textContent = options.action.label || translatedLabel(translate, 'openInModule', 'Öffnen');
       actionBtn.addEventListener('click', (clickEvent) => {
         clickEvent.stopPropagation();
         try {
@@ -154,10 +188,10 @@ export function createNotifications({ container, t }) {
 
 export function normalizeSystemNotification(options = {}, translate = (_key, fallback) => fallback) {
   const title = boundedText(
-    options.title || translate('notificationsTitle', 'Benachrichtigung'),
+    toPlainText(options.title) || translatedLabel(translate, 'notificationsTitle', 'Benachrichtigung'),
     160,
   );
-  const body = boundedText(options.message || options.body || '', 240);
+  const body = boundedText(toPlainText(options.message || options.body || ''), 240);
   const tag = boundedToken(options.tag || '', 180);
   const kind = options.kind === 'decision_hub' ? 'decision_hub' : 'business_os';
   const urgency = ['normal', 'high', 'critical'].includes(options.urgency)
