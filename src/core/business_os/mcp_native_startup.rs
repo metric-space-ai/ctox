@@ -297,7 +297,6 @@ mod tests {
                 .cli_overrides(vec![("mcp_servers".into(),serde_json::from_value::<toml::Value>(servers.clone())?)])
                 .build().await?;
             config.cwd=root.path().to_owned();
-            config.model=Some("gpt-5.1".into());
             config.model_provider.requires_openai_auth=false;
             config.model_provider.supports_websockets=false;
             let auth=std::sync::Arc::new(ctox_core::AuthManager::new(
