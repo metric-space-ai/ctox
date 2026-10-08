@@ -3,7 +3,11 @@ use crate::config::Config;
 use crate::features::Feature;
 use ctox_protocol::{ThreadId, models::ResponseItem, protocol::Op};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, io, sync::Mutex};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+    sync::Mutex,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -60,6 +64,17 @@ struct Observations {
     startup: BTreeSet<String>,
     submissions: u64,
     unreconciled: u64,
+    calls: BTreeMap<String, PlanObservation>,
+}
+
+#[derive(Default)]
+struct PlanObservation {
+    added: u8,
+    done: u8,
+    dispatched: u8,
+    eligible: bool,
+    observations: u64,
+    completed: bool,
 }
 pub(crate) struct NativeCoreEffects {
     observations: Mutex<Observations>,
@@ -105,6 +120,7 @@ impl NativeCoreEffects {
                 startup,
                 submissions: 0,
                 unreconciled: 0,
+                calls: BTreeMap::new(),
             }),
         }
     }
@@ -154,12 +170,86 @@ impl NativeCoreEffects {
         }
     }
 
-    pub(crate) fn observe_provider_item(&self, item: &ResponseItem) {
+    pub(crate) fn observe_provider_item(&self, item: &ResponseItem, completed: bool) {
+        if let ResponseItem::FunctionCall {
+            name,
+            namespace,
+            call_id,
+            ..
+        } = item
+        {
+            self.observe_plan_boundary(
+                call_id,
+                name == "update_plan" && namespace.is_none(),
+                if completed { 1 } else { 0 },
+            );
+            return;
+        }
         if !matches!(
             item,
             ResponseItem::Message { .. } | ResponseItem::Reasoning { .. }
         ) {
             self.observe_unreconciled();
+        }
+    }
+
+    pub(crate) fn observe_tool_dispatch(&self, call_id: &str, eligible_plan: bool) {
+        self.observe_plan_boundary(call_id, eligible_plan, 2);
+    }
+
+    fn observe_plan_boundary(&self, call_id: &str, eligible: bool, boundary: u8) {
+        if let Ok(mut state) = self.observations.lock() {
+            state.unreconciled = state.unreconciled.saturating_add(1);
+            // Ordinary sessions retain the conservative counter without allocating
+            // per-call state. An imported report cannot register this live ledger.
+            if !state.registered
+                || call_id.is_empty()
+                || call_id.len() > 256
+                || (!state.calls.contains_key(call_id) && state.calls.len() >= 4096)
+            {
+                return;
+            }
+            let call = state
+                .calls
+                .entry(call_id.to_owned())
+                .or_insert_with(|| PlanObservation {
+                    eligible: true,
+                    ..Default::default()
+                });
+            call.eligible &= eligible && !call.completed;
+            call.observations = call.observations.saturating_add(1);
+            match boundary {
+                0 => call.added = call.added.saturating_add(1),
+                1 => call.done = call.done.saturating_add(1),
+                _ => call.dispatched = call.dispatched.saturating_add(1),
+            }
+        }
+    }
+
+    /// Only the actual built-in plan handler calls this after its typed update.
+    /// A tool name, result, copied report, failed handler or cancellation is not
+    /// a receipt. Completed IDs stay retained to reject replay/cross-turn reuse.
+    pub(crate) fn complete_core_plan(&self, call_id: &str) {
+        if let Ok(mut state) = self.observations.lock() {
+            let registered = state.registered;
+            let Some(call) = state.calls.get_mut(call_id) else {
+                return;
+            };
+            if !registered
+                || !call.eligible
+                || call.completed
+                || call.added > 1
+                || call.done != 1
+                || call.dispatched != 1
+            {
+                return;
+            }
+            call.completed = true;
+            let observations = call.observations;
+            // Other calls and unowned startup/submission observations are untouched.
+            if let Some(remaining) = state.unreconciled.checked_sub(observations) {
+                state.unreconciled = remaining;
+            }
         }
     }
 
@@ -192,6 +282,7 @@ mod tests {
                 startup: BTreeSet::new(),
                 submissions: 0,
                 unreconciled: 0,
+                calls: BTreeMap::new(),
             }),
         }
     }

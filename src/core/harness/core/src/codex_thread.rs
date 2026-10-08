@@ -67,7 +67,8 @@ impl CodexThread {
     }
 
     /// Factory provenance only, before any submission. This grants no execution
-    /// permit and reconciles neither startup servers nor tool effects.
+    /// permit and reconciles no startup or unowned tool effects. Actual built-in
+    /// Core handlers may subsequently receipt their own scoped effects.
     pub fn register_native_source_factory(&self) -> std::io::Result<()> {
         self.codex.session.native_effects.register_source_factory()
     }
