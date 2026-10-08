@@ -42,6 +42,17 @@ fn denied_at(boundary: &'static str, reason: Denial) -> Denial {
     );
     reason
 }
+fn runtime_io_denial(boundary: &'static str, error: &io::Error) -> Denial {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema": "ctox.speech_denial.v1",
+            "boundary": boundary,
+            "ioKind": format!("{:?}", error.kind()),
+        })
+    );
+    Denial::RouteRetired
+}
 struct OwnedTask(JoinHandle<Result<ReadyAudio, Denial>>);
 impl Drop for OwnedTask {
     fn drop(&mut self) {
@@ -226,9 +237,26 @@ impl WebRTCPublicationGuard for Publication {
                         |publish| pool.with_current_native_control_peer(&self.peer, publish)?,
                         publish,
                     )
-                    .map_err(|_| Denial::RouteRetired)
+                    .map_err(|_| {
+                        denied_at(
+                            match self.boundary {
+                                PublicationBoundary::RuntimeIo => "runtime_peer",
+                                PublicationBoundary::NativeReply => "native_reply_peer",
+                            },
+                            Denial::RouteRetired,
+                        )
+                    })
             })
-            .map_err(|_| new_rx_error("CTOX_SPEECH_AUTHORITY_RETIRED", None))
+            .map_err(|reason| {
+                denied_at(
+                    match self.boundary {
+                        PublicationBoundary::RuntimeIo => "runtime_authority",
+                        PublicationBoundary::NativeReply => "native_reply_authority",
+                    },
+                    reason,
+                );
+                new_rx_error("CTOX_SPEECH_AUTHORITY_RETIRED", None)
+            })
     }
 }
 /// Reacquire current policy, live host/object and exact native connection at
@@ -805,15 +833,18 @@ async fn synthesize_local(
         .get_mut()
         .write_all(&payload)
         .await
-        .map_err(|_| Denial::RouteRetired)?;
+        .map_err(|error| runtime_io_denial("runtime_write", &error))?;
     socket
         .get_mut()
         .flush()
         .await
-        .map_err(|_| Denial::RouteRetired)?;
+        .map_err(|error| runtime_io_denial("runtime_flush", &error))?;
     let mut bytes = Vec::new();
     loop {
-        let buffer = socket.fill_buf().await.map_err(|_| Denial::RouteRetired)?;
+        let buffer = socket
+            .fill_buf()
+            .await
+            .map_err(|error| runtime_io_denial("runtime_read", &error))?;
         if buffer.is_empty() {
             return Err(Denial::InferenceFailed);
         }
