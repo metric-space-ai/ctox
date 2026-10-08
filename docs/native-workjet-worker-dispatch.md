@@ -33,7 +33,10 @@ Request operation/field names are snake_case; receipt fields are camelCase.
 
 Registration returns registrationId, revision, sourceEnvironmentId,
 sourceSupervisorThreadId, sourceInstanceId, projectId, ownerUserId,
-authorityEpoch, state. Source instance comes from authenticated MCP context.
+authorityEpoch, state. Source instance comes only from the authenticated gateway instance_id route pin,
+not its separate tenant/workspace label. The native receipt additionally binds
+sourceWorkspaceId; workspace policy and source isolation remain enforced.
+Missing pins and caller _context/serialized claims cannot manufacture one.
 Supervisor must be the actual CodeThread UUID in workjet_supervisor_bindings,
 with current owned active project and canonical Threads provenance.
 Browser metadata cannot create this provenance. Workjet additionally derives

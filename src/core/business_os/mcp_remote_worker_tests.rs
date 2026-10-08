@@ -1,3 +1,49 @@
+#[test]
+fn remote_worker_actual_gateway_instance_is_distinct_from_workspace_and_unforgeable(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let gateway = gateway("owner");
+    assert_ne!(gateway["workspace"], gateway["instance_id"]);
+    let args = json!({"action":"issue","binding":binding(),"ttl_seconds":300});
+    let receipt = super::super::call_tool_inner(root.path(), TOOL, args.clone(), Some(&gateway))?;
+    assert_eq!(receipt["binding"]["sourceInstanceId"], "source-instance");
+    assert_eq!(receipt["sourceWorkspaceId"], "tenant:source-owner");
+    for pin in [None, Some("wrong-instance"), Some("")] {
+        let mut wrong = gateway.clone();
+        if let Some(pin) = pin {
+            wrong["instance_id"] = json!(pin);
+        } else {
+            wrong.as_object_mut().unwrap().remove("instance_id");
+        }
+        assert!(
+            super::super::call_tool_inner(root.path(), TOOL, args.clone(), Some(&wrong)).is_err()
+        );
+    }
+    let untrusted = super::super::context_from_arguments_with_trusted_gateway_context(
+        TOOL,
+        &json!({"_context":gateway}),
+        None,
+    )?;
+    assert!(untrusted.trusted_managed_instance_id.is_none());
+    let mut serialized = serde_json::to_value(&untrusted)?;
+    serialized["trusted_managed_instance_id"] = json!("source-instance");
+    let decoded: McpChannelRequestContext = serde_json::from_value(serialized)?;
+    assert!(decoded.trusted_managed_instance_id.is_none());
+    let mut other_workspace = gateway.clone();
+    other_workspace["workspace"] = json!("tenant:other");
+    for action in ["claim", "revoke"] {
+        let mut request =
+            json!({"action":action,"permit_id":receipt["permitId"],"binding":binding()});
+        if action == "claim" {
+            request["execution_id"] = json!("execution-1");
+        }
+        assert!(
+            super::super::call_tool_inner(root.path(), TOOL, request, Some(&other_workspace))
+                .is_err()
+        );
+    }
+    Ok(())
+}
 // Origin: CTOX
 // License: AGPL-3.0-only
 use super::*;
@@ -21,7 +67,7 @@ fn binding() -> Binding {
 }
 fn gateway(owner: &str) -> Value {
     json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp",
-        "surface":"workjet","actor":owner,"role":"chef","workspace":"source-instance"})
+        "surface":"workjet","actor":owner,"role":"chef","workspace":"tenant:source-owner","instance_id":"source-instance"})
 }
 fn fixture() -> anyhow::Result<tempfile::TempDir> {
     let root = tempfile::tempdir()?;

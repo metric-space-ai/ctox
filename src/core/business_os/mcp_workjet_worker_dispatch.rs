@@ -19,6 +19,7 @@ struct Registration {
     source_environment_id: String,
     source_supervisor_thread_id: String,
     source_instance_id: String,
+    source_workspace_id: String,
     project_id: String,
     owner_user_id: String,
     authority_epoch: i64,
@@ -227,7 +228,8 @@ fn check_source(
     anyhow::ensure!(
         record.state == "active"
             && record.revision == revision
-            && record.source_instance_id == context.workspace,
+            && record.source_instance_id == context.managed_source_instance()?
+            && record.source_workspace_id == context.workspace,
         "worker source is stale or revoked"
     );
     let epoch = current_project(
@@ -339,7 +341,8 @@ pub(super) fn execute(
                     revision: 1,
                     source_environment_id: source_environment_id.clone(),
                     source_supervisor_thread_id: source_supervisor_thread_id.clone(),
-                    source_instance_id: context.workspace.clone(),
+                    source_instance_id: context.managed_source_instance()?.to_owned(),
+                    source_workspace_id: context.workspace.clone(),
                     project_id: project_id.clone(),
                     owner_user_id: context.actor.clone(),
                     authority_epoch: epoch,
@@ -349,7 +352,8 @@ pub(super) fn execute(
             let unchanged = record.state == "active"
                 && record.source_environment_id == source_environment_id
                 && record.source_supervisor_thread_id == source_supervisor_thread_id
-                && record.source_instance_id == context.workspace
+                && record.source_instance_id == context.managed_source_instance()?
+                && record.source_workspace_id == context.workspace
                 && record.authority_epoch == epoch;
             if unchanged {
                 anyhow::ensure!(
@@ -370,7 +374,8 @@ pub(super) fn execute(
                     .context("source revision exhausted")?;
                 record.source_environment_id = source_environment_id;
                 record.source_supervisor_thread_id = source_supervisor_thread_id;
-                record.source_instance_id = context.workspace.clone();
+                record.source_instance_id = context.managed_source_instance()?.to_owned();
+                record.source_workspace_id = context.workspace.clone();
                 record.authority_epoch = epoch;
                 record.state = "active".into();
             }
@@ -383,7 +388,8 @@ pub(super) fn execute(
         } => {
             let mut record = load(&core_tx, &context.actor, &registration_id)?;
             anyhow::ensure!(
-                record.source_instance_id == context.workspace,
+                record.source_instance_id == context.managed_source_instance()?
+                    && record.source_workspace_id == context.workspace,
                 "source instance differs"
             );
             if record.state == "revoked" {
@@ -420,12 +426,14 @@ pub(super) fn execute(
                  AND json_extract(s.record_json,'$.state')='active'
                  AND json_extract(s.record_json,'$.revision')=i.registration_revision
                  AND json_extract(s.record_json,'$.authorityEpoch')=?4
+                 AND json_extract(s.record_json,'$.sourceWorkspaceId')=?5
                  AND i.result_json IS NULL ORDER BY i.rowid LIMIT 1",
                     params![
                         context.actor,
-                        context.workspace,
+                        context.managed_source_instance()?,
                         source_environment_id,
-                        epoch
+                        epoch,
+                        context.workspace
                     ],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )

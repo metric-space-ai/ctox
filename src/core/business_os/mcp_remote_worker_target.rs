@@ -56,6 +56,7 @@ struct Registration {
     binding_id: String,
     owner_user_id: String,
     source_instance_id: String,
+    source_workspace_id: String,
     target: Target,
     revision: u64,
     state: String,
@@ -225,7 +226,8 @@ pub(super) fn execute(
                     contract: CONTRACT.into(),
                     binding_id: uuid::Uuid::new_v4().to_string(),
                     owner_user_id: context.actor.clone(),
-                    source_instance_id: context.workspace.clone(),
+                    source_instance_id: context.managed_source_instance()?.to_owned(),
+                    source_workspace_id: context.workspace.clone(),
                     target,
                     revision: 1,
                     state: "active".into(),
@@ -272,7 +274,8 @@ pub(super) fn execute(
                     contract: CONTRACT.into(),
                     binding_id: uuid::Uuid::new_v4().to_string(),
                     owner_user_id: context.actor.clone(),
-                    source_instance_id: context.workspace.clone(),
+                    source_instance_id: context.managed_source_instance()?.to_owned(),
+                    source_workspace_id: context.workspace.clone(),
                     target,
                     revision: 1,
                     state: "active".into(),
@@ -317,7 +320,8 @@ pub(super) fn execute(
     };
     // No payload can select a foreign native owner or source instance.
     record.owner_user_id = context.actor.clone();
-    record.source_instance_id = context.workspace.clone();
+    record.source_instance_id = context.managed_source_instance()?.to_owned();
+    record.source_workspace_id = context.workspace.clone();
     tx.execute(
         "INSERT INTO workjet_remote_worker_targets
         (owner_user_id,source_instance_id,target_environment_id,record_json)
@@ -326,7 +330,7 @@ pub(super) fn execute(
         DO UPDATE SET record_json=excluded.record_json",
         params![
             context.actor,
-            context.workspace,
+            context.managed_source_instance()?,
             record.target.target_environment_id,
             serde_json::to_string(&record)?
         ],
@@ -396,7 +400,11 @@ fn load(
         .query_row(
             "SELECT record_json FROM workjet_remote_worker_targets
         WHERE owner_user_id=?1 AND source_instance_id=?2 AND target_environment_id=?3",
-            params![context.actor, context.workspace, environment],
+            params![
+                context.actor,
+                context.managed_source_instance()?,
+                environment
+            ],
             |row| row.get(0),
         )
         .optional()?;
@@ -405,7 +413,8 @@ fn load(
         anyhow::ensure!(
             record.contract == CONTRACT
                 && record.owner_user_id == context.actor
-                && record.source_instance_id == context.workspace
+                && record.source_instance_id == context.managed_source_instance()?
+                && record.source_workspace_id == context.workspace
                 && record.target.target_environment_id == environment
                 && record.revision > 0
                 && matches!(record.state.as_str(), "active" | "revoked"),

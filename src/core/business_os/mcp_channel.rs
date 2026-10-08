@@ -138,9 +138,29 @@ pub struct McpChannelRequestContext {
     // Caller arguments and persisted contexts cannot manufacture gateway scope.
     #[serde(skip)]
     pub trusted_managed_read_scope: Option<ManagedMcpCollectionReadScope>,
+    // Only the authenticated gateway route can pin an instance, never _context.
+    #[serde(skip)]
+    pub trusted_managed_instance_id: Option<String>,
 }
 
 impl McpChannelRequestContext {
+    fn managed_source_instance(&self) -> anyhow::Result<&str> {
+        anyhow::ensure!(
+            self.trusted_role_source.as_deref() == Some("ctox_dev_managed_mcp_token")
+                && self.channel == "ctox_dev_managed_mcp",
+            "source requires the authenticated managed route"
+        );
+        self.trusted_managed_instance_id
+            .as_deref()
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= 256
+                    && id.trim() == *id
+                    && !id.chars().any(char::is_control)
+            })
+            .context("authenticated managed source instance pin missing")
+    }
+
     pub fn validate(&self) -> Result<(), BusinessOsMcpError> {
         ensure_non_empty("channel", &self.channel)?;
         ensure_non_empty("surface", &self.surface)?;
@@ -7457,6 +7477,13 @@ fn context_from_arguments_with_trusted_gateway_context(
             }
         },
         trusted_role,
+        trusted_managed_instance_id: trusted_gateway_context
+            .filter(|gateway| {
+                string_field(gateway, "auth_source").as_deref()
+                    == Some("ctox_dev_managed_mcp_token")
+                    && string_field(gateway, "channel").as_deref() == Some("ctox_dev_managed_mcp")
+            })
+            .and_then(|gateway| string_field(gateway, "instance_id")),
         trusted_managed_read_scope: trusted_gateway_context
             .filter(|gateway| {
                 string_field(gateway, "auth_source").as_deref()
@@ -9414,6 +9441,7 @@ mod tests {
             trusted_role: None,
             trusted_role_source: None,
             trusted_managed_read_scope: None,
+            trusted_managed_instance_id: None,
         }
     }
 

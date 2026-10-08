@@ -6,7 +6,7 @@ use serde_json::json;
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 fn gateway(actor: &str) -> Value {
     json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp",
-        "surface":"workjet","actor":actor,"role":"chef","workspace":"source-instance"})
+        "surface":"workjet","actor":actor,"role":"chef","workspace":"tenant:source-owner","instance_id":"source-instance"})
 }
 fn call(root: &Path, actor: &str, args: Value) -> anyhow::Result<Value> {
     super::super::call_tool_inner(root, TOOL, args, Some(&gateway(actor)))
