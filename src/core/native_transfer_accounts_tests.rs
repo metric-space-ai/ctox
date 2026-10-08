@@ -141,7 +141,91 @@ async fn reopened_host_resolves_pins_and_callbacks_without_loading_credentials()
         .unwrap()
         .contains_key(&account.target_id));
     // No capability record exists: public resolution must still work.
-    assert!(reopened.credentials(&account, &"n".repeat(43)).is_err());
+    assert!(reopened
+        .credentials(&account, Some(&"n".repeat(43)))
+        .is_err());
+}
+
+#[tokio::test]
+async fn initial_pairing_probe_then_challenge_retains_authority_guards() {
+    let root = tempfile::tempdir().unwrap();
+    let host = host(root.path());
+    let scope = NativeDeviceKeyScope {
+        target_id: "source-one".into(),
+        source_instance_id: "instance-one".into(),
+        source_public_identity: format!("ed25519:{}", "a".repeat(64)),
+        account_epoch: 1,
+    };
+    let secret = "p".repeat(43);
+    let _retained_provider = host
+        .pairing_provider(scope.clone(), secret.clone())
+        .await
+        .unwrap();
+    let probe = host
+        .pairing_credentials(&scope, secret.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(probe.capability_token, secret);
+    assert!(probe.device_proof.is_none());
+    let nonce = "n".repeat(43);
+    let challenged = host
+        .pairing_credentials(&scope, secret.clone(), Some(nonce.clone()))
+        .await
+        .unwrap();
+    let proof = challenged.device_proof.unwrap();
+    let mut public = vec![4];
+    public.extend(URL_SAFE_NO_PAD.decode(&proof.public_x).unwrap());
+    public.extend(URL_SAFE_NO_PAD.decode(&proof.public_y).unwrap());
+    let verifier =
+        ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_FIXED, public);
+    let signature = URL_SAFE_NO_PAD.decode(&proof.signature).unwrap();
+    verifier.verify(nonce.as_bytes(), &signature).unwrap();
+    assert!(verifier.verify(b"different-challenge", &signature).is_err());
+    assert!(host
+        .pairing_credentials(&scope, secret.clone(), Some("bad".into()))
+        .await
+        .is_err());
+    let mut enrolled = account(root.path());
+    for active in [true, false] {
+        enrolled.active = active;
+        save_authority(root.path(), &enrolled);
+        assert!(host
+            .pairing_credentials(&scope, secret.clone(), None)
+            .await
+            .is_err());
+        assert!(host
+            .pairing_credentials(&scope, secret.clone(), Some(nonce.clone()))
+            .await
+            .is_err());
+    }
+}
+
+#[test]
+fn reconnect_probe_preserves_account_signer_and_nonce_guards() {
+    let root = tempfile::tempdir().unwrap();
+    let original = account(root.path());
+    save_authority(root.path(), &original);
+    save_credentials(root.path(), &original, &original);
+    let host = host(root.path());
+    let probe = host.credentials(&original, None).unwrap();
+    assert_eq!(probe.capability_token, "isolated-native-fixture-capability");
+    assert!(probe.device_proof.is_none());
+    assert!(host.credentials(&original, Some("bad")).is_err());
+    let mut foreign = original.clone();
+    foreign.principal.user_id = "foreign-user".into();
+    save_credentials(root.path(), &original, &foreign);
+    assert!(host.credentials(&original, None).is_err());
+    save_credentials(root.path(), &original, &original);
+    let mut changed = original.clone();
+    changed.active = false;
+    save_authority(root.path(), &changed);
+    assert!(host.credentials(&original, None).is_err());
+    changed.active = true;
+    changed.account_epoch += 1;
+    save_authority(root.path(), &changed);
+    save_credentials(root.path(), &changed, &changed);
+    assert!(host.credentials(&changed, None).is_err());
+    assert!(NativeDeviceProofKey::load(root.path(), &changed.key_scope()).is_err());
 }
 
 #[test]
@@ -151,7 +235,9 @@ fn credentials_load_the_enrolled_signer_and_produce_a_verifiable_fresh_proof() {
     save_authority(root.path(), &account);
     save_credentials(root.path(), &account, &account);
     let nonce = "n".repeat(43);
-    let credentials = host(root.path()).credentials(&account, &nonce).unwrap();
+    let credentials = host(root.path())
+        .credentials(&account, Some(&nonce))
+        .unwrap();
     assert_eq!(
         credentials.capability_token,
         "isolated-native-fixture-capability"
@@ -183,11 +269,11 @@ async fn inactive_or_switched_account_denies_the_original_credential_binding() {
         .await
         .unwrap()
         .is_none());
-    assert!(host.credentials(&original, &"n".repeat(43)).is_err());
+    assert!(host.credentials(&original, Some(&"n".repeat(43))).is_err());
     changed.active = true;
     changed.account_epoch += 1;
     save_authority(root.path(), &changed);
-    assert!(host.credentials(&original, &"n".repeat(43)).is_err());
+    assert!(host.credentials(&original, Some(&"n".repeat(43))).is_err());
     assert_ne!(
         host.saved_target(&original.target_id)
             .await
@@ -207,14 +293,14 @@ fn foreign_credential_tuple_and_missing_signer_fail_without_reenrollment() {
     foreign.principal.user_id = "another-account".into();
     save_credentials(root.path(), &original, &foreign);
     assert!(host(root.path())
-        .credentials(&original, &"n".repeat(43))
+        .credentials(&original, Some(&"n".repeat(43)))
         .is_err());
     let mut missing_key = original.clone();
     missing_key.account_epoch += 1;
     save_authority(root.path(), &missing_key);
     save_credentials(root.path(), &missing_key, &missing_key);
     assert!(host(root.path())
-        .credentials(&missing_key, &"n".repeat(43))
+        .credentials(&missing_key, Some(&"n".repeat(43)))
         .is_err());
     assert!(NativeDeviceProofKey::load(root.path(), &missing_key.key_scope()).is_err());
 }
@@ -239,7 +325,7 @@ async fn corrupt_public_record_does_not_fall_back_to_credentials_or_an_old_accou
     let host = host(root.path());
     assert!(host.saved_target(&account.target_id).await.is_err());
     assert!(host.providers().await.is_err());
-    assert!(host.credentials(&account, &"n".repeat(43)).is_err());
+    assert!(host.credentials(&account, Some(&"n".repeat(43))).is_err());
 }
 
 fn provision_reply(account: &NativeTransferAccount) -> NativeTransferProvisionReply {
@@ -258,6 +344,63 @@ fn provision_reply(account: &NativeTransferAccount) -> NativeTransferProvisionRe
             expires_at_ms: now + 240_000,
         },
     }
+}
+
+#[tokio::test]
+async fn initial_authorization_epoch_enrolls_exactly_and_keeps_refresh_and_disconnect_fences() {
+    let root = tempfile::tempdir().unwrap();
+    let mut original = account(root.path());
+    original.principal.authorization_epoch = 0;
+    let enrolled = host(root.path());
+    enrolled
+        .commit_authenticated(
+            &original.key_scope(),
+            None,
+            None,
+            provision_reply(&original),
+        )
+        .unwrap();
+    let before = serde_json::to_string(&original).unwrap();
+    let route = enrolled
+        .read_record(ROUTING_SCOPE, &original.credential_name().unwrap())
+        .unwrap()
+        .unwrap();
+    let reopened = host(root.path());
+    assert!(reopened.account(&original.target_id).await.unwrap() == Some(original.clone()));
+    assert!(reopened.credentials(&original, None).is_ok());
+    assert!(reopened
+        .credentials(&original, Some(&"n".repeat(43)))
+        .is_ok());
+
+    // A new source principal cannot silently replace the retained account.
+    let mut changed = original.clone();
+    changed.principal.authorization_epoch = 1;
+    assert!(reopened
+        .commit_authenticated(
+            &original.key_scope(),
+            Some(&before),
+            Some(&route),
+            provision_reply(&changed),
+        )
+        .is_err());
+    assert!(reopened.credentials(&changed, None).is_err());
+    assert!(reopened.credentials(&original, None).is_ok());
+
+    reopened.revoke(original.clone()).await.unwrap();
+    assert!(reopened
+        .account(&original.target_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(reopened.credentials(&original, None).is_err());
+    assert!(reopened
+        .commit_authenticated(
+            &original.key_scope(),
+            Some(&before),
+            Some(&route),
+            provision_reply(&original),
+        )
+        .is_err());
 }
 
 #[tokio::test]
@@ -284,7 +427,7 @@ async fn authenticated_tuple_reopens_and_stale_refresh_cannot_undo_disconnect() 
         format!("ctox-business-os:{}:source-room", account.instance_id)
     );
     assert_eq!(
-        host.credentials(&account, &"n".repeat(43))
+        host.credentials(&account, Some(&"n".repeat(43)))
             .unwrap()
             .capability_token,
         "source-renewed-native-capability"
@@ -340,7 +483,7 @@ fn route_cas_prevents_older_refresh_overwriting_new_credentials() {
         )
         .is_err());
     assert_eq!(
-        host.credentials(&account, &"n".repeat(43))
+        host.credentials(&account, Some(&"n".repeat(43)))
             .unwrap()
             .capability_token,
         "newer-source-credential"
@@ -446,7 +589,7 @@ async fn explicit_newer_account_erases_old_tuple_and_rejects_stale_disconnect() 
     assert!(host.read_account(&next.target_id).unwrap().as_ref() == Some(&next));
     assert!(!crate::secrets::secret_exists(root.path(), CREDENTIAL_SCOPE, &old_name).unwrap());
     assert!(!crate::secrets::secret_exists(root.path(), ROUTING_SCOPE, &old_name).unwrap());
-    assert!(host.credentials(&original, &"n".repeat(43)).is_err());
+    assert!(host.credentials(&original, Some(&"n".repeat(43))).is_err());
 }
 
 fn save_route_snapshot(

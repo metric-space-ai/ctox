@@ -1,0 +1,133 @@
+/** Host orchestration needs Node filesystem/process APIs, which Playwright CLI run-code does not expose. */
+import { readFileSync, writeFileSync, mkdirSync, realpathSync, accessSync, constants, statfsSync, readlinkSync } from 'node:fs';
+import { userInfo } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { validateConfig, measureShellRollback, runAcceptance, stopOwnedAcceptance } from './installed-sync-acceptance.mjs';
+
+const [configPath, playwrightRoot, mode] = process.argv.slice(2);
+if (mode && mode !== '--check-browser') throw new Error('Unknown runner mode');
+const browserCheckOnly = mode === '--check-browser';
+if (!configPath || !playwrightRoot || !process.env.TMPDIR || !process.env.CARGO_TARGET_DIR)
+  throw new Error('Use the admitted GPU launcher with private config and the verified shared Playwright1.60.0/Chromium cache');
+process.umask(0o077); // All browser/profile/native child outputs remain owner-private.
+const config = validateConfig(JSON.parse(readFileSync(configPath)), configPath);
+const tools = realpathSync(playwrightRoot);
+const sharedTools = '/mnt/nvme1/build-lane/deps/shell-browser-collection-auth/node_modules/playwright';
+const sharedBrowsers = '/mnt/nvme1/build-lane/deps/shell-browser-collection-auth/browsers';
+if (tools !== realpathSync(sharedTools)
+  || JSON.parse(readFileSync(join(tools, 'package.json'))).version !== '1.60.0'
+  || realpathSync(process.env.PLAYWRIGHT_BROWSERS_PATH || '') !== realpathSync(sharedBrowsers))
+  throw new Error('Reuse the exact verified Playwright1.60.0 package and matching shared Chromium cache');
+const { chromium } = await import(pathToFileURL(join(tools, 'index.mjs')).href);
+const out = join(config.acceptanceBase, `browser-controller-${Date.now()}-${process.pid}`); mkdirSync(out, { mode: 0o700 });
+const receipt = { owner: config.owner, source: config.source, host: config.host,
+  launcherPid: process.pid, startedAt: new Date().toISOString(),
+  stop: `first uncaught failure or${browserCheckOnly ? 60 : 3000}s; own browser group and native groups only`,
+  playwright: '1.60.0', browserCheckOnly, maximumClientWorkers: 2, terminal: false, pass: false };
+const save = () => writeFileSync(join(out, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
+let server, browser, browserPid, browserPgid;
+const stop = async () => {
+  try { await stopOwnedAcceptance(); receipt.nativeGroupsStopped = true; }
+  catch { receipt.nativeGroupsStopped = false; }
+  try { await browser?.close(); } catch {}
+  if (server) {
+    await Promise.race([server.close().catch(() => {}), new Promise(r => setTimeout(r, 5000))]);
+  }
+  if (browserPid && browserPgid === browserPid) {
+    try { process.kill(-browserPgid, 'SIGKILL'); }
+    catch (e) { if (e.code !== 'ESRCH') receipt.browserCleanupError = e.code || e.name; }
+    receipt.browserGroupAbsent = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try { process.kill(-browserPgid, 0); }
+      catch (e) { if (e.code === 'ESRCH') receipt.browserGroupAbsent = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+};
+const deadline = setTimeout(() => { receipt.deadlineReached = true; save(); void stop(); }, browserCheckOnly ? 60000 : 3000000);
+process.once('SIGTERM', () => { receipt.interrupted = true; save(); void stop(); });
+save();
+try {
+  // The startup diagnostic never starts native or contacts a tenant.
+  if (!browserCheckOnly) {
+    receipt.phase = 'component-rollback'; save();
+    receipt.rollback = await measureShellRollback(configPath); save();
+    if (!receipt.rollback.componentRollbackPassed) throw new Error('Component baseline was not restored; no browser faults allowed');
+  }
+  if (receipt.interrupted || receipt.deadlineReached) throw new Error('Owned acceptance unit interrupted');
+  receipt.phase = 'browser-environment'; save();
+  // Query NSS directly; an invented HOME cannot repair an unresolved uid.
+  const identity = userInfo();
+  const passwd = spawnSync('getent', ['passwd', String(identity.uid)], { encoding: 'utf8' });
+  const group = spawnSync('getent', ['group', String(identity.gid)], { encoding: 'utf8' });
+  const fields = passwd.stdout.trim().split(':');
+  if (passwd.status !== 0 || group.status !== 0 || fields.length !== 7
+    || fields[5] !== identity.homedir) throw new Error('Browser uid/gid has no consistent NSS identity');
+  accessSync(identity.homedir, constants.R_OK | constants.X_OK);
+  accessSync('/dev/shm', constants.R_OK | constants.W_OK | constants.X_OK);
+  accessSync('/proc/self/status', constants.R_OK);
+  const shm = statfsSync('/dev/shm');
+  receipt.environment = { uid: identity.uid, gid: identity.gid, nssResolved: true,
+    home: identity.homedir, shmWritable: true, shmType: shm.type, shmFreeBytes: shm.bavail * shm.bsize,
+    procMounted: true, mountNamespace: readlinkSync('/proc/self/ns/mnt'),
+    userNamespace: readlinkSync('/proc/self/ns/user'), homeOverride: false };
+  if (shm.bavail * shm.bsize < 64 * 1024 * 1024) throw new Error('Browser shared memory reserve below64MiB');
+  const browserHome = join(out, 'browser-home'); mkdirSync(browserHome, { mode: 0o700 });
+  if (process.env.HOME !== identity.homedir) throw new Error('Browser parent HOME differs from its real NSS home');
+  const browserEnv = Object.fromEntries(['PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'HOME', 'USER', 'LOGNAME']
+    .filter(key => process.env[key]).map(key => [key, process.env[key]]));
+  Object.assign(browserEnv, { XDG_CONFIG_HOME: join(browserHome, 'config'),
+    XDG_DATA_HOME: join(browserHome, 'data'), XDG_CACHE_HOME: join(browserHome, 'cache') });
+  for (const key of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME']) mkdirSync(browserEnv[key], { mode: 0o700 });
+  receipt.phase = 'browser-launch';
+  // Reuse the matched package/browser that passed Shell's real Chromium checks.
+  // System Chrome146 SIGTRAP startup did not measure sync; no fresh browser download.
+  receipt.browserSelection = 'matched Playwright default headless executable'; save();
+  server = await chromium.launchServer({ headless: true,
+    chromiumSandbox: true, timeout: 30000, env: browserEnv, args: ['--disable-gpu'] });
+  receipt.browserExecutable = server.process().spawnfile;
+  receipt.phase = 'browser-group-check'; save();
+  browserPid = server.process().pid;
+  browserPgid = Number(spawnSync('ps', ['-o', 'pgid=', '-p', String(browserPid)], { encoding: 'utf8' }).stdout.trim());
+  receipt.browserPid = browserPid; receipt.browserPgid = browserPgid; save();
+  if (browserPgid !== browserPid) throw new Error('Browser has no isolated owned process group');
+  if (receipt.interrupted || receipt.deadlineReached) throw new Error('Owned acceptance unit interrupted');
+  receipt.phase = 'browser-connect'; save();
+  browser = await chromium.connect(server.wsEndpoint()); // Private endpoint never enters logs or receipts.
+  receipt.browserVersion = browser.version(); save();
+  if (browserCheckOnly) {
+    receipt.phase = 'browser-start-check'; save();
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    receipt.startup = await page.evaluate(() => ({ url: location.href, userAgent: navigator.userAgent }));
+    await context.close();
+    receipt.pass = receipt.startup.url === 'about:blank';
+  } else {
+    receipt.phase = 'sync-measurement'; save();
+    receipt.measurements = await runAcceptance(browser, configPath);
+    receipt.pass = receipt.rollback.componentRollbackPassed && receipt.measurements.goals.every(row => row.pass);
+  }
+} catch (error) {
+  receipt.failure = { name: error.name, message: 'Installed runner failed; native credentials and browser endpoint suppressed' };
+  receipt.failure.errorSha256 = createHash('sha256').update(String(error.message)).digest('hex');
+  // No invitations or private browser endpoint exist before launch succeeds.
+  if (receipt.phase === 'browser-launch') receipt.failure.launchDetail = String(error.message)
+    .replace(/(?:wss?|https?):\/\/[^\s"'<>]+/g, '[URL omitted]').slice(0, 16000);
+} finally {
+  clearTimeout(deadline);
+  await stop();
+  receipt.terminal = true; receipt.finishedAt = new Date().toISOString();
+  if (browserPid) {
+    try { process.kill(browserPid, 0); receipt.browserProcessAbsent = false; }
+    catch (error) { receipt.browserProcessAbsent = error.code === 'ESRCH'; }
+  }
+  receipt.pass = Boolean(receipt.pass && receipt.nativeGroupsStopped
+    && receipt.browserGroupAbsent && receipt.browserProcessAbsent
+    && !receipt.interrupted && !receipt.deadlineReached && !receipt.browserCleanupError);
+  save();
+}
+console.log(JSON.stringify({ receipt: join(out, 'receipt.json'), pass: receipt.pass, terminal: receipt.terminal }));
+process.exitCode = receipt.pass ? 0 : 1;

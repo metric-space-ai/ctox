@@ -17,6 +17,15 @@ or weight upload fails. The admitted typed compute plan chooses visible devices.
 Build-only NVCC/CTOX_CUDA_SM/CTOX_CUDA_HOME settings locate the compiler/toolkit;
 no new production runtime environment toggle is introduced.
 
+On Linux the explicit `openblas` build feature enables the vendored upstream
+CPU BLAS path, including the codec's dense projections. It requires OpenBLAS
+headers/library registered with pkg-config and keeps the native BLAS pool at
+two threads. CUDA and OpenBLAS may be combined; the root binary selects the
+same feature through `local-speech-openblas`. No kernel or numerical equation
+is changed. The portable fallback and macOS Accelerate path remain available.
+The final Linux runtime must supply that OpenBLAS shared library; successful
+compilation alone does not prove a packaged runtime or improved speech latency.
+
 Model directories need `consolidated.safetensors`, `tekken.json`, and requested
 `voice_embedding/<preset>.pt` BF16 embeddings. Original uncompressed PyTorch ZIP
 files are read natively as data, without executing pickle. Preset voice names

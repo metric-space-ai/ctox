@@ -728,16 +728,55 @@ pub(super) fn refresh_queue_task_projection(
     original_task: Option<&channels::QueueTaskView>,
     updated_at_ms: i64,
 ) -> anyhow::Result<()> {
+    let Some(prepared) =
+        prepare_queue_task_projection(root, command_id, command, original_task, updated_at_ms)?
+    else {
+        return Ok(());
+    };
+    let (task_id, payload) = apply_prepared_queue_task_projection(conn, prepared, updated_at_ms)?;
+    upsert_rxdb_collection_record_cached(
+        root,
+        rxdb_writers,
+        "ctox_queue_tasks",
+        &task_id,
+        updated_at_ms,
+        payload,
+    )
+}
+
+/// Queue-task payload whose Core reads (queue snapshot, execution progress)
+/// are already done. Hot callers prepare it before taking the Business OS
+/// write lock: opening Core parses its large schema, and holding the write
+/// lock meanwhile kept business-os.sqlite3 locked 94 % of the time while
+/// every worker progress event refreshed its task (thesen 08.10.2026).
+#[cfg(test)]
+thread_local! {
+    pub(super) static AFTER_QUEUE_TASK_CORE_READS: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
+pub(super) struct PreparedQueueTaskProjection {
+    task_id: String,
+    payload: Value,
+}
+
+pub(super) fn prepare_queue_task_projection(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+    original_task: Option<&channels::QueueTaskView>,
+    updated_at_ms: i64,
+) -> anyhow::Result<Option<PreparedQueueTaskProjection>> {
     let Some(task_id) = original_task
         .map(|task| task.message_key.clone())
         .or_else(|| find_queue_task_for_command(root, command_id))
     else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(snapshot) =
         channels::load_business_os_queue_mirror_snapshot(root, command_id, &task_id)?
     else {
-        return Ok(());
+        return Ok(None);
     };
     let task = snapshot.task;
     let inbound_channel = command_inbound_channel(command);
@@ -762,6 +801,28 @@ pub(super) fn refresh_queue_task_projection(
         snapshot.command_projection.as_ref(),
         snapshot.queue_clock_version,
     );
+    #[cfg(test)]
+    AFTER_QUEUE_TASK_CORE_READS.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() {
+            callback();
+        }
+    });
+    Ok(Some(PreparedQueueTaskProjection {
+        task_id: task.message_key,
+        payload,
+    }))
+}
+
+/// Writes only the Business OS row; returns the final payload for RxDB.
+pub(super) fn apply_prepared_queue_task_projection(
+    conn: &Connection,
+    prepared: PreparedQueueTaskProjection,
+    updated_at_ms: i64,
+) -> anyhow::Result<(String, Value)> {
+    let PreparedQueueTaskProjection {
+        task_id,
+        mut payload,
+    } = prepared;
     if let Some(existing) = conn
         .query_row(
             "SELECT payload_json
@@ -769,7 +830,7 @@ pub(super) fn refresh_queue_task_projection(
              WHERE collection = 'ctox_queue_tasks'
                AND record_id = ?1
                AND deleted = 0",
-            params![task.message_key.as_str()],
+            params![task_id.as_str()],
             |row| row.get::<_, String>(0),
         )
         .optional()?
@@ -780,18 +841,11 @@ pub(super) fn refresh_queue_task_projection(
     upsert_business_record(
         conn,
         "ctox_queue_tasks",
-        &task.message_key,
+        &task_id,
         updated_at_ms,
         payload.clone(),
     )?;
-    upsert_rxdb_collection_record_cached(
-        root,
-        rxdb_writers,
-        "ctox_queue_tasks",
-        &task.message_key,
-        updated_at_ms,
-        payload,
-    )
+    Ok((task_id, payload))
 }
 
 pub(super) fn stamp_canonical_queue_mirror_versions(

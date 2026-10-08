@@ -68,10 +68,9 @@ impl NativeTransferAccount {
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
             "invalid native source pin"
         );
-        ensure!(
-            self.principal.authorization_epoch > 0,
-            "invalid native principal"
-        );
+        // Business OS capability epochs start at zero. Preserve the exact
+        // source-verified epoch; the positive local account generation above
+        // is a separate value. Current source policy still fences revocation.
         let device = self.principal.device.as_ref().ok_or_else(unavailable)?;
         ensure!(
             !device.pairing_id.is_empty()
@@ -281,25 +280,9 @@ impl NativeTransferAccountHost {
                             if !same_connection {
                                 return Err(stale());
                             }
-                            let nonce = nonce.ok_or_else(stale)?;
-                            host.require_new_target(&scope.target_id)
+                            host.pairing_credentials(&scope, token, nonce)
                                 .await
-                                .map_err(|_| stale())?;
-                            let root = host.root.clone();
-                            let key_scope = scope.clone();
-                            let proof = tokio::task::spawn_blocking(move || {
-                                NativeDeviceProofKey::load(&root, &key_scope)?.sign_nonce(&nonce)
-                            })
-                            .await
-                            .map_err(|_| stale())?
-                            .map_err(|_| stale())?;
-                            host.require_new_target(&scope.target_id)
-                                .await
-                                .map_err(|_| stale())?;
-                            Ok(LocalSessionCredentials {
-                                capability_token: token,
-                                device_proof: Some(proof),
-                            })
+                                .map_err(|_| stale())
                         })
                     });
                 Ok(NativeSessionTarget {
@@ -309,6 +292,33 @@ impl NativeTransferAccountHost {
                 })
             })
         }))
+    }
+
+    /// The initial protocol probe has no remote nonce. NativeSyncSession has
+    /// already verified the source pin before calling this boundary; the source
+    /// still defers device admission until its actual nonce is answered.
+    async fn pairing_credentials(
+        &self,
+        scope: &NativeDeviceKeyScope,
+        capability_token: String,
+        nonce: Option<String>,
+    ) -> Result<LocalSessionCredentials> {
+        self.require_new_target(&scope.target_id).await?;
+        let root = self.root.clone();
+        let key_scope = scope.clone();
+        let device_proof = tokio::task::spawn_blocking(move || {
+            let key = NativeDeviceProofKey::load(&root, &key_scope)?;
+            nonce
+                .as_deref()
+                .map(|nonce| key.sign_nonce(nonce))
+                .transpose()
+        })
+        .await??;
+        self.require_new_target(&scope.target_id).await?;
+        Ok(LocalSessionCredentials {
+            capability_token,
+            device_proof,
+        })
     }
 
     /// Admission of a new job captures its account before connecting. Do not
@@ -810,11 +820,12 @@ impl NativeTransferAccountHost {
                             if !same_connection {
                                 return Err(credential_error());
                             }
-                            let nonce = nonce.ok_or_else(credential_error)?;
-                            tokio::task::spawn_blocking(move || host.credentials(&account, &nonce))
-                                .await
-                                .map_err(|_| credential_error())?
-                                .map_err(|_| credential_error())
+                            tokio::task::spawn_blocking(move || {
+                                host.credentials(&account, nonce.as_deref())
+                            })
+                            .await
+                            .map_err(|_| credential_error())?
+                            .map_err(|_| credential_error())
                         })
                     });
                 Ok(NativeSessionTarget {
@@ -829,7 +840,7 @@ impl NativeTransferAccountHost {
     fn credentials(
         &self,
         expected: &NativeTransferAccount,
-        nonce: &str,
+        nonce: Option<&str>,
     ) -> Result<LocalSessionCredentials> {
         ensure!(
             self.read_account(&expected.target_id)?.as_ref() == Some(expected),
@@ -861,14 +872,14 @@ impl NativeTransferAccountHost {
             expected.principal.device.as_ref() == Some(&key.device_identity()),
             "native account device changed"
         );
-        let device_proof = key.sign_nonce(nonce)?;
+        let device_proof = nonce.map(|nonce| key.sign_nonce(nonce)).transpose()?;
         ensure!(
             self.read_account(&expected.target_id)?.as_ref() == Some(expected),
             "native account changed"
         );
         Ok(LocalSessionCredentials {
             capability_token: stored.capability_token,
-            device_proof: Some(device_proof),
+            device_proof,
         })
     }
 }

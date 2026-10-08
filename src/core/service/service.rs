@@ -11878,7 +11878,9 @@ fn configure_business_os_mcp_session_for_queue_job(
         && !has_writeback
         && command.pointer("/payload/external_executor").is_some()
         && options.crew_persona.is_some();
-    if metadata_contract.is_none() && !has_writeback && !crew_only {
+    let workjet_supervisor = metadata_contract.is_none()
+        && crate::business_os::mcp_channel::is_workjet_supervisor_command(root, &command)?;
+    if metadata_contract.is_none() && !has_writeback && !crew_only && !workjet_supervisor {
         return Ok(false);
     }
     let payload_hash = command
@@ -11929,6 +11931,13 @@ fn configure_business_os_mcp_session_for_queue_job(
             &token,
             &attempt.attempt_id,
             &attempt.work_key,
+        )?
+    } else {
+        token
+    };
+    let token = if workjet_supervisor {
+        crate::business_os::mcp_channel::restrict_internal_command_session_to_workjet_supervisor(
+            root, &token,
         )?
     } else {
         token
@@ -33183,6 +33192,57 @@ Business OS command:
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(!options.force_isolated_session);
         assert!(queue_job_reuses_persistent_session(&options));
+    }
+
+    #[test]
+    fn workjet_dispatch_supervisor_service_entry_mints_only_current_lease_session(
+    ) -> anyhow::Result<()> {
+        let (temp, command_id) =
+            crate::business_os::mcp_channel::workjet_dispatch_service_test_fixture()?;
+        let root = temp.path();
+        let task = channels::load_queue_task_for_business_os_command(root, &command_id)?
+            .context("missing actual supervisor queue task")?;
+        let key = task.message_key.clone();
+        let job = queued_prompt_from_queue_task(task);
+        let mut options = chat_turn_session_options_for_queue_job(&job);
+        assert!(configure_business_os_mcp_session_for_queue_job(
+            root,
+            &job,
+            &mut options
+        )?);
+        assert!(options.enable_business_os_mcp && !options.disable_mcp_servers);
+        assert!(options.force_isolated_session);
+        let token = options
+            .business_os_mcp_command_session
+            .as_deref()
+            .context("missing supervisor session")?;
+        let trusted =
+            crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)?;
+        assert_eq!(trusted["command_id"], command_id);
+        assert_eq!(trusted["workjet_supervisor_only"], true);
+        assert_eq!(trusted["workjet_supervisor_lease"]["task_id"], key);
+        assert_eq!(
+            trusted["workjet_supervisor_lease"]["lease_worker_id"],
+            "fixture-worker-1"
+        );
+        assert_eq!(trusted["allowed_actions"], serde_json::json!([]));
+
+        // Service replacement and expiry must deny a previously minted token.
+        let core = rusqlite::Connection::open(crate::paths::core_db(root))?;
+        core.execute("UPDATE communication_routing_state SET lease_worker_id='replacement-worker' WHERE message_key=?1", [&key])?;
+        let refreshed =
+            crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)?;
+        assert_eq!(
+            refreshed["workjet_supervisor_lease"]["lease_worker_id"],
+            "fixture-worker-1"
+        );
+        // Verification authenticates claims; dispatch compares the live lease.
+        // The service must also refuse minting a session once the live lease expires.
+        core.execute("UPDATE communication_routing_state SET lease_expires_at='2001-01-01T00:00:00Z' WHERE message_key=?1", [&key])?;
+        let mut expired = chat_turn_session_options_for_queue_job(&job);
+        assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut expired).is_err());
+        assert!(expired.business_os_mcp_command_session.is_none());
+        Ok(())
     }
 
     #[test]

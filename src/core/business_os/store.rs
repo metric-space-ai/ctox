@@ -14685,6 +14685,16 @@ pub fn refresh_business_command_queue_task_projection(
         snapshot.command_projection.as_ref(),
         snapshot.queue_clock_version,
     );
+    // Core reads come first: this runs on every worker progress event, and
+    // holding the Business OS write lock across Core and RxDB I/O kept
+    // business-os.sqlite3 write-locked 94 % of the time (thesen 08.10.2026).
+    let prepared_task = super::store_projections::prepare_queue_task_projection(
+        root,
+        &command_id,
+        &command,
+        Some(&task),
+        updated_at_ms,
+    )?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     upsert_business_record(
         &tx,
@@ -14704,6 +14714,16 @@ pub fn refresh_business_command_queue_task_projection(
     } else {
         notify_after_canonical_command_mirror_upsert();
     }
+    let task_projection = prepared_task
+        .map(|prepared| {
+            super::store_projections::apply_prepared_queue_task_projection(
+                &tx,
+                prepared,
+                updated_at_ms,
+            )
+        })
+        .transpose()?;
+    tx.commit()?;
     let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
     upsert_rxdb_collection_record_cached(
         root,
@@ -14713,16 +14733,16 @@ pub fn refresh_business_command_queue_task_projection(
         updated_at_ms,
         command_projection.clone(),
     )?;
-    refresh_queue_task_projection(
-        root,
-        &tx,
-        Some(&mut rxdb_writers),
-        &command_id,
-        &command,
-        Some(&task),
-        updated_at_ms,
-    )?;
-    tx.commit()?;
+    if let Some((task_id, payload)) = task_projection {
+        upsert_rxdb_collection_record_cached(
+            root,
+            Some(&mut rxdb_writers),
+            "ctox_queue_tasks",
+            &task_id,
+            updated_at_ms,
+            payload,
+        )?;
+    }
     Ok(Some(command_projection))
 }
 
@@ -43403,6 +43423,66 @@ pub(super) mod tests {
         assert_eq!(
             compatibility, "accepted",
             "interleaved cancelled write must not land between canonical upsert and commit"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_queue_projection_reads_core_before_taking_the_business_write_lock(
+    ) -> anyhow::Result<()> {
+        // thesen 08.10.2026: every worker progress event refreshed its task
+        // projection while holding the Business OS write lock across Core reads;
+        // business-os.sqlite3 stayed write-locked 94 % of the time.
+        let temp = tempdir()?;
+        let root = temp.path();
+        create_repair_rxdb_tables(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd-refresh-core-first",
+                "command_id": "cmd-refresh-core-first",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {"title": "Kontext", "instruction": "core first", "prompt": "core first"},
+                "client_context": {"source": "business-os-chat", "module": "research"}
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let store_path = business_os_store_path(root);
+        crate::business_os::store_projections::AFTER_QUEUE_TASK_CORE_READS.with(|slot| {
+            let observed = observed.clone();
+            let store_path = store_path.clone();
+            *slot.borrow_mut() = Some(Box::new(move || {
+                let conn = rusqlite::Connection::open(&store_path).expect("probe store");
+                conn.busy_timeout(Duration::from_millis(0))
+                    .expect("zero busy timeout");
+                let outcome = conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;");
+                *observed.lock().expect("probe lock") = Some(match outcome {
+                    Ok(()) => "free".to_string(),
+                    Err(error) => format!("held:{error}"),
+                });
+            }));
+        });
+        let projected = refresh_business_command_queue_task_projection(root, &task_id);
+        crate::business_os::store_projections::AFTER_QUEUE_TASK_CORE_READS.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        assert!(projected?.is_some());
+        let observed = observed
+            .lock()
+            .expect("probe lock")
+            .clone()
+            .context("expected the queue task projection to read Core")?;
+        assert_eq!(
+            observed, "free",
+            "Business OS write lock held during Core reads"
         );
         Ok(())
     }
