@@ -1809,6 +1809,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
 function listLeads() { return state.leadListRows || state.leads; }
 function campaignListLeads(campaign) { return listLeads().filter(lead => leadKampagnen(lead).includes(campaign)); }
 
+const FULL_LEAD_READ_PACKAGE = 40;
 async function ensureFullLeads(ids, { fresh = false } = {}) {
   const generation = state.collectionBindingGeneration;
   const requested = [...new Set(ids.filter(Boolean))];
@@ -1817,10 +1818,17 @@ async function ensureFullLeads(ids, { fresh = false } = {}) {
   const missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
   if (!missing.length) return requested.map(id => cached.get(id));
   const sequence = ++state.fullLeadReadSequence;
-  const rows = await withLeadQueryAuthority(state.ctx.sync,
-    signal => loadFullLeadRows(state.collections.leads, missing, { signal }), {
-      isCurrent: () => state.collectionBindingGeneration === generation && state.uiMounted !== false,
-    });
+  // Ein Lesefenster (15 s) je Paket: alle 498 Leads einer Kampagne in einem
+  // Fenster waren 63 Achter-Abfragen und liefen auf thesen (08.10.2026)
+  // regelmaessig in "Daten konnten nicht rechtzeitig aus CTOX geladen werden".
+  const rows = [];
+  for (let offset = 0; offset < missing.length; offset += FULL_LEAD_READ_PACKAGE) {
+    const paket = missing.slice(offset, offset + FULL_LEAD_READ_PACKAGE);
+    rows.push(...await withLeadQueryAuthority(state.ctx.sync,
+      signal => loadFullLeadRows(state.collections.leads, paket, { signal }), {
+        isCurrent: () => state.collectionBindingGeneration === generation && state.uiMounted !== false,
+      }));
+  }
   if (generation !== state.collectionBindingGeneration || state.uiMounted === false) {
     throw new Error('Die CTOX-Verbindung hat sich geändert. Bitte die Aktion erneut versuchen.');
   }
@@ -1889,6 +1897,7 @@ const FULL_SINGLE_ACTIONS = new Set(['research-lead', 'research-lead-new', 'rese
 async function prepareFullLeadAction(action, id, campaign) {
   let ids = [];
   if (FULL_SELECTION_ACTIONS.has(action)) ids = [...state.selectedLeadIds];
+  else if (action === 'research-campaign') ids = campaignResearchQueue(campaignListLeads(campaign));
   else if (FULL_CAMPAIGN_ACTIONS.has(action)) ids = campaignListLeads(campaign).map(row => row.id);
   else if (FULL_SINGLE_ACTIONS.has(action)) ids = [id || state.selectedLeadId].filter(Boolean);
   if (!ids.length) return;
@@ -4312,19 +4321,13 @@ async function befehlAmServer(commandId) {
   }
 }
 
-const KAMPAGNENSTART_LADEPAKET = 40;
-
 async function startCampaignResearch(campaignName) {
   const campaign = String(campaignName || '').trim();
-  // Nur die startbaren Leads vollstaendig laden, in Paketen mit je eigenem
-  // Lesefenster. Vorher lud der Start alle 498 Leads der Kampagne (63 Achter-
-  // Abfragen) in einem 15-s-Fenster und brach mit "Daten konnten nicht
-  // rechtzeitig aus CTOX geladen werden" ab, obwohl nur 156 offen waren
-  // (thesen 08.10.2026). Die Listenzeilen tragen Recherche- und Freigabestatus.
+  // Nur die startbaren Leads vollstaendig laden: die Listenzeilen tragen
+  // Recherche- und Freigabestatus. Vorher lud der Start alle 498 Leads der
+  // Kampagne, obwohl nur 156 offen waren (thesen 08.10.2026).
   const startbar = campaignResearchQueue(campaignListLeads(campaign));
-  for (let offset = 0; offset < startbar.length; offset += KAMPAGNENSTART_LADEPAKET) {
-    await ensureFullLeads(startbar.slice(offset, offset + KAMPAGNENSTART_LADEPAKET));
-  }
+  await ensureFullLeads(startbar);
   const startbarIds = new Set(startbar);
   const leads = campaignLeads(campaign).filter((lead) => startbarIds.has(lead.id));
   return startScopedResearch(campaign, leads, {
