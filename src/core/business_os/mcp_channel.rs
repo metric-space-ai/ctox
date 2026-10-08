@@ -3272,7 +3272,13 @@ fn call_tool_inner(
             trusted_gateway_context,
         )?,
         workjet_calendar::ACCOUNTS_TOOL | workjet_calendar::EVENTS_TOOL => {
-            workjet_calendar::execute(root, &context, tool_name, &arguments, trusted_gateway_context)?
+            workjet_calendar::execute(
+                root,
+                &context,
+                tool_name,
+                &arguments,
+                trusted_gateway_context,
+            )?
         }
         workjet_kpis::TOOL => {
             workjet_kpis::execute(root, &context, &arguments, trusted_gateway_context)?
