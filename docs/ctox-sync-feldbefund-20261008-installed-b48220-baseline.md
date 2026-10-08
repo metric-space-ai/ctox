@@ -18,8 +18,11 @@ was recorded as context and was not driven by this test.
 Goal5's first one-document baseline write did not reach exact-value convergence
 on **both native and B** within the runner's60s window. The failed assertion was
 saved at03:38:18.954462Z, before any offline/200-write round and before the owned
-P1 unit was interrupted at03:39:44.626497Z to yield its slot to Main's already
-admitted P0 Mac UI window. Thus the baseline failure is not explained by that
+P1 GPU unit was manually interrupted at03:39:44.626497Z to yield its GPU slot to
+Main's waiting P0 GPU fixture ticket, needed by Main's already admitted short Mac
+UI window. The Mac and GPU gates are separate: no shared reservation or automatic
+cross-host preemption did this. This was DevOps's prioritization decision; the
+baseline failure is not explained by that
 later interruption. No native/B row split or connection-status snapshot was
 recorded by that runner version; the failing boundary and cause remain unknown.
 The native invitation contained a session capability token; its value was not
@@ -34,8 +37,11 @@ All owned browser/native groups were verified absent after cleanup.
 ## Next executable step and ownership
 
 DevOps repairs only the acceptance harness: canonical synthetic actor UUID,
-separate native/B exact-match counts, bounded non-secret failure snapshots,
-timestamps, and prompt interrupted-wait cancellation. A fresh admitted run
+separate A/native/B exact-match counts, per-phase timestamps and acknowledged
+write counts, missing/diverging synthetic IDs with returned revision/HLC metadata,
+bounded vocabulary-only native/browser log excerpts, and prompt interrupted-wait
+cancellation. Raw native rolling logs remain private on the isolated host; absent
+revision/HLC metadata is recorded as null, never guessed. A fresh admitted run
 must distinguish a fixture/authentication error from a browser or native sync
 failure. Production sync repairs remain with Shell and Architecture. No
 customer restart, grant widening, secret copy, guard weakening or duplicate

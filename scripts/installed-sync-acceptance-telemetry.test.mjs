@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { diagnosticScalars } from './installed-sync-acceptance.mjs';
+import { diagnosticScalars, documentAudit, logExcerpt } from './installed-sync-acceptance.mjs';
 
 test('failure telemetry retains diagnostic counts without exporting authority or records', () => {
   const secret = 'DO_NOT_EXPORT_THIS_AUTHORITY';
@@ -28,4 +28,27 @@ test('failure telemetry bounds recursive and cyclic diagnostics', () => {
   assert.equal(result.pending, 3);
   assert.doesNotThrow(() => JSON.stringify(result));
   assert.ok(JSON.stringify(result).length < 1000);
+});
+
+test('divergence audit separates missing and different documents and preserves only revision clocks', () => {
+  const id = 'acceptance-synthetic-1';
+  const a = { id, label: 'expected', _rev: '2-abc', _hlc: { wall: 123, counter: 4, node: 'synthetic' }, privateBody: 'NEVER_EXPORT' };
+  const b = { ...a, label: 'different', _rev: '1-def' };
+  const result = documentAudit([{ id, label: 'expected' }], { A: { [id]: a }, native: {}, B: { [id]: b } });
+  assert.deepEqual(result.counts.native, { available: true, found: 0, exact: 0 });
+  assert.equal(result.counts.A.exact, 1); assert.equal(result.counts.B.exact, 0);
+  assert.equal(result.differences[0].sources.native.missing, true);
+  assert.deepEqual(result.differences[0].sources.B.differingFields, ['label']);
+  assert.equal(result.differences[0].sources.A.metadata.revision, '2-abc');
+  assert.equal(result.differences[0].sources.A.metadata.hlc._hlc.wall, 123);
+  assert.equal(JSON.stringify(result).includes('NEVER_EXPORT'), false);
+  assert.throws(() => documentAudit([{ id: 'customer-id' }], { native: {} }), /synthetic/);
+});
+
+test('log excerpts preserve diagnostic vocabulary without exporting credential or record text', () => {
+  const result = logExcerpt('WebRTC timeout AUTH_DENIED token=NEVER_EXPORT https://secret.invalid/ customer-record');
+  assert.deepEqual(result.classes, ['WebRTC', 'timeout', 'AUTH_DENIED']);
+  assert.equal(JSON.stringify(result).includes('NEVER_EXPORT'), false);
+  assert.equal(JSON.stringify(result).includes('customer-record'), false);
+  assert.match(result.sha256, /^[a-f0-9]{64}$/);
 });

@@ -126,8 +126,15 @@ Copy only sanitized goal receipts, screenshots and process cleanup evidence into
 `~/.codex/task-evidence/teilziele/<NN>-<slug>-<date>.json` on the Mac. Preserve
 actual failures with `pass:false`. Baseline failures include native/B document
 counts and exact-value matches, bounded client counter/status snapshots and
-failure timestamps. Arbitrary strings, document values, credentials and URL
-errors are excluded. Interrupted waits stop before another fault attempt.
+failure timestamps. Goal5 records baseline, offline30s, peer kill/respawn,
+B reload, A re-login and catchup separately: actual A/native/B counts, acknowledged
+writes, missing/diverging generated IDs and their returned revision/HLC metadata.
+Null metadata means unavailable in that returned payload. Each phase is saved
+before and after execution; unexecuted phases stay explicitly not_run. Snapshot
+overhead is recorded, and final catchup time excludes its subsequent diagnostic
+snapshot. Timestamped log excerpts export diagnostic vocabulary only; private
+rolling native log files stay on the isolated host. Arbitrary document values,
+credentials and URL errors are excluded. Interrupted waits stop before another fault attempt.
 Include installed revisions, host identity,
 steps, measured values, criterion and artifact references. A syntactically valid
 runner or successful unit test is never evidence that a goal was reached.

@@ -14,6 +14,39 @@ const invariant = (value, reason) => { if (!value) {
   const error = new Error(reason); error.name = 'InstalledCriterionError'; throw error;
 } };
 const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex');
+export function logExcerpt(text) {
+  // Keep only named diagnostic vocabulary, never arbitrary values, URLs or credentials.
+  const classes = [...new Set(String(text).match(/\b(?:AUTH_DENIED|UNAUTHORIZED|STREAM_LIMIT_EXCEEDED|clock_skew_detected|master_key_busy|SQLITE_BUSY|WebRTC|replication|signaling|handshake|authenticated|disconnected|connected|denied|timeout|conflict|push|pull|error|failed)\b/gi) || [])];
+  return { classes, bytes: Buffer.byteLength(String(text)),
+    sha256: createHash('sha256').update(String(text)).digest('hex') };
+}
+export function documentAudit(expected, sources) {
+  invariant(expected.every(value => typeof value.id === 'string' && value.id.startsWith('acceptance-')),
+    'Only generated synthetic acceptance IDs may be exported');
+  const metadata = doc => {
+    if (!doc) return null;
+    const scalar = value => typeof value === 'number' || typeof value === 'boolean' || value === null ? value
+      : typeof value === 'string' && /^[A-Za-z0-9_.:+-]{1,180}$/.test(value) ? value : null;
+    const clock = value => value && typeof value === 'object'
+      ? Object.fromEntries(Object.entries(value).slice(0, 12).map(([key, item]) => [key, scalar(item)])) : scalar(value);
+    const hlc = Object.fromEntries(Object.entries(doc).filter(([key]) => /hlc/i.test(key)).map(([key, item]) => [key, clock(item)]));
+    for (const key of ['_meta', '_ctox']) if (doc[key] && typeof doc[key] === 'object') {
+      for (const [field, item] of Object.entries(doc[key])) if (/hlc/i.test(field)) hlc[`${key}.${field}`] = clock(item);
+    }
+    return { revision: scalar(doc._rev ?? doc.revision ?? null), hlc: Object.keys(hlc).length ? hlc : null,
+      lwt: scalar(doc._meta?.lwt ?? null), deleted: Boolean(doc._deleted),
+      metadataScope: 'Returned installed document payload; absent metadata stays null' };
+  };
+  const counts = Object.fromEntries(Object.entries(sources).map(([name, actual]) => [name, actual === null
+    ? { available: false } : { available: true, found: expected.filter(d => actual[d.id]).length,
+      exact: expected.filter(d => same(actual, [d])).length }]));
+  const differences = expected.filter(value => Object.values(sources).some(actual => actual !== null && !same(actual, [value])))
+    .map(value => ({ id: value.id, sources: Object.fromEntries(Object.entries(sources).map(([name, actual]) => [name,
+      { available: actual !== null, missing: actual !== null && !actual[value.id],
+        differingFields: actual?.[value.id] ? Object.keys(value).filter(key => actual[value.id][key] !== value[key]) : [],
+        metadata: metadata(actual?.[value.id]) }])) }));
+  return { expected: expected.length, counts, differences };
+}
 const inside = (parent, child) => {
   const rel = relative(parent, child);
   return rel !== '' && !rel.startsWith('../') && !rel.startsWith('/') && rel !== '..';
@@ -55,7 +88,7 @@ export async function stopOwnedAcceptance() {
 }
 class OwnedNative {
   constructor(config, output) {
-    this.config = config; this.output = output; this.children = new Set(); this.peer = null;
+    this.config = config; this.output = output; this.children = new Set(); this.peer = null; this.events = [];
     const home = join(config.root, 'runtime', 'acceptance-home');
     mkdirSync(home, { recursive: true, mode: 0o700 });
     const inherited = Object.fromEntries(['PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'CARGO_TARGET_DIR',
@@ -89,9 +122,24 @@ class OwnedNative {
   start(kind, args) {
     invariant(!stopping, 'Acceptance unit is stopping; no new native process allowed');
     const child = spawn(this.config.binary, args, { cwd: this.config.root, env: this.env,
-      stdio: 'ignore', detached: true });
+      stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    // Private rolling raw excerpts stay on the isolated host; exported evidence is vocabulary-only.
+    const privateLog = join(this.output, `${kind}-${child.pid}.log.private`), lines = [];
+    const capture = stream => stream.on('data', chunk => {
+      for (const line of String(chunk).split('\n').filter(Boolean).slice(-64)) {
+        const at = new Date().toISOString();
+        lines.push(`${at} ${line.slice(0, 2048)}`);
+        const event = { at, kind, ...logExcerpt(line) };
+        if (event.classes.length) this.events.push(event);
+      }
+      while (lines.length > 64) lines.shift();
+      while (this.events.length > 200) this.events.shift();
+      writeFileSync(privateLog, lines.join('\n') + '\n', { mode: 0o600 });
+    });
+    capture(child.stdout); capture(child.stderr);
     this.children.add(child);
-    const row = { pid: child.pid, pgid: child.pid, kind, terminal: false, stop: 'runner finally or1800s' };
+    const row = { pid: child.pid, pgid: child.pid, kind, terminal: false, privateLog,
+      stop: 'runner finally or1800s' };
     this.processes.push(row); child.once('error', () => {});
     child.once('close', code => { row.exit = code; row.terminal = true; this.save(); });
     this.save(); return child;
@@ -233,6 +281,16 @@ export async function measureShellRollback(configPath) {
 async function attach(context, origin, config, name, skewMs = 0, existingPage = null, localProbeIds = []) {
   const localOpenStarted = performance.now();
   const page = existingPage || await context.newPage();
+  if (!existingPage) {
+    page.installedLogEvents = [];
+    const capture = (kind, value) => {
+      const event = { at: new Date().toISOString(), kind, ...logExcerpt(value) };
+      if (event.classes.length) page.installedLogEvents.push(event);
+      if (page.installedLogEvents.length > 200) page.installedLogEvents.shift();
+    };
+    page.on('console', message => capture(message.type(), message.text()));
+    page.on('pageerror', error => capture('pageerror', error.message));
+  }
   if (existingPage) await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
   else await page.goto(`${origin}/rxdb/manifest.json`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   const localReadback = await page.evaluate(async ({ config, name, skewMs, localProbeIds }) => {
@@ -254,7 +312,7 @@ async function attach(context, origin, config, name, skewMs = 0, existingPage = 
     const localDocuments = localProbeIds.length
       ? await db.collections.desktop_icons.storageCollection.findDocumentsById(localProbeIds) : {};
     const localReadMs = performance.now() - localStarted;
-    globalThis.__installedAcceptance = { db, sync: null, diagnostics: [], wirePulls: [], state: null };
+    globalThis.__installedAcceptance = { db, sync: null, diagnostics: [], wirePulls: [], state: null, writesCompleted: 0 };
     return { localReadMs, cachedDocuments: Array.isArray(localDocuments)
       ? localDocuments.length : Object.keys(localDocuments).length };
   }, { config, name, skewMs, localProbeIds });
@@ -331,7 +389,8 @@ async function waitNative(native, expected) {
 async function write(page, values) {
   return page.evaluate(async values => {
     const c = globalThis.__installedAcceptance.db.collections.desktop_icons, timings = [];
-    for (const value of values) { const start = performance.now(); await c.upsert(value); timings.push(performance.now() - start); }
+    for (const value of values) { const start = performance.now(); await c.upsert(value);
+      globalThis.__installedAcceptance.writesCompleted++; timings.push(performance.now() - start); }
     return timings;
   }, values);
 }
@@ -413,12 +472,59 @@ export async function runAcceptance(browser, configPath) {
         7: { clockOffsetsMs: [-600000, 600000], noFalseClockError: true, distinctFieldMerge: true,
           sameFieldConflictBothValues: true, staleRevisionTypedUnapplied: true },
       };
-      const receipt = { goal, revisions, hosts: [config.host], steps: [], measured: {}, criterion: criteria[goal], pass: false,
+      const receipt = { goal, revisions, hosts: [config.host], steps: [], measured: { phases: [], currentPhase: 'client-setup' }, criterion: criteria[goal], pass: false,
         startedAt: new Date().toISOString(),
         artifacts: [], clientType: 'Installed canonical DB+sync modules in real Chromium; not a Shell UI acceptance',
         transport: 'webrtc', customerWrites: false };
       receipts.push(receipt);
       let A, B, a, b, invitationA, invitationB;
+      const receiptPath = join(output, `${String(goal).padStart(2, '0')}-installed-sync.json`);
+      const saveReceipt = () => writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
+      const snapshot = async expected => {
+        const captureStarted = performance.now();
+        const ids = expected.map(value => value.id);
+        const readBrowser = async page => {
+          if (!page || page.isClosed()) return null;
+          let timer;
+          try { return await Promise.race([docs(page, ids), new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Snapshot deadline')), 4000);
+          })]); } catch { return null; } finally { clearTimeout(timer); }
+        };
+        const [server, clientA, clientB] = await Promise.all([
+          native.read(ids).catch(() => null), readBrowser(A), readBrowser(B)]);
+        let writesInCurrentA = null;
+        if (A && !A.isClosed()) {
+          let timer;
+          try { writesInCurrentA = await Promise.race([A.evaluate(() => globalThis.__installedAcceptance?.writesCompleted ?? null),
+            new Promise(resolve => { timer = setTimeout(() => resolve(null), 4000); })]); }
+          catch {} finally { clearTimeout(timer); }
+        }
+        let health = null;
+        if (!stopping) try {
+          const value = await native.cli(['business-os', 'rxdb', 'status', '--json', '--root', config.root], false, 10000);
+          health = { running: value.running, replicationUp: value.replicationUp,
+            stages: diagnosticScalars(value.health_stages), heartbeatFresh: value.heartbeat?.fresh };
+        } catch {}
+        return { at: new Date().toISOString(), captureElapsedMs: performance.now() - captureStarted,
+          writesInCurrentASession: writesInCurrentA,
+          ...documentAudit(expected, { A: clientA, native: server, B: clientB }), nativeHealth: health,
+          logs: { native: native.events.slice(-24), A: A?.installedLogEvents?.slice(-24) || [],
+            B: B?.installedLogEvents?.slice(-24) || [],
+            scope: 'Timestamped vocabulary-only excerpts; raw native rolling files are host-private, not exported' } };
+      };
+      const phase = async (name, expected, action) => {
+        const row = receipt.measured.phases.find(value => value.phase === name && value.status === 'not_run')
+          || { phase: name, status: 'not_run' };
+        if (!receipt.measured.phases.includes(row)) receipt.measured.phases.push(row);
+        row.status = 'running'; row.startedAt = new Date().toISOString();
+        row.writesAcknowledgedByA = /baseline|A-offline-30s/.test(name) ? null : 0;
+        receipt.measured.currentPhase = name; saveReceipt();
+        const before = performance.now();
+        try { const result = await action(row); row.status = 'completed'; return result; }
+        catch (error) { row.status = 'failed'; throw error; }
+        finally { row.finishedAt = new Date().toISOString(); row.elapsedMs = performance.now() - before;
+          row.snapshot = await snapshot(expected); saveReceipt(); }
+      };
       try {
         a = await browser.newContext(); b = await browser.newContext(); contexts.push(a, b);
         a.setDefaultTimeout(30000); b.setDefaultTimeout(30000);
@@ -428,7 +534,13 @@ export async function runAcceptance(browser, configPath) {
         B = await attach(b, origin, invitationB, name + '-b');
         const probe = { id: `acceptance-${name}-connected`, target_type: 'acceptance',
           label: 'live-WebRTC-baseline', updated_at_ms: Date.now() };
-        await write(A, [probe]); await converge(native, B, [probe]);
+        if (goal === 5) receipt.measured.phases = [{ phase: 'baseline', status: 'not_run' },
+          ...Array.from({ length: 3 }, (_, round) => ['A-offline-30s', 'peer-kill-respawn', 'B-reload', 'A-relogin', 'catchup']
+            .map(label => ({ phase: `round${round}-${label}`, status: 'not_run' }))).flat()];
+        await phase('baseline', [probe], async row => {
+          const timings = await write(A, [probe]); row.writesAcknowledgedByA = timings.length;
+          row.maxLocalWriteMs = Math.max(...timings); await converge(native, B, [probe]);
+        });
         receipt.steps.push('Live baseline: A write persisted natively and reached B over WebRTC before any fault');
         const health = await native.cli(['business-os', 'rxdb', 'status', '--json', '--root', config.root]);
         receipt.measured.nativeHealth = { running: health.running, replicationUp: health.replicationUp,
@@ -439,23 +551,35 @@ export async function runAcceptance(browser, configPath) {
           for (let round = 0; round < 3; round++) {
             const values = Array.from({ length: 200 }, (_, i) => ({ id: `acceptance-${name}-${round}-${i}`,
               target_type: 'acceptance', label: `round${round}-document${i}`, x: i, y: round, updated_at_ms: Date.now() }));
-            await offline(a, A, true); const offlineStart = performance.now();
-            const timings = await write(A, values);
-            await native.restartPeer();
-            await B.evaluate(async () => {
-              await globalThis.__installedAcceptance.sync.stop(); await globalThis.__installedAcceptance.db.close();
+            let offlineStart, timings;
+            await phase(`round${round}-A-offline-30s`, values, async row => {
+              await offline(a, A, true); offlineStart = performance.now();
+              timings = await write(A, values); row.writesAcknowledgedByA = timings.length;
+              row.maxLocalWriteMs = Math.max(...timings);
+              await sleep(Math.max(0, 30000 - (performance.now() - offlineStart)));
             });
-            B = await attach(b, origin, await native.invite('B'), name + '-b', 0, B);
-            await sleep(Math.max(0, 30000 - (performance.now() - offlineStart)));
+            await phase(`round${round}-peer-kill-respawn`, values, async row => {
+              row.beforePid = native.peer.pid; await native.restartPeer(); row.afterPid = native.peer.pid;
+            });
+            await phase(`round${round}-B-reload`, values, async () => {
+              await B.evaluate(async () => {
+                await globalThis.__installedAcceptance.sync.stop(); await globalThis.__installedAcceptance.db.close();
+              });
+              B = await attach(b, origin, await native.invite('B'), name + '-b', 0, B);
+            });
             const offlineServer = await native.read(values.map(d => d.id));
             invariant(Object.keys(offlineServer).length === 0, 'Client offline fault leaked WebRTC writes to native');
             const offlineMs = performance.now() - offlineStart;
             const reconnectStart = performance.now();
-            await offline(a, A, false);
-            // Renew native-issued login and reopen the SAME IndexedDB; no cache wipe.
-            await closePage(A); A = await attach(a, origin, await native.invite('A-relogin'), name + '-a');
-            await converge(native, B, values);
-            const catchupMs = performance.now() - reconnectStart;
+            await phase(`round${round}-A-relogin`, values, async () => {
+              await offline(a, A, false);
+              // Renew native-issued login and reopen the SAME IndexedDB; no cache wipe.
+              await closePage(A); A = await attach(a, origin, await native.invite('A-relogin'), name + '-a');
+            });
+            let catchupMs;
+            await phase(`round${round}-catchup`, values, async () => {
+              await converge(native, B, values); catchupMs = performance.now() - reconnectStart;
+            });
             receipt.measured.runs.push({ round, offlineMs,
               maxLocalWriteMs: Math.max(...timings), catchupMs, exactDocumentsOnServerAndB: 200 });
           }
