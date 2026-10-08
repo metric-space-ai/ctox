@@ -10322,6 +10322,9 @@ pub fn complete_business_command_from_queue_reply(
         return Ok(None);
     };
     let command = load_business_command(&conn, &command_id)?;
+    if let Err(error) = super::workjet_exit_model::complete_research(root, &command_id, reply_text) {
+        eprintln!("[workjet-exit-model] reviewed research writeback refused: {error:#}");
+    }
     let queue_task = channels::load_queue_task(root, task_id)?;
     let accepted = if is_documents_report_command(&command) {
         process_documents_report_command(
@@ -14833,6 +14836,9 @@ pub fn fail_business_command_from_queue_error(
         "status": "failed",
         "error": error,
     });
+    if let Err(error) = super::workjet_exit_model::complete_research(root, &command_id, "{}") {
+        eprintln!("[workjet-exit-model] failed research writeback refused: {error:#}");
+    }
     let error_code = if error.starts_with("deadline_exceeded:") {
         "deadline_exceeded"
     } else if error.starts_with("cancelled:") {

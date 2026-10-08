@@ -13719,6 +13719,7 @@ async function workjetProjectControl(request = {}) {
   const supervisorActions = ['project.supervisor.bind', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
+    'project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
     'project.jour_fixe.transcript.local_candidate', 'project.jour_fixe.todos.revise', 'project.jour_fixe.todos.confirm',
@@ -14174,6 +14175,45 @@ async function workjetProjectControl(request = {}) {
     return { action, commandId, projectId, binding: { contract, projectId, threadId, threadKey } };
   }
 
+  if (['project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit'].includes(action)) {
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'asOf', 'resources', 'inputs']));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const verb = action.split('.').at(-1);
+    if (verb === 'read' && ['asOf', 'resources', 'inputs'].some((key) => Object.hasOwn(request, key))) throw new Error('Exit read accepts project identity only.');
+    if (verb === 'refresh' && Object.hasOwn(request, 'inputs')) throw new Error('Exit refresh cannot submit researched inputs.');
+    if (verb === 'submit' && (!request.inputs || Object.hasOwn(request, 'resources'))) throw new Error('Exit submission requires typed inputs.');
+    const payload = { project_id: projectId };
+    if (Object.hasOwn(request, 'asOf')) {
+      if (typeof request.asOf !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(request.asOf)) throw new Error('Invalid exit assessment date.');
+      payload.as_of = request.asOf;
+    }
+    if (Object.hasOwn(request, 'resources')) {
+      const resource = request.resources;
+      if (!resource || typeof resource !== 'object' || Array.isArray(resource)) throw new Error('Invalid exit resource proposal.');
+      assertWorkjetProjectPayloadKeys(resource, new Set(['hoursPerWeek', 'monthlyBudgetEur', 'comparisonMode']));
+      if (!Number.isFinite(resource.hoursPerWeek) || resource.hoursPerWeek < 0 || resource.hoursPerWeek > 168
+        || !Number.isFinite(resource.monthlyBudgetEur) || resource.monthlyBudgetEur < 0
+        || !['equal_resources', 'project_specific'].includes(resource.comparisonMode)) throw new Error('Invalid exit resource proposal.');
+      payload.resources = { hours_per_week: resource.hoursPerWeek, monthly_budget_eur: resource.monthlyBudgetEur, comparison_mode: resource.comparisonMode };
+    }
+    if (Object.hasOwn(request, 'inputs')) payload.inputs = request.inputs;
+    if (JSON.stringify(payload).length > 512 * 1024) throw new Error('Exit inputs exceed the payload budget.');
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox',
+      command_type: 'ctox.workjet.exit_model.' + verb, record_id: projectId, payload,
+      client_context: { source: 'workjet-project-control', actor: actorContext(state.session) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    if (state.session !== requestSession || state.db !== requestDb || actorContext(state.session).id !== ownerUserId
+      || receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId || receipt.result?.ok !== true
+      || receipt.result?.assessment?.contract !== 'ctox.workjet.exit_model.v1'
+      || receipt.result?.assessment?.project_id !== projectId) {
+      throw new Error('Exit assessment returned an uncorrelated or unsuccessful native receipt.');
+    }
+    return { action, commandId, projectId, assessment: receipt.result.assessment };
+  }
+
   if (action === 'project.list') {
     assertWorkjetProjectPayloadKeys(request, new Set(['action', 'includeConfiguration']));
     if (Object.hasOwn(request, 'includeConfiguration') && typeof request.includeConfiguration !== 'boolean') {
@@ -14290,6 +14330,13 @@ async function workjetProjectControl(request = {}) {
         || (confirmedProjectIds && projects.some((project) => !confirmedProjectIds.has(project.id)))) {
         throw Object.assign(new Error('Workjet project projection does not match the confirmed active projects.'), {
           code: 'WORKJET_PROJECT_LIST_INCOMPLETE', retryable: true,
+        });
+      }
+      if (includeConfiguration && receipt.result.exit_models) {
+        projects = projects.map((project) => {
+          const assessment = receipt.result.exit_models[project.id];
+          if (!assessment || assessment.contract !== 'ctox.workjet.exit_model.v1' || assessment.project_id !== project.id) throw new Error('Exit metadata conflicts with its project.');
+          return Object.freeze({ ...project, exitModel: assessment });
         });
       }
       return { action: 'project.list', projects, count, truncated: false };
@@ -14698,6 +14745,7 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {
     result.createdAt = new Date(createdAtMs).toISOString();
   }
   if (!includeConfiguration) return Object.freeze(result);
+  if (value.exit_model?.contract === "ctox.workjet.exit_model.v1" && value.exit_model.project_id === result.id) result.exitModel = value.exit_model;
   const metadata = boundedWorkjetProjectMetadata({
     ...(Object.hasOwn(value, 'description') ? { description: value.description } : {}),
     ...(Object.hasOwn(value, 'repo_url') ? { repoUrl: value.repo_url } : {}),

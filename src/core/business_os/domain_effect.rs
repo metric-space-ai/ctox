@@ -42,7 +42,7 @@ pub(super) struct DomainEffectAdmission {
     actor_user_id: String,
 }
 
-pub(super) const COMMAND_TYPES: [&str; 17] = [
+pub(super) const COMMAND_TYPES: [&str; 19] = [
     "ctox.workjet.jour_fixe.todos.confirm",
     "ctox.workjet.jour_fixe.meeting.start",
     "ctox.workjet.jour_fixe.meeting.end",
@@ -53,6 +53,8 @@ pub(super) const COMMAND_TYPES: [&str; 17] = [
     "ctox.workjet.jour_fixe.comment.add",
     "ctox.workjet.project.upsert",
     "ctox.workjet.project.kpis.configure",
+    "ctox.workjet.exit_model.refresh",
+    "ctox.workjet.exit_model.submit",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.supervisor.bind",
     "ctox.workjet.project.worker.add",

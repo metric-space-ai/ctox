@@ -197,9 +197,19 @@ pub(super) fn handle_workjet_project_list_command(
                 .context("active Workjet project has no id")
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    let exit_models = project_ids
+        .iter()
+        .map(|id| {
+            Ok((
+                (*id).to_owned(),
+                super::workjet_exit_model::read_state(&conn, id, &owner_user_id)?,
+            ))
+        })
+        .collect::<anyhow::Result<serde_json::Map<String, Value>>>()?;
     Ok(serde_json::json!({
         "ok": true,
         "collection": PROJECTS_COLLECTION,
+        "exit_models": exit_models,
         "owner_user_id": owner_user_id,
         "count": count,
         "project_ids": project_ids,
@@ -306,6 +316,13 @@ pub(super) fn handle_workjet_project_upsert_command(
             "updated_at_ms": now,
             "is_deleted": false,
         });
+        // Native valuation state is preserved by unrelated partial metadata edits.
+        if let Some(value) = existing
+            .as_ref()
+            .and_then(|record| record.get("exit_model"))
+        {
+            project["exit_model"] = value.clone();
+        }
         for (field, patch) in [
             ("description", description),
             ("repo_url", repo_url),
