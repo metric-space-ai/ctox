@@ -194,7 +194,7 @@ try {
     const ownerControl = new Function('assert', 'vm', 'controlSource', 'JOUR_FIXE_SCHEMA', 'validateJourFixeValue',
       `${ownerSource}\nreturn { fixture: nativeMeetingOwnerFixture, request: meetingOwnerRequest };`)(
       assert, vm, controlSource, JOUR_FIXE_SCHEMA, validateJourFixeValue);
-    for (const suffix of ['meeting.start', 'meeting.end', 'transcript.append', 'todos.revise']) {
+    for (const suffix of ['meeting.start', 'meeting.end', 'transcript.append', 'todos.revise', 'comment.add']) {
       const ownerFixture = ownerControl.fixture();
       const request = ownerControl.request(`project.jour_fixe.${suffix}`);
       const value = await ownerFixture.invoke(request);
@@ -222,7 +222,7 @@ try {
   }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd),
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
     executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 18);
+  assert.equal(results.length, 19);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };

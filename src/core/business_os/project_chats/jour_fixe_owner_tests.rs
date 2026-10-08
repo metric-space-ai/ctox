@@ -244,3 +244,61 @@ fn live_binding_rechecks_current_owner_supervisor_and_deck_after_provider_wait()
     Ok(())
 }
 
+fn comment_request(operation:&str,revision:u64)->Value {
+    let mut value=request(operation,revision);
+    value["comment_id"]=json!("comment-1");value["slide_id"]=json!("slide-1");
+    value["deck_revision"]=json!(1);value["x"]=json!(0.25);value["y"]=json!(0.75);
+    value["text"]=json!("Please prioritize persistence.");value
+}
+#[test]
+fn owner_slide_comment_is_durable_bound_to_deck_and_operation_idempotent()->anyhow::Result<()> {
+    let root=fixture("live")?;
+    let first=send(root.path(),"comment","comment.add","owner",comment_request("comment-op",0))?;
+    assert_eq!(first["status"],"completed","{first}");
+    assert_eq!(first["result"]["mutation"]["changed_id"],"comment-1");
+    let replay=send(root.path(),"comment-replay","comment.add","owner",comment_request("comment-op",0))?;
+    assert_eq!(first["result"],replay["result"]);
+    let meeting=saved(root.path())?;
+    let comments=meeting["comments"].as_array().unwrap();assert_eq!(comments.len(),1);
+    assert_eq!(comments[0]["author_user_id"],"owner");
+    assert_eq!(comments[0]["meeting_id"],"meeting-1");assert_eq!(comments[0]["deck_revision"],1);
+    assert_eq!(comments[0]["x"],0.25);assert!(comments[0]["created_at_ms"].as_i64().unwrap()>0);
+    assert!(comments[0]["supervisor_event_id"].is_null(),"no invented supervisor response");
+    assert_eq!(meeting["revision"],1);
+    let mut changed=comment_request("comment-op",1);changed["text"]=json!("Changed intent");
+    rejected(send(root.path(),"changed-comment","comment.add","owner",changed));
+    rejected(send(root.path(),"duplicate-id","comment.add","owner",comment_request("different-op",1)));
+    assert_eq!(saved(root.path())?["comments"].as_array().unwrap().len(),1);
+    Ok(())
+}
+#[test]
+fn comments_reject_foreign_actor_deck_slide_pin_author_and_closed_meetings()->anyhow::Result<()> {
+    let root=fixture("live")?;
+    rejected(send(root.path(),"foreign-comment","comment.add","foreign",comment_request("foreign-op",0)));
+    for (field,value) in [("deck_revision",json!(2)),("slide_id",json!("foreign-slide")),
+        ("x",json!(-0.1)),("y",json!(1.1)),("comment_id",json!("slide-1")),
+        ("author_user_id",json!("owner")),
+        ("supervisor_event_id",json!("invented-event")),("text",json!("  "))] {
+        let mut payload=comment_request(&format!("bad-{field}"),0);payload[field]=value;
+        rejected(send(root.path(),&format!("bad-{field}"),"comment.add","owner",payload));
+    }
+    assert!(saved(root.path())?["comments"].as_array().unwrap().is_empty());
+    for state in ["planned","preparing","ready","confirmed","cancelled","failed"] {
+        let root=fixture(state)?;
+        rejected(send(root.path(),"closed-comment","comment.add","owner",comment_request("closed-op",0)));
+        assert!(saved(root.path())?["comments"].as_array().unwrap().is_empty());
+    }
+    Ok(())
+}
+#[test]
+fn comment_rolls_back_with_failed_domain_receipt_and_retries_once()->anyhow::Result<()> {
+    let root=fixture("review")?;let conn=open_store(root.path())?;
+    conn.execute_batch("CREATE TRIGGER fail_comment_receipt BEFORE INSERT ON business_command_domain_effects BEGIN SELECT RAISE(FAIL,'comment receipt fixture failure'); END;")?;
+    rejected(send(root.path(),"failed-comment","comment.add","owner",comment_request("comment-op",0)));
+    assert!(saved(root.path())?["comments"].as_array().unwrap().is_empty());
+    assert_eq!(saved(root.path())?["revision"],0);
+    conn.execute_batch("DROP TRIGGER fail_comment_receipt")?;
+    let retried=send(root.path(),"retried-comment","comment.add","owner",comment_request("comment-op",0))?;
+    assert_eq!(retried["status"],"completed","{retried}");
+    assert_eq!(saved(root.path())?["comments"].as_array().unwrap().len(),1);Ok(())
+}
