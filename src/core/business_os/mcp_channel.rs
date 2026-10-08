@@ -48,10 +48,10 @@ mod metadata_read;
 mod project_crew_request;
 #[path = "mcp_remote_worker.rs"]
 mod remote_worker;
-#[path = "mcp_workjet_worker_dispatch.rs"]
-mod workjet_worker_dispatch;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
+#[path = "mcp_workjet_worker_dispatch.rs"]
+mod workjet_worker_dispatch;
 
 #[cfg(test)]
 pub(crate) fn workjet_dispatch_service_test_fixture() -> anyhow::Result<(tempfile::TempDir, String)>
@@ -840,7 +840,12 @@ fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bo
         string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
             && context["workjet_supervisor_only"] == true
     }) {
-        return matches!(tool_name, workjet_worker_dispatch::TOOL | workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL);
+        return matches!(
+            tool_name,
+            workjet_worker_dispatch::TOOL
+                | workjet_jour_fixe::READ_TOOL
+                | workjet_jour_fixe::WRITE_TOOL
+        );
     }
     let restricted = context.is_some_and(|context| {
         string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
@@ -3209,9 +3214,13 @@ fn call_tool_inner(
         workjet_worker_dispatch::TOOL => {
             workjet_worker_dispatch::execute(root, &context, &arguments, trusted_gateway_context)?
         }
-        workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
-            workjet_jour_fixe::execute(root, &context, tool_name, &arguments, trusted_gateway_context)?
-        }
+        workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => workjet_jour_fixe::execute(
+            root,
+            &context,
+            tool_name,
+            &arguments,
+            trusted_gateway_context,
+        )?,
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
         }
