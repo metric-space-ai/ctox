@@ -278,6 +278,12 @@ export const JOUR_FIXE_TYPES = deepFreeze({
         "type": "i64",
         "optional": true,
         "minimum": 0
+      },
+      "owner": {
+        "type": "String",
+        "optional": true,
+        "min_chars": 1,
+        "max_chars": 256
       }
     }
   },

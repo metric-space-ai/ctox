@@ -578,6 +578,8 @@ pub(crate) struct Todo {
     pub(crate) evidence_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) due_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) owner: Option<String>,
 }
 impl WireValidate for Todo {
     fn validate(&self) -> Result<(), String> {
@@ -626,6 +628,15 @@ impl WireValidate for Todo {
             value.validate()?;
             if *value < 0 {
                 return Err("Todo.due_at_ms violates minimum".into());
+            }
+        }
+        if let Some(value) = &self.owner {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("Todo.owner violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("Todo.owner violates max_chars".into());
             }
         }
         Ok(())
