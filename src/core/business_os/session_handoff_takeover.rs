@@ -2,31 +2,9 @@
 // License: AGPL-3.0-only
 //! Existing-job target ownership only. No Core turn or VM activation.
 use super::*;
-use ctox_sync::authority::{Command, Job, Ownership, Receipt, Request};
+use ctox_sync::authority::{client::take_over_checkpoint, Command, Ownership, Request};
 
 type Registry = super::super::super::super::NativeGuestRegistry;
-
-fn expected_job(
-    job: &Job,
-    request: &SessionHandoffGateRequest,
-    ownership: &Ownership,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        job.spec == request.spec
-            && job.ownership == *ownership
-            && !job.stopped
-            && job.pending_effects.is_empty()
-            && !job.checkpoint_requires_refresh
-            && job
-                .checkpoint
-                .as_ref()
-                .is_some_and(|checkpoint| checkpoint.digest == request.checkpoint_digest
-                    && checkpoint.sequence == request.checkpoint_sequence
-                    && checkpoint.replicas.contains(&ownership.node_id)),
-        "native takeover checkpoint/ownership changed; reconcile"
-    );
-    Ok(())
-}
 
 fn validate_received<P: Clone + Eq + Hash + Send + Sync + 'static>(
     target: &Target<P>,
@@ -101,17 +79,8 @@ pub(super) async fn take_over<P: Clone + Eq + Hash + Send + Sync + 'static>(
         Ok::<_, anyhow::Error>((target, authority, next))
     })
     .await??;
-    let before = authority
-        .validate_ownership(&target.request.spec.job_id, &target.request.ownership)
-        .await?;
-    expected_job(&before, &target.request, &target.request.ownership)?;
-    anyhow::ensure!(
-        before
-            .checkpoint
-            .as_ref()
-            .is_some_and(|checkpoint| checkpoint.replicas.contains(&next.node_id)),
-        "native target has no protected quorum copy"
-    );
+    // TakeOver validates source ownership and the protected target copy inside
+    // the quorum. Worker clients cannot authorize a foreign source executor.
     let t = target.clone();
     let r = registry.clone();
     let a = authority.clone();
@@ -143,8 +112,9 @@ pub(super) async fn take_over<P: Clone + Eq + Hash + Send + Sync + 'static>(
             Ok(permit.clone())
         })
     }).await??;
-    let applied = match authority
-        .submit(Request {
+    take_over_checkpoint(
+        authority.as_ref(),
+        Request {
             request_id: target.request.nonce.clone(),
             actor: authority.node_id(),
             command: Command::TakeOver {
@@ -154,21 +124,11 @@ pub(super) async fn take_over<P: Clone + Eq + Hash + Send + Sync + 'static>(
                 owner: authority.node_id(),
                 resume,
             },
-        })
-        .await?
-    {
-        Receipt::Applied(job) => job,
-        _ => anyhow::bail!("native takeover did not return a fresh applied receipt; reconcile"),
-    };
-    expected_job(&applied, &target.request, &next)?;
-    let current = authority
-        .validate_ownership(&target.request.spec.job_id, &next)
-        .await?;
-    expected_job(&current, &target.request, &next)?;
-    anyhow::ensure!(
-        current == applied,
-        "native job changed after takeover; reconcile"
-    );
+        },
+        &target.request.spec,
+        target.request.checkpoint_sequence,
+    )
+    .await?;
     tokio::task::spawn_blocking(move || {
         target.current_policy(&target.request, |permit, _, policy| {
             registry.checkpoint_authority(&target.server.gate.root)?;

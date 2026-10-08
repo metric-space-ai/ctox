@@ -1,3 +1,5 @@
+
+The nonvoting target does not call `validate_ownership` on A: the WorkerAuthorityClient deliberately denies foreign executor reads. The existing signed quorum TakeOver validates A's expected generation and B's protected copy atomically; the shared native caller then requires a fresh Applied result and quorum-validates B's new generation. A regression uses three independent durable Raft nodes, real signatures and the actual nonvoting WorkerAuthorityClient; it verifies A's read is denied, B takes over the same job, A becomes stale and a replay cannot grant fresh activation. This is a component regression, not installed continuation acceptance.
 # Native checkpoint quorum protection
 
 The current native checkpoint copy creates verified local artifacts. Execution takeover also needs signed complete-copy receipts committed by the existing quorum. These operator commands add that connection on the running host's private checkpoint socket; they never start another authority, peer, provider or guest.
