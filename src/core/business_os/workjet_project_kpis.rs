@@ -111,7 +111,7 @@ pub(super) fn read_state(conn: &Connection, project: &str, owner: &str) -> anyho
     Ok(state)
 }
 
-fn require_project(conn: &Connection, actor: &str, project_id: &str) -> anyhow::Result<String> {
+pub(super) fn require_project(conn: &Connection, actor: &str, project_id: &str) -> anyhow::Result<String> {
     let owner = super::workjet_identity::owner_from_connection(conn, actor)?;
     let project = super::project_chats::owned_project(conn, project_id, &owner, true)?;
     ensure!(project["_deleted"] != true, "project is deleted");
