@@ -311,8 +311,13 @@ mod tests {
         assert_eq!(read["accounts"][0]["id"], "mine@example.test");
         let mut unsupported_role = gateway.clone();
         unsupported_role["role"] = json!("user");
-        assert!(call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&unsupported_role))
-            .is_err());
+        assert!(call_tool_inner(
+            root.path(),
+            ACCOUNTS_TOOL,
+            json!({}),
+            Some(&unsupported_role)
+        )
+        .is_err());
         assert!(call_tool_inner(
             root.path(),
             EVENTS_TOOL,
