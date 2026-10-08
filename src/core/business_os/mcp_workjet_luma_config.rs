@@ -69,6 +69,11 @@ pub(super) fn execute(
 ) -> anyhow::Result<Value> {
     if context.trusted_role_source.as_deref() == Some("ctox_dev_managed_mcp_token") {
         let scope = context.trusted_managed_read_scope.as_ref().context("managed Luma scope missing")?;
+        if let Some(tools) = trusted_gateway_context.and_then(|gateway| gateway["managed_policy"].get("allowedTools")) {
+            let tools = tools.as_array().context("invalid managed Luma tool scope")?;
+            anyhow::ensure!(tools.is_empty() || tools.iter().any(|tool| tool.as_str() == Some(tool_name)),
+                "Luma tool is outside this managed client scope");
+        }
         anyhow::ensure!(scope.allowed_collections.is_empty() || scope.allowed_collections.iter().any(|collection| collection == COLLECTION),
             "Luma collection is outside this managed client scope");
         let allowed = match tool_name {
@@ -242,6 +247,13 @@ mod tests {
         assert_eq!(call_tool_inner(root.path(), READ_TOOL, json!({}), Some(&gateway))?["revision"], 0);
         assert!(call_tool_inner(root.path(), WRITE_TOOL,
             json!({"expected_revision":0,"configuration":{"workerProfiles":[]}}), Some(&gateway)).is_err());
+        let mut bounded = gateway.clone();
+        bounded["managed_policy"]["allowWrites"] = json!(true);
+        bounded["managed_policy"]["allowedTools"] = json!([READ_TOOL]);
+        assert!(call_tool_inner(root.path(), WRITE_TOOL,
+            json!({"expected_revision":0,"configuration":{}}), Some(&bounded)).is_err());
+        bounded["managed_policy"]["allowedTools"] = json!(["business_os.list_modules"]);
+        assert!(call_tool_inner(root.path(), READ_TOOL, json!({}), Some(&bounded)).is_err());
         let mut foreign = gateway.clone();
         foreign["managed_policy"]["allowedCollections"] = json!(["workjet_projects"]);
         assert!(call_tool_inner(root.path(), READ_TOOL, json!({}), Some(&foreign)).is_err());
