@@ -1483,3 +1483,60 @@ fn fresh_writer_replay_keeps_unchanged_records_untouched() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn only_lock_errors_keep_the_deferred_pass_flags() -> Result<()> {
+    let dir = TempDir::new()?;
+    let path = dir.path().join("lock.sqlite3");
+    let holder = Connection::open(&path)?;
+    holder.execute_batch("CREATE TABLE t(v); BEGIN IMMEDIATE; INSERT INTO t VALUES(1);")?;
+    let waiter = Connection::open(&path)?;
+    waiter.busy_timeout(Duration::from_millis(0))?;
+    let locked = waiter
+        .execute("INSERT INTO t VALUES(2)", [])
+        .map_err(anyhow::Error::from)
+        .map_err(|error| error.context("projection pass"))
+        .unwrap_err();
+    assert!(is_sqlite_busy(&locked));
+    let missing = waiter
+        .execute("INSERT INTO missing VALUES(1)", [])
+        .map_err(anyhow::Error::from)
+        .unwrap_err();
+    assert!(!is_sqlite_busy(&missing));
+
+    let root = dir.path().to_path_buf();
+    let now = Instant::now();
+    let mut pending = schedule::Schedule::default();
+    pending.mark(root.clone(), STATUS | QUEUE);
+    let (_, flags) = pending.take_ready(now).pop().unwrap();
+    complete_projection_pass(&mut pending, root.clone(), flags, now, &Err(locked));
+    assert!(
+        pending.take_ready(now).is_empty(),
+        "lock retry must respect cooldown"
+    );
+    let due = now + schedule::MIN_REFRESH_INTERVAL;
+    assert_eq!(
+        pending.take_ready(due),
+        vec![(root.clone(), STATUS | QUEUE)]
+    );
+
+    // Releasing the real writer lock permits delivery; success consumes the work.
+    holder.execute_batch("ROLLBACK;")?;
+    let result = waiter
+        .execute("INSERT INTO t VALUES(2)", [])
+        .map(|_| ())
+        .map_err(anyhow::Error::from);
+    assert!(result.is_ok());
+    complete_projection_pass(&mut pending, root.clone(), flags, due, &result);
+    assert!(pending
+        .take_ready(due + schedule::MIN_REFRESH_INTERVAL)
+        .is_empty());
+    complete_projection_pass(&mut pending, root, flags, due, &Err(missing));
+    assert!(
+        pending
+            .take_ready(due + schedule::MIN_REFRESH_INTERVAL)
+            .is_empty(),
+        "permanent SQL errors must not create a retry loop"
+    );
+    Ok(())
+}
