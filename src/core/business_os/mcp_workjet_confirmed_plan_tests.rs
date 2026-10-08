@@ -44,13 +44,12 @@ pub(super) fn fixture() -> anyhow::Result<(tempfile::TempDir, String)> {
         .context("actual goal missing")?;
     let emitted = crate::mission::plan::emit_next_step_for_goal(root.path(), goal)?
         .context("actual step missing")?;
-    let leased = crate::mission::channels::lease_pending_inbound_messages(
-        root.path(),
-        16,
-        "ctox-service",
-    )?;
+    let leased =
+        crate::mission::channels::lease_pending_inbound_messages(root.path(), 16, "ctox-service")?;
     anyhow::ensure!(
-        leased.iter().any(|message| message.message_key == emitted.message_key),
+        leased
+            .iter()
+            .any(|message| message.message_key == emitted.message_key),
         "actual native router did not lease the confirmed plan"
     );
     crate::mission::channels::record_queue_lease_worker(
