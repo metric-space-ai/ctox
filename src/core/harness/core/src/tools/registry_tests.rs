@@ -151,7 +151,7 @@ async fn actual_plan_handler_owns_only_its_matching_native_effect() {
     session.native_effects.register_source_factory().unwrap();
     let registry = ToolRegistry::new(HashMap::from([(
         "update_plan".into(),
-        Arc::new(crate::tools::handlers::plan::PlanHandler) as Arc<dyn AnyToolHandler>,
+        Arc::new(crate::tools::handlers::PlanHandler) as Arc<dyn AnyToolHandler>,
     )]));
     session.native_effects.observe_unreconciled(); // unrelated host/tool effect
     observe_native_plan(&session, "owned-plan", "update_plan");
@@ -219,7 +219,7 @@ async fn plan_name_success_and_foreign_provider_item_do_not_mint_native_receipts
     assert_eq!(pending_native_effects(&session), 3);
     let actual = ToolRegistry::new(HashMap::from([(
         "update_plan".into(),
-        Arc::new(crate::tools::handlers::plan::PlanHandler) as Arc<dyn AnyToolHandler>,
+        Arc::new(crate::tools::handlers::PlanHandler) as Arc<dyn AnyToolHandler>,
     )]));
     observe_native_plan(&session, "foreign-item", "unknown");
     actual
@@ -240,7 +240,7 @@ async fn rejected_or_cancelled_plan_stays_unknown_on_the_real_dispatch_path() {
     session.native_effects.register_source_factory().unwrap();
     let registry = ToolRegistry::new(HashMap::from([(
         "update_plan".into(),
-        Arc::new(crate::tools::handlers::plan::PlanHandler) as Arc<dyn AnyToolHandler>,
+        Arc::new(crate::tools::handlers::PlanHandler) as Arc<dyn AnyToolHandler>,
     )]));
     observe_native_plan(&session, "invalid-plan", "update_plan");
     assert!(
