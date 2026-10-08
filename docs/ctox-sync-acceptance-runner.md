@@ -14,7 +14,8 @@ fresh prefix, not replace the state or authority of an earlier attempt.
 The preparation operator checks the finished producer receipt, package hash,
 installed binary, source provenance and seven actual Shell contract files. It
 extracts the official runtime into a **new** prefix and initializes new synthetic
-state with one canonical actor UUID reused by both clients and every re-login. It refuses reused roots and customer/DR authority. Run preparation and
+state with one canonical actor UUID reused by both clients and every re-login.
+It refuses reused roots and customer/DR authority. Run preparation and
 browser measurement through `gpu-build-run.sh --jobs2`; dependency installation
 and the browser belong to that same admitted unit. Reuse the existing shared
 artifact rather than creating another native build.
@@ -126,6 +127,7 @@ Copy only sanitized goal receipts, screenshots and process cleanup evidence into
 actual failures with `pass:false`. Baseline failures include native/B document
 counts and exact-value matches, bounded client counter/status snapshots and
 failure timestamps. Arbitrary strings, document values, credentials and URL
-errors are excluded. Interrupted waits stop before another fault attempt. Include installed revisions, host identity,
+errors are excluded. Interrupted waits stop before another fault attempt.
+Include installed revisions, host identity,
 steps, measured values, criterion and artifact references. A syntactically valid
 runner or successful unit test is never evidence that a goal was reached.

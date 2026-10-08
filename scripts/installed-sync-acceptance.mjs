@@ -363,7 +363,8 @@ async function metrics(page) {
 // Only counters, flags and named short status/code fields leave browser memory.
 // Invitations, errors with URLs, arbitrary strings and document values are excluded.
 export function diagnosticScalars(value, depth = 0, field = '') {
-  if (/token|secret|credential|password|authorization|bearer|url|endpoint|document|conflict/i.test(field)) return undefined;
+  if (/token|secret|credential|password|authorization|bearer|url|endpoint/i.test(field)
+    || /^(documents?|conflicts?|newDocumentState|assumedMasterState)$/i.test(field)) return undefined;
   if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return value;
   if (typeof value === 'string') return /^(phase|status|state|code|errorCode|connectionState|signalingState)$/.test(field)
     && /^[A-Za-z_][A-Za-z0-9_ .:-]{0,79}$/.test(value) ? value : undefined;
