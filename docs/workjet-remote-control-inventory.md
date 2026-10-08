@@ -1,23 +1,26 @@
 # Workjet vollständig per Agent fernsteuern: Befehlsinventar
 
-Stand: 2026-10-08. Ziel: Ein Agent soll Workjet komplett über den MCP-Server von CTOX bedienen können, ohne Computer Use. Dieses Dokument listet, welche Workjet-Funktionen es gibt, ob es dafür heute einen MCP-Befehl gibt, und wo die Lücken liegen.
+Stand: 2026-10-08. Ziel: Ein Agent soll Workjet über den MCP-Server von CTOX bedienen können. Dieses Inventar beschreibt vorhandene Schnittstellen und mögliche Erweiterungen; es implementiert keine Werkzeuge und ist keine Abnahme der installierten Anwendung. Der native MCP-Abgleich gilt für CTOX-Main `450171de37ac60dddb3287225b711d6c3f235711`. Die Workjet-Protokollnamen stammen aus der ursprünglichen Bestandsaufnahme; deren vollständige Aktualität und installierte Erreichbarkeit sind hier nicht nachgewiesen.
 
 Quellen:
 
 - Workjet-Protokoll: `workjet/packages/contracts/src/rpc.ts` (`WS_METHODS`), `orchestration.ts` (Thread-Befehle), `project.ts`, `projectOverview.ts`, `settings.ts`
 - CTOX-Befehlsebene: `src/core/business_os/command_plane.rs` und `store_workjet_*.rs`, Befehlstypen `ctox.workjet.*`
-- MCP-Server: `src/core/business_os/mcp_channel.rs` (`tool_descriptors()`, Zeile ~1449), `mcp_workjet_*.rs`
+- MCP-Server: [`mcp_channel.rs`](../src/core/business_os/mcp_channel.rs) (`tool_descriptors()`), [`mcp_project_crew.rs`](../src/core/business_os/mcp_project_crew.rs), `mcp_workjet_*.rs`
+- Autorisierung: [MCP-Sicherheitsvertrag](business-os-mcp-channel-v1-security-admin-guide.md); [native Worker-Dispatch-Verbindung](native-workjet-worker-dispatch.md)
+
+Die Beschreibungen beziehen sich auf registrierten Quellcode. Welche Werkzeuge ein Client tatsächlich aufrufen darf, hängt zusätzlich von der installierten nativen Revision, der Gateway-Klassifikation und seinem aktuellen Grant ab. Eine Registrierung beweist weder Start noch Ergebnisrückgabe im Produkt.
 
 ## Kurzfassung
 
-- Der MCP-Server bietet heute 56 Werkzeuge. Vier davon sind Workjet-spezifisch: Worker-Dispatch, Jour fixe lesen und schreiben, KPI-Abfrage. Der Rest betrifft Business-OS-Apps, Datensätze, Freigaben, Crew-Ausführung und Meetings.
-- Die Befehlsebene von CTOX kennt deutlich mehr. Für Projekte, Supervisor-Chats, Sitzungen, Rechner und Jour fixe gibt es `ctox.workjet.*`-Befehle. Diese sind nur über die UI und die interne Befehlsebene erreichbar, nicht über MCP.
-- Das Workjet-Protokoll hat rund 160 RPC-Methoden (`rpc.ts`) und 9 Orchestrierungs-Methoden (`orchestration.ts`). Ein Teil gehört nur zur Oberfläche (Vorschau, Terminal, Ansichtszustand). Der Rest ist für die Fernsteuerung relevant.
+- Registriert sind unter anderem `business_os.start_project_task`, `business_os.cancel_project_task`, `business_os.start_crew_execution`, `business_os.remote_worker_admission`, `business_os.workjet_worker_dispatch`, `business_os.jour_fixe_read`, `business_os.jour_fixe_update` und `business_os.project_kpi`. Eine feste Gesamtzahl wird hier nicht behauptet; weitere Werkzeuge werden auch aus Modulaktionen erzeugt.
+- Die Befehlsebene kennt weitere `ctox.workjet.*`-Befehle. Ein registrierter Domänen-Wrapper deckt nicht automatisch sämtliche Aktionen dieser Befehlsebene ab. Jour fixe ist teilweise angebunden; Projektaufträge können bereits direkt über MCP starten und abbrechen.
+- Workjet-RPC und CTOX-MCP sind unterschiedliche Verträge. Ein RPC-Name in den Tabellen belegt keinen MCP-Aufruf. Die ursprünglichen Methodenzahlen sind für den aktuellen Workjet-Head nicht neu gemessen.
 - Lücken sind vor allem: Threads und Nachrichten senden, Status lesen, Projekte anlegen und konfigurieren, Import, Einstellungen, Rechner-Zuweisung, Git/PR-Operationen, Kalender, Sprache, Provider-Gateway.
 
 ## Abgleich
 
-Legende: **MCP** = über MCP erreichbar. **Befehl** = `ctox.workjet.*`-Befehl existiert, aber kein MCP-Werkzeug. **fehlt** = weder noch.
+Legende: **MCP vorhanden** = registrierter typisierter Wrapper im genannten CTOX-Quellstand. **Befehl; MCP fehlt** = ein interner Befehl ist benannt, aber kein passender Domänen-Wrapper in dieser Bestandsaufnahme. **fehlt** = kein passender Domänen-Wrapper identifiziert; dies behauptet nicht, dass die Funktion überhaupt nicht existiert. Generische `business_os.query_records`, `search_records` und `get_record` können erlaubte Datensätze lesen, ersetzen aber weder Domänenaktionen noch deren Autorisierung. Tabellen mit Workjet-RPC-Namen sind Kandidaten für den weiteren Abgleich, keine vollständige aktuelle RPC-Verifikation.
 
 ### 1. Instanz und Server
 
@@ -36,12 +39,16 @@ Legende: **MCP** = über MCP erreichbar. **Befehl** = `ctox.workjet.*`-Befehl ex
 |---|---|---|
 | Projekte auflisten | `projects.list`, `project.list`, `ctox.workjet.project.list` | Befehl; MCP fehlt |
 | Projekt anlegen | `project.create`, `ctox.workjet.project.upsert` | Befehl; MCP fehlt |
+| Nativen Auftrag in einem bestehenden eigenen Projekt starten | `business_os.start_project_task` | **MCP vorhanden**; `project_id`, `title`, `instruction`, `idempotency_key` |
+| Eigenen nativen Projektauftrag abbrechen | `business_os.cancel_project_task` | **MCP vorhanden**; `target_command_id`, `idempotency_key`, optional `reason` |
 | Projekt konfigurieren, Metadaten | `project.configure`, `project.meta.update` | Befehl (`project.upsert`); MCP fehlt |
 | Projekt löschen | `project.delete` | fehlt (Löschung braucht Bestätigung) |
 | Projektordner hinzufügen, entfernen | `projects.add`, `projects.remove` | fehlt |
 | Dateien lesen, schreiben, suchen | `projects.readFile`, `writeFile`, `listEntries`, `searchEntries`, `searchContents` | fehlt; für Agenten wichtig |
 | Projekt-Arbeitskopie | `ctox.workjet.working_copy.upsert` | Befehl; MCP fehlt |
 | Projekt-Kacheln, Reihenfolge | `projectOverview` (`metric`, `link`, `text`) | fehlt (in Arbeit laut Koordinator: `project.gallery.order`) |
+
+`start_project_task` benötigt keine erfundene Business-OS-App, Crew-Mitgliedschaft, externen Harness oder Ausführungsrechner. Native Projektbesitz- und Policy-Prüfungen bleiben verpflichtend. Dieselbe Actor-/Projekt-/Idempotenz-Identität verwendet denselben Command-/Task-Auftrag; ein geänderter Auftrag mit demselben Schlüssel wird verweigert. CTOX liefert `command_id`, `task_id` und Status. Wiederholung nach einer verlorenen Antwort verwendet den ursprünglichen Schlüssel. Der Abbruch prüft den Zielbesitz; er macht bereits eingetretene Nebenwirkungen nicht rückgängig. Diese Quellverträge sind noch kein hier ausgeführter Recovery-Nachweis.
 
 ### 3. Projekt-Supervisor und Projekt-Chat
 
@@ -129,9 +136,13 @@ Dieser Block ist für das Molecularity-Beispiel direkt nötig (importiertes Proj
 |---|---|---|
 | Status, Katalog, Health, Nutzung | `workjet.providerGateway.status`, `catalog`, `scopedCatalog`, `health`, `usage` | fehlt |
 | Modelle prüfen, entdecken, binden | `modelChecks`, `checkModels`, `discoverModels`, `bindModel` | fehlt |
-| Konten: API-Schlüssel, OAuth, entfernen | `addApiKeyAccount`, `oauthStart/Poll/Cancel`, `removeAccount`, `setGrant` | fehlt. Geheimnisse: nur mit eigener Freigabe-Regel |
+| Konten: API-Schlüssel, OAuth, entfernen | `addApiKeyAccount`, `oauthStart/Poll/Cancel`, `removeAccount`, `setGrant` | Kein passender Workjet-MCP-Wrapper identifiziert; bestehende Produktaktionen und native Berechtigungen bleiben maßgeblich |
 | Routing, Start, Stopp | `updateRouting`, `start`, `stop`, `admit`, `infer` | fehlt |
 | Provider-Abo | `ctox.provider_subscription.status`, `rotate`, `disconnect` | Befehl; MCP fehlt |
+
+Für die autorisierte Konten-Föderation kann ein Konto auf einem Computer oder standardmäßig auf CTOX liegen. Synchronisiert werden Existenz, Modelle und Health nach der geltenden Policy; das Secret bleibt am haltenden Knoten im Secret Store. Routing verwendet diesen Knoten. Dieses Inventar erklärt weder die Föderation noch eine neue Kontenverwaltung für implementiert. Modellvorschläge stammen ausschließlich aus dem von echten Provider-Listen gespeisten `llm.ctox.dev`-Katalog; Modell-IDs werden nicht geraten.
+
+Das vorhandene Credential-Metadatenwerkzeug ist enger: Es erlaubt nur exakte, im aktuellen signierten Delegationskontext freigegebene Präsenzselektoren. Daraus folgen kein allgemeiner Zugriff auf Konten, Anzahl, Readiness oder Secret-Werte.
 
 ### 11. Git, Worktrees, Pull Requests, Review
 
@@ -155,15 +166,15 @@ Dieser Block ist für das Molecularity-Beispiel direkt nötig (importiertes Proj
 | Terminal öffnen, schreiben, lesen, schließen | `terminal.open`, `write`, `attach`, `close`, … | fehlt. Entscheidung nötig: Agenten-Shell über MCP ist ein eigener Risikobereich |
 | Vorschau, Browser-Automation | `preview.*` (10), `previewAutomation.*` (3) | fehlt. Für Fernsteuerung optional, meist UI-only |
 
-Empfehlung: Vorschau und Terminal-Darstellung ausklammern. Terminal-Eingaben nur mit eigenem Werkzeug und Freigabe.
+Für einen zusätzlichen Terminal-Wrapper müssten Zielrechner, Lease, zulässige Aktionen und native Autorisierung ausdrücklich definiert werden. Dies ist ein Erweiterungsvorschlag und setzt bestehende autorisierte Produktwege nicht außer Kraft.
 
 ### 13. Jour fixe, Kalender, Meetings, KPIs
 
 | Workjet-Funktion | Protokoll | Stand in CTOX |
 |---|---|---|
-| Jour fixe lesen | `business_os.jour_fixe_read` | **MCP vorhanden** |
-| Jour fixe schreiben (inkl. narrate) | `business_os.jour_fixe_update` | **MCP vorhanden** |
-| Jour fixe: Vorbereitung, Meeting starten und beenden, Transkript, Todos, Deck, Kommentare | `ctox.workjet.jour_fixe.*` (≈14 Befehle) | Befehl; MCP teilweise (nur die zwei Werkzeuge oben) |
+| Jour fixe lesen | `business_os.jour_fixe_read` | **MCP vorhanden**: `readMeeting`, `readComments`, `readTranscript`; registrierter Supervisor mit gültiger Lease |
+| Jour fixe schreiben | `business_os.jour_fixe_update` | **MCP vorhanden**: `updatePrepareDeck`, `updateProposeTodos`, `narrate`; registrierter Supervisor mit gültiger Lease |
+| Weitere Jour-fixe-Aktionen: Meeting starten und beenden, Todos, Deck, Kommentare | `ctox.workjet.jour_fixe.*` | Interne Befehle; die zwei MCP-Wrapper oben erschließen nur ihre ausdrücklich typisierten Aktionen |
 | KPI-Werte lesen, auflösen | `business_os.project_kpi` | **MCP vorhanden** (nur Supervisor) |
 | KPI-Definitionen konfigurieren | `ctox.workjet.project.kpis.configure` | Befehl; MCP fehlt |
 | Meetings planen, Status, Absage, Transkript, Löschen | `meeting.schedule`, `status`, `cancel`, `get_transcript`, `delete` | **MCP vorhanden** (CTOX-Meeting, nicht Kalender) |
@@ -190,7 +201,7 @@ Dieser Bereich ist im MCP am vollständigsten: App anlegen, ändern, Quelldateie
 
 ### Weitere Befehle ohne MCP-Gegenstück (Befehlsebene)
 
-Diese Befehle existieren in CTOX, sind aber nicht über MCP erreichbar: `ctox.coding.turn` (Coding-Sidecar), `ctox.module.*` (Installation, Rollback, Version), `ctox.app_store.*`, `ctox.secret.*`, `ctox.channel.*`, `ctox.mailserver.*`, `ctox.iot.*`, `ctox.appsec.*`, `ctox.crew.*`, `ctox.business_os.audit.*`, `ctox.business_os.backup.*`. Die meisten davon liegen außerhalb des Workjet-Ziels. Ausnahme: `ctox.secret.*` und `ctox.provider_subscription.*` brauchen eine bewusste Entscheidung, ob Agenten sie sehen dürfen.
+Die ursprüngliche Bestandsaufnahme nennt außerdem diese internen Befehlsfamilien, für die sie keinen direkten, gleichnamigen MCP-Wrapper ausweist: `ctox.coding.turn` (Coding-Sidecar), `ctox.module.*` (Installation, Rollback, Version), `ctox.app_store.*`, `ctox.secret.*`, `ctox.channel.*`, `ctox.mailserver.*`, `ctox.iot.*`, `ctox.appsec.*`, `ctox.crew.*`, `ctox.business_os.audit.*`, `ctox.business_os.backup.*`. Die meisten liegen außerhalb des Workjet-Ziels. Manche Ziele sind über typisierte Vorschlags-/Ausführungswerkzeuge erreichbar, etwa die erlaubte App-Store-Installation; das Fehlen eines gleichnamigen Wrappers bedeutet kein allgemeines Verbot. Secret-Zugriff folgt dem bestehenden Vertrag und wird hier nicht freigegeben.
 
 ## Lückenliste nach Reihenfolge des Molecularity-Ablaufs
 
@@ -209,21 +220,20 @@ Git/PR, Terminal und Vorschau sind eigene Blöcke. Sie kommen nach Punkt 8, sofe
 
 - Ein typisiertes Werkzeug pro Domäne, zum Beispiel `workjet.project`, `workjet.thread`, `workjet.worker`, `workjet.computer`, `workjet.import`, mit einem `action`-Feld. Das folgt dem Muster von `mcp_workjet_jour_fixe.rs` und `mcp_workjet_kpis.rs`.
 - Jede Aktion wird auf einen bestehenden `ctox.workjet.*`-Befehl oder auf eine neue Befehlsart der Befehlsebene abgebildet. Die Geschäftslogik bleibt in der Befehlsebene, der MCP-Teil ist nur Schnittstelle und Richtlinie.
-- Jede Aktion läuft durch `enforce_business_os_mcp_policy`. Lesende Aktionen sind frei, schreibende brauchen die Rolle des Projekt-Supervisors oder Owner/Admin.
-- Löschungen, Rechner-Widerruf und Geheimnisse sind nicht Teil der ersten Stufe, bis Michael sie freigibt.
+- Lesen und Schreiben bleiben beide policy- und grantgebunden. `enforce_business_os_mcp_policy` sowie die jeweilige native Actor-, Modul-, Collection-, Projektbesitz- und Lease-Prüfung entscheiden. Rollen allein erteilen keine pauschale Freigabe. Die tatsächliche Managed-Instanzidentität bleibt vom Tenant-Workspace getrennt; ein Wrapper darf keinen bestehenden Grant verbreitern oder Credential-Werte exportieren.
+- Der Vorschlag erteilt keine zusätzlichen Rechte. Bestehende autorisierte Lösch-, Widerruf-, Konten- und Secret-Store-Produktwege behalten ihren jeweiligen Vertrag; neue Wrapper müssen dessen enge Ziele und Ablehnungsfälle erhalten.
 - Jede Aktion bekommt einen Test gegen die Befehlsebene und einen Test der Richtlinie (erlaubt und verweigert).
-- Generierte Verträge (`src/core/rxdb/tests/fixtures/*.json`) werden nicht von Hand geändert.
+- Wire-Verträge werden in den kanonischen Fixtures (`src/core/rxdb/tests/fixtures/*.json`) geändert und anschließend für beide Seiten regeneriert; generierte Ausgaben werden nicht von Hand editiert.
 
-## Offene Entscheidungen für Michael
+## Geltungsbereich und nächste Implementierung
 
-- Dürfen Agenten Geheimnisse und Provider-Konten sehen oder ändern? Vorschlag: nein, nur Status.
-- Dürfen Agenten Terminal-Eingaben schicken? Vorschlag: nein, in der ersten Stufe.
-- Server-Update über MCP? Vorschlag: nein.
+Das Inventar setzt keine globalen Defaults oder zusätzlichen Vorab-Freigaben.
+Die aktuellen Entscheidungen des Auftraggebers und die native Policy gelten.
+Ein neuer Wrapper für Threads, Konten, Terminal oder Updates ist ein eigener
+Implementierungsschritt; dieses Dokument liefert dafür keine Rechte.
 
-## Bewusst gesetzte Grenzen (Stand 2026-10-08)
-
-Diese Grenzen gelten als Default, bis Michael sie ändert. Sie lassen sich später lockern, jede Lockerung braucht einen eigenen PR mit Tests.
-
-- **Geheimnisse und Provider-Konten:** Agenten sehen nur Status (vorhanden, lesbar, Anzahl, Gesundheit). Keine Schreib- oder Leseaktion auf Schlüssel, Tokens oder OAuth-Daten.
-- **Terminal:** Keine Eingabe in Terminals über MCP.
-- **Server-Update:** Kein Update über MCP.
+Für jede Ergänzung werden der konkrete Befehl, die Projekt-/Instanzidentität,
+Idempotenz, Ergebnis-/Abbruchbeobachtung und erlaubte sowie verweigerte Fälle
+am finalen Quell-Head geprüft. Nach dem normalen Merge folgt die Abnahme am
+installierten Stand. Der hier beschriebene Quellenabgleich ersetzt weder diese
+Abnahme noch den Nachweis eines vollständig fernsteuerbaren Workjet-Projekts.
