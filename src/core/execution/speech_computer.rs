@@ -176,6 +176,27 @@ struct Current {
     route: SpeechComputerRoute,
 }
 impl Current {
+    fn load(root: &Path, role: SpeechWorkload) -> Result<Arc<Self>, SpeechError> {
+        let saved = load_saved(root).map_err(|_| SpeechError::ConfigurationUnavailable)?;
+        let route = match role {
+            SpeechWorkload::Transcription => &saved.config.transcription,
+            SpeechWorkload::Synthesis => &saved.config.synthesis,
+        }
+        .clone()
+        .ok_or(SpeechError::ConfigurationUnavailable)?;
+        validate_route(&route, role, now_ms())
+            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
+        let current = Arc::new(Self {
+            root: root.into(),
+            saved,
+            route,
+        });
+        current
+            .with_current(|_| Ok(()))
+            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
+        Ok(current)
+    }
+
     fn with_current<T>(
         &self,
         apply: impl FnOnce(&ctox_sync::authority::auth::SigningIdentity) -> anyhow::Result<T>,
@@ -226,23 +247,7 @@ struct Client {
 }
 impl Client {
     fn open(root: &Path, role: SpeechWorkload) -> Result<Self, SpeechError> {
-        let saved = load_saved(root).map_err(|_| SpeechError::ConfigurationUnavailable)?;
-        let route = match role {
-            SpeechWorkload::Transcription => &saved.config.transcription,
-            SpeechWorkload::Synthesis => &saved.config.synthesis,
-        }
-        .clone()
-        .ok_or(SpeechError::ConfigurationUnavailable)?;
-        validate_route(&route, role, now_ms())
-            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
-        let current = Arc::new(Current {
-            root: root.into(),
-            saved,
-            route,
-        });
-        current
-            .with_current(|_| Ok(()))
-            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
+        let current = Current::load(root, role)?;
         let channel =
             crate::sync_host::native_control_channel(root).map_err(|_| SpeechError::Transport)?;
         let peer = channel
@@ -324,6 +329,55 @@ impl Client {
             }),
             reply => Ok(reply),
         }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpeechRouteDiagnostic {
+    workload: SpeechWorkload,
+    elapsed_ms: u64,
+    ready: bool,
+    transport: crate::sync_host::NativeControlDiagnostic,
+}
+impl SpeechRouteDiagnostic {
+    pub fn ready(&self) -> bool {
+        self.ready
+    }
+}
+
+/// Local operator snapshot after a bounded wait; no speech operation is sent.
+pub async fn diagnose_route(
+    root: &Path,
+    role: SpeechWorkload,
+) -> Result<SpeechRouteDiagnostic, SpeechError> {
+    let started = Instant::now();
+    let current = Current::load(root, role)?;
+    let channel =
+        crate::sync_host::native_control_channel(root).map_err(|_| SpeechError::Transport)?;
+    loop {
+        current
+            .with_current(|_| Ok(()))
+            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
+        let transport = channel
+            .diagnostic(&current.route.target_signing_identity)
+            .map_err(|_| SpeechError::Transport)?;
+        let ready = transport.verified_target_route
+            && channel
+                .bind_identity(&current.route.target_signing_identity)
+                .map_err(|_| SpeechError::Transport)?
+                .is_some_and(|peer| {
+                    current.route.native_peer_route.is_empty()
+                        || peer.route() == current.route.native_peer_route
+                });
+        if ready || started.elapsed() >= Duration::from_secs(15) {
+            return Ok(SpeechRouteDiagnostic {
+                workload: role,
+                elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                ready,
+                transport,
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 

@@ -53,6 +53,17 @@ pub(super) struct Owner {
 pub(crate) struct NativeControlChannel {
     state: Weak<State>,
 }
+/// Transport snapshot only, never authority for a subsequent request.
+/// No endpoints, keys or signaling payloads.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct NativeControlDiagnostic {
+    pub peer_count: usize,
+    pub open_data_channels: usize,
+    pub signaling_socket_connected: bool,
+    pub signaling_join_accepted: bool,
+    pub native_control_ready_peers: usize,
+    pub verified_target_route: bool,
+}
 /// One proved connection retained across an entire workload, without authority.
 #[derive(Clone)]
 pub(crate) struct NativeControlPeer {
@@ -255,6 +266,33 @@ impl NativeControlChannel {
             identity: identity.into(),
             peer,
         }))
+    }
+
+    /// Inspect this exact host and the signed target binding used by RPC.
+    /// Registering the configured pin only wakes existing route discovery.
+    pub(crate) fn diagnostic(&self, identity: &str) -> io::Result<NativeControlDiagnostic> {
+        let verified_target_route = self.bind_identity(identity)?.is_some();
+        let state = self.current()?;
+        let alive = state.alive.lock().map_err(|_| unavailable())?;
+        if !*alive {
+            return Err(unavailable());
+        }
+        let pool = state.pool.upgrade().ok_or_else(unavailable)?;
+        let transport = pool.connection_handler.frame_transport_status();
+        let native_control_ready_peers = pool
+            .connection_handler
+            .current_connections()
+            .iter()
+            .filter(|peer| pool.is_peer_ready_for_control(peer))
+            .count();
+        Ok(NativeControlDiagnostic {
+            peer_count: transport.peer_count,
+            open_data_channels: transport.open_data_channels,
+            signaling_socket_connected: transport.signaling_socket_connected,
+            signaling_join_accepted: transport.signaling_join_accepted,
+            native_control_ready_peers,
+            verified_target_route,
+        })
     }
 
     /// Readiness only; the subsequent request still requires current grants
