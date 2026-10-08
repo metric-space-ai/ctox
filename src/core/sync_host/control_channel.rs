@@ -204,6 +204,31 @@ impl NativeControlChannel {
         }
     }
 
+    /// Readiness only; the subsequent request still requires current grants
+    /// and signing pins. This snapshot creates no peer and authorizes no work.
+    pub(crate) fn peer_connected(&self, route: &str) -> io::Result<bool> {
+        if route.is_empty()
+            || route.len() > 256
+            || route.trim() != route
+            || route.chars().any(char::is_control)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid native peer route",
+            ));
+        }
+        let state = self.current()?;
+        let alive = state.alive.lock().map_err(|_| unavailable())?;
+        if !*alive {
+            return Err(unavailable());
+        }
+        let pool = state.pool.upgrade().ok_or_else(unavailable)?;
+        let Some(peer) = pool.connection_handler.connection_for_peer(route) else {
+            return Ok(false);
+        };
+        Ok(pool.with_current_native_control_peer(&peer, || ()).is_ok())
+    }
+
     /// No discovery, new connection, account provisioning or implicit grant.
     /// The adapter supplies a signed request, current source-publication guard
     /// and mandatory pinned reply verifier. Cancellation drops the exact call.

@@ -20,9 +20,9 @@ pub struct NativeTtsLaunch {
     pub model_dir: Option<PathBuf>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum LocalTtsRequest {
+pub(crate) enum LocalTtsRequest {
     SpeechCreate {
         model: Option<String>,
         input: String,
@@ -32,9 +32,9 @@ enum LocalTtsRequest {
     RuntimeHealth,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum LocalTtsResponse {
+pub(crate) enum LocalTtsResponse {
     Speech {
         model: String,
         audio_base64: String,

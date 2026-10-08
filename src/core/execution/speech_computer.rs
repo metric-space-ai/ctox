@@ -313,6 +313,30 @@ impl Client {
     }
 }
 
+/// Operator diagnostics await their configured host's existing peer before
+/// timing audio. Never retry a request whose effect may already have started.
+pub async fn wait_for_route(root: &Path, role: SpeechWorkload) -> Result<(), SpeechError> {
+    let client = Client::open(root, role)?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let ready = client
+            .current
+            .with_current(|_| {
+                Ok(client
+                    .channel
+                    .peer_connected(&client.current.route.native_peer_route)?)
+            })
+            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
+        if ready {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(SpeechError::TimedOut);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Dropping/aborting the stream cancels its exact remote operation using the
 /// same current grant. Cleanup is bounded, cannot reconnect or revive authority.
 struct CancelOnDrop {
@@ -498,7 +522,11 @@ fn decode_hex(encoded: &str) -> Result<Vec<u8>, SpeechError> {
         .collect()
 }
 
-fn verify_audio(audio: &[u8], digest: &str, duration_ms: u64) -> Result<(), SpeechError> {
+pub(super) fn verify_audio(
+    audio: &[u8],
+    digest: &str,
+    duration_ms: u64,
+) -> Result<(), SpeechError> {
     if format!("{:x}", Sha256::digest(audio)) != digest {
         return Err(SpeechError::InvalidResponse);
     }
@@ -638,7 +666,7 @@ pub(super) async fn synthesize(
         }
         verify_audio(&audio, &sha, duration_ms)?;
         Ok(VerifiedSpeechOutput {
-            run_id,
+            run_id: run_id.clone(),
             text_sha256: format!("{:x}", Sha256::digest(request.text.as_bytes())),
             audio_sha256: sha,
             output: SpeechOutput {
@@ -653,7 +681,20 @@ pub(super) async fn synthesize(
     .await
     .map_err(|_| SpeechError::TimedOut)?;
     if result.is_ok() {
-        cancel.completed.store(true, Ordering::Release);
+        // Release the receiver's bounded audio buffer once all verified bytes
+        // are local. Cancellation remains best effort on the exact live route.
+        if matches!(
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                client.call(Op::CancelSynthesis {
+                    run_id: run_id.clone()
+                }),
+            )
+            .await,
+            Ok(Ok(Reply::SynthesisCancelled { .. }))
+        ) {
+            cancel.completed.store(true, Ordering::Release);
+        }
     }
     result
 }

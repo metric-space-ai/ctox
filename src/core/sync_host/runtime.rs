@@ -50,6 +50,8 @@ where
     let mut handoff_host = None;
     let mut checkpoint_host = None;
     let mut control_owner = None;
+    #[cfg(unix)]
+    let mut speech_host = None;
     runtime.block_on(async {
         let database = create_rx_database(RxDatabaseCreator {
             name: format!("ctox-execution-{}", config.node_id()),
@@ -133,6 +135,16 @@ where
                     root,
                     peer.pool(),
                 )?);
+                #[cfg(unix)]
+                {
+                    speech_host = Some(
+                        crate::execution::speech::target::TargetSpeechHost::start(
+                            root,
+                            peer.pool().clone(),
+                        )
+                        .map_err(io::Error::other)?,
+                    );
+                }
                 handoff_host = Some(
                     crate::business_os::NativeHandoffHost::start(root, peer.pool().clone())
                         .map_err(io::Error::other)?,
@@ -166,6 +178,8 @@ where
         )
         .await
         .map_err(|error| anyhow::anyhow!("native Sync host failed ({:?})", error.kind()));
+        #[cfg(unix)]
+        drop(speech_host.take());
         drop(control_owner.take());
         drop(handoff_host.take());
         drop(checkpoint_host.take());

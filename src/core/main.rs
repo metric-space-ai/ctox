@@ -206,6 +206,7 @@ RUN / EXEC
   ctox runtime speech-status
   ctox runtime speech-configure <speech-config.json>
   ctox runtime speech-computer-configure <routes.json>
+  ctox runtime speech-computer-authorize <grants.json>
   ctox runtime speech-synthesize <output.wav> --text <text>
   ctox runtime speech-benchmark <16khz-mono-s16le.pcm>
   ctox runtime stt-doctor
@@ -624,13 +625,23 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Some("speech-synthesize") => {
                 let output = args.get(2).context("usage: ctox runtime speech-synthesize <output.wav> --text <text>")?;
                 let text = find_flag_value(args, "--text").context("missing --text")?;
+                let config = execution::speech::SpeechRuntimeConfig::load(&root)?;
+                let _speech_host = if config.synthesis == execution::speech::SpeechBackend::Computer {
+                    Some(sync_host::start_if_configured(&root)?.context("configure the native Sync host before computer speech diagnostics")?)
+                } else { None };
                 let gateway = execution::speech::SpeechGateway::from_root(&root)?;
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-                let speech = runtime.block_on(gateway.synthesize_verified_async(&execution::speech::SpeechRequest {
+                let speech = runtime.block_on(async {
+                    #[cfg(unix)]
+                    if config.synthesis == execution::speech::SpeechBackend::Computer {
+                        execution::speech::computer::wait_for_route(&root, ctox_sync::authority::auth::speech_wire::SpeechWorkload::Synthesis).await?;
+                    }
+                    gateway.synthesize_verified_async(&execution::speech::SpeechRequest {
                     text: text.to_string(),
                     format: execution::speech::SpeechAudioFormat::Wav,
                     voice_id: None,
-                }))?;
+                    }).await
+                })?;
                 let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
                 std::io::Write::write_all(&mut file, speech.audio())?;
                 println!("{}", serde_json::json!({
@@ -656,6 +667,13 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&config)?);
                 Ok(())
             }
+            #[cfg(unix)]
+            Some("speech-computer-authorize") => {
+                anyhow::ensure!(args.len() == 3, "usage: ctox runtime speech-computer-authorize <grants.json>");
+                let config = execution::speech::target_policy::configure_from_file(&root, Path::new(&args[2]))?;
+                println!("{}", serde_json::to_string_pretty(&config)?);
+                Ok(())
+            }
             Some("speech-status") => {
                 let gateway = execution::speech::SpeechGateway::from_root(&root)?;
                 println!("{}", serde_json::to_string_pretty(&gateway.status())?);
@@ -663,8 +681,18 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             }
             Some("speech-benchmark") => {
                 let pcm = args.get(2).context("usage: ctox runtime speech-benchmark <16khz-mono-s16le.pcm>")?;
+                let config = execution::speech::SpeechRuntimeConfig::load(&root)?;
+                let _speech_host = if config.transcription == execution::speech::SpeechBackend::Computer {
+                    Some(sync_host::start_if_configured(&root)?.context("configure the native Sync host before computer speech diagnostics")?)
+                } else { None };
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-                let result = runtime.block_on(execution::speech::benchmark_pcm(&root, Path::new(pcm)))?;
+                let result = runtime.block_on(async {
+                    #[cfg(unix)]
+                    if config.transcription == execution::speech::SpeechBackend::Computer {
+                        execution::speech::computer::wait_for_route(&root, ctox_sync::authority::auth::speech_wire::SpeechWorkload::Transcription).await?;
+                    }
+                    execution::speech::benchmark_pcm(&root, Path::new(pcm)).await
+                })?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
                 Ok(())
             }
