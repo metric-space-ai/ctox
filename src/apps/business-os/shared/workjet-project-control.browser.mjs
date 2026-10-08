@@ -18,9 +18,12 @@ const detailsStart = tests.indexOf('function nativeProjectDetailsFixture(');
 const detailsEnd = tests.indexOf("\ntest(", detailsStart);
 const ownerStart = tests.indexOf('function nativeMeetingOwnerFixture(');
 const ownerEnd = tests.indexOf("\ntest(", ownerStart);
+const configurationStart = tests.indexOf('function projectConfigurationFixture(');
+const configurationEnd = tests.indexOf('function nativeProjectDetailsFixture(', configurationStart);
 assert.ok(start >= 0 && end > start && fixtureStart >= 0 && fixtureEnd > fixtureStart);
 assert.ok(detailsStart >= 0 && detailsEnd > detailsStart);
 assert.ok(ownerStart >= 0 && ownerEnd > ownerStart);
+assert.ok(configurationStart >= 0 && configurationEnd > configurationStart);
 const output = process.argv.includes('--output-dir')
   ? path.resolve(process.argv[process.argv.indexOf('--output-dir') + 1]) : null;
 const browser = await chromium.launch({ headless: true,
@@ -30,7 +33,7 @@ try {
   const context = await browser.newContext();
   await context.route('**/*', (route) => route.abort());
   const page = await context.newPage();
-  const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, ownerSource, executionSource, kpiSource, meetingSource, meeting }) => {
+  const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, ownerSource, configurationSource, executionSource, kpiSource, meetingSource, meeting }) => {
     const assert = {
       ok(value) { if (!value) throw new Error('Expected truthy'); },
       equal(left, right) { if (left !== right) throw new Error(`Expected ${right}, got ${left}`); },
@@ -111,6 +114,26 @@ try {
       assert.ok(pending.reads.every(({ query }) => query.signal.aborted));
       results.push('shared deadline aborts both browser query streams');
     } finally { Date.now = originalNow; }
+
+    const configurationFixture = new Function('vm', 'controlSource',
+      `${configurationSource}\nreturn projectConfigurationFixture;`)(vm, controlSource);
+    const configurationRequest = { action: 'project.configure', commandId: 'alias-save',
+      projectId: 'project-1', title: 'CTOX', info: { summary: 'Saved via verified alias' } };
+    const aliasConfiguration = configurationFixture(() => {}, 'owner@example.org');
+    const saved = await aliasConfiguration.invoke(configurationRequest);
+    assert.equal(saved.project.info.summary, configurationRequest.info.summary);
+    assert.equal(aliasConfiguration.commands[0].client_context.actor.id, 'owner@example.org');
+    results.push('browser configuration accepts the native canonical Owner for a verified alias');
+    for (const mutate of [
+      receipt => { receipt.result.project.owner_user_id = 'foreign'; },
+      receipt => { delete receipt.result.owner_user_id; },
+    ]) {
+      let denied = false;
+      try { await configurationFixture(mutate, 'owner@example.org').invoke(configurationRequest); }
+      catch (error) { denied = /uncorrelated/.test(error.message); }
+      assert.ok(denied);
+    }
+    results.push('browser alias configuration rejects mismatched or unconfirmed native owners');
 
     const turnId = 'actual-native-command';
     const threadId = 'cc6cfe73-2824-4360-9daf-3b3efb079931';
@@ -221,8 +244,9 @@ try {
     return results;
   }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd),
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
+    configurationSource: tests.slice(configurationStart, configurationEnd),
     executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 19);
+  assert.equal(results.length, 21);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };
