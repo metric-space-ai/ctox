@@ -619,6 +619,41 @@ export const JOUR_FIXE_TYPES = deepFreeze({
       }
     }
   },
+  "ListMeetingsRequest": {
+    "fields": {
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "limit": {
+        "type": "u64",
+        "minimum": 1,
+        "maximum": 20
+      }
+    }
+  },
+  "MeetingSummary": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "scheduled_at_ms": {
+        "type": "u64"
+      },
+      "state": {
+        "type": "MeetingState"
+      },
+      "revision": {
+        "type": "u64"
+      },
+      "todo_count": {
+        "type": "u64"
+      }
+    }
+  },
   "MeetingMutationReceipt": {
     "fields": {
       "operation_id": {
@@ -926,6 +961,10 @@ export const JOUR_FIXE_COMMANDS = deepFreeze({
   },
   "ctox.workjet.jour_fixe.meeting.read": {
     "request_type": "ReadMeetingRequest",
+    "authorization": "owner"
+  },
+  "ctox.workjet.jour_fixe.meetings.list": {
+    "request_type": "ListMeetingsRequest",
     "authorization": "owner"
   },
   "ctox.workjet.jour_fixe.narration.local_publish": {

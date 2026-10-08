@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 117] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 118] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -376,6 +376,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 117] = [
     "ctox.workjet.jour_fixe.todos.propose",
     "ctox.workjet.jour_fixe.todos.confirm",
     "ctox.workjet.jour_fixe.meeting.read",
+    "ctox.workjet.jour_fixe.meetings.list",
     "ctox.workjet.jour_fixe.meeting.start",
     "ctox.workjet.jour_fixe.meeting.end",
     "ctox.workjet.jour_fixe.transcript.append",
@@ -1286,7 +1287,9 @@ impl CentralCommandPolicyRequirement {
             ))
         } else if matches!(
             command_type,
-            "ctox.workjet.project.supervisor.turn.watch" | "ctox.workjet.jour_fixe.meeting.read"
+            "ctox.workjet.project.supervisor.turn.watch"
+                | "ctox.workjet.jour_fixe.meeting.read"
+                | "ctox.workjet.jour_fixe.meetings.list"
         ) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataRead,
@@ -1750,6 +1753,19 @@ fn dispatch_business_command(
                     .as_ref()
                     .context("meeting edit requires domain admission")?,
             ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
+                )),
+            }
+        }
+        "ctox.workjet.jour_fixe.meetings.list" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let owner =
+                session_user_id(session).context("meeting list requires authenticated user")?;
+            match super::project_chats::jour_fixe_preparation::list(root, command, owner) {
                 Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,

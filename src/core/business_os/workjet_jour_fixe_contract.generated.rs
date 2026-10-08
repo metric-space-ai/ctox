@@ -1317,6 +1317,79 @@ impl WireValidate for ReadMeetingRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ListMeetingsRequest {
+    pub(crate) project_id: String,
+    pub(crate) limit: u64,
+}
+impl WireValidate for ListMeetingsRequest {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("ListMeetingsRequest.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("ListMeetingsRequest.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.limit;
+            value.validate()?;
+            if *value < 1 {
+                return Err("ListMeetingsRequest.limit violates minimum".into());
+            }
+            if *value > 20 {
+                return Err("ListMeetingsRequest.limit violates maximum".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MeetingSummary {
+    pub(crate) id: String,
+    pub(crate) scheduled_at_ms: u64,
+    pub(crate) state: MeetingState,
+    pub(crate) revision: u64,
+    pub(crate) todo_count: u64,
+}
+impl WireValidate for MeetingSummary {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("MeetingSummary.id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("MeetingSummary.id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.scheduled_at_ms;
+            value.validate()?;
+        }
+        {
+            let value = &self.state;
+            value.validate()?;
+        }
+        {
+            let value = &self.revision;
+            value.validate()?;
+        }
+        {
+            let value = &self.todo_count;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MeetingMutationReceipt {
     pub(crate) operation_id: String,
     pub(crate) meeting_id: String,
@@ -1975,6 +2048,12 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "ReadMeetingRequest" => serde_json::from_value::<ReadMeetingRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "ListMeetingsRequest" => serde_json::from_value::<ListMeetingsRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "MeetingSummary" => serde_json::from_value::<MeetingSummary>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         "MeetingMutationReceipt" => serde_json::from_value::<MeetingMutationReceipt>(value)

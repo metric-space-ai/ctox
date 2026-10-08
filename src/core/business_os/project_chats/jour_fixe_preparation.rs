@@ -279,3 +279,77 @@ pub(in crate::business_os) fn read(
         "previous_goal_definition":previous_goal_definition}),
     )
 }
+
+/// Newest-first summaries of this owner's prepared meetings for one project.
+/// Full transcripts stay behind the single-meeting read.
+pub(in crate::business_os) fn list(
+    root: &Path,
+    command: &BusinessCommand,
+    actor: &str,
+) -> anyhow::Result<Value> {
+    let mut payload = command.payload.clone();
+    let object = payload
+        .as_object_mut()
+        .context("meeting list must be an object")?;
+    if let Some(channel) = object.remove("inbound_channel") {
+        let text = channel.as_str().context("inbound_channel must be text")?;
+        ensure!(
+            !text.trim().is_empty() && text.chars().count() <= 256,
+            "invalid inbound_channel"
+        );
+    }
+    let query: wire::ListMeetingsRequest = serde_json::from_value(payload)?;
+    query.validate().map_err(anyhow::Error::msg)?;
+    let mut reader = rusqlite::Connection::open_with_flags(
+        store::business_os_store_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    reader.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let conn = reader.transaction()?;
+    let owner = workjet_identity::owner_from_connection(&conn, actor)?;
+    let project = owned_project(&conn, &query.project_id, &owner, true)?;
+    ensure!(
+        project["id"] == query.project_id,
+        "project id must be canonical"
+    );
+    ensure!(
+        command
+            .record_id
+            .as_deref()
+            .is_none_or(|id| id == query.project_id),
+        "meeting list routing conflicts with project"
+    );
+    let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_jour_fixe_meetings')", [], |r| r.get(0))?;
+    if !exists {
+        return Ok(json!({"ok":true,"project_id":query.project_id,"meetings":[]}));
+    }
+    let mut statement = conn.prepare(
+        "SELECT metadata_json FROM workjet_jour_fixe_meetings WHERE project_id=?1 AND owner_user_id=?2 ORDER BY scheduled_at_ms DESC,meeting_id DESC LIMIT ?3",
+    )?;
+    let rows = statement.query_map(
+        params![query.project_id, owner, query.limit as i64],
+        |row| row.get::<_, String>(0),
+    )?;
+    let mut meetings = Vec::new();
+    for raw in rows {
+        let raw = raw?;
+        ensure!(
+            raw.len() <= 1024 * 1024,
+            "meeting metadata exceeds native read budget"
+        );
+        let meeting: wire::Meeting = serde_json::from_str(&raw)?;
+        meeting.validate().map_err(anyhow::Error::msg)?;
+        ensure!(
+            meeting.project_id == query.project_id && meeting.owner_user_id == owner,
+            "stored meeting ownership conflicts"
+        );
+        meetings.push(json!({
+            "id": meeting.id,
+            "scheduled_at_ms": meeting.scheduled_at_ms,
+            "state": meeting.state,
+            "revision": meeting.revision,
+            "todo_count": meeting.todos.as_ref().map_or(0, |todos| todos.items.len()),
+        }));
+    }
+    Ok(json!({"ok":true,"project_id":query.project_id,"meetings":meetings}))
+}
