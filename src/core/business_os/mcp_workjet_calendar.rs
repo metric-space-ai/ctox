@@ -91,7 +91,14 @@ fn bounded_receipt(mut value: Value, list: &str) -> anyhow::Result<Value> {
         value["truncated"] = json!(true);
     }
 }
-pub(super) fn execute(root: &Path, context: &McpChannelRequestContext, tool: &str, args: &Value) -> anyhow::Result<Value> {
+pub(super) fn execute(root: &Path, context: &McpChannelRequestContext, tool: &str, args: &Value, trusted_gateway_context: Option<&Value>) -> anyhow::Result<Value> {
+    if context.trusted_role_source.as_deref() == Some("ctox_dev_managed_mcp_token") {
+        if let Some(tools) = trusted_gateway_context.and_then(|gateway| gateway["managed_policy"].get("allowedTools")) {
+            let tools = tools.as_array().context("invalid managed calendar tool scope")?;
+            anyhow::ensure!(tools.is_empty() || tools.iter().any(|item| item.as_str() == Some(tool)),
+                "calendar tool is outside this managed client scope");
+        }
+    }
     anyhow::ensure!(serde_json::to_vec(args)?.len() <= 1024, "calendar request exceeds its budget");
     match tool {
         ACCOUNTS_TOOL => {
@@ -178,6 +185,12 @@ mod tests {
         assert_eq!(read["accounts"][0]["id"], "mine@example.test");
         assert!(call_tool_inner(root.path(), EVENTS_TOOL, json!({"account_id":"foreign@example.test","start_ms":0,"end_ms":1}), Some(&gateway)).is_err());
         assert!(call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({"actor":"other"}), Some(&gateway)).is_err());
+        let mut bounded = gateway.clone();
+        bounded["managed_policy"]["allowedTools"] = json!(["business_os.list_modules"]);
+        assert!(call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&bounded)).is_err());
+        bounded["managed_policy"]["allowedTools"] = json!([ACCOUNTS_TOOL]);
+        bounded["managed_policy"]["allowReads"] = json!(false);
+        assert!(call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&bounded)).is_err());
         let mut policy = default_mcp_policy(); policy.allowed_collections = vec!["workjet_projects".into()]; save_mcp_policy(root.path(), &policy)?;
         assert!(call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&gateway)).is_err());
         Ok(())
