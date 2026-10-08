@@ -10,7 +10,7 @@ async function fixture() {
   const audio = {
     file_id: 'retained-file', generation_id: 'immutable-generation', mime_type: 'audio/wav', format: 'wav',
     sha256: await sha256Hex(bytes), narration_text_sha256: await sha256Hex('Slide text'),
-    provenance: 'native_gateway', duration_ms: 1200, source_run_id: 'retained-run', model: 'fixture-model', synthesis_duration_ms: 50,
+    provenance: 'native_gateway', duration_ms: 1200, source_run_id: 'retained-run', model: 'grok-4.7', synthesis_duration_ms: 50,
   };
   const meeting = { id: 'meeting', project_id: 'project', owner_user_id: 'owner',
     deck_revision: 4, revision: 9, state: 'live',
@@ -53,7 +53,7 @@ test('local Owner narration is playable without asserting gateway verification',
 });
 test('invalid ranges and caller-selected credentials/text/files are rejected before any read', async () => {
   for (const change of [{ length: NARRATION_RANGE_MAX_BYTES + 1 }, { offset: -1 }, { length: 0 },
-    { fileId: 'foreign' }, { ownerUserId: 'foreign' }, { text: 'Injected' }, { model: 'grok' }, { url: 'https://invalid' }]) {
+    { fileId: 'foreign' }, { ownerUserId: 'foreign' }, { text: 'Injected' }, { model: 'grok-4.7' }, { url: 'https://invalid' }]) {
     const f = await fixture();
     await assert.rejects(readJourFixeNarration({ ...f.request, ...change }, f.deps), { code: 'NARRATION_INVALID_REQUEST' });
     assert.deepEqual(f.counts(), { fetches: 0, metadataReads: 0, meetingReads: 0 });
