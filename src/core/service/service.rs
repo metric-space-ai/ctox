@@ -24372,6 +24372,19 @@ fn apply_review_feedback_to_queue(
     Ok(updated)
 }
 
+/// The provider refused the call for capacity (MiniMax token-plan window,
+/// HTTP 429 rate limit), not because of anything in the task.
+fn runtime_error_is_provider_capacity(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("token plan usage limit")
+        || lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("http 429")
+        || lower.contains("status 429")
+        || lower.contains("status code 429")
+}
+
 fn runtime_retry_not_before_iso(error_text: &str) -> String {
     let cooldown_secs = turn_loop::hard_runtime_blocker_retry_cooldown_secs(error_text)
         .unwrap_or(300)
@@ -24388,6 +24401,8 @@ fn release_retryable_worker_messages(
 ) -> Result<usize> {
     let policy_id = if reason.contains("timeout") {
         "worker-turn-timeout"
+    } else if runtime_error_is_provider_capacity(summary) {
+        channels::PROVIDER_CAPACITY_HOLD_POLICY
     } else {
         "worker-runtime-api-failure"
     };
@@ -41077,6 +41092,16 @@ Use shell tools to create or update these files."
         assert!(runtime_error_is_transient_api_failure("database is locked"));
         assert!(runtime_error_is_transient_api_failure(
             "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)"
+        ));
+        assert!(runtime_error_is_provider_capacity(
+            "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)"
+        ));
+        assert!(runtime_error_is_provider_capacity(
+            "HTTP 429 Too Many Requests"
+        ));
+        assert!(!runtime_error_is_provider_capacity("database is locked"));
+        assert!(!runtime_error_is_provider_capacity(
+            "stream disconnected before completion"
         ));
         let mut shared = SharedState::default();
         shared.last_error = Some(

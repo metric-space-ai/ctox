@@ -2896,6 +2896,12 @@ pub fn ack_leased_messages_with_failure_reason(
 /// pending→leased→pending loop. External waits become dormant `blocked` rows;
 /// technical/evidence/artifact holds consume the existing five-attempt review
 /// budget with exponential backoff and terminalize when exhausted.
+/// Hold policy for a worker turn that failed because the model provider is
+/// out of capacity (token-plan window, rate limit). It does not consume the
+/// technical failure budget; the task waits and is offered again.
+pub const PROVIDER_CAPACITY_HOLD_POLICY: &str = "worker-provider-capacity";
+const PROVIDER_CAPACITY_RETRY_SECS: i64 = 600;
+
 pub fn hold_leased_messages(
     root: &Path,
     message_keys: &[String],
@@ -3009,8 +3015,22 @@ fn hold_leased_messages_impl(
                     )
                     .optional()?
                     .unwrap_or(0);
-                let attempts = previous_attempts.saturating_add(1);
-                let exhausted = attempts >= 5;
+                // A provider that is out of capacity (token-plan window used
+                // up, rate limit) says nothing about the task. Counted as a
+                // technical failure it ended 49 research tasks on thesen
+                // (08.10.2026) once the 5h window stayed empty longer than
+                // the 75 minutes the five-step backoff spans. Such a hold
+                // waits for capacity and keeps the failure budget intact.
+                let capacity_wait = matches!(
+                    reason,
+                    HoldReason::Technical { policy_id } if policy_id == PROVIDER_CAPACITY_HOLD_POLICY
+                );
+                let attempts = if capacity_wait {
+                    previous_attempts
+                } else {
+                    previous_attempts.saturating_add(1)
+                };
+                let exhausted = !capacity_wait && attempts >= 5;
                 let failure_class = match reason {
                     HoldReason::Technical { .. } => "technical",
                     HoldReason::MissingReviewEvidence => "missing_review_evidence",
@@ -3032,9 +3052,13 @@ fn hold_leased_messages_impl(
                     let exponent = u32::try_from(attempts.saturating_sub(1))
                         .unwrap_or(16)
                         .min(16);
-                    let seconds = 300_i64
-                        .saturating_mul(2_i64.saturating_pow(exponent))
-                        .min(3_600);
+                    let seconds = if capacity_wait {
+                        PROVIDER_CAPACITY_RETRY_SECS
+                    } else {
+                        300_i64
+                            .saturating_mul(2_i64.saturating_pow(exponent))
+                            .min(3_600)
+                    };
                     (Utc::now() + Duration::seconds(seconds)).to_rfc3339()
                 });
                 let command_transitioned = transition_business_command_for_task_in_transaction(

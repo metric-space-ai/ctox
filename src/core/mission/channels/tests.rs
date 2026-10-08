@@ -8269,3 +8269,91 @@ fn queue_task_update_keeps_its_place_unless_priority_changes() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn provider_capacity_hold_waits_without_spending_the_failure_budget() {
+    let root = business_command_test_root("ctox-provider-capacity-hold");
+    let claimed = claim_business_command_with_queue(
+        &root,
+        business_command_claim("command-capacity-hold", "sha256:capacity-hold"),
+        QueueTaskCreateRequest {
+            title: "Research one lead".to_string(),
+            prompt: "Research the lead.".to_string(),
+            thread_key: "business-os/tests/capacity-hold".to_string(),
+            workspace_root: Some(root.display().to_string()),
+            priority: "normal".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"idempotency_key": "command-capacity-hold"})),
+        },
+    )
+    .expect("claim command");
+    let task_id = claimed.task.message_key;
+    let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
+    let hold_once = |policy_id: &str, error: &str| {
+        conn.execute(
+            "UPDATE communication_routing_state SET retry_not_before=NULL WHERE message_key=?1",
+            params![task_id],
+        )
+        .expect("clear retry gate");
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+        for status in ["leased", "running"] {
+            transition_business_command_for_task(&root, &task_id, status, None, None, None, status)
+                .expect("advance command");
+        }
+        hold_leased_messages(
+            &root,
+            std::slice::from_ref(&task_id),
+            &HoldReason::Technical {
+                policy_id: policy_id.to_string(),
+            },
+            error,
+        )
+        .expect("hold leased task");
+    };
+    let quota = "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)";
+    // Longer than the five-step technical budget: a provider window that
+    // stays empty for hours must not end the task.
+    for _ in 0..7 {
+        hold_once(PROVIDER_CAPACITY_HOLD_POLICY, quota);
+    }
+    let task = load_queue_task(&root, &task_id)
+        .expect("load held queue task")
+        .expect("queue task exists");
+    assert_eq!(task.route_status, "pending");
+    let (attempts, retry_not_before, hold_reason): (i64, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT failure_attempt_count, retry_not_before, hold_reason FROM communication_routing_state WHERE message_key=?1",
+            params![task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load durable hold metadata");
+    assert_eq!(attempts, 0);
+    assert_eq!(
+        hold_reason.as_deref(),
+        Some("technical:worker-provider-capacity")
+    );
+    let wait = chrono::DateTime::parse_from_rfc3339(retry_not_before.as_deref().unwrap())
+        .expect("retry timestamp")
+        .signed_duration_since(Utc::now())
+        .num_seconds();
+    assert!((500..=600).contains(&wait), "capacity wait was {wait}s");
+    let projection = business_command_projection(&root, "command-capacity-hold")
+        .expect("load held command projection");
+    assert_eq!(projection["terminal_status"], "none");
+
+    // A real technical failure still spends the budget it always did.
+    hold_once(
+        "worker-runtime-api-failure",
+        "stream disconnected before completion",
+    );
+    let attempts: i64 = conn
+        .query_row(
+            "SELECT failure_attempt_count FROM communication_routing_state WHERE message_key=?1",
+            params![task_id],
+            |row| row.get(0),
+        )
+        .expect("load attempts");
+    assert_eq!(attempts, 1);
+    let _ = fs::remove_dir_all(root);
+}
