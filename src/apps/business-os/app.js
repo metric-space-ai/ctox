@@ -14237,11 +14237,22 @@ async function workjetProjectControl(request = {}) {
     }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
     assertCurrentIdentity();
     const nativeProject = receipt?.result?.project;
+    // An authenticated alias can mutate its verified canonical Owner's project.
+    // The native writer binds this scope; caller payloads cannot select it.
+    let projectOwnerUserId = ownerUserId;
+    if (Object.hasOwn(receipt?.result || {}, 'owner_user_id')) {
+      const confirmedOwner = receipt.result.owner_user_id;
+      if (typeof confirmedOwner !== 'string' || !confirmedOwner || confirmedOwner.length > 256
+        || confirmedOwner.trim() !== confirmedOwner || /[\u0000-\u001f\u007f]/.test(confirmedOwner)) {
+        throw new Error('Workjet project configuration returned an uncorrelated owner identity.');
+      }
+      projectOwnerUserId = confirmedOwner;
+    }
     if (receipt?.command_id !== commandId || receipt.status !== 'completed' || receipt.ok !== true
       || receipt.target_record_id !== projectId || receipt.result?.ok !== true
       || receipt.result?.collection !== 'workjet_projects'
       || nativeProject?.id !== projectId || nativeProject?.name !== title
-      || nativeProject?.owner_user_id !== ownerUserId) {
+      || nativeProject?.owner_user_id !== projectOwnerUserId) {
       throw new Error('Workjet project configuration returned an uncorrelated or unsuccessful receipt.');
     }
     const project = boundedWorkjetProjectResult(nativeProject, { includeConfiguration: true });

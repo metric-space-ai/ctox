@@ -220,10 +220,10 @@ test('Workjet project create/list is idempotent across optional copies and compu
   );
 });
 
-function projectConfigurationFixture(changeReceipt = () => {}) {
+function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1') {
   const commands = [];
   const state = {
-    session: { id: 'owner-1' },
+    session: { id: actor },
     db: { collection: () => ({}) },
     sync: { async startCollection() { return {}; } },
     commandBus: {
@@ -241,7 +241,7 @@ function projectConfigurationFixture(changeReceipt = () => {}) {
         const receipt = {
           command_id: command.id, target_record_id: command.payload.project_id,
           status: 'completed', ok: true,
-          result: { ok: true, collection: 'workjet_projects', project },
+          result: { ok: true, collection: 'workjet_projects', owner_user_id: 'owner-1', project },
         };
         changeReceipt(receipt, state);
         return receipt;
@@ -526,6 +526,23 @@ test('configuration preserves omission versus explicit null at the command bound
   }
 });
 
+test('configuration accepts a native verified owner alias without changing its actor', async () => {
+  const alias = 'owner@example.org';
+  const fixture = projectConfigurationFixture(() => {}, alias);
+  const result = await fixture.invoke(projectConfigurationRequest({ info: { summary: 'Saved via alias' } }));
+  assert.equal(result.project.id, 'project-1');
+  assert.equal(result.project.info.summary, 'Saved via alias');
+  assert.equal(fixture.commands[0].client_context.actor.id, alias);
+  assert.equal(Object.hasOwn(fixture.commands[0].payload, 'owner_user_id'), false);
+});
+
+test('configuration retains same-actor compatibility but does not infer aliases from old receipts', async () => {
+  const legacy = (receipt) => { delete receipt.result.owner_user_id; };
+  assert.equal((await projectConfigurationFixture(legacy).invoke(projectConfigurationRequest())).project.id, 'project-1');
+  await assert.rejects(projectConfigurationFixture(legacy, 'owner@example.org')
+    .invoke(projectConfigurationRequest()), /uncorrelated/);
+});
+
 test('project info summary follows the same configuration corpus as native upsert', async () => {
   const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-project-configuration-v1.json', import.meta.url), 'utf8'));
   for (const info of corpus.valid) {
@@ -559,6 +576,11 @@ test('project configuration rejects wrong receipts, foreign projects and session
     (receipt) => { receipt.command_id = 'other-command'; },
     (receipt) => { receipt.target_record_id = 'other-project'; },
     (receipt) => { receipt.result.collection = 'other-collection'; },
+    (receipt) => { receipt.result.owner_user_id = 'foreign'; },
+    (receipt) => { receipt.result.owner_user_id = null; },
+    (receipt) => { receipt.result.owner_user_id = ' owner-1'; },
+    (receipt) => { receipt.result.owner_user_id = 'owner-1\n'; },
+    (receipt) => { receipt.result.owner_user_id = 'x'.repeat(257); },
     (receipt) => { receipt.result.project.owner_user_id = 'foreign'; },
     (receipt) => { receipt.result.project.id = 'other-project'; },
     (receipt) => { receipt.result.project.name = 'other-title'; },
