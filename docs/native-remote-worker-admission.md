@@ -108,3 +108,96 @@ policy transaction. The response proves authority at that point; it does not
 hold a remote process across an await or fence arbitrary target tools. The
 Receiver/gateway own boundary revalidation and cancellation/expiry enforcement.
 No remote process or installed acceptance is claimed by this source delta.
+
+## Explicit target registration and resolution
+
+For a newly paired computer without a native assignment, call:
+
+```json
+{
+  "action": "enroll_target",
+  "target": {
+    "sourceEnvironmentId": "source-workjet-environment",
+    "targetEnvironmentId": "authenticated-execution-environment",
+    "targetConnectionId": "selected-business-os-connection",
+    "targetInstanceId": "selected-business-os-instance"
+  },
+  "computer": {
+    "displayName": "Build computer",
+    "hostingMode": "self_hosted",
+    "buildCapability": {
+      "ssh_endpoint_ref": "existing-native-endpoint-reference",
+      "slots": 1,
+      "jobs": 2,
+      "lane_root": "/build-lane",
+      "disk_floor_gib": 60,
+      "toolchains": ["rust"]
+    }
+  }
+}
+```
+
+The native service generates the opaque computer UUID and atomically persists
+the real owned computer/build configuration and target association under
+current Owner/Admin and integration policy. It then projects only committed
+computer state under a fresh owner/epoch/policy/registration check. The receipt
+contains the issued `target.targetComputerId`. Exact enrollment retries return
+the same ID; changed intent, retired settings or a revoked enrollment require
+explicit reconciliation and cannot silently create another assignment.
+
+Build settings are explicit operational configuration from the source profile;
+SSH reachability does not invent them. The endpoint reference must refer to
+the separately authorized native endpoint registry for actual build execution.
+Enrollment does not transfer SSH keys, model credentials or an Owner token.
+An already assigned computer uses `register_target`; an already enrolled one
+uses `resolve_target`. No operator- or renderer-generated computer ID is needed
+for a new enrollment.
+
+
+The same tool also provides source-owner pairing actions:
+
+- `register_target`: `{action:"register_target",target,expected_revision?:1}`.
+- `resolve_target`: `{action:"resolve_target",target_environment_id:"target-env"}`.
+- `revoke_target`: `{action:"revoke_target",target_environment_id:"target-env",expected_revision:1}`.
+
+`target` contains exactly `sourceEnvironmentId`, `targetEnvironmentId`,
+`targetConnectionId`, `targetInstanceId`, `targetComputerId`. The source
+Broker obtains source/target environment IDs from its authenticated current
+EnvironmentRegistry pairing. Connection/instance IDs name the selected
+Business OS/DecisionHub authority and exact gateway-grant target, not an SSH
+profile or a requirement for CTOX on the execution computer. Source and target
+Business OS authority may both be WELSCH while execution environments differ.
+The computer ID is the actual opaque native computer assignment result.
+The native registry never derives a computer ID from `connection-<environment>`,
+a hostname, a label or a browser capability chip. Pairing/assignment must write
+this explicit association before dispatch can resolve it. If the product has
+not registered it, dispatch fails closed.
+
+Registration and resolution require the current native source Owner/Admin and
+`IntegrationsManage` policy, an assigned computer owned by that actor, and its
+valid typed build configuration. The record is scoped to the authenticated
+source owner and source CTOX workspace. Resolution returns contract
+`ctox.workjet.remote-worker-target.v1`, opaque `bindingId`, positive `revision`,
+`ownerUserId`, `sourceInstanceId`, exact `target`, `state`, `capabilityEpoch`
+and `buildCapability`. Operational configuration is not a runtime readiness
+or free-slot observation.
+
+Exact registration retries are idempotent. Replacing an association or
+reactivating a revoked one requires its exact current `expected_revision`
+and advances the revision. Revocation also advances it; its lost-ACK replay
+is idempotent and remains available after computer retirement. A delayed
+replacement cannot overwrite a newer association.
+
+Every permit issue/claim/revalidate/renew now requires this exact active
+registration in the same policy transaction, and includes its binding ID and
+revision in the authority fingerprint. Revoke/re-register therefore cannot
+revive an old permit, even when all visible target IDs are the same. Permits
+created by the earlier implementation without explicit enrollment fail closed;
+exact-owner permit cancellation still works.
+
+This native record is durable owner approval of an explicit pairing, not a
+cryptographic proof of Workjet registry liveness. Workjet must check its actual
+authenticated current connection/instance/computer at registration and each
+dispatch/use/reconnect boundary, and revoke the native association on unpair.
+The gateway's exact current account/model grant and the build adapter's
+runtime resource admission remain additional requirements.
