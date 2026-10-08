@@ -315,6 +315,37 @@ const scopedAuthEnv = {
   MCP_REQUIRE_CLIENT_IDENTITY: "true"
 };
 
+test("managed project upsert checks writes, reads, implicit module and collection before routing", async () => {
+  const tool = "business_os.upsert_project";
+  const base = { allowReads: true, allowWrites: true,
+    allowedTools: [tool], allowedModules: ["ctox"], allowedCollections: ["workjet_projects"] };
+  for (const [override, field] of [
+    [{ allowWrites: false }, "allowWrites"],
+    [{ allowReads: false }, "allowReads"],
+    [{ allowedTools: ["business_os.status"] }, "allowedTools"],
+    [{ deniedTools: [tool] }, "deniedTools"],
+    [{ allowedModules: ["foreign"] }, "allowedModules"],
+    [{ allowedCollections: ["foreign"] }, "allowedCollections"],
+    [{}, null]
+  ]) {
+    let routed = 0;
+    globalThis.fetch = async () => Response.json(scopedManagedAuth({ ...base, ...override }));
+    const response = await handleRequest(scopedManagedRequest(tool, "spoofed", {
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: tool, arguments: {
+          project_id: "stable-project", name: "Project", idempotency_key: "create",
+          module_id: "spoofed", collection: "spoofed"
+        } } })
+    }), { ...scopedAuthEnv, BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
+      routed += 1;
+      return Response.json({ jsonrpc: "2.0", id: 1, result: { ok: true } });
+    }) });
+    assert.equal(response.status, field ? 403 : 200, field ?? "admitted");
+    if (field) assert.equal((await response.json()).error.data.field, field);
+    assert.equal(routed, field ? 0 : 1);
+  }
+});
+
 test("managed native worker controls require an explicit write-capable tool grant", async () => {
   for (const tool of ["business_os.remote_worker_admission", "business_os.workjet_worker_dispatch", "business_os.luma_configuration_update"]) {
     for (const [policy, expectedField] of [

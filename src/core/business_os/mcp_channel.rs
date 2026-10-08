@@ -61,6 +61,8 @@ mod workjet_kpis;
 mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
 mod workjet_narration;
+#[path = "mcp_workjet_projects.rs"]
+mod workjet_projects;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
 
@@ -1476,6 +1478,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         project_crew_request::descriptor(),
         project_crew_request::native_project_descriptor(),
         project_crew_request::native_project_cancel_descriptor(),
+        workjet_projects::descriptor(),
         remote_worker::descriptor(),
         workjet_worker_dispatch::descriptor(),
         workjet_jour_fixe::read_descriptor(),
@@ -3273,6 +3276,7 @@ fn call_tool_inner(
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
         }
+        workjet_projects::TOOL => workjet_projects::execute(root, &context, &arguments)?,
         "business_os.cancel_project_task" => {
             project_crew_request::cancel_native_project(root, &context, &arguments)?
         }
@@ -6387,6 +6391,13 @@ fn business_os_mcp_policy_decision(
     arguments: &Value,
 ) -> anyhow::Result<Option<PolicyDecision>> {
     match tool_name {
+        workjet_projects::TOOL => Ok(Some(trusted_mcp_actor_policy_decision(
+            root,
+            context,
+            BusinessOsPermission::DataWrite,
+            BusinessOsScopeType::Record,
+            Some(&required_arg(arguments, "project_id")?),
+        )?)),
         "business_os.start_project_task" => Ok(Some(trusted_mcp_actor_policy_decision(
             root,
             context,
@@ -7293,6 +7304,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         }
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "web_browser_prepare"
+        | workjet_projects::TOOL
         | "business_os.start_project_task"
         | "business_os.remote_worker_admission"
         | "business_os.workjet_worker_dispatch"
@@ -7662,7 +7674,8 @@ fn enforce_internal_command_session_scope(
         .filter_map(|action| string_field(action, "module_id"))
         .collect::<BTreeSet<_>>();
     match tool_name {
-        "business_os.start_project_task"
+        workjet_projects::TOOL
+        | "business_os.start_project_task"
         | "business_os.cancel_project_task"
         | "business_os.remote_worker_admission"
         | "business_os.start_crew_execution" => {

@@ -40,10 +40,10 @@ Legende: **MCP vorhanden** = registrierter typisierter Wrapper im genannten CTOX
 | Workjet-Funktion | Protokoll | Stand in CTOX |
 |---|---|---|
 | Projekte auflisten | `projects.list`, `project.list`, `ctox.workjet.project.list` | Befehl; MCP fehlt |
-| Projekt anlegen | `project.create`, `ctox.workjet.project.upsert` | Befehl; MCP fehlt |
+| Projekt anlegen | `business_os.upsert_project` → `ctox.workjet.project.upsert` | MCP im Quellstand ergänzt; stabile `project_id` + `idempotency_key`; installierte Abnahme offen |
 | Nativen Auftrag in einem bestehenden eigenen Projekt starten | `business_os.start_project_task` | **MCP vorhanden**; `project_id`, `title`, `instruction`, `idempotency_key` |
 | Eigenen nativen Projektauftrag abbrechen | `business_os.cancel_project_task` | **MCP vorhanden**; `target_command_id`, `idempotency_key`, optional `reason` |
-| Projekt konfigurieren, Metadaten | `project.configure`, `project.meta.update` | Befehl (`project.upsert`); MCP fehlt |
+| Projekt konfigurieren, Metadaten | `business_os.upsert_project` | Name, Repo, Beschreibung und Info im Quellstand; Website, Termine und andere Felder bleiben erhalten |
 | Projekt löschen | `project.delete` | fehlt (Löschung braucht Bestätigung) |
 | Projektordner hinzufügen, entfernen | `projects.add`, `projects.remove` | fehlt |
 | Dateien lesen, schreiben, suchen | `projects.readFile`, `writeFile`, `listEntries`, `searchEntries`, `searchContents` | fehlt; für Agenten wichtig |
@@ -53,6 +53,8 @@ Legende: **MCP vorhanden** = registrierter typisierter Wrapper im genannten CTOX
 `start_project_task` benötigt keine erfundene Business-OS-App, Crew-Mitgliedschaft, externen Harness oder Ausführungsrechner. Native Projektbesitz- und Policy-Prüfungen bleiben verpflichtend. Dieselbe Actor-/Projekt-/Idempotenz-Identität verwendet denselben Command-/Task-Auftrag; ein geänderter Auftrag mit demselben Schlüssel wird verweigert. CTOX liefert `command_id`, `task_id` und Status. Wiederholung nach einer verlorenen Antwort verwendet den ursprünglichen Schlüssel. Der Abbruch prüft den Zielbesitz; er macht bereits eingetretene Nebenwirkungen nicht rückgängig. Diese Quellverträge sind noch kein hier ausgeführter Recovery-Nachweis.
 
 ### 3. Projekt-Supervisor und Projekt-Chat
+
+Der begrenzte Vertrag für `upsert_project` steht in [workjet-project-mcp-registration.md](workjet-project-mcp-registration.md). `info.goal` speichert Ziele; dies ersetzt keine belegte Nachricht an den tatsächlichen Projekt-Supervisor.
 
 | Workjet-Funktion | Protokoll | Stand in CTOX |
 |---|---|---|
