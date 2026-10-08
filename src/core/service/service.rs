@@ -33322,13 +33322,27 @@ Business OS command:
         let mut options = chat_turn_session_options_for_queue_job(&job);
         assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options).is_err());
         assert!(options.business_os_mcp_command_session.is_none());
-        options.queue_turn_lease = Some(channels::QueueTurnLeaseFence {
+        let mut fence = channels::QueueTurnLeaseFence {
             root: root.to_owned(),
             message_keys: job.leased_message_keys.clone(),
             worker_id: "fixture-plan-worker".into(),
             #[cfg(unix)]
             execution: None,
-        });
+        };
+        #[cfg(unix)]
+        {
+            let lifetime = Arc::new(channels::QueueWorkerLifetime::for_native_worker(
+                root,
+                &fence.message_keys,
+                Some(&fence.worker_id),
+            ));
+            fence.execution = Some(channels::QueueExecutionFence::capture(
+                &fence,
+                "fixture-confirmed-plan-attempt",
+                lifetime,
+            )?);
+        }
+        options.queue_turn_lease = Some(fence);
         assert!(configure_business_os_mcp_session_for_queue_job(
             root,
             &job,

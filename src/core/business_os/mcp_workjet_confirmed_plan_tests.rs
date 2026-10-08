@@ -44,10 +44,21 @@ pub(super) fn fixture() -> anyhow::Result<(tempfile::TempDir, String)> {
         .context("actual goal missing")?;
     let emitted = crate::mission::plan::emit_next_step_for_goal(root.path(), goal)?
         .context("actual step missing")?;
-    let core = Connection::open(crate::paths::core_db(root.path()))?;
-    assert_eq!(core.execute("UPDATE communication_routing_state SET route_status='leased',lease_owner='fixture-service',
-        lease_worker_id='fixture-plan-worker',leased_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-        lease_expires_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','+30 minutes') WHERE message_key=?1",[&emitted.message_key])?,1);
+    let leased = crate::mission::channels::lease_pending_inbound_messages(
+        root.path(),
+        16,
+        "ctox-service",
+    )?;
+    anyhow::ensure!(
+        leased.iter().any(|message| message.message_key == emitted.message_key),
+        "actual native router did not lease the confirmed plan"
+    );
+    crate::mission::channels::record_queue_lease_worker(
+        root.path(),
+        &[emitted.message_key.clone()],
+        "ctox-service",
+        "fixture-plan-worker",
+    )?;
     Ok((root, emitted.message_key))
 }
 fn token(root: &Path, task: &str) -> anyhow::Result<String> {
