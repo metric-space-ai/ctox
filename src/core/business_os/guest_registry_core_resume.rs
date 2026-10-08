@@ -15,7 +15,11 @@ pub(in crate::business_os) trait NativeGuestCoreOwner: Send + Sync {
     fn read_state(
         &self,
         imported: &GuestImportReceipt,
-    ) -> Result<(ctox_core::NativeSessionState, PathBuf)>;
+    ) -> Result<(
+        ctox_core::NativeSessionState,
+        PathBuf,
+        ctox_sync::contracts::ArtifactRef,
+    )>;
 }
 
 /// One consumed native constructor attempt; never deserialized from a request.
@@ -26,6 +30,8 @@ pub(crate) struct NativeGuestCoreResume {
     owner: Arc<dyn NativeGuestCoreOwner>,
     state: ctox_core::NativeSessionState,
     journal: PathBuf,
+    working_journal: PathBuf,
+    working_identity: FileIdentity,
     workspace: PathBuf,
 }
 
@@ -49,7 +55,12 @@ impl NativeGuestCoreResume {
             if let Some(job) = job {
                 validate_original_job(entry, &self.protected, job)?;
             }
-            let (state, journal) = self.owner.read_state(imported)?;
+            let (state, journal, _) = self.owner.read_state(imported)?;
+            ensure!(
+                entry.core_journal.as_ref() == Some(&self.working_journal)
+                    && identity(&self.working_journal)? == self.working_identity,
+                "target Core working journal changed"
+            );
             ensure!(
                 state.as_bytes() == self.state.as_bytes() && journal == self.journal,
                 "protected original Core input changed"
@@ -89,7 +100,7 @@ impl NativeGuestCoreResume {
         let loaded = manager
             .resume_thread_from_native_checkpoint(
                 config,
-                self.journal.clone(),
+                self.working_journal.clone(),
                 auth.clone(),
                 self.state,
             )
@@ -118,7 +129,7 @@ impl NativeGuestCoreResume {
                     "target did not load the original Core Session"
                 );
                 validate_original_job(entry, &self.protected, &before)?;
-                let (state, journal) = self.owner.read_state(
+                let (state, journal, _) = self.owner.read_state(
                     entry
                         .imported
                         .as_ref()
@@ -127,6 +138,11 @@ impl NativeGuestCoreResume {
                 ensure!(
                     Sha256::digest(state.as_bytes()) == state_digest && journal == self.journal,
                     "protected original Core input changed during startup"
+                );
+                ensure!(
+                    entry.core_journal.as_ref() == Some(&self.working_journal)
+                        && identity(&self.working_journal)? == self.working_identity,
+                    "target Core working journal changed during startup"
                 );
                 verify()
             })
@@ -141,6 +157,88 @@ impl NativeGuestCoreResume {
             return Err(error);
         }
         Ok(loaded)
+    }
+}
+
+fn stage_core_journal(
+    source: &Path,
+    artifact: &ctox_sync::contracts::ArtifactRef,
+    parent: &Path,
+) -> Result<PathBuf> {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    private_directory(parent)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(source)?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o077 == 0
+            && metadata.nlink() == 1
+            && metadata.len() == artifact.size_bytes
+            && artifact.size_bytes <= 64 * 1024 * 1024
+            && std::fs::canonicalize(source)? == source,
+        "original journal is not a private bounded file"
+    );
+    let mut bytes = Vec::new();
+    file.take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 == artifact.size_bytes
+            && format!("{:x}", Sha256::digest(&bytes)) == artifact.sha256,
+        "original journal changed before target Core staging"
+    );
+    let directory = tempfile::Builder::new()
+        .prefix("core-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(parent)?;
+    let path = directory.path().join("journal.jsonl");
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    output.write_all(&bytes)?;
+    output.sync_all()?;
+    std::fs::File::open(directory.path())?.sync_all()?;
+    // Retain before Core startup can append. Failed or cancelled construction
+    // leaves owned evidence for reconciliation instead of deleting a live writer.
+    directory.keep();
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn target_core_appends_only_to_its_own_verified_journal() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let original = parent.path().join("protected-history");
+        let bytes = b"original protected journal\\n";
+        std::fs::write(&original, bytes).unwrap();
+        std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let artifact = ctox_sync::contracts::ArtifactRef {
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            size_bytes: bytes.len() as u64,
+        };
+        let working = stage_core_journal(&original, &artifact, parent.path()).unwrap();
+        assert_ne!(original, working);
+        assert_eq!(std::fs::read(&working).unwrap(), bytes);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&working)
+            .unwrap()
+            .write_all(b"target Core event\\n")
+            .unwrap();
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        assert_ne!(std::fs::read(&working).unwrap(), bytes);
+        std::fs::write(&original, b"changed").unwrap();
+        assert!(stage_core_journal(&original, &artifact, parent.path()).is_err());
     }
 }
 
@@ -273,7 +371,7 @@ impl NativeGuestRegistry {
                     .context("original Core receiver owner absent")?,
             )
         };
-        let (state, journal) = ProtectedImport {
+        let (state, journal, working_journal, working_identity) = ProtectedImport {
             registry: self.clone(),
             guest_id: guest.into(),
             protected: protected.clone(),
@@ -293,7 +391,17 @@ impl NativeGuestRegistry {
             // cancellation and ambiguous startup require native reconciliation.
             entry.core_start_attempted = true;
             verify()?;
-            owner.read_state(entry.imported.as_ref().context("original import absent")?)
+            let (state, journal, artifact) =
+                owner.read_state(entry.imported.as_ref().context("original import absent")?)?;
+            let working_journal = stage_core_journal(
+                &journal,
+                &artifact,
+                &entry.assignment.destination.import_parent,
+            )?;
+            let working_identity = identity(&working_journal)?;
+            entry.core_journal = Some(working_journal.clone());
+            verify()?;
+            Ok((state, journal, working_journal, working_identity))
         })?;
         Ok(Some(NativeGuestCoreResume {
             registry: self.clone(),
@@ -302,6 +410,8 @@ impl NativeGuestRegistry {
             owner,
             state,
             journal,
+            working_journal,
+            working_identity,
             workspace: workspace.to_path_buf(),
         }))
     }

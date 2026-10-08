@@ -23,7 +23,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> NativeGuestCoreOwner for Rece
     fn read_state(
         &self,
         imported: &GuestImportReceipt,
-    ) -> anyhow::Result<(ctox_core::NativeSessionState, PathBuf)> {
+    ) -> anyhow::Result<(ctox_core::NativeSessionState, PathBuf, ArtifactRef)> {
         let t = &self.target;
         let _retained_lifetime = &self.lifetime;
         anyhow::ensure!(
@@ -75,7 +75,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> NativeGuestCoreOwner for Rece
             .join("history")
             .join(&manifest.history[0].sha256);
         verify_journal_file(&journal, &manifest.history[0])?;
-        Ok((state, journal))
+        Ok((state, journal, manifest.history[0].clone()))
     }
 }
 
