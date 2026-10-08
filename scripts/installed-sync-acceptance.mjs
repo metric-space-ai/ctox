@@ -23,6 +23,8 @@ export function validateConfig(config, configPath) {
   invariant(process.platform === 'linux', 'Acceptance faults require the isolated Linux host');
   invariant(config.owner === OWNER && config.isolated === true, 'Explicit isolated owner binding required');
   invariant(config.source === EXPECTED_SOURCE, 'Use the one approved shared acceptance source');
+  invariant(typeof config.actorId === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.actorId),
+    'Fresh preparation must provide a canonical synthetic actor UUID');
   const base = realpathSync(config.acceptanceBase);
   invariant(base.startsWith('/mnt/nvme1/') || base.startsWith('/home/metricspace/'), 'Approved host staging only');
   const root = realpathSync(config.root);
@@ -119,7 +121,7 @@ class OwnedNative {
     // Native fs::write preserves an existing mode, but does not itself create0600.
     writeFileSync(file, '', { mode: 0o600, flag: 'wx' });
     await this.cli(['business-os', 'desktop', 'invite', '--display-name', 'DevOps isolated acceptance',
-      '--user', 'devops-isolated-sync-owner', '--user-display-name', 'Isolated acceptance owner',
+      '--user', this.config.actorId, '--user-display-name', 'Isolated acceptance owner',
       '--role', 'chef', '--ttl-hours', '1', '--format', 'json', '--output', file, '--root', this.config.root], true);
     invariant((statSync(file).mode & 0o077) === 0, 'Native invitation is not private');
     const value = JSON.parse(readFileSync(file));
@@ -300,16 +302,27 @@ const docs = (page, ids) => page.evaluate(async ids => {
 const same = (actual, expected) => expected.every(d => Object.entries(d).every(([k, v]) => actual[d.id]?.[k] === v));
 async function converge(native, page, expected, timeout = 60000) {
   const started = performance.now();
+  let server = {}, client = {};
   while (performance.now() - started < timeout) {
-    if (same(await native.read(expected.map(x => x.id)), expected) && same(await docs(page, expected.map(x => x.id)), expected))
+    invariant(!stopping, 'Acceptance interrupted; no further convergence or fault attempts');
+    server = await native.read(expected.map(x => x.id));
+    client = await docs(page, expected.map(x => x.id));
+    if (same(server, expected) && same(client, expected))
       return performance.now() - started;
     await sleep(100);
   }
-  invariant(false, 'Native and second browser failed exact-value convergence');
+  const error = new Error('Native and second browser failed exact-value convergence');
+  error.name = 'InstalledCriterionError';
+  error.convergence = { expectedDocuments: expected.length, elapsedMs: performance.now() - started,
+    nativeFound: Object.keys(server).length, secondBrowserFound: Object.keys(client).length,
+    nativeExact: expected.filter(value => same(server, [value])).length,
+    secondBrowserExact: expected.filter(value => same(client, [value])).length };
+  throw error;
 }
 async function waitNative(native, expected) {
   const started = performance.now();
   while (performance.now() - started < 60000) {
+    invariant(!stopping, 'Acceptance interrupted; no further native wait or fault attempts');
     if (same(await native.read(expected.map(x => x.id)), expected)) return;
     await sleep(100);
   }
@@ -347,6 +360,32 @@ async function metrics(page) {
   });
 }
 
+// Only counters, flags and named short status/code fields leave browser memory.
+// Invitations, errors with URLs, arbitrary strings and document values are excluded.
+export function diagnosticScalars(value, depth = 0, field = '') {
+  if (/token|secret|credential|password|authorization|bearer|url|endpoint|document|conflict/i.test(field)) return undefined;
+  if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return value;
+  if (typeof value === 'string') return /^(phase|status|state|code|errorCode|connectionState|signalingState)$/.test(field)
+    && /^[A-Za-z_][A-Za-z0-9_ .:-]{0,79}$/.test(value) ? value : undefined;
+  if (!value || typeof value !== 'object' || depth >= 4) return undefined;
+  if (Array.isArray(value)) return value.slice(-12).map(item => diagnosticScalars(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).slice(0, 64)
+    .map(([key, item]) => [key, diagnosticScalars(item, depth + 1, key)]).filter(([, item]) => item !== undefined));
+}
+async function failureMetrics(page) {
+  if (!page || page.isClosed()) return { available: false };
+  let timer;
+  try {
+    const raw = await Promise.race([metrics(page), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Failure snapshot deadline')), 4000);
+    })]);
+    return { available: true, diagnostics: diagnosticScalars(raw.diagnostics.slice(-12)),
+      unsynced: diagnosticScalars(raw.unsynced), conflictCount: raw.conflicts.length,
+      wirePulls: diagnosticScalars(raw.wirePulls.slice(-12)) };
+  } catch { return { available: false }; }
+  finally { clearTimeout(timer); }
+}
+
 /** The admitted host launcher passes its OWN browser; two contexts keep separate IndexedDB caches. */
 export async function runAcceptance(browser, configPath) {
   const config = validateConfig(JSON.parse(readFileSync(configPath)), configPath);
@@ -374,6 +413,7 @@ export async function runAcceptance(browser, configPath) {
           sameFieldConflictBothValues: true, staleRevisionTypedUnapplied: true },
       };
       const receipt = { goal, revisions, hosts: [config.host], steps: [], measured: {}, criterion: criteria[goal], pass: false,
+        startedAt: new Date().toISOString(),
         artifacts: [], clientType: 'Installed canonical DB+sync modules in real Chromium; not a Shell UI acceptance',
         transport: 'webrtc', customerWrites: false };
       receipts.push(receipt);
@@ -504,12 +544,17 @@ export async function runAcceptance(browser, configPath) {
         }
         receipt.steps.push('Installed runtime opened, real native peer and two separate Chromium contexts used');
       } catch (error) {
+        receipt.interrupted = stopping;
+        receipt.failedAt = new Date().toISOString();
+        if (error.convergence) receipt.measured.convergence = error.convergence;
+        receipt.measured.failureClients = { A: await failureMetrics(A), B: await failureMetrics(B) };
         receipt.failure = { name: error.name,
           errorSha256: createHash('sha256').update(String(error.message)).digest('hex'),
           message: error.name === 'InstalledCriterionError' ? error.message
             : 'Bounded installed acceptance failed; no credentials or raw native errors exported' };
         receipt.steps.push('First failing assertion retained; no repeated fault loop or inferred pass');
       } finally {
+        receipt.finishedAt = new Date().toISOString();
         for (const page of [A, B]) { try { if (page && !page.isClosed()) {
           const file = join(output, `goal-${goal}-${page === A ? 'A' : 'B'}.png`);
           await page.screenshot({ path: file }); receipt.artifacts.push(file);
