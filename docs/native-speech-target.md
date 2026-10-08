@@ -1,4 +1,4 @@
-# Native speech target policy
+# Native speech computer and target policy
 
 The local operator configures a bounded `SpeechTargetConfig` through
 `ctox runtime speech-computer-authorize <grants.json>`. It stores no provider
@@ -13,18 +13,38 @@ client tokens intact. Saving an empty grant list revokes the previous target
 authority. Signature verification uses the current target identity and scope;
 current policy independently compares every binding field and source pin.
 
-Before an Open or synthesis Start can perform an effect, the receiver must
-reserve its intent through the verified target policy. The bounded SQLite
-runtime ledger stores request digests and opaque object IDs, not PCM, raw text,
-voices or credentials. A retry returns its existing object ID; it must resolve
-to the same live host generation and exact native connection. Changed request
-content is rejected. Host restart leaves the old intent tombstoned and cannot
-restart it. Expired claims are reclaimed; live claims are never evicted to
-admit a replay. Reconfiguration/issuer removal invalidates prepared authority.
+The native Sync host registers `ctox.native.speech.v1` on its existing control
+pool. It creates no HTTP endpoint or additional pool, and forwards no provider
+credential. The source adapter uses the same channel and independently verifies
+the target's pinned reply identity. Target private IPC runs only when the
+existing speech runtime selects the local runtime and its auxiliary binding
+matches the exact approved model. No cloud or alternative model fallback runs.
 
-This policy is the foundation for the Models receiver on
-`ctox.native.speech.v1`. The receiver must additionally fence host lifetime and
-the exact native connection, enforce Append/Finish sequence replay protection,
-expire/cancel IPC streams and bound pending synthesis/audio artifacts. No
-handler or inference effect is activated by the policy module alone.
-Installed two-host meeting acceptance is still open.
+Before an Open or synthesis Start performs an effect, the receiver reserves
+its intent through verified target policy. The bounded SQLite runtime ledger
+stores request digests and opaque object IDs, not PCM, raw text, voices or
+credentials. A retry resolves to the same live host generation and exact
+native connection. Changed content is rejected. Host restart tombstones the
+old intent and cannot restart it. Expired claims are reclaimed; live claims
+are never evicted to admit a replay.
+
+Every private IPC read/write poll and native reply publication rechecks current
+grant configuration, issuer, expiry, live host and exact native connection.
+Pending I/O retains no authority locks. Revocation closes the next private
+I/O poll; host drop or object removal aborts owned synthesis tasks and closes
+streams. Already-admitted native GPU compute may finish its current bounded
+operation, but its result cannot be ingested or published after revocation.
+No model daemon or foreign GPU job is stopped.
+
+A computer admits at most two active speech operations. STT accepts ordered
+100 ms PCM16 frames at 16 kHz, at most 15 s per utterance, with matching retry
+digests and a cached Finish response. Finish releases its active permit.
+TTS has a 120 s deadline and an 8 MiB audio bound; actual WAV bytes, PCM format,
+duration and SHA-256 are checked before publication. The source releases the
+target's audio buffer after verified transfer. Streams expire after 90 s;
+synthesis artifacts after 150 s. Disconnected native peers are reaped within
+approximately two seconds. Cached objects are separately bounded to 64.
+
+This is a native transport implementation. Installed two-host meeting
+acceptance, microphone sentence-end latency and first TTS playback latency
+remain required product evidence; unit tests do not establish those results.

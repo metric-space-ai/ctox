@@ -6,6 +6,9 @@
 #[path = "speech_computer.rs"]
 pub mod computer;
 #[cfg(unix)]
+#[path = "speech_target.rs"]
+pub(crate) mod target;
+#[cfg(unix)]
 #[path = "speech_target_policy.rs"]
 pub mod target_policy;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};

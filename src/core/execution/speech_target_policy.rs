@@ -173,6 +173,12 @@ pub(crate) struct TargetPolicy {
     grant: SpeechTargetGrant,
 }
 impl TargetPolicy {
+    pub(crate) fn binding(&self) -> &SpeechComputerBinding {
+        &self.grant.binding
+    }
+    pub(crate) fn source_identity(&self) -> &str {
+        &self.grant.source_signing_identity
+    }
     pub(crate) fn verify(
         root: &Path,
         envelope: Value,

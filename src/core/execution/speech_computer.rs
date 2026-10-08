@@ -498,7 +498,11 @@ fn decode_hex(encoded: &str) -> Result<Vec<u8>, SpeechError> {
         .collect()
 }
 
-fn verify_audio(audio: &[u8], digest: &str, duration_ms: u64) -> Result<(), SpeechError> {
+pub(super) fn verify_audio(
+    audio: &[u8],
+    digest: &str,
+    duration_ms: u64,
+) -> Result<(), SpeechError> {
     if format!("{:x}", Sha256::digest(audio)) != digest {
         return Err(SpeechError::InvalidResponse);
     }
@@ -638,7 +642,7 @@ pub(super) async fn synthesize(
         }
         verify_audio(&audio, &sha, duration_ms)?;
         Ok(VerifiedSpeechOutput {
-            run_id,
+            run_id: run_id.clone(),
             text_sha256: format!("{:x}", Sha256::digest(request.text.as_bytes())),
             audio_sha256: sha,
             output: SpeechOutput {
@@ -653,7 +657,20 @@ pub(super) async fn synthesize(
     .await
     .map_err(|_| SpeechError::TimedOut)?;
     if result.is_ok() {
-        cancel.completed.store(true, Ordering::Release);
+        // Release the receiver's bounded audio buffer once all verified bytes
+        // are local. Cancellation remains best effort on the exact live route.
+        if matches!(
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                client.call(Op::CancelSynthesis {
+                    run_id: run_id.clone()
+                }),
+            )
+            .await,
+            Ok(Ok(Reply::SynthesisCancelled { .. }))
+        ) {
+            cancel.completed.store(true, Ordering::Release);
+        }
     }
     result
 }
