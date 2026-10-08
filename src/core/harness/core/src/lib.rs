@@ -78,6 +78,7 @@ mod mentions;
 mod message_history;
 mod model_provider_info;
 pub mod native_mcp_dispatch;
+pub mod native_mcp_startup;
 mod native_session_state;
 pub use native_session_state::NativeSessionState;
 mod native_core_effects;
