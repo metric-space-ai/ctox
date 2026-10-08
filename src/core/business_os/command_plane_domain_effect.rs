@@ -80,7 +80,10 @@ pub(super) fn recover_applied_domain_effect(
     };
     if command.command_type == super::project_chats::jour_fixe_local_candidate::COMMAND {
         super::project_chats::jour_fixe_local_candidate::validate_recovery_scope(
-            root, &conn, command, actor_user_id,
+            root,
+            &conn,
+            command,
+            actor_user_id,
         )?;
     }
     let canonical = channels::business_command_projection(root, command_id)?;

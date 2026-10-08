@@ -3,62 +3,105 @@
 //! Authenticated Owner submission of an unverified, local transcript candidate.
 //! The desktop verifies its signed helper. Native only attests authorization,
 //! exact meeting/deck scope and durable text storage, never speech execution.
-use super::*;
 use super::super::{store, workjet_jour_fixe_contract as wire};
+use super::*;
 use rusqlite::{params, OptionalExtension};
 use wire::WireValidate;
 
-pub(in crate::business_os) const COMMAND: &str = "ctox.workjet.jour_fixe.transcript.local_candidate";
+pub(in crate::business_os) const COMMAND: &str =
+    "ctox.workjet.jour_fixe.transcript.local_candidate";
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_jour_fixe_local_candidates (
  operation_id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE,
  owner_user_id TEXT NOT NULL, intent_hash TEXT NOT NULL, receipt_json TEXT NOT NULL
 );";
 
-fn parse(command: &BusinessCommand) -> anyhow::Result<(wire::LocalTranscriptCandidateRequest, Value)> {
+fn parse(
+    command: &BusinessCommand,
+) -> anyhow::Result<(wire::LocalTranscriptCandidateRequest, Value)> {
     let mut payload = command.payload.clone();
-    let object = payload.as_object_mut().context("local candidate must be an object")?;
+    let object = payload
+        .as_object_mut()
+        .context("local candidate must be an object")?;
     if let Some(channel) = object.remove("inbound_channel") {
         let text = channel.as_str().context("inbound_channel must be text")?;
-        ensure!(!text.trim().is_empty() && text.len() <= 256, "invalid inbound_channel");
+        ensure!(
+            !text.trim().is_empty() && text.len() <= 256,
+            "invalid inbound_channel"
+        );
     }
     let request: wire::LocalTranscriptCandidateRequest = serde_json::from_value(payload.clone())?;
     request.validate().map_err(anyhow::Error::msg)?;
-    for value in [&request.operation_id, &request.request_id, &request.instance_id,
-        &request.project_id, &request.meeting_id] {
-        ensure!(value.trim() == value && !value.is_empty(), "local candidate identity must be canonical");
+    for value in [
+        &request.operation_id,
+        &request.request_id,
+        &request.instance_id,
+        &request.project_id,
+        &request.meeting_id,
+    ] {
+        ensure!(
+            value.trim() == value && !value.is_empty(),
+            "local candidate identity must be canonical"
+        );
     }
-    ensure!(!request.text.trim().is_empty() && request.text.len() <= 4096,
-        "local candidate exceeds the 4096-byte UTF-8 text budget");
-    ensure!(command.record_id.as_deref() == Some(request.project_id.as_str()),
-        "local candidate routing conflicts with project");
+    ensure!(
+        !request.text.trim().is_empty() && request.text.len() <= 4096,
+        "local candidate exceeds the 4096-byte UTF-8 text budget"
+    );
+    ensure!(
+        command.record_id.as_deref() == Some(request.project_id.as_str()),
+        "local candidate routing conflicts with project"
+    );
     Ok((request, payload))
 }
 
-fn scoped_meeting(root: &Path, conn: &Connection, actor: &str,
-    request: &wire::LocalTranscriptCandidateRequest) -> anyhow::Result<wire::Meeting> {
+fn scoped_meeting(
+    root: &Path,
+    conn: &Connection,
+    actor: &str,
+    request: &wire::LocalTranscriptCandidateRequest,
+) -> anyhow::Result<wire::Meeting> {
     // This is the authenticated native `biz_` instance, not Workjet's UI alias.
     // Never create or rewrite an instance identity while accepting a candidate.
-    ensure!(store::existing_instance_id(root)?.as_deref() == Some(request.instance_id.as_str()),
-        "local candidate belongs to another native instance");
-    let meeting = super::jour_fixe_owner::owned(conn, actor, Some(&request.project_id), &request.meeting_id)?;
-    ensure!(meeting.state == wire::MeetingState::Live && meeting.deck_revision == request.deck_revision,
-        "local candidate meeting is not live at the requested deck revision");
-    ensure!(!meeting.slides.is_empty() && meeting.slides.iter().all(|s| s.meeting_id == meeting.id && s.audio.is_some()),
-        "live meeting deck is unavailable");
+    ensure!(
+        store::existing_instance_id(root)?.as_deref() == Some(request.instance_id.as_str()),
+        "local candidate belongs to another native instance"
+    );
+    let meeting =
+        super::jour_fixe_owner::owned(conn, actor, Some(&request.project_id), &request.meeting_id)?;
+    ensure!(
+        meeting.state == wire::MeetingState::Live && meeting.deck_revision == request.deck_revision,
+        "local candidate meeting is not live at the requested deck revision"
+    );
+    ensure!(
+        !meeting.slides.is_empty()
+            && meeting
+                .slides
+                .iter()
+                .all(|s| s.meeting_id == meeting.id && s.audio.is_some()),
+        "live meeting deck is unavailable"
+    );
     Ok(meeting)
 }
 
 /// Receipt replay rechecks current identity, project/Supervisor and live deck,
 /// just as a new submission does. It cannot replay into a closed/stale scope.
-pub(in crate::business_os) fn validate_recovery_scope(root: &Path, conn: &Connection,
-    command: &BusinessCommand, actor: &str) -> anyhow::Result<()> {
+pub(in crate::business_os) fn validate_recovery_scope(
+    root: &Path,
+    conn: &Connection,
+    command: &BusinessCommand,
+    actor: &str,
+) -> anyhow::Result<()> {
     let (request, _) = parse(command)?;
     scoped_meeting(root, conn, actor, &request)?;
     Ok(())
 }
 
-pub(in crate::business_os) fn handle(root: &Path, command: &BusinessCommand,
-    actor: &str, admission: &DomainEffectAdmission) -> anyhow::Result<Value> {
+pub(in crate::business_os) fn handle(
+    root: &Path,
+    command: &BusinessCommand,
+    actor: &str,
+    admission: &DomainEffectAdmission,
+) -> anyhow::Result<Value> {
     let (request, payload) = parse(command)?;
     let intent_hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&payload)?));
     let mut conn = open_store(root)?;
