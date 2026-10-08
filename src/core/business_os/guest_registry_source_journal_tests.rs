@@ -453,23 +453,38 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
         })
         .unwrap();
     assert_eq!(artifact, repeated);
-    let checkpoint = registry
-        .with_policy(|tx| {
-            super::super::source_checkpoint::persist(
+    // Preparation runs with no policy writer held. Publication uses a fresh
+    // policy transaction and the actual assignment; the Core/Git bytes above
+    // came from the stopped native producer, not reconstructed JSON.
+    let capture_checkpoint = |configuration: &ctox_core::ThreadConfigSnapshot| {
+        let assigned = registry.with_policy(|tx| {
+            super::super::workspaces::require(tx, &assignment.destination, &configuration.cwd)
+        })?;
+        let prepared = super::super::source_checkpoint::prepare(
+            &store,
+            &store_root,
+            assigned,
+            &spec,
+            &ownership,
+            &receipt,
+            configuration,
+            &state,
+            &journal_bytes,
+            &effects,
+        )?;
+        registry.with_policy(|tx| {
+            super::super::source_checkpoint::commit(
                 tx,
-                &store,
                 &store_root,
                 &assignment.destination,
                 &spec,
                 &ownership,
                 &receipt,
-                &configuration,
-                &state,
-                &journal_bytes,
-                &effects,
+                prepared,
             )
         })
-        .unwrap();
+    };
+    let checkpoint = capture_checkpoint(&configuration).unwrap();
 
     let manifest = store.load(&checkpoint.digest).unwrap();
     assert_eq!(manifest.session.session_id, spec.session_id);
@@ -493,23 +508,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
         .required_untracked
         .iter()
         .any(|e| e.path == "untracked.bin"));
-    let same = registry
-        .with_policy(|tx| {
-            super::super::source_checkpoint::persist(
-                tx,
-                &store,
-                &store_root,
-                &assignment.destination,
-                &spec,
-                &ownership,
-                &receipt,
-                &configuration,
-                &state,
-                &journal_bytes,
-                &effects,
-            )
-        })
-        .unwrap();
+    let same = capture_checkpoint(&configuration).unwrap();
     assert_eq!(checkpoint, same);
     let restored = root.path().join("protected-source-copy");
     assert!(
@@ -599,44 +598,57 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
             .is_err(),
         "unknown effects must stop reconstruction"
     );
-    let mut wrong_configuration = configuration.clone();
-    wrong_configuration.cwd = root.path().into();
-    assert!(registry
+    let assigned_before_change = registry
         .with_policy(|tx| {
-            super::super::source_checkpoint::persist(
+            super::super::workspaces::require(tx, &assignment.destination, &configuration.cwd)
+        })
+        .unwrap();
+    let staged_before_change = super::super::source_checkpoint::prepare(
+        &store,
+        &store_root,
+        assigned_before_change,
+        &spec,
+        &ownership,
+        &receipt,
+        &configuration,
+        &state,
+        &journal_bytes,
+        &effects,
+    )
+    .unwrap();
+    let stale = registry
+        .with_policy(|tx| {
+            // The real policy writer is free after preparation. A changed native
+            // assignment must reject the already-created immutable manifest.
+            tx.execute(
+                "UPDATE business_native_guest_workspace_assignments SET revision=revision+1",
+                [],
+            )?;
+            super::super::source_checkpoint::commit(
                 tx,
-                &store,
                 &store_root,
                 &assignment.destination,
                 &spec,
                 &ownership,
                 &receipt,
-                &wrong_configuration,
-                &state,
-                &journal_bytes,
-                &effects,
+                staged_before_change,
             )
         })
-        .is_err());
+        .unwrap_err();
+    assert!(
+        stale
+            .to_string()
+            .contains("assignment changed during capture"),
+        "{stale:#}"
+    );
+    // with_policy rolls back the refused fixture mutation; subsequent guards
+    // still exercise the original assignment and first checkpoint.
+    let mut wrong_configuration = configuration.clone();
+    wrong_configuration.cwd = root.path().into();
+    assert!(capture_checkpoint(&wrong_configuration).is_err());
     std::fs::write(workspace.join("tracked.txt"), "late conflicting change\n").unwrap();
     assert!(
-        registry
-            .with_policy(|tx| {
-                super::super::source_checkpoint::persist(
-                    tx,
-                    &store,
-                    &store_root,
-                    &assignment.destination,
-                    &spec,
-                    &ownership,
-                    &receipt,
-                    &configuration,
-                    &state,
-                    &journal_bytes,
-                    &effects,
-                )
-            })
-            .is_err(),
+        capture_checkpoint(&configuration).is_err(),
         "exact retry cannot replace the first checkpoint"
     );
     // Handoff grant/regrant tests intentionally advance native policy epochs.
@@ -656,23 +668,7 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
     )
     .unwrap();
     assert!(
-        registry
-            .with_policy(|tx| {
-                super::super::source_checkpoint::persist(
-                    tx,
-                    &store,
-                    &store_root,
-                    &assignment.destination,
-                    &spec,
-                    &ownership,
-                    &receipt,
-                    &configuration,
-                    &state,
-                    &journal_bytes,
-                    &effects,
-                )
-            })
-            .is_err(),
+        capture_checkpoint(&configuration).is_err(),
         "revocation denies subsequent protected source capture"
     );
     let mut foreign = spec.clone();

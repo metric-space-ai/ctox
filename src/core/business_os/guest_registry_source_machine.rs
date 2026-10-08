@@ -1,0 +1,291 @@
+// Origin: CTOX
+// License: AGPL-3.0-only
+//! Actual retained source child -> quiesced machine artifacts. Never a clean-effect grant.
+use super::*;
+use ctox_sync::contracts::WorkspaceEntry;
+use tokio::sync::watch;
+
+pub(super) struct SourceMachineCapture {
+    process: GuestProcessEffect,
+    retired: watch::Sender<bool>,
+    state: Mutex<State>,
+}
+struct State {
+    desktop: super::super::guest_runtime::RetainedQemuDesktop,
+    attempted: bool,
+    entries: Option<Vec<WorkspaceEntry>>,
+}
+impl SourceMachineCapture {
+    pub(super) fn retire(&self) {
+        self.retired.send_replace(true);
+    }
+
+    pub(super) fn matches(&self, process: &GuestProcessEffect) -> bool {
+        self.process == *process
+    }
+
+    pub(super) fn entries(&self) -> Result<Vec<WorkspaceEntry>> {
+        ensure!(!*self.retired.borrow(), "source machine export retired");
+        self.state
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("source machine export busy or poisoned"))?
+            .entries
+            .clone()
+            .context("source machine export incomplete; reconcile")
+    }
+
+    pub(super) fn stop(&self) -> Result<std::process::ExitStatus> {
+        self.retire();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("source machine export poisoned"))?;
+        super::super::guest_commands::block_on_guest(state.desktop.stop())
+    }
+
+    fn export(&self, store: &ctox_sync::checkpoint::CheckpointStore, parent: &Path) -> Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("source machine export poisoned"))?;
+        ensure!(!*self.retired.borrow(), "source machine export retired");
+        if state.entries.is_some() {
+            return Ok(());
+        }
+        ensure!(
+            !state.attempted,
+            "source machine export already attempted; reconcile"
+        );
+        state.attempted = true; // retained before the first QMP await, including cancellation
+        let mut memory = tempfile::NamedTempFile::new_in(parent)?;
+        let mut output = tokio::fs::File::from_std(memory.reopen()?);
+        let mut retired = self.retired.subscribe();
+        // subscribe marks the current value seen: check it before waiting so a
+        // retirement between the first check and subscription cannot be lost.
+        ensure!(!*retired.borrow(), "source machine export retired");
+        let witness = super::super::guest_commands::block_on_guest(async {
+            tokio::select! {
+                biased;
+                _ = retired.changed() => anyhow::bail!("source machine export revoked"),
+                result = tokio::time::timeout(Duration::from_secs(300), async {
+                    let endpoint = state.desktop.probe_live().await?;
+                    ensure!(endpoint.process_instance_id == self.process.process_instance_id,
+                        "source machine endpoint differs from the retained child");
+                    let witness = state.desktop.save_checkpoint_live(&endpoint, &mut output).await?;
+                    output.sync_all().await?;
+                    Ok::<_, anyhow::Error>(witness)
+                }) => result.context("source machine export deadline")?,
+            }
+        })?;
+        drop(output);
+        // Full RAM/disk/base hashing and chunk IO hold only this owned-child
+        // mutex, never account/issuer/worker/SQLite/controller publication locks.
+        let entries = witness.store(store, memory.as_file_mut())?;
+        ensure!(
+            !*self.retired.borrow(),
+            "source machine export revoked before publication"
+        );
+        state.entries = Some(entries);
+        Ok(())
+    }
+}
+impl NativeGuestExecution {
+    pub(super) fn export_source_machine(
+        &self,
+        source: &crate::channels::NativeProviderCaptureOwner,
+    ) -> Result<()> {
+        ensure!(
+            source.matches_provider(&self.provider),
+            "foreign native machine capture owner"
+        );
+        let mut observed = source_effects::SourceEffects::observe(self)?;
+        let prepared = source.with_current_capture_transaction(|worker, facts| {
+            self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
+                verify()?;
+                let process = match (&entry.process_effect, &entry.registered_process) {
+                    (None, None) => {
+                        ensure!(
+                            entry.desktop.is_none() && entry.source_machine.is_none(),
+                            "unregistered native source child"
+                        );
+                        return Ok(None);
+                    }
+                    (Some(id), Some(process)) if id == &process.effect_id => process.clone(),
+                    _ => anyhow::bail!("native source process effect is incomplete"),
+                };
+                ensure!(
+                    process.job_id == self.binding.spec.job_id
+                        && process.ownership == self.binding.ownership
+                        && process.controller_id == entry.assignment.destination.controller_id
+                        && process.controller_generation
+                            == entry.assignment.destination.controller_generation,
+                    "native source process ownership changed"
+                );
+                let parent = entry.assignment.destination.import_parent.clone();
+                ensure!(
+                    workspaces::snapshot(policy, &entry.assignment.destination)?.is_some(),
+                    "native machine export needs its actual assigned workspace"
+                );
+                let (store, store_root, store_identity) = source_journal::source_store(&parent)?;
+                let capture = if let Some(capture) = &entry.source_machine {
+                    ensure!(
+                        entry.desktop.is_none() && capture.matches(&process),
+                        "source machine export belongs to another process"
+                    );
+                    // Existing failed attempts stay unresolved; never repeat QMP.
+                    capture.entries()?;
+                    Arc::clone(capture)
+                } else {
+                    observed.verify_controller(entry)?;
+                    let desktop = entry
+                        .desktop
+                        .take()
+                        .context("source child is not retained")?;
+                    let (retired, _) = watch::channel(false);
+                    let capture = Arc::new(SourceMachineCapture {
+                        process,
+                        retired,
+                        state: Mutex::new(State {
+                            desktop,
+                            attempted: false,
+                            entries: None,
+                        }),
+                    });
+                    entry.source_machine = Some(Arc::clone(&capture));
+                    self.registry.retire_frame(entry)?;
+                    capture
+                };
+                Ok(Some((capture, store, store_root, store_identity, parent)))
+            })
+        })?;
+        let Some((capture, store, store_root, store_identity, parent)) = prepared else {
+            return Ok(());
+        };
+        capture.export(&store, &parent)?;
+        // No IO mutex survives fresh quorum/native authority revalidation.
+        let mut current = source_effects::SourceEffects::observe(self)?;
+        ensure!(
+            observed.same_quorum(&current),
+            "source quorum changed during machine export"
+        );
+        source.with_current_capture_transaction(|worker, facts| {
+            self.with_held_worker_policy(worker, facts, |entry, verify, _| {
+                verify()?;
+                ensure!(
+                    entry
+                        .source_machine
+                        .as_ref()
+                        .is_some_and(|actual| Arc::ptr_eq(actual, &capture))
+                        && entry.desktop.is_none()
+                        && private_directory(&store_root)? == store_identity,
+                    "native source machine/store changed during export"
+                );
+                current.verify_controller(entry)?;
+                Ok(())
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::business_os::guest_runtime::{
+        PreparedQemuGuest, QemuAcceleration, RetainedQemuDesktop,
+    };
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn failed_machine_capture_retains_exact_child_and_retirement_never_waits_for_io() -> Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let program = root.path().join("owned-child");
+        std::fs::write(&program, "#!/bin/sh\nexec /bin/sleep 30\n")?;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))?;
+        let base = root.path().join("base.raw");
+        std::fs::File::create(&base)?.set_len(2 * 1024 * 1024)?;
+        let overlay = root.path().join("disk.qcow2");
+        std::fs::write(&overlay, b"owned validation fixture")?;
+        let tmp = std::env::temp_dir();
+        let socket_parent = if tmp.as_os_str().len() > 48 {
+            tmp.parent().context("fixture tmp parent absent")?
+        } else {
+            tmp.as_path()
+        };
+        let sockets = tempfile::Builder::new()
+            .prefix("child-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(socket_parent)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let desktop = {
+            let _entered = runtime.enter();
+            RetainedQemuDesktop::spawn_paused(
+                &PreparedQemuGuest {
+                    program,
+                    runtime_parent: sockets.path().into(),
+                    base_raw: base,
+                    overlay_qcow2: overlay,
+                    memory_mib: 64,
+                    vcpus: 1,
+                    acceleration: QemuAcceleration::Tcg,
+                },
+                "source-guest".into(),
+            )?
+        };
+        let pid = desktop.pid();
+        let process = GuestProcessEffect {
+            effect_id: "owned-effect".into(),
+            job_id: "owned-job".into(),
+            ownership: Ownership {
+                node_id: 1,
+                generation: 1,
+            },
+            controller_id: "controller".into(),
+            controller_generation: 1,
+            process_instance_id: desktop.process_instance_id().into(),
+        };
+        let (retired, _) = watch::channel(false);
+        let capture = SourceMachineCapture {
+            process: process.clone(),
+            retired,
+            state: Mutex::new(State {
+                desktop,
+                attempted: false,
+                entries: None,
+            }),
+        };
+        let (store, _, _) = source_journal::source_store(root.path())?;
+        // This actual retained child has never become Ready. The production
+        // export must fail without manufacturing a VM witness or dropping it.
+        let error = capture.export(&store, root.path()).unwrap_err();
+        assert!(error.to_string().contains("guest is not ready"));
+        assert!(capture.matches(&process));
+        assert!(Path::new(&format!("/proc/{pid}")).exists());
+        assert!(capture.entries().is_err());
+        assert!(capture
+            .export(&store, root.path())
+            .unwrap_err()
+            .to_string()
+            .contains("already attempted"));
+        {
+            let state = capture.state.lock().unwrap();
+            assert_eq!(state.desktop.pid(), pid);
+            assert!(state.attempted && state.entries.is_none());
+            assert!(capture.entries().unwrap_err().to_string().contains("busy"));
+            // The actual export mutex is held: a synchronous revoke must still
+            // retire immediately, and a late subscriber must see that state.
+            capture.retire();
+            let subscriber = capture.retired.subscribe();
+            assert!(*subscriber.borrow());
+        }
+        capture.stop()?;
+        assert!(
+            !Path::new(&format!("/proc/{pid}")).exists(),
+            "exact child was not reaped"
+        );
+        assert!(capture.entries().is_err());
+        Ok(())
+    }
+}
