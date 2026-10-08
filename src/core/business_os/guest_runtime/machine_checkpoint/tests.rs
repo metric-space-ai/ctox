@@ -67,6 +67,79 @@ fn stage(
     StagedQemuCheckpoint::stage(store, entries, target, guest, service, &mut ram, &mut disk)
 }
 
+#[tokio::test]
+async fn real_incoming_machine_load_is_bound_to_its_exact_retained_child() -> Result<()> {
+    use super::super::{image::QemuOverlayPreparation, qemu::QemuProcess, RetainedQemuDesktop};
+    let root = tempfile::tempdir()?;
+    let base = file(&root.path().join("base.raw"), &[0; 512])?;
+    base.set_len(1024 * 1024)?;
+    base.set_permissions(std::fs::Permissions::from_mode(0o400))?;
+    let mut preparation = QemuOverlayPreparation::start(
+        Path::new("/usr/bin/qemu-img"),
+        root.path(),
+        &root.path().join("base.raw"),
+    )?;
+    let overlay = preparation.finish().await?;
+    let config = PreparedQemuGuest {
+        program: "/usr/bin/qemu-system-x86_64".into(),
+        runtime_parent: root.path().into(),
+        base_raw: root.path().join("base.raw"),
+        overlay_qcow2: overlay,
+        memory_mib: 64,
+        vcpus: 1,
+        acceleration: super::super::QemuAcceleration::Tcg,
+    };
+    let mut source = QemuProcess::spawn_paused(&config, "guest-o04")?;
+    source.connect_monitor().await?;
+    let mut ram = tokio::fs::File::from_std(file(&root.path().join("source.ram"), &[])?);
+    let state = source.save_memory(&mut ram).await?;
+    source.finish_memory_export().await?;
+    let mut ram = ram.into_std().await;
+    let store = CheckpointStore::open(root.path().join("store"), 64 * 1024 * 1024)?;
+    // Actual paused-QEMU/CAS/incoming connection. Service identity here is a
+    // fixture: this test never activates or claims live guest readiness.
+    let witness = QuiescedQemuCheckpoint::after_clean_exit(
+        config.clone(),
+        "guest-o04".into(),
+        GuestLiveEndpoint {
+            process_instance_id: "paused-source-fixture".into(),
+            guest_session_id: "service-o04".into(),
+            endpoint_id: "unactivated-fixture".into(),
+        },
+        state,
+    )?;
+    let entries = witness.store(&store, &mut ram)?;
+    let mut staged = stage(
+        root.path(),
+        "actual-target",
+        &store,
+        &entries,
+        &config,
+        "guest-o04",
+        "service-o04",
+    )?;
+    let mut other = stage(
+        root.path(),
+        "other-target",
+        &store,
+        &entries,
+        &config,
+        "guest-o04",
+        "service-o04",
+    )?;
+    let mut target = RetainedQemuDesktop::spawn_checkpoint(&mut staged)?;
+    let foreign_rejected = target.load_checkpoint(&mut other).await.is_err();
+    let loaded = target.load_checkpoint(&mut staged).await;
+    let stopped = target.stop().await?;
+    ensure!(
+        foreign_rejected,
+        "a different staging attempt entered this retained child"
+    );
+    loaded?;
+    ensure!(stopped.success(), "actual target did not stop successfully");
+    Ok(())
+}
+
 #[test]
 fn machine_checkpoint_binds_original_service_base_ram_and_multichunk_disk() -> Result<()> {
     let root = tempfile::tempdir()?;

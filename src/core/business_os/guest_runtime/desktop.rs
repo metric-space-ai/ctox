@@ -161,11 +161,13 @@ impl RetainedQemuDesktop {
         checkpoint: &mut StagedQemuCheckpoint,
     ) -> Result<Self> {
         checkpoint.prepare_spawn()?;
-        Self::spawn_incoming(
+        let owner = Self::spawn_incoming(
             &checkpoint.config,
             checkpoint.guest_id.clone(),
             checkpoint.service_session.clone(),
-        )
+        )?;
+        checkpoint.target_instance_id = Some(owner.process_instance_id.clone());
+        Ok(owner)
     }
 
     /// No instructions run here. A separate activate_restored still requires
@@ -175,7 +177,10 @@ impl RetainedQemuDesktop {
         checkpoint: &mut StagedQemuCheckpoint,
     ) -> Result<()> {
         ensure!(
-            self.guest_id == checkpoint.guest_id
+            checkpoint.target_instance_id.as_deref() == Some(self.process_instance_id.as_str())
+                && self.config.memory_mib == checkpoint.config.memory_mib
+                && self.config.vcpus == checkpoint.config.vcpus
+                && self.guest_id == checkpoint.guest_id
                 && self.restored_session.as_deref() == Some(checkpoint.service_session.as_str())
                 && self.config.base_raw == checkpoint.config.base_raw
                 && self.config.overlay_qcow2 == checkpoint.config.overlay_qcow2,

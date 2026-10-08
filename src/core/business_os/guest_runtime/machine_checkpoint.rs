@@ -307,6 +307,7 @@ pub(in crate::business_os) struct StagedQemuCheckpoint {
     base: File,
     base_identity: FileIdentity,
     spawn_attempted: bool,
+    pub(super) target_instance_id: Option<String>,
 }
 
 impl StagedQemuCheckpoint {
@@ -381,6 +382,7 @@ impl StagedQemuCheckpoint {
             base,
             base_identity: manifest.base,
             spawn_attempted: false,
+            target_instance_id: None,
         })
     }
 
