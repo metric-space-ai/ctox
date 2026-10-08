@@ -63,7 +63,7 @@ fn scoped_meeting(
     // This is the authenticated native `biz_` instance, not Workjet's UI alias.
     // Never create or rewrite an instance identity while accepting a candidate.
     ensure!(
-        store::existing_instance_id(root)?.as_deref() == Some(request.instance_id.as_str()),
+        store::existing_instance_id(root)? == request.instance_id,
         "local candidate belongs to another native instance"
     );
     let meeting =
