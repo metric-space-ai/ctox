@@ -71,11 +71,15 @@ original Core construction and original-job admission. A Darwin transport build
 does not supply the Linux machine witness.
 
 Import and machine-only CLI responses remain `resumed:false`. Successful
-constructor or source tests do not prove installed continuation. Native Core
-observations still preserve generic unknown effects; a successful turn, empty
-caller-provided list, completed import or stopped child cannot mint a clean
-effect receipt. Until that production clean-effects boundary is implemented
-and measured, goals 15/16/18 remain open.
+constructor or source tests do not prove installed continuation. A source
+checkpoint drops its generic unknown-effects marker only when checked
+shutdown of the exact original Core reports no unresolved effects, the actual
+registered QEMU child has been fully exported and its process effect completed,
+and current quorum ownership has no pending effects. Source publication checks
+worker, account, policy, controller and quorum observations again after artifact
+IO. Wire metadata, an empty list, completed import or stopped child cannot supply
+these retained witnesses. Unowned external actions and resumed-session effects
+remain unresolved; installed goals 15/16/18 remain open.
 
 Installed acceptance must demonstrate the original session continuing on B,
 A rejected as stale after takeover, reconnect and abort, on isolated tenants.
