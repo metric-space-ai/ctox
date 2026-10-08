@@ -20,6 +20,8 @@ mod desktop;
 #[cfg(target_os = "linux")]
 mod image;
 #[cfg(target_os = "linux")]
+pub(super) use image::QemuOverlayPreparation;
+#[cfg(target_os = "linux")]
 mod machine_checkpoint;
 #[cfg(target_os = "linux")]
 pub(super) use machine_checkpoint::{QuiescedQemuCheckpoint, StagedQemuCheckpoint};

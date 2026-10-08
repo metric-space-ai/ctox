@@ -8,7 +8,7 @@
 use super::qemu::regular_file;
 use anyhow::{anyhow, ensure, Context, Result};
 use std::fs::File;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
@@ -17,7 +17,7 @@ use tokio::process::{Child, Command};
 
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(super) struct QemuOverlayPreparation {
+pub(in crate::business_os) struct QemuOverlayPreparation {
     // The owner exists before any await; cancellation does not lose the PID.
     child: Child,
     directory: Option<TempDir>,
@@ -27,7 +27,11 @@ pub(super) struct QemuOverlayPreparation {
 impl QemuOverlayPreparation {
     /// The native owner supplies an admitted state directory and a verified,
     /// immutable raw base. This function does not download or trust an image.
-    pub(super) fn start(program: &Path, state_parent: &Path, base_raw: &Path) -> Result<Self> {
+    pub(in crate::business_os) fn start(
+        program: &Path,
+        state_parent: &Path,
+        base_raw: &Path,
+    ) -> Result<Self> {
         regular_file(program)?;
         let base = regular_file(base_raw)?;
         ensure!(
@@ -67,7 +71,7 @@ impl QemuOverlayPreparation {
     /// Retain this owner outside any cancellable future. On failure or
     /// cancellation call abort and await confirmed exit before dropping it.
     /// Successful preparation retains the disk; dropping self cannot erase it.
-    pub(super) async fn finish(&mut self) -> Result<PathBuf> {
+    pub(in crate::business_os) async fn finish(&mut self) -> Result<PathBuf> {
         ensure!(!self.attempted, "guest disk preparation is retired");
         self.attempted = true;
         let status = self.wait_for_exit().await?;
@@ -77,11 +81,22 @@ impl QemuOverlayPreparation {
             .as_ref()
             .context("guest disk preparation is retired")?;
         let overlay = directory.path().join("root.qcow2");
+        let disk = File::options()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&overlay)?;
+        let metadata = disk.metadata()?;
         ensure!(
-            regular_file(&overlay)?.len() > 0,
-            "prepared guest disk is empty"
+            metadata.is_file()
+                && metadata.len() > 0
+                && metadata.uid() == unsafe { libc::geteuid() }
+                && metadata.nlink() == 1,
+            "prepared guest disk must be nonempty, native-owned and unaliased"
         );
-        File::open(&overlay)?.sync_all()?;
+        // qemu-img inherits the operator umask. Publish a private writable
+        // disk even when that umask permits group/other access by default.
+        disk.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        disk.sync_all()?;
         File::open(directory.path())?.sync_all()?;
         File::open(
             directory
@@ -105,7 +120,7 @@ impl QemuOverlayPreparation {
 
     /// Removes only this attempt's unpublished directory, after reaping the
     /// captured helper. A completed disk is retained even if abort is called.
-    pub(super) async fn abort(&mut self) -> Result<()> {
+    pub(in crate::business_os) async fn abort(&mut self) -> Result<()> {
         self.attempted = true;
         if self.child.try_wait()?.is_none() {
             self.child.start_kill()?;
