@@ -9,6 +9,8 @@
 pub(crate) mod accounts;
 #[path = "guest_registry_command.rs"]
 mod command;
+#[path = "guest_registry_core_resume.rs"]
+pub(crate) mod core_resume;
 #[path = "guest_registry_machine_config.rs"]
 mod machine_config;
 #[cfg(target_os = "linux")]
@@ -341,6 +343,8 @@ struct ExecutionBinding {
 
 struct Registration {
     restoration: Option<target_enrollment::ProtectedEnrollment>,
+    core_owner: Option<Arc<dyn core_resume::NativeGuestCoreOwner>>,
+    core_start_attempted: bool,
     workspace_lease: Option<std::fs::File>,
     assignment: NativeGuestAssignment,
     import_identity: FileIdentity,
@@ -771,6 +775,8 @@ impl NativeGuestRegistry {
             assignment.destination.guest_id.clone(),
             Arc::new(Mutex::new(Registration {
                 restoration,
+                core_owner: None,
+                core_start_attempted: false,
                 workspace_lease: None,
                 assignment: assignment.clone(),
                 import_identity,
