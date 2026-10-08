@@ -1,3 +1,35 @@
+#[tokio::test]
+async fn native_control_adapter_receiver_guard_holds_host_fence_without_reentering_pool(
+) -> io::Result<()> {
+    struct Allow;
+    impl WebRTCPublicationGuard for Allow {
+        fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+            publish()
+        }
+    }
+    let root = tempfile::tempdir()?;
+    let pool = pool();
+    let owner = Owner::start(root.path(), &pool)?;
+    let publication = Publication {
+        state: Arc::downgrade(&owner.state),
+        peer: None,
+        workload: Arc::new(Allow),
+    };
+    publication
+        .with_current(&mut || {
+            assert!(
+                owner.state.alive.try_lock().is_err(),
+                "host retirement is fenced during publication"
+            );
+            Ok(())
+        })
+        .map_err(|_| unavailable())?;
+    owner.channel().retire();
+    assert!(publication
+        .with_current(&mut || panic!("retired host cannot publish"))
+        .is_err());
+    Ok(())
+}
 #[test]
 fn native_control_adapter_guard_requires_exactly_one_callback() {
     struct Broken(usize);

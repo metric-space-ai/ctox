@@ -138,7 +138,9 @@ fn valid_identity(identity: &str) -> bool {
 /// Every physical send poll reacquires these guards; Pending holds none.
 struct Publication {
     state: Weak<State>,
-    peer: WebRTCRsConnection,
+    // Receiver responses are already wrapped by RxDB AuxiliaryPublicationGuard.
+    // Reentering its pool fence from this inner guard would deadlock.
+    peer: Option<WebRTCRsConnection>,
     workload: Arc<dyn WebRTCPublicationGuard>,
 }
 impl WebRTCPublicationGuard for Publication {
@@ -149,8 +151,12 @@ impl WebRTCPublicationGuard for Publication {
             if !*alive {
                 return Err(denied());
             }
-            let pool = state.pool.upgrade().ok_or_else(denied)?;
-            pool.with_current_native_control_peer(&self.peer, publish)?
+            if let Some(peer) = &self.peer {
+                let pool = state.pool.upgrade().ok_or_else(denied)?;
+                pool.with_current_native_control_peer(peer, publish)?
+            } else {
+                publish()
+            }
         })
     }
 }
@@ -240,7 +246,7 @@ impl NativeControlChannel {
             .ok_or_else(unavailable)?;
         let guard: Arc<dyn WebRTCPublicationGuard> = Arc::new(Publication {
             state: self.state.clone(),
-            peer: peer.clone(),
+            peer: Some(peer.clone()),
             workload: publication,
         });
         guard
@@ -351,7 +357,7 @@ impl NativeControlChannel {
                         result: result.result,
                         publication: Arc::new(Publication {
                             state: weak,
-                            peer,
+                            peer: None,
                             workload: result.publication,
                         }),
                     })
