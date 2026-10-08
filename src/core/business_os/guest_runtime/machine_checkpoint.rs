@@ -88,16 +88,26 @@ struct MachineManifest {
 
 impl MachineManifest {
     fn validate(&self, guest: &str, session: &str, config: &PreparedQemuGuest) -> Result<()> {
+        self.validate_identity()?;
         ensure!(
-            self.version == 1
-                && self.profile == PROFILE
-                && self.guest_id == guest
+            self.guest_id == guest
                 && self.guest_service_session == session
-                && identifier(guest)
-                && identifier(session)
                 && self.memory_mib == config.memory_mib
                 && self.vcpus == config.vcpus,
             "guest machine assignment, service or hardware profile differs"
+        );
+        Ok(())
+    }
+
+    fn validate_identity(&self) -> Result<()> {
+        ensure!(
+            self.version == 1
+                && self.profile == PROFILE
+                && identifier(&self.guest_id)
+                && identifier(&self.guest_service_session)
+                && (32..=4096).contains(&self.memory_mib)
+                && (1..=2).contains(&self.vcpus),
+            "guest machine identity or hardware profile is invalid"
         );
         ensure!(
             !self.source_process_instance_id.is_empty()
@@ -118,6 +128,61 @@ impl MachineManifest {
         );
         Ok(())
     }
+}
+
+/// Protected names only; this is neither import completion nor execution permission.
+/// The target retains the original guest/service instead of minting a new identity.
+pub(in crate::business_os) struct ProtectedGuestIdentity {
+    guest_id: String,
+    service_session: String,
+}
+
+impl ProtectedGuestIdentity {
+    pub(in crate::business_os) fn from_checkpoint(
+        store: &CheckpointStore,
+        entries: &[WorkspaceEntry],
+    ) -> Result<Self> {
+        let manifest = read_manifest(store, entries)?;
+        manifest.validate_identity()?;
+        Ok(Self {
+            guest_id: manifest.guest_id,
+            service_session: manifest.guest_service_session,
+        })
+    }
+
+    pub(in crate::business_os) fn guest_id(&self) -> &str {
+        &self.guest_id
+    }
+
+    pub(in crate::business_os) fn service_session(&self) -> &str {
+        &self.service_session
+    }
+}
+
+fn read_manifest(store: &CheckpointStore, entries: &[WorkspaceEntry]) -> Result<MachineManifest> {
+    let found: Vec<_> = entries.iter().filter(|e| e.path == MACHINE_PATH).collect();
+    ensure!(
+        found.len() == 1,
+        "protected guest machine metadata missing or duplicated"
+    );
+    let entry = found[0];
+    ensure!(
+        entry.kind == WorkspaceEntryKind::File
+            && !entry.executable
+            && (1..=MAX_METADATA).contains(&entry.artifact.size_bytes),
+        "protected guest machine metadata is invalid"
+    );
+    let mut bytes = Vec::new();
+    store
+        .open_blob(&entry.artifact)?
+        .take(MAX_METADATA + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 == entry.artifact.size_bytes
+            && format!("{:x}", Sha256::digest(&bytes)) == entry.artifact.sha256,
+        "protected guest machine metadata digest changed"
+    );
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 fn private_file(file: &File) -> Result<std::fs::Metadata> {
@@ -322,28 +387,7 @@ impl StagedQemuCheckpoint {
         memory: &mut File,
         disk: &mut File,
     ) -> Result<Self> {
-        let found: Vec<_> = entries.iter().filter(|e| e.path == MACHINE_PATH).collect();
-        ensure!(
-            found.len() == 1,
-            "protected guest machine metadata missing or duplicated"
-        );
-        let entry = found[0];
-        ensure!(
-            entry.kind == WorkspaceEntryKind::File
-                && !entry.executable
-                && (1..=MAX_METADATA).contains(&entry.artifact.size_bytes),
-            "protected guest machine metadata is invalid"
-        );
-        let mut bytes = Vec::new();
-        store
-            .open_blob(&entry.artifact)?
-            .take(MAX_METADATA + 1)
-            .read_to_end(&mut bytes)?;
-        ensure!(
-            bytes.len() as u64 <= MAX_METADATA,
-            "guest machine metadata grew"
-        );
-        let manifest: MachineManifest = serde_json::from_slice(&bytes)?;
+        let manifest = read_manifest(store, entries)?;
         manifest.validate(expected_guest, expected_service, &config)?;
         let mut base = open_private(&config.base_raw)?;
         ensure!(

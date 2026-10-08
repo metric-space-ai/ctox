@@ -24,7 +24,7 @@ fn validate_received<P: Clone + Eq + Hash + Send + Sync + 'static>(
     })
 }
 
-fn received_store<P: Clone + Eq + Hash + Send + Sync + 'static>(
+pub(super) fn received_store<P: Clone + Eq + Hash + Send + Sync + 'static>(
     target: &Target<P>,
 ) -> anyhow::Result<CheckpointStore> {
     let path = target

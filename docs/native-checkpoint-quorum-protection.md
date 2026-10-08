@@ -2,6 +2,32 @@
 The nonvoting target does not call `validate_ownership` on A: the WorkerAuthorityClient deliberately denies foreign executor reads. The existing signed quorum TakeOver validates A's expected generation and B's protected copy atomically; the shared native caller then requires a fresh Applied result and quorum-validates B's new generation. A regression uses three independent durable Raft nodes, real signatures and the actual nonvoting WorkerAuthorityClient; it verifies A's read is denied, B takes over the same job, A becomes stale and a replay cannot grant fresh activation. This is a component regression, not installed continuation acceptance.
 # Native checkpoint quorum protection
 
+## Protected target guest enrollment
+
+After a completed native `handoff-take-over <binding-digest>`, Linux targets
+use `ctox sync handoff-enroll-guest <binding-digest>`. The private same-UID
+checkpoint IPC accepts only that binding identifier. It resolves the current
+target account, Receive/Resume policy, exact completed takeover row and fresh
+quorum ownership of the original job. The protected checkpoint must be complete,
+clean, current and durably copied at this target.
+
+The original guest ID and guest-service session come from the bounded,
+hash-checked machine artifact in that same checkpoint. The target creates its
+own new controller and private import directory while preserving those original
+names, original Core session/ExecutionSpec, checkpoint digest and next ownership.
+No operator-supplied guest ID, process ID, host path or copied controller can
+replace them. An exact retry returns the same retained controller; foreign
+checkpoint/binding identities and retired controllers require reconciliation.
+
+The existing `guest-enroll` command remains the fresh-source enrollment path.
+A protected target enrollment cannot acquire the ordinary fresh-Create admission.
+Its response remains `resumed:false`: enrollment starts no provider, QEMU or
+Core turn and cannot substitute for the actual completed GuestImportReceipt,
+original-session Core factory, restored original service and current execution
+activation. Those production connections and installed two-host proof remain
+separate outstanding work. Frozen Mac037 is not an approved capture runtime.
+
+
 The current native checkpoint copy creates verified local artifacts. Execution takeover also needs signed complete-copy receipts committed by the existing quorum. These operator commands add that connection on the running host's private checkpoint socket; they never start another authority, peer, provider or guest.
 
 After `ctox sync handoff-copy <binding-digest> <source-route>`, the target runs:

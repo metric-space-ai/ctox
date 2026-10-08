@@ -24,7 +24,9 @@ pub(super) use image::QemuOverlayPreparation;
 #[cfg(target_os = "linux")]
 mod machine_checkpoint;
 #[cfg(target_os = "linux")]
-pub(super) use machine_checkpoint::{QuiescedQemuCheckpoint, StagedQemuCheckpoint};
+pub(super) use machine_checkpoint::{
+    ProtectedGuestIdentity, QuiescedQemuCheckpoint, StagedQemuCheckpoint,
+};
 #[cfg(target_os = "linux")]
 mod memory_chunks;
 #[cfg(target_os = "linux")]

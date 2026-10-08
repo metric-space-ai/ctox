@@ -322,6 +322,22 @@ mod tests {
     }
     #[test]
     fn native_checkpoint_quorum_control_rejects_mixed_operations_and_accepts_legacy_copy() {
+        let original = serde_json::json!({"bindingDigest":"a".repeat(64), "enrollGuest":true});
+        let request: CopyRequest = serde_json::from_value(original.clone()).unwrap();
+        assert!(request.valid_operation());
+        for (field, value) in [
+            ("takeOver", serde_json::json!(true)),
+            ("acknowledge", serde_json::json!(true)),
+            ("reconstruct", serde_json::json!(true)),
+            ("guestId", serde_json::json!("supplied-guest")),
+            ("sourceRoute", serde_json::json!("supplied-route")),
+            ("protectionReceipts", serde_json::json!([copy(2)])),
+        ] {
+            let mut mixed = original.clone();
+            mixed[field] = value;
+            let request: CopyRequest = serde_json::from_value(mixed).unwrap();
+            assert!(!request.valid_operation(), "{field}");
+        }
         let legacy = serde_json::json!({"bindingDigest":"a".repeat(64),"sourceRoute":"peer"});
         let mut request: CopyRequest = serde_json::from_value(legacy).unwrap();
         assert!(request.valid_operation());
