@@ -31,6 +31,10 @@ use crate::communication_store::{
     UpsertMessage,
 };
 
+#[path = "email_calendar.rs"]
+mod calendar;
+pub(crate) use calendar::read_registered_calendar;
+
 const DEFAULT_IMAP_HOST: &str = "imap.one.com";
 const DEFAULT_IMAP_PORT: u16 = 993;
 const DEFAULT_SMTP_HOST: &str = "send.one.com";

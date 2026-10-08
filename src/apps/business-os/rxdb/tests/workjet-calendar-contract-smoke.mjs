@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { CALENDAR_SCHEMA, CALENDAR_VERSION, CALENDAR_TYPES, validateCalendarValue } from '../../shared/workjet-calendar-contract.generated.mjs';
+const fixture = JSON.parse(readFileSync(new URL('../../../../core/rxdb/tests/fixtures/workjet-calendar-v1.json', import.meta.url), 'utf8'));
+assert.equal(CALENDAR_VERSION, fixture.contract_version);
+assert.equal(CALENDAR_SCHEMA, fixture.schema);
+assert.deepEqual(CALENDAR_TYPES, fixture.types);
+for (const {type, value} of fixture.valid_cases) assert.equal(validateCalendarValue(type, value).ok, true, type);
+for (const {type, value, reason} of fixture.invalid_cases) assert.equal(validateCalendarValue(type, value).ok, false, reason);
+assert.throws(() => { CALENDAR_TYPES.CalendarEvent.fields.title.type = 'bool'; }, TypeError);
+console.log(`Calendar contract: ${fixture.valid_cases.length} valid / ${fixture.invalid_cases.length} rejected cases agree with native fixture`);

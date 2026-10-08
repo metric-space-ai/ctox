@@ -1073,6 +1073,9 @@ export function validateJourFixeValue(typeName, value) {
             || (['maximum','max_chars','max_items'].includes(constraint) && metric > bound)) throw new Error(at + ': ' + constraint);
       }
     }
+    for (const order of shape.ordered_fields ?? []) {
+      if (value[order.after] <= value[order.before]) throw new Error(field + '.' + order.after + ': must follow ' + order.before);
+    }
   }
   try { validate(typeName, value, typeName); return {ok:true}; }
   catch (error) { return {ok:false, error:error.message}; }

@@ -50,6 +50,8 @@ pub(crate) mod native_startup;
 mod project_crew_request;
 #[path = "mcp_remote_worker.rs"]
 mod remote_worker;
+#[path = "mcp_workjet_calendar.rs"]
+mod workjet_calendar;
 #[path = "mcp_workjet_confirmed_plan.rs"]
 mod workjet_confirmed_plan;
 pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_session;
@@ -1483,6 +1485,8 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         workjet_luma_config::read_descriptor(),
         workjet_luma_config::write_descriptor(),
         workjet_kpis::descriptor(),
+        workjet_calendar::descriptors().remove(0),
+        workjet_calendar::descriptors().remove(1),
         read_tool(
             "business_os.list_crew_executions",
             "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
@@ -3267,6 +3271,15 @@ fn call_tool_inner(
             &arguments,
             trusted_gateway_context,
         )?,
+        workjet_calendar::ACCOUNTS_TOOL | workjet_calendar::EVENTS_TOOL => {
+            workjet_calendar::execute(
+                root,
+                &context,
+                tool_name,
+                &arguments,
+                trusted_gateway_context,
+            )?
+        }
         workjet_kpis::TOOL => {
             workjet_kpis::execute(root, &context, &arguments, trusted_gateway_context)?
         }
@@ -7116,6 +7129,10 @@ fn enforce_argument_scope_policy(
         workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
             enforce_module_policy(root, "ctox")?;
             enforce_collection_policy(root, "workjet_luma_configuration")?;
+        }
+        workjet_calendar::ACCOUNTS_TOOL | workjet_calendar::EVENTS_TOOL => {
+            enforce_module_policy(root, "ctox")?;
+            enforce_collection_policy(root, "communication_accounts")?;
         }
         "business_os.create_app" => {
             if let Ok(module_id) = app_module_id_from_arguments(
