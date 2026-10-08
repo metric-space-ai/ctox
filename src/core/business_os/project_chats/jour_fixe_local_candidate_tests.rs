@@ -233,9 +233,11 @@ fn receipt_recovery_rejects_closed_or_replaced_meeting_scope() -> anyhow::Result
             "deck" => change(root.path(), |v| v["deck_revision"] = json!(2))?,
             "supervisor" => {
                 let conn = open_store(root.path())?;
-                let mut thread = outbound_load_record(&conn, THREADS, THREAD)?.unwrap();
+                let meeting = saved(root.path())?;
+                let thread_id = meeting["supervisor"]["workjet_thread_id"].as_str().unwrap();
+                let mut thread = outbound_load_record(&conn, THREADS, thread_id)?.unwrap();
                 thread["is_deleted"] = json!(true);
-                store::upsert_business_record(&conn, THREADS, THREAD, 2, thread)?;
+                store::upsert_business_record(&conn, THREADS, thread_id, 2, thread)?;
             }
             "project" => {
                 let conn = open_store(root.path())?;
