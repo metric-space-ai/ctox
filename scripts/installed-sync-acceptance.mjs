@@ -8,7 +8,7 @@ import { join, resolve, relative } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 const OWNER = '01a087a0-169a-7e23-ba3d-71352256cbfb';
-const EXPECTED_SOURCE = '77f235a4fc8e1dcbbb2285f0ca952b18c7bda755';
+const EXPECTED_SOURCE = 'b48220db385d53f07c8414c21f7ce22cdd8ff44d';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const invariant = (value, reason) => { if (!value) {
   const error = new Error(reason); error.name = 'InstalledCriterionError'; throw error;
