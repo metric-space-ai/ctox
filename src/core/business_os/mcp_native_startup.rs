@@ -271,6 +271,7 @@ mod tests {
             .enable_all()
             .build()?;
         runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(45), async {
             let home=root.path().join("actual-core-home");
             std::fs::create_dir_all(&home)?;
             let mut config=ctox_core::config::ConfigBuilder::default()
@@ -313,6 +314,7 @@ mod tests {
             let report=serde_json::to_value(state.core_effect_capture().context("actual Core capture missing")?.report())?;
             assert!(!report["startupUncertainties"].as_array().unwrap().contains(&Value::String("mcp-startup".into())));
             Ok::<(),anyhow::Error>(())
+            }).await.context("actual Core startup fixture deadline")?
         })
     }
 
