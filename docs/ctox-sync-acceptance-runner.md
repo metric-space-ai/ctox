@@ -1,14 +1,14 @@
 # Installed sync acceptance (DevOps goals5–7)
 
 This runner consumes the single shared Linux package from Main
-`77f235a4fc8e1dcbbb2285f0ca952b18c7bda755` (including #392). It never compiles native CTOX,
+`b48220db385d53f07c8414c21f7ce22cdd8ff44d` (including #392). It never compiles native CTOX,
 changes sync production code, or restarts a host/customer service. The Mac
 Workjet revision is recorded separately; this is not a Desktop or Shell UI
 acceptance proof.
 
-Use the published `native-main-77f235a4fc8e` package and its terminal producer
-manifest. Older5fb-prefix measurements remain tied to that installed source;
-they are neither relabeled nor reused as a77f sync pass. Preparation must use a
+Use the published `native-main-b48220db385d` package and its terminal producer
+manifest. Older5fb/77f-prefix measurements remain tied to their installed sources;
+they are neither relabeled nor reused as a b48220 sync pass. Preparation must use a
 fresh prefix, not replace the state or authority of an earlier attempt.
 
 The preparation operator checks the finished producer receipt, package hash,
@@ -38,8 +38,9 @@ package and Chromium148 cache that passed Shell's real fixtures:
 - `PLAYWRIGHT_BROWSERS_PATH`: `/mnt/nvme1/build-lane/deps/shell-browser-collection-auth/browsers`
 - Node: `/mnt/nvme1/build-lane/cache/node-v24.13.1-linux-x64/bin/node`
 
-The controller verifies those exact real paths and package version, then uses
-`chromium.executablePath()` from that package. It creates its own browser and
+The controller verifies those exact real paths and package version, then lets
+Playwright choose its matching default headless executable and records the
+actual spawned executable. It creates its own browser and
 private profile/config/cache, retaining the real NSS-resolved home without a
 HOME override. Before launch it checks uid/gid resolution, home accessibility,
 writable shared memory (at least64MiB free), and proc visibility; the receipt
