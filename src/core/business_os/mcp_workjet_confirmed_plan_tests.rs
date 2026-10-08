@@ -21,7 +21,11 @@ pub(super) fn fixture() -> anyhow::Result<(tempfile::TempDir, String)> {
         {"id":"prove-reopen","title":"Prove reopening","acceptance":"Saved answer survives reopening",
         "priority":"P1","owner":"Michael","due_at_ms":1791800000000i64,"evidence_ids":[]}]});
     let policy = store::open_store(root.path())?;
-    policy.execute_batch(super::super::super::jour_fixe_preparation::SCHEMA)?;
+    policy.execute_batch(
+        "CREATE TABLE workjet_jour_fixe_meetings (
+        meeting_id TEXT PRIMARY KEY,project_id TEXT NOT NULL,owner_user_id TEXT NOT NULL,
+        scheduled_at_ms INTEGER NOT NULL,metadata_json TEXT NOT NULL,preparation_task_id TEXT);",
+    )?;
     policy.execute("INSERT INTO workjet_jour_fixe_meetings VALUES ('meeting-1','project','owner',1791450000000,?1,NULL)",[meeting.to_string()])?;
     let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
         root.path(),
