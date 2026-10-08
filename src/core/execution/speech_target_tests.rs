@@ -16,6 +16,69 @@ impl WebRTCPublicationGuard for Current {
 }
 
 #[test]
+fn native_reply_composes_with_outer_peer_fence_without_reentry() {
+    let fence = Mutex::new(());
+    let authority = Current(AtomicBool::new(true));
+    let effects = AtomicUsize::new(0);
+    let publish = || {
+        authority.with_current(&mut || {
+            PublicationBoundary::NativeReply.publish(
+                |send| {
+                    let _held = fence
+                        .try_lock()
+                        .map_err(|_| new_rx_error("TEST_FENCE_REENTRY", None))?;
+                    send()
+                },
+                &mut || {
+                    // The outer RxDB guard owns the same non-reentrant fence.
+                    let _held = fence
+                        .try_lock()
+                        .map_err(|_| new_rx_error("TEST_FENCE_REENTRY", None))?;
+                    effects.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                },
+            )
+        })
+    };
+    publish().unwrap();
+    assert_eq!(effects.load(Ordering::Relaxed), 1);
+    authority.0.store(false, Ordering::Release);
+    assert!(publish().is_err());
+    assert_eq!(effects.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn private_runtime_io_still_holds_peer_fence_and_rechecks_authority() {
+    let fence = Mutex::new(());
+    let authority = Current(AtomicBool::new(true));
+    let effects = AtomicUsize::new(0);
+    let publish = || {
+        authority.with_current(&mut || {
+            PublicationBoundary::RuntimeIo.publish(
+                |send| {
+                    let _held = fence
+                        .try_lock()
+                        .map_err(|_| new_rx_error("TEST_FENCE_REENTRY", None))?;
+                    send()
+                },
+                &mut || {
+                    assert!(
+                        fence.try_lock().is_err(),
+                        "private model poll lost peer fence"
+                    );
+                    effects.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                },
+            )
+        })
+    };
+    publish().unwrap();
+    authority.0.store(false, Ordering::Release);
+    assert!(publish().is_err());
+    assert_eq!(effects.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn pending_private_io_rechecks_authority_before_next_poll() {
     let guard = Current(AtomicBool::new(true));
     let effects = AtomicUsize::new(0);
