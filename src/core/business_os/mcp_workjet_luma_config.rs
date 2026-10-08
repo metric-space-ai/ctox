@@ -65,7 +65,19 @@ pub(super) fn execute(
     context: &McpChannelRequestContext,
     tool_name: &str,
     args: &Value,
+    trusted_gateway_context: Option<&Value>,
 ) -> anyhow::Result<Value> {
+    if context.trusted_role_source.as_deref() == Some("ctox_dev_managed_mcp_token") {
+        let scope = context.trusted_managed_read_scope.as_ref().context("managed Luma scope missing")?;
+        anyhow::ensure!(scope.allowed_collections.is_empty() || scope.allowed_collections.iter().any(|collection| collection == COLLECTION),
+            "Luma collection is outside this managed client scope");
+        let allowed = match tool_name {
+            READ_TOOL => scope.allow_reads,
+            WRITE_TOOL => trusted_gateway_context.is_some_and(|gateway| gateway["managed_policy"]["allowWrites"] == true),
+            _ => false,
+        };
+        anyhow::ensure!(allowed, "Luma operation is outside this managed client scope");
+    }
     match tool_name {
         READ_TOOL => {
             let _: ReadRequest = serde_json::from_value(args.clone())
@@ -218,6 +230,28 @@ mod tests {
         })).is_ok());
     }
 
+    #[test]
+    fn managed_read_only_grants_cannot_save_instance_configuration() -> anyhow::Result<()> {
+        let root = fixture()?;
+        let gateway = json!({
+            "auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp",
+            "surface":"workjet","actor":"owner","role":"chef","workspace":"tenant:instance",
+            "instance_id":"source-instance",
+            "managed_policy":{"allowReads":true,"allowWrites":false,"allowedCollections":[COLLECTION]}
+        });
+        assert_eq!(call_tool_inner(root.path(), READ_TOOL, json!({}), Some(&gateway))?["revision"], 0);
+        assert!(call_tool_inner(root.path(), WRITE_TOOL,
+            json!({"expected_revision":0,"configuration":{"workerProfiles":[]}}), Some(&gateway)).is_err());
+        let mut foreign = gateway.clone();
+        foreign["managed_policy"]["allowedCollections"] = json!(["workjet_projects"]);
+        assert!(call_tool_inner(root.path(), READ_TOOL, json!({}), Some(&foreign)).is_err());
+        let mut disabled = gateway.clone();
+        disabled["managed_policy"]["allowReads"] = json!(false);
+        assert!(call_tool_inner(root.path(), READ_TOOL, json!({}), Some(&disabled)).is_err());
+        assert_eq!(call_tool_inner(root.path(), READ_TOOL, json!({}), Some(&gateway))?["revision"], 0);
+        Ok(())
+    }
+
     fn fixture() -> anyhow::Result<tempfile::TempDir> {
         let root = tempfile::tempdir()?;
         store::tests::seed_business_user(root.path(), "owner", "chef")?;
@@ -236,7 +270,8 @@ mod tests {
         let gateway = json!({
             "auth_source":"ctox_dev_managed_mcp_token", "channel":"ctox_dev_managed_mcp",
             "surface":"workjet", "actor":actor, "role":role,
-            "workspace":"tenant:instance", "instance_id":"source-instance"
+            "workspace":"tenant:instance", "instance_id":"source-instance",
+            "managed_policy":{"allowReads":true,"allowWrites":true,"allowedCollections":[COLLECTION]}
         });
         call_tool_inner(root, tool, args, Some(&gateway))
     }

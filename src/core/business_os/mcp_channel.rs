@@ -3246,7 +3246,7 @@ fn call_tool_inner(
             workjet_worker_dispatch::execute(root, &context, &arguments, trusted_gateway_context)?
         }
         workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
-            workjet_luma_config::execute(root, &context, tool_name, &arguments)?
+            workjet_luma_config::execute(root, &context, tool_name, &arguments, trusted_gateway_context)?
         }
         workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => workjet_jour_fixe::execute(
             root,

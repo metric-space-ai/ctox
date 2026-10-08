@@ -316,7 +316,7 @@ const scopedAuthEnv = {
 };
 
 test("managed native worker controls require an explicit write-capable tool grant", async () => {
-  for (const tool of ["business_os.remote_worker_admission", "business_os.workjet_worker_dispatch"]) {
+  for (const tool of ["business_os.remote_worker_admission", "business_os.workjet_worker_dispatch", "business_os.luma_configuration_update"]) {
     for (const [policy, expectedField] of [
       [{ allowWrites: false, allowedTools: [tool] }, "allowWrites"],
       [{ allowWrites: true, allowedTools: ["business_os.status"] }, "allowedTools"],
