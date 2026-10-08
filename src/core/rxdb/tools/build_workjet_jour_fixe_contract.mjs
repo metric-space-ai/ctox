@@ -36,7 +36,10 @@ for (const [name, type] of Object.entries(spec.types)) {
     for (const [key, op] of Object.entries({min_chars:'<',max_chars:'>',min_items:'<',max_items:'>',minimum:'<',maximum:'>'})) {
       if (f[key] === undefined) continue;
       const bound = f.type === 'f64' && ['minimum','maximum'].includes(key) ? Number(f[key]).toFixed(1) : String(f[key]);
-      rust += `if ${expr[key]} ${op} ${bound} { return Err(${JSON.stringify(name+'.'+field+' violates '+key)}.into()); }\n`;
+      const condition = key === 'min_items' && f[key] === 1
+        ? 'value.is_empty()'
+        : `${expr[key]} ${op} ${bound}`;
+      rust += `if ${condition} { return Err(${JSON.stringify(name+'.'+field+' violates '+key)}.into()); }\n`;
     }
     rust += '}\n';
   }

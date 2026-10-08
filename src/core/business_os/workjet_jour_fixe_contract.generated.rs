@@ -936,7 +936,7 @@ impl WireValidate for PublishDeckRequest {
         {
             let value = &self.slides;
             value.validate()?;
-            if value.len() < 1 {
+            if value.is_empty() {
                 return Err("PublishDeckRequest.slides violates min_items".into());
             }
             if value.len() > 100 {
