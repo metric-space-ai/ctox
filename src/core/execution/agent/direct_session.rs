@@ -3577,7 +3577,10 @@ mod tests {
             .expect("explicit enabled tools");
         for name in ["business_os.jour_fixe_read", "business_os.jour_fixe_update"] {
             assert_eq!(
-                tools.iter().filter(|tool| tool.as_str() == Some(name)).count(),
+                tools
+                    .iter()
+                    .filter(|tool| tool.as_str() == Some(name))
+                    .count(),
                 1,
                 "the harness must expose the native meeting tool exactly once: {name}"
             );
