@@ -12,6 +12,7 @@ fn fixture(state: &str) -> anyhow::Result<(tempfile::TempDir,Value)> {
     meeting["supervisor"] = json!({"workjet_thread_id":THREAD,"ctox_thread_key":format!("business-os/threads/{THREAD}")});
     meeting["state"] = json!(state); meeting["revision"] = json!(0);
     meeting["comments"] = json!([]); meeting["transcript"] = json!([]); meeting["todos"] = Value::Null;
+    meeting["previous_goal"] = Value::Null;
     if state == "planned" { meeting["slides"] = json!([]); meeting["deck_revision"] = json!(0); }
     let policy = store::open_store(root.path())?;
     policy.execute_batch("CREATE TABLE workjet_jour_fixe_meetings (

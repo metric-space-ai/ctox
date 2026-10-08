@@ -32,10 +32,10 @@ use crate::governance;
 use super::plan_status::PlanGoalStatus;
 use super::plan_status::PlanStepStatus;
 
-const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
+pub(crate) mod confirmed_goal;
 const DEFAULT_GOAL_THREAD_PREFIX: &str = "plan";
 const DEFAULT_RESULT_EXCERPT_CHARS: usize = 420;
-const PLAN_STATE_STAMP_RELATIVE_PATH: &str = "runtime/mission/plan-state.stamp";
+const PLAN_STATE_STAMP_RELATIVE_PATH: &str = "mission/plan-state.stamp";
 
 static PLAN_SCHEMA_READY: OnceLock<Mutex<HashSet<PlanDbKey>>> = OnceLock::new();
 static EMIT_DUE_STEPS_GATE: OnceLock<Mutex<HashMap<PathBuf, EmitDueStepsGateState>>> =
@@ -2436,11 +2436,11 @@ fn schema_state(conn: &Connection) -> Result<serde_json::Value> {
 }
 
 fn resolve_db_path(root: &Path) -> std::path::PathBuf {
-    root.join(DEFAULT_DB_RELATIVE_PATH)
+    crate::paths::core_db(root)
 }
 
 fn resolve_plan_state_stamp_path(root: &Path) -> PathBuf {
-    root.join(PLAN_STATE_STAMP_RELATIVE_PATH)
+    crate::paths::runtime_dir(root).join(PLAN_STATE_STAMP_RELATIVE_PATH)
 }
 
 fn plan_state_change_stamp(root: &Path) -> PlanStateChangeStamp {

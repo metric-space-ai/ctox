@@ -16,6 +16,7 @@ pub(super) fn fixture(state: &str) -> anyhow::Result<TempDir> {
     meeting["comments"] = json!([]);
     meeting["transcript"] = json!([]);
     meeting["todos"] = Value::Null;
+    meeting["previous_goal"] = Value::Null;
     let conn = open_store(root.path())?;
     conn.execute_batch(super::super::jour_fixe_preparation::SCHEMA)?;
     conn.execute("INSERT INTO workjet_jour_fixe_meetings VALUES ('meeting-1','project','owner',1791450000000,?1,NULL)", [meeting.to_string()])?;

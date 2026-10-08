@@ -733,7 +733,7 @@ fn reject_legacy_external_sql_replay(
         "legacy control rejection requires the same currently authenticated actor"
     );
     anyhow::ensure!(
-        !domain_effect::contains(&tx, command_id)?,
+        !domain_effect::contains_at_root(root, &tx, command_id)?,
         "applied domain effect cannot be terminalized as a failed mutation"
     );
     let original_claim = super::store::business_command_core_claim(command_id, &original)?;
@@ -908,7 +908,7 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
     // Only proof-bearing domain commands bypass the uncertain replay shortcut.
     // Authentication and central policy still run before reading their result.
     let resumes_domain_effect =
-        domain_effect_hash.is_some() && domain_effect::contains(&conn, &command_id)?;
+        domain_effect_hash.is_some() && domain_effect::contains_at_root(root, &conn, &command_id)?;
     let existing_status: Option<String> = conn
         .query_row(
             "SELECT status FROM business_commands WHERE command_id = ?1",
@@ -1723,13 +1723,13 @@ fn dispatch_business_command(
         }
         "ctox.workjet.jour_fixe.prepare"
         | "ctox.workjet.jour_fixe.deck.publish"
-        | "ctox.workjet.jour_fixe.todos.propose"
-        | "ctox.workjet.jour_fixe.todos.confirm" => Ok(BusinessCommandDispatchOutcome::failed(
+        | "ctox.workjet.jour_fixe.todos.propose" => Ok(BusinessCommandDispatchOutcome::failed(
             None,
             serde_json::json!({"ok":false,"error":"Jour fixe action is not implemented on this native release"}),
             anyhow::anyhow!("Jour fixe action is not implemented on this native release"),
         )),
-        "ctox.workjet.jour_fixe.meeting.start"
+        "ctox.workjet.jour_fixe.todos.confirm"
+        | "ctox.workjet.jour_fixe.meeting.start"
         | "ctox.workjet.jour_fixe.meeting.end"
         | "ctox.workjet.jour_fixe.transcript.append"
         | "ctox.workjet.jour_fixe.todos.revise"
@@ -2332,7 +2332,7 @@ fn write_rxdb_control_command_state(
     terminal: bool,
 ) -> anyhow::Result<Value> {
     let command_id = command.id.as_deref().context("command id is required")?;
-    if terminal && status != "completed" && domain_effect::contains(&open_store(root)?, command_id)?
+    if terminal && status != "completed" && domain_effect::contains_at_root(root, &open_store(root)?, command_id)?
     {
         anyhow::bail!("applied domain effect cannot be terminalized as a failed mutation");
     }
