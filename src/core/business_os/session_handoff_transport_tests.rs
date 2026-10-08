@@ -250,3 +250,37 @@ fn native_handoff_transport_new_probe_retires_old_response_and_bounds_expiry() {
     // The retained challenge record is part of authority too.
     assert!(new.publication.with_current(&mut || Ok(())).is_err());
 }
+
+#[test]
+fn native_handoff_transport_renews_local_decisions_but_never_expired_wire_responses() {
+    let f = fresh_fixture();
+    let server = server(&f);
+    let current = server.gate.authorize(&f.request).unwrap();
+    let mut original = current.clone();
+    original.expires_at_ms = 0;
+    assert!(operation_authority_matches(&original, &current));
+    assert!(!currency_matches(&original, &current));
+    for field in 0..12 {
+        let mut changed = current.clone();
+        match field {
+            0 => changed.principal_epoch += 1,
+            1 => changed.binding_revision += 1,
+            2 => changed.ownership_generation += 1,
+            3 => changed.binding_digest = "b".repeat(64),
+            4 => changed.job_id = "another-job".into(),
+            5 => changed.session_id = "another-session".into(),
+            6 => changed.checkpoint_digest = "c".repeat(64),
+            7 => changed.checkpoint_sequence += 1,
+            8 => changed.scope_id = "another-scope".into(),
+            9 => changed.audience = "another-audience".into(),
+            10 => changed.expires_at_ms = 0,
+            _ => changed.issued_at_ms = u64::MAX,
+        }
+        assert!(!operation_authority_matches(&original, &changed), "{field}");
+    }
+    // Same authority may resolve a new chunk nonce or the second Resume gate.
+    let mut next = current.clone();
+    next.nonce = fresh_nonce().unwrap();
+    next.phase = SessionHandoffPhase::Resume;
+    assert!(operation_authority_matches(&original, &next));
+}

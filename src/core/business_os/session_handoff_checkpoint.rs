@@ -390,14 +390,14 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Target<P> {
         let mut result = None;
         self.server.gate.with_current_authority(|conn, identity| {
             let permit = self.server.gate.resolve_fenced(conn, identity, request)?;
-            if !currency_matches(&self.original, &permit) {
+            if !operation_authority_matches(&self.original, &permit) {
                 return Err(deny("target_authority_changed"));
             }
             if self.request.phase == SessionHandoffPhase::Resume {
                 let mut receive = request.clone();
                 receive.phase = SessionHandoffPhase::Receive;
                 let permit = self.server.gate.resolve_fenced(conn, identity, &receive)?;
-                if !currency_matches(&self.original, &permit) {
+                if !operation_authority_matches(&self.original, &permit) {
                     return Err(deny("target_authority_changed"));
                 }
             }
@@ -729,7 +729,10 @@ pub(crate) fn assert_native_checkpoint_path(
         AuthCredentialsStoreMode::File,
     )
     .unwrap();
-    let original = native_target.gate.authorize(&local).unwrap();
+    let mut original = native_target.gate.authorize(&local).unwrap();
+    // Deterministically exercise a copy outliving its initial local witness.
+    // Actual wire challenges/receive permits are freshly signed per chunk.
+    original.expires_at_ms = 0;
     let live = Arc::new(Mutex::new(true));
     let target = Target {
         server: native_target,
@@ -998,6 +1001,15 @@ fn copy_only(reconstruct: &bool) -> bool {
     !reconstruct
 }
 impl CopyRequest {
+    pub(crate) fn operation_timeout(&self) -> std::time::Duration {
+        // Full manifests permit up to 1 GiB of bounded chunks. The local
+        // command deadline is separate from every short-lived wire permit.
+        std::time::Duration::from_secs(if self.source_route.is_empty() {
+            60
+        } else {
+            30 * 60
+        })
+    }
     fn valid_operation(&self) -> bool {
         let ordinary = !self.acknowledge && self.protection_receipts.is_empty();
         let identifiers_only =
@@ -1096,6 +1108,7 @@ pub(super) fn listen(
                             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                         && r.valid_operation() =>
                 {
+                    let deadline = r.operation_timeout();
                     let operation = async {
                         if r.acknowledge || !r.protection_receipts.is_empty() {
                             let registry = guests.as_ref().ok_or_else(|| {
@@ -1147,7 +1160,7 @@ pub(super) fn listen(
                         }
                     };
                     tokio::select! {
-                        result=tokio::time::timeout(std::time::Duration::from_secs(60),operation)=>{
+                        result=tokio::time::timeout(deadline,operation)=>{
                             match result {Ok(Ok(response))=>response,_=>CopyResponse::Denied}
                         },
                         _=stream.read_u8()=>CopyResponse::Denied,

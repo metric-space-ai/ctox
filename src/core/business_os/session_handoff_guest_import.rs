@@ -28,7 +28,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> NativeGuestImportFence for Ta
                     .gate
                     .resolve_fenced(policy, identity, &request)?;
                 anyhow::ensure!(
-                    currency_matches(&self.original, &permit),
+                    operation_authority_matches(&self.original, &permit),
                     "target authority changed during guest import"
                 );
             }
