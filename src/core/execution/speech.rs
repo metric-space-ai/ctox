@@ -1234,7 +1234,10 @@ mod speech_availability_tests {
 
     #[test]
     fn a_check_that_could_not_run_is_unknown_not_unavailable() {
-        assert_eq!(availability_from_check(Err(())), SpeechAvailability::Unknown);
+        assert_eq!(
+            availability_from_check(Err(())),
+            SpeechAvailability::Unknown
+        );
     }
 
     #[test]
