@@ -43456,7 +43456,7 @@ pub(super) mod tests {
             .to_string();
         let observed = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
         let store_path = business_os_store_path(root);
-        super::store_projections::AFTER_QUEUE_TASK_CORE_READS.with(|slot| {
+        crate::business_os::store_projections::AFTER_QUEUE_TASK_CORE_READS.with(|slot| {
             let observed = observed.clone();
             let store_path = store_path.clone();
             *slot.borrow_mut() = Some(Box::new(move || {
@@ -43471,7 +43471,7 @@ pub(super) mod tests {
             }));
         });
         let projected = refresh_business_command_queue_task_projection(root, &task_id);
-        super::store_projections::AFTER_QUEUE_TASK_CORE_READS.with(|slot| {
+        crate::business_os::store_projections::AFTER_QUEUE_TASK_CORE_READS.with(|slot| {
             *slot.borrow_mut() = None;
         });
         assert!(projected?.is_some());
