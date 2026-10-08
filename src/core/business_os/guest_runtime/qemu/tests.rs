@@ -575,6 +575,11 @@ async fn real_qemu_survives_retirement_of_its_calling_thread() -> Result<()> {
             "retained guest executed before authorization"
         );
         guest.ensure_alive()?;
+        guest.monitor()?.quit().await?;
+        ensure!(
+            guest.wait_for_exit().await?.success(),
+            "retained guest did not confirm a clean QMP quit"
+        );
         Ok::<_, anyhow::Error>(())
     })
     .await;
