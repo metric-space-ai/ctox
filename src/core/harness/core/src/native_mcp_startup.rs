@@ -99,8 +99,9 @@ mod tests {
             &serde_json::json!({"data":"x".repeat(MAX_INITIALIZE_BYTES)}),
         );
         assert!(oversized.initialize().is_none());
-        let snapshot = NativeMcpStartupSnapshot::new(ThreadId::default(), vec![original]);
-        assert_eq!(snapshot.session_id(), ThreadId::default());
+        let session_id = ThreadId::default();
+        let snapshot = NativeMcpStartupSnapshot::new(session_id, vec![original]);
+        assert_eq!(snapshot.session_id(), session_id);
         assert_eq!(snapshot.servers().len(), 1);
     }
 }
