@@ -4,6 +4,7 @@
 use super::*;
 use crate::communication::{email_accounts, email_native};
 use rusqlite::{Connection, OpenFlags};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 #[path = "workjet_calendar_contract.generated.rs"]
 mod wire;
