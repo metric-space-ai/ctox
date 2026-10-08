@@ -21,6 +21,12 @@ pub struct NativeCoreEffectReport {
 }
 
 impl NativeCoreEffectReport {
+    pub(crate) fn requires_reconciliation(&self) -> bool {
+        !self.source_factory_registered
+            || !self.startup_uncertainties.is_empty()
+            || self.unreconciled_observations != 0
+    }
+
     pub(crate) fn validate_metadata(&self, session: ThreadId) -> io::Result<()> {
         if self.version != 1
             || self.session_id != session
@@ -53,9 +59,25 @@ impl NativeCoreEffectCapture {
         self.report.session_id
     }
     pub fn requires_reconciliation(&self) -> bool {
-        !self.report.source_factory_registered
-            || !self.report.startup_uncertainties.is_empty()
-            || self.report.unreconciled_observations != 0
+        self.report.requires_reconciliation()
+    }
+}
+
+/// Actual input of the one-use native restore manager, never decoded from JSON.
+/// The source report remains descriptive; only the protected native owner may
+/// verify this input and reconcile its previous-history uncertainty.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NativePreviousSessionSnapshot {
+    session_id: ThreadId,
+    input_sha256: [u8; 32],
+    reported_source_clean: bool,
+}
+impl NativePreviousSessionSnapshot {
+    pub fn session_id(&self) -> ThreadId {
+        self.session_id
+    }
+    pub fn input_sha256(&self) -> &[u8; 32] {
+        &self.input_sha256
     }
 }
 
@@ -67,6 +89,7 @@ struct Observations {
     mcp_refreshing: u64,
     unreconciled: u64,
     calls: BTreeMap<String, PlanObservation>,
+    previous_input: Option<NativePreviousSessionSnapshot>,
 }
 
 fn advance_mcp_generation(state: &mut Observations) {
@@ -133,8 +156,85 @@ impl NativeCoreEffects {
                 mcp_refreshing: 0,
                 unreconciled: 0,
                 calls: BTreeMap::new(),
+                previous_input: None,
             }),
         }
+    }
+
+    pub(crate) fn bind_previous_input(
+        &self,
+        session_id: ThreadId,
+        input_sha256: [u8; 32],
+        reported_source_clean: bool,
+    ) -> io::Result<()> {
+        let mut state = self
+            .observations
+            .lock()
+            .map_err(|_| io::Error::other("native Core effect ledger poisoned"))?;
+        if state.previous_input.is_some()
+            || state.registered
+            || state.submissions != 0
+            || state.unreconciled != 0
+            || !state.startup.contains("previous-session-effects")
+        {
+            return Err(io::Error::other(
+                "native previous input is late or repeated",
+            ));
+        }
+        state.previous_input = Some(NativePreviousSessionSnapshot {
+            session_id,
+            input_sha256,
+            reported_source_clean,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn previous_snapshot(
+        &self,
+        session: ThreadId,
+    ) -> io::Result<NativePreviousSessionSnapshot> {
+        let state = self
+            .observations
+            .lock()
+            .map_err(|_| io::Error::other("native Core effect ledger poisoned"))?;
+        let snapshot = state
+            .previous_input
+            .as_ref()
+            .ok_or_else(|| io::Error::other("Core has no actual native previous input"))?;
+        if snapshot.session_id != session
+            || !snapshot.reported_source_clean
+            || state.submissions != 0
+            || state.unreconciled != 0
+            || !state.startup.contains("previous-session-effects")
+        {
+            return Err(io::Error::other(
+                "native previous effects remain unresolved",
+            ));
+        }
+        Ok(snapshot.clone())
+    }
+
+    pub(crate) fn reconcile_previous(
+        &self,
+        snapshot: &NativePreviousSessionSnapshot,
+    ) -> io::Result<()> {
+        let mut state = self
+            .observations
+            .lock()
+            .map_err(|_| io::Error::other("native Core effect ledger poisoned"))?;
+        if state.previous_input.as_ref() != Some(snapshot)
+            || !snapshot.reported_source_clean
+            || state.submissions != 0
+            || state.unreconciled != 0
+            || !state.startup.contains("previous-session-effects")
+        {
+            return Err(io::Error::other(
+                "native previous receipt is late, repeated or stale",
+            ));
+        }
+        state.startup.remove("previous-session-effects");
+        state.previous_input = None;
+        Ok(())
     }
 
     pub(crate) fn observe_mcp_startup(&self, enabled_servers: usize) {
@@ -349,9 +449,68 @@ mod tests {
                 mcp_refreshing: 0,
                 unreconciled: 0,
                 calls: BTreeMap::new(),
+                previous_input: None,
             }),
         }
     }
+
+    #[test]
+    fn previous_input_requires_actual_binding_and_current_clean_source() {
+        let id = ThreadId::default();
+        let ledger = quiet();
+        ledger
+            .observations
+            .lock()
+            .unwrap()
+            .startup
+            .insert("previous-session-effects".into());
+        assert!(ledger.previous_snapshot(id).is_err());
+        ledger.bind_previous_input(id, [7; 32], false).unwrap();
+        assert!(ledger.previous_snapshot(id).is_err());
+        assert!(ledger.bind_previous_input(id, [7; 32], true).is_err());
+    }
+
+    #[test]
+    fn previous_receipt_rejects_foreign_late_unknown_and_repeated_use() {
+        let id = ThreadId::default();
+        for failure in 0..4 {
+            let ledger = quiet();
+            ledger
+                .observations
+                .lock()
+                .unwrap()
+                .startup
+                .insert("previous-session-effects".into());
+            ledger.bind_previous_input(id, [7; 32], true).unwrap();
+            let mut snapshot = ledger.previous_snapshot(id).unwrap();
+            match failure {
+                0 => snapshot.input_sha256 = [8; 32],
+                1 => snapshot.session_id = ThreadId::default(),
+                2 => ledger.observe_submission(&Op::Shutdown),
+                _ => ledger.observe_unreconciled(),
+            }
+            assert!(ledger.reconcile_previous(&snapshot).is_err());
+            assert!(ledger.capture(id).unwrap().requires_reconciliation());
+        }
+        let ledger = quiet();
+        ledger
+            .observations
+            .lock()
+            .unwrap()
+            .startup
+            .insert("previous-session-effects".into());
+        ledger.observe_mcp_startup(1);
+        ledger.bind_previous_input(id, [7; 32], true).unwrap();
+        let snapshot = ledger.previous_snapshot(id).unwrap();
+        ledger.reconcile_previous(&snapshot).unwrap();
+        ledger.register_source_factory().unwrap();
+        assert!(
+            ledger.capture(id).unwrap().requires_reconciliation(),
+            "MCP uncertainty was erased"
+        );
+        assert!(ledger.reconcile_previous(&snapshot).is_err());
+    }
+
     #[test]
     fn no_observations_are_not_a_factory_receipt() {
         let ledger = quiet();

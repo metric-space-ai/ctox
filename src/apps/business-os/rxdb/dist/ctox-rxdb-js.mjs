@@ -11652,6 +11652,7 @@ var CtoxWebRtcReplicationState = class {
     const budgetMs = Math.max(250, Number(timeoutMs) || 15e3);
     const subscriptions = [];
     let timer = null;
+    let lastError = null;
     try {
       return await new Promise((resolve, reject) => {
         let settled = false;
@@ -11676,9 +11677,13 @@ var CtoxWebRtcReplicationState = class {
         };
         subscriptions.push(this.queryReady$?.subscribe?.(inspect));
         subscriptions.push(this.peerStates$?.subscribe?.(inspect));
+        subscriptions.push(this.error$?.subscribe?.((error) => {
+          lastError = error;
+        }));
         inspect();
         timer = setTimeout(() => {
-          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms`));
+          const cause = lastError?.message ? `; last error: ${lastError.message}` : "";
+          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms${cause}`));
         }, budgetMs);
       });
     } finally {

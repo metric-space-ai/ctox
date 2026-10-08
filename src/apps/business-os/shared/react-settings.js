@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261008-jour-fixe-speech-ingress';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261009-shell-v2-query-ready-diagnostics';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {

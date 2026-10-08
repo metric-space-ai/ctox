@@ -14,6 +14,17 @@ Fork policy:
 - Local modifications inside this subtree belong to the CTOX fork state unless explicitly documented otherwise.
 - CTOX must not auto-clone, auto-fetch, or auto-update this subtree from upstream.
 
+## 2026-10 Protected previous-session effect receipt
+
+A one-use native restore manager binds the actual loaded original-session
+input digest to an opaque runtime snapshot. Only the protected receiver,
+under current account/quorum/native-owner and immutable input checks, may
+reconcile its previous-history marker before any submission. Source effect
+metadata remains descriptive and the protected manifest must be free of
+pending effects. Normal resume, unknown sources, foreign/late/repeated receipts
+stay unresolved; MCP and new effects are not cleared. Real Core restore and
+re-capture regressions remain source checks, not installed failover proof.
+
 ## 2026-10 Original-session checkpoint import
 
 `ThreadManager::resume_thread_from_native_checkpoint` restores the captured
