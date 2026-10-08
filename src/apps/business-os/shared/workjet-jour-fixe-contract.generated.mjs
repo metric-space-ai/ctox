@@ -685,6 +685,27 @@ export const JOUR_FIXE_TYPES = deepFreeze({
       }
     }
   },
+  "NarrationInput": {
+    "fields": {
+      "slide_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "expected_revision": {
+        "type": "u64"
+      },
+      "narration_text_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      }
+    }
+  },
   "NativeNarrationReceipt": {
     "fields": {
       "operation_id": {

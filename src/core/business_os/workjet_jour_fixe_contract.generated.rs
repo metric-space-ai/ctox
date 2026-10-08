@@ -1453,6 +1453,51 @@ impl WireValidate for NarrateRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct NarrationInput {
+    pub(crate) slide_id: String,
+    pub(crate) deck_revision: u64,
+    pub(crate) expected_revision: u64,
+    pub(crate) narration_text_sha256: String,
+}
+impl WireValidate for NarrationInput {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.slide_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("NarrationInput.slide_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("NarrationInput.slide_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.deck_revision;
+            value.validate()?;
+            if *value < 1 {
+                return Err("NarrationInput.deck_revision violates minimum".into());
+            }
+        }
+        {
+            let value = &self.expected_revision;
+            value.validate()?;
+        }
+        {
+            let value = &self.narration_text_sha256;
+            value.validate()?;
+            if value.chars().count() < 64 {
+                return Err("NarrationInput.narration_text_sha256 violates min_chars".into());
+            }
+            if value.chars().count() > 64 {
+                return Err("NarrationInput.narration_text_sha256 violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct NativeNarrationReceipt {
     pub(crate) operation_id: String,
     pub(crate) instance_id: String,
@@ -2160,6 +2205,9 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "NarrateRequest" => serde_json::from_value::<NarrateRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "NarrationInput" => serde_json::from_value::<NarrationInput>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         "NativeNarrationReceipt" => serde_json::from_value::<NativeNarrationReceipt>(value)

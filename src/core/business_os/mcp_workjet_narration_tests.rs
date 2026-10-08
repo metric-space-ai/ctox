@@ -299,16 +299,39 @@ fn custody_failure_rolls_back_file_chunks_reference_and_receipt_together() -> an
 
 #[test]
 fn native_read_supplies_exact_narration_hashes_until_audio_is_committed() -> anyhow::Result<()> {
-    let (root,trusted)=fixture()?;
-    let request=json!({"action":"read_meeting","request":{"project_id":"project","meeting_id":"meeting-1"}});
-    let context=super::super::context_from_arguments_with_trusted_gateway_context(workjet_jour_fixe::READ_TOOL,&request,Some(&trusted))?;
-    let read=workjet_jour_fixe::execute(root.path(),&context,workjet_jour_fixe::READ_TOOL,&request,Some(&trusted))?;
-    let input=&read["narration_inputs"][0];
-    assert_eq!(input["narration_text_sha256"],hash(TEXT.as_bytes()));
-    let mut narrate=args();
-    for field in ["slide_id","deck_revision","expected_revision","narration_text_sha256"] {narrate["request"][field]=input[field].clone();}
-    call(root.path(),&trusted,narrate,output)?;
-    let read=workjet_jour_fixe::execute(root.path(),&context,workjet_jour_fixe::READ_TOOL,&request,Some(&trusted))?;
-    assert_eq!(read["narration_inputs"],json!([]));
+    let (root, trusted) = fixture()?;
+    let request = json!({"action":"read_meeting","request":{"project_id":"project","meeting_id":"meeting-1"}});
+    let context = super::super::context_from_arguments_with_trusted_gateway_context(
+        workjet_jour_fixe::READ_TOOL,
+        &request,
+        Some(&trusted),
+    )?;
+    let read = workjet_jour_fixe::execute(
+        root.path(),
+        &context,
+        workjet_jour_fixe::READ_TOOL,
+        &request,
+        Some(&trusted),
+    )?;
+    let input = &read["narration_inputs"][0];
+    assert_eq!(input["narration_text_sha256"], hash(TEXT.as_bytes()));
+    let mut narrate = args();
+    for field in [
+        "slide_id",
+        "deck_revision",
+        "expected_revision",
+        "narration_text_sha256",
+    ] {
+        narrate["request"][field] = input[field].clone();
+    }
+    call(root.path(), &trusted, narrate, output)?;
+    let read = workjet_jour_fixe::execute(
+        root.path(),
+        &context,
+        workjet_jour_fixe::READ_TOOL,
+        &request,
+        Some(&trusted),
+    )?;
+    assert_eq!(read["narration_inputs"], json!([]));
     Ok(())
 }
