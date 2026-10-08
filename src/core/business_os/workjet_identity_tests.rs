@@ -221,7 +221,10 @@ fn alias_project_update_keeps_canonical_owner_and_private_chat_visibility() -> a
     assert_eq!(result["status"], "completed");
     assert_eq!(result["result"]["owner_user_id"], OWNER);
     assert_eq!(result["result"]["project"]["owner_user_id"], OWNER);
-    assert_eq!(result["result"]["project"]["info"]["summary"], "Saved via alias");
+    assert_eq!(
+        result["result"]["project"]["info"]["summary"],
+        "Saved via alias"
+    );
     let chat_id = result["result"]["group_chat_id"]
         .as_str()
         .context("group chat")?;
