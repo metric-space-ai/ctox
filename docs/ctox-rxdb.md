@@ -1841,6 +1841,18 @@ silent pass-through.
 
 ### 6.4 Demand-loading RPCs (V1.5)
 
+Explicit native file publication hashes the same open file and then materializes
+its existing 16-KiB Base64 chunks with 12-KiB reads and at most 64 documents per
+write batch. Republish completeness checks also read at most 64 chunk documents
+at a time. Generation cleanup projects out Base64 payloads in SQLite before
+hydrating its existing capped scan and writes tombstones in 64-document batches.
+Empty files and the existing chunk/hash/generation format remain
+compatible. The available file generation is published only after the second
+pass agrees with the full first-pass SHA-256 and size; failed partial batches do
+not make a file available. This bounds application payload buffers, not total
+SQLite disk allocation or installed transfer throughput, which require measurement.
+
+
 The native `NativeSyncSession::file_range` consumer uses the existing
 `rxdb.file.fetch` exchange on an already admitted connection. Each request
 requires an explicit range of at most 2 MiB and a fresh generated request ID.
@@ -1928,6 +1940,21 @@ SQLite, or take issuer/authority locks. An external CLI reads the daemon's fresh
 heartbeat rather than its own empty aggregate; a missing or stale heartbeat
 keeps performance unknown (`null`). Bind measurements to the heartbeat's PID,
 installed source/binary and freshness before calculating interval deltas.
+
+Native `transport.handshake` diagnostics retain fixed-cardinality lifetime
+counts of received/successfully sent offers, answers and ICE candidates, signal
+failures and connection-state callbacks. They include only static failure-stage
+and state names. `registeredSignalingPeerSha256` hashes the actual signaling
+server Init identity; it is null before Init or after a signaling reset. It is
+not the random native replication session ID or an identity inferred from an
+invite/URL. The digest can be compared with the expected invite peer's SHA256.
+No peer name, room, SDP, ICE address, capability, credential or document is
+retained in this aggregate. Counts include failed/replaced generations and do
+not certify current peer authentication or replication. Read these diagnostics
+with existing socket/join/channel/authentication fields and heartbeat freshness.
+The daemon persists the transport aggregate in its existing status heartbeat.
+An external CLI reads that fresh daemon aggregate, never its own empty handler;
+missing or stale heartbeat transport remains unknown (`null`).
 
 Failed native reads of the current actor role/epoch or collection
 grants propagate as unavailable authority rather than invalid credentials;

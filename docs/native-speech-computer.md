@@ -58,6 +58,17 @@ persisted by this adapter.
 
 ## Delivery boundary
 
+Before loading models, `ctox runtime speech-route-check` starts the configured
+native host and waits at most 15 seconds for both configured speech target pins.
+It prints a typed JSON snapshot even when the routes are not ready, then exits
+nonzero. The snapshot separates signaling socket/join, known peers, open
+DataChannels, native-control admission and the target's signed route proof.
+It exposes no endpoints, credentials or signaling payloads, sends no audio,
+and grants no workload authority. A successful snapshot cannot replace the
+current grant and exact-connection checks on each real request. Synthesis and
+transcription diagnostics also distinguish route-readiness failures from
+failures after the request path starts.
+
 The source adapter and speech-specific receiver use `ctox.native.speech.v1`
 on the existing native host. The receiver requires current target grants and
 maintains durable intent/sequence tombstones around local runtime execution.

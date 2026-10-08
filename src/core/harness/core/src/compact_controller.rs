@@ -1191,7 +1191,15 @@ fn build_screen_prompt(
         serde_json::to_string_pretty(&serialize_blocks_for_prompt(blocks)).map_err(|err| {
             CodexErr::InvalidRequest(format!("failed to serialize screen blocks: {err}"))
         })?;
+    // The block list leads, the stage instructions follow: progress and screen
+    // run back to back on the same blocks, so a provider prefix cache serves the
+    // second call. Instructions first left every compaction call uncached
+    // (thesen 08.10.2026: ~110 calls per hour, 240k-370k input tokens, 0 % cached).
     Ok([
+        "<BLOCKS>".to_string(),
+        serialized,
+        "</BLOCKS>".to_string(),
+        String::new(),
         "You are distilling a long work context into three products.".to_string(),
         "Product 1: continuity narrative.".to_string(),
         "This is a short cause-and-effect story: situation, diagnosed root cause, important turning points, durable decisions, and why the rules still apply.".to_string(),
@@ -1234,10 +1242,6 @@ fn build_screen_prompt(
             task.to_string()
         },
         "</NEXT_STEP>".to_string(),
-        String::new(),
-        "<BLOCKS>".to_string(),
-        serialized,
-        "</BLOCKS>".to_string(),
     ]
     .join("\n"))
 }
@@ -1251,7 +1255,12 @@ fn build_progress_prompt(
         serde_json::to_string_pretty(&serialize_blocks_for_prompt(blocks)).map_err(|err| {
             CodexErr::InvalidRequest(format!("failed to serialize progress blocks: {err}"))
         })?;
+    // Same block-first order as the screen prompt (shared cacheable prefix).
     Ok([
+        "<BLOCKS>".to_string(),
+        serialized,
+        "</BLOCKS>".to_string(),
+        String::new(),
         "Evaluate the agent's progress so far for this work context using a strict 1-6 progress score.".to_string(),
         "Score 1 = excellent, clear progress with substantial forward movement.".to_string(),
         "Score 6 = insufficient, no effective movement, looping, dead end, or chaotic state.".to_string(),
@@ -1273,10 +1282,6 @@ fn build_progress_prompt(
             task.to_string()
         },
         "</NEXT_STEP>".to_string(),
-        String::new(),
-        "<BLOCKS>".to_string(),
-        serialized,
-        "</BLOCKS>".to_string(),
     ]
     .join("\n"))
 }
@@ -1861,6 +1866,29 @@ async fn run_structured_prompt_once<T: DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn progress_and_screen_prompts_share_the_block_prefix() {
+        let history = (0..12)
+            .map(|index| format!("## Step {index}\n{}", "observed detail. ".repeat(60)))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let blocks = super::segment_context(&history, super::DEFAULT_BLOCK_CHARS);
+        assert!(blocks.len() > 1);
+        let progress = super::build_progress_prompt("next step", "model-x", &blocks).unwrap();
+        let screen = super::build_screen_prompt("next step", 1000, 500, &blocks).unwrap();
+        let shared = progress
+            .chars()
+            .zip(screen.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let blocks_end = progress.find("</BLOCKS>").unwrap() + "</BLOCKS>".len();
+        assert!(progress.starts_with("<BLOCKS>"));
+        assert!(
+            shared >= blocks_end,
+            "the serialized blocks must be the common prefix ({shared} < {blocks_end})"
+        );
+    }
+
     use super::*;
 
     #[test]

@@ -324,7 +324,7 @@ impl ExecutionAuthority for RejectAuthority {
         Box::pin(async { Err(io::Error::other("no quorum in policy component fixture")) })
     }
 }
-fn session(owner: &str) -> BusinessOsSession {
+pub(super) fn session(owner: &str) -> BusinessOsSession {
     BusinessOsSession {
         ok: true,
         authenticated: true,
@@ -342,7 +342,7 @@ fn session(owner: &str) -> BusinessOsSession {
 fn put(conn: &Connection, collection: &str, id: &str, value: serde_json::Value) {
     super::super::store::upsert_business_record(conn, collection, id, 1, value).unwrap();
 }
-fn fixture() -> (
+pub(super) fn fixture() -> (
     tempfile::TempDir,
     Arc<NativeGuestRegistry>,
     NativeGuestAssignment,

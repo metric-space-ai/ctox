@@ -8,9 +8,13 @@ cross this same-UID control socket. It accepts neither a path nor serialized
 provider, ownership, process or clean-effect claims.
 
 The host passes its actual guest registry to the listener. An enrolled directory
-alone cannot import: the guest must retain the real provider and admitted
-execution, with the original session/account/harness contract and the actual
-next target ownership (local node, source generation + 1). Quorum verifies
+alone cannot import. A protected target enrolled by `handoff-enroll-guest`
+retains the original guest/service identity and completed native takeover before
+a Core/provider exists. Its import uses the target account, Receive/Resume,
+controller and copy-binding fences. Ordinary existing-provider imports still
+require the real admitted provider execution. Both paths preserve the original
+session/account/harness contract and exact next target ownership (local node,
+source generation + 1). Quorum verifies
 the protected checkpoint and denies pending effects or a refresh requirement.
 The target binding's receive/execute grants authorize the original handoff;
 they do not substitute for that current target quorum ownership.
@@ -33,7 +37,78 @@ target provider/Core-session binding, native image/RAM restoration and guest
 readiness before activation. These gaps remain goals 16/18 and require installed
 isolated-tenant evidence rather than a successful copy/import response.
 
+## Native protected machine restore
+
+After `handoff-enroll-guest` and `handoff-import-guest`, the local operator can
+request `ctox sync handoff-restore-guest <binding-digest> <guest-id>`. This uses
+the existing same-UID checkpoint socket and accepts identifiers only. The
+privileged `configure-guests` JSON has an optional `machine` object:
+
+```json
+{"program":"/usr/bin/qemu-system-x86_64","baseRaw":"/native/immutable/base.raw","memoryMib":768,"vcpus":2,"acceleration":"tcg"}
+```
+
+The paths are host-local operator configuration, never peer/model inputs. The
+independent raw base must be immutable, unaliased and native owned; its full
+hash, hardware profile, RAM and disk must match the protected source machine
+manifest. KVM/TCG is explicit; no accelerator fallback or arbitrary QEMU args.
+The host reads the typed runtime-store configuration on startup before guest
+enrollment; omission denies machine restoration. Linux is currently required.
+
+The registry retains a one-shot preparation owner before staging/awaits and a
+real paused QEMU child before migration. Full chunk/base verification and paused
+RAM loading run outside native publication locks. Before activation it checks
+fresh quorum ownership, the original completed import/checkpoint, exactly its
+registered process reservation, current target account, Receive/Resume grants,
+binding revision, principal epoch, host lifetime and controller. The fixed
+networkless guest resumes under these native guards and must report the original
+guest-service session through its real endpoint. The process reservation stays
+pending through the actual child lifetime. Uncertain BeginEffect, changed
+ownership, unknown source effects, incomplete staging, cancellation, failed
+migration/probe or session mismatch deny success and keep the attempt retained;
+there is no automatic replacement child. Cancellation attempts bounded stop of
+only that retained child, without completing its quorum effect.
+
+The response distinguishes `machineRestored:true` from `coreResumed:false` and
+`resumed:false`. It does not start a Core/provider or permit guest inputs from a
+new worker. Quorum reads before and after machine awaits must match the full accepted BeginEffect state. These reads do not prove a distributed atomic revocation fence during the QMP call; the local account/policy/controller guards cover that call, and this limitation remains an installed acceptance requirement. The machine retains its own runtime through child creation, migration, activation and reaping, including cancellation from the host's CurrentThread runtime. Authoritative source Core/tool effects and the original Core/provider
+factory/admission remain required for goals 15/18. This source connection is not
+installed acceptance evidence; the current source unknown-effect marker still
+prevents a successful production import/restore. Mac transport builds, including
+9228ec92437c with the nonce correction, cannot supply the current Linux-only
+machine witness. Real machine acceptance starts with an enrolled Linux source.
+
+## Fresh native source guest boot
+
+The first native-admitted queue turn now calls
+`NativeGuestExecution::start_configured_source` after actual quorum/provider
+admission and before its first Core `TurnStart`. With the optional typed
+`machine` configuration above, it requires a virgin source controller, reserves
+one actual `guest-process` effect through quorum `BeginEffect`, creates a private
+qcow2 disk with the canonical operator-owned `qemu-img` beside the configured
+QEMU program, and retains the real paused QEMU process before booting it. An
+existing runtime directory, imported target or uncertain attempt is rejected.
+
+Disk preparation and guest-service boot run outside worker, account, policy,
+SQLite and controller locks. After every machine await, fresh quorum ownership
+must still match the full accepted job; native provider/account/policy,
+controller and command authority are rechecked before publication and the real
+Core turn. The machine retains its own process/signal runtime through later
+desktop operations, source export and reaping. An opaque cancellation owner
+survives until the actual producer has bound the returned Core thread/turn;
+a failed or cancelled first turn retires and stops only its retained helper
+and child. Human stop uses the same owner and rejects foreign principals.
+A stop never completes the pending process effect or grants takeover.
+
+Omitting `machine` preserves ordinary native Core execution but supplies no VM
+readiness or capture witness. Configured startup failures poison the source
+attempt rather than falling back to another child or isolated Core. These
+connections do not certify Core/tool effects, original Core target activation,
+atomic remote revocation through QMP, or installed two-host continuation.
+The source unknown-external-effect marker remains authoritative.
+
 ## Core import primitive
+
 
 The trusted native execution owner can now call
 `ThreadManager::resume_thread_from_native_checkpoint` with a strictly decoded
@@ -168,9 +243,14 @@ The target stages privately and verifies complete artifact hashes before
 publishing immutable blobs. It validates the manifest digest and full producer
 contract, then validates all contents and portable journals and fsyncs the copy
 before replying `copied:true,resumed:false`. A truncated, corrupt, timed-out or
-cancelled transfer yields no successful copy response. The temporary staging
-directory is dropped. Already verified immutable blobs may remain after a failed
-copy; their presence alone permits neither a receipt nor execution.
+cancelled transfer yields no successful copy response. Private incomplete ranges
+persist under the exact binding and checkpoint digest, with separate files per
+artifact hash (and manifest). They remain unverified until complete hash ingestion;
+they confer neither a receipt nor execution. Each retained file must be native-owned,
+0600, regular, unaliased and unchanged before writes. A corrupt completed prefix is
+discarded; corrupt CAS contents deny rather than being reused or overwritten.
+Already complete CAS blobs are fully reverified under the fresh target guard before
+skipping their network transfer. Other bindings/checkpoints cannot inherit a prefix.
 The native source's enrollment still verifies full contents; repeated physical
 policy checks use the manifest hash/identity instead of rehashing every blob
 for every block. Receive and durable-copy checks retain full verification.
@@ -178,8 +258,18 @@ for every block. Receive and durable-copy checks retain full verification.
 The operation is bounded to one local copy, 60 seconds, 4096 distinct artifacts,
 1GiB total, 8MiB manifest and 64MiB per blob. Each exchange has a 15-second bound.
 Local client disconnect retires the operation's shared publication fence;
-queued blocking work checks it before writing. A fresh operation is needed
-after expiry/failure; this is not an automatic retry or general crash recovery.
+queued blocking work checks it before writing. Copy stops fetching at 50 seconds
+and, if current authority still permits, returns `copied:false,pending:true` with
+`verifiedBytes`, `partialBytes` and `totalBytes` (null before the manifest is known).
+Partial bytes are durable ranges, not verified progress or a copy receipt. Repeat
+the same `handoff-copy` command to continue; it rechecks enrollment, account, policy
+and the admitted peer, and fetches every remaining range with fresh wire permits.
+A client disconnect or 60-second hard timeout can return no progress response;
+the same guarded continuation still works. No automatic retries or Core activation
+are started. The 60-second operation, 15-second exchange and all size limits stay
+in force, including for VM RAM/disk chunk artifacts. Immutable VM bases are provisioned
+independently and are never checkpoint blobs. Abandoned private ranges may be removed
+only by their owner's cleanup after the operation/host has stopped.
 
 This connects production checkpoint sending and local durable ingestion.
 It creates no Raft DATA receipt, ownership transfer, clean-effect witness or

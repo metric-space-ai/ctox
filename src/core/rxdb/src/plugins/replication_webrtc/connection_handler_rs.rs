@@ -10,6 +10,8 @@
 
 #[path = "frame_contract_generated.rs"]
 mod frame_contract_generated;
+#[path = "handshake_status.rs"]
+mod handshake_status;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::UdpSocket;
@@ -1166,6 +1168,7 @@ pub struct WebRTCRsConnectionHandler {
     /// broadcast paths (abrupt disconnect -> `remove_peer`); the next sweep
     /// broadcasts the corrected aggregate even when nothing expired.
     presence_dirty: Arc<std::sync::atomic::AtomicBool>,
+    handshake_status: Mutex<handshake_status::HandshakeStatus>,
     transport_status: Arc<Mutex<WebRtcFrameTransportStatus>>,
     frame_counter: AtomicU64,
     peer_generation_counter: AtomicU64,
@@ -1352,6 +1355,7 @@ impl WebRTCRsConnectionHandler {
             closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             presence_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             transport_status: Arc::new(Mutex::new(WebRtcFrameTransportStatus::default())),
+            handshake_status: Mutex::new(handshake_status::HandshakeStatus::default()),
             frame_counter: AtomicU64::new(0),
             peer_generation_counter: AtomicU64::new(0),
             accepted_offers: Mutex::new(VecDeque::new()),
@@ -1840,6 +1844,8 @@ impl WebRTCRsConnectionHandler {
             "openDataChannels": status.open_data_channels,
             "signalingSocketConnected": status.signaling_socket_connected,
             "signalingJoinAccepted": status.signaling_join_accepted,
+            "handshake": self.handshake_status.lock().json(
+                self.signaling.as_ref().and_then(|client| client.own_peer_id()).as_deref()),
             "turnConfigured": status.turn_configured,
             "credentialedTurnReady": status.credentialed_turn_ready,
             "lastSendPriority": status.last_send_priority,
@@ -1997,12 +2003,12 @@ impl WebRTCRsConnectionHandler {
                 .await
                 .map_err(|e| webrtc_error("set local offer", e))?;
             if let Some(local_description) = pc.local_description().await {
-                signaling
-                    .send_signal(
-                        remote_peer_id,
-                        serde_json::to_value(local_description).unwrap_or(Value::Null),
-                    )
-                    .await?;
+                self.send_handshake_signal(
+                    &signaling,
+                    remote_peer_id,
+                    serde_json::to_value(local_description).unwrap_or(Value::Null),
+                )
+                .await?;
             }
         }
 
@@ -2010,6 +2016,32 @@ impl WebRTCRsConnectionHandler {
     }
 
     async fn handle_signal(self: &Arc<Self>, remote_peer_id: PeerId, data: Value) -> RxResult<()> {
+        self.handshake_status.lock().received(&data);
+        let result = self.apply_signal(remote_peer_id, data).await;
+        if result.is_err() {
+            self.handshake_status.lock().signal_error("apply-signal");
+        }
+        result
+    }
+
+    async fn send_handshake_signal(
+        &self,
+        signaling: &Arc<SignalingClient>,
+        peer: PeerId,
+        data: Value,
+    ) -> RxResult<()> {
+        let kind = handshake_status::SignalKind::of(&data);
+        let result = signaling.send_signal(peer, data).await;
+        let mut status = self.handshake_status.lock();
+        if result.is_ok() {
+            status.sent(kind);
+        } else {
+            status.signal_error("send-signal");
+        }
+        result
+    }
+
+    async fn apply_signal(self: &Arc<Self>, remote_peer_id: PeerId, data: Value) -> RxResult<()> {
         let is_offer = data.get("type").and_then(Value::as_str) == Some("offer");
         if data.get("sdp").is_some() {
             let description: RTCSessionDescription =
@@ -2127,8 +2159,9 @@ impl WebRTCRsConnectionHandler {
                 Some(serde_json::json!({ "message": "answer has no local description" })),
             ));
         };
-        if let Err(error) = signaling
-            .send_signal(
+        if let Err(error) = self
+            .send_handshake_signal(
+                &signaling,
                 remote_peer_id.clone(),
                 serde_json::to_value(local_description).unwrap_or(Value::Null),
             )
@@ -3976,8 +4009,8 @@ impl PeerConnectionEventHandler for RsPeerConnectionEvents {
             Ok(candidate) => {
                 let data = simple_peer_ice_signal(candidate);
                 if let Err(err) = self
-                    .signaling
-                    .send_signal(self.remote_peer_id.clone(), data)
+                    .handler
+                    .send_handshake_signal(&self.signaling, self.remote_peer_id.clone(), data)
                     .await
                 {
                     self.handler.error_subject.next(err);
@@ -3991,6 +4024,7 @@ impl PeerConnectionEventHandler for RsPeerConnectionEvents {
     }
 
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
+        self.handler.handshake_status.lock().connection(state);
         // FIX 5: `Disconnected` is a TRANSIENT ICE state that very often
         // recovers on its own (e.g. brief network blips, NAT rebinding). Only
         // `Failed` and `Closed` are terminal and warrant tearing the peer
@@ -7285,6 +7319,20 @@ mod tests {
             .handle_signal("browser-1".to_string(), malformed)
             .await
             .is_err());
+        let evidence = handler.frame_transport_status_json()["handshake"].clone();
+        assert_eq!(evidence["receivedOffers"], 1);
+        assert_eq!(evidence["signalErrors"], 1);
+        assert_eq!(evidence["lastErrorStage"], "apply-signal");
+        {
+            use sha2::{Digest, Sha256};
+            assert_eq!(
+                evidence["registeredSignalingPeerSha256"],
+                format!("{:x}", Sha256::digest(b"native-1"))
+            );
+        }
+        assert!(!evidence.to_string().contains("native-1"));
+        assert!(!evidence.to_string().contains("not SDP"));
+        assert!(!evidence.to_string().contains("old-token"));
         assert_eq!(
             handler
                 .connection_for_peer("browser-1")

@@ -30,6 +30,7 @@ import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } f
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
+import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -10398,6 +10399,26 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
       if (!['new', 'failed', 'needs_review'].includes(status)) return false;
       return !String(lead.payload?.observed_research_command_key || '').trim();
     });
+    // Leads ausserhalb des geladenen Listenfensters: sonst blieben sie auf
+    // "Läuft", obwohl ihr Vorgang laengst beendet ist (thesen 08.10.2026).
+    if (Date.now() - Number(state.fensterAbgleichAm || 0) >= IN_FLIGHT_SWEEP_INTERVAL_MS) {
+      state.fensterAbgleichAm = Date.now();
+      try {
+        const bekannt = new Set(pendingLeads.map((lead) => lead.id));
+        const ausserhalb = await inFlightLeadsOutsideWindow(async (query) => {
+          const docs = await withTimeout(
+            state.collections.leads.find(query).exec(),
+            'Laufende Leads konnten nicht geladen werden.',
+            30_000,
+          );
+          return (docs || []).map((doc) => doc?.toJSON?.() || doc);
+        }, bekannt);
+        for (const lead of ausserhalb) pendingLeads.push(normalizeLeadRecipientShape(lead));
+        abgleichDiagnose('fenster', { ausserhalb: ausserhalb.length });
+      } catch (error) {
+        console.warn('[olg-abgleich] laufende Leads ausserhalb des Fensters nicht geladen', error);
+      }
+    }
     abgleichDiagnose('befehle-laden', { offen: pendingLeads.length, laufend: pendingLeads.filter((lead) => researchInFlight(lead)).length });
     const commands = uniqueCommands(await demandResearchCommands(pendingLeads, { authoritative }));
     abgleichDiagnose('anwenden', { befehle: commands.length });
@@ -10432,12 +10453,11 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
           lead.payload?.research_wait_since_ms || lead.payload?.research_started_at_ms || 0,
         );
         if (!startedAt || Date.now() - startedAt < RESEARCH_RUNNING_MAX_MS) continue;
-        await patchLead(lead.id, fehlerOhneErgebnisverlust(
+        if (await patchLeadImAbgleich(lead.id, fehlerOhneErgebnisverlust(
           lead,
           NICHT_ZURUECKGEMELDET,
           { research_finished_at_ms: Date.now() },
-        ));
-        changed = true;
+        ))) changed = true;
         continue;
       }
       const observedCommandId = String(command.command_id || command.id || '').trim();
@@ -10447,16 +10467,20 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
       // stand am 27.09.2026 um 13:06:37 wieder auf running, obwohl der
       // Abgleich um 13:05:58 den gescheiterten Vorgang angewendet und den
       // Schluessel gesetzt hatte; danach wurde er nie wieder abgeglichen.
+      if (String(lead.research_status || '') === 'failed'
+        && command?.command_type === 'business_os.chat.task'
+        && vorgangNochOffen(command)) {
+        const wieder = chatResearchTaskLeadPatch(lead, command);
+        if (wieder && await patchLeadImAbgleich(lead.id, wieder)) changed = true;
+        continue;
+      }
       const zurueckgefallen = researchInFlight(lead) && befehlIstEndgueltig(command);
       if (lead.payload?.observed_research_command_key === observationKey && !zurueckgefallen) {
         // Nicht terminale Vorgaenge behalten ihren Schluessel (id:none), waehrend
         // die Ausfuehrungsphase wechselt (queued -> leased -> retry_wait). Die
         // Phase wird deshalb hier eigens verglichen (Codex-Review 1.0.268).
         const nurPhase = ausfuehrungsphasePatch(lead, command);
-        if (nurPhase) {
-          await patchLead(lead.id, nurPhase);
-          changed = true;
-        }
+        if (nurPhase && await patchLeadImAbgleich(lead.id, nurPhase)) changed = true;
         continue;
       }
       const patch = researchCommandLeadPatch(lead, command);
@@ -10472,8 +10496,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
           : {}),
       };
       abgleichDiagnose('schreiben', { lead: lead.id });
-      await patchLead(lead.id, patch);
-      changed = true;
+      if (await patchLeadImAbgleich(lead.id, patch)) changed = true;
     }
   } finally {
     state.reconcilingCommands = false;
@@ -10490,6 +10513,19 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
     }
   }
   return changed;
+}
+
+// Ein Lead, dessen Schreiben scheitert, darf den Abgleich der uebrigen nicht
+// abbrechen: lead_12a1ulp hielt so am 08.10.2026 bei jedem Durchlauf 35 Leads
+// mit laengst beendetem Vorgang auf "Läuft".
+async function patchLeadImAbgleich(id, patch) {
+  try {
+    await patchLead(id, patch);
+    return true;
+  } catch (error) {
+    console.warn('[olg-abgleich] Lead nicht geschrieben', id, String(error?.message || error).slice(0, 300));
+    return false;
+  }
 }
 
 function newerResearchCommandCanRecoverLead(lead, command) {
@@ -10745,7 +10781,7 @@ function researchCommandForLead(lead, commands = []) {
   // (Kiesow, 10.09.2026 21:48). Die Chat-Aufgabe des AKTUELLEN Auftrags hat
   // Vorrang, solange der Lead auf sie wartet.
   const aktuellerAuftrag = String(lead?.command_id || '').trim();
-  if (aktuellerAuftrag && ['queued', 'running'].includes(String(lead?.research_status || ''))) {
+  if (aktuellerAuftrag && ['queued', 'running', 'failed'].includes(String(lead?.research_status || ''))) {
     const chatAufgabe = commands.find((command) => command?.command_type === 'business_os.chat.task'
       && String(command.command_id || command.id || '').trim() === aktuellerAuftrag);
     if (chatAufgabe) return chatAufgabe;
@@ -12209,7 +12245,27 @@ function researchCommandLeadPatch(lead, command) {
 // Die Chat-Aufgabe liefert ihr Ergebnis ueber das Rueckschreiben, das den Lead
 // selbst aktualisiert. Hier zaehlt nur ihr Scheitern: dann steht der Lead auf
 // "Unvollständig" mit dem Grund, den der Worker genannt hat, statt auf "Läuft".
+// Massgeblich ist der Core-Lebenszyklus: "blocked" oder "accepted" bei
+// execution_phase retry_wait heisst Warten auf Wiederholung, nicht Ende. Am
+// 08.10.2026 wurden sonst 15 Leads mit weiterlaufendem Vorgang als
+// "Unvollständig" beendet.
+function vorgangNochOffen(command) {
+  const phase = String(command?.execution_phase || '').trim().toLowerCase();
+  const terminal = String(command?.terminal_status || '').trim().toLowerCase();
+  return Boolean(phase) && phase !== 'terminal' && (!terminal || terminal === 'none');
+}
+
 function chatResearchTaskLeadPatch(lead, command) {
+  if (vorgangNochOffen(command)) {
+    if (String(lead?.research_status || '') === 'failed') {
+      return {
+        research_status: 'running',
+        research_error: '',
+        payload: { ...(lead?.payload || {}), research_error: '', research_resumed_waiting_at_ms: Date.now() },
+      };
+    }
+    return ausfuehrungsphasePatch(lead, command);
+  }
   const status = normalizedResearchCommandStatus(command);
   if (!['failed', 'blocked', 'cancelled', 'canceled', 'error'].includes(status)) return ausfuehrungsphasePatch(lead, command);
   if (['cancelled', 'canceled'].includes(status)) {

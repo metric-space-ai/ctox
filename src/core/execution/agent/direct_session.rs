@@ -2060,6 +2060,9 @@ impl PersistentSession {
         // from these overrides.
         configure_managed_linux_sandbox(&mut cli_overrides);
         configure_worker_tool_stack(&mut cli_overrides, disable_active_tools);
+        if native_guest {
+            super::session_continuity::constrain_native_guest_startup(&mut cli_overrides);
+        }
         let config = ConfigBuilder::default()
             .cli_overrides(cli_overrides.clone())
             .harness_overrides(overrides)
@@ -2398,6 +2401,8 @@ impl PersistentSession {
         } else {
             None
         };
+        #[cfg(target_os = "linux")]
+        let mut source_boot_ready = None;
         #[cfg(unix)]
         if let Some(admission) = native_provider_admission {
             let (registry, guest_id) = native_guest_registry.ok_or_else(|| {
@@ -2468,6 +2473,23 @@ impl PersistentSession {
             }
             // Observation handle only. Actual guest operations independently
             // revalidate provider/account/policy/controller and quorum ownership.
+            #[cfg(target_os = "linux")]
+            {
+                source_boot_ready = execution.start_configured_source().await.map_err(|error| {
+                    SessionPoisoned(format!(
+                        "native source guest boot requires reconciliation: {error}"
+                    ))
+                })?;
+            }
+            // Machine preparation/boot awaits cannot preserve old command authority.
+            let after_boot =
+                crate::business_os::mcp_channel::verify_internal_command_session_token(
+                    root, token,
+                )?;
+            anyhow::ensure!(
+                native_command_context == Some(&after_boot),
+                "native guest command changed during machine boot"
+            );
             execution.verify_turn_workspace(cwd)?;
             *native_guest_execution = Some(execution);
         }
@@ -2541,6 +2563,17 @@ impl PersistentSession {
             }
         }
 
+        #[cfg(target_os = "linux")]
+        if let Some(ready) = source_boot_ready {
+            if let Err(error) = ready.commit_started(&thread_id, &turn_id).await {
+                let terminal =
+                    interrupt_cancelled_queue_turn(client, seq, &thread_id, &turn_id).await;
+                return Err(SessionPoisoned(format!(
+                    "source guest actual turn binding failed: {error}; terminal_observed={terminal}"
+                ))
+                .into());
+            }
+        }
         // Event loop
         let mut reply_capture = DirectSessionReplyCapture::default();
         let mut completion_message: Option<String> = None;
@@ -3477,6 +3510,60 @@ mod tests {
             } if writable_roots.iter().any(|root| root.as_path() == writable)
                 && readable_roots.iter().any(|root| root.as_path() == readable)
         ));
+    }
+
+    #[tokio::test]
+    async fn native_guest_startup_disables_inherited_background_execution() -> Result<()> {
+        use ctox_core::features::Feature;
+        let home = tempfile::tempdir()?;
+        std::fs::write(
+            home.path().join("config.toml"),
+            r#"
+notify = ["operator-notification"]
+[features]
+shell_snapshot = true
+shell_zsh_fork = true
+ctox_hooks = true
+memory_tool = true
+undo = true
+multi_agent = true
+enable_fanout = true
+"#,
+        )?;
+        let mut overrides = vec![
+            ("features.shell_snapshot".into(), toml::Value::Boolean(true)),
+            (
+                "notify".into(),
+                toml::Value::Array(vec![toml::Value::String("provider-notification".into())]),
+            ),
+        ];
+        configure_worker_tool_stack(&mut overrides, false);
+        super::super::session_continuity::constrain_native_guest_startup(&mut overrides);
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .cli_overrides(overrides)
+            .build()
+            .await?;
+        for feature in [
+            Feature::ShellSnapshot,
+            Feature::ShellZshFork,
+            Feature::CodexHooks,
+            Feature::MemoryTool,
+            Feature::GhostCommit,
+            Feature::Collab,
+            Feature::SpawnCsv,
+        ] {
+            assert!(
+                !config.features.enabled(feature),
+                "ambient feature {feature:?} escaped native startup profile"
+            );
+        }
+        assert_eq!(config.notify, Some(Vec::new()));
+        assert!(
+            config.features.enabled(Feature::ShellTool),
+            "authorized turn tools retain their own dispatch boundary"
+        );
+        Ok(())
     }
 
     #[test]

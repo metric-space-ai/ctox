@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 pub(in crate::business_os) mod jour_fixe_confirmed_goal;
+pub(in crate::business_os) mod jour_fixe_local_candidate;
 pub(in crate::business_os) mod jour_fixe_owner;
 pub(in crate::business_os) mod jour_fixe_preparation;
 pub(in crate::business_os) mod jour_fixe_speech;

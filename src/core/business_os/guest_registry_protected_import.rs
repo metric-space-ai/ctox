@@ -7,11 +7,11 @@ use super::target_import::NativeGuestImportFence;
 use super::*;
 use ctox_sync::{authority::auth::SigningIdentity, checkpoint::CheckpointStore};
 
-struct ProtectedImport<'a> {
-    registry: Arc<NativeGuestRegistry>,
-    guest_id: String,
-    protected: ProtectedEnrollment,
-    fence: &'a dyn NativeGuestImportFence,
+pub(super) struct ProtectedImport<'a> {
+    pub(super) registry: Arc<NativeGuestRegistry>,
+    pub(super) guest_id: String,
+    pub(super) protected: ProtectedEnrollment,
+    pub(super) fence: &'a dyn NativeGuestImportFence,
 }
 
 impl ProtectedImport<'_> {
@@ -29,6 +29,14 @@ impl ProtectedImport<'_> {
         &self,
         action: impl FnOnce(&mut Registration, &dyn Fn() -> Result<()>) -> Result<T>,
     ) -> Result<T> {
+        self.with_current_machine(false, action)
+    }
+
+    pub(super) fn with_current_machine<T>(
+        &self,
+        restoring: bool,
+        action: impl FnOnce(&mut Registration, &dyn Fn() -> Result<()>) -> Result<T>,
+    ) -> Result<T> {
         self.registry
             .verify_runtime_root(&self.registry.runtime_root)?;
         crate::sync_host::with_current_signing_identity(&self.registry.runtime_root, |identity| {
@@ -41,16 +49,37 @@ impl ProtectedImport<'_> {
                     !entry.revoked
                         && entry.restoration.as_ref() == Some(&self.protected)
                         && entry.provider.is_none()
-                        && entry.execution.is_none()
-                        && entry.process_effect.is_none()
-                        && entry.registered_process.is_none(),
+                        && entry.execution.is_none(),
                     "protected target controller changed or execution already exists"
                 );
-                #[cfg(target_os = "linux")]
-                ensure!(
-                    entry.desktop.is_none() && entry.source_machine.is_none(),
-                    "protected target already has a retained process"
-                );
+                if restoring {
+                    let imported = entry
+                        .imported
+                        .as_ref()
+                        .context("target has no registered import")?;
+                    ensure!(
+                        entry.publication == PublicationState::Published
+                            && imported.spec == self.protected.spec
+                            && imported.ownership == self.protected.ownership
+                            && imported.checkpoint_digest == self.protected.checkpoint_digest
+                            && imported.destination == entry.assignment.destination
+                            && entry.imported_identity.as_ref()
+                                == Some(&private_directory(&imported.imported_directory)?),
+                        "protected target import identity changed"
+                    );
+                } else {
+                    ensure!(
+                        entry.process_effect.is_none() && entry.registered_process.is_none(),
+                        "protected target process already exists"
+                    );
+                    #[cfg(target_os = "linux")]
+                    ensure!(
+                        entry.desktop.is_none()
+                            && entry.source_machine.is_none()
+                            && entry.target_machine.is_none(),
+                        "protected target already has a retained process"
+                    );
+                }
                 let destination = entry.assignment.destination.clone();
                 let import_identity = entry.import_identity.clone();
                 let scope = &self.protected.scope;

@@ -100,6 +100,34 @@ mod tests {
             assert_eq!(stored.content_hash, first.sha256);
             assert_eq!(stored.size_bytes, first.size);
             assert!(!stored.generation_id.is_empty());
+            // Read the durable generation through the native demand-file
+            // source, including the final chunk beyond the first write batch.
+            let (rows, offset) =
+                super::super::rxdb_peer_desktop_files::active_desktop_file_chunk_rows_from_sqlite(
+                    &root,
+                    &first.file_id,
+                    None,
+                    &mut super::super::rxdb_peer::DemandFileFetchRequestStats::default(),
+                )
+                .unwrap();
+            assert_eq!(offset, 0);
+            let mut encoded = String::new();
+            for (idx, row) in rows.iter().enumerate() {
+                assert_eq!(row["idx"].as_u64(), Some(idx as u64));
+                let data = row["data"].as_str().unwrap();
+                assert_eq!(
+                    row["chunk_hash"].as_str(),
+                    Some(format!("{:x}", Sha256::digest(data.as_bytes())).as_str())
+                );
+                encoded.push_str(data);
+            }
+            use base64::Engine;
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+                bytes
+            );
             let second = publish_native_file(&root, &path).unwrap();
             assert_eq!(first.file_id, second.file_id);
             assert_eq!(first.source_public_identity, second.source_public_identity);

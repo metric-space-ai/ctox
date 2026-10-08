@@ -609,6 +609,118 @@ export const JOUR_FIXE_TYPES = deepFreeze({
       }
     }
   },
+  "LocalTranscriptProvenance": {
+    "enum": [
+      "authenticated_owner_local_candidate"
+    ]
+  },
+  "LocalTranscriptCandidateRequest": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "request_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "instance_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "expected_revision": {
+        "type": "u64"
+      },
+      "text": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 4096
+      }
+    }
+  },
+  "LocalTranscriptCandidateReceipt": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "request_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "instance_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "owner_user_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "turn_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "sequence": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "text_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      },
+      "persisted_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "provenance": {
+        "type": "LocalTranscriptProvenance"
+      },
+      "provider_verified": {
+        "type": "bool"
+      }
+    }
+  },
   "MeetingMutationReceipt": {
     "fields": {
       "operation_id": {
@@ -664,6 +776,10 @@ export const JOUR_FIXE_COMMANDS = deepFreeze({
   },
   "ctox.workjet.jour_fixe.comment.add": {
     "request_type": "AddCommentRequest",
+    "authorization": "owner"
+  },
+  "ctox.workjet.jour_fixe.transcript.local_candidate": {
+    "request_type": "LocalTranscriptCandidateRequest",
     "authorization": "owner"
   },
   "ctox.workjet.jour_fixe.transcript.append": {

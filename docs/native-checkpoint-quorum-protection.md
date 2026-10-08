@@ -104,3 +104,27 @@ the same controller. Unknown source effects are still rejected. Import does not 
 QEMU, create a Core turn or report resumed:true. The original-session factory, guarded
 guest activation and authoritative source-effects reconciliation remain separate
 production work; no installed continuation or supported Darwin source release is claimed.
+
+## Exact source QEMU process reconciliation
+
+The native source-journal capture now reconciles its registered QEMU reservation
+only after the retained child produces the opaque complete machine export. That
+witness requires the exact Ready guest service, checked full RAM/disk capture,
+QMP quit and successful reap of the exact owned child under the enforced isolated
+QEMU profile. A generic stop status, PID disappearance, file or copied metadata
+cannot substitute for this witness.
+
+Under fresh native worker/account/policy/controller guards, the capture must map
+to the exact registered process, original job and current ownership, with that
+process as the sole pending quorum effect. The controller retains Pending before
+submitting CompleteEffect. The actual Applied job and a new quorum ownership read
+must both equal the exact expected transition. Native authority and the retained
+export are checked again before recording processEffectReconciled. Neither await
+holds the native publication locks. Failure, cancellation, replay, changed state
+or uncertain completion cannot manufacture that observation or repeat completion.
+
+This closes only the stopped QEMU process reservation. The checkpoint still
+requires refresh; native Core/tool/submission effects remain unknown and the
+native-effects capture marker remains pending. No clean checkpoint, completed
+ProtectCheckpoint, target activation or installed continuation follows from
+this process observation alone.

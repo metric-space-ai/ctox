@@ -12,10 +12,65 @@ pub(super) struct SourceMachineCapture {
 }
 struct State {
     desktop: super::super::guest_runtime::RetainedQemuDesktop,
+    io: Option<Arc<super::machine_io::MachineIo>>,
     attempted: bool,
     entries: Option<Vec<WorkspaceEntry>>,
+    completion: Completion,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Completion {
+    Virgin,
+    Pending,
+    Completed,
 }
 impl SourceMachineCapture {
+    /// Successful opaque VM export is required; stop status or PID absence is insufficient.
+    pub(super) fn process_reconciled(&self, process: &GuestProcessEffect) -> Result<bool> {
+        ensure!(
+            self.matches(process) && !*self.retired.borrow(),
+            "source machine export retired or foreign"
+        );
+        let state = self
+            .state
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("source machine export busy or poisoned"))?;
+        Ok(state.entries.is_some() && state.completion == Completion::Completed)
+    }
+
+    pub(super) fn begin_reconciliation(&self, process: &GuestProcessEffect) -> Result<()> {
+        ensure!(
+            self.matches(process) && !*self.retired.borrow(),
+            "source machine export retired or foreign"
+        );
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("source machine export busy or poisoned"))?;
+        ensure!(
+            state.entries.is_some() && state.completion == Completion::Virgin,
+            "source machine has no complete export or effect completion is uncertain"
+        );
+        state.completion = Completion::Pending;
+        Ok(())
+    }
+
+    pub(super) fn finish_reconciliation(&self, process: &GuestProcessEffect) -> Result<()> {
+        ensure!(
+            self.matches(process) && !*self.retired.borrow(),
+            "source machine export retired or foreign"
+        );
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("source machine export busy or poisoned"))?;
+        ensure!(
+            state.entries.is_some() && state.completion == Completion::Pending,
+            "source machine effect completion changed"
+        );
+        state.completion = Completion::Completed;
+        Ok(())
+    }
+
     pub(super) fn retire(&self) {
         self.retired.send_replace(true);
     }
@@ -40,7 +95,8 @@ impl SourceMachineCapture {
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("source machine export poisoned"))?;
-        super::super::guest_commands::block_on_guest(state.desktop.stop())
+        let io = state.io.clone();
+        super::machine_io::run(io.as_deref(), state.desktop.stop())
     }
 
     fn export(&self, store: &ctox_sync::checkpoint::CheckpointStore, parent: &Path) -> Result<()> {
@@ -63,15 +119,17 @@ impl SourceMachineCapture {
         // subscribe marks the current value seen: check it before waiting so a
         // retirement between the first check and subscription cannot be lost.
         ensure!(!*retired.borrow(), "source machine export retired");
-        let witness = super::super::guest_commands::block_on_guest(async {
+        let io = state.io.clone();
+        let desktop = &mut state.desktop;
+        let witness = super::machine_io::run(io.as_deref(), async {
             tokio::select! {
                 biased;
                 _ = retired.changed() => anyhow::bail!("source machine export revoked"),
                 result = tokio::time::timeout(Duration::from_secs(300), async {
-                    let endpoint = state.desktop.probe_live().await?;
+                    let endpoint = desktop.probe_live().await?;
                     ensure!(endpoint.process_instance_id == self.process.process_instance_id,
                         "source machine endpoint differs from the retained child");
-                    let witness = state.desktop.save_checkpoint_live(&endpoint, &mut output).await?;
+                    let witness = desktop.save_checkpoint_live(&endpoint, &mut output).await?;
                     output.sync_all().await?;
                     Ok::<_, anyhow::Error>(witness)
                 }) => result.context("source machine export deadline")?,
@@ -148,8 +206,10 @@ impl NativeGuestExecution {
                         retired,
                         state: Mutex::new(State {
                             desktop,
+                            io: entry.desktop_io.take(),
                             attempted: false,
                             entries: None,
+                            completion: Completion::Virgin,
                         }),
                     });
                     entry.source_machine = Some(Arc::clone(&capture));
@@ -259,8 +319,10 @@ mod tests {
             retired,
             state: Mutex::new(State {
                 desktop,
+                io: None,
                 attempted: false,
                 entries: None,
+                completion: Completion::Virgin,
             }),
         };
         let (store, _, _) = source_journal::source_store(root.path())?;
@@ -271,6 +333,9 @@ mod tests {
         assert!(capture.matches(&process));
         assert!(Path::new(&format!("/proc/{pid}")).exists());
         assert!(capture.entries().is_err());
+        assert!(capture.begin_reconciliation(&process).is_err());
+        assert!(capture.finish_reconciliation(&process).is_err());
+        assert!(!capture.process_reconciled(&process)?);
         assert!(capture
             .export(&store, root.path())
             .unwrap_err()
