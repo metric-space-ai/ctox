@@ -1,4 +1,87 @@
 #[test]
+fn speech_computer_batching_preserves_pcm_and_the_wire_budget() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut expected = Vec::new();
+    for frame in 0..8u8 {
+        let pcm = vec![frame; 640];
+        expected.extend_from_slice(&pcm);
+        assert!(tx.try_send(Input::Audio(pcm)).is_ok());
+    }
+    assert!(matches!(
+        tx.try_send(Input::Audio(vec![9; 640])),
+        Err(mpsc::error::TrySendError::Full(_))
+    ));
+    let mut pending = None;
+    let Input::Audio(first) = rx.try_recv().unwrap() else {
+        panic!("audio expected")
+    };
+    let first = coalesce_audio(first, &mut rx, &mut pending);
+    assert_eq!(first.len(), 3200);
+    PcmFormat::default().validate_chunk(&first).unwrap();
+    assert!(pending.is_none());
+    let Input::Audio(next) = rx.try_recv().unwrap() else {
+        panic!("audio expected")
+    };
+    let second = coalesce_audio(next, &mut rx, &mut pending);
+    assert_eq!(second.len(), 1920);
+    PcmFormat::default().validate_chunk(&second).unwrap();
+    assert_eq!([first, second].concat(), expected);
+}
+
+#[test]
+fn speech_computer_batching_defers_an_oversized_next_frame_without_splitting() {
+    let (tx, mut rx) = mpsc::channel(8);
+    assert!(tx.try_send(Input::Audio(vec![2; 1280])).is_ok());
+    assert!(tx.try_send(Input::Audio(vec![3; 640])).is_ok());
+    let mut pending = None;
+    let first = coalesce_audio(vec![1; 2560], &mut rx, &mut pending);
+    assert_eq!(first, vec![1; 2560]);
+    let Some(Input::Audio(next)) = pending.take() else {
+        panic!("overflow frame retained")
+    };
+    assert_eq!(next, vec![2; 1280]);
+    let second = coalesce_audio(next, &mut rx, &mut pending);
+    assert_eq!(second, [vec![2; 1280], vec![3; 640]].concat());
+    assert!(pending.is_none());
+}
+
+#[test]
+fn speech_computer_batching_does_not_cross_flush_finish_or_cancel() {
+    for command in [Input::Flush, Input::Finish(Instant::now()), Input::Cancel] {
+        let finish = match &command {
+            Input::Finish(mark) => Some(*mark),
+            _ => None,
+        };
+        let (tx, mut rx) = mpsc::channel(8);
+        assert!(tx.try_send(Input::Audio(vec![2; 640])).is_ok());
+        assert!(tx.try_send(command).is_ok());
+        assert!(tx.try_send(Input::Audio(vec![3; 640])).is_ok());
+        let mut pending = None;
+        let batch = coalesce_audio(vec![1; 640], &mut rx, &mut pending);
+        assert_eq!(batch, [vec![1; 640], vec![2; 640]].concat());
+        match pending.take().unwrap() {
+            Input::Finish(mark) => assert_eq!(Some(mark), finish),
+            Input::Flush | Input::Cancel => assert!(finish.is_none()),
+            Input::Audio(_) => panic!("control command reordered"),
+        }
+        let Input::Audio(after) = rx.try_recv().unwrap() else {
+            panic!("audio expected")
+        };
+        assert_eq!(after, vec![3; 640]);
+    }
+}
+
+#[test]
+fn speech_computer_batching_forwards_an_isolated_frame_without_waiting() {
+    let (_tx, mut rx) = mpsc::channel(8);
+    let mut pending = None;
+    assert_eq!(
+        coalesce_audio(vec![7; 640], &mut rx, &mut pending),
+        vec![7; 640]
+    );
+    assert!(pending.is_none());
+}
+#[test]
 fn speech_computer_prepared_publication_rejects_reconfiguration_and_issuer_removal() {
     for change in ["epoch", "issuer"] {
         let root = tempfile::tempdir().unwrap();
