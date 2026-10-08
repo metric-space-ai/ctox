@@ -152,6 +152,16 @@ fn explicit_owner_confirmation_creates_one_exact_executable_core_goal_and_a_shar
     assert_eq!(routed_thread, thread);
     assert_eq!(direction, "inbound");
     assert_eq!(route, "pending");
+    // Synthetic plan work is never mailbox history, including equal/future
+    // account timestamps. Backfill must not terminalize an unexecuted step.
+    conn.execute("UPDATE communication_accounts SET created_at=\u00272099-01-01T00:00:00Z\u0027 WHERE account_key=\u0027plan:system\u0027", [])?;
+    conn.execute("DELETE FROM communication_routing_state WHERE message_key=?1", [&emitted.message_key])?;
+    channels::ensure_routing_rows_for_inbound(&conn)?;
+    let backfilled: String = conn.query_row("SELECT route_status FROM communication_routing_state WHERE message_key=?1", [&emitted.message_key], |r| r.get(0))?;
+    assert_eq!(backfilled, "pending");
+    let (step_state, message): (String, String) = conn.query_row("SELECT status,last_message_key FROM planned_steps WHERE goal_id=?1", [goal], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    assert_eq!(step_state, "queued");
+    assert_eq!(message, emitted.message_key);
     assert!(prompt.contains("Michael") && prompt.contains("saved answer survives reopening"));
     assert!(plan::emit_next_step_for_goal(root.path(), goal)?.is_none());
     Ok(())
