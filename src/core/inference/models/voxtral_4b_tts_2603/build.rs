@@ -28,6 +28,18 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CTOX_CUDA_SM");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_TTS_BUILD_CUDA");
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let openblas = env::var_os("CARGO_FEATURE_OPENBLAS").is_some();
+    assert!(
+        !openblas || os == "linux",
+        "OpenBLAS feature requires Linux; macOS uses Accelerate"
+    );
+    let blas = openblas.then(|| {
+        pkg_config::Config::new()
+            .atleast_version("0.3")
+            .cargo_metadata(false)
+            .probe("openblas")
+            .expect("OpenBLAS feature requires openblas headers/library via pkg-config")
+    });
     if os != "linux" && os != "macos" {
         return;
     }
@@ -99,6 +111,18 @@ fn main() {
         if os == "macos" {
             cc.arg("-DUSE_BLAS");
         }
+        if let Some(blas) = &blas {
+            cc.args(["-DUSE_BLAS", "-DCTOX_OPENBLAS"]);
+            for include in &blas.include_paths {
+                cc.arg("-I").arg(include);
+            }
+            for (name, value) in &blas.defines {
+                cc.arg(match value {
+                    Some(value) => format!("-D{name}={value}"),
+                    None => format!("-D{name}"),
+                });
+            }
+        }
         cc.arg(src.join(format!("{name}.c"))).arg("-o").arg(&obj);
         run(&mut cc);
         objects.push(obj);
@@ -135,6 +159,14 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=voxtral_native");
     println!("cargo:rustc-link-lib=m");
+    if let Some(blas) = &blas {
+        for path in &blas.link_paths {
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
+        for lib in &blas.libs {
+            println!("cargo:rustc-link-lib={lib}");
+        }
+    }
     if os == "macos" {
         println!("cargo:rustc-link-lib=framework=Accelerate");
     }

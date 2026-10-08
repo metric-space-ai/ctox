@@ -3529,6 +3529,9 @@ dependencies = [
 [[package]]
 name = "ctox-voxtral-4b-tts-2603"
 version = "0.1.0"
+dependencies = [
+ "pkg-config",
+]
 
 [[package]]
 name = "ctox-voxtral-mini-4b-realtime-2602"
