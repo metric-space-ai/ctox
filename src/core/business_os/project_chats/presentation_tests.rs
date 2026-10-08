@@ -18,6 +18,7 @@ fn deck() -> Value {
 
 fn fixture() -> anyhow::Result<(TempDir, meeting_wire::Meeting)> {
     let root = super::supervisor_turns::fixture()?;
+    crate::business_os::store::stable_instance_id(root.path())?;
     let corpus: Value = serde_json::from_str(include_str!(
         "../../rxdb/tests/fixtures/workjet-jour-fixe-v1.json"
     ))?;
@@ -37,6 +38,10 @@ fn fixture() -> anyhow::Result<(TempDir, meeting_wire::Meeting)> {
         "INSERT INTO workjet_jour_fixe_meetings VALUES ('meeting-1','project','owner',1791450000000,?1,NULL)",
         [meeting.to_string()],
     )?;
+    let db = Connection::open(crate::business_os::store::rxdb_store_path(root.path()))?;
+    for collection in ["desktop_files", "desktop_file_chunks"] {
+        db.execute_batch(&format!("CREATE TABLE IF NOT EXISTS ctox_business_os__{collection}__v0(id TEXT PRIMARY KEY,revision TEXT NOT NULL,deleted INTEGER NOT NULL,lastWriteTime REAL NOT NULL,data TEXT NOT NULL)"))?;
+    }
     let typed: meeting_wire::Meeting = serde_json::from_value(meeting)?;
     Ok((root, typed))
 }
@@ -210,12 +215,15 @@ fn stale_foreign_and_invalid_saves_keep_the_revision() -> anyhow::Result<()> {
         "canvas.save",
         "owner",
         request(1, invalid.to_string()),
-    )?;
-    assert_eq!(failed["status"], "failed", "{failed}");
-    assert!(
-        failed.to_string().contains("presentation rejected"),
-        "{failed}"
     );
+    let message = match failed {
+        Ok(value) => {
+            assert_eq!(value["status"], "failed", "{value}");
+            value.to_string()
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(message.contains("presentation rejected"), "{message}");
     let conn = open_store(root.path())?;
     assert_eq!(load_by_meeting(&conn, "meeting-1")?.unwrap().revision, 1);
     Ok(())
