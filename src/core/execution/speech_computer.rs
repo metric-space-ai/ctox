@@ -5,12 +5,12 @@
 //! still bind/revalidate their current Owner capability before and after awaits.
 use super::*;
 use ctox_sync::authority::auth::{
-    public_key,
     speech_wire::{
         SignedSpeechRequest, SpeechComputerBinding, SpeechComputerReply as Reply,
         SpeechComputerRequest, SpeechDenial, SpeechOperation as Op, SpeechWorkload, MAX_READ_BYTES,
         METHOD,
     },
+    validate_public_identity,
 };
 use rxdb::{
     plugins::replication_webrtc::WebRTCPublicationGuard,
@@ -65,8 +65,8 @@ fn validate_route(
     role: SpeechWorkload,
     now: u64,
 ) -> anyhow::Result<()> {
-    public_key(&route.source_signing_identity)?;
-    public_key(&route.target_signing_identity)?;
+    validate_public_identity(&route.source_signing_identity)?;
+    validate_public_identity(&route.target_signing_identity)?;
     anyhow::ensure!(
         route.source_signing_identity != route.target_signing_identity,
         "speech computer must be a distinct pinned peer"

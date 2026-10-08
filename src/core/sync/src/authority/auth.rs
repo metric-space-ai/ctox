@@ -65,6 +65,11 @@ pub(crate) fn public_key(identity: &str) -> io::Result<[u8; 32]> {
     )
 }
 
+/// Validate a canonical public signing pin without exposing key bytes or granting authority.
+pub fn validate_public_identity(identity: &str) -> io::Result<()> {
+    public_key(identity).map(|_| ())
+}
+
 pub struct SigningIdentity {
     key: Ed25519KeyPair,
 }
