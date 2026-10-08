@@ -213,6 +213,16 @@ persistent-resume regression is in `ctox-app-server-client`; root `cargo test`
 does not execute that nested package. Failure-only diagnostics use read-only
 SQLite handles with bounded lock waits and omit raw message contents.
 
+## 2026-10 Original MCP startup evidence
+
+The loaded Core Session exposes a non-deserializable snapshot of the original
+initialize results retained by its actual managed MCP connections, including the
+configured HTTP endpoint. The reader does not start pending connections, and
+limits retained metadata to 16 KiB per server and 32 servers per snapshot.
+The snapshot changes no effect ledger and is not a clean-effect receipt:
+authenticated native startup verification, current execution authority and
+owned guest-effect receipts remain required before source portability can pass.
+
 ## 2026-10 Native Core plan-effect ownership
 
 The native source factory's actual Core ledger observes provider added/done and
