@@ -213,6 +213,20 @@ persistent-resume regression is in `ctox-app-server-client`; root `cargo test`
 does not execute that nested package. Failure-only diagnostics use read-only
 SQLite handles with bounded lock waits and omit raw message contents.
 
+## 2026-10 Native Core plan-effect ownership
+
+The native source factory's actual Core ledger observes provider added/done and
+tool dispatch before awaits. A bounded per-call record retains completed IDs
+throughout that Session. Only the actual built-in PlanHandler, after parsing and
+emitting its typed plan update, can receipt the matching added/done/dispatch
+observations. A duplicate, cancelled/rejected handler, foreign namespace/item,
+successful replacement handler or imported report cannot produce that receipt.
+Unrelated startup/submission/tool observations remain unresolved.
+
+This is local Core plan-effect ownership, not a clean external-effects assertion.
+MCP startup, generic MCP/shell/host effects and the source capture's generic
+uncertainty remain protected. No wire report field or execution permission changed.
+
 ## 2026-08 Required Plan and Stable Activity Events
 
 CTOX service-owned queue turns use the upstream-compatible

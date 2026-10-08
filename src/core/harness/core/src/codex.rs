@@ -7397,7 +7397,7 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                sess.native_effects.observe_provider_item(&item);
+                sess.native_effects.observe_provider_item(&item, true);
                 let is_required_initial_tool = matches!(
                     &item,
                     ResponseItem::FunctionCall { name, .. }
@@ -7467,7 +7467,7 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
-                sess.native_effects.observe_provider_item(&item);
+                sess.native_effects.observe_provider_item(&item, false);
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),
