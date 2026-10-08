@@ -1,0 +1,358 @@
+{
+  "schema": "ctox.workjet.calendar.v1",
+  "contract_version": 1,
+  "export_prefix": "CALENDAR",
+  "types": {
+    "CalendarKind": {
+      "enum": [
+        "local",
+        "project_meeting",
+        "synced",
+        "project_session"
+      ]
+    },
+    "CalendarEvent": {
+      "fields": {
+        "id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "calendar_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "kind": {
+          "type": "CalendarKind"
+        },
+        "title": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "start_ms": {
+          "type": "i64"
+        },
+        "end_ms": {
+          "type": "i64"
+        },
+        "all_day": {
+          "type": "bool"
+        },
+        "timezone": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "location": {
+          "type": "String",
+          "max_chars": 512,
+          "optional": true
+        },
+        "notes": {
+          "type": "String",
+          "max_chars": 4096,
+          "optional": true
+        },
+        "revision": {
+          "type": "u64"
+        },
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "session_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "account_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "external_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        }
+      },
+      "ordered_fields": [
+        {
+          "before": "start_ms",
+          "after": "end_ms"
+        }
+      ]
+    },
+    "CalendarEventUpdate": {
+      "fields": {
+        "expected_revision": {
+          "type": "u64"
+        },
+        "event": {
+          "type": "CalendarEvent"
+        }
+      }
+    },
+    "CalendarEventDelete": {
+      "fields": {
+        "id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "expected_revision": {
+          "type": "u64"
+        }
+      }
+    }
+  },
+  "commands": {
+    "ctox.workjet.calendar.event.create": {
+      "request_type": "CalendarEvent",
+      "authorization": "owner"
+    },
+    "ctox.workjet.calendar.event.update": {
+      "request_type": "CalendarEventUpdate",
+      "authorization": "owner"
+    },
+    "ctox.workjet.calendar.event.delete": {
+      "request_type": "CalendarEventDelete",
+      "authorization": "owner"
+    }
+  },
+  "valid_cases": [
+    {
+      "type": "CalendarEvent",
+      "value": {
+        "id": "unicode-boundary",
+        "calendar_id": "account-calendar",
+        "kind": "synced",
+        "title": "🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟",
+        "start_ms": 1,
+        "end_ms": 2,
+        "all_day": false,
+        "timezone": "UTC",
+        "revision": 1
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "value": {
+        "id": "evt_01",
+        "calendar_id": "local-default",
+        "kind": "local",
+        "title": "Design review",
+        "start_ms": 1791373200000,
+        "end_ms": 1791376800000,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "location": "Room 2",
+        "revision": 1
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "value": {
+        "id": "evt_02",
+        "calendar_id": "project-meetings",
+        "kind": "project_meeting",
+        "title": "ctox.dev Jour fixe",
+        "start_ms": 1791271800000,
+        "end_ms": 1791275400000,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "revision": 3
+      }
+    },
+    {
+      "type": "CalendarEventUpdate",
+      "value": {
+        "expected_revision": 1,
+        "event": {
+          "id": "evt_01",
+          "calendar_id": "local-default",
+          "kind": "local",
+          "title": "Design review moved",
+          "start_ms": 1791373200000,
+          "end_ms": 1791376800000,
+          "all_day": false,
+          "timezone": "Europe/Berlin",
+          "location": "Room 2",
+          "revision": 2
+        }
+      }
+    },
+    {
+      "type": "CalendarEventDelete",
+      "value": {
+        "id": "evt_01",
+        "expected_revision": 2
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "value": {
+        "id": "session_01",
+        "calendar_id": "project-sessions",
+        "kind": "project_session",
+        "title": "Design review",
+        "start_ms": 1791373200000,
+        "end_ms": 1791376800000,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "location": "Room 2",
+        "revision": 1,
+        "project_id": "project_01",
+        "session_id": "session_01"
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "value": {
+        "id": "account_event_01",
+        "calendar_id": "calendar_01",
+        "kind": "synced",
+        "title": "Design review",
+        "start_ms": 1791373200000,
+        "end_ms": 1791376800000,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "location": "Room 2",
+        "revision": 1,
+        "account_id": "account_01",
+        "external_id": "provider_event_01"
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "type": "CalendarEvent",
+      "reason": "Unicode title exceeds max_chars",
+      "value": {
+        "id": "unicode-boundary",
+        "calendar_id": "account-calendar",
+        "kind": "synced",
+        "title": "🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟",
+        "start_ms": 1,
+        "end_ms": 2,
+        "all_day": false,
+        "timezone": "UTC",
+        "revision": 1
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "reason": "empty title",
+      "value": {
+        "id": "evt_03",
+        "calendar_id": "local-default",
+        "kind": "local",
+        "title": "",
+        "start_ms": 0,
+        "end_ms": 0,
+        "all_day": true,
+        "timezone": "UTC",
+        "revision": 1
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "reason": "unknown calendar kind",
+      "value": {
+        "id": "evt_04",
+        "calendar_id": "local-default",
+        "kind": "google",
+        "title": "x",
+        "start_ms": 0,
+        "end_ms": 0,
+        "all_day": false,
+        "timezone": "UTC",
+        "revision": 1
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "reason": "unknown field",
+      "value": {
+        "id": "evt_05",
+        "calendar_id": "local-default",
+        "kind": "local",
+        "title": "x",
+        "start_ms": 0,
+        "end_ms": 0,
+        "all_day": false,
+        "timezone": "UTC",
+        "revision": 1,
+        "attendees": []
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "reason": "unsafe integer timestamp",
+      "value": {
+        "id": "evt_06",
+        "calendar_id": "local-default",
+        "kind": "local",
+        "title": "x",
+        "start_ms": 9007199254740993,
+        "end_ms": 0,
+        "all_day": false,
+        "timezone": "UTC",
+        "revision": 1
+      }
+    },
+    {
+      "type": "CalendarEventDelete",
+      "reason": "missing revision guard",
+      "value": {
+        "id": "evt_01"
+      }
+    },
+    {
+      "type": "CalendarEventUpdate",
+      "reason": "update without an event",
+      "value": {
+        "expected_revision": 1
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "reason": "zero-duration event",
+      "value": {
+        "id": "evt_01",
+        "calendar_id": "local-default",
+        "kind": "local",
+        "title": "Design review",
+        "start_ms": 1791373200000,
+        "end_ms": 1791373200000,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "location": "Room 2",
+        "revision": 1
+      }
+    },
+    {
+      "type": "CalendarEvent",
+      "reason": "end before start",
+      "value": {
+        "id": "evt_01",
+        "calendar_id": "local-default",
+        "kind": "local",
+        "title": "Design review",
+        "start_ms": 1791373200000,
+        "end_ms": 1791373199999,
+        "all_day": false,
+        "timezone": "Europe/Berlin",
+        "location": "Room 2",
+        "revision": 1
+      }
+    }
+  ]
+}
