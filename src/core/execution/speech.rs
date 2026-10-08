@@ -303,6 +303,30 @@ pub struct SpeechStatus {
     pub mistral_credential_present: bool,
     pub mistral_voice_configured: bool,
     pub streaming_stt_selected: bool,
+    /// Whether speech-to-text can run on this host right now, per the selected backend.
+    pub stt: SpeechAvailability,
+    /// Whether text-to-speech can run on this host right now, per the selected backend.
+    pub tts: SpeechAvailability,
+}
+
+/// Three-state answer for one speech role. `Unknown` means the check could not run,
+/// which is different from `Unavailable`, where the check ran and found nothing usable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechAvailability {
+    Unknown,
+    Available,
+    Unavailable,
+}
+
+/// Maps the outcome of a readiness check to a role availability.
+/// `Err` means the check itself could not run.
+pub fn availability_from_check(check: Result<bool, ()>) -> SpeechAvailability {
+    match check {
+        Ok(true) => SpeechAvailability::Available,
+        Ok(false) => SpeechAvailability::Unavailable,
+        Err(()) => SpeechAvailability::Unknown,
+    }
 }
 
 /// Local operator configuration through the existing runtime store. This is not
@@ -336,6 +360,14 @@ impl SpeechGateway {
 
     pub fn status(&self) -> SpeechStatus {
         SpeechStatus {
+            stt: self.role_availability(
+                self.config.transcription,
+                crate::inference::engine::AuxiliaryRole::Stt,
+            ),
+            tts: self.role_availability(
+                self.config.synthesis,
+                crate::inference::engine::AuxiliaryRole::Tts,
+            ),
             config: self.config.clone(),
             mistral_credential_present: mistral_key(&self.root).is_some(),
             mistral_voice_configured: self.config.voice_id.is_some(),
@@ -365,6 +397,43 @@ impl SpeechGateway {
                         })
                 }
             },
+        }
+    }
+
+    /// Readiness of one role under the backend selected for it. A local runtime role counts as
+    /// available only when the runtime binds a loaded model for it. Computer synthesis is not
+    /// served by this gateway, so it is reported unavailable.
+    fn role_availability(
+        &self,
+        backend: SpeechBackend,
+        role: crate::inference::engine::AuxiliaryRole,
+    ) -> SpeechAvailability {
+        match backend {
+            SpeechBackend::Mistral => {
+                availability_from_check(Ok(mistral_key(&self.root).is_some()))
+            }
+            SpeechBackend::Computer => match role {
+                crate::inference::engine::AuxiliaryRole::Stt => {
+                    #[cfg(unix)]
+                    {
+                        availability_from_check(
+                            computer::SpeechComputerConfig::load(&self.root)
+                                .map(|c| c.transcription.is_some())
+                                .map_err(|_| ()),
+                        )
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        SpeechAvailability::Unavailable
+                    }
+                }
+                _ => SpeechAvailability::Unavailable,
+            },
+            SpeechBackend::Runtime => availability_from_check(
+                crate::inference::runtime_kernel::InferenceRuntimeKernel::resolve(&self.root)
+                    .map(|runtime| runtime.binding_for_auxiliary_role(role).is_some())
+                    .map_err(|_| ()),
+            ),
         }
     }
 
@@ -1113,3 +1182,32 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "speech_runtime_tests.rs"]
 mod runtime_tests;
+
+#[cfg(test)]
+mod speech_availability_tests {
+    use super::{availability_from_check, SpeechAvailability};
+
+    #[test]
+    fn a_completed_check_maps_to_available_or_unavailable() {
+        assert_eq!(availability_from_check(Ok(true)), SpeechAvailability::Available);
+        assert_eq!(availability_from_check(Ok(false)), SpeechAvailability::Unavailable);
+    }
+
+    #[test]
+    fn a_check_that_could_not_run_is_unknown_not_unavailable() {
+        assert_eq!(availability_from_check(Err(())), SpeechAvailability::Unknown);
+    }
+
+    #[test]
+    fn availability_serializes_to_the_contract_values() {
+        let values: Vec<String> = [
+            SpeechAvailability::Unknown,
+            SpeechAvailability::Available,
+            SpeechAvailability::Unavailable,
+        ]
+        .iter()
+        .map(|value| serde_json::to_string(value).unwrap())
+        .collect();
+        assert_eq!(values, ["\"unknown\"", "\"available\"", "\"unavailable\""]);
+    }
+}
