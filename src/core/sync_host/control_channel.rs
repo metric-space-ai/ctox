@@ -6,6 +6,7 @@
 #[path = "control_channel_tests.rs"]
 mod tests;
 use ctox_sync::native::NativePool;
+use futures_util::StreamExt;
 use rxdb::plugins::replication_webrtc::{
     index_mod::{GuardedAuxiliaryRequestHandler, GuardedAuxiliaryResponse},
     WebRTCConnectionHandler, WebRTCMessage, WebRTCPublicationGuard, WebRTCRsConnection,
@@ -21,7 +22,6 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{watch, Semaphore};
-use tokio_stream::StreamExt;
 
 const MAX_REQUEST: usize = 32 * 1024;
 const MAX_RESPONSE: usize = 128 * 1024;
@@ -138,7 +138,9 @@ fn valid_identity(identity: &str) -> bool {
 /// Every physical send poll reacquires these guards; Pending holds none.
 struct Publication {
     state: Weak<State>,
-    peer: WebRTCRsConnection,
+    // Receiver responses are already wrapped by RxDB AuxiliaryPublicationGuard.
+    // Reentering its pool fence from this inner guard would deadlock.
+    peer: Option<WebRTCRsConnection>,
     workload: Arc<dyn WebRTCPublicationGuard>,
 }
 impl WebRTCPublicationGuard for Publication {
@@ -149,8 +151,12 @@ impl WebRTCPublicationGuard for Publication {
             if !*alive {
                 return Err(denied());
             }
-            let pool = state.pool.upgrade().ok_or_else(denied)?;
-            pool.with_current_native_control_peer(&self.peer, publish)?
+            if let Some(peer) = &self.peer {
+                let pool = state.pool.upgrade().ok_or_else(denied)?;
+                pool.with_current_native_control_peer(peer, publish)?
+            } else {
+                publish()
+            }
         })
     }
 }
@@ -159,14 +165,17 @@ fn with_once(
     publish: &mut dyn FnMut() -> RxResult<()>,
 ) -> RxResult<()> {
     let mut called = 0usize;
+    let mut publication_failed = false;
     guard.with_current(&mut || {
         called = called.saturating_add(1);
         if called != 1 {
             return Err(denied());
         }
-        publish()
+        let result = publish();
+        publication_failed |= result.is_err();
+        result
     })?;
-    if called != 1 {
+    if called != 1 || publication_failed {
         return Err(denied());
     }
     Ok(())
@@ -240,7 +249,7 @@ impl NativeControlChannel {
             .ok_or_else(unavailable)?;
         let guard: Arc<dyn WebRTCPublicationGuard> = Arc::new(Publication {
             state: self.state.clone(),
-            peer: peer.clone(),
+            peer: Some(peer.clone()),
             workload: publication,
         });
         guard
@@ -351,7 +360,7 @@ impl NativeControlChannel {
                         result: result.result,
                         publication: Arc::new(Publication {
                             state: weak,
-                            peer,
+                            peer: None,
                             workload: result.publication,
                         }),
                     })
