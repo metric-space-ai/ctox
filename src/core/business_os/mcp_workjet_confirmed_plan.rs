@@ -40,7 +40,7 @@ fn load(core: &Connection, task_id: &str) -> anyhow::Result<Option<Binding>> {
         JOIN workjet_jour_fixe_confirmations c ON c.goal_id=g.goal_id
         JOIN communication_messages m ON m.message_key=s.last_message_key
         JOIN communication_routing_state r ON r.message_key=m.message_key
-        WHERE s.last_message_key=?1 LIMIT 2")?;
+        WHERE s.last_message_key=?1 AND m.direction='inbound' LIMIT 2")?;
     let rows=query.query_map([task_id],|r| Ok((
         r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,u64>(3)?,
         r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?,r.get::<_,String>(7)?,

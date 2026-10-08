@@ -51,7 +51,7 @@ fn actual_confirmed_plan_reads_the_goal_and_dispatches_once_without_a_fake_comma
     assert_eq!(trusted["workjet_confirmed_plan"]["lease"]["task_id"],task);
     let result=call(root.path(),&trusted,workjet_jour_fixe::READ_TOOL,read())?;
     assert_eq!(result["meeting"]["state"],"confirmed");
-    assert_eq!(result["current_goal"]["revision"],1);
+    assert_eq!(result["meeting"]["todos"]["goal"]["revision"],1);
     let args=json!({"action":"dispatch","dispatch_key":"confirmed-todo-one","task":"Prove reopening"});
     let first=call(root.path(),&trusted,workjet_worker_dispatch::TOOL,args.clone())?;
     assert_eq!(call(root.path(),&trusted,workjet_worker_dispatch::TOOL,args)?,first);
@@ -62,6 +62,27 @@ fn actual_confirmed_plan_reads_the_goal_and_dispatches_once_without_a_fake_comma
     assert!(call(root.path(),&trusted,"business_os.execute_action",json!({})).is_err());
     Ok(())
 }
+#[test]
+fn confirmed_plan_can_prepare_the_next_meeting_but_cannot_confirm_owner_todos()->anyhow::Result<()> {
+    let (root,task)=fixture()?;
+    let trusted=verify_internal_command_session_token(root.path(),&token(root.path(),&task)?)?;
+    let policy=store::open_store(root.path())?;
+    let raw:String=policy.query_row("SELECT metadata_json FROM workjet_jour_fixe_meetings WHERE meeting_id='meeting-1'",[],|r|r.get(0))?;
+    let mut next:Value=serde_json::from_str(&raw)?;
+    next["id"]=json!("meeting-next");next["scheduled_at_ms"]=json!(1792054800000i64);
+    next["state"]=json!("planned");next["deck_revision"]=json!(0);next["slides"]=json!([]);next["todos"]=Value::Null;
+    policy.execute("INSERT INTO workjet_jour_fixe_meetings VALUES ('meeting-next','project','owner',1792054800000,?1,NULL)",[next.to_string()])?;
+    let args=json!({"action":"prepare_deck","request":{"meeting_id":"meeting-next","operation_id":"next-deck",
+        "expected_revision":0,"deck_revision":1,"slides":[{"id":"next-slide","position":0,"title":"Progress",
+        "body_markdown":"Actual confirmed task progress","meeting_id":"meeting-next"}]}});
+    let first=call(root.path(),&trusted,workjet_jour_fixe::WRITE_TOOL,args.clone())?;
+    assert_eq!(first["mutation"]["state"],"preparing");
+    assert_eq!(call(root.path(),&trusted,workjet_jour_fixe::WRITE_TOOL,args)?,first);
+    assert_eq!(policy.query_row("SELECT command_id FROM workjet_jour_fixe_supervisor_operations WHERE operation_id='next-deck'",[],|r|r.get::<_,String>(0))?,task);
+    assert!(call(root.path(),&trusted,workjet_jour_fixe::WRITE_TOOL,json!({"action":"confirm_todos","request":{}})).is_err());
+    Ok(())
+}
+
 #[test]
 fn confirmed_plan_revokes_on_lease_step_goal_source_or_authority_change()->anyhow::Result<()> {
     for change in ["worker","owner","leased_at","expiry","cancel","completed_step","superseded_goal",
