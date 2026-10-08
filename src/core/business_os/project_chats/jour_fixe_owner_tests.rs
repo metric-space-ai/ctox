@@ -182,10 +182,10 @@ fn live_stream_binding_is_read_only_and_revalidates_after_an_independent_writer(
     assert_eq!(binding.meeting_id(),"meeting-1");
     assert_eq!(binding.deck_revision(),1);
     assert_eq!(binding.meeting_revision(),0);
+    let mut metadata=saved(root.path())?;
     let mut conn=open_store(root.path())?;
     conn.busy_timeout(std::time::Duration::ZERO)?;
     let tx=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let mut metadata=saved(root.path())?;
     metadata["revision"]=json!(1);
     tx.execute("UPDATE workjet_jour_fixe_meetings SET metadata_json=?1",[metadata.to_string()])?;
     tx.commit()?;
@@ -231,9 +231,9 @@ fn live_binding_rechecks_current_owner_supervisor_and_deck_after_provider_wait()
             thread["source_record_id"]=json!("foreign-project");
             store::upsert_business_record(&conn,THREADS,THREAD,8,thread)?;
         } else if changed=="owner" {
-            let mut project=outbound_load_record(&conn,PROJECTS,"project")?.unwrap();
+            let mut project=outbound_load_record(&conn,"workjet_projects","project")?.unwrap();
             project["owner_user_id"]=json!("foreign");
-            store::upsert_business_record(&conn,PROJECTS,"project",8,project)?;
+            store::upsert_business_record(&conn,"workjet_projects","project",8,project)?;
         } else {
             let mut metadata=saved(root.path())?;
             metadata["deck_revision"]=json!(2);
