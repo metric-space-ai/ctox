@@ -334,6 +334,7 @@ impl Store {
             store: self.clone(),
             _lease: lease,
             run_gate: tokio::sync::Mutex::new(()),
+            poll: std::sync::Mutex::new(None),
             peer,
             storage,
         })
@@ -352,6 +353,10 @@ pub struct Worker {
     store: Store,
     _lease: File,
     run_gate: tokio::sync::Mutex<()>,
+    // Idle polling reads through one kept connection: the worker polls every
+    // 250 ms, and opening Core each time parsed its whole schema and took the
+    // write lock even with an empty queue (thesen 08.10.2026: ~20 % of a core).
+    poll: std::sync::Mutex<Option<Connection>>,
     peer: Option<Arc<dyn PeerRangeSource>>,
     storage: Option<Arc<dyn StorageResolver>>,
 }
@@ -364,9 +369,33 @@ enum SourceOutcome {
 
 impl Worker {
     /// One bounded attempt. Failed jobs require explicit resume; no unbounded retries.
+    /// Read-only check through the kept poll connection; the claim below still
+    /// re-reads under its write lock.
+    fn has_runnable_job(&self) -> Result<bool> {
+        let mut poll = self.poll.lock().unwrap_or_else(|error| error.into_inner());
+        if poll.is_none() {
+            *poll = Some(self.store.connection()?);
+        }
+        let found = poll.as_ref().expect("poll connection").query_row(
+            "SELECT EXISTS(SELECT 1 FROM ctox_transfer_jobs WHERE state='queued' AND desired='run')",
+            [],
+            |row| row.get::<_, bool>(0),
+        );
+        match found {
+            Ok(found) => Ok(found),
+            Err(error) => {
+                *poll = None;
+                Err(error.into())
+            }
+        }
+    }
+
     pub async fn run_next(&self, stop: &AtomicBool) -> Result<bool> {
         let _run = self.run_gate.lock().await;
         if stop.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        if !self.has_runnable_job()? {
             return Ok(false);
         }
         let mut c = self.store.connection()?;
@@ -717,6 +746,19 @@ fn sync_directory(path: &Path) -> Result<()> {
 }
 
 /// The daemon owns this guard. UI lifetime has no bearing on the worker or its durable jobs.
+fn storage_busy(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(failure, _))
+                if matches!(
+                    failure.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                )
+        )
+    })
+}
+
 pub struct DaemonWorker {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<Result<()>>>,
@@ -753,6 +795,10 @@ impl DaemonWorker {
                         match worker.run_next(&stopped).await {
                             Ok(true) => continue,
                             Ok(false) => {}
+                            // A busy Core store is contention, not a storage failure: the
+                            // worker used to stop with "restart required" in almost every
+                            // service process on thesen (08.10.2026).
+                            Err(error) if storage_busy(&error) => {}
                             Err(error) => {
                                 eprintln!("ctox transfer worker storage failure; restart required");
                                 break Err(error);
