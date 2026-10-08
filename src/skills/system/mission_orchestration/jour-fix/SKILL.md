@@ -12,7 +12,7 @@ grant change or unrelated delegated work. Never mutate stores, queues or goals
 via shell.
 
 Read configuration, previous confirmed goal, evidenced PRs, KPIs, comments and
-final transcript. Name missing/stale evidence; invent neither numbers nor work.
+final transcript. Name missing/stale evidence. Never invent numeric metrics or completed work.
 Use business_os.project_kpi action read, request {project_id}, for prompts and
 recipe catalogue. Resolve a matching recipe with BindKpiRequest
 {operation_id,project_id,kpi_id,prompt_revision,expected_revision,recipe,window_days}.
@@ -48,6 +48,6 @@ During the current leased Supervisor turn:
 
 Read revisions before new intent. Recover uncertain mutations using the same
 operation_id and identical request. Changed authority/expired lease needs native
-recovery, never forged receipts. Only the Owner's explicit confirmation of the
+recovery, never forged receipts. Only the owner's explicit confirmation of the
 current proposal installs the next durable Supervisor goal. A proposal is not a
 confirmed goal; subsequent work retains normal permissions, review and recovery.
