@@ -165,6 +165,8 @@ pub use server::BusinessOsServeOptions;
 pub(crate) mod session_handoff_enrollment;
 #[cfg(unix)]
 pub(crate) use guest_registry::target_handoff::configure_repository as configure_handoff_target_repository;
+#[cfg(unix)]
+pub(crate) use guest_registry::NativeGuestMachineConfiguration;
 pub use session_handoff_gate::native_session_handoff_gate;
 #[cfg(unix)]
 pub(crate) use session_handoff_gate::native_source_offer;

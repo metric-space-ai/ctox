@@ -342,7 +342,7 @@ fn session(owner: &str) -> BusinessOsSession {
 fn put(conn: &Connection, collection: &str, id: &str, value: serde_json::Value) {
     super::super::store::upsert_business_record(conn, collection, id, 1, value).unwrap();
 }
-fn fixture() -> (
+pub(super) fn fixture() -> (
     tempfile::TempDir,
     Arc<NativeGuestRegistry>,
     NativeGuestAssignment,

@@ -8,9 +8,13 @@ cross this same-UID control socket. It accepts neither a path nor serialized
 provider, ownership, process or clean-effect claims.
 
 The host passes its actual guest registry to the listener. An enrolled directory
-alone cannot import: the guest must retain the real provider and admitted
-execution, with the original session/account/harness contract and the actual
-next target ownership (local node, source generation + 1). Quorum verifies
+alone cannot import. A protected target enrolled by `handoff-enroll-guest`
+retains the original guest/service identity and completed native takeover before
+a Core/provider exists. Its import uses the target account, Receive/Resume,
+controller and copy-binding fences. Ordinary existing-provider imports still
+require the real admitted provider execution. Both paths preserve the original
+session/account/harness contract and exact next target ownership (local node,
+source generation + 1). Quorum verifies
 the protected checkpoint and denies pending effects or a refresh requirement.
 The target binding's receive/execute grants authorize the original handoff;
 they do not substitute for that current target quorum ownership.
@@ -33,7 +37,48 @@ target provider/Core-session binding, native image/RAM restoration and guest
 readiness before activation. These gaps remain goals 16/18 and require installed
 isolated-tenant evidence rather than a successful copy/import response.
 
+## Native protected machine restore
+
+After `handoff-enroll-guest` and `handoff-import-guest`, the local operator can
+request `ctox sync handoff-restore-guest <binding-digest> <guest-id>`. This uses
+the existing same-UID checkpoint socket and accepts identifiers only. The
+privileged `configure-guests` JSON has an optional `machine` object:
+
+```json
+{"program":"/usr/bin/qemu-system-x86_64","baseRaw":"/native/immutable/base.raw","memoryMib":768,"vcpus":2,"acceleration":"tcg"}
+```
+
+The paths are host-local operator configuration, never peer/model inputs. The
+independent raw base must be immutable, unaliased and native owned; its full
+hash, hardware profile, RAM and disk must match the protected source machine
+manifest. KVM/TCG is explicit; no accelerator fallback or arbitrary QEMU args.
+The host reads the typed runtime-store configuration on startup before guest
+enrollment; omission denies machine restoration. Linux is currently required.
+
+The registry retains a one-shot preparation owner before staging/awaits and a
+real paused QEMU child before migration. Full chunk/base verification and paused
+RAM loading run outside native publication locks. Before activation it checks
+fresh quorum ownership, the original completed import/checkpoint, exactly its
+registered process reservation, current target account, Receive/Resume grants,
+binding revision, principal epoch, host lifetime and controller. The fixed
+networkless guest resumes under these native guards and must report the original
+guest-service session through its real endpoint. The process reservation stays
+pending through the actual child lifetime. Uncertain BeginEffect, changed
+ownership, unknown source effects, incomplete staging, cancellation, failed
+migration/probe or session mismatch deny success and keep the attempt retained;
+there is no automatic replacement child. Cancellation attempts bounded stop of
+only that retained child, without completing its quorum effect.
+
+The response distinguishes `machineRestored:true` from `coreResumed:false` and
+`resumed:false`. It does not start a Core/provider or permit guest inputs from a
+new worker. Authoritative source Core/tool effects and the original Core/provider
+factory/admission remain required for goals 15/18. This source connection is not
+installed acceptance evidence; the current source unknown-effect marker still
+prevents a successful production import/restore. Frozen Mac037 and a new Darwin
+build alone cannot supply the current Linux-only machine witness.
+
 ## Core import primitive
+
 
 The trusted native execution owner can now call
 `ThreadManager::resume_thread_from_native_checkpoint` with a strictly decoded
