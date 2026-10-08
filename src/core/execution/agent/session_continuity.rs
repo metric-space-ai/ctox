@@ -130,6 +130,53 @@ pub(crate) struct SessionThreadSpec<'a> {
     pub persistent_thread_name: Option<&'a str>,
 }
 
+// Thread construction precedes native producer/quorum admission. Ambient
+// subprocesses cannot inherit that future execution permit. Use the same
+// profile in the app-server loader and its higher-priority thread overrides.
+const NATIVE_GUEST_BACKGROUND_FEATURES: &[&str] = &[
+    "features.shell_snapshot",
+    "features.shell_zsh_fork",
+    "features.ctox_hooks",
+    "features.memory_tool",
+    "features.undo",
+    "features.multi_agent",
+    "features.enable_fanout",
+];
+
+pub(super) fn constrain_native_guest_startup(overrides: &mut Vec<(String, toml::Value)>) {
+    overrides.retain(|(key, _)| {
+        key != "notify" && !NATIVE_GUEST_BACKGROUND_FEATURES.contains(&key.as_str())
+    });
+    overrides.extend(
+        NATIVE_GUEST_BACKGROUND_FEATURES
+            .iter()
+            .map(|key| ((*key).to_owned(), toml::Value::Boolean(false))),
+    );
+    // Empty argv is the existing explicit no-notification configuration.
+    // The hook registry rejects empty argv before creating a legacy hook.
+    overrides.push(("notify".into(), toml::Value::Array(Vec::new())));
+}
+
+fn thread_start_config(spec: &SessionThreadSpec<'_>) -> Option<HashMap<String, JsonValue>> {
+    let mut config = spec.thread_config.cloned();
+    if spec.durable_guest {
+        let config = config.get_or_insert_with(HashMap::new);
+        for key in NATIVE_GUEST_BACKGROUND_FEATURES {
+            config.insert((*key).to_owned(), JsonValue::Bool(false));
+            if let Some(JsonValue::Object(features)) = config.get_mut("features") {
+                features.insert(
+                    key.strip_prefix("features.")
+                        .expect("native feature key")
+                        .to_owned(),
+                    JsonValue::Bool(false),
+                );
+            }
+        }
+        config.insert("notify".into(), JsonValue::Array(Vec::new()));
+    }
+    config
+}
+
 pub(crate) struct SessionControlTimeouts {
     pub list: Duration,
     pub resume: Duration,
@@ -327,7 +374,7 @@ pub(crate) async fn start_session_thread<C: DirectSessionControlClient>(
             cwd: Some(spec.cwd.to_string_lossy().to_string()),
             approval_policy: Some(ctox_protocol::protocol::AskForApproval::Never.into()),
             sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
-            config: spec.thread_config.cloned(),
+            config: thread_start_config(spec),
             base_instructions: Some(spec.base_instructions.to_string()),
             dynamic_tools: spec.disable_active_tools.then(Vec::new),
             disable_mcp_servers: Some(spec.disable_mcp_servers),
@@ -785,6 +832,87 @@ mod tests {
             );
             assert_eq!(client.methods(), ["thread/start"]);
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn durable_guest_startup_overrides_ambient_exec_before_thread_creation() -> Result<()> {
+        let id = "00000000-0000-0000-0000-000000000001";
+        let mut reply = start_ok(id);
+        let ScriptedReply::Ok(value) = &mut reply else {
+            unreachable!()
+        };
+        value["thread"]["ephemeral"] = JsonValue::Bool(false);
+        let client = ScriptedControlClient::new(vec![reply]);
+        let mcp = serde_json::json!({"ctox-business-os":{"url":"http://127.0.0.1:8788/mcp"}});
+        let ambient = HashMap::from([
+            (
+                "features".into(),
+                serde_json::json!({
+                    "shell_snapshot":true, "shell_zsh_fork":true, "ctox_hooks":true,
+                    "memory_tool":true, "undo":true, "multi_agent":true,
+                    "enable_fanout":true, "apps":false
+                }),
+            ),
+            ("features.shell_snapshot".into(), JsonValue::Bool(true)),
+            (
+                "notify".into(),
+                serde_json::json!(["/bin/sh", "-c", "exit 1"]),
+            ),
+            ("mcp_servers".into(), mcp.clone()),
+        ]);
+        let mut spec = isolated_spec();
+        spec.durable_guest = true;
+        spec.thread_config = Some(&ambient);
+        let mut seq = RequestIdSeq::new();
+        assert_eq!(
+            start_session_thread(&client, &mut seq, &spec, fast_timeouts().start).await?,
+            id
+        );
+        let params = client.params();
+        let config = &params[0]["config"];
+        for feature in [
+            "shell_snapshot",
+            "shell_zsh_fork",
+            "ctox_hooks",
+            "memory_tool",
+            "undo",
+            "multi_agent",
+            "enable_fanout",
+        ] {
+            assert_eq!(
+                config[format!("features.{feature}")],
+                JsonValue::Bool(false)
+            );
+            assert_eq!(config["features"][feature], JsonValue::Bool(false));
+        }
+        assert_eq!(config["notify"], serde_json::json!([]));
+        assert_eq!(config["mcp_servers"], mcp);
+        assert_eq!(config["features"]["apps"], JsonValue::Bool(false));
+        assert_eq!(ambient["features.shell_snapshot"], JsonValue::Bool(true));
+        assert_eq!(ambient["features"]["shell_snapshot"], JsonValue::Bool(true));
+        assert_eq!(client.methods(), ["thread/start"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ordinary_startup_preserves_operator_configuration() -> Result<()> {
+        let client = ScriptedControlClient::new(vec![start_ok("ordinary")]);
+        let ambient = HashMap::from([
+            ("features.shell_snapshot".into(), JsonValue::Bool(true)),
+            (
+                "notify".into(),
+                serde_json::json!(["operator-notification"]),
+            ),
+        ]);
+        let mut spec = isolated_spec();
+        spec.thread_config = Some(&ambient);
+        let mut seq = RequestIdSeq::new();
+        start_session_thread(&client, &mut seq, &spec, fast_timeouts().start).await?;
+        assert_eq!(
+            client.params()[0]["config"],
+            serde_json::to_value(&ambient)?
+        );
         Ok(())
     }
 
