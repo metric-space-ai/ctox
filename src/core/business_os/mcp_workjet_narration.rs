@@ -11,6 +11,7 @@ use crate::execution::speech::{
 };
 use base64::Engine;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use wire::WireValidate;
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_jour_fixe_native_narration (
