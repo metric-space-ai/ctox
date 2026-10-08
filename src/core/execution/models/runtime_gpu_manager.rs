@@ -102,12 +102,17 @@ pub fn prepare_workload_launch(
     let Some(processes_after_cleanup) = resource_state::inspect_gpu_process_snapshot() else {
         return Ok(());
     };
-    let remaining = classify_gpu_blockers(
+    let mut remaining = classify_gpu_blockers(
         &processes_after_cleanup,
         &gpu_indices,
         &owned_pids,
         std::process::id(),
     );
+    let speech_cohosts =
+        compatible_speech_gpu_holders(root, descriptor, admission, &remaining.owned_pids)?;
+    remaining
+        .owned_pids
+        .retain(|pid| !speech_cohosts.contains(pid));
     if !remaining.owned_pids.is_empty() {
         anyhow::bail!(
             "refusing to launch {} backend because target GPUs [{}] are still held by managed runtime pids {:?}",
@@ -142,7 +147,7 @@ pub fn prepare_workload_launch(
     if descriptor.role == runtime_contract::BackendRole::Chat {
         validate_primary_generation_budget(root)?;
     } else {
-        validate_auxiliary_gpu_budget(root, descriptor, admission)?;
+        validate_auxiliary_gpu_budget(root, descriptor, admission, !speech_cohosts.is_empty())?;
     }
     Ok(())
 }
@@ -323,14 +328,42 @@ fn validate_auxiliary_gpu_budget(
     root: &Path,
     descriptor: &RuntimeWorkloadDescriptor,
     admission: &GpuAdmission,
+    sharing_managed_speech: bool,
 ) -> Result<()> {
     if descriptor.compute_target != Some(engine::ComputeTarget::Gpu) {
         return Ok(());
     }
     let Some(snapshot) = resource_state::inspect_resource_snapshot() else {
+        anyhow::ensure!(
+            !sharing_managed_speech,
+            "speech GPU cohosting requires a live memory snapshot"
+        );
         return Ok(());
     };
     let already_reserved = runtime_contract::reserved_gpu_mb_by_role(root, Some(descriptor.role))?;
+    validate_auxiliary_gpu_budget_snapshot(
+        descriptor,
+        admission,
+        &snapshot,
+        &already_reserved,
+        sharing_managed_speech,
+    )
+}
+
+fn validate_auxiliary_gpu_budget_snapshot(
+    descriptor: &RuntimeWorkloadDescriptor,
+    admission: &GpuAdmission,
+    snapshot: &resource_state::ResourceSnapshot,
+    already_reserved: &BTreeMap<usize, u64>,
+    sharing_managed_speech: bool,
+) -> Result<()> {
+    if sharing_managed_speech {
+        anyhow::ensure!(
+            admission.reserved_mb_by_gpu.len() == 1
+                && admission.reserved_mb_by_gpu.values().all(|mb| *mb > 0),
+            "speech GPU cohosting requires a positive single-device memory reservation"
+        );
+    }
     for (gpu_index, required_mb) in &admission.reserved_mb_by_gpu {
         let Some(gpu) = snapshot.gpu(*gpu_index) else {
             anyhow::bail!(
@@ -339,9 +372,14 @@ fn validate_auxiliary_gpu_budget(
                 gpu_index
             );
         };
-        let live_available_mb = gpu
-            .free_mb
-            .saturating_add(already_reserved.get(gpu_index).copied().unwrap_or_default());
+        // A resident speech model already consumes physical memory. Its planned
+        // reservation is not free space for loading the complementary model.
+        let live_available_mb = if sharing_managed_speech {
+            gpu.free_mb
+        } else {
+            gpu.free_mb
+                .saturating_add(already_reserved.get(gpu_index).copied().unwrap_or_default())
+        };
         if *required_mb > live_available_mb {
             anyhow::bail!(
                 "refusing to launch {} backend for {} because gpu{} only has {}MB available for CTOX but {}MB are required",
@@ -354,6 +392,116 @@ fn validate_auxiliary_gpu_budget(
         }
     }
     Ok(())
+}
+
+fn compatible_speech_gpu_holders(
+    root: &Path,
+    descriptor: &RuntimeWorkloadDescriptor,
+    admission: &GpuAdmission,
+    live_owned_pids: &[u32],
+) -> Result<BTreeSet<u32>> {
+    let ownership = runtime_contract::load_runtime_ownership_state(root)?;
+    Ok(compatible_speech_gpu_holders_from_state(
+        descriptor,
+        admission,
+        &ownership,
+        live_owned_pids,
+        |pid, role| same_root_native_speech_process(root, pid, role),
+    ))
+}
+
+fn compatible_speech_gpu_holders_from_state(
+    descriptor: &RuntimeWorkloadDescriptor,
+    admission: &GpuAdmission,
+    ownership: &runtime_contract::RuntimeOwnershipState,
+    live_owned_pids: &[u32],
+    verify_process: impl Fn(u32, runtime_contract::BackendRole) -> bool,
+) -> BTreeSet<u32> {
+    use runtime_contract::{BackendRole, RuntimeResidencyPhase};
+    let complementary = match (descriptor.role, descriptor.model.as_str()) {
+        (BackendRole::Stt, "engineai/Voxtral-Mini-4B-Realtime-2602") => {
+            (BackendRole::Tts, "engineai/Voxtral-4B-TTS-2603")
+        }
+        (BackendRole::Tts, "engineai/Voxtral-4B-TTS-2603") => {
+            (BackendRole::Stt, "engineai/Voxtral-Mini-4B-Realtime-2602")
+        }
+        _ => return BTreeSet::new(),
+    };
+    let devices = admission
+        .visible_devices
+        .as_deref()
+        .map(parse_visible_devices);
+    let Some(devices) = devices.filter(|devices| devices.len() == 1) else {
+        return BTreeSet::new();
+    };
+    if descriptor.compute_target != Some(engine::ComputeTarget::Gpu)
+        || admission.reserved_mb_by_gpu.len() != 1
+        || admission
+            .reserved_mb_by_gpu
+            .get(&devices[0])
+            .copied()
+            .unwrap_or(0)
+            < auxiliary_selection(descriptor.role, &descriptor.model).gpu_reserve_mb()
+    {
+        return BTreeSet::new();
+    }
+    ownership
+        .workloads
+        .iter()
+        .filter(|workload| {
+            workload.role == complementary.0
+                && workload.model == complementary.1
+                && workload.phase == RuntimeResidencyPhase::Active
+                && workload.launcher_kind.as_deref() == Some("engine")
+                && workload.compute_target.as_deref() == Some("gpu")
+                && workload.visible_devices == devices
+                && workload.reserved_mb_by_gpu.len() == 1
+                && workload
+                    .reserved_mb_by_gpu
+                    .get(&devices[0])
+                    .copied()
+                    .unwrap_or(0)
+                    >= auxiliary_selection(complementary.0, complementary.1).gpu_reserve_mb()
+        })
+        .filter_map(|workload| {
+            workload
+                .pid
+                .filter(|pid| live_owned_pids.contains(pid) && verify_process(*pid, workload.role))
+        })
+        .collect()
+}
+
+fn same_root_native_speech_process(
+    root: &Path,
+    pid: u32,
+    role: runtime_contract::BackendRole,
+) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let command = match role {
+            runtime_contract::BackendRole::Stt => "__native-voxtral-stt-service",
+            runtime_contract::BackendRole::Tts => "__native-voxtral-tts-service",
+            _ => return false,
+        };
+        let process = Path::new("/proc").join(pid.to_string());
+        let (Ok(exe), Ok(expected), Ok(cwd), Ok(root), Ok(args)) = (
+            std::fs::read_link(process.join("exe")),
+            std::env::current_exe().and_then(std::fs::canonicalize),
+            std::fs::read_link(process.join("cwd")),
+            std::fs::canonicalize(root),
+            std::fs::read(process.join("cmdline")),
+        ) else {
+            return false;
+        };
+        exe == expected
+            && cwd == root
+            && args.split(|byte| *byte == 0).nth(1) == Some(command.as_bytes())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (root, pid, role);
+        false
+    }
 }
 
 fn classify_gpu_blockers(
@@ -500,6 +648,197 @@ mod tests {
             }],
             moe_cache: None,
         }
+    }
+
+    fn speech_fixture() -> (
+        RuntimeWorkloadDescriptor,
+        GpuAdmission,
+        runtime_contract::RuntimeOwnershipState,
+    ) {
+        (
+            RuntimeWorkloadDescriptor {
+                role: BackendRole::Tts,
+                model: "engineai/Voxtral-4B-TTS-2603".to_string(),
+                port: 19881,
+                health_path: "/health".to_string(),
+                launcher_kind: runtime_kernel::RuntimeLauncherKind::Engine,
+                compute_target: Some(engine::ComputeTarget::Gpu),
+            },
+            GpuAdmission {
+                visible_devices: Some("2".to_string()),
+                reserved_mb_by_gpu: BTreeMap::from([(2, 12_288)]),
+            },
+            runtime_contract::RuntimeOwnershipState {
+                version: 1,
+                workloads: vec![runtime_contract::BackendRuntimeResidency {
+                    role: BackendRole::Stt,
+                    phase: runtime_contract::RuntimeResidencyPhase::Active,
+                    model: "engineai/Voxtral-Mini-4B-Realtime-2602".to_string(),
+                    pid: Some(22),
+                    port: Some(19880),
+                    health_path: Some("/health".to_string()),
+                    launcher_kind: Some("engine".to_string()),
+                    compute_target: Some("gpu".to_string()),
+                    visible_devices: vec![2],
+                    reserved_mb_by_gpu: BTreeMap::from([(2, 6144)]),
+                    updated_at_epoch_secs: 1,
+                }],
+            },
+        )
+    }
+
+    #[test]
+    fn voxtral_speech_pair_can_cohost_without_admitting_foreign_processes() {
+        let (descriptor, admission, ownership) = speech_fixture();
+        let permitted = compatible_speech_gpu_holders_from_state(
+            &descriptor,
+            &admission,
+            &ownership,
+            &[22],
+            |pid, role| pid == 22 && role == BackendRole::Stt,
+        );
+        assert_eq!(permitted, BTreeSet::from([22]));
+        let processes = [22, 33].map(|pid| resource_state::GpuProcessLiveState {
+            gpu_index: 2,
+            gpu_uuid: None,
+            pid,
+            used_mb: 1000,
+            process_name: "process".to_string(),
+            command: None,
+        });
+        let mut blockers = classify_gpu_blockers(&processes, &[2], &BTreeSet::from([22]), 999);
+        blockers.owned_pids.retain(|pid| !permitted.contains(pid));
+        assert!(blockers.owned_pids.is_empty());
+        assert_eq!(blockers.foreign_pids, vec![33]);
+        let mut chat = descriptor.clone();
+        chat.role = BackendRole::Chat;
+        assert!(compatible_speech_gpu_holders_from_state(
+            &chat,
+            &admission,
+            &ownership,
+            &[22],
+            |_, _| true,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn speech_cohosting_requires_active_exact_model_and_verified_process() {
+        let (descriptor, admission, ownership) = speech_fixture();
+        assert!(compatible_speech_gpu_holders_from_state(
+            &descriptor,
+            &admission,
+            &ownership,
+            &[22],
+            |_, _| false,
+        )
+        .is_empty());
+        for invalid in 0..8 {
+            let mut invalid_ownership = ownership.clone();
+            let peer = &mut invalid_ownership.workloads[0];
+            match invalid {
+                0 => peer.phase = runtime_contract::RuntimeResidencyPhase::Starting,
+                1 => peer.model = "unrelated-model".to_string(),
+                2 => peer.visible_devices = vec![1],
+                3 => {
+                    peer.reserved_mb_by_gpu.insert(2, 0);
+                }
+                4 => peer.launcher_kind = Some("unmanaged".to_string()),
+                5 => peer.compute_target = Some("cpu".to_string()),
+                6 => peer.pid = Some(23),
+                _ => {
+                    peer.reserved_mb_by_gpu.insert(2, 1);
+                }
+            }
+            assert!(
+                compatible_speech_gpu_holders_from_state(
+                    &descriptor,
+                    &admission,
+                    &invalid_ownership,
+                    &[22],
+                    |_, _| true,
+                )
+                .is_empty(),
+                "invalid residency case {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn speech_cohosting_also_allows_stt_after_managed_tts() {
+        let (mut descriptor, mut admission, mut ownership) = speech_fixture();
+        descriptor.role = BackendRole::Stt;
+        descriptor.model = "engineai/Voxtral-Mini-4B-Realtime-2602".to_string();
+        ownership.workloads[0].role = BackendRole::Tts;
+        ownership.workloads[0].model = "engineai/Voxtral-4B-TTS-2603".to_string();
+        ownership.workloads[0].reserved_mb_by_gpu.insert(2, 12_288);
+        admission.reserved_mb_by_gpu.insert(2, 4200);
+        assert_eq!(
+            compatible_speech_gpu_holders_from_state(
+                &descriptor,
+                &admission,
+                &ownership,
+                &[22],
+                |pid, role| pid == 22 && role == BackendRole::Tts,
+            ),
+            BTreeSet::from([22])
+        );
+    }
+
+    #[test]
+    fn speech_reservation_cannot_replace_physical_free_memory() {
+        let (descriptor, admission, _) = speech_fixture();
+        let mut snapshot = resource_state::ResourceSnapshot {
+            source: "test".to_string(),
+            gpus: vec![resource_state::GpuLiveState {
+                index: 2,
+                uuid: None,
+                name: "A4500".to_string(),
+                total_mb: 20000,
+                used_mb: 14000,
+                free_mb: 6000,
+            }],
+        };
+        let other_role_reservation = BTreeMap::from([(2, 6144)]);
+        let error = validate_auxiliary_gpu_budget_snapshot(
+            &descriptor,
+            &admission,
+            &snapshot,
+            &other_role_reservation,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("only has 6000MB"));
+        snapshot.gpus[0].used_mb = 6000;
+        snapshot.gpus[0].free_mb = 14000;
+        validate_auxiliary_gpu_budget_snapshot(
+            &descriptor,
+            &admission,
+            &snapshot,
+            &other_role_reservation,
+            true,
+        )
+        .unwrap();
+        let mut missing_reservation = admission.clone();
+        missing_reservation.reserved_mb_by_gpu.clear();
+        assert!(validate_auxiliary_gpu_budget_snapshot(
+            &descriptor,
+            &missing_reservation,
+            &snapshot,
+            &other_role_reservation,
+            true,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_pid_for_this_test_process_is_not_a_native_speech_service() {
+        assert!(!same_root_native_speech_process(
+            &std::env::current_dir().unwrap(),
+            std::process::id(),
+            BackendRole::Stt,
+        ));
     }
 
     #[test]

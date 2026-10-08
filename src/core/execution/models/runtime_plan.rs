@@ -6353,9 +6353,8 @@ fn default_auxiliary_manifest_for_model(
     let (role, gpu_reserve_mb) = match profile.runtime.family {
         engine::LocalModelFamily::Qwen3Embedding => ("embedding", 1_100),
         engine::LocalModelFamily::VoxtralTranscription => ("stt", 4_200),
-        engine::LocalModelFamily::Qwen3Speech | engine::LocalModelFamily::VoxtralSpeech => {
-            ("tts", 1_400)
-        }
+        engine::LocalModelFamily::Qwen3Speech => ("tts", 1_400),
+        engine::LocalModelFamily::VoxtralSpeech => ("tts", 12_288),
         engine::LocalModelFamily::Qwen3VisionAuxiliary => ("vision", 3_500),
         _ => return None,
     };
