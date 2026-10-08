@@ -303,9 +303,9 @@ pub struct SpeechStatus {
     pub mistral_credential_present: bool,
     pub mistral_voice_configured: bool,
     pub streaming_stt_selected: bool,
-    /// Whether speech-to-text can run on this host right now, per the selected backend.
+    /// Verified readiness, or unknown when only backend configuration is available.
     pub stt: SpeechAvailability,
-    /// Whether text-to-speech can run on this host right now, per the selected backend.
+    /// Verified readiness, or unknown when only backend configuration is available.
     pub tts: SpeechAvailability,
 }
 
@@ -326,6 +326,13 @@ pub fn availability_from_check(check: Result<bool, ()>) -> SpeechAvailability {
         Ok(true) => SpeechAvailability::Available,
         Ok(false) => SpeechAvailability::Unavailable,
         Err(()) => SpeechAvailability::Unknown,
+    }
+}
+
+fn availability_from_configuration(configuration: Result<bool, ()>) -> SpeechAvailability {
+    match configuration {
+        Ok(false) => SpeechAvailability::Unavailable,
+        Ok(true) | Err(()) => SpeechAvailability::Unknown,
     }
 }
 
@@ -400,9 +407,9 @@ impl SpeechGateway {
         }
     }
 
-    /// Readiness of one role under the backend selected for it. A local runtime role counts as
-    /// available only when the runtime binds a loaded model for it. Computer synthesis is not
-    /// served by this gateway, so it is reported unavailable.
+    /// Configuration can establish absence, but cannot prove a provider or
+    /// holding computer will answer. Present credentials and model bindings
+    /// remain unknown until an actual request verifies that speech role.
     fn role_availability(
         &self,
         backend: SpeechBackend,
@@ -410,13 +417,13 @@ impl SpeechGateway {
     ) -> SpeechAvailability {
         match backend {
             SpeechBackend::Mistral => {
-                availability_from_check(Ok(mistral_key(&self.root).is_some()))
+                availability_from_configuration(Ok(mistral_key(&self.root).is_some()))
             }
             SpeechBackend::Computer => match role {
                 crate::inference::engine::AuxiliaryRole::Stt => {
                     #[cfg(unix)]
                     {
-                        availability_from_check(
+                        availability_from_configuration(
                             computer::SpeechComputerConfig::load(&self.root)
                                 .map(|c| c.transcription.is_some())
                                 .map_err(|_| ()),
@@ -429,7 +436,7 @@ impl SpeechGateway {
                 }
                 _ => SpeechAvailability::Unavailable,
             },
-            SpeechBackend::Runtime => availability_from_check(
+            SpeechBackend::Runtime => availability_from_configuration(
                 crate::inference::runtime_kernel::InferenceRuntimeKernel::resolve(&self.root)
                     .map(|runtime| runtime.binding_for_auxiliary_role(role).is_some())
                     .map_err(|_| ()),
@@ -1185,7 +1192,33 @@ mod runtime_tests;
 
 #[cfg(test)]
 mod speech_availability_tests {
-    use super::{availability_from_check, SpeechAvailability};
+    use super::{
+        availability_from_check, availability_from_configuration, SpeechAvailability,
+        SpeechBackend, SpeechGateway, SpeechRuntimeConfig,
+    };
+
+    #[test]
+    fn status_never_promotes_credential_presence_to_verified_provider_readiness() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = SpeechGateway {
+            root: root.path().to_owned(),
+            config: SpeechRuntimeConfig {
+                transcription: SpeechBackend::Mistral,
+                synthesis: SpeechBackend::Mistral,
+                ..Default::default()
+            },
+        };
+        let status = gateway.status();
+        let expected = availability_from_configuration(Ok(status.mistral_credential_present));
+        assert_eq!(status.stt, expected);
+        assert_eq!(status.tts, expected);
+        assert_ne!(status.stt, SpeechAvailability::Available);
+        assert_ne!(status.tts, SpeechAvailability::Available);
+        assert_eq!(
+            availability_from_configuration(Ok(true)),
+            SpeechAvailability::Unknown,
+        );
+    }
 
     #[test]
     fn a_completed_check_maps_to_available_or_unavailable() {
