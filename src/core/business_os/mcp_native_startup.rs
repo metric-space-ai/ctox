@@ -76,7 +76,8 @@ pub(super) fn attest(
         verify_internal_command_session_token(root, token)? == before,
         "native MCP command authority changed during initialization"
     );
-    initialize["capabilities"]["experimental"] = serde_json::json!({ CAPABILITY: proof });
+    initialize["capabilities"]["experimental"] =
+        serde_json::json!({ CAPABILITY: { "proof": proof } });
     Ok(())
 }
 
@@ -111,6 +112,9 @@ fn verify_proof(
         .and_then(Value::as_object)
         .filter(|caps| caps.len() == 1)
         .and_then(|caps| caps.get(CAPABILITY))
+        .and_then(Value::as_object)
+        .filter(|extension| extension.len() == 1)
+        .and_then(|extension| extension.get("proof"))
         .and_then(Value::as_str)
         .context("original MCP initialization has no native startup receipt")?;
     anyhow::ensure!(proof.len() <= 12 * 1024, "native MCP receipt exceeds bound");
@@ -214,7 +218,7 @@ mod tests {
         };
         let mut value = response();
         value["capabilities"]["experimental"] =
-            serde_json::json!({CAPABILITY:sign(secret,&receipt).unwrap()});
+            serde_json::json!({CAPABILITY:{"proof":sign(secret,&receipt).unwrap()}});
         value
     }
     struct ListenerFixture {
@@ -397,6 +401,18 @@ mod tests {
             ),
         ] {
             assert!(verify_proof(secret, n, token, url, &value, time).is_err());
+        }
+        // rmcp 1.4 requires object-valued experimental extensions. A legacy
+        // string or an extension with unrecognized fields is never a receipt.
+        for extra_field in [false, true] {
+            let mut malformed = value.clone();
+            let extension = &mut malformed["capabilities"]["experimental"][CAPABILITY];
+            if extra_field {
+                extension["foreign"] = Value::Bool(true);
+            } else {
+                *extension = extension["proof"].clone();
+            }
+            assert!(verify_proof(b"native-secret", &nonce, "command", "http://127.0.0.1:8788/mcp", &malformed, 101).is_err());
         }
         let mut changed = value;
         changed["capabilities"]["tools"]["listChanged"] = Value::Bool(true);
