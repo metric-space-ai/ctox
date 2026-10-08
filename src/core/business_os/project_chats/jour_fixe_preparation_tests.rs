@@ -112,10 +112,11 @@ fn test_time_creates_one_planned_meeting_and_the_registered_supervisor_turn() ->
         .contains("Never invent numeric metrics or completed work."));
     // The real scheduled admission must retain the whole engine instruction,
     // including its style and evidence rules, within the bounded turn goal.
-    let instruction = include_str!("../../../skills/system/mission_orchestration/jour-fix/SKILL.md")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let instruction =
+        include_str!("../../../skills/system/mission_orchestration/jour-fix/SKILL.md")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
     assert!(queue.prompt.contains(&instruction));
     for required in [
         "learnordie.slide-agent.v1",
