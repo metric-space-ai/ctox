@@ -1841,6 +1841,18 @@ silent pass-through.
 
 ### 6.4 Demand-loading RPCs (V1.5)
 
+Explicit native file publication hashes the same open file and then materializes
+its existing 16-KiB Base64 chunks with 12-KiB reads and at most 64 documents per
+write batch. Republish completeness checks also read at most 64 chunk documents
+at a time. Generation cleanup projects out Base64 payloads in SQLite before
+hydrating its existing capped scan and writes tombstones in 64-document batches.
+Empty files and the existing chunk/hash/generation format remain
+compatible. The available file generation is published only after the second
+pass agrees with the full first-pass SHA-256 and size; failed partial batches do
+not make a file available. This bounds application payload buffers, not total
+SQLite disk allocation or installed transfer throughput, which require measurement.
+
+
 The native `NativeSyncSession::file_range` consumer uses the existing
 `rxdb.file.fetch` exchange on an already admitted connection. Each request
 requires an explicit range of at most 2 MiB and a fresh generated request ID.
