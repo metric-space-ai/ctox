@@ -1384,9 +1384,9 @@ fn continuity_prompt_contains_document_and_diff_rules() -> Result<()> {
     )?;
 
     let payload = engine.continuity_build_prompt(12, ContinuityKind::Narrative)?;
-    assert!(payload
-        .prompt
-        .contains("Your reply text does not update memory. You must call `ctox continuity-update`"));
+    assert!(payload.prompt.contains(
+        "Your reply text does not update memory. You must call `ctox continuity-update`"
+    ));
     assert!(payload.prompt.contains("<CURRENT_DOCUMENT>"));
     assert!(payload.prompt.contains("<RECENT_MESSAGES>"));
     assert!(payload.prompt.contains("## Entries"));
@@ -1398,13 +1398,17 @@ fn continuity_prompt_contains_document_and_diff_rules() -> Result<()> {
     }
     assert!(payload.prompt.contains("--kind narrative"));
     assert!(payload.prompt.contains("--conversation-id 12"));
-    assert!(payload.prompt.contains("memory is updated only after the CLI command succeeds"));
+    assert!(payload
+        .prompt
+        .contains("memory is updated only after the CLI command succeeds"));
     assert!(!payload.prompt.contains("Reply with only a diff"));
 
     let focus_payload = engine.continuity_build_prompt(12, ContinuityKind::Focus)?;
     assert!(focus_payload.prompt.contains("mission_state:"));
     assert!(focus_payload.prompt.contains("continuation_mode:"));
-    assert!(focus_payload.prompt.contains(&focus_payload.current_document));
+    assert!(focus_payload
+        .prompt
+        .contains(&focus_payload.current_document));
     assert!(focus_payload
         .prompt
         .contains("whether it is still open, what is blocked, what to do next"));

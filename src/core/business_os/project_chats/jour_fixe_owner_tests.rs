@@ -327,14 +327,9 @@ fn meeting_command_visibility_uses_its_native_owner_and_project_binding() -> any
 fn reserved_meeting_tools_fail_terminally_without_creating_recursive_model_tasks(
 ) -> anyhow::Result<()> {
     let root = fixture("ready")?;
-    for (i, action) in [
-        "prepare",
-        "deck.publish",
-        "todos.propose",
-        "todos.confirm",
-    ]
-    .iter()
-    .enumerate()
+    for (i, action) in ["prepare", "deck.publish", "todos.propose", "todos.confirm"]
+        .iter()
+        .enumerate()
     {
         let command = format!("reserved-{i}");
         let error = send(root.path(), &command, action, "owner", request(&command, 0))
@@ -344,7 +339,10 @@ fn reserved_meeting_tools_fail_terminally_without_creating_recursive_model_tasks
             .expect("terminal failure must be persisted");
         assert_eq!(value["status"], "failed", "{value}");
         assert_eq!(value["result"]["ok"], false);
-        assert!(value["result"]["error"].as_str().unwrap().contains("not implemented"));
+        assert!(value["result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("not implemented"));
         assert!(
             crate::mission::channels::load_queue_task_for_business_os_command(
                 root.path(),

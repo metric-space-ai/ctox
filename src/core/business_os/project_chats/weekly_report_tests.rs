@@ -276,7 +276,10 @@ fn weekly_report_storage_failure_keeps_the_existing_schedule_enabled() -> anyhow
     // Preparation and the weekly report now coexist. Unknown authority must
     // preserve both complete schedules, including their due times and pauses.
     assert_eq!(serde_json::to_value(&retained)?, before);
-    let report = retained.iter().find(|task| task.task_id == first.task_id).unwrap();
+    let report = retained
+        .iter()
+        .find(|task| task.task_id == first.task_id)
+        .unwrap();
     assert!(report.enabled);
     assert_eq!(report.next_run_at, first.next_run_at);
     assert_eq!(count(root.path(), "user_thread_messages")?, 0);
