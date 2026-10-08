@@ -371,6 +371,7 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
   const commands = [];
   const state = {
     session: { id: 'owner-alias' }, db: { collection: () => ({}) },
+    syncConfig: { instance_id: 'biz_fixture' },
     sync: { async startCollection(name) { assert.equal(name, 'business_commands'); return {}; } },
     commandBus: { async dispatch(command) {
       commands.push(command);
@@ -378,6 +379,7 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
       const payload = { ...structuredClone(command.payload), inbound_channel: command.inbound_channel || 'ctox' };
       const append = command.command_type.endsWith('.transcript.append');
       const revise = command.command_type.endsWith('.todos.revise');
+      const narration = command.command_type.endsWith('.narration.local_publish');
       const comment = command.command_type.endsWith('.comment.add');
       const receipt = {
         command_id: command.id, target_record_id: command.record_id,
@@ -385,12 +387,24 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
         result: { ok: true, contract: JOUR_FIXE_SCHEMA, mutation: {
           operation_id: payload.operation_id, meeting_id: payload.meeting_id,
           project_id: command.record_id, revision: payload.expected_revision + 1,
-          state: command.command_type.endsWith('.meeting.start') || append ? 'live' : 'review',
+          state: narration ? 'ready' : command.command_type.endsWith('.meeting.start') || append ? 'live' : 'review',
           ...(append ? { changed_id: payload.turn.id } : {}),
           ...(comment ? { changed_id: payload.comment_id } : {}),
+          ...(narration ? { changed_id: payload.slide_id } : {}),
           ...(revise ? { todos_revision: payload.proposal_revision } : {}),
         } },
       };
+      if (narration) {
+        receipt.result.owner_user_id = 'native-owner';
+        receipt.result.local_narration = { operation_id: payload.operation_id, instance_id: payload.instance_id,
+          project_id: payload.project_id, meeting_id: payload.meeting_id, slide_id: payload.slide_id,
+          deck_revision: payload.deck_revision, owner_user_id: 'native-owner', revision: payload.expected_revision + 1,
+          persisted_at_ms: 1791450012000, provenance: 'authenticated_owner_local_audio', provider_verified: false,
+          audio: { file_id: 'persisted-native-audio', generation_id: 'immutable-native-generation', sha256: payload.audio_sha256,
+            narration_text_sha256: payload.narration_text_sha256, mime_type: 'audio/wav', duration_ms: 2000,
+            source_run_id: payload.operation_id, model: 'owner-uploaded-local-audio', format: 'wav', synthesis_duration_ms: 0,
+            provenance: 'authenticated_owner_local_audio' } };
+      }
       changeReceipt(receipt, state);
       return receipt;
     } },
@@ -407,6 +421,8 @@ function meetingOwnerRequest(action = 'project.jour_fixe.meeting.start', extra =
       id: 'owner-text', sequence: 1, speaker: 'owner', modality: 'text', text: 'Please verify persistence.',
       started_at_ms: 1000, ended_at_ms: 1001, meeting_id: 'meeting-1',
     } } : {}),
+    ...(action === 'project.jour_fixe.narration.local_publish' ? { slideId: 'slide-1', fileId: 'owner-upload', generationId: 'upload-gen',
+      deckRevision: 1, audioSha256: 'a'.repeat(64), narrationTextSha256: 'b'.repeat(64) } : {}),
     ...(action === 'project.jour_fixe.comment.add' ? { commentId: 'comment-1', slideId: 'slide-1',
       deckRevision: 1, x: 0.25, y: 0.75, text: 'Please prioritize persistence.' } : {}),
     ...(action === 'project.jour_fixe.todos.revise' ? { proposalRevision: 2, items: [{
@@ -1439,4 +1455,27 @@ test('slide comment receipt must confirm the same comment identity', async () =>
     receipt => { receipt.payload.slide_id = 'another-slide'; }]) {
     await assert.rejects(nativeMeetingOwnerFixture(change).invoke(request));
   }
+});
+
+test('local narration derives the native instance and exact persisted local custody', async () => {
+ const request=meetingOwnerRequest('project.jour_fixe.narration.local_publish');
+ const fixture=nativeMeetingOwnerFixture();const value=await fixture.invoke(request);
+ assert.equal(fixture.commands[0].payload.instance_id,'biz_fixture');assert.equal(fixture.commands[0].payload.project_id,request.projectId);
+ assert.equal(value.localNarration.audio.file_id,'persisted-native-audio');assert.equal(value.localNarration.provider_verified,false);
+ assert.equal(value.mutation.state,'ready');assert.equal(value.localNarration.owner_user_id,'native-owner');
+ for (const extra of [{instanceId:'caller-instance'},{ownerUserId:'foreign'},{model:'Apple'},{durationMs:1},{audioSha256:'A'.repeat(64)}]) {
+  const bad=nativeMeetingOwnerFixture();await assert.rejects(bad.invoke({...request,...extra}));assert.equal(bad.commands.length,0);
+ }
+});
+test('local narration rejects corrupted scope, bytes, provenance and replaced instance', async () => {
+ const request=meetingOwnerRequest('project.jour_fixe.narration.local_publish');
+ for (const mutate of [r=>{r.result.local_narration.instance_id='foreign';},r=>{r.result.local_narration.deck_revision=2;},
+  r=>{r.result.local_narration.slide_id='foreign';},r=>{r.result.local_narration.owner_user_id='foreign';},
+  r=>{r.result.local_narration.provider_verified=true;},r=>{r.result.local_narration.audio.sha256='c'.repeat(64);},
+  r=>{r.result.local_narration.audio.file_id='owner-upload';},r=>{r.result.local_narration.audio.generation_id='';},
+  r=>{r.result.local_narration.audio.model='gateway-provider';},r=>{r.result.local_narration.audio.duration_ms=0;},
+  r=>{r.result.local_narration.audio.narration_text_sha256='c'.repeat(64);},r=>{r.result.local_narration.audio.provenance='native_gateway';},
+  r=>{r.result.mutation.state='live';},(r,state)=>{state.syncConfig.instance_id='biz_other';}]) {
+  await assert.rejects(nativeMeetingOwnerFixture(mutate).invoke(request));
+ }
 });

@@ -241,6 +241,20 @@ try {
     assert.equal(forgedOwner.commands.length, 0);
     results.push('browser Owner text rejects forged speech provenance before dispatch');
 
+    const localRequest = ownerControl.request('project.jour_fixe.narration.local_publish');
+    const localAudio = await ownerControl.fixture().invoke(localRequest);
+    assert.equal(localAudio.localNarration.audio.file_id, 'persisted-native-audio');
+    assert.equal(localAudio.localNarration.provider_verified, false);
+    assert.equal(localAudio.mutation.state, 'ready');
+    results.push('browser preserves local narration file custody without provider verification');
+    for (const mutate of [r => { r.result.local_narration.audio.sha256 = 'c'.repeat(64); },
+      r => { r.result.local_narration.provider_verified = true; },
+      (r, state) => { state.syncConfig.instance_id = 'biz_other'; }]) {
+      let denied = false;
+      try { await ownerControl.fixture(mutate).invoke(localRequest); } catch { denied = true; }
+      assert.ok(denied);
+    }
+    results.push('browser rejects corrupted local narration and replaced native instance');
     return results;
   }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd),
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
