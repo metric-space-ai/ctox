@@ -1396,6 +1396,14 @@ fn continuity_prompt_contains_document_and_diff_rules() -> Result<()> {
     for mode in ["full", "replace", "diff"] {
         assert!(payload.prompt.contains(&format!("--mode {mode}")));
     }
+    // One call per refresh: chained single-field edits ran refresh turns past
+    // their 45 s budget on thesen (08.10.2026, up to 46 commits per 22 min).
+    assert!(payload
+        .prompt
+        .contains("Make ALL changes of this refresh in ONE single `ctox continuity-update` call"));
+    assert!(!payload
+        .prompt
+        .contains("Pick the smallest one that fits your change"));
     assert!(payload.prompt.contains("--kind narrative"));
     assert!(payload.prompt.contains("--conversation-id 12"));
     assert!(payload
