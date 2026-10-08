@@ -7,17 +7,34 @@ export const IN_FLIGHT_SWEEP_INTERVAL_MS = 60_000;
 export const IN_FLIGHT_SWEEP_PAGE = 200;
 const MAX_PAGES = 25;
 
+// A failed lead whose command was still open when it was observed (key
+// "<command>:none") may have been ended too early; the reconciliation checks
+// it again against the command's Core lifecycle.
+export function failedWhileCommandOpen(row) {
+  return String(row?.research_status || '') === 'failed'
+    && Boolean(String(row?.command_id || '').trim())
+    && String(row?.payload?.observed_research_command_key || '').endsWith(':none');
+}
+
 // `find(query)` resolves to plain lead rows. Leads in `known` are skipped.
 export async function inFlightLeadsOutsideWindow(find, known = new Set()) {
+  const found = [
+    ...await pagedLeads(find, ['queued', 'running'], known, () => true),
+    ...await pagedLeads(find, ['failed'], known, failedWhileCommandOpen),
+  ];
+  return found;
+}
+
+async function pagedLeads(find, statuses, known, keep) {
   const found = [];
   let afterId = '';
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const selector = { research_status: { $in: ['queued', 'running'] } };
+    const selector = { research_status: { $in: statuses } };
     if (afterId) selector.id = { $gt: afterId };
     const rows = (await find({ selector, sort: [{ id: 'asc' }], limit: IN_FLIGHT_SWEEP_PAGE })) || [];
     for (const row of rows) {
       const id = String(row?.id || '');
-      if (id && !known.has(id)) found.push(row);
+      if (id && !known.has(id) && keep(row)) found.push(row);
     }
     if (!rows.length) break;
     afterId = String(rows[rows.length - 1]?.id || '');

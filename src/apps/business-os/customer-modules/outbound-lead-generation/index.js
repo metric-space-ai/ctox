@@ -10467,6 +10467,13 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
       // stand am 27.09.2026 um 13:06:37 wieder auf running, obwohl der
       // Abgleich um 13:05:58 den gescheiterten Vorgang angewendet und den
       // Schluessel gesetzt hatte; danach wurde er nie wieder abgeglichen.
+      if (String(lead.research_status || '') === 'failed'
+        && command?.command_type === 'business_os.chat.task'
+        && vorgangNochOffen(command)) {
+        const wieder = chatResearchTaskLeadPatch(lead, command);
+        if (wieder && await patchLeadImAbgleich(lead.id, wieder)) changed = true;
+        continue;
+      }
       const zurueckgefallen = researchInFlight(lead) && befehlIstEndgueltig(command);
       if (lead.payload?.observed_research_command_key === observationKey && !zurueckgefallen) {
         // Nicht terminale Vorgaenge behalten ihren Schluessel (id:none), waehrend
@@ -10774,7 +10781,7 @@ function researchCommandForLead(lead, commands = []) {
   // (Kiesow, 10.09.2026 21:48). Die Chat-Aufgabe des AKTUELLEN Auftrags hat
   // Vorrang, solange der Lead auf sie wartet.
   const aktuellerAuftrag = String(lead?.command_id || '').trim();
-  if (aktuellerAuftrag && ['queued', 'running'].includes(String(lead?.research_status || ''))) {
+  if (aktuellerAuftrag && ['queued', 'running', 'failed'].includes(String(lead?.research_status || ''))) {
     const chatAufgabe = commands.find((command) => command?.command_type === 'business_os.chat.task'
       && String(command.command_id || command.id || '').trim() === aktuellerAuftrag);
     if (chatAufgabe) return chatAufgabe;
@@ -12238,7 +12245,27 @@ function researchCommandLeadPatch(lead, command) {
 // Die Chat-Aufgabe liefert ihr Ergebnis ueber das Rueckschreiben, das den Lead
 // selbst aktualisiert. Hier zaehlt nur ihr Scheitern: dann steht der Lead auf
 // "Unvollständig" mit dem Grund, den der Worker genannt hat, statt auf "Läuft".
+// Massgeblich ist der Core-Lebenszyklus: "blocked" oder "accepted" bei
+// execution_phase retry_wait heisst Warten auf Wiederholung, nicht Ende. Am
+// 08.10.2026 wurden sonst 15 Leads mit weiterlaufendem Vorgang als
+// "Unvollständig" beendet.
+function vorgangNochOffen(command) {
+  const phase = String(command?.execution_phase || '').trim().toLowerCase();
+  const terminal = String(command?.terminal_status || '').trim().toLowerCase();
+  return Boolean(phase) && phase !== 'terminal' && (!terminal || terminal === 'none');
+}
+
 function chatResearchTaskLeadPatch(lead, command) {
+  if (vorgangNochOffen(command)) {
+    if (String(lead?.research_status || '') === 'failed') {
+      return {
+        research_status: 'running',
+        research_error: '',
+        payload: { ...(lead?.payload || {}), research_error: '', research_resumed_waiting_at_ms: Date.now() },
+      };
+    }
+    return ausfuehrungsphasePatch(lead, command);
+  }
   const status = normalizedResearchCommandStatus(command);
   if (!['failed', 'blocked', 'cancelled', 'canceled', 'error'].includes(status)) return ausfuehrungsphasePatch(lead, command);
   if (['cancelled', 'canceled'].includes(status)) {

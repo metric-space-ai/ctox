@@ -36,3 +36,14 @@ test('skips leads the window already holds', async () => {
   const found = await inFlightLeadsOutsideWindow(fakeFind(rows), new Set(['lead_a']));
   assert.deepEqual(found.map((row) => row.id), ['lead_b']);
 });
+
+test('also returns failed leads whose command was still open when observed', async () => {
+  const rows = [
+    { id: 'lead_open', research_status: 'failed', command_id: 'cmd-1', payload: { observed_research_command_key: 'cmd-1:none' } },
+    { id: 'lead_done', research_status: 'failed', command_id: 'cmd-2', payload: { observed_research_command_key: 'cmd-2:failed' } },
+    { id: 'lead_none', research_status: 'failed', command_id: '', payload: { observed_research_command_key: ':none' } },
+    { id: 'lead_run', research_status: 'running' },
+  ];
+  const found = await inFlightLeadsOutsideWindow(fakeFind(rows));
+  assert.deepEqual(found.map((row) => row.id).sort(), ['lead_open', 'lead_run']);
+});
