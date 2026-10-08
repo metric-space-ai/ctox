@@ -156,6 +156,15 @@ fn workjet_dispatch_actual_mcp_signed_supervisor_queue_and_lost_acks() -> anyhow
         "business_os.execute_action",
         Some(&trusted)
     ));
+    // Reject a title that Workjet cannot decode before it poisons the poll head.
+    assert!(super::super::call_tool_inner(
+        root.path(),
+        TOOL,
+        json!({"action":"dispatch","dispatch_key":"oversized-title","task":"Make a change",
+            "title":"x".repeat(201)}),
+        Some(&trusted)
+    )
+    .is_err());
     let first = dispatch(root.path(), &trusted)?;
     let intent = &first["intent"];
     uuid::Uuid::parse_str(intent["intentId"].as_str().context("intent UUID")?)?;
