@@ -34,10 +34,8 @@ fn authorized_accounts(root: &Path, context: &McpChannelRequestContext) -> anyho
     enforce_managed_collection_read_scope(context, "communication_accounts")?;
     let conn = Connection::open_with_flags(store::business_os_store_path(root), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    anyhow::ensure!(super::super::store_policy::trusted_actor_policy_decision_with_conn(
-        &conn, &context.actor, context.trusted_role.as_deref().context("calendar trusted role missing")?,
-        BusinessOsPermission::DataRead, BusinessOsScopeType::Workspace, None)?.allowed,
-        "calendar read policy denied");
+    let actor = super::super::policy::BusinessOsActor::new(Some(context.actor.clone()),
+        context.trusted_role.as_deref().context("calendar trusted role missing")?);
     let owner = super::super::workjet_identity::owner_from_connection(&conn, &context.actor)?;
     let accounts = email_accounts::load_accounts(root)?;
     accounts.into_iter().filter_map(|account| {
@@ -46,7 +44,19 @@ fn authorized_accounts(root: &Path, context: &McpChannelRequestContext) -> anyho
         let allowed = identities.filter(|id| !id.is_empty()).try_fold(false, |allowed, id| {
             Ok::<_, anyhow::Error>(allowed || super::super::workjet_identity::owner_from_connection(&conn, id)? == owner)
         });
-        match allowed { Ok(true) => Some(Ok(account)), Ok(false) => None, Err(error) => Some(Err(error)) }
+        match allowed {
+            Ok(true) => {
+                let scope = super::super::policy::BusinessOsScope {
+                    scope_type: BusinessOsScopeType::Record, scope_id: Some(account.address.clone()),
+                    assigned_to_actor: true, owned_by_actor: true,
+                };
+                match super::super::store_policy::evaluate_policy_with_explicit_grants(&conn, &actor, BusinessOsPermission::DataRead, &scope) {
+                    Ok(decision) if decision.allowed => Some(Ok(account)),
+                    Ok(_) => None, Err(error) => Some(Err(error)),
+                }
+            }
+            Ok(false) => None, Err(error) => Some(Err(error)),
+        }
     }).collect()
 }
 fn supported(provider: &str) -> bool { matches!(provider, "ews" | "owa" | "exchange" | "graph") }
@@ -89,7 +99,7 @@ pub(super) fn execute(root: &Path, context: &McpChannelRequestContext, tool: &st
             let accounts = authorized_accounts(root, context)?;
             bounded_receipt(json!({"ok":true,"truncated":accounts.len() > 100,"accounts":accounts.iter().take(100).map(|account| json!({
                 "id":account.address,"calendar_id":calendar_id(&account.address),
-                "label":if account.display_name.is_empty() { &account.address } else { &account.display_name },
+                "label":if account.display_name.is_empty() { account.address.clone() } else { account.display_name.chars().take(256).collect::<String>() },
                 "supported":supported(&account.provider)
             })).collect::<Vec<_>>()}), "accounts")
         }
