@@ -347,6 +347,63 @@ fn provision_reply(account: &NativeTransferAccount) -> NativeTransferProvisionRe
 }
 
 #[tokio::test]
+async fn initial_authorization_epoch_enrolls_exactly_and_keeps_refresh_and_disconnect_fences() {
+    let root = tempfile::tempdir().unwrap();
+    let mut original = account(root.path());
+    original.principal.authorization_epoch = 0;
+    let enrolled = host(root.path());
+    enrolled
+        .commit_authenticated(
+            &original.key_scope(),
+            None,
+            None,
+            provision_reply(&original),
+        )
+        .unwrap();
+    let before = serde_json::to_string(&original).unwrap();
+    let route = enrolled
+        .read_record(ROUTING_SCOPE, &original.credential_name().unwrap())
+        .unwrap()
+        .unwrap();
+    let reopened = host(root.path());
+    assert!(reopened.account(&original.target_id).await.unwrap() == Some(original.clone()));
+    assert!(reopened.credentials(&original, None).is_ok());
+    assert!(reopened
+        .credentials(&original, Some(&"n".repeat(43)))
+        .is_ok());
+
+    // A new source principal cannot silently replace the retained account.
+    let mut changed = original.clone();
+    changed.principal.authorization_epoch = 1;
+    assert!(reopened
+        .commit_authenticated(
+            &original.key_scope(),
+            Some(&before),
+            Some(&route),
+            provision_reply(&changed),
+        )
+        .is_err());
+    assert!(reopened.credentials(&changed, None).is_err());
+    assert!(reopened.credentials(&original, None).is_ok());
+
+    reopened.revoke(original.clone()).await.unwrap();
+    assert!(reopened
+        .account(&original.target_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(reopened.credentials(&original, None).is_err());
+    assert!(reopened
+        .commit_authenticated(
+            &original.key_scope(),
+            Some(&before),
+            Some(&route),
+            provision_reply(&original),
+        )
+        .is_err());
+}
+
+#[tokio::test]
 async fn authenticated_tuple_reopens_and_stale_refresh_cannot_undo_disconnect() {
     let root = tempfile::tempdir().unwrap();
     let account = account(root.path());
