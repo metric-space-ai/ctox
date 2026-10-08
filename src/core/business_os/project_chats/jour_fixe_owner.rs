@@ -2,8 +2,8 @@
 // License: AGPL-3.0-only
 //! Owner meeting edits, committed with their native domain application receipt.
 //! These controls do not manufacture narration, STT provenance or confirmed goals.
-use super::*;
 use super::super::{workjet_identity, workjet_jour_fixe_contract as wire};
+use super::*;
 use rusqlite::{params, OptionalExtension};
 use wire::WireValidate;
 const OPERATIONS: &str = "CREATE TABLE IF NOT EXISTS workjet_jour_fixe_owner_operations (
@@ -12,17 +12,26 @@ const OPERATIONS: &str = "CREATE TABLE IF NOT EXISTS workjet_jour_fixe_owner_ope
 );";
 const MAX_METADATA_BYTES: usize = 1024 * 1024;
 
-pub(in crate::business_os) fn is_command(kind:&str)->bool {
-    matches!(kind,"ctox.workjet.jour_fixe.meeting.start" | "ctox.workjet.jour_fixe.meeting.end"
-        | "ctox.workjet.jour_fixe.transcript.append" | "ctox.workjet.jour_fixe.todos.revise"
-        | "ctox.workjet.jour_fixe.comment.add")
+pub(in crate::business_os) fn is_command(kind: &str) -> bool {
+    matches!(
+        kind,
+        "ctox.workjet.jour_fixe.meeting.start"
+            | "ctox.workjet.jour_fixe.meeting.end"
+            | "ctox.workjet.jour_fixe.transcript.append"
+            | "ctox.workjet.jour_fixe.todos.revise"
+            | "ctox.workjet.jour_fixe.comment.add"
+    )
 }
 // A declared meeting tool without a handler must fail terminally, never fall
 // through into an ordinary model task or recursively queue another preparation.
-pub(in crate::business_os) fn is_reserved_command(kind:&str)->bool {
-    matches!(kind,"ctox.workjet.jour_fixe.prepare" | "ctox.workjet.jour_fixe.deck.publish"
-        | "ctox.workjet.jour_fixe.todos.propose"
-        | "ctox.workjet.jour_fixe.todos.confirm")
+pub(in crate::business_os) fn is_reserved_command(kind: &str) -> bool {
+    matches!(
+        kind,
+        "ctox.workjet.jour_fixe.prepare"
+            | "ctox.workjet.jour_fixe.deck.publish"
+            | "ctox.workjet.jour_fixe.todos.propose"
+            | "ctox.workjet.jour_fixe.todos.confirm"
+    )
 }
 enum Edit {
     Start(wire::MeetingTransitionRequest),
@@ -32,66 +41,120 @@ enum Edit {
     Revise(wire::ProposeTodosRequest),
 }
 impl Edit {
-    fn identity(&self)->(&str,&str,u64) {
+    fn identity(&self) -> (&str, &str, u64) {
         match self {
-            Self::Start(v)|Self::End(v)=>(v.operation_id.as_str(),v.meeting_id.as_str(),v.expected_revision),
-            Self::Text(v)=>(v.operation_id.as_str(),v.meeting_id.as_str(),v.expected_revision),
-            Self::Comment(v)=>(v.operation_id.as_str(),v.meeting_id.as_str(),v.expected_revision),
-            Self::Revise(v)=>(v.operation_id.as_str(),v.meeting_id.as_str(),v.expected_revision),
+            Self::Start(v) | Self::End(v) => (
+                v.operation_id.as_str(),
+                v.meeting_id.as_str(),
+                v.expected_revision,
+            ),
+            Self::Text(v) => (
+                v.operation_id.as_str(),
+                v.meeting_id.as_str(),
+                v.expected_revision,
+            ),
+            Self::Comment(v) => (
+                v.operation_id.as_str(),
+                v.meeting_id.as_str(),
+                v.expected_revision,
+            ),
+            Self::Revise(v) => (
+                v.operation_id.as_str(),
+                v.meeting_id.as_str(),
+                v.expected_revision,
+            ),
         }
     }
 }
-fn parse(command:&BusinessCommand)->anyhow::Result<(Edit,Value)> {
-    let mut payload=command.payload.clone();
-    let object=payload.as_object_mut().context("meeting edit must be an object")?;
-    if let Some(channel)=object.remove("inbound_channel") {
-        let value=channel.as_str().context("inbound_channel must be text")?;
-        ensure!(!value.trim().is_empty() && value.chars().count()<=256,"invalid inbound_channel");
+fn parse(command: &BusinessCommand) -> anyhow::Result<(Edit, Value)> {
+    let mut payload = command.payload.clone();
+    let object = payload
+        .as_object_mut()
+        .context("meeting edit must be an object")?;
+    if let Some(channel) = object.remove("inbound_channel") {
+        let value = channel.as_str().context("inbound_channel must be text")?;
+        ensure!(
+            !value.trim().is_empty() && value.chars().count() <= 256,
+            "invalid inbound_channel"
+        );
     }
-    let edit=match command.command_type.as_str() {
-        "ctox.workjet.jour_fixe.meeting.start"=>{
-            let v:wire::MeetingTransitionRequest=serde_json::from_value(payload.clone())?;
-            v.validate().map_err(anyhow::Error::msg)?; Edit::Start(v)
-        },
-        "ctox.workjet.jour_fixe.meeting.end"=>{
-            let v:wire::MeetingTransitionRequest=serde_json::from_value(payload.clone())?;
-            v.validate().map_err(anyhow::Error::msg)?; Edit::End(v)
-        },
-        "ctox.workjet.jour_fixe.transcript.append"=>{
-            let v:wire::AppendTranscriptRequest=serde_json::from_value(payload.clone())?;
-            v.validate().map_err(anyhow::Error::msg)?; Edit::Text(v)
-        },
-        "ctox.workjet.jour_fixe.comment.add"=>{
-            let v:wire::AddCommentRequest=serde_json::from_value(payload.clone())?;
-            v.validate().map_err(anyhow::Error::msg)?; Edit::Comment(v)
-        },
-        "ctox.workjet.jour_fixe.todos.revise"=>{
-            let v:wire::ProposeTodosRequest=serde_json::from_value(payload.clone())?;
-            v.validate().map_err(anyhow::Error::msg)?; Edit::Revise(v)
-        },
-        _=>anyhow::bail!("unsupported owner meeting edit"),
+    let edit = match command.command_type.as_str() {
+        "ctox.workjet.jour_fixe.meeting.start" => {
+            let v: wire::MeetingTransitionRequest = serde_json::from_value(payload.clone())?;
+            v.validate().map_err(anyhow::Error::msg)?;
+            Edit::Start(v)
+        }
+        "ctox.workjet.jour_fixe.meeting.end" => {
+            let v: wire::MeetingTransitionRequest = serde_json::from_value(payload.clone())?;
+            v.validate().map_err(anyhow::Error::msg)?;
+            Edit::End(v)
+        }
+        "ctox.workjet.jour_fixe.transcript.append" => {
+            let v: wire::AppendTranscriptRequest = serde_json::from_value(payload.clone())?;
+            v.validate().map_err(anyhow::Error::msg)?;
+            Edit::Text(v)
+        }
+        "ctox.workjet.jour_fixe.comment.add" => {
+            let v: wire::AddCommentRequest = serde_json::from_value(payload.clone())?;
+            v.validate().map_err(anyhow::Error::msg)?;
+            Edit::Comment(v)
+        }
+        "ctox.workjet.jour_fixe.todos.revise" => {
+            let v: wire::ProposeTodosRequest = serde_json::from_value(payload.clone())?;
+            v.validate().map_err(anyhow::Error::msg)?;
+            Edit::Revise(v)
+        }
+        _ => anyhow::bail!("unsupported owner meeting edit"),
     };
-    let (operation,meeting,_)=edit.identity();
-    ensure!(operation.trim()==operation && meeting.trim()==meeting,"meeting operation identity must be canonical");
-    Ok((edit,payload))
+    let (operation, meeting, _) = edit.identity();
+    ensure!(
+        operation.trim() == operation && meeting.trim() == meeting,
+        "meeting operation identity must be canonical"
+    );
+    Ok((edit, payload))
 }
-pub(super) fn owned(conn:&Connection,actor:&str,project_route:Option<&str>,id:&str)->anyhow::Result<wire::Meeting> {
+pub(super) fn owned(
+    conn: &Connection,
+    actor: &str,
+    project_route: Option<&str>,
+    id: &str,
+) -> anyhow::Result<wire::Meeting> {
     let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_jour_fixe_meetings')",[],|r|r.get(0))?;
-    ensure!(exists,"meeting unavailable to this project owner");
-    let owner=workjet_identity::owner_from_connection(conn,actor)?;
+    ensure!(exists, "meeting unavailable to this project owner");
+    let owner = workjet_identity::owner_from_connection(conn, actor)?;
     let row:Option<(String,String,String)>=conn.query_row(
         "SELECT project_id,owner_user_id,metadata_json FROM workjet_jour_fixe_meetings WHERE meeting_id=?1",
         [id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-    let (project,stored_owner,raw)=row.context("meeting unavailable to this project owner")?;
-    ensure!(stored_owner==owner,"meeting unavailable to this project owner");
-    ensure!(raw.len()<=MAX_METADATA_BYTES,"meeting metadata exceeds native read budget");
-    let meeting:wire::Meeting=serde_json::from_str(&raw)?;
+    let (project, stored_owner, raw) = row.context("meeting unavailable to this project owner")?;
+    ensure!(
+        stored_owner == owner,
+        "meeting unavailable to this project owner"
+    );
+    ensure!(
+        raw.len() <= MAX_METADATA_BYTES,
+        "meeting metadata exceeds native read budget"
+    );
+    let meeting: wire::Meeting = serde_json::from_str(&raw)?;
     meeting.validate().map_err(anyhow::Error::msg)?;
-    ensure!(meeting.id==id && meeting.project_id==project && meeting.owner_user_id==owner,
-        "meeting ownership binding conflicts");
-    ensure!(project_route.is_none_or(|id|id==project),"meeting routing conflicts with project");
-    let binding=supervisor_turns::binding_from_connection(conn,&owner,&project,&meeting.supervisor.workjet_thread_id,true)?;
-    ensure!(binding.thread_key==meeting.supervisor.ctox_thread_key,"meeting supervisor binding conflicts");
+    ensure!(
+        meeting.id == id && meeting.project_id == project && meeting.owner_user_id == owner,
+        "meeting ownership binding conflicts"
+    );
+    ensure!(
+        project_route.is_none_or(|id| id == project),
+        "meeting routing conflicts with project"
+    );
+    let binding = supervisor_turns::binding_from_connection(
+        conn,
+        &owner,
+        &project,
+        &meeting.supervisor.workjet_thread_id,
+        true,
+    )?;
+    ensure!(
+        binding.thread_key == meeting.supervisor.ctox_thread_key,
+        "meeting supervisor binding conflicts"
+    );
     Ok(meeting)
 }
 
@@ -109,40 +172,74 @@ pub(in crate::business_os) struct LiveMeetingBinding {
     meeting_revision: u64,
 }
 impl LiveMeetingBinding {
-    pub(super) fn identity(&self)->Value {
+    pub(super) fn identity(&self) -> Value {
         json!({"owner":self.owner_user_id,"project":self.project_id,"meeting":self.meeting_id,
             "supervisor_thread":self.supervisor_thread_id,"supervisor_key":self.supervisor_thread_key,
             "deck":self.deck_revision})
     }
-    pub(super) fn revalidate_from_connection(&self,conn:&Connection,actor:&str)->anyhow::Result<Self> {
-        let meeting=owned(conn,actor,Some(&self.project_id),&self.meeting_id)?;
-        ensure!(meeting.state==wire::MeetingState::Live && meeting.deck_revision==self.deck_revision
-            && meeting.owner_user_id==self.owner_user_id
-            && meeting.supervisor.workjet_thread_id==self.supervisor_thread_id
-            && meeting.supervisor.ctox_thread_key==self.supervisor_thread_key,
-            "live meeting execution binding changed");
-        ensure!(!meeting.slides.is_empty() && meeting.slides.iter().all(|slide|
-            slide.meeting_id==meeting.id && slide.audio.is_some()),"live meeting deck is unavailable");
-        let mut current=self.clone(); current.meeting_revision=meeting.revision; Ok(current)
+    pub(super) fn revalidate_from_connection(
+        &self,
+        conn: &Connection,
+        actor: &str,
+    ) -> anyhow::Result<Self> {
+        let meeting = owned(conn, actor, Some(&self.project_id), &self.meeting_id)?;
+        ensure!(
+            meeting.state == wire::MeetingState::Live
+                && meeting.deck_revision == self.deck_revision
+                && meeting.owner_user_id == self.owner_user_id
+                && meeting.supervisor.workjet_thread_id == self.supervisor_thread_id
+                && meeting.supervisor.ctox_thread_key == self.supervisor_thread_key,
+            "live meeting execution binding changed"
+        );
+        ensure!(
+            !meeting.slides.is_empty()
+                && meeting
+                    .slides
+                    .iter()
+                    .all(|slide| slide.meeting_id == meeting.id && slide.audio.is_some()),
+            "live meeting deck is unavailable"
+        );
+        let mut current = self.clone();
+        current.meeting_revision = meeting.revision;
+        Ok(current)
     }
-    pub(in crate::business_os) fn owner_user_id(&self)->&str { &self.owner_user_id }
-    pub(in crate::business_os) fn project_id(&self)->&str { &self.project_id }
-    pub(in crate::business_os) fn meeting_id(&self)->&str { &self.meeting_id }
-    pub(in crate::business_os) fn deck_revision(&self)->u64 { self.deck_revision }
-    pub(in crate::business_os) fn meeting_revision(&self)->u64 { self.meeting_revision }
+    pub(in crate::business_os) fn owner_user_id(&self) -> &str {
+        &self.owner_user_id
+    }
+    pub(in crate::business_os) fn project_id(&self) -> &str {
+        &self.project_id
+    }
+    pub(in crate::business_os) fn meeting_id(&self) -> &str {
+        &self.meeting_id
+    }
+    pub(in crate::business_os) fn deck_revision(&self) -> u64 {
+        self.deck_revision
+    }
+    pub(in crate::business_os) fn meeting_revision(&self) -> u64 {
+        self.meeting_revision
+    }
     /// Re-read after each awaited provider operation, without retaining a
     /// connection, read transaction or issuer fence across that operation.
     /// Conversation writes may advance meeting_revision; owner, deck, live
     /// state and the registered Supervisor binding must remain unchanged.
     pub(in crate::business_os) fn revalidate(
-        &self,root:&Path,authenticated_actor:&str,
-    )->anyhow::Result<Self> {
-        let current=check_live_meeting_for_authenticated_actor(
-            root,authenticated_actor,&self.project_id,&self.meeting_id,self.deck_revision)?;
-        ensure!(current.owner_user_id==self.owner_user_id
-            && current.supervisor_thread_id==self.supervisor_thread_id
-            && current.supervisor_thread_key==self.supervisor_thread_key,
-            "live meeting execution binding changed");
+        &self,
+        root: &Path,
+        authenticated_actor: &str,
+    ) -> anyhow::Result<Self> {
+        let current = check_live_meeting_for_authenticated_actor(
+            root,
+            authenticated_actor,
+            &self.project_id,
+            &self.meeting_id,
+            self.deck_revision,
+        )?;
+        ensure!(
+            current.owner_user_id == self.owner_user_id
+                && current.supervisor_thread_id == self.supervisor_thread_id
+                && current.supervisor_thread_key == self.supervisor_thread_key,
+            "live meeting execution binding changed"
+        );
         Ok(current)
     }
 }
@@ -152,36 +249,65 @@ impl LiveMeetingBinding {
 /// This supplements normal authenticated native ingress; it never authorizes
 /// a client, grants collection access, or accepts a caller-supplied speaker.
 pub(in crate::business_os) fn check_live_meeting_for_authenticated_actor(
-    root:&Path,authenticated_actor:&str,project_id:&str,meeting_id:&str,deck_revision:u64,
-)->anyhow::Result<LiveMeetingBinding> {
-    ensure!(!authenticated_actor.trim().is_empty() && !project_id.trim().is_empty()
-        && !meeting_id.trim().is_empty() && deck_revision>0,
-        "live meeting binding requires authenticated identity and an existing deck");
-    let mut conn=Connection::open_with_flags(store::business_os_store_path(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    root: &Path,
+    authenticated_actor: &str,
+    project_id: &str,
+    meeting_id: &str,
+    deck_revision: u64,
+) -> anyhow::Result<LiveMeetingBinding> {
+    ensure!(
+        !authenticated_actor.trim().is_empty()
+            && !project_id.trim().is_empty()
+            && !meeting_id.trim().is_empty()
+            && deck_revision > 0,
+        "live meeting binding requires authenticated identity and an existing deck"
+    );
+    let mut conn = Connection::open_with_flags(
+        store::business_os_store_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    let tx=conn.transaction()?;
-    let meeting=owned(&tx,authenticated_actor,Some(project_id),meeting_id)?;
-    ensure!(meeting.state==wire::MeetingState::Live && meeting.deck_revision==deck_revision,
-        "meeting is not live at the requested deck revision");
-    ensure!(!meeting.slides.is_empty() && meeting.slides.iter().all(|slide|
-        slide.meeting_id==meeting.id && slide.audio.is_some()),"live meeting deck is unavailable");
+    let tx = conn.transaction()?;
+    let meeting = owned(&tx, authenticated_actor, Some(project_id), meeting_id)?;
+    ensure!(
+        meeting.state == wire::MeetingState::Live && meeting.deck_revision == deck_revision,
+        "meeting is not live at the requested deck revision"
+    );
+    ensure!(
+        !meeting.slides.is_empty()
+            && meeting
+                .slides
+                .iter()
+                .all(|slide| slide.meeting_id == meeting.id && slide.audio.is_some()),
+        "live meeting deck is unavailable"
+    );
     Ok(LiveMeetingBinding {
-        owner_user_id:meeting.owner_user_id,project_id:meeting.project_id,meeting_id:meeting.id,
-        supervisor_thread_id:meeting.supervisor.workjet_thread_id,
-        supervisor_thread_key:meeting.supervisor.ctox_thread_key,
-        deck_revision:meeting.deck_revision,meeting_revision:meeting.revision,
+        owner_user_id: meeting.owner_user_id,
+        project_id: meeting.project_id,
+        meeting_id: meeting.id,
+        supervisor_thread_id: meeting.supervisor.workjet_thread_id,
+        supervisor_thread_key: meeting.supervisor.ctox_thread_key,
+        deck_revision: meeting.deck_revision,
+        meeting_revision: meeting.revision,
     })
 }
 
 pub(in crate::business_os) fn handle(
-    root:&Path,command:&BusinessCommand,actor:&str,admission:&DomainEffectAdmission,
-)->anyhow::Result<Value> {
-    let (edit,payload)=parse(command)?;
-    let (operation,id,expected)=edit.identity();
-    let intent=format!("{:x}",Sha256::digest(serde_json::to_vec(&json!({"kind":command.command_type,"payload":payload}))?));
-    let mut conn=open_store(root)?;
-    owned(&conn,actor,command.record_id.as_deref(),id)?;
+    root: &Path,
+    command: &BusinessCommand,
+    actor: &str,
+    admission: &DomainEffectAdmission,
+) -> anyhow::Result<Value> {
+    let (edit, payload) = parse(command)?;
+    let (operation, id, expected) = edit.identity();
+    let intent = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(
+            &json!({"kind":command.command_type,"payload":payload})
+        )?)
+    );
+    let mut conn = open_store(root)?;
+    owned(&conn, actor, command.record_id.as_deref(), id)?;
     conn.execute_batch(OPERATIONS)?;
     let applied=admission.apply(&mut conn,|tx| {
         // Current project ownership and registered supervisor are checked inside

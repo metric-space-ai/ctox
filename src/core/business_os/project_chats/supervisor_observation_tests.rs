@@ -382,26 +382,49 @@ fn admitted_active_run_id_survives_reader_reopen_and_terminal_finalization() -> 
     let (root, turn) = fixture()?;
     let tasks = vec![turn["task_id"].as_str().unwrap().to_owned()];
     let db = crate::paths::core_db(root.path());
-    let run_id = crate::lcm::run_register_worker_run(&db, crate::lcm::WorkerRunInput {
-        attempt_id:"native-active-attempt", work_key:"native-work", conversation_id:42,
-        source_label:"queue", task_ids:&tasks,
-    })?;
-    event(root.path(), &turn, "native-active-attempt", "worker.turn_started", json!({}))?;
+    let run_id = crate::lcm::run_register_worker_run(
+        &db,
+        crate::lcm::WorkerRunInput {
+            attempt_id: "native-active-attempt",
+            work_key: "native-work",
+            conversation_id: 42,
+            source_label: "queue",
+            task_ids: &tasks,
+        },
+    )?;
+    event(
+        root.path(),
+        &turn,
+        "native-active-attempt",
+        "worker.turn_started",
+        json!({}),
+    )?;
     let first = watch(root.path(), &turn, "active-first", Some(json!({})))?;
     assert_eq!(page(&first)["attempt"]["run_id"], run_id);
-    assert_eq!(page(&first)["attempt"]["attempt_id"], "native-active-attempt");
+    assert_eq!(
+        page(&first)["attempt"]["attempt_id"],
+        "native-active-attempt"
+    );
     assert!(page(&first)["attempt"]["status"].is_null());
     assert!(page(&first)["attempt"]["finished_at_ms"].is_null());
     let reopened = watch(root.path(), &turn, "active-reopened", Some(json!({})))?;
     assert_eq!(page(&reopened)["attempt"]["run_id"], run_id);
     let conn = Connection::open(&db)?;
-    let count: i64 = conn.query_row("SELECT count(*) FROM worker_attempt_finalizations", [], |r|r.get(0))?;
+    let count: i64 = conn.query_row(
+        "SELECT count(*) FROM worker_attempt_finalizations",
+        [],
+        |r| r.get(0),
+    )?;
     assert_eq!(count, 0);
     let engine = crate::lcm::LcmEngine::open(&db, crate::lcm::LcmConfig::default())?;
     engine.begin_worker_attempt_finalization(crate::lcm::WorkerAttemptFinalizationInput {
-        attempt_id:"native-active-attempt", work_key:"native-work", conversation_id:42,
-        source_label:"queue",agent_outcome:crate::lcm::AgentOutcome::Success,
-        reply_text:"actual result",error_text:None,
+        attempt_id: "native-active-attempt",
+        work_key: "native-work",
+        conversation_id: 42,
+        source_label: "queue",
+        agent_outcome: crate::lcm::AgentOutcome::Success,
+        reply_text: "actual result",
+        error_text: None,
     })?;
     let terminal = watch(root.path(), &turn, "finalizing-same-run", Some(json!({})))?;
     assert_eq!(page(&terminal)["attempt"]["run_id"], run_id);
@@ -410,14 +433,27 @@ fn admitted_active_run_id_survives_reader_reopen_and_terminal_finalization() -> 
 }
 
 #[test]
-fn registered_native_run_rejects_a_different_task_even_with_an_attempt_flow_event() -> anyhow::Result<()> {
+fn registered_native_run_rejects_a_different_task_even_with_an_attempt_flow_event(
+) -> anyhow::Result<()> {
     let (root, turn) = fixture()?;
     let tasks = vec!["foreign-task".to_owned()];
-    crate::lcm::run_register_worker_run(&crate::paths::core_db(root.path()), crate::lcm::WorkerRunInput {
-        attempt_id:"foreign-bound-attempt",work_key:"foreign-work",conversation_id:42,
-        source_label:"queue",task_ids:&tasks,
-    })?;
-    event(root.path(), &turn, "foreign-bound-attempt", "worker.turn_started", json!({}))?;
+    crate::lcm::run_register_worker_run(
+        &crate::paths::core_db(root.path()),
+        crate::lcm::WorkerRunInput {
+            attempt_id: "foreign-bound-attempt",
+            work_key: "foreign-work",
+            conversation_id: 42,
+            source_label: "queue",
+            task_ids: &tasks,
+        },
+    )?;
+    event(
+        root.path(),
+        &turn,
+        "foreign-bound-attempt",
+        "worker.turn_started",
+        json!({}),
+    )?;
     rejected(watch(root.path(), &turn, "wrong-run-task", Some(json!({}))));
     Ok(())
 }

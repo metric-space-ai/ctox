@@ -165,7 +165,10 @@ fn read_does_not_create_a_missing_store() -> anyhow::Result<()> {
     let path = store::business_os_store_path(root.path());
     assert!(!path.exists());
     assert!(handle_command(root.path(), &command, OWNER, None).is_err());
-    assert!(!path.exists(), "a KPI read must not initialize the database");
+    assert!(
+        !path.exists(),
+        "a KPI read must not initialize the database"
+    );
     Ok(())
 }
 

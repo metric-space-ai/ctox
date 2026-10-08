@@ -1,8 +1,6 @@
 mod mission_state;
 mod runtime_support;
 mod worker_runs;
-pub use worker_runs::{run_register_worker_run, WorkerRunInput};
-pub(crate) use worker_runs::projected_worker_run_id;
 pub(crate) use mission_state::drain_pending_mission_state_clobbers;
 #[cfg(test)]
 pub(crate) use mission_state::drain_pending_mission_state_clobbers_for_test;
@@ -33,6 +31,8 @@ pub use runtime_support::{
     run_show_continuity, run_task_execution_progress, run_task_execution_progress_for_task,
     run_terminalize_worker_attempt, run_worker_attempt,
 };
+pub(crate) use worker_runs::projected_worker_run_id;
+pub use worker_runs::{run_register_worker_run, WorkerRunInput};
 
 use anyhow::Context;
 use anyhow::Result;

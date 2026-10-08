@@ -1288,6 +1288,75 @@ impl WireValidate for ReadMeetingRequest {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MeetingMutationReceipt {
+    pub(crate) operation_id: String,
+    pub(crate) meeting_id: String,
+    pub(crate) project_id: String,
+    pub(crate) revision: u64,
+    pub(crate) state: MeetingState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) changed_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) todos_revision: Option<u64>,
+}
+impl WireValidate for MeetingMutationReceipt {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.operation_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("MeetingMutationReceipt.operation_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("MeetingMutationReceipt.operation_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.meeting_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("MeetingMutationReceipt.meeting_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("MeetingMutationReceipt.meeting_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("MeetingMutationReceipt.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("MeetingMutationReceipt.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.revision;
+            value.validate()?;
+        }
+        {
+            let value = &self.state;
+            value.validate()?;
+        }
+        if let Some(value) = &self.changed_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("MeetingMutationReceipt.changed_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("MeetingMutationReceipt.changed_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.todos_revision {
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -1358,6 +1427,9 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "ReadMeetingRequest" => serde_json::from_value::<ReadMeetingRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "MeetingMutationReceipt" => serde_json::from_value::<MeetingMutationReceipt>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown contract type".into()),

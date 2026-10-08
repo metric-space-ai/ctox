@@ -125,7 +125,8 @@ pub(super) fn handle_command(
             request.validate().map_err(anyhow::Error::msg)?;
             let mut reader = Connection::open_with_flags(
                 super::store::business_os_store_path(root),
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?;
             reader.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
             // Identity, project ownership and KPI state share a read snapshot;

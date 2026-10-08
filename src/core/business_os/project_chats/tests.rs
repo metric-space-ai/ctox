@@ -8,10 +8,10 @@ use tempfile::{tempdir, TempDir};
 
 #[path = "jour_fixe_owner_tests.rs"]
 mod jour_fixe_owner;
-#[path = "jour_fixe_speech_tests.rs"]
-mod jour_fixe_speech;
 #[path = "jour_fixe_preparation_tests.rs"]
 mod jour_fixe_preparation;
+#[path = "jour_fixe_speech_tests.rs"]
+mod jour_fixe_speech;
 #[path = "recovery_tests.rs"]
 mod recovery;
 #[path = "supervisor_tests.rs"]

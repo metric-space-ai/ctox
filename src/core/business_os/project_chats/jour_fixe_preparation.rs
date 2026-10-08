@@ -238,7 +238,10 @@ pub(in crate::business_os) fn read(
         );
         return Ok(json!({"ok":true,"meeting":null}));
     };
-    ensure!(raw.len() <= 1024 * 1024, "meeting metadata exceeds native read budget");
+    ensure!(
+        raw.len() <= 1024 * 1024,
+        "meeting metadata exceeds native read budget"
+    );
     let meeting: wire::Meeting = serde_json::from_str(&raw)?;
     meeting.validate().map_err(anyhow::Error::msg)?;
     ensure!(

@@ -31,30 +31,53 @@ impl LcmEngine {
     /// Replaying the same exact native binding returns its existing random ID.
     pub fn register_worker_run(&self, input: WorkerRunInput<'_>) -> Result<String> {
         for value in [input.attempt_id, input.work_key, input.source_label] {
-            anyhow::ensure!(!value.trim().is_empty() && value.len() <= 4096,
-                "invalid native worker run binding");
+            anyhow::ensure!(
+                !value.trim().is_empty() && value.len() <= 4096,
+                "invalid native worker run binding"
+            );
         }
-        anyhow::ensure!(input.task_ids.len() <= 1024, "native worker run task window too large");
+        anyhow::ensure!(
+            input.task_ids.len() <= 1024,
+            "native worker run task window too large"
+        );
         let mut task_ids = input.task_ids.to_vec();
         task_ids.sort();
         task_ids.dedup();
-        anyhow::ensure!(task_ids.iter().all(|id| !id.trim().is_empty() && id.len() <= 4096),
-            "invalid native worker run task binding");
+        anyhow::ensure!(
+            task_ids
+                .iter()
+                .all(|id| !id.trim().is_empty() && id.len() <= 4096),
+            "invalid native worker run task binding"
+        );
         let task_ids_json = serde_json::to_string(&task_ids)?;
         let tx = rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         )?;
-        let existing: Option<(String, String, i64, String, String)> = tx.query_row(
-            "SELECT run_id,work_key,conversation_id,source_label,task_ids_json
+        let existing: Option<(String, String, i64, String, String)> = tx
+            .query_row(
+                "SELECT run_id,work_key,conversation_id,source_label,task_ids_json
              FROM worker_run_identities WHERE attempt_id=?1",
-            [input.attempt_id],
-            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
-        ).optional()?;
+                [input.attempt_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
         if let Some((run_id, work, conversation, source, tasks)) = existing {
-            anyhow::ensure!(work == input.work_key && conversation == input.conversation_id
-                && source == input.source_label && tasks == task_ids_json,
-                "native worker run identity binding conflict");
+            anyhow::ensure!(
+                work == input.work_key
+                    && conversation == input.conversation_id
+                    && source == input.source_label
+                    && tasks == task_ids_json,
+                "native worker run identity binding conflict"
+            );
             tx.commit()?;
             return Ok(run_id);
         }
@@ -62,16 +85,27 @@ impl LcmEngine {
         // Recovery must not mint a replacement identity or invoke a model again.
         let finalized: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM worker_attempt_finalizations WHERE attempt_id=?1)",
-            [input.attempt_id], |row| row.get(0),
+            [input.attempt_id],
+            |row| row.get(0),
         )?;
-        anyhow::ensure!(!finalized, "cannot allocate a run after native finalization began");
+        anyhow::ensure!(
+            !finalized,
+            "cannot allocate a run after native finalization began"
+        );
         let run_id = format!("worker-run:{}", uuid::Uuid::new_v4());
         tx.execute(
             "INSERT INTO worker_run_identities
                 (attempt_id,run_id,work_key,conversation_id,source_label,task_ids_json,created_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![input.attempt_id,run_id,input.work_key,input.conversation_id,
-                input.source_label,task_ids_json,chrono::Utc::now().to_rfc3339()],
+            params![
+                input.attempt_id,
+                run_id,
+                input.work_key,
+                input.conversation_id,
+                input.source_label,
+                task_ids_json,
+                chrono::Utc::now().to_rfc3339()
+            ],
         )?;
         tx.commit()?;
         Ok(run_id)
@@ -89,17 +123,30 @@ pub(crate) fn projected_worker_run_id(conn: &Connection, attempt_id: &str) -> Re
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_run_identities')",
         [], |row| row.get(0),
     )?;
-    if !exists { return Ok(attempt_id.to_owned()); }
-    Ok(conn.query_row("SELECT run_id FROM worker_run_identities WHERE attempt_id=?1",
-        [attempt_id], |row| row.get(0)).optional()?.unwrap_or_else(|| attempt_id.to_owned()))
+    if !exists {
+        return Ok(attempt_id.to_owned());
+    }
+    Ok(conn
+        .query_row(
+            "SELECT run_id FROM worker_run_identities WHERE attempt_id=?1",
+            [attempt_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| attempt_id.to_owned()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     fn input<'a>(attempt: &'a str, tasks: &'a [String]) -> WorkerRunInput<'a> {
-        WorkerRunInput { attempt_id:attempt, work_key:"work", conversation_id:42,
-            source_label:"queue", task_ids:tasks }
+        WorkerRunInput {
+            attempt_id: attempt,
+            work_key: "work",
+            conversation_id: 42,
+            source_label: "queue",
+            task_ids: tasks,
+        }
     }
     #[test]
     fn active_run_identity_survives_reopen_and_is_independent_of_attempt_and_task() -> Result<()> {
@@ -111,12 +158,25 @@ mod tests {
         assert_ne!(run, "attempt");
         assert!(!tasks.contains(&run));
         let reversed = vec!["task-a".into(), "task-b".into()];
-        assert_eq!(run, run_register_worker_run(&db, input("attempt", &reversed))?);
-        assert_ne!(run, run_register_worker_run(&db, input("attempt-2", &tasks))?);
+        assert_eq!(
+            run,
+            run_register_worker_run(&db, input("attempt", &reversed))?
+        );
+        assert_ne!(
+            run,
+            run_register_worker_run(&db, input("attempt-2", &tasks))?
+        );
         let conn = Connection::open(&db)?;
         assert_eq!(projected_worker_run_id(&conn, "attempt")?, run);
-        let count: i64 = conn.query_row("SELECT count(*) FROM worker_attempt_finalizations",[],|r|r.get(0))?;
-        assert_eq!(count, 0, "identity admission must not fabricate finalization");
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM worker_attempt_finalizations",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(
+            count, 0,
+            "identity admission must not fabricate finalization"
+        );
         Ok(())
     }
     #[test]
@@ -144,8 +204,13 @@ mod tests {
         let db = temp.path().join("core.sqlite3");
         let engine = LcmEngine::open(&db, LcmConfig::default())?;
         engine.begin_worker_attempt_finalization(WorkerAttemptFinalizationInput {
-            attempt_id:"legacy",work_key:"work",conversation_id:42,source_label:"queue",
-            agent_outcome:AgentOutcome::Success,reply_text:"saved",error_text:None,
+            attempt_id: "legacy",
+            work_key: "work",
+            conversation_id: 42,
+            source_label: "queue",
+            agent_outcome: AgentOutcome::Success,
+            reply_text: "saved",
+            error_text: None,
         })?;
         assert!(engine.register_worker_run(input("legacy", &[])).is_err());
         assert_eq!(projected_worker_run_id(&engine.conn, "legacy")?, "legacy");
@@ -159,8 +224,13 @@ mod tests {
         let tasks = vec!["task".into()];
         let run = engine.register_worker_run(input("attempt", &tasks))?;
         engine.begin_worker_attempt_finalization(WorkerAttemptFinalizationInput {
-            attempt_id:"attempt",work_key:"work",conversation_id:42,source_label:"queue",
-            agent_outcome:AgentOutcome::Success,reply_text:"saved",error_text:None,
+            attempt_id: "attempt",
+            work_key: "work",
+            conversation_id: 42,
+            source_label: "queue",
+            agent_outcome: AgentOutcome::Success,
+            reply_text: "saved",
+            error_text: None,
         })?;
         assert_eq!(engine.register_worker_run(input("attempt", &tasks))?, run);
         assert_eq!(projected_worker_run_id(&engine.conn, "attempt")?, run);
