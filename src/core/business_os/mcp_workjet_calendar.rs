@@ -135,7 +135,7 @@ mod tests {
                 email_accounts::EmailAccountConfig { address:"ownerless@example.test".into(), ..Default::default() },
             ])?)
         ]))?;
-        let gateway = json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp","surface":"workjet","actor":"owner","role":"admin","workspace":"tenant:instance","instance_id":"source-instance","managed_policy":{"allow_reads":true,"allowed_collections":["communication_accounts"]}});
+        let gateway = json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp","surface":"workjet","actor":"owner","role":"admin","workspace":"tenant:instance","instance_id":"source-instance","managed_policy":{"allowReads":true,"allowedCollections":["communication_accounts"]}});
         let read = call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&gateway))?;
         assert_eq!(read["accounts"].as_array().unwrap().len(), 1);
         assert_eq!(read["accounts"][0]["id"], "mine@example.test");
