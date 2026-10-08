@@ -138,12 +138,13 @@ pub(super) fn emit(
     );
     tx.commit()?;
     drop(conn);
+    // Supervisor goals are bounded single-line text; retain every embedded skill word.
     let accepted = super::super::store::accept_rxdb_business_command_with_origin(
         root,
         json!({
             "id":operation,"module":"ctox","command_type":"ctox.workjet.project.supervisor.turn.submit","record_id":route.project_id,
             "payload":{"project_id":route.project_id,"thread_id":route.thread_id,"goal":format!(
-              "JourFix preparation for meeting {meeting_id}, appointment {scheduled_at} ms UTC.\n\n{}", include_str!("../../../skills/system/mission_orchestration/jour-fix/SKILL.md"))},
+              "JourFix preparation for meeting {meeting_id}, appointment {scheduled_at} ms UTC. {}", include_str!("../../../skills/system/mission_orchestration/jour-fix/SKILL.md").split_whitespace().collect::<Vec<_>>().join(" "))},
             "client_context":{"actor":threads::actor_payload(&session),"source":"native-workjet-jour-fixe-schedule"}
         }),
         super::super::store::CommandOrigin::TrustedLocal,

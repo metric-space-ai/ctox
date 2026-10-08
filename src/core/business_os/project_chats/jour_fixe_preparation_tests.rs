@@ -104,7 +104,8 @@ fn test_time_creates_one_planned_meeting_and_the_registered_supervisor_turn() ->
             .unwrap()
     );
     assert!(queue.prompt.contains("JourFix"));
-    assert!(queue.prompt.contains("Only the"));
+    assert!(queue.prompt.contains("Only the owner's explicit confirmation"));
+    assert!(queue.prompt.contains("Never invent numeric metrics or completed work."));
     assert!(
         crate::skill_store::load_skill_deliverable_contract(root.path(), "jour-fix")?.is_some()
     );
