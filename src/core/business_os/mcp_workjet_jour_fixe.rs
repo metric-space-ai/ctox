@@ -24,13 +24,14 @@ enum Update {
 #[derive(Deserialize)]
 #[serde(tag = "action", content = "request", rename_all = "snake_case", deny_unknown_fields)]
 enum Read {
+    ReadMeeting(wire::ReadMeetingRequest),
     ReadComments(wire::ReadMeetingRequest),
     ReadTranscript(wire::ReadMeetingRequest),
 }
 
 pub(super) fn allows(tool: &str, args: &Value) -> bool {
     matches!((tool, args["action"].as_str()),
-        (READ_TOOL, Some("read_comments" | "read_transcript"))
+        (READ_TOOL, Some("read_meeting" | "read_comments" | "read_transcript"))
         | (WRITE_TOOL, Some("prepare_deck" | "propose_todos")))
 }
 
@@ -70,15 +71,20 @@ fn descriptor_schema(actions: &[(&str,&str)]) -> Value {
     let spec: Value = serde_json::from_str(include_str!("../rxdb/tests/fixtures/workjet-jour-fixe-v1.json")).expect("shared meeting fixture");
     json!({"type":"object","additionalProperties":false,"required":["action","request"],
         "properties":{"action":{"type":"string"},"request":{"type":"object"}},
-        "oneOf":actions.iter().map(|(action,kind)|json!({
-        "type":"object","additionalProperties":false,"required":["action","request"],
-        "properties":{"action":{"type":"string","const":action},"request":schema(&spec,kind)}
-    })).collect::<Vec<_>>()})
+        "oneOf":actions.iter().map(|(action,kind)| {
+        let mut request = schema(&spec,kind);
+        if *kind == "ReadMeetingRequest" {
+            request["required"] = json!(["project_id","meeting_id"]);
+            request["properties"]["meeting_id"] = json!({"type":"string","minLength":1,"maxLength":128});
+        }
+        json!({"type":"object","additionalProperties":false,"required":["action","request"],
+            "properties":{"action":{"type":"string","const":action},"request":request}})
+    }).collect::<Vec<_>>()})
 }
 pub(super) fn read_descriptor() -> BusinessOsMcpToolDescriptor {
     read_tool(READ_TOOL,
-        "Read retained comments or final transcript for this registered Supervisor's meeting. Requires its signed, current native execution session. Return meeting/project/revision and bounded stored evidence; no inferred speech or cross-project read.",
-        descriptor_schema(&[("read_comments","ReadMeetingRequest"),("read_transcript","ReadMeetingRequest")]))
+        "Read this registered Supervisor's current meeting plus bounded project configuration, or retained comments/final transcript only. Requires its signed, current native execution session and an explicit meeting_id. Returns stored evidence, never inferred speech or cross-project data.",
+        descriptor_schema(&[("read_meeting","ReadMeetingRequest"),("read_comments","ReadMeetingRequest"),("read_transcript","ReadMeetingRequest")]))
 }
 pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(WRITE_TOOL,
@@ -158,14 +164,26 @@ pub(super) fn execute(
     let policy_tx = policy.transaction_with_behavior(behavior)?;
     if !writing {
         let read: Read = serde_json::from_value(arguments.clone())?;
-        let (request,comments) = match read {
-            Read::ReadComments(v) => (v,true), Read::ReadTranscript(v) => (v,false),
+        let (request,section) = match read {
+            Read::ReadMeeting(v) => (v,"meeting"),
+            Read::ReadComments(v) => (v,"comments"), Read::ReadTranscript(v) => (v,"transcript"),
         };
         request.validate().map_err(anyhow::Error::msg)?;
         let id = request.meeting_id.as_deref().context("explicit meeting_id is required")?;
         let meeting = current_meeting(&core_tx,&policy_tx,context,trusted,id,false)?;
         anyhow::ensure!(request.project_id == meeting.project_id,"meeting read project differs");
-        return Ok(if comments {
+        if section == "meeting" {
+            let record = store::outbound_load_record(&policy_tx,"workjet_projects",&meeting.project_id)?
+                .context("native project configuration unavailable")?;
+            let project = json!({"id":meeting.project_id,"name":record["name"],"repo_url":record["repo_url"],
+                "public_url":record["public_url"],"info":{"summary":record["info"]["summary"],
+                "goal":record["info"]["goal"],"phase":record["info"]["phase"]},
+                "jour_fixe":{"weekday":record["jour_fixe"]["weekday"],"time":record["jour_fixe"]["time"],
+                "timezone":record["jour_fixe"]["timezone"]}});
+            anyhow::ensure!(serde_json::to_vec(&project)?.len() <= 64 * 1024,"project configuration exceeds meeting read budget");
+            return Ok(json!({"contract":wire::CONTRACT_SCHEMA,"meeting":meeting,"project":project}));
+        }
+        return Ok(if section == "comments" {
             json!({"contract":wire::CONTRACT_SCHEMA,"meeting_id":meeting.id,"project_id":meeting.project_id,
                 "revision":meeting.revision,"state":meeting.state,"comments":meeting.comments})
         } else {

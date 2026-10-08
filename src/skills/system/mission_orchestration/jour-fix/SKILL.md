@@ -20,7 +20,8 @@ During the currently leased native Supervisor turn, these restricted tools are
 available:
 
 - business_os.jour_fixe_read: {action:"read_comments",request:{project_id,meeting_id}}
-  or action:"read_transcript". Use the actual meeting ID, never a guessed UUID.
+  or action:"read_transcript"; action:"read_meeting" also returns current deck,
+  proposal/revisions and bounded project configuration. Use the actual meeting ID.
 - business_os.jour_fixe_update: {action:"prepare_deck",request:<PublishDeckRequest>}.
   Supply operation_id, meeting_id, expected_revision, next deck_revision and
   slides [{id,position,title,body_markdown,meeting_id}]. Positions start at zero;

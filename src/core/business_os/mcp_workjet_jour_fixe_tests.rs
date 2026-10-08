@@ -141,7 +141,7 @@ fn ordinary_managed_owner_and_foreign_peer_cannot_impersonate_supervisor() -> an
 }
 #[test]
 fn replaced_expired_and_cancelled_native_lease_reject_reads_writes_and_replays() -> anyhow::Result<()> {
-    for change in ["replaced","expired","cancelled","hash","terminal","epoch"] {
+    for change in ["replaced","expired","cancelled","hash","terminal","epoch","binding"] {
         let (root,mut trusted)=fixture("planned")?;
         call(root.path(),&trusted,WRITE_TOOL,draft())?;
         match change {
@@ -153,6 +153,7 @@ fn replaced_expired_and_cancelled_native_lease_reject_reads_writes_and_replays()
             "hash" => trusted["payload_hash"]=json!("wrong"),
             "terminal" => {core(root.path())?.execute("UPDATE business_command_aggregates SET execution_phase='terminal' WHERE command_id=?1",[required_arg(&trusted,"command_id")?])?;},
             "epoch" => trusted["workjet_supervisor_epoch"]=json!(-1),
+            "binding" => {store::open_store(root.path())?.execute("UPDATE workjet_supervisor_bindings SET thread_id='replacement' WHERE project_id='project'",[])?;},
             _=>unreachable!(),
         };
         assert!(call(root.path(),&trusted,WRITE_TOOL,draft()).is_err(),"{change}");
@@ -218,9 +219,34 @@ fn meeting_tool_descriptors_are_strict_root_objects_from_the_shared_dtos() {
     assert_eq!(read["type"],"object");
     assert_eq!(read["additionalProperties"],false);
     assert_eq!(read["required"],json!(["action","request"]));
+    assert_eq!(read["oneOf"][0]["properties"]["request"]["required"],json!(["project_id","meeting_id"]));
     assert_eq!(read["oneOf"][0]["properties"]["request"]["additionalProperties"],false);
     let update = descriptor_schema(&[("propose_todos","ProposeTodosRequest")]);
     let fields = &update["oneOf"][0]["properties"]["request"]["properties"]["items"]["items"]["properties"];
     assert_eq!(fields["owner"]["anyOf"][0]["maxLength"],256);
     assert_eq!(fields["due_at_ms"]["anyOf"][0]["minimum"],0);
+}
+
+#[test]
+fn supervisor_reads_current_meeting_and_only_allowlisted_owned_project_configuration() -> anyhow::Result<()> {
+    let (root,trusted)=fixture("planned")?;
+    let conn=store::open_store(root.path())?;
+    let mut record=store::outbound_load_record(&conn,"workjet_projects","project")?.context("project")?;
+    record["repo_url"]=json!("https://github.com/metric-space-ai/ctox");
+    record["public_url"]=json!("https://ctox.dev");
+    record["info"]=json!({"summary":"Durable work","goal":"Verified delivery","phase":"active","private_note":"must not escape"});
+    record["jour_fixe"]=json!({"weekday":"monday","time":"13:00","timezone":"Europe/Berlin","runtime_secret":"must not escape"});
+    record["runtime_secret"]=json!("must not escape");
+    store::upsert_business_record(&conn,"workjet_projects","project",1,record)?;
+    let response=call(root.path(),&trusted,READ_TOOL,read_args("read_meeting"))?;
+    assert_eq!(response["meeting"],saved(root.path())?);
+    assert_eq!(response["project"]["repo_url"],"https://github.com/metric-space-ai/ctox");
+    assert_eq!(response["project"]["info"]["summary"],"Durable work");
+    assert_eq!(response["project"]["jour_fixe"]["time"],"13:00");
+    assert!(!response["project"].to_string().contains("must not escape"));
+    let mut args=read_args("read_meeting");args["request"]["project_id"]=json!("foreign");
+    assert!(call(root.path(),&trusted,READ_TOOL,args).is_err());
+    let mut args=read_args("read_meeting");args["request"].as_object_mut().unwrap().remove("meeting_id");
+    assert!(call(root.path(),&trusted,READ_TOOL,args).is_err());
+    Ok(())
 }
