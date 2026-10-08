@@ -34,6 +34,7 @@ function projectedSession(overrides = {}) {
     run_status: 'running',
     fence_epoch: 0,
     owner_user_id: 'owner-1',
+    created_at_ms: 1_699_999_000_000,
     updated_at_ms: 1_700_000_000_000,
     is_deleted: false,
     ...overrides,
