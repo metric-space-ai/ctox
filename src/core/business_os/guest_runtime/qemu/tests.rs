@@ -567,8 +567,8 @@ async fn real_qemu_cannot_survive_abrupt_native_parent_exit() -> Result<()> {
         let mut guest = QemuProcess::spawn_paused(&input, "isolated-parent-exit-guest")?;
         guest.connect_monitor().await?;
         ensure!(!guest.status().await?.running);
-        println!("VM_PARENT_EXIT_OWNED_QEMU {}", guest.pid());
-        std::io::stdout().flush()?;
+        // A private witness avoids libtest's inline progress prefix on stdout.
+        std::fs::write(root.join("parent-exit-qemu.pid"), guest.pid().to_string())?;
         // Deliberately bypass every Rust destructor, as SIGABRT does.
         std::process::exit(0);
     }
@@ -589,10 +589,7 @@ async fn real_qemu_cannot_survive_abrupt_native_parent_exit() -> Result<()> {
         "native parent fixture failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let text = String::from_utf8(output.stdout)?;
-    let pid: i32 = text
-        .lines()
-        .find_map(|line| line.strip_prefix("VM_PARENT_EXIT_OWNED_QEMU "))
+    let pid: i32 = std::fs::read_to_string(root.path().join("parent-exit-qemu.pid"))
         .context("actual QEMU child identity missing")?
         .parse()?;
     // SAFETY: pidfd pins this exact process; an already-reaped PID is absent.
