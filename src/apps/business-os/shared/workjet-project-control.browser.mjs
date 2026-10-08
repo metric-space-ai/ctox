@@ -246,6 +246,27 @@ try {
     assert.equal(forgedOwner.commands.length, 0);
     results.push('browser Owner text rejects forged speech provenance before dispatch');
 
+    const confirmRequest = ownerControl.request('project.jour_fixe.todos.confirm');
+    const confirmed = await ownerControl.fixture().invoke(confirmRequest);
+    assert.equal(confirmed.mutation.state, 'confirmed');
+    assert.equal(confirmed.goal.revision, confirmRequest.expectedGoalRevision + 1);
+    assert.equal(confirmed.goal.goal_id, confirmed.mutation.changed_id);
+    results.push('browser Owner confirmation returns the native Core goal with exact revisions');
+    for (const mutate of [r => { r.result.goal.revision += 1; },
+      r => { r.result.mutation.changed_id = 'foreign-goal'; },
+      r => { r.result.mutation.todos_revision += 1; },
+      r => { r.result.mutation.state = 'review'; }]) {
+      let rejected = false;
+      try { await ownerControl.fixture(mutate).invoke(confirmRequest); } catch { rejected = true; }
+      assert.ok(rejected);
+    }
+    const extraGoal = ownerControl.fixture();
+    let forgedGoalRejected = false;
+    try { await extraGoal.invoke({ ...confirmRequest, goal: { goal_id: 'forged' } }); } catch { forgedGoalRejected = true; }
+    assert.ok(forgedGoalRejected);
+    assert.equal(extraGoal.commands.length, 0);
+    results.push('browser Owner confirmation rejects substituted proposals and invented goal authority');
+
     const localAudioRequest = ownerControl.request('project.jour_fixe.narration.local_publish');
     const localAudio = await ownerControl.fixture().invoke(localAudioRequest);
     assert.equal(localAudio.localNarration.audio.file_id, 'persisted-native-audio');
@@ -299,7 +320,7 @@ try {
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
     configurationSource: tests.slice(configurationStart, configurationEnd),
     executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 27);
+  assert.equal(results.length, 29);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };
