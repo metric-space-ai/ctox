@@ -100,7 +100,7 @@ impl StagedPart {
         };
         // A corrupt incomplete prefix must not poison every future operation.
         // No CAS blob is removed, overwritten, or trusted by this cleanup.
-        if result.is_ok()
+        if (artifact.is_some() && result.is_ok())
             || result
                 .as_ref()
                 .is_err_and(|e| e.kind() == std::io::ErrorKind::InvalidData)
@@ -245,6 +245,11 @@ mod tests {
         assert_eq!(part.offset, 4);
         part.append(&bytes[4..], a.size_bytes).unwrap();
         assert_eq!(part.finish(&store, None, &a.sha256).unwrap(), bytes);
-        assert!(!first.join("manifest").exists());
+        // Retain a complete manifest too: the next native request probes its
+        // end offset under fresh source authority and rehashes these bytes.
+        // A large manifest must not consume the fetch budget again per call.
+        let mut cached = StagedPart::open(&first, None).unwrap();
+        assert_eq!(cached.offset, bytes.len() as u64);
+        assert_eq!(cached.finish(&store, None, &a.sha256).unwrap(), bytes);
     }
 }
