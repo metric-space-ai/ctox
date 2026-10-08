@@ -1,3 +1,25 @@
+#[test]
+fn native_control_adapter_guard_requires_exactly_one_callback() {
+    struct Broken(usize);
+    impl WebRTCPublicationGuard for Broken {
+        fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+            for _ in 0..self.0 {
+                let _ = publish();
+            }
+            Ok(())
+        }
+    }
+    for count in [0, 1, 2] {
+        let mut calls = 0;
+        let result = with_once(&Broken(count), &mut || {
+            calls += 1;
+            Ok(())
+        });
+        assert_eq!(result.is_ok(), count == 1);
+        assert_eq!(calls, usize::from(count != 0));
+    }
+    assert!(with_once(&Deny, &mut || panic!("denied guard must not publish")).is_err());
+}
 // Origin: CTOX
 // License: AGPL-3.0-only
 use super::*;

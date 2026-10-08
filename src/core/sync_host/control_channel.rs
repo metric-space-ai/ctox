@@ -158,15 +158,15 @@ fn with_once(
     guard: &dyn WebRTCPublicationGuard,
     publish: &mut dyn FnMut() -> RxResult<()>,
 ) -> RxResult<()> {
-    let mut called = false;
+    let mut called = 0usize;
     guard.with_current(&mut || {
-        if called {
+        called = called.saturating_add(1);
+        if called != 1 {
             return Err(denied());
         }
-        called = true;
         publish()
     })?;
-    if !called {
+    if called != 1 {
         return Err(denied());
     }
     Ok(())
