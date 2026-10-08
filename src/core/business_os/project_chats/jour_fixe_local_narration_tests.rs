@@ -62,7 +62,7 @@ fn fixture() -> anyhow::Result<(TempDir, String, Value)> {
     })?;
     let db = Connection::open(store::rxdb_store_path(root.path()))?;
     for collection in ["desktop_files", "desktop_file_chunks"] {
-        db.execute_batch(&format!("CREATE TABLE IF NOT EXISTS ctox_business_os__{collection}__v0(id TEXT PRIMARY KEY,rev TEXT NOT NULL,deleted INTEGER NOT NULL,last_write_time REAL NOT NULL,data TEXT NOT NULL)"))?;
+        db.execute_batch(&format!("CREATE TABLE IF NOT EXISTS ctox_business_os__{collection}__v0(id TEXT PRIMARY KEY,revision TEXT NOT NULL,deleted INTEGER NOT NULL,lastWriteTime REAL NOT NULL,data TEXT NOT NULL)"))?;
     }
     let bytes = wav();
     let hash = sha(&bytes);
