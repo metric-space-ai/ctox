@@ -13,6 +13,7 @@ pub(super) struct SourceEffects {
     child_stop_observed: bool,
     process_effect_reconciled: bool,
     machine_entries: Vec<ctox_sync::contracts::WorkspaceEntry>,
+    core_effects: Option<ctox_core::NativeCoreEffectCapture>,
 }
 
 impl SourceEffects {
@@ -62,6 +63,7 @@ impl SourceEffects {
             child_stop_observed: false,
             process_effect_reconciled: false,
             machine_entries: Vec::new(),
+            core_effects: None,
         })
     }
 
@@ -130,6 +132,17 @@ impl SourceEffects {
         Ok(())
     }
 
+    pub(super) fn bind_core_state(&mut self, state: &ctox_core::NativeSessionState) -> Result<()> {
+        ensure!(
+            state.session_id().to_string() == self.job.spec.session_id
+                && state.model() == self.job.spec.model_id
+                && state.provider_id() == self.job.spec.model_route_id,
+            "native Core effects belong to another source"
+        );
+        self.core_effects = state.core_effect_capture().cloned();
+        Ok(())
+    }
+
     pub(super) fn machine_entries(&self) -> &[ctox_sync::contracts::WorkspaceEntry] {
         &self.machine_entries
     }
@@ -148,6 +161,8 @@ impl SourceEffects {
             && self.child_stop_observed == other.child_stop_observed
             && self.process_effect_reconciled == other.process_effect_reconciled
             && self.machine_entries == other.machine_entries
+            && self.core_effects.as_ref().map(|c| c.report())
+                == other.core_effects.as_ref().map(|c| c.report())
     }
 
     pub(super) fn bytes(&self, spec: &ExecutionSpec, ownership: &Ownership) -> Result<Vec<u8>> {
@@ -168,6 +183,7 @@ impl SourceEffects {
                 "childStopObserved": self.child_stop_observed,
                 "processEffectReconciled": self.process_effect_reconciled
             })),
+            "coreEffects": self.core_effects.as_ref().map(|capture| capture.report()),
             "externalEffects": "unknown", "reconciled": false
         }))?;
         ensure!(

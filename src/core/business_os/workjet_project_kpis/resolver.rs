@@ -16,6 +16,22 @@ const DEFINITIONS: &str = "CREATE TABLE IF NOT EXISTS workjet_project_kpi_defini
  request_json TEXT NOT NULL, next_refresh_ms INTEGER NOT NULL,
  PRIMARY KEY(project_id,kpi_id));";
 
+pub(super) fn snapshot_binding_is_current(
+    conn: &Connection, project: &str, owner: &str, prompt: &KpiPrompt,
+) -> anyhow::Result<bool> {
+    if !has(conn, "workjet_project_kpi_definitions")? { return Ok(true); }
+    let definition: Option<(String, String, u64)> = conn.query_row(
+      "SELECT owner_user_id,supervisor_thread_id,prompt_revision FROM workjet_project_kpi_definitions WHERE project_id=?1 AND kpi_id=?2",
+      params![project,prompt.kpi_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    let Some((bound_owner, thread, revision)) = definition else { return Ok(false) };
+    if bound_owner != owner || revision != prompt.revision { return Ok(false); }
+    match super::super::project_chats::supervisor_turns::binding_from_connection(conn,owner,project,&thread,true) {
+      Ok(_) => Ok(true),
+      Err(error) if error.chain().any(|v| v.is::<rusqlite::Error>() || v.is::<std::io::Error>()) => Err(error),
+      Err(_) => Ok(false),
+    }
+}
+
 pub(in crate::business_os) fn catalogue() -> Value {
     json!([
       {"recipe":"project_tasks_total","label":"Tasks","meaning":"Native queued Supervisor commands admitted to this project, created within the rolling window."},

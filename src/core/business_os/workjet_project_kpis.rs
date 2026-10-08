@@ -106,6 +106,13 @@ pub(super) fn read_state(
     let now = super::store::now_ms() as i64;
     for item in &mut state.items {
         if item.result.status == KpiState::Ready
+            && !resolver::snapshot_binding_is_current(conn, project, owner, &item.prompt)?
+        {
+            item.result.status = KpiState::Stale;
+            item.result.reason_code = Some("source_binding_changed".into());
+            item.result.message = Some("The registered source Supervisor changed; resolve the prompt again.".into());
+        }
+        if item.result.status == KpiState::Ready
             && item
                 .result
                 .snapshot

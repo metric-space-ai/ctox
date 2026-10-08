@@ -324,3 +324,18 @@ fn expired_snapshot_read_is_stale_and_does_not_take_writer_locks() -> anyhow::Re
     lock.rollback()?;
     Ok(())
 }
+
+#[test]
+fn replacing_the_supervisor_immediately_stales_its_snapshot_without_a_writer() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    call(root.path(), &trusted, args("project_tasks_completed", "bind", 1))?;
+    let mut policy = store::open_store(root.path())?;
+    policy.execute("UPDATE workjet_supervisor_bindings SET thread_id='replacement' WHERE project_id='project'",[])?;
+    let lock = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let reader = Connection::open_with_flags(store::business_os_store_path(root.path()), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let state = super::super::super::workjet_project_kpis::read_state(&reader,"project","owner")?;
+    assert_eq!(state.items[0].result.status, crate::business_os::workjet_project_kpis_contract::KpiState::Stale);
+    assert_eq!(state.items[0].result.reason_code.as_deref(), Some("source_binding_changed"));
+    lock.rollback()?;
+    Ok(())
+}

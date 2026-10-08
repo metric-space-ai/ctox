@@ -66,6 +66,12 @@ impl CodexThread {
         }
     }
 
+    /// Factory provenance only, before any submission. This grants no execution
+    /// permit and reconciles neither startup servers nor tool effects.
+    pub fn register_native_source_factory(&self) -> std::io::Result<()> {
+        self.codex.session.native_effects.register_source_factory()
+    }
+
     /// Register against this loaded Core Session, never a caller-supplied label.
     pub fn register_native_mcp_dispatch(
         &self,
