@@ -5,10 +5,10 @@ pub mod business_data_identity;
 pub mod handoff_wire;
 #[cfg(all(feature = "webrtc", unix))]
 pub(crate) mod route;
-#[path = "auth/speech_wire.rs"]
-pub mod speech_wire;
 #[path = "auth/session_handoff.rs"]
 pub mod session_handoff;
+#[path = "auth/speech_wire.rs"]
+pub mod speech_wire;
 #[cfg(test)]
 #[path = "auth_tests.rs"]
 mod tests;
