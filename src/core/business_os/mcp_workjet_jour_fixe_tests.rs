@@ -211,3 +211,16 @@ fn failed_metadata_commit_rolls_back_operation_receipt_and_cas() -> anyhow::Resu
     assert_eq!(call(root.path(),&trusted,WRITE_TOOL,draft())?["mutation"]["revision"],1);
     Ok(())
 }
+
+#[test]
+fn meeting_tool_descriptors_are_strict_root_objects_from_the_shared_dtos() {
+    let read = descriptor_schema(&[("read_comments","ReadMeetingRequest")]);
+    assert_eq!(read["type"],"object");
+    assert_eq!(read["additionalProperties"],false);
+    assert_eq!(read["required"],json!(["action","request"]));
+    assert_eq!(read["oneOf"][0]["properties"]["request"]["additionalProperties"],false);
+    let update = descriptor_schema(&[("propose_todos","ProposeTodosRequest")]);
+    let fields = &update["oneOf"][0]["properties"]["request"]["properties"]["items"]["items"]["properties"];
+    assert_eq!(fields["owner"]["anyOf"][0]["maxLength"],256);
+    assert_eq!(fields["due_at_ms"]["anyOf"][0]["minimum"],0);
+}

@@ -68,7 +68,9 @@ fn schema(spec: &Value, kind: &str) -> Value {
 }
 fn descriptor_schema(actions: &[(&str,&str)]) -> Value {
     let spec: Value = serde_json::from_str(include_str!("../rxdb/tests/fixtures/workjet-jour-fixe-v1.json")).expect("shared meeting fixture");
-    json!({"oneOf":actions.iter().map(|(action,kind)|json!({
+    json!({"type":"object","additionalProperties":false,"required":["action","request"],
+        "properties":{"action":{"type":"string"},"request":{"type":"object"}},
+        "oneOf":actions.iter().map(|(action,kind)|json!({
         "type":"object","additionalProperties":false,"required":["action","request"],
         "properties":{"action":{"type":"string","const":action},"request":schema(&spec,kind)}
     })).collect::<Vec<_>>()})
@@ -137,6 +139,9 @@ pub(super) fn execute(
 ) -> anyhow::Result<Value> {
     anyhow::ensure!(allows(tool,arguments),"unsupported supervisor meeting action");
     let trusted = trusted.context("native supervisor session unavailable")?;
+    anyhow::ensure!(context.trusted_role_source.as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
+        && trusted["workjet_supervisor_only"] == true,
+        "meeting tool requires the restricted native supervisor session");
     anyhow::ensure!(serde_json::to_vec(arguments)?.len() <= MAX_METADATA_BYTES,
         "meeting request exceeds native write budget");
     let writing = tool == WRITE_TOOL;
