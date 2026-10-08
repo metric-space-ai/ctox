@@ -30,8 +30,8 @@ pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(TOOL,"Read prompted KPIs and the registered recipe catalogue, or resolve one prompt by binding a matching recipe and rolling window_days (1..365). Restricted to the current native registered project Supervisor. Native receipts calculate values; no caller values, SQL, URLs or cross-project source. expected_revision and prompt_revision fence stale results. Stable operation_id replays once; definitions refresh hourly and before JourFix. Unsupported GitHub/connected sources remain missing_source, never estimated.",
       json!({"type":"object","additionalProperties":false,"required":["action","request"],
       "properties":{"action":{"type":"string","enum":["read","resolve"]},"request":{"type":"object"}},
-      "oneOf":[("read","ReadKpisRequest"),("resolve","BindKpiRequest")].iter().map(|(action,kind)| json!({"type":"object","additionalProperties":false,"required":["action","request"],
-        "properties":{"action":{"const":action,"type":"string"},"request":workjet_jour_fixe::schema(&fixture,kind)}})).collect::<Vec<_>>()}))
+      "oneOf":([("read","ReadKpisRequest"),("resolve","BindKpiRequest")].iter().map(|(action,kind)| json!({"type":"object","additionalProperties":false,"required":["action","request"],
+        "properties":{"action":{"const":action,"type":"string"},"request":workjet_jour_fixe::schema(&fixture,kind)}} )).collect::<Vec<_>>())}))
 }
 pub(super) fn execute(
     root: &Path,
