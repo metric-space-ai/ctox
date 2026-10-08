@@ -15,9 +15,10 @@ shared `ctox.workjet.jour_fixe.v1` fixture request types:
   review. This does not confirm goals or completion.
 - `ctox.workjet.jour_fixe.transcript.append`: the owner-text subset of
   `AppendTranscriptRequest`; live/review only, exact meeting and next sequence.
-  This path rejects supervisor identity, speech modality, audio, STT run/stream
-  and latency claims. Registered speech/supervisor production is a separate
-  owned integration; storing owner text is not proof of a supervisor reply.
+  The Browser text path rejects supervisor identity, speech modality, audio,
+  STT run/stream and latency claims. Native speech finals use the private
+  producer-receipt consumer described below; client JSON is never that proof.
+  Storing owner text is not proof of a supervisor reply.
 - `ctox.workjet.jour_fixe.comment.add`: `AddCommentRequest`; live/review only,
   an existing slide at the exact current deck revision, normalized pin and
   nonempty text. The native canonical Owner and server timestamp are stored;
@@ -42,9 +43,9 @@ state. Runtime metadata writes are bounded to 1 MiB. Preparation and a ready
 state are not audio-file authorization; playback still uses the authorized
 file/chunk path.
 
-Supervisor processing of comments, bound-supervisor deck/proposal publication, registered audio
-and speech, and confirmed to-dos becoming the Core supervisor goal remain
-separate required delivery work. Their declared command names fail terminally
+Supervisor processing of comments, bound-supervisor deck/proposal publication,
+authorized narration files and the Browser PCM transport, and confirmed to-dos
+becoming the Core supervisor goal remain separate required delivery work. Their declared command names fail terminally
 until their handlers land; they cannot fall through into recursive model tasks.
 This slice and isolated source regressions do
 not establish installed meeting acceptance.
@@ -66,7 +67,11 @@ project ownership is resolved from the stored meeting, never a caller assertion.
 The browser returns `{action, commandId, projectId, contract, mutation}` only
 after a completed receipt matches the command, project, whole nested request
 intent, operation, meeting and next revision. The compact `mutation` follows
-`MeetingMutationReceipt`. Identity/session/database replacement during the wait
+`MeetingMutationReceipt`. Every generated optional field accepts omission or
+JSON null; canonical native serialization omits `None`. Required fields and
+present objects remain strict. `supervisor_event_id` belongs to a stored
+Comment, not to the mutation receipt, and is absent until actual Supervisor
+processing exists. Identity/session/database replacement during the wait
 fails closed. Re-read the meeting after an uncertain result and reuse the same
 operation and intent when retrying; a new operation must use the current revision.
 The isolated Node and Chromium regressions exercise the actual control source
@@ -90,8 +95,11 @@ The helper opens only a read-only DEFERRED snapshot, creates/migrates nothing,
 and drops all database state before returning. It holds no issuer fence across
 network or audio operations and cannot be deserialized from a browser payload.
 
-Verified speech-final persistence and narration file receipts remain a separate
-integration. `execution::speech::TranscriptEvent` currently derives Deserialize
-and is not by itself proof of gateway provenance. The Models producer must expose
-a native-only verified receipt; do not pass deserialized client events to the
-Owner text append handler or invent speaker/model/audio evidence.
+The Models producer supplies native-only `VerifiedTranscriptFinal` values from
+the actual owned `TranscriptionStream`. `jour_fixe_speech::BoundTranscription`
+binds that stream to the fresh live meeting, stages its actual Final, and admits
+it through the ordinary replicated-peer command path. The private receipt is
+consumed atomically with the transcript mutation. Raw `TranscriptEvent` values
+derive Deserialize and are not provenance. No Browser open/append/events/finish
+audio API or authorized narration-file byte publication is implemented here;
+do not substitute client events or invent speaker/model/audio evidence.
