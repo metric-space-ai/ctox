@@ -13741,8 +13741,6 @@ async function workjetProjectControl(request = {}) {
     const allowedKeys = new Set(['action', 'commandId', 'projectId', 'operationId', 'meetingId', 'expectedRevision']);
     if (appending) allowedKeys.add('turn');
     if (localNarration) for (const key of ['slideId', 'fileId', 'generationId', 'deckRevision', 'audioSha256', 'narrationTextSha256']) allowedKeys.add(key);
-      }
-    }
     if (localCandidate) for (const key of ['requestId', 'deckRevision', 'text']) allowedKeys.add(key);
     if (revising) for (const key of ['proposalRevision', 'items']) allowedKeys.add(key);
     if (commenting) for (const key of ['commentId', 'slideId', 'deckRevision', 'x', 'y', 'text']) allowedKeys.add(key);
