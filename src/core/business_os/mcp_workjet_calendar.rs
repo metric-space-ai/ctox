@@ -28,6 +28,7 @@ pub(super) fn descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             "account_id":{"type":"string","minLength":1,"maxLength":256},"start_ms":{"type":"integer"},"end_ms":{"type":"integer"}}}))]
 }
 fn authorized_accounts(root: &Path, context: &McpChannelRequestContext) -> anyhow::Result<Vec<email_accounts::EmailAccountConfig>> {
+    enforce_managed_collection_read_scope(context, "communication_accounts")?;
     let conn = Connection::open_with_flags(store::business_os_store_path(root), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     anyhow::ensure!(super::super::store_policy::trusted_actor_policy_decision_with_conn(
@@ -63,7 +64,16 @@ fn wire_events(account_id: &str, page: &Value) -> anyhow::Result<Value> {
             "all_day":event["all_day"], "timezone":"UTC", "location":event["location"], "revision":revision
         }))
     }).collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(json!({"ok":true,"events":result,"truncated":page["truncated"],"synced_at_ms":store::now_ms()}))
+    bounded_receipt(json!({"ok":true,"events":result,"truncated":page["truncated"],"synced_at_ms":store::now_ms()}), "events")
+}
+fn bounded_receipt(mut value: Value, list: &str) -> anyhow::Result<Value> {
+    loop {
+        if let Ok(receipt) = mcp_tool_result(value.clone()) {
+            if serde_json::to_vec(&receipt)?.len() + 1024 <= MAX_MCP_RESPONSE_BYTES { return Ok(value); }
+        }
+        anyhow::ensure!(value[list].as_array_mut().and_then(|items| items.pop()).is_some(), "calendar receipt exceeds its budget");
+        value["truncated"] = json!(true);
+    }
 }
 pub(super) fn execute(root: &Path, context: &McpChannelRequestContext, tool: &str, args: &Value) -> anyhow::Result<Value> {
     anyhow::ensure!(serde_json::to_vec(args)?.len() <= 1024, "calendar request exceeds its budget");
@@ -71,11 +81,11 @@ pub(super) fn execute(root: &Path, context: &McpChannelRequestContext, tool: &st
         ACCOUNTS_TOOL => {
             let _: EmptyRequest = serde_json::from_value(args.clone())?;
             let accounts = authorized_accounts(root, context)?;
-            Ok(json!({"ok":true,"truncated":accounts.len() > 100,"accounts":accounts.iter().take(100).map(|account| json!({
+            bounded_receipt(json!({"ok":true,"truncated":accounts.len() > 100,"accounts":accounts.iter().take(100).map(|account| json!({
                 "id":account.address,"calendar_id":calendar_id(&account.address),
                 "label":if account.display_name.is_empty() { &account.address } else { &account.display_name },
                 "supported":supported(&account.provider)
-            })).collect::<Vec<_>>()}))
+            })).collect::<Vec<_>>()}), "accounts")
         }
         EVENTS_TOOL => {
             let request: EventsRequest = serde_json::from_value(args.clone())?;
@@ -109,7 +119,7 @@ mod tests {
                 email_accounts::EmailAccountConfig { address:"ownerless@example.test".into(), ..Default::default() },
             ])?)
         ]))?;
-        let gateway = json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp","surface":"workjet","actor":"owner","role":"admin","workspace":"tenant:instance","instance_id":"source-instance"});
+        let gateway = json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp","surface":"workjet","actor":"owner","role":"admin","workspace":"tenant:instance","instance_id":"source-instance","managed_policy":{"allow_reads":true,"allowed_collections":["communication_accounts"]}});
         let read = call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&gateway))?;
         assert_eq!(read["accounts"].as_array().unwrap().len(), 1);
         assert_eq!(read["accounts"][0]["id"], "mine@example.test");
