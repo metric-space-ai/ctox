@@ -673,6 +673,9 @@ mod tests {
             crew_binding: Some(serde_json::from_value(trusted["crew_binding"].clone())?),
             crew_work_key: Some("crew-context-plan".to_owned()),
             crew_only: false,
+            workjet_supervisor_only: false,
+            workjet_supervisor_epoch: None,
+            workjet_supervisor_lease: None,
             issued_at_ms: now_ms(),
             expires_at_ms: now_ms() + MCP_INTERNAL_SESSION_TTL_MS,
         };

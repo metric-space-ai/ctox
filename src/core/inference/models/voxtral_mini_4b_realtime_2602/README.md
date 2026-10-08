@@ -20,6 +20,11 @@ feature (CTOX binary: `--features local-speech-cuda`) builds the already vendore
 ggml CUDA kernels and uses CUDA for both weights and graph execution. It requires
 a Linux CUDA toolkit. GPU placement still comes from the supervisor's existing
 GPU admission plan; device 0 is relative to that admitted visible-device set.
+For CUDA, token lookup keeps one byte-identical host copy of the embedding
+weights because vendored CUDA GET_ROWS does not support their K-quantized type.
+The tied output projection retains the original CUDA weights. This adds one
+embedding table of host RAM and avoids transferring the entire table for each
+token; the initial fixture profile transferred 37.7 GB from device to host.
 An unavailable requested backend fails explicitly instead of silently using CPU.
 CMake builds respect Cargo's job count, capped at two compiler workers.
 BLAS is available

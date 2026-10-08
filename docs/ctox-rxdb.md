@@ -388,6 +388,20 @@ transport regressions. These source tests are not two-host acceptance; final
 composed execution, dirty/untracked Git fidelity and reconnect/resume remain
 required before describing the worktree transfer as usable.
 
+`ctox transfer pair` observes peer errors from before signaling join. If its
+20-second readiness window expires, the operator error reports signaling
+connection/join, peer and open-channel counts, and the last bounded error class.
+Messages, arbitrary error parameters, invite secrets and routing URLs are never
+included. An open data channel alone does not establish bidirectional readiness.
+
+Native transfer credential callbacks accept the initial protocol probe without
+a remote nonce, after the pinned native source identity has been verified.
+That probe carries the existing capability and no device signature. The source
+defers device admission and capability capture until its fresh nonce receives
+the required proof. Both initial pairing and reconnect retain their original
+account and signer checks for the probe as well as the challenged response;
+a supplied invalid nonce, missing signer, or changed authority still fails.
+
 ### Auth-assist command recovery
 
 `web_stack.auth_assist.request` represents an outstanding human login request.

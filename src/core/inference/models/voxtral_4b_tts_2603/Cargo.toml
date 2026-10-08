@@ -24,7 +24,11 @@ path = "src/synthesize.rs"
 [features]
 default = []
 cuda = []
+openblas = []
 metal = []
 wgsl = []
 
 [dependencies]
+
+[build-dependencies]
+pkg-config = "0.3"
