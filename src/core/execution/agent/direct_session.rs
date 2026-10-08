@@ -1102,8 +1102,9 @@ impl PersistentSession {
         Ok(())
     }
 
-    /// Create a fresh durable native guest session with actual pinned account
-    /// and policy-verified command provenance. No named legacy worker is reused.
+    /// Construct the actual native guest Core with pinned account and verified
+    /// command provenance. Protected targets load their original Core UUID from
+    /// the retained receiver; fresh guests start a new durable session.
     /// This creates no model turn and does not itself grant Raft/guest execution.
     #[cfg(unix)]
     pub(crate) fn start_native_guest_with_business_os_mcp(
@@ -1153,6 +1154,7 @@ impl PersistentSession {
             false,
             false,
             Some(account_authority),
+            Some((registry.clone(), guest_id.to_owned(), context.clone())),
         )?;
         let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
             root,
@@ -1366,6 +1368,8 @@ impl PersistentSession {
             read_only_sandbox,
             persistent_worker,
             None,
+            #[cfg(unix)]
+            None,
         )
     }
 
@@ -1382,6 +1386,11 @@ impl PersistentSession {
         read_only_sandbox: bool,
         persistent_worker: bool,
         native_guest_authorization: Option<Arc<NativeGuestProviderAuthorization>>,
+        #[cfg(unix)] native_guest_start: Option<(
+            Arc<crate::business_os::NativeGuestRegistry>,
+            String,
+            JsonValue,
+        )>,
     ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1403,6 +1412,8 @@ impl PersistentSession {
                 read_only_sandbox,
                 persistent_worker,
                 native_guest_authorization.as_deref(),
+                #[cfg(unix)]
+                native_guest_start.as_ref(),
             )
             .await
         });
@@ -1807,6 +1818,11 @@ impl PersistentSession {
         read_only_sandbox: bool,
         persistent_worker: bool,
         native_guest_authorization: Option<&NativeGuestProviderAuthorization>,
+        #[cfg(unix)] native_guest_start: Option<&(
+            Arc<crate::business_os::NativeGuestRegistry>,
+            String,
+            JsonValue,
+        )>,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -1861,6 +1877,15 @@ impl PersistentSession {
                 (explicit_api_source || engine::is_api_chat_model(&model))
                     .then(|| engine::default_api_provider_for_model(&model).to_string())
             });
+        #[cfg(unix)]
+        let cwd = if let Some((registry, guest, context)) = native_guest_start {
+            registry
+                .continuation_workspace(guest, context)?
+                .unwrap_or_else(|| cwd.to_path_buf())
+        } else {
+            cwd.to_path_buf()
+        };
+        #[cfg(not(unix))]
         let cwd = cwd.to_path_buf();
 
         let codex_home =
@@ -2098,6 +2123,15 @@ impl PersistentSession {
         {
             binding.with_current_contract(|contract| authorize(&model, contract))?;
         }
+        #[cfg(unix)]
+        let native_resume = match (native_guest_start, &native_checkpoint_binding) {
+            (Some((registry, guest, context)), Some(binding)) => {
+                binding.with_current_contract(|contract| {
+                    registry.prepare_core_resume(guest, context, &model, contract, &cwd)
+                })?
+            }
+            _ => None,
+        };
         let config = Arc::new(config);
         let session_source = SessionSource::Exec;
         let thread_manager = Arc::new(ThreadManager::new(
@@ -2109,11 +2143,11 @@ impl PersistentSession {
 
         let start_args = InProcessClientStartArgs {
             arg0_paths: direct_session_arg0_paths(),
-            config,
+            config: config.clone(),
             cli_overrides: cli_overrides.clone(),
             loader_overrides: Default::default(),
             cloud_requirements,
-            auth_manager: Some(auth_manager),
+            auth_manager: Some(auth_manager.clone()),
             thread_manager: Some(thread_manager.clone()),
             feedback: CodexFeedback::new(),
             config_warnings: vec![],
@@ -2148,7 +2182,29 @@ impl PersistentSession {
             persistent_thread_name: persistent_thread_name.as_deref(),
         };
         let timeouts = production_session_control_timeouts();
-        let thread_id = bind_session_thread(&client, &mut seq, &spec, &timeouts).await?;
+        #[cfg(unix)]
+        let restored_thread_id = if let Some(resume) = native_resume {
+            Some(
+                resume
+                    .load(
+                        &thread_manager,
+                        config.as_ref().clone(),
+                        auth_manager.clone(),
+                    )
+                    .await?
+                    .thread_id
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        #[cfg(not(unix))]
+        let restored_thread_id: Option<String> = None;
+        let thread_id = if let Some(original) = restored_thread_id {
+            original
+        } else {
+            bind_session_thread(&client, &mut seq, &spec, &timeouts).await?
+        };
         if let (Some(binding), Some(authorize)) =
             (&native_checkpoint_binding, native_guest_authorization)
         {
