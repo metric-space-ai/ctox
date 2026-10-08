@@ -222,7 +222,7 @@ limits retained metadata to 16 KiB per server and 32 servers per snapshot.
 The snapshot itself changes no effect ledger. The native factory separately
 waits for the actual bounded connection, verifies the native listener's signed
 original initialize result, fresh per-Core nonce, command-session hash, actual
-listener port and short expiry under current command/account/execution guards.
+listener address and port, and short expiry under current command/account/execution guards.
 Only before the first submission may it retire that generation's mcp-startup
 uncertainty. Refresh fences the previous generation before its first await;
 failed/repeated/stale receipts and every other uncertainty remain unresolved.

@@ -15,10 +15,23 @@ const TTL_MS: i64 = 60_000;
 struct Receipt {
     nonce: String,
     command_token_hash: String,
-    listener_port: u16,
+    listener_addr: SocketAddr,
     issued_at_ms: i64,
     expires_at_ms: i64,
     initialize: Value,
+}
+
+fn canonical_listener(listener: SocketAddr) -> SocketAddr {
+    if listener.ip().is_unspecified() {
+        let ip = if listener.is_ipv4() {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        } else {
+            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+        };
+        SocketAddr::new(ip, listener.port())
+    } else {
+        listener
+    }
 }
 
 fn validate_nonce(nonce: &str) -> anyhow::Result<()> {
@@ -52,7 +65,7 @@ pub(super) fn attest(
     let receipt = Receipt {
         nonce: nonce.to_owned(),
         command_token_hash: format!("{:x}", Sha256::digest(token.as_bytes())),
-        listener_port: listener.port(),
+        listener_addr: canonical_listener(listener),
         issued_at_ms: now,
         expires_at_ms: now.saturating_add(TTL_MS),
         initialize: initialize.clone(),
@@ -115,7 +128,8 @@ fn verify_proof(
     anyhow::ensure!(
         receipt.nonce == nonce
             && receipt.command_token_hash == format!("{:x}", Sha256::digest(token.as_bytes()))
-            && Some(receipt.listener_port) == url.port_or_known_default()
+            && Some(receipt.listener_addr.port()) == url.port_or_known_default()
+            && receipt.listener_addr.ip() == ip
             && receipt.issued_at_ms <= now
             && now < receipt.expires_at_ms
             && receipt.expires_at_ms == receipt.issued_at_ms.saturating_add(TTL_MS),
@@ -189,11 +203,11 @@ mod tests {
             "serverInfo":{"name":"ctox-business-os-mcp","version":env!("CARGO_PKG_VERSION")}
         })
     }
-    fn signed(secret: &[u8], nonce: &str) -> Value {
+    fn signed(secret: &[u8], nonce: &str, listener: SocketAddr) -> Value {
         let receipt = Receipt {
             nonce: nonce.into(),
             command_token_hash: format!("{:x}", Sha256::digest(b"command")),
-            listener_port: 8788,
+            listener_addr: canonical_listener(listener),
             issued_at_ms: 100,
             expires_at_ms: 100 + TTL_MS,
             initialize: response(),
@@ -321,7 +335,7 @@ mod tests {
     #[test]
     fn native_startup_receipt_binds_original_response_nonce_token_listener_and_expiry() {
         let nonce = uuid::Uuid::new_v4().to_string();
-        let value = signed(b"native-secret", &nonce);
+        let value = signed(b"native-secret", &nonce, "127.0.0.1:8788".parse().unwrap());
         assert!(verify_proof(
             b"native-secret",
             &nonce,
@@ -364,6 +378,13 @@ mod tests {
                 &b"native-secret"[..],
                 nonce.as_str(),
                 "command",
+                "http://127.0.0.2:8788/mcp",
+                101,
+            ),
+            (
+                &b"native-secret"[..],
+                nonce.as_str(),
+                "command",
                 "http://remote.invalid:8788/mcp",
                 101,
             ),
@@ -388,5 +409,35 @@ mod tests {
             101
         )
         .is_err());
+    }
+
+    #[test]
+    fn native_startup_wildcard_receipts_accept_only_the_configured_loopback_family() {
+        let nonce = uuid::Uuid::new_v4().to_string();
+        for (listener, endpoint, foreign) in [
+            (
+                "0.0.0.0:8788",
+                "http://127.0.0.1:8788/mcp",
+                "http://127.0.0.2:8788/mcp",
+            ),
+            (
+                "[::]:8788",
+                "http://[::1]:8788/mcp",
+                "http://127.0.0.1:8788/mcp",
+            ),
+            (
+                "127.0.0.2:8788",
+                "http://127.0.0.2:8788/mcp",
+                "http://127.0.0.1:8788/mcp",
+            ),
+        ] {
+            let value = signed(b"native-secret", &nonce, listener.parse().unwrap());
+            assert!(
+                verify_proof(b"native-secret", &nonce, "command", endpoint, &value, 101).is_ok()
+            );
+            assert!(
+                verify_proof(b"native-secret", &nonce, "command", foreign, &value, 101).is_err()
+            );
+        }
     }
 }
