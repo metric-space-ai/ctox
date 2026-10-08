@@ -21,6 +21,8 @@ mod source_journal;
 mod source_policy;
 #[path = "guest_registry_target_handoff.rs"]
 pub(crate) mod target_handoff;
+#[path = "guest_registry_target_import.rs"]
+pub(crate) mod target_import;
 #[path = "guest_registry_workspaces.rs"]
 pub(crate) mod workspaces;
 pub(crate) use source_journal::NativeSourceJournalReceipt;
@@ -36,6 +38,13 @@ struct NativeGuestAdmissionResolver {
     guest_id: String,
 }
 impl NativeGuestRegistry {
+    /// Borrow the actual live host authority for identifier-only checkpoint control.
+    pub(crate) fn checkpoint_authority(&self, root: &Path) -> Result<Arc<dyn ExecutionAuthority>> {
+        self.verify_runtime_root(root)?;
+        self.require_live_transport()?;
+        Ok(Arc::clone(&self.authority))
+    }
+
     pub(crate) fn admission(
         self: &Arc<Self>,
         guest_id: &str,
@@ -1195,6 +1204,11 @@ impl NativeGuestExecution {
     /// Receipt registration revalidates completed quorum effect; presence of an
     /// imported directory can never fabricate successful import completion.
     pub(crate) async fn register_import(&self, receipt: GuestImportReceipt) -> Result<()> {
+        self.validate_import_completion(&receipt).await?;
+        self.with_current(|entry, verify| self.register_import_current(entry, verify, receipt))
+    }
+
+    async fn validate_import_completion(&self, receipt: &GuestImportReceipt) -> Result<()> {
         let job = self
             .registry
             .authority
@@ -1214,54 +1228,60 @@ impl NativeGuestExecution {
                     && checkpoint.sequence == receipt.sequence),
             "guest import is not the protected checkpoint"
         );
-        self.with_current(|entry, verify| {
-            ensure!(
-                receipt.destination == entry.assignment.destination
-                    && receipt.spec == self.binding.spec
-                    && receipt.ownership == self.binding.ownership,
-                "foreign guest import receipt"
-            );
-            ensure!(
-                entry.imported.is_none(),
-                "guest import already registered; reconcile before replacing"
-            );
-            ensure!(
-                entry.publication == PublicationState::Published,
-                "native owner did not successfully publish this import"
-            );
-            ensure!(
-                receipt.imported_directory.parent()
-                    == Some(entry.assignment.destination.import_parent.as_path()),
-                "guest import outside native parent"
-            );
-            let effect_bytes = format!(
-                "{}\0{}\0{}\0{}\0{}\0{}\0{}",
-                receipt.spec.job_id,
-                receipt.destination.instance_id,
-                receipt.destination.guest_id,
-                receipt.destination.controller_id,
-                receipt.destination.controller_generation,
-                receipt.ownership.generation,
-                receipt.checkpoint_digest
-            );
-            // ref: src/core/sync/src/guest_restore.rs:287-304,324-329
-            let expected_effect =
-                format!("guest-import:{:x}", Sha256::digest(effect_bytes.as_bytes()));
-            ensure!(
-                receipt.effect_id == expected_effect
-                    && receipt.imported_directory
-                        == receipt.destination.import_parent.join(format!(
-                            "import-{:x}",
-                            Sha256::digest(receipt.effect_id.as_bytes())
-                        )),
-                "import receipt is not the exact native destination effect"
-            );
-            let imported_identity = private_directory(&receipt.imported_directory)?;
-            verify()?;
-            entry.imported_identity = Some(imported_identity);
-            entry.imported = Some(receipt);
-            Ok(())
-        })
+        Ok(())
+    }
+
+    fn register_import_current(
+        &self,
+        entry: &mut Registration,
+        verify: &dyn Fn() -> Result<()>,
+        receipt: GuestImportReceipt,
+    ) -> Result<()> {
+        ensure!(
+            receipt.destination == entry.assignment.destination
+                && receipt.spec == self.binding.spec
+                && receipt.ownership == self.binding.ownership,
+            "foreign guest import receipt"
+        );
+        ensure!(
+            entry.imported.is_none(),
+            "guest import already registered; reconcile before replacing"
+        );
+        ensure!(
+            entry.publication == PublicationState::Published,
+            "native owner did not successfully publish this import"
+        );
+        ensure!(
+            receipt.imported_directory.parent()
+                == Some(entry.assignment.destination.import_parent.as_path()),
+            "guest import outside native parent"
+        );
+        let effect_bytes = format!(
+            "{}\0{}\0{}\0{}\0{}\0{}\0{}",
+            receipt.spec.job_id,
+            receipt.destination.instance_id,
+            receipt.destination.guest_id,
+            receipt.destination.controller_id,
+            receipt.destination.controller_generation,
+            receipt.ownership.generation,
+            receipt.checkpoint_digest
+        );
+        // ref: src/core/sync/src/guest_restore.rs:287-304,324-329
+        let expected_effect = format!("guest-import:{:x}", Sha256::digest(effect_bytes.as_bytes()));
+        ensure!(
+            receipt.effect_id == expected_effect
+                && receipt.imported_directory
+                    == receipt.destination.import_parent.join(format!(
+                        "import-{:x}",
+                        Sha256::digest(receipt.effect_id.as_bytes())
+                    )),
+            "import receipt is not the exact native destination effect"
+        );
+        let imported_identity = private_directory(&receipt.imported_directory)?;
+        verify()?;
+        entry.imported_identity = Some(imported_identity);
+        entry.imported = Some(receipt);
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]

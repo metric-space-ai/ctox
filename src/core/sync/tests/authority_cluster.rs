@@ -1,4 +1,117 @@
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nonvoting_target_takes_over_without_authorizing_the_source_executor() {
+    use ctox_sync::authority::{
+        client::{take_over_checkpoint, ExecutionAuthority, WorkerAuthorityClient},
+        WorkerMembership,
+    };
+    tokio::time::timeout(Duration::from_secs(45), async {
+        let c = Cluster::new().await;
+        c.create().await;
+        let key = Arc::new(
+            SigningIdentity::from_pkcs8(&SigningIdentity::generate_pkcs8().unwrap()).unwrap(),
+        );
+        let member = WorkerMembership {
+            node_id: 4,
+            identity: key.public_identity(),
+            data_replica: true,
+            revoked: false,
+        };
+        assert!(matches!(
+            c.send(
+                1,
+                "admit-takeover-worker",
+                Command::AdmitWorker {
+                    worker: member.clone()
+                }
+            )
+            .await,
+            Receipt::WorkerApplied(_)
+        ));
+        let client = WorkerAuthorityClient::new(
+            member,
+            "test-scope".into(),
+            c.peers.clone(),
+            key.clone(),
+            Arc::new(LostCommittedReply {
+                bus: c.bus.clone(),
+                lose_next: std::sync::atomic::AtomicBool::new(false),
+            }),
+        )
+        .unwrap();
+        let original = ownership(1, 1);
+        assert_eq!(
+            client
+                .validate_ownership("job", &original)
+                .await
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let copies = vec![
+            checkpoint_fixture::copy_receipt(c.root.path(), 1, &c.keys[&1], &spec(), &original, 1),
+            checkpoint_fixture::copy_receipt(c.root.path(), 4, &key, &spec(), &original, 1),
+        ];
+        assert!(matches!(
+            c.send(
+                1,
+                "protect-worker-copy",
+                Command::ProtectCheckpoint {
+                    job_id: "job".into(),
+                    ownership: original.clone(),
+                    receipts: copies.clone(),
+                    disclosure: disclosure(&c, 1, "protect-worker-copy", &copies),
+                }
+            )
+            .await,
+            Receipt::Applied(_)
+        ));
+        let request = Request {
+            request_id: "target-worker-takeover".into(),
+            actor: 4,
+            command: Command::TakeOver {
+                job_id: "job".into(),
+                expected: original.clone(),
+                checkpoint_digest: copies[0].checkpoint_digest.clone(),
+                owner: 4,
+                resume: checkpoint_fixture::handoff_permit(
+                    &key,
+                    SessionHandoffPhase::Resume,
+                    &spec(),
+                    &copies[0].checkpoint_digest,
+                    copies[0].sequence,
+                    &ownership(1, 4),
+                    "target-worker-takeover",
+                ),
+            },
+        };
+        let current = take_over_checkpoint(&client, request.clone(), &spec(), 1)
+            .await
+            .unwrap();
+        assert_eq!(current.spec, spec());
+        assert_eq!(current.ownership, ownership(2, 4));
+        assert!(c.nodes[&1]
+            .validate_ownership("job", &original)
+            .await
+            .is_err());
+        // Reconnect with the same request cannot publish another fresh result.
+        assert!(take_over_checkpoint(&client, request, &spec(), 1)
+            .await
+            .is_err());
+        assert_eq!(
+            client
+                .validate_ownership("job", &ownership(2, 4))
+                .await
+                .unwrap(),
+            current
+        );
+        client.shutdown().await.unwrap();
+        c.close().await;
+    })
+    .await
+    .expect("actual worker takeover exceeded its bounded deadline");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn network_timing_confirms_delayed_quorum_but_denies_isolated_leader() {
     let timing = ctox_sync::authority::timing::AuthorityTiming::default();
     // An 80 ms RPC cannot satisfy the old implicit 50 ms read deadline.

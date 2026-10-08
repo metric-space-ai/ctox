@@ -19,6 +19,61 @@ mod source_journal_tests;
 #[path = "guest_registry_workspace_tests.rs"]
 mod workspace_tests;
 
+#[tokio::test]
+async fn native_guest_import_cannot_create_a_provider_from_enrolled_paths() {
+    use super::target_import::NativeGuestImportFence;
+    struct RejectFence;
+    impl NativeGuestImportFence for RejectFence {
+        fn with_current(
+            &self,
+            _: &Connection,
+            _: &ctox_sync::authority::auth::SigningIdentity,
+            _: &GuestRestoreDestination,
+            _: &mut dyn FnMut() -> io::Result<()>,
+        ) -> io::Result<()> {
+            panic!("an enrollment without an actual provider must never reach publication")
+        }
+    }
+    let (root, registry, assignment) = fixture();
+    let store =
+        ctox_sync::checkpoint::CheckpointStore::open(root.path().join("received"), 1024).unwrap();
+    let spec = ExecutionSpec {
+        job_id: "enrolled-job".into(),
+        session_id: uuid::Uuid::new_v4().to_string(),
+        scope_id: assignment.scope_id.clone(),
+        harness: ctox_core::native_harness_name().into(),
+        harness_version: ctox_core::native_harness_version().into(),
+        model_route_id: "openai".into(),
+        gateway_account_id: "fixture".into(),
+        model_id: "model".into(),
+        required_capabilities: BTreeSet::from(["fixture-requirement".into()]),
+    };
+    let result = registry
+        .import_received_checkpoint(
+            &assignment.destination.guest_id,
+            &spec,
+            &Ownership {
+                node_id: 2,
+                generation: 1,
+            },
+            &store,
+            &"aa".repeat(32),
+            &RejectFence,
+        )
+        .await;
+    assert!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("no retained provider"));
+    let entry = registry
+        .registration(&assignment.destination.guest_id)
+        .unwrap();
+    let entry = entry.lock().unwrap();
+    assert!(entry.imported.is_none());
+    assert!(entry.process_effect.is_none());
+    assert!(entry.publication == PublicationState::Virgin);
+}
 fn enrollment_control_fixture() -> (tempfile::TempDir, Arc<NativeGuestRegistry>, PathBuf, String) {
     let (root, registry, assignment) = fixture();
     // The component fixture's virgin enrollment has no provider/process. Start

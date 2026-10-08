@@ -14,7 +14,7 @@ struct StagedWorkspace {
     checkpoint_digest: String,
 }
 
-fn verify_manifest(
+pub(super) fn verify_manifest(
     manifest: &CheckpointManifest,
     request: &SessionHandoffGateRequest,
 ) -> anyhow::Result<()> {

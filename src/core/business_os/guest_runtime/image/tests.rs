@@ -111,8 +111,13 @@ async fn real_overlay_is_small_retained_and_used_by_the_owned_qemu_process() -> 
     let image = base(root.path())?;
     let existing = root.path().join("root.qcow2");
     std::fs::write(&existing, b"existing worker state")?;
-    let mut preparation =
-        QemuOverlayPreparation::start(Path::new("/usr/bin/qemu-img"), root.path(), &image)?;
+    let program = root.path().join("qemu-img-permissive-umask");
+    std::fs::write(
+        &program,
+        b"#!/bin/sh\numask 022\nexec /usr/bin/qemu-img \"$@\"\n",
+    )?;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))?;
+    let mut preparation = QemuOverlayPreparation::start(&program, root.path(), &image)?;
     let mut second =
         QemuOverlayPreparation::start(Path::new("/usr/bin/qemu-img"), root.path(), &image)?;
     let mut guest: Option<QemuProcess> = None;
@@ -120,6 +125,10 @@ async fn real_overlay_is_small_retained_and_used_by_the_owned_qemu_process() -> 
         let overlay = preparation.finish().await?;
         let other_overlay = second.finish().await?;
         ensure!(overlay != other_overlay, "workers shared a writable disk");
+        ensure!(
+            std::fs::metadata(&overlay)?.permissions().mode() & 0o777 == 0o600,
+            "permissive operator umask leaked the prepared guest disk"
+        );
         ensure!(
             std::fs::metadata(overlay.parent().unwrap())?
                 .permissions()
