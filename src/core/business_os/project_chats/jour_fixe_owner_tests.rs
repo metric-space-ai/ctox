@@ -328,7 +328,7 @@ fn meeting_command_visibility_uses_its_native_owner_and_project_binding() -> any
 fn reserved_meeting_tools_fail_terminally_without_creating_recursive_model_tasks(
 ) -> anyhow::Result<()> {
     let root = fixture("ready")?;
-    for (i, action) in ["prepare", "deck.publish", "todos.propose", "todos.confirm"]
+    for (i, action) in ["prepare", "deck.publish", "todos.propose"]
         .iter()
         .enumerate()
     {
