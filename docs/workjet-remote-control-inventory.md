@@ -11,6 +11,8 @@ Quellen:
 
 Die Beschreibungen beziehen sich auf registrierten Quellcode. Welche Werkzeuge ein Client tatsächlich aufrufen darf, hängt zusätzlich von der installierten nativen Revision, der Gateway-Klassifikation und seinem aktuellen Grant ab. Eine Registrierung beweist weder Start noch Ergebnisrückgabe im Produkt.
 
+Für den beauftragten Molecularity-Ablauf gelten feste Grenzen: Geheimnisse dürfen über diese MCP-Fernsteuerung nur als freigegebener Status erscheinen; Werte werden nicht gelesen, exportiert oder kopiert. Terminal-Input und Server-Updates sind aus diesem Auftrag ausgeschlossen. Ein zukünftiger Wrapper muss diese Grenzen nativ und am Gateway einhalten. Bestehende getrennt autorisierte Operator- und Secret-Store-Produktwege werden dadurch nicht erweitert oder aufgehoben.
+
 ## Kurzfassung
 
 - Registriert sind unter anderem `business_os.start_project_task`, `business_os.cancel_project_task`, `business_os.start_crew_execution`, `business_os.remote_worker_admission`, `business_os.workjet_worker_dispatch`, `business_os.jour_fixe_read`, `business_os.jour_fixe_update` und `business_os.project_kpi`. Eine feste Gesamtzahl wird hier nicht behauptet; weitere Werkzeuge werden auch aus Modulaktionen erzeugt.
@@ -163,10 +165,10 @@ Das vorhandene Credential-Metadatenwerkzeug ist enger: Es erlaubt nur exakte, im
 | Workjet-Funktion | Protokoll | Stand in CTOX |
 |---|---|---|
 | Dateien | siehe Abschnitt 2 | fehlt |
-| Terminal öffnen, schreiben, lesen, schließen | `terminal.open`, `write`, `attach`, `close`, … | fehlt. Entscheidung nötig: Agenten-Shell über MCP ist ein eigener Risikobereich |
+| Terminal öffnen, schreiben, lesen, schließen | `terminal.open`, `write`, `attach`, `close`, … | kein MCP-Wrapper in diesem Umfang; insbesondere Terminal-Input ist ausdrücklich ausgeschlossen |
 | Vorschau, Browser-Automation | `preview.*` (10), `previewAutomation.*` (3) | fehlt. Für Fernsteuerung optional, meist UI-only |
 
-Für einen zusätzlichen Terminal-Wrapper müssten Zielrechner, Lease, zulässige Aktionen und native Autorisierung ausdrücklich definiert werden. Dies ist ein Erweiterungsvorschlag und setzt bestehende autorisierte Produktwege nicht außer Kraft.
+Ein generischer Terminal-Wrapper gehört nicht zum Molecularity-Auftrag. Zulässige Laufstatus-, Aktivitäts- und Ergebnisabfragen bleiben typisierte, policy-gebundene Leseoperationen; sie erteilen keine Terminal-Schreibrechte.
 
 ### 13. Jour fixe, Kalender, Meetings, KPIs
 
@@ -214,7 +216,7 @@ Die ursprüngliche Bestandsaufnahme nennt außerdem diese internen Befehlsfamili
 7. **Kalender und Sprache**: abhängig von den parallelen Threads.
 8. **Übersicht**: Projektkacheln, KPI-Konfiguration, Jour-fixe-Listen.
 
-Git/PR, Terminal und Vorschau sind eigene Blöcke. Sie kommen nach Punkt 8, sofern Michael sie für Agenten will.
+Git/PR und Vorschau sind eigene Blöcke und benötigen einen gesonderten Auftrag. Terminal-Input und Server-Updates bleiben aus diesem Molecularity-Ablauf ausgeschlossen.
 
 ## Gestaltungsvorschlag für den MCP-Server
 
@@ -229,8 +231,10 @@ Git/PR, Terminal und Vorschau sind eigene Blöcke. Sie kommen nach Punkt 8, sofe
 
 Das Inventar setzt keine globalen Defaults oder zusätzlichen Vorab-Freigaben.
 Die aktuellen Entscheidungen des Auftraggebers und die native Policy gelten.
-Ein neuer Wrapper für Threads, Konten, Terminal oder Updates ist ein eigener
-Implementierungsschritt; dieses Dokument liefert dafür keine Rechte.
+Ein neuer Wrapper für Threads oder Konten ist ein eigener Implementierungsschritt;
+dieses Dokument liefert dafür keine Rechte. Geheimnisse bleiben auf freigegebenen
+Status beschränkt; Terminal-Input und Server-Updates sind keine nächsten Schritte
+dieses Auftrags.
 
 Für jede Ergänzung werden der konkrete Befehl, die Projekt-/Instanzidentität,
 Idempotenz, Ergebnis-/Abbruchbeobachtung und erlaubte sowie verweigerte Fälle

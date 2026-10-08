@@ -89,6 +89,7 @@ import {
   withStartupDeadline,
 } from './shared/startup-deadlines.js?v=20261008-jour-fixe-speech-ingress';
 import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-jour-fixe-speech-ingress';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261008-narration-read';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -13706,6 +13707,58 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
+  if (action === 'project.jour_fixe.narration.read') {
+    validateNarrationRead(request);
+    const requestSync = state.sync;
+    const instance = boundedWorkjetProjectText(
+      state.syncConfig?.instance_id || requestSync?.config?.instance_id, 'native instanceId', 256,
+    );
+    const deadline = Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+    const authority = {};
+    let bridge;
+    const assertCurrent = () => {
+      if (controller.signal.aborted || Date.now() >= deadline || state.session !== requestSession
+        || state.db !== requestDb || state.sync !== requestSync
+        || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance
+        || (authority.peer && (authority.peer.cancelled
+          || authority.peer.collection.demandLoader !== authority.loader
+          || authority.peer.collectionQueryGenerationToken?.(authority.peer.activeRemotePeerId) !== authority.generation))) {
+        throw Object.assign(new Error('Narration scope or connection changed.'), { code: 'NARRATION_SCOPE_CHANGED' });
+      }
+    };
+    try {
+      return await readJourFixeNarration(request, {
+        assertCurrent,
+        readMeeting: async scope => {
+          const response = await awaitWorkjetProjectListStep(workjetProjectControl({
+            action: 'project.jour_fixe.meeting.read', commandId: crypto.randomUUID(),
+            projectId: scope.projectId, meetingId: scope.meetingId,
+          }), deadline, 'meeting narration scope');
+          return response.meeting;
+        },
+        readMetadata: async fileId => {
+          bridge ??= await awaitWorkjetProjectListStep(
+            requestSync?.startCollection?.('desktop_files', { pin: false, forceDirect: true }), deadline, 'narration file bridge',
+          );
+          if (!bridge?.state && bridge?.ready) {
+            bridge = await awaitWorkjetProjectListStep(bridge.ready, deadline, 'narration file bridge readiness');
+          }
+          const rows = await readWorkjetProjectListRows(bridge, {
+            selector: { id: { $eq: fileId } }, limit: 1,
+          }, crypto.randomUUID(), deadline, controller.signal, authority);
+          return rows[0]?.toJSON?.() || rows[0] || null;
+        },
+        readRange: (fileId, range) => {
+          const loader = bridge?.state?.demandFileLoader;
+          if (!loader?.fetchFile) throw new Error('Narration file transport is unavailable.');
+          return awaitWorkjetProjectListStep(loader.fetchFile(fileId, { range }), deadline, 'narration bytes');
+        },
+      });
+    } finally { clearTimeout(timer); controller.abort(); }
+  }
   if (action === 'project.jour_fixe.speech') {
     const sync = state.sync;
     const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);

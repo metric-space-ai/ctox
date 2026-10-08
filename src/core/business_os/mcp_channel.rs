@@ -44,6 +44,8 @@ mod crew_execution;
 mod crew_plan;
 #[path = "mcp_metadata_read.rs"]
 mod metadata_read;
+#[path = "mcp_native_startup.rs"]
+pub(crate) mod native_startup;
 #[path = "mcp_project_crew.rs"]
 mod project_crew_request;
 #[path = "mcp_remote_worker.rs"]
@@ -55,6 +57,8 @@ pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_se
 mod workjet_jour_fixe;
 #[path = "mcp_workjet_kpis.rs"]
 mod workjet_kpis;
+#[path = "mcp_workjet_luma_config.rs"]
+mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
 mod workjet_narration;
 #[path = "mcp_workjet_worker_dispatch.rs"]
@@ -1090,10 +1094,14 @@ pub fn serve_mcp_channel(root: &Path, options: BusinessOsMcpServeOptions) -> any
         "MCP endpoint: http://{}/mcp (requires Authorization: Bearer <secret business_os/mcp_inbound_auth_token>)",
         options.addr
     );
+    let listener = server
+        .server_addr()
+        .to_ip()
+        .context("native MCP listener is not TCP")?;
     for request in server.incoming_requests() {
         let root = root.to_path_buf();
         std::thread::spawn(move || {
-            if let Err(error) = handle_mcp_http_request(&root, request) {
+            if let Err(error) = handle_mcp_http_request(&root, listener, request) {
                 eprintln!("[business-os-mcp] request failed: {error:#}");
             }
         });
@@ -1472,6 +1480,8 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         workjet_worker_dispatch::descriptor(),
         workjet_jour_fixe::read_descriptor(),
         workjet_jour_fixe::write_descriptor(),
+        workjet_luma_config::read_descriptor(),
+        workjet_luma_config::write_descriptor(),
         workjet_kpis::descriptor(),
         read_tool(
             "business_os.list_crew_executions",
@@ -3240,6 +3250,15 @@ fn call_tool_inner(
         remote_worker::TOOL => remote_worker::execute(root, &context, &arguments)?,
         workjet_worker_dispatch::TOOL => {
             workjet_worker_dispatch::execute(root, &context, &arguments, trusted_gateway_context)?
+        }
+        workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
+            workjet_luma_config::execute(
+                root,
+                &context,
+                tool_name,
+                &arguments,
+                trusted_gateway_context,
+            )?
         }
         workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => workjet_jour_fixe::execute(
             root,
@@ -5808,7 +5827,11 @@ fn support_agent_action_payload(
     payload
 }
 
-fn handle_mcp_http_request(root: &Path, mut request: Request) -> anyhow::Result<()> {
+fn handle_mcp_http_request(
+    root: &Path,
+    listener: std::net::SocketAddr,
+    mut request: Request,
+) -> anyhow::Result<()> {
     let method = request.method().clone();
     let path = request.url().split('?').next().unwrap_or("/").to_string();
     if method == Method::Options {
@@ -5839,7 +5862,13 @@ fn handle_mcp_http_request(root: &Path, mut request: Request) -> anyhow::Result<
                 )?;
                 return Ok(());
             }
-            let trusted_context = match request_internal_command_session_token(&request) {
+            let internal_token = request_internal_command_session_token(&request);
+            let native_nonce = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv(native_startup::HEADER))
+                .map(|header| header.value.as_str().to_owned());
+            let trusted_context = match internal_token.as_deref() {
                 Some(token) => match verify_internal_command_session_token(root, &token) {
                     Ok(context) => Some(context),
                     Err(error) => {
@@ -5862,8 +5891,17 @@ fn handle_mcp_http_request(root: &Path, mut request: Request) -> anyhow::Result<
                 respond_empty_status(request, 202)?;
                 return Ok(());
             }
-            let response =
+            let initializing = body["method"] == "initialize";
+            let mut response =
                 handle_json_rpc_with_gateway_context(root, body, trusted_context.as_ref());
+            if initializing {
+                if let Some(nonce) = native_nonce {
+                    let token = internal_token
+                        .as_deref()
+                        .context("native MCP initialization has no command session")?;
+                    native_startup::attest(root, listener, token, &nonce, &mut response["result"])?;
+                }
+            }
             respond_json_value(request, response)?;
         }
         _ => respond_json_status(
@@ -6916,6 +6954,7 @@ fn collection_requires_typed_mcp_tool(collection: &str) -> bool {
             | "business_consents"
             | "business_credentials"
             | "ctox_runtime_settings"
+            | "workjet_luma_configuration"
             | "ctox_task_approval_requests"
             | "kundenpipeline_entscheidungen"
             | "desktop_files"
@@ -7073,6 +7112,10 @@ fn enforce_argument_scope_policy(
         }
         workjet_kpis::TOOL | workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
             enforce_module_policy(root, "ctox")?;
+        }
+        workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
+            enforce_module_policy(root, "ctox")?;
+            enforce_collection_policy(root, "workjet_luma_configuration")?;
         }
         "business_os.create_app" => {
             if let Ok(module_id) = app_module_id_from_arguments(
@@ -7254,6 +7297,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "business_os.remote_worker_admission"
         | "business_os.workjet_worker_dispatch"
         | "business_os.jour_fixe_update"
+        | workjet_luma_config::WRITE_TOOL
         | workjet_kpis::TOOL
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"

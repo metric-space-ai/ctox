@@ -4,6 +4,7 @@ on:
   push:
     branches: [codex/workjet-computer-schema-migration]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
     paths:
       - '.github/workflows/workjet-computer-migration.yml'
@@ -23,6 +24,7 @@ concurrency:
 
 jobs:
   native:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:

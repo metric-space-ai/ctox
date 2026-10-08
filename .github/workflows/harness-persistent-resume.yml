@@ -2,6 +2,7 @@ name: Harness persistent resume
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "src/core/harness/**"
       - ".github/workflows/harness-persistent-resume.yml"
@@ -21,6 +22,7 @@ concurrency:
 
 jobs:
   persistent-resume:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-22.04
     timeout-minutes: 50
     env:
