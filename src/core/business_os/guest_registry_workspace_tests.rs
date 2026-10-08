@@ -195,3 +195,47 @@ fn native_workspace_lease_excludes_another_native_writer_until_stopped_capture_r
         .unwrap()
         .is_some());
 }
+
+#[test]
+fn native_core_constructor_resolves_the_assigned_source_workspace() {
+    let (root, registry, assignment) = fixture();
+    let (_worker, facts, _token) = worker_store(root.path());
+    let context = facts.command_provenance.as_ref().unwrap();
+    let guest = &assignment.destination.guest_id;
+    assert_eq!(
+        registry.continuation_workspace(guest, context).unwrap(),
+        None
+    );
+    let workspace = grant_workspace(root.path(), &assignment);
+    assert_eq!(
+        registry.continuation_workspace(guest, context).unwrap(),
+        Some(workspace.clone())
+    );
+    assert_ne!(workspace, root.path());
+    let mut foreign = context.clone();
+    foreign["actor"] = json!("foreign");
+    assert!(registry.continuation_workspace(guest, &foreign).is_err());
+    let mut expired = context.clone();
+    expired["expires_at_ms"] = json!(1);
+    assert!(registry.continuation_workspace(guest, &expired).is_err());
+    ws::revoke_workspace_assignment(root.path(), "owner", "profile", "project").unwrap();
+    assert!(registry.continuation_workspace(guest, context).is_err());
+}
+
+#[test]
+fn native_core_constructor_rejects_a_replaced_source_workspace() {
+    let (root, registry, assignment) = fixture();
+    let (_worker, facts, _token) = worker_store(root.path());
+    let workspace = grant_workspace(root.path(), &assignment);
+    let context = facts.command_provenance.as_ref().unwrap();
+    let guest = &assignment.destination.guest_id;
+    assert!(registry
+        .continuation_workspace(guest, context)
+        .unwrap()
+        .is_some());
+    std::fs::rename(&workspace, root.path().join("original-workspace")).unwrap();
+    std::fs::create_dir(&workspace).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(registry.continuation_workspace(guest, context).is_err());
+}

@@ -210,12 +210,34 @@ fn store_alloc(mode: AllocMode) {
     LAST_ALLOC.store(n, Ordering::SeqCst);
 }
 
+/// One positioned `pwrite` (unix). Windows `seek_write` also moves the file
+/// cursor; every caller in this crate does positional IO only, so that is unobservable.
+#[cfg(unix)]
+fn pwrite_once(f: &std::fs::File, data: &[u8], off: u64) -> std::io::Result<usize> {
+    rustix::io::retry_on_intr(|| rustix::io::pwrite(f, data, off)).map_err(std::io::Error::from)
+}
+
+#[cfg(windows)]
+fn pwrite_once(f: &std::fs::File, data: &[u8], off: u64) -> std::io::Result<usize> {
+    std::os::windows::fs::FileExt::seek_write(f, data, off)
+}
+
+/// One positioned `pread` (unix); Windows `seek_read`, see [`pwrite_once`].
+#[cfg(unix)]
+pub(crate) fn pread_once(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
+    rustix::io::retry_on_intr(|| rustix::io::pread(f, &mut *buf, off)).map_err(std::io::Error::from)
+}
+
+#[cfg(windows)]
+pub(crate) fn pread_once(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
+    std::os::windows::fs::FileExt::seek_read(f, buf, off)
+}
+
 /// C++ `DirectDiskWriter` / `DefaultDiskWriter`: positioned `pwrite` on the
 /// download thread (no per-chunk copy / `spawn_blocking`), no per-chunk `fflush`.
 fn pwrite_all(f: &std::fs::File, mut data: &[u8], mut off: u64) -> std::io::Result<()> {
     while !data.is_empty() {
-        let n = rustix::io::retry_on_intr(|| rustix::io::pwrite(f, data, off))
-            .map_err(std::io::Error::from)?;
+        let n = pwrite_once(f, data, off)?;
         if n == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::WriteZero,
@@ -231,8 +253,7 @@ fn pwrite_all(f: &std::fs::File, mut data: &[u8], mut off: u64) -> std::io::Resu
 fn pread_all(f: &std::fs::File, buf: &mut [u8], mut off: u64) -> std::io::Result<usize> {
     let mut n = 0usize;
     while n < buf.len() {
-        let r = rustix::io::retry_on_intr(|| rustix::io::pread(f, &mut buf[n..], off))
-            .map_err(std::io::Error::from)?;
+        let r = pread_once(f, &mut buf[n..], off)?;
         if r == 0 {
             break;
         }
@@ -566,6 +587,7 @@ impl FileStorage {
                 let f = self.open_held().await?;
                 if self.total > 0 {
                     // C++ FileAllocationIterator: posix_fallocate on dest fd.
+                    #[cfg(unix)]
                     rustix::fs::fallocate(
                         &*f,
                         rustix::fs::FallocateFlags::empty(),
@@ -573,6 +595,11 @@ impl FileStorage {
                         self.total,
                     )
                     .map_err(|e| Error::Other(format!("posix_fallocate: {e}")))?;
+                    // No posix_fallocate on Windows: extending the length makes NTFS
+                    // allocate the clusters, which is what falloc is for.
+                    #[cfg(windows)]
+                    f.set_len(self.total)
+                        .map_err(|e| Error::Other(format!("falloc set_len: {e}")))?;
                     LAST_SYNC_FALLOC.fetch_add(1, Ordering::Relaxed);
                 }
                 store_alloc(AllocMode::Falloc);

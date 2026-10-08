@@ -9,6 +9,8 @@
 pub(crate) mod accounts;
 #[path = "guest_registry_command.rs"]
 mod command;
+#[path = "guest_registry_core_resume.rs"]
+pub(crate) mod core_resume;
 #[path = "guest_registry_machine_config.rs"]
 mod machine_config;
 #[cfg(target_os = "linux")]
@@ -19,9 +21,14 @@ mod protected_import;
 #[cfg(target_os = "linux")]
 #[path = "guest_registry_source_boot.rs"]
 mod source_boot;
+#[path = "guest_registry_target_admission.rs"]
+mod target_admission;
 #[cfg(target_os = "linux")]
 #[path = "guest_registry_target_machine.rs"]
 mod target_machine;
+#[cfg(target_os = "linux")]
+#[path = "guest_registry_target_turn.rs"]
+mod target_turn;
 pub(crate) use machine_config::NativeGuestMachineConfiguration;
 #[path = "guest_registry_source_checkpoint.rs"]
 mod source_checkpoint;
@@ -70,15 +77,10 @@ impl NativeGuestRegistry {
     pub(crate) fn admission(
         self: &Arc<Self>,
         guest_id: &str,
-    ) -> Result<Arc<crate::channels::NativeGuestAdmission>> {
-        ensure!(
-            self.registration(guest_id)?
-                .lock()
-                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
-                .restoration
-                .is_none(),
-            "protected target guest requires existing-job continuation, never fresh Create"
-        );
+    ) -> Result<Arc<dyn crate::channels::NativeProviderAdmission>> {
+        if let Some(target) = target_admission::TargetAdmission::for_guest(self, guest_id)? {
+            return Ok(Arc::new(target));
+        }
         let owner = Arc::new(NativeGuestAdmissionResolver {
             registry: Arc::clone(self),
             guest_id: guest_id.into(),
@@ -341,6 +343,11 @@ struct ExecutionBinding {
 
 struct Registration {
     restoration: Option<target_enrollment::ProtectedEnrollment>,
+    core_owner: Option<Arc<dyn core_resume::NativeGuestCoreOwner>>,
+    core_start_attempted: bool,
+    core_ready: bool,
+    core_journal: Option<PathBuf>,
+    core_journal_identity: Option<FileIdentity>,
     workspace_lease: Option<std::fs::File>,
     assignment: NativeGuestAssignment,
     import_identity: FileIdentity,
@@ -771,6 +778,11 @@ impl NativeGuestRegistry {
             assignment.destination.guest_id.clone(),
             Arc::new(Mutex::new(Registration {
                 restoration,
+                core_owner: None,
+                core_start_attempted: false,
+                core_ready: false,
+                core_journal: None,
+                core_journal_identity: None,
                 workspace_lease: None,
                 assignment: assignment.clone(),
                 import_identity,
@@ -892,8 +904,12 @@ impl NativeGuestRegistry {
                 serde_json::from_str::<Ownership>(&ownership_json)?,
             ))
         })?;
-        self.bind_execution(provider, guest_id, spec, ownership)
-            .await
+        if let Some(target) = target_admission::TargetAdmission::for_guest(self, guest_id)? {
+            target.bind_original(provider, spec, ownership).await
+        } else {
+            self.bind_execution(provider, guest_id, spec, ownership)
+                .await
+        }
     }
 
     /// Bind only the actual quorum result, then revalidate native destination and
@@ -1285,10 +1301,17 @@ impl NativeGuestExecution {
     ) -> Result<T> {
         self.registry
             .verify_runtime_root(self.provider.runtime_root())?;
-        self.provider
-            .with_live_provider_transaction(|worker_tx, facts, _| {
-                self.with_held_worker(worker_tx, facts, apply)
-            })
+        self.with_native_issuer(|identity| {
+            self.provider
+                .with_live_provider_transaction(|worker_tx, facts, _| {
+                    self.with_held_worker_policy_guarded(
+                        worker_tx,
+                        facts,
+                        identity,
+                        |entry, verify, _| apply(entry, verify),
+                    )
+                })
+        })
     }
 
     /// Read current capture authority on the exact retained producer record.
@@ -1302,10 +1325,12 @@ impl NativeGuestExecution {
             source.matches_provider(&self.provider),
             "capture belongs to another native provider owner"
         );
-        source.with_current_capture_transaction(|worker_tx, facts| {
-            self.with_held_worker(worker_tx, facts, |_, verify| {
-                verify()?;
-                capture(&self.binding.spec, &self.binding.ownership)
+        self.with_native_issuer(|identity| {
+            source.with_current_capture_transaction(|worker_tx, facts| {
+                self.with_held_worker_policy_guarded(worker_tx, facts, identity, |_, verify, _| {
+                    verify()?;
+                    capture(&self.binding.spec, &self.binding.ownership)
+                })
             })
         })
     }
@@ -1325,6 +1350,39 @@ impl NativeGuestExecution {
         &self,
         worker_tx: &Connection,
         facts: &NativeProviderFacts,
+        apply: impl FnOnce(&mut Registration, &dyn Fn() -> Result<()>, &Connection) -> Result<T>,
+    ) -> Result<T> {
+        self.with_held_worker_policy_guarded(worker_tx, facts, None, apply)
+    }
+
+    /// Target callers acquire the current native issuer BEFORE the worker.
+    /// A held worker callback must supply that actual borrow, never re-enter secrets.
+    fn with_native_issuer<T>(
+        &self,
+        apply: impl FnOnce(Option<&ctox_sync::authority::auth::SigningIdentity>) -> Result<T>,
+    ) -> Result<T> {
+        let protected = self
+            .registry
+            .registration(&self.guest_id)?
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
+            .restoration
+            .is_some();
+        if protected {
+            crate::sync_host::with_current_signing_identity(
+                self.provider.runtime_root(),
+                |identity| apply(Some(identity)),
+            )
+        } else {
+            apply(None)
+        }
+    }
+
+    fn with_held_worker_policy_guarded<T>(
+        &self,
+        worker_tx: &Connection,
+        facts: &NativeProviderFacts,
+        identity: Option<&ctox_sync::authority::auth::SigningIdentity>,
         apply: impl FnOnce(&mut Registration, &dyn Fn() -> Result<()>, &Connection) -> Result<T>,
     ) -> Result<T> {
         self.registry
@@ -1398,7 +1456,22 @@ impl NativeGuestExecution {
                 verify_worker_current(worker_tx, facts)?;
                 validate_provider(worker_tx, tx, facts, &destination)
             };
-            let result = apply(&mut entry, &verify, tx)?;
+            let result = if entry.restoration.is_some() {
+                target_admission::TargetAdmission::with_fenced_entry(
+                    &self.registry,
+                    tx,
+                    identity,
+                    &mut entry,
+                    |entry| {
+                        verify()?;
+                        let result = apply(entry, &verify, tx)?;
+                        verify()?;
+                        Ok(result)
+                    },
+                )?
+            } else {
+                apply(&mut entry, &verify, tx)?
+            };
             if let Err(error) = verify() {
                 // A late lease/authority failure must retire current pixels
                 // before another native command can acquire this controller.

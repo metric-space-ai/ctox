@@ -132,6 +132,24 @@ pub struct VerifiedSpeechOutput {
     output: SpeechOutput,
 }
 
+#[cfg(test)]
+pub(crate) fn verified_fixture_output(text: &str, audio: Vec<u8>) -> VerifiedSpeechOutput {
+    // Unit-test producer seam only. No constructor exists in a production build;
+    // these bytes prove custody/fencing, not installed TTS or provider latency.
+    VerifiedSpeechOutput {
+        run_id: Uuid::new_v4().to_string(),
+        text_sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+        audio_sha256: format!("{:x}", Sha256::digest(&audio)),
+        output: SpeechOutput {
+            audio,
+            format: SpeechAudioFormat::Wav,
+            model: "fixture-native-producer".into(),
+            input_characters: text.chars().count(),
+            elapsed_ms: 12,
+        },
+    }
+}
+
 impl VerifiedSpeechOutput {
     pub fn run_id(&self) -> &str {
         &self.run_id

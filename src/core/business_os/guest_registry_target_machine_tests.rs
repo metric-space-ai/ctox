@@ -101,7 +101,8 @@ fn cancelled_target_attempt_cannot_load_activate_or_observe_readiness() {
     let machine = Arc::new(TargetMachine {
         retired,
         state: Mutex::new(State {
-            io: MachineIo::new().unwrap(),
+            io: Arc::new(MachineIo::new().unwrap()),
+            ready: None,
             attempted: false,
             staged: None,
             desktop: None,
@@ -190,7 +191,8 @@ async fn cancellation_on_host_runtime_reaps_the_exact_retained_child() -> Result
     let machine = Arc::new(TargetMachine {
         retired,
         state: Mutex::new(State {
-            io,
+            io: Arc::new(io),
+            ready: None,
             attempted: true,
             staged: None,
             desktop: Some(desktop),

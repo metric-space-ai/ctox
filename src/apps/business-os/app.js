@@ -1,21 +1,22 @@
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-jour-supervisor-tools';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v2-jour-supervisor-tools';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v2-jour-supervisor-tools';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createAppActions } from './shared/app-actions.js?v=20261008-shell-v2-jour-supervisor-tools';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261008-jour-fixe-speech-ingress';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-jour-fixe-speech-ingress';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-jour-fixe-speech-ingress';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-jour-fixe-speech-ingress';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-jour-fixe-speech-ingress';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-jour-fixe-speech-ingress';
+import { CtoxResizer } from './shared/resizer.js?v=20261008-jour-fixe-speech-ingress';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-jour-fixe-speech-ingress';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-jour-fixe-speech-ingress';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-jour-fixe-speech-ingress';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-jour-fixe-speech-ingress';
+import { createAppActions } from './shared/app-actions.js?v=20261008-jour-fixe-speech-ingress';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/app-lifecycle.js?v=20261008-jour-fixe-speech-ingress';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -24,20 +25,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/permissions.js?v=20261008-jour-fixe-speech-ingress';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/branding.js?v=20261008-jour-fixe-speech-ingress';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-jour-fixe-speech-ingress';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/presentation.js?v=20261008-jour-fixe-speech-ingress';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -48,9 +49,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createDocumentsFacade } from './shared/documents.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/shell-permissions-ui.js?v=20261008-jour-fixe-speech-ingress';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-jour-fixe-speech-ingress';
+import { createDocumentsFacade } from './shared/documents.js?v=20261008-jour-fixe-speech-ingress';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -58,16 +59,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/maintenance-state.js?v=20261008-jour-fixe-speech-ingress';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/workspace-session.js?v=20261008-jour-fixe-speech-ingress';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/taskbar-pins.js?v=20261008-jour-fixe-speech-ingress';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -75,10 +76,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-shell-v2-jour-supervisor-tools';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-jour-fixe-speech-ingress';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-shell-v2-jour-supervisor-tools';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-jour-fixe-speech-ingress';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-jour-fixe-speech-ingress';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -86,8 +87,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/startup-deadlines.js?v=20261008-jour-fixe-speech-ingress';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-jour-fixe-speech-ingress';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -105,7 +106,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261008-shell-v2-jour-supervisor-tools';
+const APP_BUILD = '20261008-jour-fixe-speech-ingress';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -5524,7 +5525,7 @@ function renderModuleTab(target, options = {}) {
     <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
     ${target.id === 'threads' ? '<span class="module-tab-count" data-threads-attention hidden></span>' : ''}
-    ${lifecycle?.updateAvailable ? `<span class="module-tab-update" data-app-lifecycle-badge="${escapeHtml(target.id)}" title="${escapeHtml(lifecycle.title)}" aria-label="Update verfügbar"></span>` : ''}
+    ${lifecycle?.updateAvailable || lifecycle?.state === 'preview' ? `<span class="module-tab-update" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${lifecycle.updateAvailable ? 'Update verfügbar' : escapeHtml(lifecycle.text)}"></span>` : ''}
     ${status ? `<span class="module-tab-state">${escapeHtml(status)}</span>` : ''}
   `;
   button.setAttribute('aria-current', state.activeModule?.id === target.id ? 'page' : 'false');
@@ -13705,6 +13706,13 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
+  if (action === 'project.jour_fixe.speech') {
+    const sync = state.sync;
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
+    const result = await requestJourFixeSpeech(sync, instance, request);
+    if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync) throw new Error('Speech scope changed.');
+    return result;
+  }
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
@@ -13712,7 +13720,8 @@ async function workjetProjectControl(request = {}) {
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
-    'project.jour_fixe.transcript.append', 'project.jour_fixe.todos.revise',
+    'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
+    'project.jour_fixe.transcript.local_candidate', 'project.jour_fixe.todos.revise', 'project.jour_fixe.todos.confirm',
     'project.jour_fixe.comment.add'];
   const acquisition = supervisorActions.includes(action)
     ? requireWorkjetSupervisorDataPlane() : requireWorkjetProjectDataPlane();
@@ -13724,16 +13733,27 @@ async function workjetProjectControl(request = {}) {
     'project.jour_fixe.meeting.start': 'MeetingTransitionRequest',
     'project.jour_fixe.meeting.end': 'MeetingTransitionRequest',
     'project.jour_fixe.transcript.append': 'AppendTranscriptRequest',
+    'project.jour_fixe.narration.local_publish': 'LocalNarrationRequest',
+    'project.jour_fixe.transcript.local_candidate': 'LocalTranscriptCandidateRequest',
     'project.jour_fixe.todos.revise': 'ProposeTodosRequest',
+    'project.jour_fixe.todos.confirm': 'ConfirmTodosRequest',
     'project.jour_fixe.comment.add': 'AddCommentRequest',
   };
   if (Object.hasOwn(meetingMutationTypes, action)) {
     const appending = action === 'project.jour_fixe.transcript.append';
+    const localNarration = action === 'project.jour_fixe.narration.local_publish';
+    const localCandidate = action === 'project.jour_fixe.transcript.local_candidate';
+    const nativeInstanceId = localNarration || localCandidate
+      ? boundedWorkjetProjectText(state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', localNarration ? 128 : 256) : null;
     const revising = action === 'project.jour_fixe.todos.revise';
+    const confirming = action === 'project.jour_fixe.todos.confirm';
     const commenting = action === 'project.jour_fixe.comment.add';
     const allowedKeys = new Set(['action', 'commandId', 'projectId', 'operationId', 'meetingId', 'expectedRevision']);
     if (appending) allowedKeys.add('turn');
+    if (localNarration) for (const key of ['slideId', 'fileId', 'generationId', 'deckRevision', 'audioSha256', 'narrationTextSha256']) allowedKeys.add(key);
+    if (localCandidate) for (const key of ['requestId', 'deckRevision', 'text']) allowedKeys.add(key);
     if (revising) for (const key of ['proposalRevision', 'items']) allowedKeys.add(key);
+    if (confirming) for (const key of ['proposalRevision', 'expectedGoalRevision']) allowedKeys.add(key);
     if (commenting) for (const key of ['commentId', 'slideId', 'deckRevision', 'x', 'y', 'text']) allowedKeys.add(key);
     assertWorkjetProjectPayloadKeys(request, allowedKeys);
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
@@ -13747,19 +13767,38 @@ async function workjetProjectControl(request = {}) {
       meeting_id: boundedWorkjetProjectText(request.meetingId, 'meetingId', 128),
       expected_revision: request.expectedRevision,
       ...(appending ? { turn: request.turn } : {}),
+      ...(localNarration ? { instance_id: nativeInstanceId, project_id: projectId, slide_id: request.slideId,
+        file_id: request.fileId, generation_id: request.generationId, deck_revision: request.deckRevision,
+        audio_sha256: request.audioSha256, narration_text_sha256: request.narrationTextSha256 } : {}),
+      ...(localCandidate ? { request_id: request.requestId, instance_id: nativeInstanceId,
+        project_id: projectId, deck_revision: request.deckRevision, text: request.text } : {}),
       ...(revising ? { proposal_revision: request.proposalRevision, items: request.items } : {}),
+      ...(confirming ? { proposal_revision: request.proposalRevision, expected_goal_revision: request.expectedGoalRevision } : {}),
       ...(commenting ? { comment_id: request.commentId, slide_id: request.slideId,
         deck_revision: request.deckRevision, x: request.x, y: request.y, text: request.text } : {}),
     };
     const validation = validateJourFixeValue(meetingMutationTypes[action], payload);
     if (validation.ok !== true) throw new TypeError(validation.error);
+    if (confirming && (!Number.isSafeInteger(payload.expected_goal_revision)
+      || payload.expected_goal_revision < 0 || payload.expected_goal_revision === Number.MAX_SAFE_INTEGER)) {
+      throw new TypeError('Workjet confirmation requires a safe next goal revision.');
+    }
     if (appending && (payload.turn.meeting_id !== payload.meeting_id
       || payload.turn.speaker !== 'owner' || payload.turn.modality !== 'text'
       || ['audio', 'source_run_id', 'stream_id', 'sentence_end_latency_ms'].some(key => payload.turn[key] != null)
       || payload.turn.sequence < 1 || payload.turn.ended_at_ms < payload.turn.started_at_ms)) {
       throw new TypeError('Owner text cannot claim another speaker or speech provenance.');
     }
+    if (localNarration && ![payload.audio_sha256, payload.narration_text_sha256].every(hash => /^[a-f0-9]{64}$/.test(hash))) {
+      throw new TypeError('Local narration requires exact lowercase SHA256 hashes.');
+    }
+    if (localCandidate && (!payload.text.trim() || new TextEncoder().encode(payload.text).length > 4096)) {
+      throw new TypeError('Local transcript candidate exceeds the 4096-byte UTF-8 text budget.');
+    }
     const expectedPayload = JSON.parse(JSON.stringify(payload));
+    const candidateTextHash = localCandidate
+      ? [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(expectedPayload.text)))]
+        .map(byte => byte.toString(16).padStart(2, '0')).join('') : null;
     const sameValue = (left, right) => {
       if (left === right) return true;
       if (!left || !right || typeof left !== 'object' || typeof right !== 'object'
@@ -13770,7 +13809,8 @@ async function workjetProjectControl(request = {}) {
     };
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
-        || actorContext(state.session).id !== ownerUserId) {
+        || actorContext(state.session).id !== ownerUserId
+        || ((localNarration || localCandidate) && (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== nativeInstanceId)) {
         throw new Error('Workjet project session changed before the meeting mutation was delivered.');
       }
     };
@@ -13791,18 +13831,66 @@ async function workjetProjectControl(request = {}) {
     const mutation = receipt.result.mutation;
     const resultValidation = validateJourFixeValue('MeetingMutationReceipt', mutation);
     if (resultValidation.ok !== true) throw new TypeError(resultValidation.error);
-    const expectedState = action === 'project.jour_fixe.meeting.start' ? 'live'
+    const confirmedGoal = confirming ? receipt.result.goal : null;
+    if (confirming) {
+      const goalValidation = validateJourFixeValue('GoalRef', confirmedGoal);
+      if (goalValidation.ok !== true) throw new TypeError(goalValidation.error);
+      if (!confirmedGoal.goal_id.trim() || confirmedGoal.revision !== expectedPayload.expected_goal_revision + 1) {
+        throw new Error('Workjet confirmation did not return the requested next goal revision.');
+      }
+    }
+    const expectedState = confirming ? 'confirmed' : action === 'project.jour_fixe.meeting.start' || localCandidate ? 'live'
       : action === 'project.jour_fixe.meeting.end' || revising ? 'review' : null;
     if (mutation.operation_id !== expectedPayload.operation_id || mutation.meeting_id !== expectedPayload.meeting_id
       || mutation.project_id !== projectId || mutation.revision !== expectedPayload.expected_revision + 1
-      || (expectedState ? mutation.state !== expectedState : !['live', 'review'].includes(mutation.state))
-      || (appending ? mutation.changed_id !== expectedPayload.turn.id
+      || (expectedState ? mutation.state !== expectedState : !(localNarration ? ['preparing', 'ready'] : ['live', 'review']).includes(mutation.state))
+      || (confirming ? mutation.changed_id !== confirmedGoal.goal_id
+        : localNarration ? mutation.changed_id !== expectedPayload.slide_id
+        : localCandidate ? mutation.changed_id !== receipt.result.local_candidate?.turn_id
+        : appending ? mutation.changed_id !== expectedPayload.turn.id
         : commenting ? mutation.changed_id !== expectedPayload.comment_id : mutation.changed_id != null)
-      || (revising ? mutation.todos_revision !== expectedPayload.proposal_revision : mutation.todos_revision != null)) {
+      || (revising || confirming ? mutation.todos_revision !== expectedPayload.proposal_revision : mutation.todos_revision != null)) {
       throw new Error('Workjet meeting mutation receipt does not confirm the requested operation.');
     }
+    if (localNarration) {
+      const stored = receipt.result.local_narration;
+      const checked = validateJourFixeValue('LocalNarrationReceipt', stored);
+      if (checked.ok !== true) throw new TypeError(checked.error);
+      const audio = stored.audio;
+      if (stored.operation_id !== expectedPayload.operation_id || stored.instance_id !== nativeInstanceId
+        || stored.project_id !== projectId || stored.meeting_id !== expectedPayload.meeting_id
+        || stored.slide_id !== expectedPayload.slide_id || stored.deck_revision !== expectedPayload.deck_revision
+        || stored.owner_user_id !== receipt.result.owner_user_id || !stored.owner_user_id.trim()
+        || stored.revision !== mutation.revision || stored.provider_verified !== false
+        || stored.provenance !== 'authenticated_owner_local_audio'
+        || audio.provenance !== 'authenticated_owner_local_audio' || !audio.generation_id?.trim()
+        || audio.file_id === expectedPayload.file_id || audio.sha256 !== expectedPayload.audio_sha256
+        || audio.narration_text_sha256 !== expectedPayload.narration_text_sha256
+        || audio.source_run_id !== expectedPayload.operation_id || audio.model !== 'owner-uploaded-local-audio'
+        || audio.format !== 'wav' || audio.mime_type !== 'audio/wav' || audio.duration_ms < 1
+        || audio.duration_ms > 300000 || audio.synthesis_duration_ms !== 0) {
+        throw new Error('Workjet could not verify the saved narration audio.');
+      }
+    }
+    if (localCandidate) {
+      const stored = receipt.result.local_candidate;
+      const shape = validateJourFixeValue('LocalTranscriptCandidateReceipt', stored);
+      if (shape.ok !== true) throw new TypeError(shape.error);
+      const nativeOwnerId = boundedWorkjetProjectText(receipt.result.owner_user_id, 'owner_user_id', 256);
+      if (stored.operation_id !== expectedPayload.operation_id || stored.request_id !== expectedPayload.request_id
+        || stored.instance_id !== nativeInstanceId || stored.project_id !== projectId
+        || stored.meeting_id !== expectedPayload.meeting_id || stored.deck_revision !== expectedPayload.deck_revision
+        || stored.owner_user_id !== nativeOwnerId || stored.revision !== mutation.revision
+        || stored.turn_id !== mutation.changed_id || stored.text_sha256 !== candidateTextHash
+        || stored.provider_verified !== false || stored.provenance !== 'authenticated_owner_local_candidate') {
+        throw new Error('Local transcript receipt does not confirm the exact Owner candidate and live scope.');
+      }
+    }
     return { action, commandId, projectId, contract: JOUR_FIXE_SCHEMA,
-      mutation: JSON.parse(JSON.stringify(mutation)) };
+      mutation: JSON.parse(JSON.stringify(mutation)),
+      ...(confirming ? { goal: JSON.parse(JSON.stringify(confirmedGoal)) } : {}),
+      ...(localNarration ? { localNarration: JSON.parse(JSON.stringify(receipt.result.local_narration)) } : {}),
+      ...(localCandidate ? { localCandidate: JSON.parse(JSON.stringify(receipt.result.local_candidate)) } : {}) };
   }
 
   if (['project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {
@@ -14672,7 +14760,7 @@ function boundedWorkjetProjectMetadata(request) {
         { allowEmpty: key === 'description' });
       if (key !== 'description') {
         const url = new URL(text);
-        if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) {
+        if (!['http:', 'https:'].includes(url.protocol) || !url.host || url.username || url.password) {
           throw new Error(`Invalid Workjet project ${key}.`);
         }
       }

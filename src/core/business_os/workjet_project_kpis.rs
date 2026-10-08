@@ -87,6 +87,7 @@ fn load(conn: &Connection, project_id: &str, owner: &str) -> anyhow::Result<Proj
         stored_owner == owner,
         "KPI owner conflicts with current project ownership"
     );
+    ensure!(data.len() <= 64 * 1024, "KPI state exceeds read budget");
     let result: ProjectKpis = serde_json::from_str(&data)?;
     ensure!(
         result.project_id == project_id,
@@ -96,7 +97,44 @@ fn load(conn: &Connection, project_id: &str, owner: &str) -> anyhow::Result<Proj
     Ok(result)
 }
 
-fn require_project(conn: &Connection, actor: &str, project_id: &str) -> anyhow::Result<String> {
+pub(super) fn read_state(
+    conn: &Connection,
+    project: &str,
+    owner: &str,
+) -> anyhow::Result<ProjectKpis> {
+    let mut state = load(conn, project, owner)?;
+    let now = super::store::now_ms() as i64;
+    for item in &mut state.items {
+        if item.result.status == KpiState::Ready
+            && !resolver::snapshot_binding_is_current(conn, project, owner, &item.prompt)?
+        {
+            item.result.status = KpiState::Stale;
+            item.result.reason_code = Some("source_binding_changed".into());
+            item.result.message =
+                Some("The registered source Supervisor changed; resolve the prompt again.".into());
+        }
+        if item.result.status == KpiState::Ready
+            && item
+                .result
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.freshness.fresh_until_ms <= now)
+        {
+            item.result.status = KpiState::Stale;
+            item.result.reason_code = Some("refresh_overdue".into());
+            item.result.message =
+                Some("The native source snapshot has expired; a fresh result is required.".into());
+        }
+    }
+    state.validate().map_err(anyhow::Error::msg)?;
+    Ok(state)
+}
+
+pub(super) fn require_project(
+    conn: &Connection,
+    actor: &str,
+    project_id: &str,
+) -> anyhow::Result<String> {
     let owner = super::workjet_identity::owner_from_connection(conn, actor)?;
     let project = super::project_chats::owned_project(conn, project_id, &owner, true)?;
     ensure!(project["_deleted"] != true, "project is deleted");
@@ -133,7 +171,7 @@ pub(super) fn handle_command(
             // a read neither initializes the store nor takes its writer lock.
             let snapshot = reader.transaction()?;
             let owner = require_project(&snapshot, actor, &request.project_id)?;
-            let state = load(&snapshot, &request.project_id, &owner)?;
+            let state = read_state(&snapshot, &request.project_id, &owner)?;
             Ok(json!({"ok":true,"kpis":state}))
         }
         "ctox.workjet.project.kpis.configure" => {
@@ -214,6 +252,24 @@ fn configure(
         revision,
         items,
     };
+    // Clearing/replacing a prompt retires its recipe, while the prompt revision
+    // watermark still prevents a late result from binding a reused identity.
+    let definitions: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='workjet_project_kpi_definitions')",
+        [],
+        |r| r.get(0),
+    )?;
+    if definitions {
+        let retained = serde_json::to_string(
+            &state
+                .items
+                .iter()
+                .map(|v| json!({"id":v.prompt.kpi_id,"revision":v.prompt.revision}))
+                .collect::<Vec<_>>(),
+        )?;
+        conn.execute("DELETE FROM workjet_project_kpi_definitions WHERE project_id=?1 AND NOT EXISTS
+          (SELECT 1 FROM json_each(?2) WHERE json_extract(value,'$.id')=kpi_id AND json_extract(value,'$.revision')=prompt_revision)",params![request.project_id,retained])?;
+    }
     state.validate().map_err(anyhow::Error::msg)?;
     let result = json!({"ok":true,"kpis":state});
     conn.execute(
@@ -228,6 +284,8 @@ fn configure(
         projections: vec![],
     })
 }
+
+pub(in crate::business_os) mod resolver;
 
 #[cfg(test)]
 mod tests;

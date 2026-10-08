@@ -9,6 +9,7 @@ pub struct NativeSessionState {
     model: String,
     provider_id: String,
     bytes: Vec<u8>,
+    core_effect_capture: Option<crate::NativeCoreEffectCapture>,
 }
 
 impl NativeSessionState {
@@ -41,6 +42,7 @@ impl NativeSessionState {
             model,
             provider_id,
             bytes: output.0,
+            core_effect_capture: None,
         })
     }
     pub fn session_id(&self) -> ThreadId {
@@ -55,6 +57,20 @@ impl NativeSessionState {
     /// Protected source input only: never emit these bytes in receipts/logs.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
+    }
+    pub(crate) fn with_effect_capture(
+        mut self,
+        capture: crate::NativeCoreEffectCapture,
+    ) -> io::Result<Self> {
+        if capture.session_id() != self.session_id {
+            return Err(io::Error::other("foreign native Core effect capture"));
+        }
+        self.core_effect_capture = Some(capture);
+        Ok(self)
+    }
+    /// Only local checked Core shutdown; checkpoint JSON cannot return this.
+    pub fn core_effect_capture(&self) -> Option<&crate::NativeCoreEffectCapture> {
+        self.core_effect_capture.as_ref()
     }
 }
 
@@ -95,6 +111,8 @@ pub(crate) struct NativeImportPayload {
     pub(crate) provider: NativeModelContinuation,
     target_authority: String,
     external_effects: String,
+    #[serde(default)]
+    core_effects: Option<crate::NativeCoreEffectReport>,
 }
 
 #[derive(Deserialize)]
@@ -162,11 +180,15 @@ impl NativeSessionState {
             return Err(invalid_state());
         }
         payload.provider.validate(expected_session)?;
+        if let Some(report) = &payload.core_effects {
+            report.validate_metadata(expected_session)?;
+        }
         Ok(Self {
             session_id: expected_session,
             model: expected_model.to_owned(),
             provider_id: expected_provider.to_owned(),
             bytes: bytes.to_vec(),
+            core_effect_capture: None,
         })
     }
 

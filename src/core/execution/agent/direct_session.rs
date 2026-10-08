@@ -1102,8 +1102,9 @@ impl PersistentSession {
         Ok(())
     }
 
-    /// Create a fresh durable native guest session with actual pinned account
-    /// and policy-verified command provenance. No named legacy worker is reused.
+    /// Construct the actual native guest Core with pinned account and verified
+    /// command provenance. Protected targets load their original Core UUID from
+    /// the retained receiver; fresh guests start a new durable session.
     /// This creates no model turn and does not itself grant Raft/guest execution.
     #[cfg(unix)]
     pub(crate) fn start_native_guest_with_business_os_mcp(
@@ -1153,6 +1154,7 @@ impl PersistentSession {
             false,
             false,
             Some(account_authority),
+            Some((registry.clone(), guest_id.to_owned(), context.clone())),
         )?;
         let current = crate::business_os::mcp_channel::verify_internal_command_session_token(
             root,
@@ -1366,6 +1368,8 @@ impl PersistentSession {
             read_only_sandbox,
             persistent_worker,
             None,
+            #[cfg(unix)]
+            None,
         )
     }
 
@@ -1382,6 +1386,11 @@ impl PersistentSession {
         read_only_sandbox: bool,
         persistent_worker: bool,
         native_guest_authorization: Option<Arc<NativeGuestProviderAuthorization>>,
+        #[cfg(unix)] native_guest_start: Option<(
+            Arc<crate::business_os::NativeGuestRegistry>,
+            String,
+            JsonValue,
+        )>,
     ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1403,6 +1412,8 @@ impl PersistentSession {
                 read_only_sandbox,
                 persistent_worker,
                 native_guest_authorization.as_deref(),
+                #[cfg(unix)]
+                native_guest_start.as_ref(),
             )
             .await
         });
@@ -1807,6 +1818,11 @@ impl PersistentSession {
         read_only_sandbox: bool,
         persistent_worker: bool,
         native_guest_authorization: Option<&NativeGuestProviderAuthorization>,
+        #[cfg(unix)] native_guest_start: Option<&(
+            Arc<crate::business_os::NativeGuestRegistry>,
+            String,
+            JsonValue,
+        )>,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -1861,6 +1877,15 @@ impl PersistentSession {
                 (explicit_api_source || engine::is_api_chat_model(&model))
                     .then(|| engine::default_api_provider_for_model(&model).to_string())
             });
+        #[cfg(unix)]
+        let cwd = if let Some((registry, guest, context)) = native_guest_start {
+            registry
+                .continuation_workspace(guest, context)?
+                .unwrap_or_else(|| cwd.to_path_buf())
+        } else {
+            cwd.to_path_buf()
+        };
+        #[cfg(not(unix))]
         let cwd = cwd.to_path_buf();
 
         let codex_home =
@@ -2060,6 +2085,9 @@ impl PersistentSession {
         // from these overrides.
         configure_managed_linux_sandbox(&mut cli_overrides);
         configure_worker_tool_stack(&mut cli_overrides, disable_active_tools);
+        if native_guest {
+            super::session_continuity::constrain_native_guest_startup(&mut cli_overrides);
+        }
         let config = ConfigBuilder::default()
             .cli_overrides(cli_overrides.clone())
             .harness_overrides(overrides)
@@ -2074,6 +2102,8 @@ impl PersistentSession {
             );
             anyhow::ensure!(
                 config.model_provider.requires_openai_auth
+                    && config.chatgpt_base_url.trim_end_matches('/')
+                        == "https://chatgpt.com/backend-api"
                     && config.model_provider.wire_api.to_string() == "responses"
                     && config.model_provider.base_url.is_none()
                     && config.model_provider.transport_endpoint.is_none()
@@ -2095,6 +2125,15 @@ impl PersistentSession {
         {
             binding.with_current_contract(|contract| authorize(&model, contract))?;
         }
+        #[cfg(unix)]
+        let native_resume = match (native_guest_start, &native_checkpoint_binding) {
+            (Some((registry, guest, context)), Some(binding)) => {
+                binding.with_current_contract(|contract| {
+                    registry.prepare_core_resume(guest, context, &model, contract, &cwd)
+                })?
+            }
+            _ => None,
+        };
         let config = Arc::new(config);
         let session_source = SessionSource::Exec;
         let thread_manager = Arc::new(ThreadManager::new(
@@ -2106,11 +2145,11 @@ impl PersistentSession {
 
         let start_args = InProcessClientStartArgs {
             arg0_paths: direct_session_arg0_paths(),
-            config,
+            config: config.clone(),
             cli_overrides: cli_overrides.clone(),
             loader_overrides: Default::default(),
             cloud_requirements,
-            auth_manager: Some(auth_manager),
+            auth_manager: Some(auth_manager.clone()),
             thread_manager: Some(thread_manager.clone()),
             feedback: CodexFeedback::new(),
             config_warnings: vec![],
@@ -2145,7 +2184,29 @@ impl PersistentSession {
             persistent_thread_name: persistent_thread_name.as_deref(),
         };
         let timeouts = production_session_control_timeouts();
-        let thread_id = bind_session_thread(&client, &mut seq, &spec, &timeouts).await?;
+        #[cfg(unix)]
+        let restored_thread_id = if let Some(resume) = native_resume {
+            Some(
+                resume
+                    .load(
+                        &thread_manager,
+                        config.as_ref().clone(),
+                        auth_manager.clone(),
+                    )
+                    .await?
+                    .thread_id
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        #[cfg(not(unix))]
+        let restored_thread_id: Option<String> = None;
+        let thread_id = if let Some(original) = restored_thread_id {
+            original
+        } else {
+            bind_session_thread(&client, &mut seq, &spec, &timeouts).await?
+        };
         if let (Some(binding), Some(authorize)) =
             (&native_checkpoint_binding, native_guest_authorization)
         {
@@ -2154,12 +2215,19 @@ impl PersistentSession {
         let native_capture_thread = if native_guest {
             let actual_id = ctox_protocol::ThreadId::from_string(&thread_id)
                 .context("native producer returned an invalid thread identity")?;
-            Some(
-                thread_manager
-                    .get_thread(actual_id)
-                    .await
-                    .context("native producer has no actual loaded Core Session")?,
-            )
+            let actual_thread = thread_manager
+                .get_thread(actual_id)
+                .await
+                .context("native producer has no actual loaded Core Session")?;
+            // Actual object provenance before the first submission; no JSON or
+            // renderer field registers this ledger, and it grants no execution.
+            actual_thread.register_native_source_factory()?;
+            if let (Some(binding), Some(authorize)) =
+                (&native_checkpoint_binding, native_guest_authorization)
+            {
+                binding.with_current_contract(|contract| authorize(&model, contract))?;
+            }
+            Some(actual_thread)
         } else {
             None
         };
@@ -2472,11 +2540,15 @@ impl PersistentSession {
             // revalidate provider/account/policy/controller and quorum ownership.
             #[cfg(target_os = "linux")]
             {
-                source_boot_ready = execution.start_configured_source().await.map_err(|error| {
-                    SessionPoisoned(format!(
-                        "native source guest boot requires reconciliation: {error}"
-                    ))
-                })?;
+                source_boot_ready =
+                    execution
+                        .start_current_guest_turn()
+                        .await
+                        .map_err(|error| {
+                            SessionPoisoned(format!(
+                                "native guest preparation requires reconciliation: {error}"
+                            ))
+                        })?;
             }
             // Machine preparation/boot awaits cannot preserve old command authority.
             let after_boot =
@@ -2566,7 +2638,7 @@ impl PersistentSession {
                 let terminal =
                     interrupt_cancelled_queue_turn(client, seq, &thread_id, &turn_id).await;
                 return Err(SessionPoisoned(format!(
-                    "source guest actual turn binding failed: {error}; terminal_observed={terminal}"
+                    "native guest actual turn binding failed: {error}; terminal_observed={terminal}"
                 ))
                 .into());
             }
@@ -3507,6 +3579,66 @@ mod tests {
             } if writable_roots.iter().any(|root| root.as_path() == writable)
                 && readable_roots.iter().any(|root| root.as_path() == readable)
         ));
+    }
+
+    #[tokio::test]
+    async fn native_guest_startup_disables_inherited_background_execution() -> Result<()> {
+        use ctox_core::features::Feature;
+        let home = tempfile::tempdir()?;
+        std::fs::write(
+            home.path().join("config.toml"),
+            r#"
+notify = ["operator-notification"]
+chatgpt_base_url = "https://untrusted.invalid/backend"
+[features]
+shell_snapshot = true
+shell_zsh_fork = true
+ctox_hooks = true
+memory_tool = true
+undo = true
+multi_agent = true
+enable_fanout = true
+"#,
+        )?;
+        let mut overrides = vec![
+            ("features.shell_snapshot".into(), toml::Value::Boolean(true)),
+            (
+                "notify".into(),
+                toml::Value::Array(vec![toml::Value::String("provider-notification".into())]),
+            ),
+        ];
+        overrides.push((
+            "chatgpt_base_url".into(),
+            toml::Value::String("https://other.invalid/backend".into()),
+        ));
+        configure_worker_tool_stack(&mut overrides, false);
+        super::super::session_continuity::constrain_native_guest_startup(&mut overrides);
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .cli_overrides(overrides)
+            .build()
+            .await?;
+        for feature in [
+            Feature::ShellSnapshot,
+            Feature::ShellZshFork,
+            Feature::CodexHooks,
+            Feature::MemoryTool,
+            Feature::GhostCommit,
+            Feature::Collab,
+            Feature::SpawnCsv,
+        ] {
+            assert!(
+                !config.features.enabled(feature),
+                "ambient feature {feature:?} escaped native startup profile"
+            );
+        }
+        assert_eq!(config.chatgpt_base_url, "https://chatgpt.com/backend-api");
+        assert_eq!(config.notify, Some(Vec::new()));
+        assert!(
+            config.features.enabled(Feature::ShellTool),
+            "authorized turn tools retain their own dispatch boundary"
+        );
+        Ok(())
     }
 
     #[test]

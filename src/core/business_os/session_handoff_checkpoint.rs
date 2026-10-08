@@ -8,6 +8,8 @@ use std::io::{Read, Seek, SeekFrom};
 const CHUNK: usize = 8192;
 const MANIFEST_LIMIT: u64 = 8 * 1024 * 1024;
 const BLOB_LIMIT: u64 = 64 * 1024 * 1024;
+#[path = "session_handoff_guest_core.rs"]
+mod guest_core;
 #[path = "session_handoff_guest_enrollment.rs"]
 mod guest_enrollment;
 #[path = "session_handoff_guest_import.rs"]

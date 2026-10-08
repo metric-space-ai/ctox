@@ -369,6 +369,8 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
             ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig::default(),
         );
         let started = tokio::time::timeout(Duration::from_secs(15), manager.start_thread(config)).await.unwrap().unwrap();
+        started.thread.register_native_source_factory().unwrap();
+        assert!(started.thread.register_native_source_factory().is_err());
         assert!(started.thread.capture_native_state().await.is_err());
         assert!(started.thread.retain_native_journal().await.is_err(), "unmaterialized journal remains rejected");
         let turn = started.thread.submit(ctox_protocol::protocol::Op::UserInput {
@@ -407,10 +409,36 @@ fn native_session_state_artifact_uses_actual_stopped_core_and_exact_policy_captu
     let (mut spec, ownership) = source_spec();
     spec.session_id = state.session_id().to_string();
     spec.model_id = configuration.model.clone();
-    let effects = super::super::source_effects::SourceEffects::fixture(
+    let mut effects = super::super::source_effects::SourceEffects::fixture(
         &spec,
         &ownership,
         BTreeSet::from(["actual-open-process-effect".into()]),
+    );
+    effects.bind_core_state(&state).unwrap();
+    let effect_bytes: serde_json::Value =
+        serde_json::from_slice(&effects.bytes(&spec, &ownership).unwrap()).unwrap();
+    assert_eq!(effect_bytes["coreEffects"]["sourceFactoryRegistered"], true);
+    assert_eq!(effect_bytes["reconciled"], false);
+    assert_eq!(effect_bytes["externalEffects"], "unknown");
+    assert_eq!(effects.pending("fixture-capture").unwrap().len(), 2);
+    // A syntactically valid report is descriptive, never an opaque local capture.
+    let mut forged = captured.clone();
+    forged["coreEffects"]["startupUncertainties"] = json!([]);
+    forged["coreEffects"]["unreconciledObservations"] = json!(0);
+    let imported = ctox_core::NativeSessionState::from_checkpoint(
+        &serde_json::to_vec(&forged).unwrap(),
+        state.session_id(),
+        state.model(),
+        state.provider_id(),
+    )
+    .unwrap();
+    assert!(imported.core_effect_capture().is_none());
+    let mut foreign_effects =
+        super::super::source_effects::SourceEffects::fixture(&spec, &ownership, BTreeSet::new());
+    foreign_effects.bind_core_state(&imported).unwrap();
+    assert_eq!(
+        foreign_effects.pending("fixture-imported").unwrap().len(),
+        1
     );
     let native_policy_revision = registry
         .with_policy(|tx| {

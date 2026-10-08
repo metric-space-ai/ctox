@@ -5230,7 +5230,7 @@ var CtoxWebRtcNativePeer = class {
       this.pending.set(id, { resolve, reject, timer, method, peerId: remotePeerId });
       const frame = { id, method, params };
       if (collection) frame.collection = collection;
-      const sendPromise = method === "ctox.browser.live.v1" || method === CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD ? this.sendImmediateControlFrame(remotePeerId, frame) : Promise.resolve(this.send(remotePeerId, frame));
+      const sendPromise = method === "ctox.browser.live.v1" || method === "ctox.workjet.jour_fixe.speech.v1" || method === CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD ? this.sendImmediateControlFrame(remotePeerId, frame) : Promise.resolve(this.send(remotePeerId, frame));
       sendPromise.then((sent) => {
         if (sent) return;
         this.pending.delete(id);

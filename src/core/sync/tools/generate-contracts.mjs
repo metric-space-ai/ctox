@@ -91,7 +91,7 @@ for (const [name, fields] of Object.entries(fixture.types)) {
 }
 for (const [name, variants] of Object.entries(unions)) {
   const debug = (fixture.sensitiveTypes ?? []).includes(name) ? '' : 'Debug, ';
-  rust += `\n#[derive(${debug}Clone, PartialEq, Eq, Serialize, Deserialize)]\n#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]\npub enum ${name} {\n`;
+  rust += `\n#[allow(clippy::large_enum_variant)]\n#[derive(${debug}Clone, PartialEq, Eq, Serialize, Deserialize)]\n#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]\npub enum ${name} {\n`;
   const tsVariants = [];
   const schemaVariants = [];
   for (const [variant, fields] of Object.entries(variants)) {

@@ -687,6 +687,7 @@ impl Codex {
     /// Use sparingly: prefer `submit()` so Codex is responsible for generating
     /// unique IDs for each submission.
     pub async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
+        self.session.native_effects.observe_submission(&sub.op);
         if sub.trace.is_none() {
             sub.trace = current_span_w3c_trace_context();
         }
@@ -835,6 +836,7 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    pub(crate) native_effects: crate::native_core_effects::NativeCoreEffects,
     interrupt_receipts: std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
     /// Only the real shutdown handler can certify the journal I/O boundary.
     /// Termination, channel closure, or a prior error event is not that receipt.
@@ -1499,6 +1501,10 @@ impl Session {
         file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
+        let native_effects = crate::native_core_effects::NativeCoreEffects::new(
+            &config,
+            matches!(&initial_history, InitialHistory::New),
+        );
         debug!(
             "Configuring session: model={}; provider={:?}",
             session_configuration.collaboration_mode.model(),
@@ -1634,6 +1640,7 @@ impl Session {
             (history_log_id, history_entry_count),
             (auth, mcp_servers, auth_statuses),
         ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
+        native_effects.observe_mcp_startup(mcp_servers.values().filter(|s| s.enabled).count());
 
         let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
@@ -1954,6 +1961,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            native_effects,
             interrupt_receipts: std::sync::Mutex::new(HashMap::new()),
             shutdown_journal_result: std::sync::OnceLock::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
@@ -4081,6 +4089,7 @@ impl Session {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> anyhow::Result<ReadResourceResult> {
+        self.native_effects.observe_unreconciled();
         self.services
             .mcp_connection_manager
             .read()
@@ -4096,6 +4105,7 @@ impl Session {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
+        self.native_effects.observe_unreconciled();
         self.services
             .mcp_connection_manager
             .read()
@@ -4166,6 +4176,7 @@ impl Session {
             ));
         }
         let settings = &state.session_configuration;
+        let effects = self.native_effects.capture(self.conversation_id)?;
         let payload = serde_json::json!({
             "format": "ctox-native-session-state",
             "version": 1,
@@ -4192,14 +4203,16 @@ impl Session {
             "activeConnectorSelection": state.active_connector_selection.iter().collect::<std::collections::BTreeSet<_>>(),
             "provider": self.services.model_client.native_continuation_state(self.conversation_id)?,
             "targetAuthority": "reauthorization-required",
-            "externalEffects": "unknown"
+            "externalEffects": "unknown",
+            "coreEffects": effects.report()
         });
         let captured = crate::NativeSessionState::from_core(
             self.conversation_id,
             config.model.clone(),
             config.model_provider_id.clone(),
             &payload,
-        )?;
+        )?
+        .with_effect_capture(effects)?;
         Ok((config, captured))
     }
 
@@ -7384,6 +7397,7 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                sess.native_effects.observe_provider_item(&item, true);
                 let is_required_initial_tool = matches!(
                     &item,
                     ResponseItem::FunctionCall { name, .. }
@@ -7453,6 +7467,7 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
+                sess.native_effects.observe_provider_item(&item, false);
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),

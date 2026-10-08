@@ -86,6 +86,10 @@ const OUTBOUND_SELLIFY_LOOKUP_METHOD: &str = "ctox.outbound.sellify_lookup.v1";
 const OUTBOUND_SELLIFY_RESPONSE_COLLECTION: &str = "outbound_lead_generation_leads";
 
 fn auxiliary_response_collection(method: &str, operation: &str) -> Option<String> {
+    // Bounded interactive speech acknowledges PCM and partials ahead of bulk replication.
+    if method == "ctox.workjet.jour_fixe.speech.v1" {
+        return Some(CTOX_BROWSER_INPUT_RESPONSE_COLLECTION.to_string());
+    }
     if method == BROWSER_LIVE_METHOD {
         return Some(
             if operation == "input" {
@@ -248,6 +252,7 @@ const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
     "ctox-browser-live-v1",
     "ctox-workjet-device-control-v1",
+    "ctox-workjet-jour-fixe-speech-v1",
     // Presence is ephemeral transport state (ctox-presence-v1): always
     // advertised, never gated on a runtime flag — there is no persistence or
     // policy surface behind it, only the in-memory hub in the connection
@@ -3385,6 +3390,13 @@ mod tests {
             auxiliary_response_collection(OUTBOUND_SELLIFY_LOOKUP_METHOD, "live").as_deref(),
             Some(OUTBOUND_SELLIFY_RESPONSE_COLLECTION)
         );
+        for operation in ["open", "write", "read", "finish", "cancel"] {
+            assert_eq!(
+                auxiliary_response_collection("ctox.workjet.jour_fixe.speech.v1", operation)
+                    .as_deref(),
+                Some(CTOX_BROWSER_INPUT_RESPONSE_COLLECTION)
+            );
+        }
         assert_eq!(
             auxiliary_response_collection("ctox.unknown.v1", "live"),
             None

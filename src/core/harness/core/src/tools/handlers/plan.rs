@@ -89,7 +89,8 @@ impl ToolHandler for PlanHandler {
         };
 
         let content =
-            handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
+            handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id.clone()).await?;
+        session.native_effects.complete_core_plan(&call_id);
 
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }

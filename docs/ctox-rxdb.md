@@ -16,6 +16,14 @@ and request key after peer cancellation. Ordinary completion and rejection
 release before publishing their terminal response. This does not change
 collection authority, retryable errors or the browser admission queue.
 
+### Native projection soft deletion
+
+Native projections preserve explicit domain `deleted` and `is_deleted` fields
+independently of the RxDB `_deleted` tombstone envelope. Reviving a physical
+RxDB tombstone clears inherited deletion aliases only when the new source
+omits them. A live Workjet session projection therefore retains an intentional
+soft deletion and stays hidden in the session list.
+
 ### CLI app command admission
 
 CLI app create/modify and app-bench requests persist and enqueue the real coding
