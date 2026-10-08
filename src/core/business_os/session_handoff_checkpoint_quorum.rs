@@ -3,6 +3,7 @@
 //! Native durable-copy acknowledgement and source quorum protection.
 //! Public signed metadata only; neither operation resumes an executor.
 use super::*;
+use anyhow::Context;
 use ctox_sync::authority::{client::ExecutionAuthority, Command, Receipt, Request};
 use ctox_sync::contracts::CheckpointCopyReceipt;
 
