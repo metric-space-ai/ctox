@@ -6,6 +6,7 @@
 #[path = "control_channel_tests.rs"]
 mod tests;
 use ctox_sync::native::NativePool;
+use futures_util::StreamExt;
 use rxdb::plugins::replication_webrtc::{
     index_mod::{GuardedAuxiliaryRequestHandler, GuardedAuxiliaryResponse},
     WebRTCConnectionHandler, WebRTCMessage, WebRTCPublicationGuard, WebRTCRsConnection,
@@ -21,7 +22,6 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{watch, Semaphore};
-use tokio_stream::StreamExt;
 
 const MAX_REQUEST: usize = 32 * 1024;
 const MAX_RESPONSE: usize = 128 * 1024;
