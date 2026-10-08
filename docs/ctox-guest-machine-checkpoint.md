@@ -37,6 +37,26 @@ The base/device profile is `pc-i440fx-5.1` with
 `qemu64-v1,kvm=off,kvmclock=off,svm=off`, KVM kernel irqchip off or explicitly
 admitted TCG. Changes to the device layout require a new checkpoint profile.
 
+Native preparation uses `guest_runtime::QemuOverlayPreparation::start(qemu_img,
+assignment.runtime_parent(), verified_base_raw)`. Retain that owner before
+awaiting `finish()`; on failure/cancellation, `abort().await` confirms helper
+exit before discarding only its unpublished directory. Success returns a fresh
+native-owned, unaliased 0600 `guest-disk-*/root.qcow2` under the private 0700
+assignment runtime parent. It retains that disk and never copies or edits the
+immutable base. The embedded backing marker `ctox-native-base` is deliberately
+unresolved: QEMU binds the independently verified base explicitly.
+
+The native operator supplies `PreparedQemuGuest` fields `program`,
+`runtime_parent`, `base_raw`, `overlay_qcow2`, `memory_mib`, `vcpus` and the
+explicitly admitted `QemuAcceleration`. The portable manifest profile is
+`ctox.pc-i440fx-5.1.qemu64-v1.v1`; both hosts must use identical memory/vCPU
+resources and original guest/service identity. A target restore uses a fresh
+private disk staging file and the incoming branch, rather than a cold boot.
+`native-guest-machine.json` carries the hardware/base/full-state identities;
+`native-guest-memory.json`, `native-guest-disk.json` and their ordered
+`native-guest-{memory,disk}/0000.bin` chunks belong to the same protected
+manifest. There is no separate operator-supplied hardware artifact.
+
 This is a native source integration. Byte-codec tests do not certify installed
 guest readiness, effective revocation, original Core continuation or the
 production two-host path. Goals 16/19 remain open until those are measured.
