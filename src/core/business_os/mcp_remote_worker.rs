@@ -410,7 +410,7 @@ fn verify_receipt(
     Ok(())
 }
 
-fn current_actor(
+pub(super) fn current_actor(
     conn: &Connection,
     context: &McpChannelRequestContext,
 ) -> anyhow::Result<(String, i64)> {

@@ -11869,7 +11869,9 @@ fn configure_business_os_mcp_session_for_queue_job(
         && !has_writeback
         && command.pointer("/payload/external_executor").is_some()
         && options.crew_persona.is_some();
-    if metadata_contract.is_none() && !has_writeback && !crew_only {
+    let workjet_supervisor = metadata_contract.is_none()
+        && crate::business_os::mcp_channel::is_workjet_supervisor_command(root, &command)?;
+    if metadata_contract.is_none() && !has_writeback && !crew_only && !workjet_supervisor {
         return Ok(false);
     }
     let payload_hash = command
@@ -11920,6 +11922,13 @@ fn configure_business_os_mcp_session_for_queue_job(
             &token,
             &attempt.attempt_id,
             &attempt.work_key,
+        )?
+    } else {
+        token
+    };
+    let token = if workjet_supervisor {
+        crate::business_os::mcp_channel::restrict_internal_command_session_to_workjet_supervisor(
+            root, &token,
         )?
     } else {
         token
