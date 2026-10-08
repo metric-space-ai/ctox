@@ -145,7 +145,9 @@ const NATIVE_GUEST_BACKGROUND_FEATURES: &[&str] = &[
 
 pub(super) fn constrain_native_guest_startup(overrides: &mut Vec<(String, toml::Value)>) {
     overrides.retain(|(key, _)| {
-        key != "notify" && !NATIVE_GUEST_BACKGROUND_FEATURES.contains(&key.as_str())
+        key != "notify"
+            && key != "chatgpt_base_url"
+            && !NATIVE_GUEST_BACKGROUND_FEATURES.contains(&key.as_str())
     });
     overrides.extend(
         NATIVE_GUEST_BACKGROUND_FEATURES
@@ -155,6 +157,10 @@ pub(super) fn constrain_native_guest_startup(overrides: &mut Vec<(String, toml::
     // Empty argv is the existing explicit no-notification configuration.
     // The hook registry rejects empty argv before creating a legacy hook.
     overrides.push(("notify".into(), toml::Value::Array(Vec::new())));
+    overrides.push((
+        "chatgpt_base_url".into(),
+        toml::Value::String("https://chatgpt.com/backend-api".into()),
+    ));
 }
 
 fn thread_start_config(spec: &SessionThreadSpec<'_>) -> Option<HashMap<String, JsonValue>> {
@@ -173,6 +179,10 @@ fn thread_start_config(spec: &SessionThreadSpec<'_>) -> Option<HashMap<String, J
             }
         }
         config.insert("notify".into(), JsonValue::Array(Vec::new()));
+        config.insert(
+            "chatgpt_base_url".into(),
+            JsonValue::String("https://chatgpt.com/backend-api".into()),
+        );
     }
     config
 }

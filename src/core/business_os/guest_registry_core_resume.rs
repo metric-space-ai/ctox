@@ -144,7 +144,13 @@ impl NativeGuestCoreResume {
                         && identity(&self.working_journal)? == self.working_identity,
                     "target Core working journal changed during startup"
                 );
-                verify()
+                ensure!(
+                    !entry.core_ready,
+                    "original Core constructor already published"
+                );
+                verify()?;
+                entry.core_ready = true;
+                Ok(())
             })
         })();
         if let Err(error) = validation {
@@ -242,7 +248,7 @@ mod tests {
     }
 }
 
-fn validate_original_job(
+pub(super) fn validate_original_job(
     entry: &Registration,
     protected: &ProtectedEnrollment,
     job: &ctox_sync::authority::Job,
@@ -259,7 +265,10 @@ fn validate_original_job(
             && job
                 .checkpoint
                 .as_ref()
-                .is_some_and(|checkpoint| checkpoint.digest == protected.checkpoint_digest),
+                .is_some_and(
+                    |checkpoint| checkpoint.digest == protected.checkpoint_digest
+                        && checkpoint.sequence == imported.sequence
+                ),
         "original target job/import/checkpoint is stale"
     );
     let pending = match (&entry.process_effect, &entry.registered_process) {
@@ -279,7 +288,7 @@ fn validate_original_job(
         _ => anyhow::bail!("original target process effect is incomplete"),
     };
     ensure!(
-        job.pending_effects == pending,
+        job.pending_effects == pending && job.pending_effects.is_disjoint(&job.completed_effects),
         "original target has unknown or foreign pending effects"
     );
     Ok(())
@@ -408,6 +417,7 @@ impl NativeGuestRegistry {
             )?;
             let working_identity = identity(&working_journal)?;
             entry.core_journal = Some(working_journal.clone());
+            entry.core_journal_identity = Some(working_identity.clone());
             verify()?;
             Ok((state, journal, working_journal, working_identity))
         })?;
