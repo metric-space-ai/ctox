@@ -22,6 +22,51 @@ mod routing_tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn workload_pins_wake_discovery_without_joining_raft() -> io::Result<()> {
+        let pool = RxWebRTCReplicationPool::new_multi(Vec::new(), WebRTCRsConnectionHandler::new());
+        let mut voters = BTreeSet::new();
+        for _ in 0..3 {
+            let bytes = SigningIdentity::generate_pkcs8()?;
+            voters.insert(SigningIdentity::from_pkcs8(&bytes)?.public_identity());
+        }
+        let channel = WebRtcControlChannel::new(&pool, voters.clone(), Duration::from_secs(1))?;
+        let worker = format!("ed25519:{:064x}", 1);
+        channel.register_workload_pin(&worker)?;
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            channel.workload_routes_changed(),
+        )
+        .await
+        .map_err(io::Error::other)?;
+        assert!(
+            channel.current_peer(&worker)?.is_none(),
+            "a pin alone is no route proof"
+        );
+        assert_eq!(
+            channel.allowed, voters,
+            "workload enrollment cannot add a Raft member"
+        );
+        assert!(channel
+            .set_route(&worker, "unsigned-worker".into())
+            .is_err());
+        assert!(
+            channel.request(&worker, Value::Null).await.is_err(),
+            "Raft transport cannot use a workload-only target"
+        );
+        assert!(!channel.routes.read().unwrap().contains_key(&worker));
+        for n in 1..=64 {
+            channel.register_workload_pin(&format!("ed25519:{n:064x}"))?;
+        }
+        channel.register_workload_pin(&worker)?;
+        assert!(channel
+            .register_workload_pin(&format!("ed25519:{:064x}", 65))
+            .is_err());
+        assert!(channel.register_workload_pin("unsigned-worker").is_err());
+        assert_eq!(channel.workload_pins.read().unwrap().len(), 64);
+        Ok(())
+    }
 }
 use super::{
     auth::{self, ControlChannel, SigningIdentity},
@@ -48,6 +93,9 @@ pub struct WebRtcControlChannel {
     allowed: BTreeSet<String>,
     routes: RwLock<BTreeMap<String, String>>,
     authenticated_routes: RwLock<BTreeMap<String, (String, WebRTCRsConnection)>>,
+    workload_pins: RwLock<BTreeSet<String>>,
+    workload_routes: RwLock<BTreeMap<String, (String, WebRTCRsConnection)>>,
+    workload_changed: tokio::sync::Notify,
     deadline: Duration,
 }
 impl WebRtcControlChannel {
@@ -70,6 +118,9 @@ impl WebRtcControlChannel {
             allowed,
             routes: RwLock::new(BTreeMap::new()),
             authenticated_routes: RwLock::new(BTreeMap::new()),
+            workload_pins: RwLock::new(BTreeSet::new()),
+            workload_routes: RwLock::new(BTreeMap::new()),
+            workload_changed: tokio::sync::Notify::new(),
             deadline,
         })
     }
@@ -87,17 +138,59 @@ impl WebRtcControlChannel {
             .insert(identity.into(), peer);
         Ok(())
     }
+    /// An explicit workload target pin permits only public identity discovery.
+    /// It never changes the three Raft voters or grants execution authority.
+    /// Pins live at most as long as this host and are bounded independently.
+    pub fn register_workload_pin(&self, identity: &str) -> io::Result<()> {
+        auth::public_key(identity)?;
+        if self.allowed.contains(identity) {
+            return Ok(());
+        }
+        let mut pins = self
+            .workload_pins
+            .write()
+            .map_err(|_| io::Error::other("workload pin lock poisoned"))?;
+        if pins.contains(identity) {
+            return Ok(());
+        }
+        if pins.len() >= 64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "workload discovery pin limit",
+            ));
+        }
+        pins.insert(identity.into());
+        drop(pins);
+        self.workload_changed.notify_one();
+        Ok(())
+    }
+
+    pub(crate) async fn workload_routes_changed(&self) {
+        self.workload_changed.notified().await;
+    }
+
     /// An already proved current connection, never an unsigned discovery hint.
     /// Consumers still need their workload grant and must retain this lifetime.
     pub fn current_peer(&self, identity: &str) -> io::Result<Option<(String, WebRTCRsConnection)>> {
-        if !self.allowed.contains(identity) {
+        let voter = self.allowed.contains(identity);
+        if !voter
+            && !self
+                .workload_pins
+                .read()
+                .map_err(|_| io::Error::other("workload pin lock poisoned"))?
+                .contains(identity)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "unconfigured control peer",
             ));
         }
-        let binding = self
-            .authenticated_routes
+        let bindings = if voter {
+            &self.authenticated_routes
+        } else {
+            &self.workload_routes
+        };
+        let binding = bindings
             .read()
             .map_err(|_| io::Error::other("control route lock poisoned"))?
             .get(identity)
@@ -134,18 +227,29 @@ impl WebRtcControlChannel {
             .connection_handler
             .connection_for_peer(route)
             .ok_or_else(|| io::Error::other("authority route disconnected"))?;
+        let workload_pins = self
+            .workload_pins
+            .read()
+            .map_err(|_| io::Error::other("workload pin lock poisoned"))?
+            .clone();
+        let proof_pins = self.allowed.union(&workload_pins).cloned().collect();
         let probe = auth::route::RouteProbe::new(key, scope, route)?;
         let reply = self
             .request_route(route, auth::route::METHOD, probe.request())
             .await?;
-        let identity = probe.verify(reply, &self.allowed)?;
+        let identity = probe.verify(reply, &proof_pins)?;
         if pool.connection_handler.connection_for_peer(route).as_ref() != Some(&connection)
             || !pool.is_peer_ready_for_control(&connection)
         {
             return Err(io::Error::other("authority route changed during discovery"));
         }
-        self.set_route(&identity, route.into())?;
-        self.authenticated_routes
+        let bindings = if self.allowed.contains(&identity) {
+            self.set_route(&identity, route.into())?;
+            &self.authenticated_routes
+        } else {
+            &self.workload_routes
+        };
+        bindings
             .write()
             .map_err(|_| io::Error::other("control route lock poisoned"))?
             .insert(identity, (route.to_owned(), connection));

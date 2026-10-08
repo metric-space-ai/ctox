@@ -239,6 +239,7 @@ impl NativeControlChannel {
         let Some(routes) = state.routes.as_ref().and_then(Weak::upgrade) else {
             return Ok(None);
         };
+        routes.register_workload_pin(identity)?;
         let Some((route, peer)) = routes.current_peer(identity)? else {
             return Ok(None);
         };

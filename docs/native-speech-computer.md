@@ -33,7 +33,7 @@ Each route contains:
   speech-only grant ID/revision, workload and model;
 - `expires_at_unix_ms`, at most one day ahead.
 
-The configured target signing pin resolves through the existing native host's signed route discovery. Unsigned signaling/session claims and startup hints cannot supply a connection. Each stream/run binds the exact proved connection generation before Open/Start and retains it for every PCM/audio request, including cancellation. A rejoin needs a fresh stream; an active stream never moves to a replacement connection. The signing pins and grant configuration remain stable across new streams. A supplied legacy route hint must also match the current proved connection.
+The configured target signing pin resolves through the existing native host's signed route discovery. Explicit workload pins use a separate bounded map (64 per host lifetime), including nonvoting workers. Registering a pin wakes discovery but never changes the three Raft voters, their route map, or execution authority; every operation still requires its current speech grant. Unsigned signaling/session claims and startup hints cannot supply a connection. Each stream/run binds the exact proved connection generation before Open/Start and retains it for every PCM/audio request, including cancellation. A rejoin needs a fresh stream; an active stream never moves to a replacement connection. The signing pins and grant configuration remain stable across new streams. A supplied legacy route hint must also match the current proved connection.
 
 The local source pin must match the provisioned secret-store identity.
 Configuration saves under its existing issuer fence into SQLite and mints a

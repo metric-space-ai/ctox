@@ -230,6 +230,11 @@ impl<A: ExecutionAuthority + 'static> NativeExecutionHost<A> {
                         if peer.is_none() { break; }
                     },
                     _ = tokio::time::sleep(Duration::from_secs(1)), if retry => {},
+                    _ = discovery.channel.workload_routes_changed() => {
+                        // A newly configured workload pin may name a connected
+                        // nonvoter rejected by an earlier public-key probe.
+                        completed_probes.clear();
+                    },
                 }
                 // Signaling addresses are ephemeral. The attached signing key,
                 // member ID and scope remain pinned, and SignedTransport verifies
