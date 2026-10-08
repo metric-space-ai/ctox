@@ -115,6 +115,7 @@ mod threads;
 mod worker_profile_bindings;
 #[path = "workjet_jour_fixe_contract.generated.rs"]
 pub(crate) mod workjet_jour_fixe_contract;
+mod workjet_project_gallery_order;
 mod workjet_project_kpis;
 #[path = "workjet_project_kpis_contract.generated.rs"]
 pub(crate) mod workjet_project_kpis_contract;
