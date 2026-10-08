@@ -328,3 +328,46 @@ fn changing_calendar_rejects_old_route_and_preserves_operator_pause() -> anyhow:
     assert_eq!(count(root.path(), "user_thread_messages")?, 0);
     Ok(())
 }
+
+fn listed(root: &Path, actor: &str, id: &str, payload: Value) -> anyhow::Result<Value> {
+    store::accept_rxdb_business_command_with_origin(
+        root,
+        json!({"id":id,"module":"ctox",
+      "command_type":"ctox.workjet.jour_fixe.meetings.list","record_id":"project","payload":payload,
+      "client_context":{"actor":{"id":actor,"role":"admin"}}}),
+        store::CommandOrigin::TrustedLocal,
+    )
+}
+
+#[test]
+fn meeting_list_is_empty_without_a_table_and_rejects_foreign_or_unbounded_requests(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let value = listed(
+        root.path(),
+        "owner",
+        "list-empty",
+        json!({"project_id":"project","limit":5}),
+    )?;
+    assert_eq!(value["status"], "completed", "{value}");
+    assert_eq!(value["result"]["meetings"], json!([]));
+    rejected(listed(
+        root.path(),
+        "foreign",
+        "list-foreign",
+        json!({"project_id":"project","limit":5}),
+    ));
+    rejected(listed(
+        root.path(),
+        "owner",
+        "list-zero",
+        json!({"project_id":"project","limit":0}),
+    ));
+    rejected(listed(
+        root.path(),
+        "owner",
+        "list-too-many",
+        json!({"project_id":"project","limit":21}),
+    ));
+    Ok(())
+}

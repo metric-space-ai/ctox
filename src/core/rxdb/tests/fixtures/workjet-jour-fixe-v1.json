@@ -25,6 +25,8 @@
     "ConfirmTodosRequest": {"fields":{"operation_id":{"type":"String","min_chars":1,"max_chars":128},"meeting_id":{"type":"String","min_chars":1,"max_chars":128},"expected_revision":{"type":"u64"},"proposal_revision":{"type":"u64"},"expected_goal_revision":{"type":"u64"}}},
     "TranscriptEvent": {"fields":{"stream_id":{"type":"String","min_chars":1,"max_chars":128},"sequence":{"type":"u64"},"is_final":{"type":"bool"},"text":{"type":"String","min_chars":1,"max_chars":16384},"started_at_ms":{"type":"i64","minimum":0},"ended_at_ms":{"type":"i64","minimum":0},"sentence_end_latency_ms":{"type":"u64","optional":true}}},
     "ReadMeetingRequest": {"fields":{"project_id":{"type":"String","min_chars":1,"max_chars":128},"meeting_id":{"type":"String","optional":true,"min_chars":1,"max_chars":128}}},
+    "ListMeetingsRequest": {"fields":{"project_id":{"type":"String","min_chars":1,"max_chars":128},"limit":{"type":"u64","minimum":1,"maximum":20}}},
+    "MeetingSummary": {"fields":{"id":{"type":"String","min_chars":1,"max_chars":128},"scheduled_at_ms":{"type":"u64"},"state":{"type":"MeetingState"},"revision":{"type":"u64"},"todo_count":{"type":"u64"}}},
     "MeetingMutationReceipt": {"fields":{"operation_id":{"type":"String","min_chars":1,"max_chars":128},"meeting_id":{"type":"String","min_chars":1,"max_chars":128},"project_id":{"type":"String","min_chars":1,"max_chars":128},"revision":{"type":"u64"},"state":{"type":"MeetingState"},"changed_id":{"type":"String","optional":true,"min_chars":1,"max_chars":128},"todos_revision":{"type":"u64","optional":true}}},
     "NarrateRequest": {"fields":{"operation_id":{"type":"String","min_chars":1,"max_chars":128},"meeting_id":{"type":"String","min_chars":1,"max_chars":128},"slide_id":{"type":"String","min_chars":1,"max_chars":128},"deck_revision":{"type":"u64","minimum":1},"expected_revision":{"type":"u64"},"narration_text_sha256":{"type":"String","min_chars":64,"max_chars":64}}},
     "NarrationInput": {"fields":{"slide_id":{"type":"String","min_chars":1,"max_chars":128},"deck_revision":{"type":"u64","minimum":1},"expected_revision":{"type":"u64"},"narration_text_sha256":{"type":"String","min_chars":64,"max_chars":64}}},
@@ -48,6 +50,7 @@
     "ctox.workjet.jour_fixe.todos.confirm": {"request_type":"ConfirmTodosRequest","authorization":"owner"},
     "ctox.workjet.jour_fixe.todos.revise": {"request_type":"ProposeTodosRequest","authorization":"owner"},
     "ctox.workjet.jour_fixe.meeting.read": {"request_type":"ReadMeetingRequest","authorization":"owner"},
+    "ctox.workjet.jour_fixe.meetings.list": {"request_type":"ListMeetingsRequest","authorization":"owner"},
     "ctox.workjet.jour_fixe.narration.local_publish": {"request_type":"LocalNarrationRequest","authorization":"owner"}
   },
   "valid_cases": [

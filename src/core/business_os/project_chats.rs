@@ -77,6 +77,7 @@ pub(super) fn is_command(command_type: &str) -> bool {
         || jour_fixe_owner::is_command(command_type)
         || jour_fixe_owner::is_reserved_command(command_type)
         || command_type == "ctox.workjet.jour_fixe.meeting.read"
+        || command_type == "ctox.workjet.jour_fixe.meetings.list"
         || super::workjet_project_kpis::is_command(command_type)
         || matches!(
             command_type,
