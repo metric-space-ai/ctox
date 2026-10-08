@@ -324,7 +324,7 @@ impl ExecutionAuthority for RejectAuthority {
         Box::pin(async { Err(io::Error::other("no quorum in policy component fixture")) })
     }
 }
-fn session(owner: &str) -> BusinessOsSession {
+pub(super) fn session(owner: &str) -> BusinessOsSession {
     BusinessOsSession {
         ok: true,
         authenticated: true,
