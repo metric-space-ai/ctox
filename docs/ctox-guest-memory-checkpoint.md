@@ -35,6 +35,11 @@ the attempt without releasing the child; stop/reap and effect reconciliation
 remain mandatory. No failed migration is automatically replayed.
 The Linux child also receives a parent-death signal, so an abrupt native-owner
 exit cannot leave QEMU running merely because Rust destructors did not execute.
+Linux binds this signal to the creating thread. The retained QEMU owner therefore
+keeps a dedicated launch thread alive through child teardown; retirement of the
+calling runtime worker cannot terminate a guest that still has a live owner.
+The launch thread waits on the unique owner without polling and exits on drop.
+Real-QEMU regressions cover both caller-thread retirement and abrupt native exit.
 Such termination is unclean and requires explicit effect reconciliation; it
 never supplies a successful source checkpoint.
 
