@@ -5530,6 +5530,12 @@ fn process_is_running(pid: u32) -> bool {
 /// lease-3 (F-002): instance-unique durable worker identity stamped onto
 /// queue-task lease rows. Combines the per-boot service id with a per-slice
 /// attempt id so a recovered lease row names the exact worker that owned it.
+fn queue_job_needs_native_turn_lease(job: &QueuedPrompt) -> bool {
+    !job.leased_message_keys.is_empty() && (job.source_label == "queue"
+        || (job.source_label == "plan" && job.leased_message_keys.len() == 1
+            && job.leased_message_keys[0].starts_with("plan:system::")))
+}
+
 fn queue_lease_worker_id(job: &QueuedPrompt) -> String {
     let boot_id = SERVICE_PERFORMANCE_BOOT_ID
         .get_or_init(|| uuid::Uuid::new_v4().to_string())
@@ -6875,7 +6881,7 @@ fn start_prompt_worker(
                 source_label: job.source_label.clone(),
                 progress_error: Arc::clone(&progress_error),
             });
-            if job.source_label == "queue" && !job.leased_message_keys.is_empty() {
+            if queue_job_needs_native_turn_lease(&job) {
                 let mut fence = channels::QueueTurnLeaseFence {
                     root: root.clone(),
                     message_keys: job.leased_message_keys.clone(),
@@ -33270,11 +33276,17 @@ Business OS command:
         let root = temp.path();
         let job = QueuedPrompt {
             prompt: "Execute the confirmed step".into(), queue_task_metadata: json!({}),
-            goal: "Confirmed todo".into(), preview: "Confirmed todo".into(), source_label: "queue".into(),
+            goal: "Confirmed todo".into(), preview: "Confirmed todo".into(), source_label: "plan".into(),
             suggested_skill: None, leased_message_keys: vec![task.clone()], leased_ticket_event_keys: vec![],
             thread_key: Some("business-os/threads/cc6cfe73-2824-4360-9daf-3b3efb079931".into()),
             workspace_root: None, ticket_self_work_id: None, outbound_email: None, outbound_anchor: None,
         };
+        // route_external_messages uses inbound_source_label == "plan";
+        // this same predicate now attaches its real fence before MCP admission.
+        assert!(queue_job_needs_native_turn_lease(&job));
+        let mut unrelated = job.clone();
+        unrelated.leased_message_keys = vec!["email:owner::mail".into()];
+        assert!(!queue_job_needs_native_turn_lease(&unrelated));
         let mut options = chat_turn_session_options_for_queue_job(&job);
         assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options).is_err());
         assert!(options.business_os_mcp_command_session.is_none());
