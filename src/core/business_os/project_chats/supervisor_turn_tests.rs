@@ -1,6 +1,112 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 use super::*;
+#[test]
+fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let exit = |id: &str, kind: &str, payload: Value| {
+        crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({
+                "id":id,"module":"ctox","command_type":format!("ctox.workjet.exit_model.{kind}"),
+                "record_id":"project","payload":payload,"client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}
+            }),
+        )
+    };
+    let request = json!({"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"}});
+    let first = exit("exit-refresh-1", "refresh", request.clone())?;
+    ensure!(
+        first["status"] == "completed",
+        "refresh was not accepted: {first}"
+    );
+    let initial = &first["result"]["assessment"];
+    assert_eq!(initial["status"], "researching");
+    assert!(initial["result"].is_null());
+    let second = exit("exit-refresh-2", "refresh", request)?;
+    assert_eq!(second["result"]["assessment"]["run_id"], initial["run_id"]);
+    let conn = open_store(root.path())?;
+    let research: String = conn.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs WHERE run_id=?1",
+        [initial["run_id"].as_str().unwrap()],
+        |r| r.get(0),
+    )?;
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE project_id='project'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(count, 1);
+    drop(conn);
+    // Component writeback test. The store's production call sits after the
+    // existing native terminal review gate, not after an arbitrary message.
+    let input = crate::business_os::workjet_exit_model_engine::fixture();
+    crate::business_os::workjet_exit_model::complete_research(
+        root.path(),
+        &research,
+        &json!({"exit_model_inputs":input}).to_string(),
+    )?;
+    let state = exit("exit-read", "read", json!({"project_id":"project"}))?;
+    ensure!(state["status"] == "completed", "read failed: {state}");
+    assert_eq!(state["result"]["assessment"]["status"], "provisional");
+    assert_eq!(
+        state["result"]["assessment"]["result"]["expected_exit_equity_eur"],
+        8050.0
+    );
+    let before = state["result"]["assessment"]["history"].clone();
+    crate::business_os::workjet_exit_model::complete_research(
+        root.path(),
+        &research,
+        &json!({"exit_model_inputs":crate::business_os::workjet_exit_model_engine::fixture()})
+            .to_string(),
+    )?;
+    assert_eq!(
+        exit("exit-read-2", "read", json!({"project_id":"project"}))?["result"]["assessment"]
+            ["history"],
+        before
+    );
+    Ok(())
+}
+
+#[test]
+fn exit_research_missing_evidence_is_blocked_and_keeps_admission_history() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+        root.path(),
+        json!({
+            "id":"exit-blocked-research","module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":"project",
+            "payload":{"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"}},
+            "client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}
+        }),
+    )?;
+    ensure!(
+        accepted["status"] == "completed",
+        "refresh failed: {accepted}"
+    );
+    let conn = open_store(root.path())?;
+    let research: String = conn.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [],
+        |r| r.get(0),
+    )?;
+    drop(conn);
+    crate::business_os::workjet_exit_model::complete_research(
+        root.path(),
+        &research,
+        r#"{"exit_model_blocked":{"missing_inputs":["rights_source","confirmed_plan"]}}"#,
+    )?;
+    let conn = open_store(root.path())?;
+    let state = crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?;
+    assert_eq!(state["status"], "blocked");
+    assert!(state["result"].is_null());
+    assert_eq!(state["history"].as_array().unwrap().len(), 2);
+    assert_eq!(state["history"][1]["status"], "researching");
+    assert_eq!(
+        state["missing_inputs"],
+        json!(["rights_source", "confirmed_plan"])
+    );
+    Ok(())
+}
+
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 
 pub(super) fn fixture() -> anyhow::Result<TempDir> {
