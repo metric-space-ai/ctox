@@ -248,6 +248,7 @@ const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
     "ctox-browser-live-v1",
     "ctox-workjet-device-control-v1",
+    "ctox-workjet-jour-fixe-speech-v1",
     // Presence is ephemeral transport state (ctox-presence-v1): always
     // advertised, never gated on a runtime flag — there is no persistence or
     // policy surface behind it, only the in-memory hub in the connection

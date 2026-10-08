@@ -1,3 +1,4 @@
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261008-speech-ingress';
 import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
@@ -13705,6 +13706,13 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
+  if (action === 'project.jour_fixe.speech') {
+    const sync = state.sync;
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
+    const result = await requestJourFixeSpeech(sync, instance, request);
+    if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync) throw new Error('Speech scope changed.');
+    return result;
+  }
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
