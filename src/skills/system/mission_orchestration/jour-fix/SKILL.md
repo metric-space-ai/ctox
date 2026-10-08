@@ -10,8 +10,9 @@ task. Titles or caller UUIDs cannot authorize another project or speaker. Use
 one explicit execution plan and complete its model-owned steps.
 
 Read the previous confirmed goal, configuration, evidenced merged PRs, KPIs,
-comments and final transcript. Name missing or stale evidence; never invent
-metrics or completed work. Prepare slides covering progress against goals, PR
+comments and final transcript. Name missing or stale evidence.
+Never invent numeric metrics or completed work.
+Prepare slides covering progress against goals, PR
 results, KPIs, owner decisions and next actions with acceptance criteria.
 Keep source references. Preparation authorizes no deployment, external message,
 grant change or unrelated delegated work.
