@@ -396,6 +396,7 @@ pub(crate) struct NativeGuestRegistry {
     >,
 }
 
+#[derive(Clone)]
 pub(crate) struct NativeGuestExecution {
     registry: Arc<NativeGuestRegistry>,
     provider: NativeProviderBinding,

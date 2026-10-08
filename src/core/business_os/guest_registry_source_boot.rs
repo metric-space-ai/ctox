@@ -53,8 +53,9 @@ impl SourceBoot {
         std::fs::DirBuilder::new().mode(0o700).create(parent)?;
         private_directory(parent)?;
         self.current()?;
+        let slot = &mut *helper;
         self.io.run(|_| {
-            *helper = Some(QemuOverlayPreparation::start(
+            *slot = Some(QemuOverlayPreparation::start(
                 &program,
                 parent,
                 &prepared.base_raw,
