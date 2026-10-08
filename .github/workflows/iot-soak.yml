@@ -12,6 +12,7 @@ name: IoT Engine Soak
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ".github/workflows/iot-soak.yml"
       - "src/core/iot/**"
@@ -57,6 +58,7 @@ concurrency:
 
 jobs:
   iot-soak:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-22.04
     timeout-minutes: 60
 

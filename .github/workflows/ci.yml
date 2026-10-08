@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 env:
@@ -17,6 +18,7 @@ concurrency:
 
 jobs:
   check-business-os-desktop:
+    if: ${{ !github.event.pull_request.draft }}
     strategy:
       fail-fast: false
       matrix:
@@ -98,6 +100,7 @@ jobs:
           '
 
   check-desktop:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-22.04
     name: Desktop extra check (linux)
 
@@ -130,6 +133,7 @@ jobs:
           cargo test --locked business_os_peer_status
 
   check-ctox:
+    if: ${{ !github.event.pull_request.draft }}
     strategy:
       fail-fast: false
       matrix:

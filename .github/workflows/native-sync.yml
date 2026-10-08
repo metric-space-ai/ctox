@@ -2,6 +2,7 @@ name: Native Sync
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main, codex/checkpoint-workspace-restore]
     paths:
       - '.github/workflows/native-sync.yml'
@@ -62,6 +63,7 @@ concurrency:
 
 jobs:
   native-profiler:
+    if: ${{ !github.event.pull_request.draft }}
     name: Native CPU profiler (real Linux process)
     runs-on: ubuntu-22.04
     timeout-minutes: 10
@@ -95,6 +97,7 @@ jobs:
           if-no-files-found: error
 
   native-sync:
+    if: ${{ !github.event.pull_request.draft }}
     name: Native Sync (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -201,6 +204,7 @@ jobs:
           if-no-files-found: error
 
   chat-presentation:
+    if: ${{ !github.event.pull_request.draft }}
     name: Chat presentation (Chromium)
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -242,6 +246,7 @@ jobs:
           if-no-files-found: error
 
   full-host-acceptance:
+    if: ${{ !github.event.pull_request.draft }}
     name: Full CTOX host acceptance (Linux)
     runs-on: ubuntu-22.04
     timeout-minutes: 90
