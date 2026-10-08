@@ -1222,8 +1222,14 @@ mod speech_availability_tests {
 
     #[test]
     fn a_completed_check_maps_to_available_or_unavailable() {
-        assert_eq!(availability_from_check(Ok(true)), SpeechAvailability::Available);
-        assert_eq!(availability_from_check(Ok(false)), SpeechAvailability::Unavailable);
+        assert_eq!(
+            availability_from_check(Ok(true)),
+            SpeechAvailability::Available
+        );
+        assert_eq!(
+            availability_from_check(Ok(false)),
+            SpeechAvailability::Unavailable
+        );
     }
 
     #[test]
