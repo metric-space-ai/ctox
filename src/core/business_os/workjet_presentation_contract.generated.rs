@@ -199,7 +199,7 @@ impl WireValidate for PresentationManifest {
         {
             let value = &self.slide_ids;
             value.validate()?;
-            if value.len() < 1 {
+            if value.is_empty() {
                 return Err("PresentationManifest.slide_ids violates min_items".into());
             }
             if value.len() > 160 {
@@ -665,7 +665,7 @@ impl WireValidate for PresentationMutationReceipt {
         {
             let value = &self.slide_ids;
             value.validate()?;
-            if value.len() < 1 {
+            if value.is_empty() {
                 return Err("PresentationMutationReceipt.slide_ids violates min_items".into());
             }
             if value.len() > 160 {
