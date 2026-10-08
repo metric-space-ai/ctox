@@ -672,8 +672,9 @@ collection and record_ids enables a signed, scoped Business OS MCP session even
 without allowed_actions. business_os.execute_writeback dispatches the native
 outbound.lead.research_writeback command and binds it to that parent and lead.
 Server authorization and native field/evidence validation remain mandatory.
-The managed session filter also exposes `business_os.jour_fixe_read` and
-`business_os.jour_fixe_update` for scheduled meeting preparation. Their native
+The managed session filter also exposes `business_os.jour_fixe_read`,
+`business_os.jour_fixe_update` and `business_os.project_kpi` for scheduled meeting
+preparation. Their native
 handlers require the signed, current execution of the registered project
 Supervisor; an ordinary managed Owner token or a foreign peer gains no meeting
 authority from inclusion in the harness tool list.

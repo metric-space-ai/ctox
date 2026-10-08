@@ -181,6 +181,7 @@ const BUSINESS_OS_MCP_SESSION_TOOLS: &[&str] = &[
     // them from that execution when a scheduled meeting needs preparation.
     "business_os.jour_fixe_read",
     "business_os.jour_fixe_update",
+    "business_os.project_kpi",
     "business_os.list_runs",
     "business_os.get_run",
 ];
@@ -3568,21 +3569,25 @@ mod tests {
     }
 
     #[test]
-    fn business_os_mcp_thread_config_exposes_native_jour_fixe_tools() {
+    fn business_os_mcp_thread_config_exposes_scheduled_supervisor_tools() {
         let config =
             business_os_mcp_thread_config("127.0.0.1:8788", "test-secret", "command-session")
                 .expect("build scheduled Supervisor MCP config");
         let tools = config["mcp_servers"][BUSINESS_OS_MCP_SESSION_SERVER_NAME]["enabled_tools"]
             .as_array()
             .expect("explicit enabled tools");
-        for name in ["business_os.jour_fixe_read", "business_os.jour_fixe_update"] {
+        for name in [
+            "business_os.jour_fixe_read",
+            "business_os.jour_fixe_update",
+            "business_os.project_kpi",
+        ] {
             assert_eq!(
                 tools
                     .iter()
                     .filter(|tool| tool.as_str() == Some(name))
                     .count(),
                 1,
-                "the harness must expose the native meeting tool exactly once: {name}"
+                "the harness must expose the native preparation tool exactly once: {name}"
             );
         }
     }
