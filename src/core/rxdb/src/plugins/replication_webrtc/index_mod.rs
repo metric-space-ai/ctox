@@ -3392,7 +3392,8 @@ mod tests {
         );
         for operation in ["open", "write", "read", "finish", "cancel"] {
             assert_eq!(
-                auxiliary_response_collection("ctox.workjet.jour_fixe.speech.v1", operation).as_deref(),
+                auxiliary_response_collection("ctox.workjet.jour_fixe.speech.v1", operation)
+                    .as_deref(),
                 Some(CTOX_BROWSER_INPUT_RESPONSE_COLLECTION)
             );
         }
