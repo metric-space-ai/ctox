@@ -206,6 +206,7 @@ RUN / EXEC
   ctox runtime speech-status
   ctox runtime speech-configure <speech-config.json>
   ctox runtime speech-computer-configure <routes.json>
+  ctox runtime speech-computer-authorize <grants.json>
   ctox runtime speech-synthesize <output.wav> --text <text>
   ctox runtime speech-benchmark <16khz-mono-s16le.pcm>
   ctox runtime stt-doctor
@@ -653,6 +654,13 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Some("speech-computer-configure") => {
                 anyhow::ensure!(args.len() == 3, "usage: ctox runtime speech-computer-configure <routes.json>");
                 let config = execution::speech::computer::configure_from_file(&root, Path::new(&args[2]))?;
+                println!("{}", serde_json::to_string_pretty(&config)?);
+                Ok(())
+            }
+            #[cfg(unix)]
+            Some("speech-computer-authorize") => {
+                anyhow::ensure!(args.len() == 3, "usage: ctox runtime speech-computer-authorize <grants.json>");
+                let config = execution::speech::target_policy::configure_from_file(&root, Path::new(&args[2]))?;
                 println!("{}", serde_json::to_string_pretty(&config)?);
                 Ok(())
             }
