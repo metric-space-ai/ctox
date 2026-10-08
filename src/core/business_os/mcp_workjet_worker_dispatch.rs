@@ -127,7 +127,7 @@ pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
                 "registration_id":{"type":"string"},"revision":{"type":"integer","minimum":1},
                 "intent_id":{"type":"string"},"result":{"type":"object"},
                 "dispatch_key":{"type":"string"},"task":{"type":"string","maxLength":16384},
-                "title":{"type":"string","maxLength":256},"computer_id":{"type":"string"},
+                "title":{"type":"string","maxLength":200},"computer_id":{"type":"string"},
                 "worker_profile_id":{"type":"string"}}}))
 }
 
@@ -485,10 +485,10 @@ pub(super) fn execute(
         } => {
             text(&dispatch_key, 128)?;
             text(&task, 16 * 1024)?;
-            for value in [&title, &computer_id, &worker_profile_id]
-                .into_iter()
-                .flatten()
-            {
+            if let Some(title) = &title {
+                text(title, 200)?;
+            }
+            for value in [&computer_id, &worker_profile_id].into_iter().flatten() {
                 text(value, 256)?;
             }
             let trusted = trusted.context("native supervisor session unavailable")?;
