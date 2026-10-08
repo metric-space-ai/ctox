@@ -68,7 +68,7 @@ fn parse(command:&BusinessCommand)->anyhow::Result<(Edit,Value)> {
     ensure!(operation.trim()==operation && meeting.trim()==meeting,"meeting operation identity must be canonical");
     Ok((edit,payload))
 }
-fn owned(conn:&Connection,command:&BusinessCommand,actor:&str,id:&str)->anyhow::Result<wire::Meeting> {
+fn owned(conn:&Connection,actor:&str,project_route:Option<&str>,id:&str)->anyhow::Result<wire::Meeting> {
     let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_jour_fixe_meetings')",[],|r|r.get(0))?;
     ensure!(exists,"meeting unavailable to this project owner");
     let owner=workjet_identity::owner_from_connection(conn,actor)?;
@@ -82,10 +82,73 @@ fn owned(conn:&Connection,command:&BusinessCommand,actor:&str,id:&str)->anyhow::
     meeting.validate().map_err(anyhow::Error::msg)?;
     ensure!(meeting.id==id && meeting.project_id==project && meeting.owner_user_id==owner,
         "meeting ownership binding conflicts");
-    ensure!(command.record_id.as_deref().is_none_or(|id|id==project),"meeting routing conflicts with project");
+    ensure!(project_route.is_none_or(|id|id==project),"meeting routing conflicts with project");
     let binding=supervisor_turns::binding_from_connection(conn,&owner,&project,&meeting.supervisor.workjet_thread_id,true)?;
     ensure!(binding.thread_key==meeting.supervisor.ctox_thread_key,"meeting supervisor binding conflicts");
     Ok(meeting)
+}
+
+/// Native-only metadata binding. This is not a bearer credential and cannot be
+/// reconstructed from browser JSON. Callers must first perform the existing
+/// fresh native peer/session/collection authorization for every operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::business_os) struct LiveMeetingBinding {
+    owner_user_id: String,
+    project_id: String,
+    meeting_id: String,
+    supervisor_thread_id: String,
+    supervisor_thread_key: String,
+    deck_revision: u64,
+    meeting_revision: u64,
+}
+impl LiveMeetingBinding {
+    pub(in crate::business_os) fn owner_user_id(&self)->&str { &self.owner_user_id }
+    pub(in crate::business_os) fn project_id(&self)->&str { &self.project_id }
+    pub(in crate::business_os) fn meeting_id(&self)->&str { &self.meeting_id }
+    pub(in crate::business_os) fn deck_revision(&self)->u64 { self.deck_revision }
+    pub(in crate::business_os) fn meeting_revision(&self)->u64 { self.meeting_revision }
+    /// Re-read after each awaited provider operation, without retaining a
+    /// connection, read transaction or issuer fence across that operation.
+    /// Conversation writes may advance meeting_revision; owner, deck, live
+    /// state and the registered Supervisor binding must remain unchanged.
+    pub(in crate::business_os) fn revalidate(
+        &self,root:&Path,authenticated_actor:&str,
+    )->anyhow::Result<Self> {
+        let current=check_live_meeting_for_authenticated_actor(
+            root,authenticated_actor,&self.project_id,&self.meeting_id,self.deck_revision)?;
+        ensure!(current.owner_user_id==self.owner_user_id
+            && current.supervisor_thread_id==self.supervisor_thread_id
+            && current.supervisor_thread_key==self.supervisor_thread_key,
+            "live meeting execution binding changed");
+        Ok(current)
+    }
+}
+
+/// Only current native metadata is read. The returned binding contains no
+/// connection, policy decision cache, peer token, source audio or credentials.
+/// This supplements normal authenticated native ingress; it never authorizes
+/// a client, grants collection access, or accepts a caller-supplied speaker.
+pub(in crate::business_os) fn check_live_meeting_for_authenticated_actor(
+    root:&Path,authenticated_actor:&str,project_id:&str,meeting_id:&str,deck_revision:u64,
+)->anyhow::Result<LiveMeetingBinding> {
+    ensure!(!authenticated_actor.trim().is_empty() && !project_id.trim().is_empty()
+        && !meeting_id.trim().is_empty() && deck_revision>0,
+        "live meeting binding requires authenticated identity and an existing deck");
+    let mut conn=Connection::open_with_flags(store::business_os_store_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let tx=conn.transaction()?;
+    let meeting=owned(&tx,authenticated_actor,Some(project_id),meeting_id)?;
+    ensure!(meeting.state==wire::MeetingState::Live && meeting.deck_revision==deck_revision,
+        "meeting is not live at the requested deck revision");
+    ensure!(!meeting.slides.is_empty() && meeting.slides.iter().all(|slide|
+        slide.meeting_id==meeting.id && slide.audio.is_some()),"live meeting deck is unavailable");
+    Ok(LiveMeetingBinding {
+        owner_user_id:meeting.owner_user_id,project_id:meeting.project_id,meeting_id:meeting.id,
+        supervisor_thread_id:meeting.supervisor.workjet_thread_id,
+        supervisor_thread_key:meeting.supervisor.ctox_thread_key,
+        deck_revision:meeting.deck_revision,meeting_revision:meeting.revision,
+    })
 }
 
 pub(in crate::business_os) fn handle(
@@ -95,12 +158,12 @@ pub(in crate::business_os) fn handle(
     let (operation,id,expected)=edit.identity();
     let intent=format!("{:x}",Sha256::digest(serde_json::to_vec(&json!({"kind":command.command_type,"payload":payload}))?));
     let mut conn=open_store(root)?;
-    owned(&conn,command,actor,id)?;
+    owned(&conn,actor,command.record_id.as_deref(),id)?;
     conn.execute_batch(OPERATIONS)?;
     let applied=admission.apply(&mut conn,|tx| {
         // Current project ownership and registered supervisor are checked inside
         // the same writer transaction as both metadata and the domain receipt.
-        let mut meeting=owned(tx,command,actor,id)?;
+        let mut meeting=owned(tx,actor,command.record_id.as_deref(),id)?;
         let old:Option<(String,String,String)>=tx.query_row(
             "SELECT owner_user_id,intent_hash,receipt_json FROM workjet_jour_fixe_owner_operations WHERE operation_id=?1",
             [operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;

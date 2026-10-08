@@ -171,3 +171,76 @@ fn reserved_meeting_tools_fail_terminally_without_creating_recursive_model_tasks
     assert_eq!(saved(root.path())?["revision"],0);
     Ok(())
 }
+
+#[test]
+fn live_stream_binding_is_read_only_and_revalidates_after_an_independent_writer() -> anyhow::Result<()> {
+    use super::super::jour_fixe_owner::check_live_meeting_for_authenticated_actor;
+    let root=fixture("live")?;
+    let binding=check_live_meeting_for_authenticated_actor(root.path(),"owner","project","meeting-1",1)?;
+    assert_eq!(binding.owner_user_id(),"owner");
+    assert_eq!(binding.project_id(),"project");
+    assert_eq!(binding.meeting_id(),"meeting-1");
+    assert_eq!(binding.deck_revision(),1);
+    assert_eq!(binding.meeting_revision(),0);
+    let mut conn=open_store(root.path())?;
+    conn.busy_timeout(std::time::Duration::ZERO)?;
+    let tx=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut metadata=saved(root.path())?;
+    metadata["revision"]=json!(1);
+    tx.execute("UPDATE workjet_jour_fixe_meetings SET metadata_json=?1",[metadata.to_string()])?;
+    tx.commit()?;
+    let refreshed=binding.revalidate(root.path(),"owner")?;
+    assert_eq!(refreshed.meeting_revision(),1);
+    assert!(binding.revalidate(root.path(),"foreign").is_err());
+    let ended=send(root.path(),"end-stream","meeting.end","owner",request("end-stream-op",1))?;
+    assert_eq!(ended["status"],"completed");
+    assert!(binding.revalidate(root.path(),"owner").is_err());
+    Ok(())
+}
+
+#[test]
+fn stream_binding_rejects_foreign_project_deck_state_and_missing_store_without_creation() -> anyhow::Result<()> {
+    use super::super::jour_fixe_owner::check_live_meeting_for_authenticated_actor;
+    let root=fixture("live")?;
+    for (actor,project,meeting,deck) in [("foreign","project","meeting-1",1),
+        ("owner","foreign","meeting-1",1),("owner","project","foreign",1),
+        ("owner","project","meeting-1",0),("owner","project","meeting-1",2)] {
+        assert!(check_live_meeting_for_authenticated_actor(root.path(),actor,project,meeting,deck).is_err());
+    }
+    for state in ["planned","preparing","ready","review","confirmed","cancelled","failed"] {
+        let root=fixture(state)?;
+        assert!(check_live_meeting_for_authenticated_actor(root.path(),"owner","project","meeting-1",1).is_err());
+    }
+    let empty=TempDir::new()?;
+    let path=store::business_os_store_path(empty.path());
+    assert!(!path.exists());
+    assert!(check_live_meeting_for_authenticated_actor(empty.path(),"owner","project","meeting-1",1).is_err());
+    assert!(!path.exists(),"metadata checks must not create or migrate a store");
+    Ok(())
+}
+
+#[test]
+fn live_binding_rechecks_current_owner_supervisor_and_deck_after_provider_wait() -> anyhow::Result<()> {
+    use super::super::jour_fixe_owner::check_live_meeting_for_authenticated_actor;
+    for changed in ["owner","supervisor","deck"] {
+        let root=fixture("live")?;
+        let binding=check_live_meeting_for_authenticated_actor(root.path(),"owner","project","meeting-1",1)?;
+        let conn=open_store(root.path())?;
+        if changed=="supervisor" {
+            let mut thread=outbound_load_record(&conn,THREADS,THREAD)?.unwrap();
+            thread["source_record_id"]=json!("foreign-project");
+            store::upsert_business_record(&conn,THREADS,THREAD,8,thread)?;
+        } else if changed=="owner" {
+            let mut project=outbound_load_record(&conn,PROJECTS,"project")?.unwrap();
+            project["owner_user_id"]=json!("foreign");
+            store::upsert_business_record(&conn,PROJECTS,"project",8,project)?;
+        } else {
+            let mut metadata=saved(root.path())?;
+            metadata["deck_revision"]=json!(2);
+            conn.execute("UPDATE workjet_jour_fixe_meetings SET metadata_json=?1",[metadata.to_string()])?;
+        }
+        assert!(binding.revalidate(root.path(),"owner").is_err(),"{changed}");
+    }
+    Ok(())
+}
+

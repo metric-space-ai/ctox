@@ -63,3 +63,26 @@ operation and intent when retrying; a new operation must use the current revisio
 The isolated Node and Chromium regressions exercise the actual control source
 against a controlled transport fixture; they do not establish installed native
 or Workjet room acceptance.
+
+## Native speech adapter metadata seam
+
+`business_os::project_chats::jour_fixe_owner::check_live_meeting_for_authenticated_actor`
+returns an opaque `LiveMeetingBinding` to native Business OS code. It checks the
+current canonical project Owner, stored meeting, registered Supervisor, exact
+nonzero deck revision, live state and available narrated deck. The caller must
+first perform the existing fresh native peer/session/collection authorization;
+this metadata check is not a credential, grant or substitute for that ingress.
+
+`LiveMeetingBinding::revalidate(root, authenticated_actor)` repeats the read
+after an awaited provider operation. Conversation writes may advance the meeting
+revision; changing owner, Supervisor, deck or live state invalidates the binding.
+`meeting_revision()` returns the fresh CAS revision for the next mutation.
+The helper opens only a read-only DEFERRED snapshot, creates/migrates nothing,
+and drops all database state before returning. It holds no issuer fence across
+network or audio operations and cannot be deserialized from a browser payload.
+
+Verified speech-final persistence and narration file receipts remain a separate
+integration. `execution::speech::TranscriptEvent` currently derives Deserialize
+and is not by itself proof of gateway provenance. The Models producer must expose
+a native-only verified receipt; do not pass deserialized client events to the
+Owner text append handler or invent speaker/model/audio evidence.
