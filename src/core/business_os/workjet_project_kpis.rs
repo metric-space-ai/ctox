@@ -110,7 +110,8 @@ pub(super) fn read_state(
         {
             item.result.status = KpiState::Stale;
             item.result.reason_code = Some("source_binding_changed".into());
-            item.result.message = Some("The registered source Supervisor changed; resolve the prompt again.".into());
+            item.result.message =
+                Some("The registered source Supervisor changed; resolve the prompt again.".into());
         }
         if item.result.status == KpiState::Ready
             && item

@@ -3208,7 +3208,7 @@ fn call_tool_inner(
         trusted_gateway_context,
     )?;
     enforce_internal_command_session_scope(tool_name, &arguments, trusted_gateway_context)?;
-    enforce_tool_policy(root, tool_name)?;
+    enforce_tool_policy_class(root, tool_name, tool_policy_class_for_call(tool_name, &arguments))?;
     enforce_context_policy(root, &context)?;
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
@@ -6208,6 +6208,10 @@ fn dedupe_policy_values(values: Vec<String>) -> Vec<String> {
 }
 
 fn enforce_tool_policy(root: &Path, tool_name: &str) -> anyhow::Result<()> {
+    enforce_tool_policy_class(root, tool_name, tool_policy_class(tool_name))
+}
+
+fn enforce_tool_policy_class(root: &Path, tool_name: &str, class: McpToolPolicyClass) -> anyhow::Result<()> {
     let policy = mcp_policy(root);
     if !policy.enabled {
         return Err(anyhow::Error::new(BusinessOsMcpError {
@@ -6223,7 +6227,7 @@ fn enforce_tool_policy(root: &Path, tool_name: &str) -> anyhow::Result<()> {
             field: Some("CTOX_BUSINESS_OS_MCP_DENY_TOOLS".to_string()),
         }));
     }
-    match tool_policy_class(tool_name) {
+    match class {
         McpToolPolicyClass::Read if !policy.allow_reads => Err(policy_denied(
             "read tools are disabled by policy",
             "CTOX_BUSINESS_OS_MCP_ALLOW_READS",
@@ -7091,7 +7095,7 @@ fn enforce_argument_scope_policy(
         }
         _ => {}
     }
-    if tool_policy_class(tool_name) == McpToolPolicyClass::Read {
+    if tool_policy_class_for_call(tool_name, arguments) == McpToolPolicyClass::Read {
         enforce_business_os_mcp_policy(root, context, tool_name, arguments)?;
     }
     Ok(())
@@ -7204,6 +7208,14 @@ enum McpToolPolicyClass {
     ExternalEffect,
 }
 
+fn tool_policy_class_for_call(tool_name: &str, arguments: &Value) -> McpToolPolicyClass {
+    if tool_name == workjet_kpis::TOOL && arguments["action"] == "read" {
+        McpToolPolicyClass::Read
+    } else {
+        tool_policy_class(tool_name)
+    }
+}
+
 fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
     match tool_name {
         "business_os.approve" | "web_browser_automate" | "meeting.schedule" => {
@@ -7215,6 +7227,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "business_os.remote_worker_admission"
         | "business_os.workjet_worker_dispatch"
         | "business_os.jour_fixe_update"
+        | workjet_kpis::TOOL
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
         | "business_os.claim_crew_execution"
