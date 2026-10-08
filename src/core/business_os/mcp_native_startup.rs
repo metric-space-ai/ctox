@@ -275,7 +275,7 @@ mod tests {
             std::fs::create_dir_all(&home)?;
             let mut config=ctox_core::config::ConfigBuilder::default()
                 .codex_home(home.clone())
-                .cli_overrides(vec![("mcp_servers".into(),toml::Value::try_from(&servers)?)])
+                .cli_overrides(vec![("mcp_servers".into(),serde_json::from_value::<toml::Value>(servers.clone())?)])
                 .build().await?;
             config.cwd=root.path().to_owned();
             config.model=Some("gpt-5.1".into());

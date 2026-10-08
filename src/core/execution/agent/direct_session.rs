@@ -2168,10 +2168,11 @@ impl PersistentSession {
             cli_overrides.retain(|(key, _)| key != "mcp_servers" && key != "features.apps");
             cli_overrides.push((
                 "mcp_servers".into(),
-                toml::Value::try_from(
+                serde_json::from_value::<toml::Value>(
                     native_config
                         .get("mcp_servers")
-                        .context("native MCP servers missing")?,
+                        .context("native MCP servers missing")?
+                        .clone(),
                 )?,
             ));
             cli_overrides.push(("features.apps".into(), toml::Value::Boolean(false)));
