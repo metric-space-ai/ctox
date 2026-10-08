@@ -46,3 +46,31 @@ Main owns capture permission, resampling, VAD and 100 ms framing. A room scope
 transition aborts its AbortSignal. The existing room mic remains unavailable
 until this transport is installed, authorized and wired. This source contract
 does not establish installed speech or the <=~1.5 s sentence-end acceptance.
+
+## WELSCH production prerequisites
+
+The measured public state at 2026-10-08T12:02:37.953657Z is native
+`native-main-11ac94eeb045`, PID 70754, state root
+`/home/ctox/.local/state/ctox`. Normal `ctox sync status` reported
+`configured:false` / `listener:inactive`; `sync identity` exited 1.
+The actual source instance, public Sync signing identity and scope remain
+unknown. The canonical Owner from existing project evidence is
+`196a89ba-ee86-4413-885c-04ca60e6f291`; that does not supply a source identity.
+
+The published `native-main-7c94f7aab837` (includes #455) is not evidence of
+WELSCH activation or of an installed renderer speech ingress. Instances owns
+the real source/registered-target binding dependency. The existing writer
+applies reviewed source/target configuration through normal Owner authority
+and the local secret store only after those real identities are supplied,
+preserving current grants and keys. Never substitute a tenant workspace,
+initialize a synthetic production identity or read a denied computer collection
+through SQL/SSH.
+
+Keep the production mic unavailable until source configuration, target binding,
+installed ingress and room capture/VAD are verified. Classify this measured
+state as missing transport configuration, never as a provider credential failure
+or successful production speech. Isolated Models bootstraps do not establish
+production readiness.
+
+Evidence:
+`~/.codex/task-evidence/devops/welsch-speech-public-host-metadata-20261008.json`.
