@@ -131,9 +131,10 @@ where
             options,
             stop,
             |ready, authority, peer| {
-                control_owner = Some(super::super::control_channel::Owner::start(
+                control_owner = Some(super::super::control_channel::Owner::start_with_routes(
                     root,
                     peer.pool(),
+                    peer.native_route_channel(),
                 )?);
                 #[cfg(unix)]
                 {

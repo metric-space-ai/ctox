@@ -71,6 +71,8 @@ struct RouteDiscovery {
 
 pub struct NativeExecutionHost<A: ExecutionAuthority + 'static> {
     node: Arc<A>,
+    #[cfg(unix)]
+    route_channel: std::sync::Weak<WebRtcControlChannel>,
     endpoint: PathBuf,
     stop: Mutex<Option<oneshot::Sender<()>>>,
     task: Mutex<Option<JoinHandle<io::Result<()>>>>,
@@ -149,6 +151,7 @@ impl NativeExecutionHost<AuthorityNode> {
             );
             let mut group = Self {
                 node,
+                route_channel: std::sync::Weak::new(),
                 endpoint: PathBuf::new(),
                 stop: Mutex::new(None),
                 task: Mutex::new(None),
@@ -184,6 +187,11 @@ impl NativeExecutionHost<AuthorityNode> {
 
 impl<A: ExecutionAuthority + 'static> NativeExecutionHost<A> {
     #[cfg(unix)]
+    pub(crate) fn route_channel(&self) -> std::sync::Weak<WebRtcControlChannel> {
+        self.route_channel.clone()
+    }
+
+    #[cfg(unix)]
     async fn activate(
         &mut self,
         pool: &NativePool,
@@ -192,6 +200,7 @@ impl<A: ExecutionAuthority + 'static> NativeExecutionHost<A> {
         discovery: RouteDiscovery,
     ) -> io::Result<()> {
         let group = self;
+        group.route_channel = Arc::downgrade(&discovery.channel);
         let mut host = LocalIpcHost::start_authority(ipc_directory, group.node.clone()).await?;
         group.endpoint = host.endpoint().to_path_buf();
         let (stop, mut stopped) = oneshot::channel();
@@ -221,6 +230,11 @@ impl<A: ExecutionAuthority + 'static> NativeExecutionHost<A> {
                         if peer.is_none() { break; }
                     },
                     _ = tokio::time::sleep(Duration::from_secs(1)), if retry => {},
+                    _ = discovery.channel.workload_routes_changed() => {
+                        // A newly configured workload pin may name a connected
+                        // nonvoter rejected by an earlier public-key probe.
+                        completed_probes.clear();
+                    },
                 }
                 // Signaling addresses are ephemeral. The attached signing key,
                 // member ID and scope remain pinned, and SignedTransport verifies
@@ -433,6 +447,7 @@ impl NativeExecutionHost<crate::authority::client::WorkerAuthorityClient> {
             )?);
             let mut worker = Self {
                 node,
+                route_channel: std::sync::Weak::new(),
                 endpoint: PathBuf::new(),
                 stop: Mutex::new(None),
                 task: Mutex::new(None),
