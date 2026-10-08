@@ -50,10 +50,10 @@ mod project_crew_request;
 mod remote_worker;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
-#[path = "mcp_workjet_narration.rs"]
-mod workjet_narration;
 #[path = "mcp_workjet_kpis.rs"]
 mod workjet_kpis;
+#[path = "mcp_workjet_narration.rs"]
+mod workjet_narration;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
 

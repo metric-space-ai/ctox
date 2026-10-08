@@ -46,7 +46,10 @@ pub(super) fn allows(tool: &str, args: &Value) -> bool {
         (
             READ_TOOL,
             Some("read_meeting" | "read_comments" | "read_transcript")
-        ) | (WRITE_TOOL, Some("prepare_deck" | "propose_todos" | "narrate"))
+        ) | (
+            WRITE_TOOL,
+            Some("prepare_deck" | "propose_todos" | "narrate")
+        )
     )
 }
 
@@ -243,7 +246,9 @@ pub(super) fn execute(
         serde_json::to_vec(arguments)?.len() <= MAX_METADATA_BYTES,
         "meeting request exceeds native write budget"
     );
-    if tool == WRITE_TOOL && arguments["action"] == "narrate" { return workjet_narration::execute(root,context,arguments,trusted); }
+    if tool == WRITE_TOOL && arguments["action"] == "narrate" {
+        return workjet_narration::execute(root, context, arguments, trusted);
+    }
     let writing = tool == WRITE_TOOL;
     // Core before Policy, matching the native execution/cancellation lock order.
     // Only a mutation holds a Core writer reservation while the Policy edit
