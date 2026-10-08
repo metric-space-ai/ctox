@@ -7,8 +7,8 @@ use crate::execution::speech::{tests::{fixture as transport_fixture,start},Verif
 use tokio::{task::JoinHandle,time::{timeout,Duration}};
 
 fn owner_token(root:&Path)->anyhow::Result<String> {
-    store::tests::seed_business_user(root,"owner","admin")?;
-    Ok(store::issue_business_os_capability_token(root,"owner",chrono::Utc::now().timestamp_millis())?.0)
+    Ok(store::issue_business_os_capability_token_for_managed_user(root,"owner","Owner","admin",
+        chrono::Utc::now().timestamp_millis())?.0)
 }
 async fn bound(root:&Path,token:&str)->anyhow::Result<(BoundTranscription,JoinHandle<()>)> {
     let binding=check_live_meeting_for_authenticated_actor(root,"owner","project","meeting-1",1)?;
@@ -85,8 +85,11 @@ async fn revoked_actor_cannot_stage_an_actual_final_or_read_a_retry() -> anyhow:
     let token=owner_token(root.path())?;
     let (mut stream,server)=bound(root.path(),&token).await?;
     let receipt=final_receipt(&mut stream).await?;
-    assert!(stream.stage_final(root.path(),"invalid-or-revoked-token",receipt).is_err());
-    assert!(submit_staged_final(root.path(),"invalid-or-revoked-token",stream.binding(),stream.stream_id()).is_err());
+    assert!(store::verified_webrtc_capability_claims(root.path(),&token).is_some());
+    open_store(root.path())?.execute("UPDATE business_users SET active=0 WHERE user_id='owner'",[])?;
+    assert!(store::verified_webrtc_capability_claims(root.path(),&token).is_none());
+    assert!(stream.stage_final(root.path(),&token,receipt).is_err());
+    assert!(submit_staged_final(root.path(),&token,stream.binding(),stream.stream_id()).is_err());
     assert_eq!(consumed(root.path())?,0);finish(stream,server).await
 }
 #[tokio::test]
