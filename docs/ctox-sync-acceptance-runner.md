@@ -1,10 +1,15 @@
 # Installed sync acceptance (DevOps goals5–7)
 
 This runner consumes the single shared Linux package from Main
-`5fbba4af6ab4bc58135d71246608484ed8364035`. It never compiles native CTOX,
+`77f235a4fc8e1dcbbb2285f0ca952b18c7bda755` (including #392). It never compiles native CTOX,
 changes sync production code, or restarts a host/customer service. The Mac
 Workjet revision is recorded separately; this is not a Desktop or Shell UI
 acceptance proof.
+
+Use the published `native-main-77f235a4fc8e` package and its terminal producer
+manifest. Older5fb-prefix measurements remain tied to that installed source;
+they are neither relabeled nor reused as a77f sync pass. Preparation must use a
+fresh prefix, not replace the state or authority of an earlier attempt.
 
 The preparation operator checks the finished producer receipt, package hash,
 installed binary, source provenance and seven actual Shell contract files. It

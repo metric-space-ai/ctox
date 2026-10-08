@@ -10,7 +10,7 @@ import subprocess
 import time
 
 OWNER = '01a087a0-169a-7e23-ba3d-71352256cbfb'
-SOURCE = '5fbba4af6ab4bc58135d71246608484ed8364035'
+SOURCE = '77f235a4fc8e1dcbbb2285f0ca952b18c7bda755'
 CONTRACTS = ['rxdb/manifest.json', 'rxdb/src/protocol-contract.generated.mjs',
              'rxdb/src/frame-contract.generated.mjs', 'shared/rxdb-runtime.js',
              'rxdb/dist/ctox-rxdb-js.mjs', 'index.html', 'app.js']
