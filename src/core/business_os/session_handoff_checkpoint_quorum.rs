@@ -325,7 +325,7 @@ mod tests {
         let legacy = serde_json::json!({"bindingDigest":"a".repeat(64),"sourceRoute":"peer"});
         let mut request: CopyRequest = serde_json::from_value(legacy).unwrap();
         assert!(request.valid_operation());
-        assert_eq!(request.operation_timeout().as_secs(), 1800);
+        assert_eq!(request.operation_timeout().as_secs(), 60);
         request.acknowledge = true;
         assert!(!request.valid_operation());
         request.source_route.clear();
