@@ -1647,6 +1647,23 @@ fn heartbeat_critical_task_alive(heartbeat: Option<&Value>, task_name: &str) -> 
         })
 }
 
+fn native_peer_transport_status(
+    local: Option<Value>,
+    heartbeat: Option<&Value>,
+    fresh: bool,
+) -> Value {
+    if let Some(local) = local {
+        return local;
+    }
+    if !fresh {
+        return Value::Null;
+    }
+    heartbeat
+        .and_then(|status| status.get("transport"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 pub fn native_peer_status(root: &Path) -> Value {
     let circuit_breaker = native_peer_circuit_snapshot();
     let circuit_open = circuit_breaker.get("state").and_then(Value::as_str) == Some("open");
@@ -1659,11 +1676,10 @@ pub fn native_peer_status(root: &Path) -> Value {
         peer.refresh_liveness_signals();
     }
     let lifecycle = native_peer_lifecycle_snapshot();
-    let transport = active_peer
+    let local_transport = active_peer
         .as_ref()
         .and_then(|peer| peer._pools.first())
-        .map(|pool| pool.pool().connection_handler.frame_transport_status_json())
-        .unwrap_or(Value::Null);
+        .map(|pool| pool.pool().connection_handler.frame_transport_status_json());
     let local_command_consumer_alive = active_peer
         .as_ref()
         .is_some_and(|peer| !peer._command_consumer.is_finished());
@@ -1688,6 +1704,8 @@ pub fn native_peer_status(root: &Path) -> Value {
     let heartbeat_fresh = heartbeat_age_ms
         .map(|age_ms| age_ms <= NATIVE_PEER_HEARTBEAT_TTL_MS)
         .unwrap_or(false);
+    let transport =
+        native_peer_transport_status(local_transport, heartbeat.as_ref(), heartbeat_fresh);
     let heartbeat_running = heartbeat_fresh
         && heartbeat
             .as_ref()
@@ -4018,6 +4036,7 @@ fn write_native_peer_heartbeat(
         "circuitBreaker": native_peer_circuit_snapshot(),
         "criticalTasks": critical_tasks,
         "performance": native_peer_performance_snapshot(),
+        "transport": transport,
     });
     let temporary_path = path.with_extension("status.json.tmp");
     fs::write(&temporary_path, serde_json::to_vec_pretty(&payload)?).with_context(|| {
@@ -13498,6 +13517,19 @@ pub(in crate::business_os) mod tests {
 
     #[test]
     fn native_peer_status_reports_fresh_heartbeat() {
+        let local = json!({"handshake":{"receivedOffers":3}});
+        let heartbeat = json!({"transport":{"handshake":{"receivedOffers":2}}});
+        assert_eq!(
+            native_peer_transport_status(Some(local.clone()), Some(&heartbeat), true),
+            local
+        );
+        assert_eq!(
+            native_peer_transport_status(None, Some(&heartbeat), true),
+            heartbeat["transport"]
+        );
+        assert!(native_peer_transport_status(None, Some(&heartbeat), false).is_null());
+        assert!(native_peer_transport_status(None, None, true).is_null());
+        assert!(native_peer_transport_status(None, Some(&json!({})), true).is_null());
         let root = tempfile::tempdir().expect("temp root");
         let database_path = root.path().join("runtime/ctox.sqlite3");
         let heartbeat_path = native_peer_heartbeat_path(root.path());
@@ -13524,6 +13556,7 @@ pub(in crate::business_os) mod tests {
                 },
                 "criticalTasks": [{"name": "business_commands", "alive": true}],
                 "performance": native_peer_performance_snapshot(),
+                "transport": {"handshake":{"receivedOffers":2}},
             }))
             .expect("serialize heartbeat"),
         )
@@ -13532,6 +13565,7 @@ pub(in crate::business_os) mod tests {
         let status = native_peer_status(root.path());
         assert_eq!(status["running"], true);
         assert_eq!(status["heartbeat"]["fresh"], true);
+        assert_eq!(status["transport"]["handshake"]["receivedOffers"], 2);
         assert_eq!(status["replicationUp"], true);
         for stage in [
             "signaling_socket_connected",
