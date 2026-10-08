@@ -122,6 +122,14 @@ fn project_custody(root: &Path, projections: &Value) -> anyhow::Result<()> {
     }
     Ok(())
 }
+pub(super) fn inputs(meeting: &wire::Meeting) -> Vec<wire::NarrationInput> {
+    if meeting.state != wire::MeetingState::Preparing || meeting.deck_revision == 0 { return vec![]; }
+    meeting.slides.iter().filter(|s| s.audio.is_none() && s.body_markdown.len() <= 4096 && !s.body_markdown.trim().is_empty()).map(|s| wire::NarrationInput {
+        slide_id:s.id.clone(),deck_revision:meeting.deck_revision,expected_revision:meeting.revision,
+        narration_text_sha256:hash(s.body_markdown.as_bytes()),
+    }).collect()
+}
+
 pub(super) fn execute(
     root: &Path,
     context: &McpChannelRequestContext,

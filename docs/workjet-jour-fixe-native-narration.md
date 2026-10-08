@@ -3,7 +3,7 @@
 A current, leased, registered project Supervisor uses the existing
 `business_os.jour_fixe_update` tool with `action: narrate` and a generated
 `NarrateRequest`. The request supplies operation, meeting and slide IDs, deck and
-meeting revisions, and the SHA256 of the stored slide body. Owner, model, voice,
+meeting revisions, and the SHA256 of the stored slide body. The native meeting read supplies eligible slide inputs and exact hashes, so the model does not have to calculate or guess a cryptographic hash. Owner, model, voice,
 text, audio, credentials and provider attestations cannot be supplied by the
 caller. The authenticated project/lease boundary remains the same as the existing
 JourFix read, draft-deck and todo-proposal tools.
