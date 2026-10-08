@@ -48,6 +48,9 @@ mod metadata_read;
 mod project_crew_request;
 #[path = "mcp_remote_worker.rs"]
 mod remote_worker;
+#[path = "mcp_workjet_confirmed_plan.rs"]
+mod workjet_confirmed_plan;
+pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_session;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
 #[path = "mcp_workjet_kpis.rs"]
@@ -61,6 +64,11 @@ mod workjet_worker_dispatch;
 pub(crate) fn workjet_dispatch_service_test_fixture() -> anyhow::Result<(tempfile::TempDir, String)>
 {
     workjet_worker_dispatch::service_test_fixture()
+}
+#[cfg(test)]
+pub(crate) fn workjet_confirmed_plan_service_test_fixture(
+) -> anyhow::Result<(tempfile::TempDir, String)> {
+    workjet_confirmed_plan::service_fixture()
 }
 pub(crate) use command_writeback::supports_command_writeback;
 pub(crate) use workjet_worker_dispatch::is_supervisor_command as is_workjet_supervisor_command;
@@ -589,6 +597,8 @@ struct BusinessOsMcpInternalSessionClaims {
     workjet_supervisor_epoch: Option<i64>,
     #[serde(default)]
     workjet_supervisor_lease: Option<workjet_worker_dispatch::SupervisorLease>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workjet_confirmed_plan: Option<workjet_confirmed_plan::Binding>,
     issued_at_ms: i64,
     expires_at_ms: i64,
 }
@@ -764,6 +774,7 @@ pub(crate) fn issue_internal_command_session_token(
         workjet_supervisor_only: false,
         workjet_supervisor_epoch: None,
         workjet_supervisor_lease: None,
+        workjet_confirmed_plan: None,
         issued_at_ms,
         expires_at_ms: issued_at_ms.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
@@ -894,48 +905,54 @@ pub(crate) fn verify_internal_command_session_token(
     token: &str,
 ) -> anyhow::Result<Value> {
     let claims = decode_internal_command_session_token(root, token)?;
-    let command = crate::mission::channels::inspect_business_command(root, &claims.command_id)?
-        .context("Business OS internal command session references an unknown command")?;
-    anyhow::ensure!(
-        command
-            .pointer("/command/payload_hash")
-            .and_then(Value::as_str)
-            == Some(claims.payload_hash.as_str()),
-        "Business OS internal command payload changed"
-    );
-    anyhow::ensure!(
-        command
-            .pointer("/command/execution_phase")
-            .and_then(Value::as_str)
-            != Some("terminal"),
-        "Business OS internal command is already terminal"
-    );
-    let authorization =
-        store::revalidate_business_command_execution_authorization(root, &claims.command_id)?;
-    anyhow::ensure!(
-        authorization.pointer("/actor/id").and_then(Value::as_str) == Some(claims.actor.as_str())
-            && authorization
-                .pointer("/actor/role")
-                .and_then(Value::as_str)
-                .map(normalize_role)
-                .as_deref()
-                == Some(claims.role.as_str()),
-        "Business OS internal command authorization changed"
-    );
-    if let Some(expected) = claims.crew_binding.as_ref() {
-        let conn = crew_context::open_read_connection(root)?;
-        let (current, _) = crew_context::live_binding(
-            &conn,
-            &claims.command_id,
-            &claims.payload_hash,
-            &expected.attempt_id,
-        )?;
+    if claims.workjet_confirmed_plan.is_some() {
+        workjet_confirmed_plan::verify(root, &claims)?;
+    } else {
+        let command = crate::mission::channels::inspect_business_command(root, &claims.command_id)?
+            .context("Business OS internal command session references an unknown command")?;
         anyhow::ensure!(
-            &current == expected,
-            "crew session lease or identity changed"
+            command
+                .pointer("/command/payload_hash")
+                .and_then(Value::as_str)
+                == Some(claims.payload_hash.as_str()),
+            "Business OS internal command payload changed"
         );
+        anyhow::ensure!(
+            command
+                .pointer("/command/execution_phase")
+                .and_then(Value::as_str)
+                != Some("terminal"),
+            "Business OS internal command is already terminal"
+        );
+        let authorization =
+            store::revalidate_business_command_execution_authorization(root, &claims.command_id)?;
+        anyhow::ensure!(
+            authorization.pointer("/actor/id").and_then(Value::as_str)
+                == Some(claims.actor.as_str())
+                && authorization
+                    .pointer("/actor/role")
+                    .and_then(Value::as_str)
+                    .map(normalize_role)
+                    .as_deref()
+                    == Some(claims.role.as_str()),
+            "Business OS internal command authorization changed"
+        );
+        if let Some(expected) = claims.crew_binding.as_ref() {
+            let conn = crew_context::open_read_connection(root)?;
+            let (current, _) = crew_context::live_binding(
+                &conn,
+                &claims.command_id,
+                &claims.payload_hash,
+                &expected.attempt_id,
+            )?;
+            anyhow::ensure!(
+                &current == expected,
+                "crew session lease or identity changed"
+            );
+        }
     }
     Ok(serde_json::json!({
+        "workjet_confirmed_plan": claims.workjet_confirmed_plan,
         "crew_binding": claims.crew_binding,
         "crew_work_key": claims.crew_work_key,
         "crew_only": claims.crew_only,
