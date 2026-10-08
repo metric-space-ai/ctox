@@ -1120,7 +1120,7 @@ pub(super) fn domain_effect_identity_for_intake(
     command_id: &str,
 ) -> anyhow::Result<Option<super::domain_effect::DomainEffectIdentity>> {
     with_store_connection(root, |conn| {
-        super::domain_effect::identity(conn, command_id)
+        super::domain_effect::identity_at_root(root, conn, command_id)
     })
 }
 

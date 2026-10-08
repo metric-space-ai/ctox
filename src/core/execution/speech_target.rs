@@ -30,6 +30,29 @@ use tokio::{io::ReadBuf, sync::Mutex as AsyncMutex};
 
 type Pool = RxWebRTCReplicationPool<WebRTCRsConnectionHandler>;
 const MAX_OBJECTS: usize = 64;
+// Bounded operator evidence: never include envelopes, text, PCM or credentials.
+fn denied_at(boundary: &'static str, reason: Denial) -> Denial {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema": "ctox.speech_denial.v1",
+            "boundary": boundary,
+            "reason": format!("{reason:?}"),
+        })
+    );
+    reason
+}
+fn runtime_io_denial(boundary: &'static str, error: &io::Error) -> Denial {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema": "ctox.speech_denial.v1",
+            "boundary": boundary,
+            "ioKind": format!("{:?}", error.kind()),
+        })
+    );
+    Denial::RouteRetired
+}
 struct OwnedTask(JoinHandle<Result<ReadyAudio, Denial>>);
 impl Drop for OwnedTask {
     fn drop(&mut self) {
@@ -149,6 +172,7 @@ impl TargetSpeechHost {
                             .is_some_and(|pool| pool.is_peer_ready_for_control(&entry.peer))
                         && entry.policy.with_current(|_| Ok(())).is_ok();
                     if !current {
+                        denied_at("object_reaper", Denial::RouteRetired);
                         if let Ok(mut entries) = server.entries.lock() {
                             if entries
                                 .get(&id)
@@ -166,11 +190,31 @@ impl TargetSpeechHost {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PublicationBoundary {
+    RuntimeIo,
+    NativeReply,
+}
+impl PublicationBoundary {
+    fn publish(
+        self,
+        peer_fence: impl FnOnce(&mut dyn FnMut() -> RxResult<()>) -> RxResult<()>,
+        publish: &mut dyn FnMut() -> RxResult<()>,
+    ) -> RxResult<()> {
+        match self {
+            Self::RuntimeIo => peer_fence(publish),
+            // RxDB's AuxiliaryPublicationGuard applies the exact peer fence
+            // around this callback. Reentering it here deadlocks before send.
+            Self::NativeReply => publish(),
+        }
+    }
+}
 struct Publication {
     server: Weak<Server>,
     policy: Arc<TargetPolicy>,
     peer: WebRTCRsConnection,
     object_id: Option<String>,
+    boundary: PublicationBoundary,
 }
 impl WebRTCPublicationGuard for Publication {
     fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
@@ -188,11 +232,31 @@ impl WebRTCPublicationGuard for Publication {
                     }
                 }
                 let pool = server.pool.upgrade().ok_or(Denial::RouteRetired)?;
-                pool.with_current_native_control_peer(&self.peer, publish)
-                    .map_err(|_| Denial::RouteRetired)?
-                    .map_err(|_| Denial::RouteRetired)
+                self.boundary
+                    .publish(
+                        |publish| pool.with_current_native_control_peer(&self.peer, publish)?,
+                        publish,
+                    )
+                    .map_err(|_| {
+                        denied_at(
+                            match self.boundary {
+                                PublicationBoundary::RuntimeIo => "runtime_peer",
+                                PublicationBoundary::NativeReply => "native_reply_peer",
+                            },
+                            Denial::RouteRetired,
+                        )
+                    })
             })
-            .map_err(|_| new_rx_error("CTOX_SPEECH_AUTHORITY_RETIRED", None))
+            .map_err(|reason| {
+                denied_at(
+                    match self.boundary {
+                        PublicationBoundary::RuntimeIo => "runtime_authority",
+                        PublicationBoundary::NativeReply => "native_reply_authority",
+                    },
+                    reason,
+                );
+                new_rx_error("CTOX_SPEECH_AUTHORITY_RETIRED", None)
+            })
     }
 }
 /// Reacquire current policy, live host/object and exact native connection at
@@ -268,12 +332,14 @@ impl Server {
         policy: Arc<TargetPolicy>,
         peer: WebRTCRsConnection,
         id: Option<String>,
+        boundary: PublicationBoundary,
     ) -> Arc<dyn WebRTCPublicationGuard> {
         Arc::new(Publication {
             server: Arc::downgrade(self),
             policy,
             peer,
             object_id: id,
+            boundary,
         })
     }
     fn entry(
@@ -283,7 +349,10 @@ impl Server {
         request: &VerifiedSpeechRequest,
     ) -> Result<Arc<Entry>, Denial> {
         let entries = self.entries.lock().map_err(|_| Denial::RouteRetired)?;
-        let entry = entries.get(id).cloned().ok_or(Denial::RouteRetired)?;
+        let entry = entries
+            .get(id)
+            .cloned()
+            .ok_or_else(|| denied_at("object_missing", Denial::RouteRetired))?;
         drop(entries);
         if entry.peer != *peer
             || entry.deadline <= Instant::now()
@@ -311,7 +380,12 @@ impl Server {
                 .map_err(|_| Denial::RouteRetired)??;
         let (answer, id) = match self.execute(&peer, &policy, &request).await {
             Ok(value) => value,
-            Err(reason) => (Reply::Denied { reason }, None),
+            Err(reason) => (
+                Reply::Denied {
+                    reason: denied_at("execute", reason),
+                },
+                None,
+            ),
         };
         let current = policy.clone();
         let signed = request.clone();
@@ -320,7 +394,7 @@ impl Server {
             .map_err(|_| Denial::RouteRetired)??;
         Ok(GuardedAuxiliaryResponse {
             result,
-            publication: self.publication(policy, peer, id),
+            publication: self.publication(policy, peer, id, PublicationBoundary::NativeReply),
         })
     }
     async fn execute(
@@ -333,7 +407,9 @@ impl Server {
         let binding = &request.request().binding;
         match &request.request().operation {
             Op::OpenTranscription { .. } | Op::StartSynthesis { .. } => {
-                let admitted = policy.reserve_intent(request, &self.generation)?;
+                let admitted = policy
+                    .reserve_intent(request, &self.generation)
+                    .map_err(|reason| denied_at("reserve_intent", reason))?;
                 let id = match admitted {
                     IntentAdmission::Existing(id) => {
                         let entry = self.entry(&id, peer, request)?;
@@ -387,11 +463,17 @@ impl Server {
                     entries.insert(id.clone(), entry.clone());
                     Ok(())
                 })?;
-                let guard = self.publication(policy.clone(), peer.clone(), Some(id.clone()));
+                let guard = self.publication(
+                    policy.clone(),
+                    peer.clone(),
+                    Some(id.clone()),
+                    PublicationBoundary::RuntimeIo,
+                );
                 let socket = connect_runtime(&self.root, binding, guard.clone()).await;
                 let socket = match socket {
                     Ok(socket) => socket,
                     Err(reason) => {
+                        denied_at("runtime_connect", reason);
                         *entry.work.lock().await = Work::Failed(reason);
                         entry.release();
                         return Err(reason);
@@ -751,15 +833,18 @@ async fn synthesize_local(
         .get_mut()
         .write_all(&payload)
         .await
-        .map_err(|_| Denial::RouteRetired)?;
+        .map_err(|error| runtime_io_denial("runtime_write", &error))?;
     socket
         .get_mut()
         .flush()
         .await
-        .map_err(|_| Denial::RouteRetired)?;
+        .map_err(|error| runtime_io_denial("runtime_flush", &error))?;
     let mut bytes = Vec::new();
     loop {
-        let buffer = socket.fill_buf().await.map_err(|_| Denial::RouteRetired)?;
+        let buffer = socket
+            .fill_buf()
+            .await
+            .map_err(|error| runtime_io_denial("runtime_read", &error))?;
         if buffer.is_empty() {
             return Err(Denial::InferenceFailed);
         }

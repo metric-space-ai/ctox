@@ -46,13 +46,16 @@ pub(super) fn allows(tool: &str, args: &Value) -> bool {
         (
             READ_TOOL,
             Some("read_meeting" | "read_comments" | "read_transcript")
-        ) | (WRITE_TOOL, Some("prepare_deck" | "propose_todos"))
+        ) | (
+            WRITE_TOOL,
+            Some("prepare_deck" | "propose_todos" | "narrate")
+        )
     )
 }
 
 // Describe the very same bounded DTOs used by both wire consumers, rather than
 // maintaining a third, permissive copy of the meeting schema.
-fn schema(spec: &Value, kind: &str) -> Value {
+pub(super) fn schema(spec: &Value, kind: &str) -> Value {
     match kind {
         "String" => json!({"type":"string"}),
         "u64" => json!({"type":"integer","minimum":0,"maximum":9_007_199_254_740_991_u64}),
@@ -120,11 +123,26 @@ pub(super) fn read_descriptor() -> BusinessOsMcpToolDescriptor {
 }
 pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(WRITE_TOOL,
-        "Persist a deck draft (prepare_deck, PublishDeckRequest without audio) or a review todo proposal (propose_todos). Requires this registered Supervisor's signed current execution, exact meeting revision and stable operation_id. Drafts remain preparing; todos require an explicit owner and remain proposed. No audio publication, goal confirmation, SQL or independent work admission.",
-        descriptor_schema(&[("prepare_deck","PublishDeckRequest"),("propose_todos","ProposeTodosRequest")]))
+        "Persist a deck draft (prepare_deck, PublishDeckRequest without audio) or a review todo proposal (propose_todos). Requires this registered Supervisor's signed current execution, exact meeting revision and stable operation_id. Drafts remain preparing; todos require an explicit owner and remain proposed. narrate synthesizes the exact stored slide via the configured native gateway and freezes authorized WAV bytes, hashes and native provenance before setting ready. No caller text/audio/model, goal confirmation, SQL or independent work admission.",
+        descriptor_schema(&[("prepare_deck","PublishDeckRequest"),("propose_todos","ProposeTodosRequest"),("narrate","NarrateRequest")]))
 }
 
-fn bound_project(
+/// Durable source identity, never a synthetic business command.
+pub(super) fn execution_key(trusted: &Value) -> anyhow::Result<String> {
+    if let Some(plan) = trusted
+        .get("workjet_confirmed_plan")
+        .filter(|v| !v.is_null())
+    {
+        return plan
+            .pointer("/lease/task_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .context("native confirmed plan task missing");
+    }
+    required_arg(trusted, "command_id")
+}
+
+pub(super) fn bound_project(
     core: &Connection,
     policy: &Connection,
     context: &McpChannelRequestContext,
@@ -135,6 +153,12 @@ fn bound_project(
             && trusted["workjet_supervisor_only"] == true,
         "meeting tool requires the restricted native supervisor session"
     );
+    if trusted
+        .get("workjet_confirmed_plan")
+        .is_some_and(|v| !v.is_null())
+    {
+        return workjet_confirmed_plan::bound_project(core, policy, context, trusted);
+    }
     let command_id = required_arg(trusted, "command_id")?;
     let expected: workjet_worker_dispatch::SupervisorLease =
         serde_json::from_value(trusted["workjet_supervisor_lease"].clone())?;
@@ -180,7 +204,7 @@ fn bound_project(
     );
     Ok((project, thread, thread_key))
 }
-fn current_meeting(
+pub(super) fn current_meeting(
     core: &Connection,
     policy: &Connection,
     context: &McpChannelRequestContext,
@@ -189,7 +213,10 @@ fn current_meeting(
     writing: bool,
 ) -> anyhow::Result<wire::Meeting> {
     let (project, thread, thread_key) = bound_project(core, policy, context, trusted)?;
-    let meeting = jour_fixe_owner::owned(policy, &context.actor, Some(&project), id)?;
+    let meeting = super::super::project_chats::jour_fixe_confirmed_goal::overlay_from_core(
+        core,
+        jour_fixe_owner::owned(policy, &context.actor, Some(&project), id)?,
+    )?;
     anyhow::ensure!(
         meeting.supervisor.workjet_thread_id == thread
             && meeting.supervisor.ctox_thread_key == thread_key,
@@ -240,6 +267,9 @@ pub(super) fn execute(
         serde_json::to_vec(arguments)?.len() <= MAX_METADATA_BYTES,
         "meeting request exceeds native write budget"
     );
+    if tool == WRITE_TOOL && arguments["action"] == "narrate" {
+        return workjet_narration::execute(root, context, arguments, trusted);
+    }
     let writing = tool == WRITE_TOOL;
     // Core before Policy, matching the native execution/cancellation lock order.
     // Only a mutation holds a Core writer reservation while the Policy edit
@@ -290,8 +320,14 @@ pub(super) fn execute(
                 serde_json::to_vec(&project)?.len() <= 64 * 1024,
                 "project configuration exceeds meeting read budget"
             );
+            let previous_goal_definition =
+                super::super::project_chats::jour_fixe_confirmed_goal::goal_for_deck(
+                    &core_tx, &meeting,
+                )?;
             return Ok(
-                json!({"contract":wire::CONTRACT_SCHEMA,"meeting":meeting,"project":project}),
+                json!({"contract":wire::CONTRACT_SCHEMA,"meeting":meeting,"project":project,
+                "previous_goal_definition":previous_goal_definition,
+                "narration_inputs":workjet_narration::inputs(&meeting)}),
             );
         }
         return Ok(if section == "comments" {
@@ -451,7 +487,7 @@ pub(super) fn execute(
         params![meeting.id,raw,meeting.owner_user_id])? == 1,"meeting disappeared");
     policy_tx.execute(
         "INSERT INTO workjet_jour_fixe_supervisor_operations(operation_id,owner_user_id,meeting_id,intent_hash,receipt_json,command_id) VALUES(?1,?2,?3,?4,?5,?6)",
-        params![operation,meeting.owner_user_id,meeting.id,hash,serde_json::to_string(&receipt)?,required_arg(trusted,"command_id")?])?;
+        params![operation,meeting.owner_user_id,meeting.id,hash,serde_json::to_string(&receipt)?,execution_key(trusted)?])?;
     policy_tx.commit()?;
     core_tx.commit()?;
     Ok(receipt)

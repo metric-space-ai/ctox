@@ -82,6 +82,29 @@ This change does not implement queue-claim cancellation or publication fencing.
 
 ## 2026-10 Actual quiescent native session state
 
+Native guest thread construction happens before producer/quorum admission.
+The CTOX direct-session factory constrains both the canonical app-server loader
+overrides and the higher-priority thread/start configuration: shell snapshots,
+zsh fork setup, hooks (including legacy notification argv), memory startup,
+ghost undo snapshots and free subagents are disabled for this lane. Nested and
+dotted feature overrides cannot re-enable that startup profile. Ordinary
+sessions keep their operator configuration; authorized native turn tools and
+the policy-gated Business OS MCP route retain their existing dispatch guards.
+This removes ambient background execution before admission. It is not a clean
+external-effect receipt: actual tool/submission effects remain unreconciled,
+and imported state still grants no target execution authority.
+
+The actual Core execution paths now also capture bounded effect observations:
+constructor startup uncertainties, submissions before enqueue, provider tool
+items and tools/MCP before their first await. Factory registration is tied to
+the retained Core object before the first submission. Cancellation or a handler
+result cannot erase observations. The protected source artifact records this
+report under the current native fences after checked Core shutdown. Decoded
+checkpoint JSON carries descriptive metadata only and cannot manufacture the
+opaque local capture. These observations do not certify clean effects: source
+pending effects and target rejection remain until actual effect owners provide
+reconciliation.
+
 The retained Core thread can export private state only after successful
 submission-loop termination and checked recorder shutdown, with no active
 turn. The sealed Rust object uses a strict checkpoint decoder for target import. It
@@ -189,6 +212,20 @@ concurrent readers, state visibility and file ownership. The actual in-process
 persistent-resume regression is in `ctox-app-server-client`; root `cargo test`
 does not execute that nested package. Failure-only diagnostics use read-only
 SQLite handles with bounded lock waits and omit raw message contents.
+
+## 2026-10 Native Core plan-effect ownership
+
+The native source factory's actual Core ledger observes provider added/done and
+tool dispatch before awaits. A bounded per-call record retains completed IDs
+throughout that Session. Only the actual built-in PlanHandler, after parsing and
+emitting its typed plan update, can receipt the matching added/done/dispatch
+observations. A duplicate, cancelled/rejected handler, foreign namespace/item,
+successful replacement handler or imported report cannot produce that receipt.
+Unrelated startup/submission/tool observations remain unresolved.
+
+This is local Core plan-effect ownership, not a clean external-effects assertion.
+MCP startup, generic MCP/shell/host effects and the source capture's generic
+uncertainty remain protected. No wire report field or execution permission changed.
 
 ## 2026-08 Required Plan and Stable Activity Events
 

@@ -316,16 +316,23 @@ impl NativeGuestExecution {
     /// before the native producer can execute. Unconfigured ordinary chats
     /// retain journal-only capture and gain no filesystem/export grant.
     pub(crate) fn verify_turn_workspace(&self, cwd: &Path) -> Result<()> {
-        self.provider
-            .with_live_provider_transaction(|worker, facts, _| {
-                self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
-                    verify()?;
-                    if snapshot(policy, &entry.assignment.destination)?.is_some() {
-                        require(policy, &entry.assignment.destination, cwd)?;
-                    }
-                    Ok(())
+        self.with_native_issuer(|identity| {
+            self.provider
+                .with_live_provider_transaction(|worker, facts, _| {
+                    self.with_held_worker_policy_guarded(
+                        worker,
+                        facts,
+                        identity,
+                        |entry, verify, policy| {
+                            verify()?;
+                            if snapshot(policy, &entry.assignment.destination)?.is_some() {
+                                require(policy, &entry.assignment.destination, cwd)?;
+                            }
+                            Ok(())
+                        },
+                    )
                 })
-            })
+        })
     }
 }
 

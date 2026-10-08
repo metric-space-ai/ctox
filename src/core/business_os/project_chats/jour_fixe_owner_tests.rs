@@ -16,6 +16,7 @@ pub(super) fn fixture(state: &str) -> anyhow::Result<TempDir> {
     meeting["comments"] = json!([]);
     meeting["transcript"] = json!([]);
     meeting["todos"] = Value::Null;
+    meeting["previous_goal"] = Value::Null;
     let conn = open_store(root.path())?;
     conn.execute_batch(super::super::jour_fixe_preparation::SCHEMA)?;
     conn.execute("INSERT INTO workjet_jour_fixe_meetings VALUES ('meeting-1','project','owner',1791450000000,?1,NULL)", [meeting.to_string()])?;
@@ -327,7 +328,7 @@ fn meeting_command_visibility_uses_its_native_owner_and_project_binding() -> any
 fn reserved_meeting_tools_fail_terminally_without_creating_recursive_model_tasks(
 ) -> anyhow::Result<()> {
     let root = fixture("ready")?;
-    for (i, action) in ["prepare", "deck.publish", "todos.propose", "todos.confirm"]
+    for (i, action) in ["prepare", "deck.publish", "todos.propose"]
         .iter()
         .enumerate()
     {

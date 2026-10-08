@@ -6,6 +6,12 @@ use crate::business_os::{mcp_channel, store, threads, worker_profile_bindings};
 use std::sync::{Arc, Barrier};
 use tempfile::{tempdir, TempDir};
 
+#[path = "jour_fixe_confirmed_goal_tests.rs"]
+mod jour_fixe_confirmed_goal;
+#[path = "jour_fixe_local_candidate_tests.rs"]
+mod jour_fixe_local_candidate;
+#[path = "jour_fixe_local_narration_tests.rs"]
+mod jour_fixe_local_narration;
 #[path = "jour_fixe_owner_tests.rs"]
 mod jour_fixe_owner;
 #[path = "jour_fixe_preparation_tests.rs"]
@@ -22,6 +28,9 @@ mod supervisor_observation;
 mod supervisor_turns;
 #[path = "weekly_report_tests.rs"]
 mod weekly_reports;
+pub(in crate::business_os) fn speech_live_fixture() -> anyhow::Result<TempDir> {
+    jour_fixe_owner::fixture("live")
+}
 
 fn command(kind: &str, id: &str, payload: Value) -> BusinessCommand {
     BusinessCommand {

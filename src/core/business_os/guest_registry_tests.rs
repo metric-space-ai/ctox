@@ -404,7 +404,7 @@ pub(super) fn fixture() -> (
         .unwrap();
     (directory, registry, assignment)
 }
-fn worker_store(root: &Path) -> (Connection, NativeProviderFacts, String) {
+pub(super) fn worker_store(root: &Path) -> (Connection, NativeProviderFacts, String) {
     // Use real command intake, lease, Crew attempt and signed command authority.
     // The provider/account contract remains a component fixture, not model proof.
     let (capability, _) = super::super::store::issue_business_os_capability_token_for_managed_user(

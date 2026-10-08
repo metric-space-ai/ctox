@@ -108,6 +108,16 @@ export const JOUR_FIXE_TYPES = deepFreeze({
       },
       "synthesis_duration_ms": {
         "type": "u64"
+      },
+      "provenance": {
+        "type": "AudioProvenance",
+        "optional": true
+      },
+      "generation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128,
+        "optional": true
       }
     }
   },
@@ -643,6 +653,340 @@ export const JOUR_FIXE_TYPES = deepFreeze({
         "optional": true
       }
     }
+  },
+  "NarrateRequest": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "slide_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "expected_revision": {
+        "type": "u64"
+      },
+      "narration_text_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      }
+    }
+  },
+  "NarrationInput": {
+    "fields": {
+      "slide_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "expected_revision": {
+        "type": "u64"
+      },
+      "narration_text_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      }
+    }
+  },
+  "NativeNarrationReceipt": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "instance_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "slide_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "owner_user_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "revision": {
+        "type": "u64"
+      },
+      "audio": {
+        "type": "AudioRef"
+      },
+      "persisted_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "provenance": {
+        "type": "AudioProvenance"
+      },
+      "provider_verified": {
+        "type": "bool"
+      }
+    }
+  },
+  "AudioProvenance": {
+    "enum": [
+      "native_gateway",
+      "authenticated_owner_local_audio"
+    ]
+  },
+  "LocalNarrationRequest": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "instance_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "slide_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "file_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "generation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "expected_revision": {
+        "type": "u64"
+      },
+      "audio_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      },
+      "narration_text_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      }
+    }
+  },
+  "LocalNarrationReceipt": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "instance_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "slide_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "owner_user_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "revision": {
+        "type": "u64"
+      },
+      "audio": {
+        "type": "AudioRef"
+      },
+      "persisted_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "provenance": {
+        "type": "AudioProvenance"
+      },
+      "provider_verified": {
+        "type": "bool"
+      }
+    }
+  },
+  "LocalTranscriptProvenance": {
+    "enum": [
+      "authenticated_owner_local_candidate"
+    ]
+  },
+  "LocalTranscriptCandidateRequest": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "request_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "instance_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "expected_revision": {
+        "type": "u64"
+      },
+      "text": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 4096
+      }
+    }
+  },
+  "LocalTranscriptCandidateReceipt": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "request_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "instance_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "deck_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "owner_user_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "turn_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "sequence": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "text_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      },
+      "persisted_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "provenance": {
+        "type": "LocalTranscriptProvenance"
+      },
+      "provider_verified": {
+        "type": "bool"
+      }
+    }
   }
 });
 export const JOUR_FIXE_COMMANDS = deepFreeze({
@@ -666,6 +1010,10 @@ export const JOUR_FIXE_COMMANDS = deepFreeze({
     "request_type": "AddCommentRequest",
     "authorization": "owner"
   },
+  "ctox.workjet.jour_fixe.transcript.local_candidate": {
+    "request_type": "LocalTranscriptCandidateRequest",
+    "authorization": "owner"
+  },
   "ctox.workjet.jour_fixe.transcript.append": {
     "request_type": "AppendTranscriptRequest",
     "authorization": "owner_or_bound_supervisor"
@@ -684,6 +1032,10 @@ export const JOUR_FIXE_COMMANDS = deepFreeze({
   },
   "ctox.workjet.jour_fixe.meeting.read": {
     "request_type": "ReadMeetingRequest",
+    "authorization": "owner"
+  },
+  "ctox.workjet.jour_fixe.narration.local_publish": {
+    "request_type": "LocalNarrationRequest",
     "authorization": "owner"
   }
 });

@@ -31,8 +31,13 @@ const browser = await chromium.launch({ headless: true,
     ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
 try {
   const context = await browser.newContext();
-  await context.route('**/*', (route) => route.abort());
+  // A fully intercepted static secure origin supplies the real browser crypto
+  // API. Every other request is aborted; no native data travels over HTTP.
+  await context.route('**/*', (route) => route.request().url() === 'https://workjet-control.test/'
+    ? route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Isolated control fixture</title>' })
+    : route.abort());
   const page = await context.newPage();
+  await page.goto('https://workjet-control.test/');
   const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, ownerSource, configurationSource, executionSource, kpiSource, meetingSource, meeting }) => {
     const assert = {
       ok(value) { if (!value) throw new Error('Expected truthy'); },
@@ -241,12 +246,81 @@ try {
     assert.equal(forgedOwner.commands.length, 0);
     results.push('browser Owner text rejects forged speech provenance before dispatch');
 
+    const confirmRequest = ownerControl.request('project.jour_fixe.todos.confirm');
+    const confirmed = await ownerControl.fixture().invoke(confirmRequest);
+    assert.equal(confirmed.mutation.state, 'confirmed');
+    assert.equal(confirmed.goal.revision, confirmRequest.expectedGoalRevision + 1);
+    assert.equal(confirmed.goal.goal_id, confirmed.mutation.changed_id);
+    results.push('browser Owner confirmation returns the native Core goal with exact revisions');
+    for (const mutate of [r => { r.result.goal.revision += 1; },
+      r => { r.result.mutation.changed_id = 'foreign-goal'; },
+      r => { r.result.mutation.todos_revision += 1; },
+      r => { r.result.mutation.state = 'review'; }]) {
+      let rejected = false;
+      try { await ownerControl.fixture(mutate).invoke(confirmRequest); } catch { rejected = true; }
+      assert.ok(rejected);
+    }
+    const extraGoal = ownerControl.fixture();
+    let forgedGoalRejected = false;
+    try { await extraGoal.invoke({ ...confirmRequest, goal: { goal_id: 'forged' } }); } catch { forgedGoalRejected = true; }
+    assert.ok(forgedGoalRejected);
+    assert.equal(extraGoal.commands.length, 0);
+    results.push('browser Owner confirmation rejects substituted proposals and invented goal authority');
+
+    const localAudioRequest = ownerControl.request('project.jour_fixe.narration.local_publish');
+    const localAudio = await ownerControl.fixture().invoke(localAudioRequest);
+    assert.equal(localAudio.localNarration.audio.file_id, 'persisted-native-audio');
+    assert.equal(localAudio.localNarration.provider_verified, false);
+    assert.equal(localAudio.mutation.state, 'ready');
+    results.push('browser preserves local narration file custody without provider verification');
+    for (const mutate of [r => { r.result.local_narration.audio.sha256 = 'c'.repeat(64); },
+      r => { r.result.local_narration.provider_verified = true; },
+      (r, state) => { state.syncConfig.instance_id = 'biz_other'; }]) {
+      let denied = false;
+      try { await ownerControl.fixture(mutate).invoke(localAudioRequest); } catch { denied = true; }
+      assert.ok(denied);
+    }
+    results.push('browser rejects corrupted local narration and replaced native instance');
+
+    const localRequest = ownerControl.request('project.jour_fixe.transcript.local_candidate', {
+      requestId: 'helper:final:1', deckRevision: 1, text: 'Lokaler Kandidat.',
+    });
+    const localFixture = ownerControl.fixture();
+    const local = await localFixture.invoke(localRequest);
+    assert.equal(localFixture.commands[0].payload.instance_id, 'biz_fixture');
+    assert.equal(local.localCandidate.request_id, localRequest.requestId);
+    assert.equal(local.localCandidate.turn_id, local.mutation.changed_id);
+    assert.equal(local.localCandidate.provider_verified, false);
+    assert.equal(local.localCandidate.provenance, 'authenticated_owner_local_candidate');
+    results.push('browser local candidate hashes exact text and confirms its native stored scope');
+    for (const corrupt of [r => { r.result.local_candidate.provider_verified = true; },
+      r => { r.result.local_candidate.deck_revision = 2; },
+      r => { r.result.local_candidate.request_id = 'other-final'; },
+      r => { r.result.local_candidate.text_sha256 = 'a'.repeat(64); }]) {
+      let denied = false;
+      try { await ownerControl.fixture(corrupt).invoke(localRequest); } catch { denied = true; }
+      assert.ok(denied);
+    }
+    results.push('browser local candidate rejects fake provider and mismatched final receipts');
+    let staleLocal = false;
+    try { await ownerControl.fixture((receipt, state) => { state.syncConfig.instance_id = 'biz_replaced'; }).invoke(localRequest); }
+    catch { staleLocal = true; }
+    assert.ok(staleLocal);
+    results.push('browser local candidate rejects instance replacement during native wait');
+    const oversized = ownerControl.fixture();
+    let budgetRejected = false;
+    try { await oversized.invoke({ ...localRequest, text: 'é'.repeat(2049) }); }
+    catch { budgetRejected = true; }
+    assert.ok(budgetRejected);
+    assert.equal(oversized.commands.length, 0);
+    results.push('browser local candidate UTF-8 byte limit rejects before native dispatch');
+
     return results;
   }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd),
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
     configurationSource: tests.slice(configurationStart, configurationEnd),
     executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 21);
+  assert.equal(results.length, 29);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };

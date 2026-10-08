@@ -484,9 +484,18 @@ async fn pump(
     let mut sequence = 0;
     let mut event_sequence = 0;
     let mut previous = String::new();
-    while let Some(command) = input.recv().await {
+    let mut pending = None;
+    loop {
+        let command = match pending.take() {
+            Some(command) => command,
+            None => match input.recv().await {
+                Some(command) => command,
+                None => break,
+            },
+        };
         let (operation, finish) = match command {
             Input::Audio(pcm) => {
+                let pcm = coalesce_audio(pcm, &mut input, &mut pending);
                 sequence += 1;
                 (
                     Op::Append {
@@ -497,8 +506,8 @@ async fn pump(
                     None,
                 )
             }
-            // Appends are already acknowledged individually. There is no final
-            // sentence implied by a flush; only Finish can mint a final receipt.
+            // Each bounded append is acknowledged. A flush preserves ordering
+            // but implies no final sentence; only Finish can mint a final receipt.
             Input::Flush => continue,
             Input::Finish(mark) => {
                 sequence += 1;
@@ -552,6 +561,32 @@ async fn pump(
         }
     }
     Ok(())
+}
+
+/// Drain only audio already waiting behind this frame. Native RPCs are signed
+/// and acknowledged, so forwarding every 20ms capture frame separately can
+/// outpace them. The wire already admits 100ms/3200-byte appends at16kHz.
+/// Never wait for more audio, cross a control command, split a capture frame,
+/// or grow the input queue. One deferred command preserves exact FIFO order.
+fn coalesce_audio(
+    mut pcm: Vec<u8>,
+    input: &mut mpsc::Receiver<Input>,
+    pending: &mut Option<Input>,
+) -> Vec<u8> {
+    const MAX_APPEND_BYTES: usize = 3200;
+    while pcm.len() < MAX_APPEND_BYTES {
+        match input.try_recv() {
+            Ok(Input::Audio(next)) if pcm.len() + next.len() <= MAX_APPEND_BYTES => {
+                pcm.extend_from_slice(&next);
+            }
+            Ok(command) => {
+                *pending = Some(command);
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+    pcm
 }
 
 fn encode_hex(bytes: &[u8]) -> String {

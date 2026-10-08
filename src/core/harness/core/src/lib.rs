@@ -80,6 +80,8 @@ mod model_provider_info;
 pub mod native_mcp_dispatch;
 mod native_session_state;
 pub use native_session_state::NativeSessionState;
+mod native_core_effects;
+pub use native_core_effects::{NativeCoreEffectCapture, NativeCoreEffectReport};
 pub mod path_utils;
 pub mod personality_migration;
 pub mod plugins;

@@ -329,3 +329,97 @@ pub(super) fn consume_in_transaction(
     ensure!(changed == 1, "native final was already consumed");
     Ok(())
 }
+
+/// Authenticated live scope used by the ephemeral browser/desktop adapter.
+pub(in crate::business_os) fn open_binding(
+    root: &Path,
+    token: &str,
+    project: &str,
+    meeting: &str,
+    deck: u64,
+) -> anyhow::Result<LiveMeetingBinding> {
+    let actor = authenticated_actor(root, token)?;
+    jour_fixe_owner::check_live_meeting_for_authenticated_actor(
+        root, &actor, project, meeting, deck,
+    )
+}
+pub(in crate::business_os) fn revalidate_binding(
+    root: &Path,
+    token: &str,
+    binding: &LiveMeetingBinding,
+) -> anyhow::Result<()> {
+    checked(root, token, binding).map(|_| ())
+}
+/// A handle is returned only after the private receipt and transcript committed
+/// in the normal domain writer. Command admission alone is insufficient.
+pub(in crate::business_os) fn committed_revision(
+    root: &Path,
+    token: &str,
+    binding: &LiveMeetingBinding,
+    stream_id: &str,
+) -> anyhow::Result<u64> {
+    let actor = authenticated_actor(root, token)?;
+    binding.revalidate(root, &actor)?;
+    let conn = Connection::open_with_flags(
+        store::business_os_store_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let consumed: Option<String> = conn.query_row("SELECT consumed_command FROM workjet_jour_fixe_speech_receipts WHERE stream_id=?1 AND binding_hash=?2",
+        params![stream_id, digest_binding(binding)?], |r| r.get(0))?;
+    ensure!(consumed.is_some(), "speech receipt not committed");
+    let meeting = jour_fixe_owner::owned(
+        &conn,
+        &actor,
+        Some(binding.project_id()),
+        binding.meeting_id(),
+    )?;
+    ensure!(
+        meeting
+            .transcript
+            .iter()
+            .any(|turn| turn.stream_id.as_deref() == Some(stream_id)
+                && turn.modality == wire::Modality::Speech),
+        "speech transcript not committed"
+    );
+    Ok(meeting.revision)
+}
+/// Issuer -> current policy -> exact transport poll. No provider await, nested
+/// secret read, or transcript write occurs inside this short publication fence.
+pub(in crate::business_os) fn with_publication_authority<T>(
+    root: &Path,
+    token: &str,
+    instance: &str,
+    binding: &LiveMeetingBinding,
+    publish: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    store::with_current_webrtc_capability_signer(root, |secret| {
+        ensure!(
+            store::existing_instance_id(root)? == instance,
+            "speech instance changed"
+        );
+        let mut conn = Connection::open_with_flags(
+            store::business_os_store_path(root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )?;
+        conn.busy_timeout(std::time::Duration::ZERO)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let at = chrono::Utc::now().timestamp_millis();
+        let claims =
+            store::verified_webrtc_capability_claims_from_connection(&tx, token, secret, at)
+                .context("speech actor retired")?;
+        ensure!(
+            store::check_webrtc_collection_permission_from_connection(
+                &tx,
+                token,
+                secret,
+                "business_commands",
+                BusinessOsPermission::DataWrite,
+                at
+            )?,
+            "speech write authority retired"
+        );
+        binding.revalidate_from_connection(&tx, &claims.user_id)?;
+        publish()
+    })
+}

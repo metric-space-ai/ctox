@@ -23,7 +23,8 @@ struct State {
     desktop: Option<super::super::guest_runtime::RetainedQemuDesktop>,
     loaded: bool,
     // Keep the driver's lifetime until after the retained child is dropped.
-    io: MachineIo,
+    io: Arc<MachineIo>,
+    ready: Option<ctox_sync::guest_restore::GuestReadyReceipt>,
 }
 struct Attempt {
     machine: Arc<TargetMachine>,
@@ -42,6 +43,93 @@ impl Drop for Attempt {
 use super::machine_io::MachineIo;
 
 impl TargetMachine {
+    pub(super) fn verify_ready(
+        &self,
+        imported: &GuestImportReceipt,
+        process: &GuestProcessEffect,
+        service: &str,
+        running: Option<&mut super::super::guest_runtime::RetainedQemuDesktop>,
+    ) -> Result<()> {
+        self.current()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("target machine poisoned"))?;
+        let ready = state
+            .ready
+            .clone()
+            .context("original machine readiness is absent")?;
+        ensure!(
+            ready.import == *imported
+                && ready.process_effect == *process
+                && ready.endpoint.guest_session_id == service
+                && !state.loaded,
+            "original machine readiness changed"
+        );
+        let io = state.io.clone();
+        let desktop = if let Some(running) = running {
+            ensure!(state.desktop.is_none(), "target has two desktop owners");
+            running
+        } else {
+            state
+                .desktop
+                .as_mut()
+                .context("original machine not retained")?
+        };
+        io.run(|_| desktop.ensure_live_endpoint_current(&ready.endpoint))?;
+        self.current()
+    }
+
+    pub(super) fn take_ready_desktop(
+        &self,
+        imported: &GuestImportReceipt,
+        process: &GuestProcessEffect,
+    ) -> Result<(
+        super::super::guest_runtime::RetainedQemuDesktop,
+        Arc<MachineIo>,
+        GuestLiveEndpoint,
+    )> {
+        self.current()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("target machine poisoned"))?;
+        let ready = state
+            .ready
+            .clone()
+            .context("target machine has no native readiness receipt")?;
+        ensure!(
+            ready.import == *imported && ready.process_effect == *process && !state.loaded,
+            "target machine readiness belongs to another import/process"
+        );
+        let io = state.io.clone();
+        let desktop = state
+            .desktop
+            .as_mut()
+            .context("target desktop already consumed or absent")?;
+        io.run(|_| desktop.ensure_live_endpoint_current(&ready.endpoint))?;
+        self.current()?;
+        Ok((state.desktop.take().unwrap(), io, ready.endpoint))
+    }
+
+    fn confirm_ready(&self, ready: &ctox_sync::guest_restore::GuestReadyReceipt) -> Result<()> {
+        self.current()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("target machine poisoned"))?;
+        ensure!(
+            state.ready.is_none() && !state.loaded,
+            "target machine readiness already published"
+        );
+        let io = state.io.clone();
+        let desktop = state.desktop.as_mut().context("target child missing")?;
+        io.run(|_| desktop.ensure_live_endpoint_current(&ready.endpoint))?;
+        self.current()?;
+        state.ready = Some(ready.clone());
+        Ok(())
+    }
+
     pub(super) fn retire(&self) {
         self.retired.send_replace(true);
     }
@@ -389,7 +477,8 @@ impl NativeGuestRegistry {
                     let machine = Arc::new(TargetMachine {
                         retired,
                         state: Mutex::new(State {
-                            io: MachineIo::new()?,
+                            io: Arc::new(MachineIo::new()?),
+                            ready: None,
                             attempted: false,
                             staged: None,
                             desktop: None,
@@ -533,10 +622,25 @@ impl NativeGuestRegistry {
             .validate_ownership(&imported.spec.job_id, &imported.ownership)
             .await?;
         validate_unchanged_process_job(&current, &job, &imported, &effect)?;
-        owner.protected.with_current_machine(true, |_, verify| {
-            machine.current()?;
-            verify()
-        })?;
+        owner
+            .protected
+            .with_current_machine(true, |entry, verify| {
+                machine.current()?;
+                ensure!(
+                    entry.imported.as_ref() == Some(&ready.import)
+                        && entry.registered_process.as_ref() == Some(&ready.process_effect)
+                        && ready.endpoint.guest_session_id
+                            == owner.protected.protected.service_session
+                        && entry
+                            .target_machine
+                            .as_ref()
+                            .is_some_and(|m| Arc::ptr_eq(m, &machine)),
+                    "target readiness changed before publication"
+                );
+                verify()?;
+                machine.confirm_ready(&ready)?;
+                verify()
+            })?;
         attempt.complete = true;
         Ok(ready)
     }

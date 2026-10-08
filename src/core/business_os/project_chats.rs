@@ -14,6 +14,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+pub(in crate::business_os) mod jour_fixe_confirmed_goal;
+pub(in crate::business_os) mod jour_fixe_local_candidate;
+pub(in crate::business_os) mod jour_fixe_local_narration;
 pub(in crate::business_os) mod jour_fixe_owner;
 pub(in crate::business_os) mod jour_fixe_preparation;
 pub(in crate::business_os) mod jour_fixe_speech;
@@ -29,7 +32,7 @@ pub(super) use privacy::{
 pub(crate) use weekly_reports::{emit_project_report, reconcile_project_reports};
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 pub(super) const CHATS: &str = "workjet_project_chats";
 pub(super) const MEMBERS: &str = "workjet_project_workers";
