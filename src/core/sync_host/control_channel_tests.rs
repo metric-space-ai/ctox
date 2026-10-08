@@ -132,6 +132,7 @@ async fn native_control_adapter_request_requires_existing_peer_and_bounded_workl
     assert!(channel
         .register_handler("ctox.sync.authority.v1", handler.clone())
         .is_err());
+    channel.register_handler("ctox.native.speech.v1", handler.clone())?;
     channel.register_handler("ctox.sync.workload.speech.v1", handler.clone())?;
     assert!(
         channel

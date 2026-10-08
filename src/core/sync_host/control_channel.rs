@@ -119,7 +119,7 @@ fn denied() -> rxdb::rx_error::RxError {
     new_rx_error("CTOX_NATIVE_CONTROL_RETIRED", None)
 }
 fn valid_method(method: &str) -> bool {
-    method.starts_with("ctox.sync.workload.")
+    (method == "ctox.native.speech.v1" || method.starts_with("ctox.sync.workload."))
         && method.len() <= 128
         && method
             .bytes()
@@ -143,7 +143,7 @@ struct Publication {
 }
 impl WebRTCPublicationGuard for Publication {
     fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
-        self.workload.with_current(&mut || {
+        with_once(self.workload.as_ref(), &mut || {
             let state = self.state.upgrade().ok_or_else(denied)?;
             let alive = state.alive.lock().map_err(|_| denied())?;
             if !*alive {
@@ -153,6 +153,23 @@ impl WebRTCPublicationGuard for Publication {
             pool.with_current_native_control_peer(&self.peer, publish)?
         })
     }
+}
+fn with_once(
+    guard: &dyn WebRTCPublicationGuard,
+    publish: &mut dyn FnMut() -> RxResult<()>,
+) -> RxResult<()> {
+    let mut called = false;
+    guard.with_current(&mut || {
+        if called {
+            return Err(denied());
+        }
+        called = true;
+        publish()
+    })?;
+    if !called {
+        return Err(denied());
+    }
+    Ok(())
 }
 struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
 impl<T> Drop for AbortOnDrop<T> {
