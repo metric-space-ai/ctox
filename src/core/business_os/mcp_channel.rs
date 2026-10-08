@@ -3208,7 +3208,11 @@ fn call_tool_inner(
         trusted_gateway_context,
     )?;
     enforce_internal_command_session_scope(tool_name, &arguments, trusted_gateway_context)?;
-    enforce_tool_policy_class(root, tool_name, tool_policy_class_for_call(tool_name, &arguments))?;
+    enforce_tool_policy_class(
+        root,
+        tool_name,
+        tool_policy_class_for_call(tool_name, &arguments),
+    )?;
     enforce_context_policy(root, &context)?;
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
@@ -6211,7 +6215,11 @@ fn enforce_tool_policy(root: &Path, tool_name: &str) -> anyhow::Result<()> {
     enforce_tool_policy_class(root, tool_name, tool_policy_class(tool_name))
 }
 
-fn enforce_tool_policy_class(root: &Path, tool_name: &str, class: McpToolPolicyClass) -> anyhow::Result<()> {
+fn enforce_tool_policy_class(
+    root: &Path,
+    tool_name: &str,
+    class: McpToolPolicyClass,
+) -> anyhow::Result<()> {
     let policy = mcp_policy(root);
     if !policy.enabled {
         return Err(anyhow::Error::new(BusinessOsMcpError {

@@ -320,14 +320,21 @@ fn expired_snapshot_read_is_stale_and_does_not_take_writer_locks() -> anyhow::Re
     policy.execute("UPDATE workjet_project_kpi_state SET state_json=json_set(state_json,'$.items[0].result.snapshot.freshness.calculated_at_ms',1,'$.items[0].result.snapshot.freshness.refresh_at_ms',2,'$.items[0].result.snapshot.freshness.fresh_until_ms',3,'$.items[0].result.snapshot.sources[0].observed_at_ms',1)",[])?;
     let lock = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let request = json!({"action":"read","request":{"project_id":"project"}});
-    let context = super::super::context_from_arguments_with_trusted_gateway_context(TOOL,&request,Some(&trusted))?;
+    let context = super::super::context_from_arguments_with_trusted_gateway_context(
+        TOOL,
+        &request,
+        Some(&trusted),
+    )?;
     // The native KPI snapshot needs no writer. The outer MCP envelope still
     // persists an audit/rate-limit event in the Policy DB; that existing layer
     // intentionally cannot finish while this writer is held.
     let result = execute(root.path(), &context, &request, Some(&trusted))?;
     assert_eq!(result["kpis"]["items"][0]["result"]["status"], "stale");
     lock.rollback()?;
-    assert_eq!(read(root.path(),&trusted)?["kpis"]["items"][0]["result"]["status"], "stale");
+    assert_eq!(
+        read(root.path(), &trusted)?["kpis"]["items"][0]["result"]["status"],
+        "stale"
+    );
     Ok(())
 }
 
@@ -364,22 +371,42 @@ fn replacing_the_supervisor_immediately_stales_its_snapshot_without_a_writer() -
 }
 
 #[test]
-fn global_write_policy_denies_recipe_binding_but_still_allows_snapshot_reads() -> anyhow::Result<()> {
+fn global_write_policy_denies_recipe_binding_but_still_allows_snapshot_reads() -> anyhow::Result<()>
+{
     let (root, trusted) = fixture()?;
     let mut settings = std::collections::BTreeMap::new();
-    settings.insert("CTOX_BUSINESS_OS_MCP_ALLOW_WRITES".to_owned(),"false".to_owned());
-    crate::inference::runtime_env::save_runtime_env_map(root.path(),&settings)?;
-    assert!(call(root.path(),&trusted,args("project_tasks_completed","denied",1)).is_err());
-    assert_eq!(read(root.path(),&trusted)?["kpis"]["revision"],1);
+    settings.insert(
+        "CTOX_BUSINESS_OS_MCP_ALLOW_WRITES".to_owned(),
+        "false".to_owned(),
+    );
+    crate::inference::runtime_env::save_runtime_env_map(root.path(), &settings)?;
+    assert!(call(
+        root.path(),
+        &trusted,
+        args("project_tasks_completed", "denied", 1)
+    )
+    .is_err());
+    assert_eq!(read(root.path(), &trusted)?["kpis"]["revision"], 1);
     Ok(())
 }
 #[test]
-fn resolving_a_recipe_uses_write_policy_when_global_read_tools_are_disabled() -> anyhow::Result<()> {
+fn resolving_a_recipe_uses_write_policy_when_global_read_tools_are_disabled() -> anyhow::Result<()>
+{
     let (root, trusted) = fixture()?;
     let mut settings = std::collections::BTreeMap::new();
-    settings.insert("CTOX_BUSINESS_OS_MCP_ALLOW_READS".to_owned(),"false".to_owned());
-    crate::inference::runtime_env::save_runtime_env_map(root.path(),&settings)?;
-    assert!(read(root.path(),&trusted).is_err());
-    assert_eq!(call(root.path(),&trusted,args("project_tasks_completed","write",1))?["kpis"]["revision"],2);
+    settings.insert(
+        "CTOX_BUSINESS_OS_MCP_ALLOW_READS".to_owned(),
+        "false".to_owned(),
+    );
+    crate::inference::runtime_env::save_runtime_env_map(root.path(), &settings)?;
+    assert!(read(root.path(), &trusted).is_err());
+    assert_eq!(
+        call(
+            root.path(),
+            &trusted,
+            args("project_tasks_completed", "write", 1)
+        )?["kpis"]["revision"],
+        2
+    );
     Ok(())
 }
