@@ -5522,11 +5522,14 @@ function renderModuleTab(target, options = {}) {
       governance: state.governance,
     })
     : null;
+  const lifecycleIconAttributes = lifecycle?.state === 'preview' && !lifecycle.updateAvailable
+    ? `role="img" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${escapeHtml(lifecycleBadgeAriaLabel(target.title || target.id, lifecycle))}"`
+    : 'aria-hidden="true"';
   button.innerHTML = `
-    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
+    <span class="module-tab-icon" ${lifecycleIconAttributes}>${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
     ${target.id === 'threads' ? '<span class="module-tab-count" data-threads-attention hidden></span>' : ''}
-    ${lifecycle?.updateAvailable || lifecycle?.state === 'preview' ? `<span class="module-tab-update" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${lifecycle.updateAvailable ? 'Update verfügbar' : escapeHtml(lifecycle.text)}"></span>` : ''}
+    ${lifecycle?.updateAvailable ? `<span class="module-tab-update" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="Update verfügbar"></span>` : ''}
     ${status ? `<span class="module-tab-state">${escapeHtml(status)}</span>` : ''}
   `;
   button.setAttribute('aria-current', state.activeModule?.id === target.id ? 'page' : 'false');
