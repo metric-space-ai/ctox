@@ -124,6 +124,43 @@ pub(super) fn execute(root: &Path, context: &McpChannelRequestContext, tool: &st
 mod tests {
     use super::*;
     #[test]
+    fn calendar_shared_user_and_verified_alias_are_record_scoped_and_revocable() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let canonical = "196a89ba-ee86-4413-885c-04ca60e6f291";
+        let alias = "owner@example.test";
+        for actor in [canonical, alias, "shared", "foreign"] {
+            store::tests::seed_business_user(root.path(), actor, "user")?;
+        }
+        save_mcp_policy(root.path(), &default_mcp_policy())?;
+        super::super::super::workjet_identity::remember_managed_identity(
+            &store::open_store(root.path())?, canonical, Some(alias), store::now_ms(),
+        )?;
+        let save = |shared: Vec<String>| -> anyhow::Result<()> {
+            crate::inference::runtime_env::save_runtime_env_map(root.path(), &std::collections::BTreeMap::from([
+                (email_accounts::REGISTRY_ENV_KEY.into(), serde_json::to_string(&vec![
+                    email_accounts::EmailAccountConfig {
+                        address: "calendar@example.test".into(), owner_user_id: canonical.into(),
+                        shared_user_ids: Some(shared), provider: "ews".into(), ..Default::default()
+                    },
+                ])?)
+            ]))
+        };
+        save(vec!["shared".into()])?;
+        let read = |actor: &str| -> anyhow::Result<Value> {
+            let gateway = json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp","surface":"workjet","actor":actor,"role":"user","workspace":"tenant:instance","instance_id":"source-instance","managed_policy":{"allowReads":true,"allowedCollections":["communication_accounts"]}});
+            call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&gateway))
+        };
+        for actor in [canonical, alias, "shared"] {
+            assert_eq!(read(actor)?["accounts"][0]["id"], "calendar@example.test");
+        }
+        assert_eq!(read("foreign")?["accounts"].as_array().unwrap().len(), 0);
+        save(vec![])?;
+        assert_eq!(read("shared")?["accounts"].as_array().unwrap().len(), 0);
+        store::open_store(root.path())?.execute("UPDATE business_users SET active=0 WHERE user_id=?1", [canonical])?;
+        assert!(read(alias).is_err());
+        Ok(())
+    }
+    #[test]
     fn calendar_accounts_never_expose_foreign_or_ownerless_mailboxes() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         for actor in ["owner", "other"] { store::tests::seed_business_user(root.path(), actor, "admin")?; }
