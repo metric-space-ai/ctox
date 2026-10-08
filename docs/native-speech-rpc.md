@@ -59,4 +59,3 @@ Models owns current speech grant admission, runtime proxy and real GPU inference
 It does not register a public handler, create a grant, start a model or establish
 installed meeting readiness. Those integrations and measured sentence-end to
 transcript latency remain required before goal20 can pass.
-
