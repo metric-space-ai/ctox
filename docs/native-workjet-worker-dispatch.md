@@ -9,6 +9,17 @@ durable control queue. CTOX creates no second worker, worktree or harness.
 
 Use the existing authenticated managed Business OS MCP connection.
 Tool: business_os.workjet_worker_dispatch.
+The source grant needs allowWrites:true and, if allowedTools is nonempty,
+business_os.workjet_worker_dispatch plus business_os.remote_worker_admission.
+Native tools/list advertises both; the gateway must include both in WRITE_TOOLS.
+No collection read/write, approval or external-effect grant is added by this
+adapter. Native current persisted Owner/Admin, integrations.manage workspace
+and ctox.task.create on the owned project remain required. The managed grant
+cannot invoke dispatch: that operation requires the signed native supervisor
+session. If the existing pairing grant lacks these tools, pair a separate
+narrow source client; never rotate/widen an existing connector token. Actual
+live grant availability must be checked by the source owner, not inferred
+from tool registration. No credential is printed or returned.
 Receipt contract: ctox.workjet.worker-dispatch.v1.
 Request operation/field names are snake_case; receipt fields are camelCase.
 
@@ -72,7 +83,8 @@ payload hash, unexpired exact lease, native provenance and policy. The core
 transaction fences cancellation/lease replacement through intent commit;
 native policy remains held through that commit. Exact dispatch_key replay
 returns the same intent/result; changed scope/task is rejected. At most128
-uncompleted intents per owner are admitted.
+uncompleted intents per owner under current registration revisions and
+current authority epoch are admitted; retired intents do not consume capacity.
 
 The pending receipt proves admission only. Internal sessions cannot control
 source registrations or mint remote worker permits. Ordinary command bounds

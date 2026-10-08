@@ -142,6 +142,11 @@ fn success(intent: &Value) -> Value {
 #[test]
 fn workjet_dispatch_actual_mcp_signed_supervisor_queue_and_lost_acks() -> anyhow::Result<()> {
     let root = fixture()?;
+    let mut read_only = default_mcp_policy();
+    read_only.allow_writes = false;
+    save_mcp_policy(root.path(), &read_only)?;
+    assert!(register(root.path()).is_err());
+    save_mcp_policy(root.path(), &default_mcp_policy())?;
     let registration = register(root.path())?;
     assert_eq!(register(root.path())?, registration);
     let (token, trusted) = session(root.path())?;

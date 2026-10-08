@@ -7167,6 +7167,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         "web_browser_prepare"
         | "business_os.start_project_task"
         | "business_os.remote_worker_admission"
+        | "business_os.workjet_worker_dispatch"
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
         | "business_os.claim_crew_execution"
