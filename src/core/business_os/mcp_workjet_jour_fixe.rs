@@ -5,6 +5,7 @@
 use super::super::{project_chats::jour_fixe_owner, workjet_jour_fixe_contract as wire};
 use super::*;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use wire::WireValidate;
 
