@@ -764,5 +764,12 @@ pub(super) fn service_test_fixture() -> anyhow::Result<(tempfile::TempDir, Strin
 }
 
 #[cfg(test)]
+pub(super) fn meeting_test_fixture() -> anyhow::Result<(tempfile::TempDir, Value)> {
+    let root = tests::fixture()?;
+    let (_, trusted) = tests::session(root.path())?;
+    Ok((root, trusted))
+}
+
+#[cfg(test)]
 #[path = "mcp_workjet_worker_dispatch_tests.rs"]
 mod tests;

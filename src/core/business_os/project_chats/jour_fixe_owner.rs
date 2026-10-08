@@ -115,7 +115,7 @@ fn parse(command: &BusinessCommand) -> anyhow::Result<(Edit, Value)> {
     );
     Ok((edit, payload))
 }
-pub(super) fn owned(
+pub(in crate::business_os) fn owned(
     conn: &Connection,
     actor: &str,
     project_route: Option<&str>,
