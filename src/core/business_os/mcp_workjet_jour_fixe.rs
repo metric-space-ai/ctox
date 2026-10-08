@@ -127,6 +127,15 @@ pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
         descriptor_schema(&[("prepare_deck","PublishDeckRequest"),("propose_todos","ProposeTodosRequest"),("narrate","NarrateRequest")]))
 }
 
+/// Durable source identity, never a synthetic business command.
+pub(super) fn execution_key(trusted: &Value) -> anyhow::Result<String> {
+    if let Some(plan) = trusted.get("workjet_confirmed_plan").filter(|v| !v.is_null()) {
+        return plan.pointer("/lease/task_id").and_then(Value::as_str)
+            .map(str::to_owned).context("native confirmed plan task missing");
+    }
+    required_arg(trusted, "command_id")
+}
+
 pub(super) fn bound_project(
     core: &Connection,
     policy: &Connection,
@@ -138,6 +147,9 @@ pub(super) fn bound_project(
             && trusted["workjet_supervisor_only"] == true,
         "meeting tool requires the restricted native supervisor session"
     );
+    if trusted.get("workjet_confirmed_plan").is_some_and(|v| !v.is_null()) {
+        return workjet_confirmed_plan::bound_project(core, policy, context, trusted);
+    }
     let command_id = required_arg(trusted, "command_id")?;
     let expected: workjet_worker_dispatch::SupervisorLease =
         serde_json::from_value(trusted["workjet_supervisor_lease"].clone())?;
@@ -466,7 +478,7 @@ pub(super) fn execute(
         params![meeting.id,raw,meeting.owner_user_id])? == 1,"meeting disappeared");
     policy_tx.execute(
         "INSERT INTO workjet_jour_fixe_supervisor_operations(operation_id,owner_user_id,meeting_id,intent_hash,receipt_json,command_id) VALUES(?1,?2,?3,?4,?5,?6)",
-        params![operation,meeting.owner_user_id,meeting.id,hash,serde_json::to_string(&receipt)?,required_arg(trusted,"command_id")?])?;
+        params![operation,meeting.owner_user_id,meeting.id,hash,serde_json::to_string(&receipt)?,execution_key(trusted)?])?;
     policy_tx.commit()?;
     core_tx.commit()?;
     Ok(receipt)

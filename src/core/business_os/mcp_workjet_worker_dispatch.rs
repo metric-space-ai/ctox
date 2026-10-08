@@ -27,10 +27,10 @@ struct Registration {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct SupervisorLease {
-    task_id: String,
-    lease_owner: String,
-    leased_at: String,
-    lease_worker_id: String,
+    pub(super) task_id: String,
+    pub(super) lease_owner: String,
+    pub(super) leased_at: String,
+    pub(super) lease_worker_id: String,
 }
 
 pub(super) fn current_lease(
@@ -500,48 +500,11 @@ pub(super) fn execute(
                 text(value, 256)?;
             }
             let trusted = trusted.context("native supervisor session unavailable")?;
-            let command_id = required_arg(trusted, "command_id")?;
-            let payload_hash = required_arg(trusted, "payload_hash")?;
-            let expected: SupervisorLease =
-                serde_json::from_value(trusted["workjet_supervisor_lease"].clone())?;
-            anyhow::ensure!(
-                current_lease(&core_tx, &command_id)? == expected,
-                "supervisor execution lease replaced or expired"
-            );
-            let command =
-                crate::channels::business_command_projection_from_conn(&core_tx, &command_id)?;
-            anyhow::ensure!(
-                command["payload_hash"] == payload_hash && command["execution_phase"] != "terminal",
-                "supervisor command changed or completed"
-            );
-            if trusted.get("crew_binding").is_some_and(|v| !v.is_null()) {
-                current_guest_crew_command(&core_tx, trusted)?;
-            }
-            let admitted = store::load_business_command(&policy_tx, &command_id)?;
-            anyhow::ensure!(
-                admitted.module == "ctox"
-                    && admitted.command_type == "business_os.chat.task"
-                    && admitted.payload == command["payload"]
-                    && admitted.payload["risk_class"] == "internal"
-                    && admitted
-                        .client_context
-                        .pointer("/actor/id")
-                        .and_then(Value::as_str)
-                        == Some(context.actor.as_str()),
-                "native supervisor command provenance differs"
-            );
-            let project = admitted
-                .record_id
-                .as_deref()
-                .context("supervisor project missing")?;
-            let thread = admitted.payload["thread_id"]
-                .as_str()
-                .context("supervisor thread missing")?;
-            let epoch = current_project(&policy_tx, context, project, thread)?;
-            anyhow::ensure!(
-                trusted["workjet_supervisor_epoch"] == epoch,
-                "supervisor authority changed"
-            );
+            let (project, thread, _) = workjet_jour_fixe::bound_project(&core_tx, &policy_tx, context, trusted)?;
+            // Existing column name is retained; the source is either an actual
+            // business command or the exact native confirmed-plan task key.
+            let execution_key = workjet_jour_fixe::execution_key(trusted)?;
+            let epoch = current_project(&policy_tx, context, &project, &thread)?;
             let raw: String = core_tx
                 .query_row(
                     "SELECT record_json FROM workjet_worker_dispatch_sources
@@ -578,7 +541,7 @@ pub(super) fn execute(
             );
             let prior: Option<(String,String,Option<String>)> = core_tx.query_row(
                 "SELECT request_digest,intent_json,result_json FROM workjet_worker_dispatch_intents WHERE command_id=?1 AND dispatch_key=?2",
-                params![command_id,dispatch_key],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
+                params![execution_key,dispatch_key],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
             let result = if let Some((old_digest, raw, result)) = prior {
                 anyhow::ensure!(
                     old_digest == digest,
@@ -602,7 +565,7 @@ pub(super) fn execute(
                 );
                 core_tx.execute("INSERT INTO workjet_worker_dispatch_intents(intent_id,registration_id,registration_revision,
                     command_id,dispatch_key,request_digest,intent_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-                    params![intent.intent_id,intent.registration_id,intent.registration_revision,command_id,dispatch_key,digest,serde_json::to_string(&intent)?])?;
+                    params![intent.intent_id,intent.registration_id,intent.registration_revision,execution_key,dispatch_key,digest,serde_json::to_string(&intent)?])?;
                 None
             };
             serde_json::json!({"contract":CONTRACT,"state":if result.is_some(){"completed"}else{"pending"},

@@ -1,0 +1,11 @@
+# Confirmed JourFix plan execution authority
+
+Owner-confirmed todos are real Core goals and steps. Their `plan:system` workers now receive the same restricted native Supervisor tools as an admitted Supervisor chat turn. No synthetic business command, new client, general collection grant or second queue item is created.
+
+Admission uses the service's actual QueueTurnLeaseFence. The native issuer reads the exact queued step, its current confirmed project definition, the persisted Owner-confirmation receipt, the emitted plan message and the unexpired instance-specific routing lease. It checks the current active Owner, project policy and registered Supervisor. Ordinary plans have no additional MCP authority. Unknown, replaced, inactive, superseded or completed confirmed plans deny admission.
+
+The signed internal session carries the native plan identity, accepted goal revision, confirmation/source digest and lease generation. Each request revalidates these against read-only Core/Policy snapshots. Mutations revalidate under the tools' existing Core-before-Policy writer reservations; narration drops reservations before synthesis and rechecks after it. Lease renewal preserves a session; replacement, cancellation, expiry, goal replacement, source changes, Owner/policy revocation and Supervisor rebinding revoke it. Read paths do not initialize schemas or take a writer reservation.
+
+The action scope is unchanged: bounded Workjet worker dispatch, current-project KPI read/resolve and JourFix read/draft/narrate/propose. Owner confirmation, arbitrary action execution, SQL and general collection writes remain unavailable. Dispatch still requires a currently authorized explicit Workjet source registration. Stable replay uses the actual plan task key in the existing legacy-named `command_id` source column; that key is never represented as a business command.
+
+Core stores the confirmed goal and executes/terminalizes its steps through the existing plan and review path. Policy stores the meeting and dispatch registration; this change makes no atomicity claim across two SQLite WAL databases. It does not establish installed provider dispatch, a successful PR, real narration or meeting acceptance. Those are measured after installation on the real Workjet project through its existing writer and evidence path.
