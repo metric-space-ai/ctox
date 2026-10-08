@@ -1,21 +1,21 @@
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v2-confirmed-todo-bridge';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createAppActions } from './shared/app-actions.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v3-gallery-order';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v3-gallery-order';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v3-gallery-order';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v3-gallery-order';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v3-gallery-order';
+import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v3-gallery-order';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-shell-v3-gallery-order';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-shell-v3-gallery-order';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-shell-v3-gallery-order';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-shell-v3-gallery-order';
+import { createAppActions } from './shared/app-actions.js?v=20261008-shell-v3-gallery-order';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/app-lifecycle.js?v=20261008-shell-v3-gallery-order';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -24,20 +24,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/permissions.js?v=20261008-shell-v3-gallery-order';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/branding.js?v=20261008-shell-v3-gallery-order';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-shell-v3-gallery-order';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/presentation.js?v=20261008-shell-v3-gallery-order';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -48,9 +48,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createDocumentsFacade } from './shared/documents.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/shell-permissions-ui.js?v=20261008-shell-v3-gallery-order';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-shell-v3-gallery-order';
+import { createDocumentsFacade } from './shared/documents.js?v=20261008-shell-v3-gallery-order';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -58,16 +58,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/maintenance-state.js?v=20261008-shell-v3-gallery-order';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/workspace-session.js?v=20261008-shell-v3-gallery-order';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/taskbar-pins.js?v=20261008-shell-v3-gallery-order';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -75,10 +75,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-shell-v3-gallery-order';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-shell-v2-confirmed-todo-bridge';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-shell-v3-gallery-order';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-shell-v3-gallery-order';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -86,8 +86,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261008-shell-v2-confirmed-todo-bridge';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-shell-v2-confirmed-todo-bridge';
+} from './shared/startup-deadlines.js?v=20261008-shell-v3-gallery-order';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-shell-v3-gallery-order';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -105,7 +105,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261008-shell-v2-confirmed-todo-bridge';
+const APP_BUILD = '20261008-shell-v3-gallery-order';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13883,6 +13883,57 @@ async function workjetProjectControl(request = {}) {
       ...(confirming ? { goal: JSON.parse(JSON.stringify(confirmedGoal)) } : {}),
       ...(localNarration ? { localNarration: JSON.parse(JSON.stringify(receipt.result.local_narration)) } : {}),
       ...(localCandidate ? { localCandidate: JSON.parse(JSON.stringify(receipt.result.local_candidate)) } : {}) };
+  }
+
+  if (action === 'project.gallery.order.read' || action === 'project.gallery.order.set') {
+    // Gallery order is a per-user native preference: the browser only sends
+    // project ids, and the native owner decides what is stored and returned.
+    const setting = action === 'project.gallery.order.set';
+    const allowedKeys = new Set(['action', 'commandId']);
+    if (setting) for (const key of ['operationId', 'expectedRevision', 'projectIds']) allowedKeys.add(key);
+    assertWorkjetProjectPayloadKeys(request, allowedKeys);
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const payload = {};
+    if (setting) {
+      if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
+        throw new TypeError('Workjet gallery order expectedRevision must be a nonnegative safe integer.');
+      }
+      if (!Array.isArray(request.projectIds) || request.projectIds.length > 500) {
+        throw new TypeError('Workjet gallery order must list at most 500 projects.');
+      }
+      payload.operation_id = boundedWorkjetProjectText(request.operationId, 'operationId', 128);
+      payload.expected_revision = request.expectedRevision;
+      payload.project_ids = request.projectIds.map(id => boundedWorkjetProjectText(id, 'projectId', 128));
+      if (new Set(payload.project_ids).size !== payload.project_ids.length) {
+        throw new TypeError('Workjet gallery order repeats a project.');
+      }
+    }
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Die Projektsitzung hat sich vor der Antwort geändert.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox', record_id: ownerUserId,
+      command_type: `ctox.workjet.${action}`,
+      payload, client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentIdentity();
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.result?.ok !== true) {
+      throw new Error('Für die Projektreihenfolge liegt keine passende Erfolgsbestätigung vor.');
+    }
+    const order = receipt.result.order;
+    if (!Number.isSafeInteger(order?.revision) || !Array.isArray(order.project_ids)
+      || order.project_ids.some(id => typeof id !== 'string')) {
+      throw new TypeError('Workjet gallery order result is malformed.');
+    }
+    return {
+      action, commandId, contract: 'ctox.workjet.project_gallery_order.v1',
+      order: { revision: order.revision, projectIds: order.project_ids.slice() },
+    };
   }
 
   if (['project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {
