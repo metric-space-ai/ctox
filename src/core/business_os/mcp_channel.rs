@@ -50,6 +50,8 @@ mod project_crew_request;
 mod remote_worker;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
+#[path = "mcp_workjet_kpis.rs"]
+mod workjet_kpis;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
 
@@ -845,6 +847,7 @@ fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bo
             workjet_worker_dispatch::TOOL
                 | workjet_jour_fixe::READ_TOOL
                 | workjet_jour_fixe::WRITE_TOOL
+                | workjet_kpis::TOOL
         );
     }
     let restricted = context.is_some_and(|context| {
@@ -1450,6 +1453,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         workjet_worker_dispatch::descriptor(),
         workjet_jour_fixe::read_descriptor(),
         workjet_jour_fixe::write_descriptor(),
+        workjet_kpis::descriptor(),
         read_tool(
             "business_os.list_crew_executions",
             "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
@@ -3221,6 +3225,7 @@ fn call_tool_inner(
             &arguments,
             trusted_gateway_context,
         )?,
+        workjet_kpis::TOOL => workjet_kpis::execute(root, &context, &arguments, trusted_gateway_context)?,
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
         }
@@ -7033,7 +7038,7 @@ fn enforce_argument_scope_policy(
             enforce_module_policy(root, "kundenpipeline")?;
             enforce_collection_policy(root, "kundenpipeline_entscheidungen")?;
         }
-        workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
+        workjet_kpis::TOOL | workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
             enforce_module_policy(root, "ctox")?;
         }
         "business_os.create_app" => {
@@ -7555,7 +7560,8 @@ fn enforce_internal_command_session_scope(
     if context["workjet_supervisor_only"] == true {
         anyhow::ensure!(
             (tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "dispatch")
-                || workjet_jour_fixe::allows(tool_name, arguments),
+                || workjet_jour_fixe::allows(tool_name, arguments)
+                || workjet_kpis::allows(tool_name, arguments),
             "tool/action is outside the restricted native supervisor session"
         );
         return Ok(());
