@@ -1723,7 +1723,6 @@ fn dispatch_business_command(
         }
         "ctox.workjet.jour_fixe.prepare"
         | "ctox.workjet.jour_fixe.deck.publish"
-        | "ctox.workjet.jour_fixe.comment.add"
         | "ctox.workjet.jour_fixe.todos.propose"
         | "ctox.workjet.jour_fixe.todos.confirm" => {
             Ok(BusinessCommandDispatchOutcome::failed(None,
@@ -1733,7 +1732,8 @@ fn dispatch_business_command(
         "ctox.workjet.jour_fixe.meeting.start"
         | "ctox.workjet.jour_fixe.meeting.end"
         | "ctox.workjet.jour_fixe.transcript.append"
-        | "ctox.workjet.jour_fixe.todos.revise" => {
+        | "ctox.workjet.jour_fixe.todos.revise"
+        | "ctox.workjet.jour_fixe.comment.add" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let actor = session_user_id(session).context("meeting edit requires authenticated user")?;
             match super::project_chats::jour_fixe_owner::handle(

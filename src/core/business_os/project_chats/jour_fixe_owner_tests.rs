@@ -256,6 +256,9 @@ fn owner_slide_comment_is_durable_bound_to_deck_and_operation_idempotent()->anyh
     let first=send(root.path(),"comment","comment.add","owner",comment_request("comment-op",0))?;
     assert_eq!(first["status"],"completed","{first}");
     assert_eq!(first["result"]["mutation"]["changed_id"],"comment-1");
+    let receipt:String=open_store(root.path())?.query_row(
+        "SELECT receipt_json FROM business_command_domain_effects WHERE command_id='comment'",[],|r|r.get(0))?;
+    assert_eq!(serde_json::from_str::<Value>(&receipt)?["result"],first["result"]);
     let replay=send(root.path(),"comment-replay","comment.add","owner",comment_request("comment-op",0))?;
     assert_eq!(first["result"],replay["result"]);
     let meeting=saved(root.path())?;
