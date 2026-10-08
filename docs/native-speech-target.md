@@ -45,6 +45,13 @@ target's audio buffer after verified transfer. Streams expire after 90 s;
 synthesis artifacts after 150 s. Disconnected peers and revoked grants are reaped within
 approximately two seconds, releasing their active permits. Cached objects are separately bounded to 64.
 
+The operator speech-synthesize and speech-benchmark CLI commands start the
+configured native host in their own process when the computer backend is
+selected. They await its existing peer attachment for at most15s before audio
+timing and drop the host on completion. Use an isolated operator root without
+another running native host; the directory lease refuses a duplicate host.
+Readiness creates no peer or grant and never retries an inference effect.
+
 This is a native transport implementation. Installed two-host meeting
 acceptance, microphone sentence-end latency and first TTS playback latency
 remain required product evidence; unit tests do not establish those results.

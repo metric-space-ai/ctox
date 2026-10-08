@@ -313,6 +313,30 @@ impl Client {
     }
 }
 
+/// Operator diagnostics await their configured host's existing peer before
+/// timing audio. Never retry a request whose effect may already have started.
+pub async fn wait_for_route(root: &Path, role: SpeechWorkload) -> Result<(), SpeechError> {
+    let client = Client::open(root, role)?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let ready = client
+            .current
+            .with_current(|_| {
+                Ok(client
+                    .channel
+                    .peer_connected(&client.current.route.native_peer_route)?)
+            })
+            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
+        if ready {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(SpeechError::TimedOut);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Dropping/aborting the stream cancels its exact remote operation using the
 /// same current grant. Cleanup is bounded, cannot reconnect or revive authority.
 struct CancelOnDrop {
