@@ -75,11 +75,13 @@ fn legacy_watch_is_unchanged_and_pending_turn_has_no_invented_execution_identity
             .keys()
             .cloned()
             .collect::<std::collections::BTreeSet<_>>(),
-        ["ok", "contract", "binding", "turn"]
+        ["ok", "contract", "binding", "turn", "status", "task_status"]
             .into_iter()
             .map(str::to_owned)
             .collect()
     );
+    assert_eq!(old["result"]["status"], "completed");
+    assert_eq!(old["result"]["task_status"], "completed");
     let value = watch(root.path(), &turn, "page", Some(json!({})))?;
     let observed = page(&value);
     assert_eq!(value["result"]["turn"], old["result"]["turn"]);
