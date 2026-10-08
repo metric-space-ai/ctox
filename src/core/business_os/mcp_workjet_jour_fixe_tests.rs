@@ -47,7 +47,7 @@ fn proposal() -> Value {
     json!({"action":"propose_todos","request":{"operation_id":"proposal-op","meeting_id":"meeting-1",
         "expected_revision":0,"proposal_revision":1,"items":[{"id":"todo-1","title":"Verify reopen",
         "acceptance":"Saved data survives reopen","priority":"P1","evidence_ids":["slide-1"],
-        "owner":"Project supervisor","due_at_ms":1791450000000}]}})
+        "owner":"Project supervisor","due_at_ms":1791450000000i64}]}})
 }
 fn saved(root: &Path) -> anyhow::Result<Value> {
     let raw: String = Connection::open_with_flags(
