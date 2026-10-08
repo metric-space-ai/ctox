@@ -25,3 +25,8 @@ CARGO_TARGET_DIR=/tmp/aria2-rust-target cargo build --release
 License: GPL-2.0-or-later (same as aria2).
 
 Library consumers that only need HTTP can set `default-features = false` to omit the optional `sftp` feature and its SSH dependencies. Default builds retain SFTP; an SFTP request in a build without that feature fails explicitly instead of falling back to another protocol.
+
+Windows uses offset-based file reads/writes and Tokio's vectored socket writer.
+POSIX-only `rlimit-nofile`, DSCP socket options and `file-allocation=falloc`
+fail explicitly when requested on Windows. Default options leave these settings
+unchanged. `file-allocation=prealloc` remains available.
