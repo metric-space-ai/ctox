@@ -75,9 +75,19 @@ pub(super) fn recover_applied_domain_effect(
 ) -> anyhow::Result<Option<Value>> {
     let command_id = command.id.as_deref().context("command id is required")?;
     let conn = open_store(root)?;
-    let Some(applied) = domain_effect::load(&conn, command_id, payload_hash, actor_user_id)? else {
+    let Some(applied) =
+        domain_effect::load_at_root(root, &conn, command_id, payload_hash, actor_user_id)?
+    else {
         return Ok(None);
     };
+    if command.command_type == "ctox.workjet.jour_fixe.todos.confirm" {
+        crate::business_os::project_chats::jour_fixe_confirmed_goal::validate_recovery(
+            root,
+            &conn,
+            command,
+            actor_user_id,
+        )?;
+    }
     if command.command_type == crate::business_os::project_chats::jour_fixe_local_candidate::COMMAND
     {
         crate::business_os::project_chats::jour_fixe_local_candidate::validate_recovery_scope(

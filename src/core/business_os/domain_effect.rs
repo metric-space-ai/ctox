@@ -42,7 +42,8 @@ pub(super) struct DomainEffectAdmission {
     actor_user_id: String,
 }
 
-pub(super) const COMMAND_TYPES: [&str; 16] = [
+pub(super) const COMMAND_TYPES: [&str; 17] = [
+    "ctox.workjet.jour_fixe.todos.confirm",
     "ctox.workjet.jour_fixe.meeting.start",
     "ctox.workjet.jour_fixe.meeting.end",
     "ctox.workjet.jour_fixe.transcript.append",
@@ -84,6 +85,19 @@ impl DomainEffectAdmission {
         })
     }
 
+    pub(super) fn validate_core_claim(&self, core: &Connection) -> anyhow::Result<()> {
+        let command =
+            crate::channels::business_command_projection_from_conn(core, &self.command_id)?;
+        ensure!(
+            command["payload_hash"] == self.payload_hash
+                && command["execution_mode"] == "control"
+                && command["terminal_status"].as_str().unwrap_or("none") == "none"
+                && command["execution_phase"] != "terminal",
+            "Core control claim changed or was cancelled"
+        );
+        Ok(())
+    }
+
     /// The closure may only mutate this transaction's local domain records.
     /// External effects, Core writes and RxDB publication are not atomic here.
     /// Returning an error rolls back BOTH the domain mutation and its receipt.
@@ -93,13 +107,24 @@ impl DomainEffectAdmission {
         mutate: impl FnOnce(&Transaction<'_>) -> anyhow::Result<AppliedDomainEffect>,
     ) -> anyhow::Result<AppliedDomainEffect> {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let applied = self.apply_in_transaction(&tx, mutate)?;
+        tx.commit()?;
+        Ok(applied)
+    }
+
+    /// The native domain owner may commit its own Core transaction, keeping
+    /// real Core plans and their receipt atomic. No second database is written.
+    pub(super) fn apply_in_transaction(
+        &self,
+        tx: &Transaction<'_>,
+        mutate: impl FnOnce(&Transaction<'_>) -> anyhow::Result<AppliedDomainEffect>,
+    ) -> anyhow::Result<AppliedDomainEffect> {
         if let Some(applied) = load(
             &tx,
             &self.command_id,
             &self.payload_hash,
             &self.actor_user_id,
         )? {
-            tx.commit()?;
             return Ok(applied);
         }
         let applied = mutate(&tx)?;
@@ -121,9 +146,66 @@ impl DomainEffectAdmission {
                 serde_json::to_string(&applied)?
             ],
         )?;
-        tx.commit()?;
         Ok(applied)
     }
+}
+
+/// Read-only lookup of Core-owned confirmations; historical domain receipts
+/// stay in Policy. Missing pre-migration tables are absence, never schema writes.
+fn core_receipt_connection(root: &std::path::Path) -> anyhow::Result<Option<Connection>> {
+    let path = crate::paths::core_db(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let exists: bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_command_domain_effects')",[],|r|r.get(0))?;
+    Ok(exists.then_some(conn))
+}
+
+pub(super) fn identity_at_root(
+    root: &std::path::Path,
+    policy: &Connection,
+    command_id: &str,
+) -> anyhow::Result<Option<DomainEffectIdentity>> {
+    let local = identity(policy, command_id)?;
+    let core = core_receipt_connection(root)?
+        .map(|conn| identity(&conn, command_id))
+        .transpose()?
+        .flatten();
+    anyhow::ensure!(
+        local.is_none() || core.is_none(),
+        "domain receipt exists in two authority stores"
+    );
+    Ok(core.or(local))
+}
+pub(super) fn contains_at_root(
+    root: &std::path::Path,
+    policy: &Connection,
+    command_id: &str,
+) -> anyhow::Result<bool> {
+    Ok(identity_at_root(root, policy, command_id)?.is_some())
+}
+pub(super) fn load_at_root(
+    root: &std::path::Path,
+    policy: &Connection,
+    command_id: &str,
+    payload_hash: &str,
+    actor: &str,
+) -> anyhow::Result<Option<AppliedDomainEffect>> {
+    let local = load(policy, command_id, payload_hash, actor)?;
+    let core = core_receipt_connection(root)?
+        .map(|conn| load(&conn, command_id, payload_hash, actor))
+        .transpose()?
+        .flatten();
+    anyhow::ensure!(
+        local.is_none() || core.is_none(),
+        "domain receipt exists in two authority stores"
+    );
+    Ok(core.or(local))
 }
 
 pub(super) struct DomainEffectIdentity {

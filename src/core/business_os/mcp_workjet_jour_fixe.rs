@@ -189,7 +189,10 @@ fn current_meeting(
     writing: bool,
 ) -> anyhow::Result<wire::Meeting> {
     let (project, thread, thread_key) = bound_project(core, policy, context, trusted)?;
-    let meeting = jour_fixe_owner::owned(policy, &context.actor, Some(&project), id)?;
+    let meeting = super::super::project_chats::jour_fixe_confirmed_goal::overlay_from_core(
+        core,
+        jour_fixe_owner::owned(policy, &context.actor, Some(&project), id)?,
+    )?;
     anyhow::ensure!(
         meeting.supervisor.workjet_thread_id == thread
             && meeting.supervisor.ctox_thread_key == thread_key,
@@ -290,8 +293,13 @@ pub(super) fn execute(
                 serde_json::to_vec(&project)?.len() <= 64 * 1024,
                 "project configuration exceeds meeting read budget"
             );
+            let previous_goal_definition =
+                super::super::project_chats::jour_fixe_confirmed_goal::goal_for_deck(
+                    &core_tx, &meeting,
+                )?;
             return Ok(
-                json!({"contract":wire::CONTRACT_SCHEMA,"meeting":meeting,"project":project}),
+                json!({"contract":wire::CONTRACT_SCHEMA,"meeting":meeting,"project":project,
+                "previous_goal_definition":previous_goal_definition}),
             );
         }
         return Ok(if section == "comments" {
