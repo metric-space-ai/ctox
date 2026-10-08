@@ -3,7 +3,7 @@
 use super::*;
 #[test]
 fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Result<()> {
-    let root = fixture()?;
+    let root = super::weekly_reports::fixture()?;
     let exit = |id: &str, kind: &str, payload: Value| {
         crate::business_os::command_plane::accept_rxdb_business_command(
             root.path(),
@@ -52,6 +52,12 @@ fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Resu
         state["result"]["assessment"]["result"]["expected_exit_equity_eur"],
         8050.0
     );
+    let fixture_path = std::env::temp_dir().join("ctox-exit-model-assessment-fixture.json");
+    std::fs::write(
+        &fixture_path,
+        serde_json::to_vec_pretty(&state["result"]["assessment"])?,
+    )?;
+    eprintln!("EXIT_MODEL_ASSESSMENT_FIXTURE {}", fixture_path.display());
     let before = state["result"]["assessment"]["history"].clone();
     crate::business_os::workjet_exit_model::complete_research(
         root.path(),
@@ -69,7 +75,7 @@ fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Resu
 
 #[test]
 fn exit_research_missing_evidence_is_blocked_and_keeps_admission_history() -> anyhow::Result<()> {
-    let root = fixture()?;
+    let root = super::weekly_reports::fixture()?;
     let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
         root.path(),
         json!({
