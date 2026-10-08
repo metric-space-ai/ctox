@@ -111,6 +111,7 @@ impl AuxiliaryModelSelection {
         match self.role {
             AuxiliaryRole::Embedding => 1100,
             AuxiliaryRole::Stt => 4200,
+            AuxiliaryRole::Tts if self.request_model == "engineai/Voxtral-4B-TTS-2603" => 12_288,
             AuxiliaryRole::Tts => 1400,
             // Qwen3-VL-2B with Q4K quant: ~1.2 GB weights + ~2 GB KV cache
             // + vision encoder headroom. Conservative reserve of 3.5 GB.

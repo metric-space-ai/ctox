@@ -43,7 +43,7 @@ epoch, expiry and current issuer. Build permissions grant no speech access.
 The remote computer independently needs a current speech-specific target
 grant for exactly that binding and sender. This client cannot create it.
 
-Select `{"synthesis":"computer","transcription":"computer","voice_id":"neutral_female"}`
+Select `{"synthesis":"computer","transcription":"computer","voice_id":"de_female"}`
 through `ctox runtime speech-configure <speech-config.json>`.
 The CLI speech-synthesize path uses the asynchronous producer call and outputs
 non-secret run/audio hash metadata. Unsupported formats fail locally; no
@@ -58,13 +58,12 @@ persisted by this adapter.
 
 ## Delivery boundary
 
-This PR supplies the source adapter, source route lifecycle and failure
-regressions. The speech-specific receiver with current target grants, durable
-intent/sequence tombstones and local runtime execution is the next Models
-slice. It must register `ctox.native.speech.v1` on the same native host.
-Until that receiver is installed, this change alone does not enable remote
-speech. Installed two-host audio, intelligibility and latency acceptance remain
-open; fixture tests and signed metadata are not installed product evidence.
+The source adapter and speech-specific receiver use `ctox.native.speech.v1`
+on the existing native host. The receiver requires current target grants and
+maintains durable intent/sequence tombstones around local runtime execution.
+Both sides must be installed and configured before remote speech can run.
+Installed two-host audio, intelligibility and latency acceptance remain open;
+fixture tests and signed metadata are not installed product evidence.
 
 ## Preparing the local speech computer
 
@@ -82,3 +81,13 @@ open socket alone is insufficient. The result reports each model, backend and
 preparation time. Cold preparation is separate from measured sentence-end and
 first-audio latency. The operator retains the managed runtime's normal ownership
 and cleanup responsibilities; no cloud or alternate backend is selected.
+
+The native Voxtral STT and TTS services may share one admitted Linux GPU in the
+same runtime. The existing ownership ledger must identify the complementary
+model as active, and its live PID must match this CTOX executable, runtime root
+and native speech subcommand. Both roles need single-device memory reservations
+at least as large as their native model minimum. Voxtral TTS reserves 12 GiB for
+its BF16 graph and load headroom. The second model must fit in actually free GPU memory; the first
+model's reservation cannot count as free space. Other managed workloads and
+foreign GPU processes remain blockers. This is the standard local speech policy,
+with no extra configuration option or runtime environment switch.
