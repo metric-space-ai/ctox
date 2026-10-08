@@ -3218,10 +3218,54 @@ mod tests {
         Ok(())
     }
 
+    fn record_reviewed_plan_completion(root: &Path, message_key: &str) -> Result<()> {
+        use crate::core_state::{CoreEntityType, CoreEvent, CoreEvidenceRefs,
+            CoreState, CoreTransitionRequest, RuntimeLane};
+        let conn = open_plan_db(root)?;
+        // Match the service's reviewed terminal-success gate. Merely marking
+        // a plan step completed is not evidence that its queued work passed.
+        crate::core_state::guard::enforce_core_transition(&conn, &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Leased,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-completion-review-terminal-gate".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some("plan-test-reviewed-summary".to_string()),
+                verification_id: Some("validation-not-required:plan-test-summary".to_string()),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: std::collections::BTreeMap::from([
+                ("completion_review_required".to_string(), "true".to_string()),
+                ("completion_review_verdict".to_string(), "pass".to_string()),
+                ("reviewed_work_terminal_success".to_string(), "true".to_string()),
+                ("validation_not_required_policy_proof".to_string(),
+                    "validation-not-required:plan-test-summary".to_string()),
+            ]),
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn unreviewed_plan_completion_keeps_step_and_route_leased() -> Result<()> {
+        let root = temp_plan_root("complete-without-reviewed-proof");
+        let (goal_id, step_id, message_key) = emitted_step_fixture(&root)?;
+        assert!(mark_step_completed(&root, &step_id, "unreviewed").is_err());
+        assert_eq!(routing_status_for_message(&root, &message_key), "leased");
+        let view = load_goal_with_steps(&root, &goal_id)?.expect("goal should reload");
+        let step = view.steps.iter().find(|step| step.step_id == step_id).unwrap();
+        assert_eq!(step.status, PlanStepStatus::Queued.as_str());
+        assert!(step.completed_at.is_none());
+        Ok(())
+    }
+
     #[test]
     fn completing_step_updates_step_and_routing_state_immediately() -> Result<()> {
         let root = temp_plan_root("complete-routing-transaction");
         let (goal_id, step_id, message_key) = emitted_step_fixture(&root)?;
+        record_reviewed_plan_completion(&root, &message_key)?;
 
         assert_eq!(mark_step_completed(&root, &step_id, "done")?, 1);
         assert_eq!(routing_status_for_message(&root, &message_key), "handled");
@@ -3294,6 +3338,7 @@ mod tests {
     fn legacy_routing_drift_migrates_only_on_first_plan_db_open() -> Result<()> {
         let root = temp_plan_root("legacy-routing-migration-once");
         let (_goal_id, step_id, message_key) = emitted_step_fixture(&root)?;
+        record_reviewed_plan_completion(&root, &message_key)?;
         let conn = Connection::open(resolve_db_path(&root))?;
         conn.execute(
             "UPDATE planned_steps SET status = ?2 WHERE step_id = ?1",
