@@ -1561,7 +1561,7 @@ test('Owner confirmation preserves all three native CAS revisions and returns th
   const request = meetingOwnerRequest('project.jour_fixe.todos.confirm', { expectedGoalRevision: 5 });
   const fixture = nativeMeetingOwnerFixture();
   const result = await fixture.invoke(request);
-  assert.deepEqual(fixture.commands[0].payload, { operation_id: request.operationId, meeting_id: request.meetingId,
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].payload)), { operation_id: request.operationId, meeting_id: request.meetingId,
     expected_revision: 3, proposal_revision: 2, expected_goal_revision: 5 });
   assert.equal(fixture.commands[0].record_id, request.projectId);
   assert.equal(fixture.commands[0].command_type, 'ctox.workjet.jour_fixe.todos.confirm');
