@@ -105,6 +105,7 @@ struct Receipt {
     contract: String,
     permit_id: String,
     owner_user_id: String,
+    source_workspace_id: String,
     authority_epoch: i64,
     authority_fingerprint: String,
     expires_at_ms: i64,
@@ -236,7 +237,7 @@ fn execute_checked(
     };
     validate_binding(binding)?;
     anyhow::ensure!(
-        binding.source_instance_id == context.workspace,
+        binding.source_instance_id == context.managed_source_instance()?,
         "remote worker source instance differs from authenticated source"
     );
     let mut conn = store::open_store(root)?;
@@ -276,6 +277,7 @@ fn execute_checked(
                     contract: CONTRACT.to_owned(),
                     permit_id: uuid::Uuid::new_v4().to_string(),
                     owner_user_id: context.actor.clone(),
+                    source_workspace_id: context.workspace.clone(),
                     authority_epoch: epoch,
                     authority_fingerprint: fingerprint.clone(),
                     expires_at_ms: now + i64::from(*ttl_seconds) * 1000,
@@ -293,7 +295,7 @@ fn execute_checked(
             label(permit_id)?;
             let raw: String = tx.query_row(
                 "SELECT receipt_json FROM workjet_remote_worker_admissions WHERE permit_id=?1 AND owner_user_id=?2 AND source_instance_id=?3",
-                params![permit_id, context.actor, context.workspace], |row| row.get(0)).optional()?
+                params![permit_id, context.actor, context.managed_source_instance()?], |row| row.get(0)).optional()?
                 .context("worker permit is unavailable to this source owner")?;
             let receipt: Receipt = serde_json::from_str(&raw)?;
             verify_receipt(
@@ -387,6 +389,7 @@ fn verify_receipt(
     anyhow::ensure!(
         receipt.contract == CONTRACT
             && receipt.owner_user_id == context.actor
+            && receipt.source_workspace_id == context.workspace
             && &receipt.binding == binding,
         "worker permit immutable binding differs"
     );
@@ -410,7 +413,7 @@ fn verify_receipt(
     Ok(())
 }
 
-fn current_actor(
+pub(super) fn current_actor(
     conn: &Connection,
     context: &McpChannelRequestContext,
 ) -> anyhow::Result<(String, i64)> {
@@ -478,7 +481,7 @@ fn current_authority(
     let fingerprint = format!(
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(&serde_json::json!({
-            "owner":context.actor,"epoch":epoch,"instance":context.workspace,
+            "owner":context.actor,"epoch":epoch,"workspace":context.workspace,"instance":context.managed_source_instance()?,
             "project":binding.project_id,"repository":repository_key(native_repo)?,
             "computer":binding.target_computer_id,"hostingMode":computer["hosting_mode"],
             "capabilityEpoch":computer["capability_epoch"],"capabilityConfig":computer["capability_config"],
