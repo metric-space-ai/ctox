@@ -2056,3 +2056,24 @@ fn closure_claim_count_fails_closed_when_claims_schema_is_missing() -> Result<()
     assert!(err.to_string().contains("claim_status"));
     Ok(())
 }
+
+#[test]
+fn continuity_prompt_bounds_an_oversized_document() -> Result<()> {
+    let small = "# CONTINUITY NARRATIVE\n\n## Situation\n- short entry\n";
+    assert_eq!(super::continuity_document_prompt_view(small), small);
+
+    let oversized = format!(
+        "# CONTINUITY NARRATIVE\n\n## Situation\n- {}newest entry",
+        "the prior latest fresh new dispatch adds a lead; ".repeat(12_000)
+    );
+    let view = super::continuity_document_prompt_view(&oversized);
+    assert!(
+        view.chars().count() < 17_000,
+        "view has {} chars",
+        view.chars().count()
+    );
+    assert!(view.starts_with("# CONTINUITY NARRATIVE"));
+    assert!(view.contains("newest entry"));
+    assert!(view.contains("SIZE RULE"));
+    Ok(())
+}
