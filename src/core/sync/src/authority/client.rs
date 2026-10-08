@@ -218,3 +218,83 @@ impl ExecutionAuthority for WorkerAuthorityClient {
         Ok(())
     }
 }
+
+/// Transfer an existing protected job to this executor. Source ownership is
+/// checked by the committed TakeOver command, not by a foreign Validate read:
+/// nonvoting workers deliberately cannot authorize another executor.
+/// The lifecycle caller owns native policy fences and durable Pending evidence.
+pub async fn take_over_checkpoint(
+    authority: &dyn ExecutionAuthority,
+    request: Request,
+    spec: &crate::contracts::ExecutionSpec,
+    sequence: u64,
+) -> io::Result<Job> {
+    let Command::TakeOver {
+        job_id,
+        expected,
+        checkpoint_digest,
+        owner,
+        ..
+    } = &request.command
+    else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "checkpoint takeover requires TakeOver",
+        ));
+    };
+    let next = Ownership {
+        node_id: authority.node_id(),
+        generation: expected
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("checkpoint ownership generation exhausted"))?,
+    };
+    if request.actor != next.node_id
+        || *owner != next.node_id
+        || expected.node_id == next.node_id
+        || expected.node_id == 0
+        || expected.generation == 0
+        || next.node_id == 0
+        || job_id != &spec.job_id
+        || authority.scope_id() != spec.scope_id
+        || sequence == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "checkpoint takeover destination differs",
+        ));
+    }
+    let digest = checkpoint_digest.clone();
+    let applied = match authority.submit(request).await? {
+        Receipt::Applied(job) => job,
+        _ => {
+            return Err(io::Error::other(
+                "checkpoint takeover needs a fresh applied receipt; reconcile",
+            ))
+        }
+    };
+    let matches = |job: &Job| {
+        job.spec == *spec
+            && job.ownership == next
+            && !job.stopped
+            && job.pending_effects.is_empty()
+            && !job.checkpoint_requires_refresh
+            && job.checkpoint.as_ref().is_some_and(|checkpoint| {
+                checkpoint.digest == digest
+                    && checkpoint.sequence == sequence
+                    && checkpoint.replicas.contains(&next.node_id)
+            })
+    };
+    if !matches(&applied) {
+        return Err(io::Error::other(
+            "checkpoint takeover applied a different execution; reconcile",
+        ));
+    }
+    let current = authority.validate_ownership(&spec.job_id, &next).await?;
+    if !matches(&current) || current != applied {
+        return Err(io::Error::other(
+            "checkpoint job changed after takeover; reconcile",
+        ));
+    }
+    Ok(current)
+}

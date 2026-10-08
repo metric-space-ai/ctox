@@ -1,6 +1,6 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
-//! Bounded source reads and target ingestion. No resume or ownership mutation.
+//! Bounded checkpoint transport and explicit native ownership controls.
 use super::*;
 use ctox_sync::checkpoint::{artifacts, CheckpointStore};
 use ctox_sync::contracts::{ArtifactRef, CheckpointManifest};
@@ -14,6 +14,8 @@ mod guest_import;
 mod quorum;
 #[path = "session_handoff_reconstruction.rs"]
 mod reconstruction;
+#[path = "session_handoff_takeover.rs"]
+mod takeover;
 
 /// Resolve the native Core credential source in the assigned workspace. The
 /// returned manager pins the actual account, not a client account label. It
@@ -912,6 +914,7 @@ pub(crate) fn assert_native_checkpoint_path(
     reconstruction::assert_native_reconstruction(&target, &received);
     guest_import::assert_native_import_fence(&target, &received);
     quorum::assert_dirty_copy_cannot_acknowledge(&target, &received);
+    takeover::assert_dirty_copy_cannot_take_over(&target, &received);
     let (_, foreign) = make_fetch(
         Some(ArtifactRef {
             sha256: "aa".repeat(32),
@@ -994,6 +997,8 @@ pub(crate) struct CopyRequest {
     pub guest_id: String,
     #[serde(default, skip_serializing_if = "copy_only")]
     pub acknowledge: bool,
+    #[serde(default, skip_serializing_if = "copy_only")]
+    pub take_over: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protection_receipts: Vec<ctox_sync::contracts::CheckpointCopyReceipt>,
 }
@@ -1011,7 +1016,7 @@ impl CopyRequest {
         })
     }
     fn valid_operation(&self) -> bool {
-        let ordinary = !self.acknowledge && self.protection_receipts.is_empty();
+        let ordinary = !self.acknowledge && !self.take_over && self.protection_receipts.is_empty();
         let identifiers_only =
             !self.reconstruct && self.guest_id.is_empty() && self.source_route.is_empty();
         (ordinary
@@ -1024,8 +1029,12 @@ impl CopyRequest {
                     && !self.source_route.is_empty()
                     && self.source_route.len() <= 256)))
             || (identifiers_only
-                && ((self.acknowledge && self.protection_receipts.is_empty())
-                    || (!self.acknowledge
+                && ((self.take_over && !self.acknowledge && self.protection_receipts.is_empty())
+                    || (!self.take_over
+                        && self.acknowledge
+                        && self.protection_receipts.is_empty())
+                    || (!self.take_over
+                        && !self.acknowledge
                         && !self.protection_receipts.is_empty()
                         && self.protection_receipts.len() <= 8)))
     }
@@ -1046,6 +1055,12 @@ pub(crate) enum CopyResponse {
         controller_id: String,
         controller_generation: u64,
         effect_id: String,
+    },
+    OwnershipTaken {
+        checkpoint_digest: String,
+        job_id: String,
+        session_id: String,
+        ownership: ctox_sync::authority::Ownership,
     },
     CopyAcknowledged {
         receipt: ctox_sync::contracts::CheckpointCopyReceipt,
@@ -1110,7 +1125,13 @@ pub(super) fn listen(
                 {
                     let deadline = r.operation_timeout();
                     let operation = async {
-                        if r.acknowledge || !r.protection_receipts.is_empty() {
+                        if r.take_over {
+                            let registry = guests.as_ref().ok_or_else(|| {
+                                anyhow::anyhow!("native authority host unavailable")
+                            })?;
+                            takeover::take_over(server.clone(), registry.clone(), r.binding_digest)
+                                .await
+                        } else if r.acknowledge || !r.protection_receipts.is_empty() {
                             let registry = guests.as_ref().ok_or_else(|| {
                                 anyhow::anyhow!("native authority host unavailable")
                             })?;
