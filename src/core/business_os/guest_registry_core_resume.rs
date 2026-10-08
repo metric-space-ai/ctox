@@ -325,17 +325,25 @@ impl NativeGuestRegistry {
             let entry = registration
                 .lock()
                 .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
-            if entry.restoration.is_none() {
-                return Ok(None);
-            }
             let d = &entry.assignment.destination;
             ensure!(
-                !entry.revoked && context["actor"].as_str() == Some(d.human_owner_id.as_str()),
-                "original Core workspace belongs to another principal"
+                !entry.revoked
+                    && context["actor"].as_str() == Some(d.human_owner_id.as_str())
+                    && context["expires_at_ms"]
+                        .as_u64()
+                        .is_some_and(|expiry| u128::from(expiry) > super::super::store::now_ms()),
+                "native Core workspace principal or command lifetime is not current"
             );
             validate_policy(policy, d)?;
-            let assignment =
-                workspaces::snapshot(policy, d)?.context("target workspace is not assigned")?;
+            let Some(assignment) = workspaces::snapshot(policy, d)? else {
+                ensure!(
+                    entry.restoration.is_none(),
+                    "target workspace is not assigned"
+                );
+                // Ordinary, unassigned source chats retain their caller cwd;
+                // they acquire no portable workspace/export authority.
+                return Ok(None);
+            };
             let path = PathBuf::from(
                 assignment["nativeWorkspace"]
                     .as_str()
