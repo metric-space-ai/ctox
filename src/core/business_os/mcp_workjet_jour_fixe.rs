@@ -52,7 +52,7 @@ pub(super) fn allows(tool: &str, args: &Value) -> bool {
 
 // Describe the very same bounded DTOs used by both wire consumers, rather than
 // maintaining a third, permissive copy of the meeting schema.
-fn schema(spec: &Value, kind: &str) -> Value {
+pub(super) fn schema(spec: &Value, kind: &str) -> Value {
     match kind {
         "String" => json!({"type":"string"}),
         "u64" => json!({"type":"integer","minimum":0,"maximum":9_007_199_254_740_991_u64}),
@@ -124,7 +124,7 @@ pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
         descriptor_schema(&[("prepare_deck","PublishDeckRequest"),("propose_todos","ProposeTodosRequest")]))
 }
 
-fn bound_project(
+pub(super) fn bound_project(
     core: &Connection,
     policy: &Connection,
     context: &McpChannelRequestContext,

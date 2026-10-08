@@ -12,6 +12,8 @@ one explicit execution plan and complete its model-owned steps.
 Read the previous confirmed goal, configuration, evidenced merged PRs, KPIs,
 comments and final transcript. Name missing or stale evidence.
 Never invent numeric metrics or completed work.
+Use business_os.project_kpi with action read and request {project_id}. For each unbound prompt, select a matching registered recipe with action resolve and BindKpiRequest {operation_id,project_id,kpi_id,prompt_revision,expected_revision,recipe,window_days}. Read returns the recipe catalogue. Match its stated meaning to the prompt; do not substitute a different measure. Native readers calculate the number, persist the recipe and refresh hourly and before preparation. Unsupported sources stay missing_source; never supply a value, SQL, URL or another project.
+
 Prepare slides covering progress against goals, PR
 results, KPIs, owner decisions and next actions with acceptance criteria.
 Keep source references. Preparation authorizes no deployment, external message,
