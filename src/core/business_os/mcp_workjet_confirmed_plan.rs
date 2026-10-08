@@ -259,6 +259,7 @@ pub(crate) fn issue(
         |r| r.get(0),
     )?;
     let mut trusted = serde_json::json!({"auth_source":MCP_INTERNAL_SESSION_AUTH_SOURCE,
+        "channel":"ctox_internal_business_command","surface":"business_os_command_session",
         "actor":binding.owner_user_id,"role":role,"workspace":workspace,
         "workjet_confirmed_plan":binding,"workjet_supervisor_lease":binding.lease,"command_id":"","payload_hash":""});
     let context = context_from_arguments_with_trusted_gateway_context(
@@ -327,6 +328,7 @@ pub(super) fn verify(
     let core_tx = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
     let policy_tx = policy.transaction_with_behavior(TransactionBehavior::Deferred)?;
     let trusted = serde_json::json!({"auth_source":MCP_INTERNAL_SESSION_AUTH_SOURCE,
+        "channel":"ctox_internal_business_command","surface":"business_os_command_session",
         "actor":claims.actor,"role":claims.role,"workspace":claims.workspace,"command_id":"","payload_hash":"",
         "workjet_confirmed_plan":claims.workjet_confirmed_plan,"workjet_supervisor_lease":claims.workjet_supervisor_lease,"workjet_supervisor_epoch":claims.workjet_supervisor_epoch});
     let context = context_from_arguments_with_trusted_gateway_context(

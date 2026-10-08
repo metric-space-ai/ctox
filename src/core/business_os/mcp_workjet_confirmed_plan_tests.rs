@@ -75,6 +75,13 @@ fn actual_confirmed_plan_reads_the_goal_and_dispatches_once_without_a_fake_comma
     let trusted = verify_internal_command_session_token(root.path(), &token(root.path(), &task)?)?;
     assert_eq!(trusted["command_id"], "");
     assert_eq!(trusted["payload_hash"], "");
+    assert_eq!(trusted["channel"], "ctox_internal_business_command");
+    let context = context_from_arguments_with_trusted_gateway_context(
+        workjet_jour_fixe::READ_TOOL,
+        &read(),
+        Some(&trusted),
+    )?;
+    assert_eq!(context.trusted_role.as_deref(), Some("chef"));
     assert_eq!(trusted["workjet_confirmed_plan"]["lease"]["task_id"], task);
     let result = call(root.path(), &trusted, workjet_jour_fixe::READ_TOOL, read())?;
     assert_eq!(result["meeting"]["state"], "confirmed");
