@@ -284,7 +284,7 @@ impl QuiescedQemuCheckpoint {
             sha256: format!("{:x}", Sha256::digest(&bytes)),
             size_bytes: bytes.len() as u64,
         };
-        store.ingest_blob(&artifact, &bytes)?;
+        store.ingest_blob(&artifact, bytes.as_slice())?;
         entries.push(WorkspaceEntry {
             path: MACHINE_PATH.into(),
             kind: WorkspaceEntryKind::File,
