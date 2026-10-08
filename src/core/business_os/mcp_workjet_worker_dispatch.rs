@@ -500,7 +500,8 @@ pub(super) fn execute(
                 text(value, 256)?;
             }
             let trusted = trusted.context("native supervisor session unavailable")?;
-            let (project, thread, _) = workjet_jour_fixe::bound_project(&core_tx, &policy_tx, context, trusted)?;
+            let (project, thread, _) =
+                workjet_jour_fixe::bound_project(&core_tx, &policy_tx, context, trusted)?;
             // Existing column name is retained; the source is either an actual
             // business command or the exact native confirmed-plan task key.
             let execution_key = workjet_jour_fixe::execution_key(trusted)?;

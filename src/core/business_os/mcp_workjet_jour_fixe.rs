@@ -129,9 +129,15 @@ pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
 
 /// Durable source identity, never a synthetic business command.
 pub(super) fn execution_key(trusted: &Value) -> anyhow::Result<String> {
-    if let Some(plan) = trusted.get("workjet_confirmed_plan").filter(|v| !v.is_null()) {
-        return plan.pointer("/lease/task_id").and_then(Value::as_str)
-            .map(str::to_owned).context("native confirmed plan task missing");
+    if let Some(plan) = trusted
+        .get("workjet_confirmed_plan")
+        .filter(|v| !v.is_null())
+    {
+        return plan
+            .pointer("/lease/task_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .context("native confirmed plan task missing");
     }
     required_arg(trusted, "command_id")
 }
@@ -147,7 +153,10 @@ pub(super) fn bound_project(
             && trusted["workjet_supervisor_only"] == true,
         "meeting tool requires the restricted native supervisor session"
     );
-    if trusted.get("workjet_confirmed_plan").is_some_and(|v| !v.is_null()) {
+    if trusted
+        .get("workjet_confirmed_plan")
+        .is_some_and(|v| !v.is_null())
+    {
         return workjet_confirmed_plan::bound_project(core, policy, context, trusted);
     }
     let command_id = required_arg(trusted, "command_id")?;

@@ -5531,9 +5531,11 @@ fn process_is_running(pid: u32) -> bool {
 /// queue-task lease rows. Combines the per-boot service id with a per-slice
 /// attempt id so a recovered lease row names the exact worker that owned it.
 fn queue_job_needs_native_turn_lease(job: &QueuedPrompt) -> bool {
-    !job.leased_message_keys.is_empty() && (job.source_label == "queue"
-        || (job.source_label == "plan" && job.leased_message_keys.len() == 1
-            && job.leased_message_keys[0].starts_with("plan:system::")))
+    !job.leased_message_keys.is_empty()
+        && (job.source_label == "queue"
+            || (job.source_label == "plan"
+                && job.leased_message_keys.len() == 1
+                && job.leased_message_keys[0].starts_with("plan:system::")))
 }
 
 fn queue_lease_worker_id(job: &QueuedPrompt) -> String {
@@ -11842,18 +11844,37 @@ fn configure_business_os_mcp_session_for_queue_job(
 ) -> Result<bool> {
     let Some(command_id) = metadata_string(&job.queue_task_metadata, "business_os_command_id")
     else {
-        if job.leased_message_keys.len() != 1 || !job.leased_message_keys[0].starts_with("plan:system::") {
+        if job.leased_message_keys.len() != 1
+            || !job.leased_message_keys[0].starts_with("plan:system::")
+        {
             return Ok(false);
         }
         let worker = if let Some(fence) = options.queue_turn_lease.as_ref() {
-            anyhow::ensure!(fence.message_keys == job.leased_message_keys && fence.root == root,
-                "plan job differs from the admitted native turn");
-            anyhow::ensure!(fence.still_owned(&fence.open_reader()?)?, "native plan turn lease lost");
+            anyhow::ensure!(
+                fence.message_keys == job.leased_message_keys && fence.root == root,
+                "plan job differs from the admitted native turn"
+            );
+            anyhow::ensure!(
+                fence.still_owned(&fence.open_reader()?)?,
+                "native plan turn lease lost"
+            );
             fence.worker_id.as_str()
-        } else { "" };
-        let workspace = job.workspace_root.as_deref().unwrap_or("native-confirmed-plan");
+        } else {
+            ""
+        };
+        let workspace = job
+            .workspace_root
+            .as_deref()
+            .unwrap_or("native-confirmed-plan");
         let Some(token) = crate::business_os::mcp_channel::issue_internal_confirmed_plan_session(
-            root, &job.leased_message_keys[0], worker, workspace)? else { return Ok(false); };
+            root,
+            &job.leased_message_keys[0],
+            worker,
+            workspace,
+        )?
+        else {
+            return Ok(false);
+        };
         options.disable_mcp_servers = false;
         options.enable_business_os_mcp = true;
         options.business_os_mcp_command_session = Some(token);
@@ -33271,15 +33292,25 @@ Business OS command:
     }
 
     #[test]
-    fn workjet_confirmed_plan_service_entry_uses_the_actual_native_turn_fence() -> anyhow::Result<()> {
-        let (temp, task) = crate::business_os::mcp_channel::workjet_confirmed_plan_service_test_fixture()?;
+    fn workjet_confirmed_plan_service_entry_uses_the_actual_native_turn_fence() -> anyhow::Result<()>
+    {
+        let (temp, task) =
+            crate::business_os::mcp_channel::workjet_confirmed_plan_service_test_fixture()?;
         let root = temp.path();
         let job = QueuedPrompt {
-            prompt: "Execute the confirmed step".into(), queue_task_metadata: json!({}),
-            goal: "Confirmed todo".into(), preview: "Confirmed todo".into(), source_label: "plan".into(),
-            suggested_skill: None, leased_message_keys: vec![task.clone()], leased_ticket_event_keys: vec![],
+            prompt: "Execute the confirmed step".into(),
+            queue_task_metadata: json!({}),
+            goal: "Confirmed todo".into(),
+            preview: "Confirmed todo".into(),
+            source_label: "plan".into(),
+            suggested_skill: None,
+            leased_message_keys: vec![task.clone()],
+            leased_ticket_event_keys: vec![],
             thread_key: Some("business-os/threads/cc6cfe73-2824-4360-9daf-3b3efb079931".into()),
-            workspace_root: None, ticket_self_work_id: None, outbound_email: None, outbound_anchor: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
         };
         // route_external_messages uses inbound_source_label == "plan";
         // this same predicate now attaches its real fence before MCP admission.
@@ -33291,13 +33322,28 @@ Business OS command:
         assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options).is_err());
         assert!(options.business_os_mcp_command_session.is_none());
         options.queue_turn_lease = Some(channels::QueueTurnLeaseFence {
-            root: root.to_owned(), message_keys: job.leased_message_keys.clone(), worker_id: "fixture-plan-worker".into(),
-            #[cfg(unix)] execution: None,
+            root: root.to_owned(),
+            message_keys: job.leased_message_keys.clone(),
+            worker_id: "fixture-plan-worker".into(),
+            #[cfg(unix)]
+            execution: None,
         });
-        assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options)?);
-        assert!(options.enable_business_os_mcp && !options.disable_mcp_servers && options.force_isolated_session);
-        let token = options.business_os_mcp_command_session.as_deref().context("plan session missing")?;
-        let trusted = crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)?;
+        assert!(configure_business_os_mcp_session_for_queue_job(
+            root,
+            &job,
+            &mut options
+        )?);
+        assert!(
+            options.enable_business_os_mcp
+                && !options.disable_mcp_servers
+                && options.force_isolated_session
+        );
+        let token = options
+            .business_os_mcp_command_session
+            .as_deref()
+            .context("plan session missing")?;
+        let trusted =
+            crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)?;
         assert_eq!(trusted["command_id"], "");
         assert_eq!(trusted["workjet_confirmed_plan"]["lease"]["task_id"], task);
         let mut wrong = chat_turn_session_options_for_queue_job(&job);
