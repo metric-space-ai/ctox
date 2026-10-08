@@ -35,7 +35,13 @@ package and Chromium148 cache that passed Shell's real fixtures:
 
 The controller verifies those exact real paths and package version, then uses
 `chromium.executablePath()` from that package. It creates its own browser and
-private HOME/config/cache. The shared dependency cache is read-only; no new npm
+private profile/config/cache, retaining the real NSS-resolved home without a
+HOME override. Before launch it checks uid/gid resolution, home accessibility,
+writable shared memory (at least64MiB free), and proc visibility; the receipt
+records namespace IDs and shared-memory type. Chromium uses its sandbox and
+disables GPU rendering, matching Shell's verified configuration. These checks
+do not establish a missing-identity cause for earlier SIGTRAPs.
+The shared dependency cache is read-only; no new npm
 installation, browser download, global profile or system Chrome substitution.
 The earlier Playwright1.64/systemChrome146 SIGTRAP failures remain preserved as
 launcher/environment evidence, not sync findings.
@@ -48,6 +54,11 @@ export PLAYWRIGHT_BROWSERS_PATH=/mnt/nvme1/build-lane/deps/shell-browser-collect
   scripts/run-installed-sync-browser.mjs <private-parent>/runner.private.json \
   /mnt/nvme1/build-lane/deps/shell-browser-collection-auth/node_modules/playwright
 ```
+
+Append `--check-browser` for one bounded60s startup diagnostic after a launch
+failure. It opens only `about:blank`, then closes its browser/process group. It
+neither starts native nor contacts a tenant, performs rollback, or certifies a
+sync goal. Its separate receipt records startup and cleanup.
 
 The owned browser launcher creates two separate Chromium contexts. It opens **installed**
 canonical DB, desktop schema and sync modules from the native static server.
