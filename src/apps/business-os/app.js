@@ -14209,7 +14209,7 @@ async function workjetProjectControl(request = {}) {
       || receipt.target_record_id !== projectId || receipt.result?.ok !== true
       || receipt.result?.assessment?.contract !== 'ctox.workjet.exit_model.v1'
       || receipt.result?.assessment?.project_id !== projectId) {
-      throw new Error('Exit assessment returned an uncorrelated or unsuccessful native receipt.');
+      throw new Error('Exit assessment returned an uncorrelated or unsuccessful response.');
     }
     return { action, commandId, projectId, assessment: receipt.result.assessment };
   }
