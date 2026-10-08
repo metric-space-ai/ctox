@@ -253,7 +253,14 @@ fn comment_request(operation:&str,revision:u64)->Value {
 #[test]
 fn owner_slide_comment_is_durable_bound_to_deck_and_operation_idempotent()->anyhow::Result<()> {
     let root=fixture("live")?;
-    let first=send(root.path(),"comment","comment.add","owner",comment_request("comment-op",0))?;
+    let token=store::issue_business_os_capability_token_for_managed_user(root.path(),
+        "owner","Owner","admin",chrono::Utc::now().timestamp_millis())?.0;
+    let first=crate::business_os::command_plane::accept_rxdb_business_command_with_origin(root.path(),
+        json!({"id":"comment","module":"ctox","record_id":"project",
+            "command_type":"ctox.workjet.jour_fixe.comment.add",
+            "payload":comment_request("comment-op",0),
+            "client_context":{"actor":{"id":"owner"},"capability_token":token}}),
+        store::CommandOrigin::ReplicatedPeer)?;
     assert_eq!(first["status"],"completed","{first}");
     assert_eq!(first["result"]["mutation"]["changed_id"],"comment-1");
     let receipt:String=open_store(root.path())?.query_row(
