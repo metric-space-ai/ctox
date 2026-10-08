@@ -3693,6 +3693,26 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn voxtral_tts_cold_start_uses_model_budget_without_extending_other_roles() {
+        for model in ["engineai/Voxtral-4B-TTS-2603", "voxtral-4b-tts-2603"] {
+            let budget = backend_startup_wait_secs_for_model(Some(model));
+            assert!(
+                (300..=600).contains(&budget),
+                "cold Voxtral startup: {model}"
+            );
+        }
+        assert_eq!(backend_startup_wait_secs_for_model(None), 120);
+        assert_eq!(
+            backend_startup_wait_secs_for_model(Some("unknown-model")),
+            120
+        );
+        assert_eq!(
+            backend_startup_wait_secs_for_model(Some("engineai/Voxtral-Mini-4B-Realtime-2602")),
+            120
+        );
+    }
+
+    #[test]
     fn propagate_backend_outcome_is_fatal_for_chat_best_effort_for_aux() {
         // Chat (primary) failure must bubble up so the caller holds the task
         // with cooldown instead of burning it.

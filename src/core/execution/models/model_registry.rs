@@ -1912,7 +1912,10 @@ const MODEL_OPS_METADATA_REGISTRY: &[ModelOpsMetadataEntry] = &[
             "Voxtral-4B-TTS",
             "Voxtral-TTS",
         ],
-        startup_wait_secs: 120,
+        // Cold BF16 graph/weight upload on the admitted two-CPU A4500 lane
+        // exceeds the generic auxiliary 120s budget. Keep this preparation
+        // deadline separate from per-request speech latency.
+        startup_wait_secs: 300,
         default_tokens_per_second: None,
         estimated_chat_base_memory_mb: None,
         gpu_short_label: Some("tts"),
