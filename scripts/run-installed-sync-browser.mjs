@@ -76,7 +76,8 @@ try {
     userNamespace: readlinkSync('/proc/self/ns/user'), homeOverride: false };
   if (shm.bavail * shm.bsize < 64 * 1024 * 1024) throw new Error('Browser shared memory reserve below64MiB');
   const browserHome = join(out, 'browser-home'); mkdirSync(browserHome, { mode: 0o700 });
-  const browserEnv = Object.fromEntries(['PATH', 'LANG', 'LC_ALL', 'TMPDIR']
+  if (process.env.HOME !== identity.homedir) throw new Error('Browser parent HOME differs from its real NSS home');
+  const browserEnv = Object.fromEntries(['PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'HOME', 'USER', 'LOGNAME']
     .filter(key => process.env[key]).map(key => [key, process.env[key]]));
   Object.assign(browserEnv, { XDG_CONFIG_HOME: join(browserHome, 'config'),
     XDG_DATA_HOME: join(browserHome, 'data'), XDG_CACHE_HOME: join(browserHome, 'cache') });
@@ -84,9 +85,10 @@ try {
   receipt.phase = 'browser-launch';
   // Reuse the matched package/browser that passed Shell's real Chromium checks.
   // System Chrome146 SIGTRAP startup did not measure sync; no fresh browser download.
-  receipt.browserExecutable = chromium.executablePath(); save();
-  server = await chromium.launchServer({ executablePath: chromium.executablePath(), headless: true,
-    chromiumSandbox: true, timeout: 30000, env: browserEnv, args: ['--disable-gpu', '--enable-logging=stderr'] });
+  receipt.browserSelection = 'matched Playwright default headless executable'; save();
+  server = await chromium.launchServer({ headless: true,
+    chromiumSandbox: true, timeout: 30000, env: browserEnv, args: ['--disable-gpu'] });
+  receipt.browserExecutable = server.process().spawnfile;
   receipt.phase = 'browser-group-check'; save();
   browserPid = server.process().pid;
   browserPgid = Number(spawnSync('ps', ['-o', 'pgid=', '-p', String(browserPid)], { encoding: 'utf8' }).stdout.trim());
