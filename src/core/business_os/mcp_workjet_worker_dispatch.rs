@@ -583,8 +583,11 @@ pub(super) fn execute(
             } else {
                 let pending: i64 = core_tx.query_row(
                     "SELECT count(*) FROM workjet_worker_dispatch_intents i JOIN workjet_worker_dispatch_sources s
-                     ON s.registration_id=i.registration_id WHERE s.owner_user_id=?1 AND i.result_json IS NULL",
-                    [&context.actor], |row| row.get(0))?;
+                     ON s.registration_id=i.registration_id WHERE s.owner_user_id=?1 AND i.result_json IS NULL
+                     AND json_extract(s.record_json,'$.state')='active'
+                     AND json_extract(s.record_json,'$.revision')=i.registration_revision
+                     AND json_extract(s.record_json,'$.authorityEpoch')=?2",
+                    params![context.actor,epoch], |row| row.get(0))?;
                 anyhow::ensure!(
                     pending < 128,
                     "worker dispatch pending-intent capacity exceeded"
@@ -743,6 +746,13 @@ fn validate_result(intent: &Intent, value: &Value) -> anyhow::Result<()> {
         _ => anyhow::bail!("pending or unsupported dispatch result is not terminal"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn service_test_fixture() -> anyhow::Result<(tempfile::TempDir, String)> {
+    let root = tests::fixture()?;
+    let command_id = tests::queued_supervisor(root.path())?;
+    Ok((root, command_id))
 }
 
 #[cfg(test)]

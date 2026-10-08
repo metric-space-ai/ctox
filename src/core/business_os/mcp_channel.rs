@@ -50,6 +50,12 @@ mod project_crew_request;
 mod remote_worker;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
+
+#[cfg(test)]
+pub(crate) fn workjet_dispatch_service_test_fixture() -> anyhow::Result<(tempfile::TempDir, String)>
+{
+    workjet_worker_dispatch::service_test_fixture()
+}
 pub(crate) use command_writeback::supports_command_writeback;
 pub(crate) use workjet_worker_dispatch::is_supervisor_command as is_workjet_supervisor_command;
 #[path = "mcp_app_authority.rs"]

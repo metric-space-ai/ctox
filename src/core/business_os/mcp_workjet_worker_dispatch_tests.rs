@@ -26,7 +26,7 @@ fn poll(root: &Path, actor: &str) -> anyhow::Result<Value> {
         json!({"action":"poll","source_environment_id":"source-env"}),
     )
 }
-fn fixture() -> anyhow::Result<tempfile::TempDir> {
+pub(super) fn fixture() -> anyhow::Result<tempfile::TempDir> {
     let root = tempfile::tempdir()?;
     store::tests::seed_business_user(root.path(), "owner", "chef")?;
     store::tests::seed_business_user(root.path(), "foreign", "chef")?;
@@ -75,7 +75,7 @@ fn fixture() -> anyhow::Result<tempfile::TempDir> {
     );
     Ok(root)
 }
-fn session(root: &Path) -> anyhow::Result<(String, Value)> {
+pub(super) fn queued_supervisor(root: &Path) -> anyhow::Result<String> {
     let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
         root,
         json!({
@@ -100,6 +100,10 @@ fn session(root: &Path) -> anyhow::Result<(String, Value)> {
         lease_expires_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','+30 minutes') WHERE message_key=?1",
         [&queued.message_key])?;
     anyhow::ensure!(changed == 1, "fixture actual routing lease missing");
+    Ok(id)
+}
+fn session(root: &Path) -> anyhow::Result<(String, Value)> {
+    let id = queued_supervisor(root)?;
     let command = crate::channels::business_command_projection(root, &id)?;
     let token = issue_internal_command_session_token(
         root,
