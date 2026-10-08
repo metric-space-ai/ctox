@@ -412,7 +412,8 @@ pub(super) fn visible_in_store(
     }
     if project_command(collection, document) {
         let meeting_edit = document["command_type"].as_str()
-            .is_some_and(super::jour_fixe_owner::is_command);
+            .is_some_and(|kind| super::jour_fixe_owner::is_command(kind)
+                || super::jour_fixe_owner::is_reserved_command(kind));
         let project_id = if meeting_edit {
             // The typed mutation names a meeting, not a caller-selected project.
             // Resolve its current native binding; record_id alone grants nothing.

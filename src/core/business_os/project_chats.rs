@@ -71,6 +71,7 @@ struct ChatPayload {
 pub(super) fn is_command(command_type: &str) -> bool {
     supervisor_turns::is_command(command_type)
         || jour_fixe_owner::is_command(command_type)
+        || jour_fixe_owner::is_reserved_command(command_type)
         || command_type == "ctox.workjet.jour_fixe.meeting.read"
         || super::workjet_project_kpis::is_command(command_type)
         || matches!(

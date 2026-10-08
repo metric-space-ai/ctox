@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 110] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 115] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -370,6 +370,11 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 110] = [
     "ctox.workjet.project.supervisor.bind",
     "ctox.workjet.project.supervisor.turn.submit",
     "ctox.workjet.project.supervisor.turn.watch",
+    "ctox.workjet.jour_fixe.prepare",
+    "ctox.workjet.jour_fixe.deck.publish",
+    "ctox.workjet.jour_fixe.comment.add",
+    "ctox.workjet.jour_fixe.todos.propose",
+    "ctox.workjet.jour_fixe.todos.confirm",
     "ctox.workjet.jour_fixe.meeting.read",
     "ctox.workjet.jour_fixe.meeting.start",
     "ctox.workjet.jour_fixe.meeting.end",
@@ -1715,6 +1720,15 @@ fn dispatch_business_command(
         | "ctox.business_os.support.export_diagnostics"
         | "ctox.business_os.why" => {
             handle_business_os_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
+        }
+        "ctox.workjet.jour_fixe.prepare"
+        | "ctox.workjet.jour_fixe.deck.publish"
+        | "ctox.workjet.jour_fixe.comment.add"
+        | "ctox.workjet.jour_fixe.todos.propose"
+        | "ctox.workjet.jour_fixe.todos.confirm" => {
+            Ok(BusinessCommandDispatchOutcome::failed(None,
+                serde_json::json!({"ok":false,"error":"Jour fixe action is not implemented on this native release"}),
+                anyhow::anyhow!("Jour fixe action is not implemented on this native release")))
         }
         "ctox.workjet.jour_fixe.meeting.start"
         | "ctox.workjet.jour_fixe.meeting.end"

@@ -32,11 +32,13 @@ Result: `{ok:true, contract:"ctox.workjet.jour_fixe.v1", mutation:<MeetingMutati
 The generated receipt carries operation/meeting/project IDs, native revision
 and state, plus `changed_id` or `todos_revision` when applicable. It does not
 copy the full meeting. The existing authorized `meeting.read` obtains current
-state. Runtime metadata writes are bounded to1MiB. Preparation and a ready
+state. Runtime metadata writes are bounded to 1 MiB. Preparation and a ready
 state are not audio-file authorization; playback still uses the authorized
 file/chunk path.
 
 Comment delivery, bound-supervisor deck/proposal publication, registered audio
 and speech, and confirmed to-dos becoming the Core supervisor goal remain
-separate required delivery work. This slice and isolated source regressions do
+separate required delivery work. Their declared command names fail terminally
+until their handlers land; they cannot fall through into recursive model tasks.
+This slice and isolated source regressions do
 not establish installed meeting acceptance.

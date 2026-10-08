@@ -158,3 +158,16 @@ fn meeting_command_visibility_uses_its_native_owner_and_project_binding() -> any
     assert_eq!(document_visible_to_actor(root.path(),"business_commands",&wrong,"owner"),Some(false));
     Ok(())
 }
+
+#[test]
+fn reserved_meeting_tools_fail_terminally_without_creating_recursive_model_tasks() -> anyhow::Result<()> {
+    let root=fixture("ready")?;
+    for (i,action) in ["prepare","deck.publish","comment.add","todos.propose","todos.confirm"].iter().enumerate() {
+        let command=format!("reserved-{i}");
+        let value=send(root.path(),&command,action,"owner",request(&command,0))?;
+        assert_eq!(value["status"],"failed","{value}");
+        assert!(crate::mission::channels::load_queue_task_for_business_os_command(root.path(),&command)?.is_none());
+    }
+    assert_eq!(saved(root.path())?["revision"],0);
+    Ok(())
+}

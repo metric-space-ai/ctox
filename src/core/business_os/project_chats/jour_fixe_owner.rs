@@ -16,6 +16,13 @@ pub(in crate::business_os) fn is_command(kind:&str)->bool {
     matches!(kind,"ctox.workjet.jour_fixe.meeting.start" | "ctox.workjet.jour_fixe.meeting.end"
         | "ctox.workjet.jour_fixe.transcript.append" | "ctox.workjet.jour_fixe.todos.revise")
 }
+// A declared meeting tool without a handler must fail terminally, never fall
+// through into an ordinary model task or recursively queue another preparation.
+pub(in crate::business_os) fn is_reserved_command(kind:&str)->bool {
+    matches!(kind,"ctox.workjet.jour_fixe.prepare" | "ctox.workjet.jour_fixe.deck.publish"
+        | "ctox.workjet.jour_fixe.comment.add" | "ctox.workjet.jour_fixe.todos.propose"
+        | "ctox.workjet.jour_fixe.todos.confirm")
+}
 enum Edit {
     Start(wire::MeetingTransitionRequest),
     End(wire::MeetingTransitionRequest),
