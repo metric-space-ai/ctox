@@ -1,3 +1,49 @@
+#[test]
+fn remote_worker_actual_gateway_instance_is_distinct_from_workspace_and_unforgeable(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let gateway = gateway("owner");
+    assert_ne!(gateway["workspace"], gateway["instance_id"]);
+    let args = json!({"action":"issue","binding":binding(),"ttl_seconds":300});
+    let receipt = super::super::call_tool_inner(root.path(), TOOL, args.clone(), Some(&gateway))?;
+    assert_eq!(receipt["binding"]["sourceInstanceId"], "source-instance");
+    assert_eq!(receipt["sourceWorkspaceId"], "tenant:source-owner");
+    for pin in [None, Some("wrong-instance"), Some("")] {
+        let mut wrong = gateway.clone();
+        if let Some(pin) = pin {
+            wrong["instance_id"] = json!(pin);
+        } else {
+            wrong.as_object_mut().unwrap().remove("instance_id");
+        }
+        assert!(
+            super::super::call_tool_inner(root.path(), TOOL, args.clone(), Some(&wrong)).is_err()
+        );
+    }
+    let untrusted = super::super::context_from_arguments_with_trusted_gateway_context(
+        TOOL,
+        &json!({"_context":gateway}),
+        None,
+    )?;
+    assert!(untrusted.trusted_managed_instance_id.is_none());
+    let mut serialized = serde_json::to_value(&untrusted)?;
+    serialized["trusted_managed_instance_id"] = json!("source-instance");
+    let decoded: McpChannelRequestContext = serde_json::from_value(serialized)?;
+    assert!(decoded.trusted_managed_instance_id.is_none());
+    let mut other_workspace = gateway.clone();
+    other_workspace["workspace"] = json!("tenant:other");
+    for action in ["claim", "revoke"] {
+        let mut request =
+            json!({"action":action,"permit_id":receipt["permitId"],"binding":binding()});
+        if action == "claim" {
+            request["execution_id"] = json!("execution-1");
+        }
+        assert!(
+            super::super::call_tool_inner(root.path(), TOOL, request, Some(&other_workspace))
+                .is_err()
+        );
+    }
+    Ok(())
+}
 // Origin: CTOX
 // License: AGPL-3.0-only
 use super::*;
@@ -21,7 +67,7 @@ fn binding() -> Binding {
 }
 fn gateway(owner: &str) -> Value {
     json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp",
-        "surface":"workjet","actor":owner,"role":"chef","workspace":"source-instance"})
+        "surface":"workjet","actor":owner,"role":"chef","workspace":"tenant:source-owner","instance_id":"source-instance"})
 }
 fn fixture() -> anyhow::Result<tempfile::TempDir> {
     let root = tempfile::tempdir()?;
@@ -47,7 +93,26 @@ fn fixture() -> anyhow::Result<tempfile::TempDir> {
             "slots":1,"jobs":2,"lane_root":"/build-lane","disk_floor_gib":60,
             "toolchains":["rust"]}]}),
     )?;
+    call(
+        root.path(),
+        "owner",
+        json!({"action":"register_target","target":target_binding()}),
+    )?;
     Ok(root)
+}
+fn target_binding() -> Value {
+    let binding = serde_json::to_value(binding()).unwrap();
+    let mut target = json!({});
+    for key in [
+        "sourceEnvironmentId",
+        "targetEnvironmentId",
+        "targetConnectionId",
+        "targetInstanceId",
+        "targetComputerId",
+    ] {
+        target[key] = binding[key].clone();
+    }
+    target
 }
 fn record(root: &Path, collection: &str, id: &str, value: Value) -> anyhow::Result<()> {
     super::super::super::store_workjet_projects::persist_idempotently(
@@ -76,6 +141,297 @@ fn operation(action: &str, receipt: &Value, execution: Option<&str>) -> Value {
         args["execution_id"] = json!(execution);
     }
     args
+}
+fn enrollment() -> Value {
+    json!({"action":"enroll_target",
+        "target":{"sourceEnvironmentId":"source-env","targetEnvironmentId":"new-execution-environment",
+            "targetConnectionId":"connection-1","targetInstanceId":"target-instance"},
+        "computer":{"displayName":"Remote build computer","hostingMode":"self_hosted",
+            "buildCapability":{"ssh_endpoint_ref":"native-build-endpoint","slots":1,"jobs":2,
+                "lane_root":"/build-lane","disk_floor_gib":60,"toolchains":["rust"]}}})
+}
+fn computer_count(root: &Path) -> anyhow::Result<usize> {
+    Ok(store::outbound_load_records_by_string_field(
+        &store::open_store(root)?,
+        "workjet_computers",
+        "owner_user_id",
+        "owner",
+    )?
+    .len())
+}
+
+#[test]
+fn remote_worker_target_enrollment_issues_one_real_native_computer_and_projection(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    std::fs::create_dir_all(root.path().join("runtime"))?;
+    let projection = rusqlite::Connection::open(store::rxdb_store_path(root.path()))?;
+    projection.execute_batch(
+        "CREATE TABLE ctox_business_os__workjet_computers__v0 (
+        id TEXT PRIMARY KEY NOT NULL, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0,
+        lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL);",
+    )?;
+    drop(projection);
+    let enroll = enrollment();
+    let enrolled = call(root.path(), "owner", enroll.clone())?;
+    let id = enrolled["target"]["targetComputerId"].as_str().unwrap();
+    uuid::Uuid::parse_str(id)?;
+    assert_ne!(id, "new-execution-environment");
+    assert_eq!(
+        call(root.path(), "owner", enroll.clone())?,
+        enrolled,
+        "lost enrollment ACK cannot create another native computer"
+    );
+    let persisted =
+        store::outbound_load_record(&store::open_store(root.path())?, "workjet_computers", id)?
+            .unwrap();
+    assert_eq!(persisted["owner_user_id"], "owner");
+    assert_eq!(persisted["status"], "assigned");
+    assert_eq!(persisted["capability_config"][0]["kind"], "build");
+    let projected =
+        store::load_rxdb_collection_record(root.path(), "workjet_computers", id)?.unwrap();
+    assert_eq!(projected["owner_user_id"], "owner");
+    assert!(
+        projected.get("capability_config").is_none(),
+        "operational config stays native"
+    );
+    assert_eq!(computer_count(root.path())?, 2);
+    for pointer in [
+        "/computer/displayName",
+        "/computer/buildCapability/jobs",
+        "/target/targetConnectionId",
+    ] {
+        let mut changed = enroll.clone();
+        *changed.pointer_mut(pointer).unwrap() = if pointer.ends_with("jobs") {
+            json!(3)
+        } else {
+            json!("changed-intent")
+        };
+        assert!(
+            call(root.path(), "owner", changed).is_err(),
+            "changed enrollment {pointer} accepted"
+        );
+    }
+    let mut request_binding = serde_json::to_value(binding())?;
+    request_binding["targetEnvironmentId"] = enrolled["target"]["targetEnvironmentId"].clone();
+    request_binding["targetComputerId"] = json!(id);
+    assert!(call(
+        root.path(),
+        "owner",
+        json!({"action":"issue","binding":request_binding,"ttl_seconds":300})
+    )
+    .is_ok());
+    Ok(())
+}
+
+#[test]
+fn remote_worker_invalid_or_revoked_enrollment_never_creates_another_assignment(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let enroll = enrollment();
+    for pointer in [
+        "/computer/hostingMode",
+        "/computer/buildCapability/slots",
+        "/target/sourceEnvironmentId",
+    ] {
+        let mut invalid = enroll.clone();
+        *invalid.pointer_mut(pointer).unwrap() = match pointer {
+            "/computer/hostingMode" => json!("managed_backend"),
+            "/computer/buildCapability/slots" => json!(0),
+            _ => json!("new-execution-environment"),
+        };
+        assert!(call(root.path(), "owner", invalid).is_err());
+    }
+    assert_eq!(
+        computer_count(root.path())?,
+        1,
+        "rejected enrollment leaves no assigned computer"
+    );
+    let enrolled = call(root.path(), "owner", enroll.clone())?;
+    let revoked = call(
+        root.path(),
+        "owner",
+        json!({"action":"revoke_target","target_environment_id":"new-execution-environment",
+            "expected_revision":enrolled["revision"]}),
+    )?;
+    assert_eq!(revoked["state"], "revoked");
+    assert!(
+        call(root.path(), "owner", enroll).is_err(),
+        "a replay cannot reactivate or mint another computer after unpair"
+    );
+    assert_eq!(computer_count(root.path())?, 2);
+    Ok(())
+}
+
+#[test]
+fn remote_worker_target_resolution_is_explicit_native_owner_and_source_scoped() -> anyhow::Result<()>
+{
+    let root = fixture()?;
+    let resolve = json!({"action":"resolve_target","target_environment_id":"target-env"});
+    let resolved = call(root.path(), "owner", resolve.clone())?;
+    assert_eq!(resolved["contract"], "ctox.workjet.remote-worker-target.v1");
+    assert_eq!(resolved["target"], target_binding());
+    assert_eq!(resolved["buildCapability"]["kind"], "build");
+    assert_eq!(resolved["revision"], 1);
+    assert_eq!(
+        call(
+            root.path(),
+            "owner",
+            json!({"action":"register_target","target":target_binding()})
+        )?,
+        resolved
+    );
+    assert!(call(root.path(), "foreign", resolve.clone()).is_err());
+    let mut foreign_source = gateway("owner");
+    foreign_source["workspace"] = json!("other-source-instance");
+    assert!(
+        super::super::call_tool_inner(root.path(), TOOL, resolve, Some(&foreign_source)).is_err()
+    );
+    for key in [
+        "sourceEnvironmentId",
+        "targetEnvironmentId",
+        "targetConnectionId",
+        "targetInstanceId",
+        "targetComputerId",
+    ] {
+        let mut request_binding = serde_json::to_value(binding())?;
+        request_binding[key] = json!("different-native-binding");
+        assert!(
+            call(
+                root.path(),
+                "owner",
+                json!({"action":"issue","binding":request_binding,"ttl_seconds":300})
+            )
+            .is_err(),
+            "unregistered target tuple field {key} was admitted"
+        );
+    }
+    let mut unregistered = target_binding();
+    unregistered["targetComputerId"] = json!("connection-target-env");
+    assert!(
+        call(
+            root.path(),
+            "owner",
+            json!({"action":"register_target","target":unregistered})
+        )
+        .is_err(),
+        "a presentation computer identifier cannot create native assignment"
+    );
+    Ok(())
+}
+
+#[test]
+fn remote_worker_target_replacement_and_revocation_fence_existing_execution() -> anyhow::Result<()>
+{
+    let root = fixture()?;
+    let permit = issue(root.path())?;
+    call(
+        root.path(),
+        "owner",
+        operation("claim", &permit, Some("execution-1")),
+    )?;
+    let mut replacement = target_binding();
+    replacement["targetConnectionId"] = json!("new-connection");
+    let replace = json!({"action":"register_target","target":replacement,"expected_revision":1});
+    let registered = call(root.path(), "owner", replace.clone())?;
+    assert_eq!(registered["revision"], 2);
+    assert_eq!(
+        call(root.path(), "owner", replace)?,
+        registered,
+        "lost registration ACK is idempotent"
+    );
+    assert!(call(
+        root.path(),
+        "owner",
+        operation("revalidate", &permit, Some("execution-1"))
+    )
+    .is_err());
+    let mut renewal = operation("renew", &permit, Some("execution-1"));
+    renewal["renewal_sequence"] = json!(1);
+    renewal["ttl_seconds"] = json!(300);
+    assert!(call(root.path(), "owner", renewal).is_err());
+    assert!(
+        call(
+            root.path(),
+            "owner",
+            json!({"action":"register_target","target":target_binding(),"expected_revision":1})
+        )
+        .is_err(),
+        "delayed replacement cannot undo a newer registration"
+    );
+    let revoke = json!({"action":"revoke_target","target_environment_id":"target-env","expected_revision":2});
+    let revoked = call(root.path(), "owner", revoke.clone())?;
+    assert_eq!(revoked["revision"], 3);
+    assert_eq!(revoked["state"], "revoked");
+    assert_eq!(call(root.path(), "owner", revoke)?, revoked);
+    assert!(call(
+        root.path(),
+        "owner",
+        json!({"action":"resolve_target","target_environment_id":"target-env"})
+    )
+    .is_err());
+    let reactivated = call(
+        root.path(),
+        "owner",
+        json!({"action":"register_target","target":replacement,"expected_revision":3}),
+    )?;
+    assert_eq!(reactivated["revision"], 4);
+    assert!(call(
+        root.path(),
+        "owner",
+        operation("revalidate", &permit, Some("execution-1"))
+    )
+    .is_err());
+    assert_eq!(
+        call(root.path(), "owner", operation("revoke", &permit, None))?["state"],
+        "revoked"
+    );
+    Ok(())
+}
+
+#[test]
+fn remote_worker_target_missing_registration_and_retired_computer_fail_closed() -> anyhow::Result<()>
+{
+    let root = fixture()?;
+    let permit = issue(root.path())?;
+    store::open_store(root.path())?.execute("DELETE FROM workjet_remote_worker_targets", [])?;
+    assert!(
+        issue(root.path()).is_err(),
+        "legacy unregistered permit cannot bypass enrollment"
+    );
+    assert!(call(
+        root.path(),
+        "owner",
+        operation("claim", &permit, Some("execution-1"))
+    )
+    .is_err());
+    let registered = call(
+        root.path(),
+        "owner",
+        json!({"action":"register_target","target":target_binding()}),
+    )?;
+    let conn = store::open_store(root.path())?;
+    let mut computer =
+        store::outbound_load_record(&conn, "workjet_computers", "computer-1")?.unwrap();
+    computer["status"] = json!("unassigned");
+    record(root.path(), "workjet_computers", "computer-1", computer)?;
+    assert!(call(
+        root.path(),
+        "owner",
+        json!({"action":"resolve_target","target_environment_id":"target-env"})
+    )
+    .is_err());
+    assert!(call(
+        root.path(),
+        "owner",
+        json!({"action":"register_target","target":target_binding()})
+    )
+    .is_err());
+    let revoke = json!({"action":"revoke_target","target_environment_id":"target-env",
+        "expected_revision":registered["revision"]});
+    assert!(call(root.path(), "foreign", revoke.clone()).is_err());
+    assert_eq!(call(root.path(), "owner", revoke)?["state"], "revoked");
+    Ok(())
 }
 
 #[test]
@@ -152,6 +508,13 @@ fn remote_worker_receipt_preserves_only_typed_account_reference() -> anyhow::Res
             "unknown secret field {pointer}"
         );
     }
+    let target = redact_receipt(json!({
+        "contract": target::CONTRACT, "credentialRef":{"accountId":"test-secret"},
+        "target":{"targetComputerId":"computer-1"}, "token":"test-token"
+    }))?;
+    assert_eq!(target["credentialRef"], REDACTED_MCP_VALUE);
+    assert_eq!(target["token"], REDACTED_MCP_VALUE);
+    assert_eq!(target["target"]["targetComputerId"], "computer-1");
     let mut wrong_contract = permit;
     wrong_contract["contract"] = json!("untrusted");
     assert!(redact_receipt(wrong_contract).is_err());
