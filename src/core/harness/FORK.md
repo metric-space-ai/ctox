@@ -219,9 +219,16 @@ The loaded Core Session exposes a non-deserializable snapshot of the original
 initialize results retained by its actual managed MCP connections, including the
 configured HTTP endpoint. The reader does not start pending connections, and
 limits retained metadata to 16 KiB per server and 32 servers per snapshot.
-The snapshot changes no effect ledger and is not a clean-effect receipt:
-authenticated native startup verification, current execution authority and
-owned guest-effect receipts remain required before source portability can pass.
+The snapshot itself changes no effect ledger. The native factory separately
+waits for the actual bounded connection, verifies the native listener\x27s signed
+original initialize result, fresh per-Core nonce, command-session hash, actual
+listener port and short expiry under current command/account/execution guards.
+Only before the first submission may it retire that generation\x27s mcp-startup
+uncertainty. Refresh fences the previous generation before its first await;
+failed/repeated/stale receipts and every other uncertainty remain unresolved.
+The protected original-session loader uses the same canonical MCP override as
+the fresh factory. This receipts readonly initialize/tools-list startup only;
+owned guest-effect receipts and installed acceptance still remain required.
 
 ## 2026-10 Native Core plan-effect ownership
 

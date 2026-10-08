@@ -246,6 +246,71 @@ fn business_os_mcp_thread_config(
     Ok(config)
 }
 
+struct NativeMcpStartupExpectation {
+    nonce: String,
+    token: String,
+    endpoint: String,
+    context: JsonValue,
+}
+
+impl NativeMcpStartupExpectation {
+    fn prepare(root: &Path, config: &mut HashMap<String, JsonValue>) -> Result<Self> {
+        let servers = config
+            .get_mut("mcp_servers")
+            .and_then(JsonValue::as_object_mut)
+            .context("native Core has no managed MCP configuration")?;
+        anyhow::ensure!(
+            servers.len() == 1,
+            "native Core has foreign configured MCP servers"
+        );
+        let server = servers
+            .get_mut(BUSINESS_OS_MCP_SESSION_SERVER_NAME)
+            .context("native Core has no original Business OS MCP server")?;
+        let endpoint = server["url"]
+            .as_str()
+            .context("native MCP has no HTTP endpoint")?
+            .to_owned();
+        let url = url::Url::parse(&endpoint)?;
+        let ip = url
+            .host_str()
+            .context("native MCP endpoint has no host")?
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()?;
+        anyhow::ensure!(
+            ip.is_loopback()
+                && url.scheme() == "http"
+                && url.path() == "/mcp"
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "native Core requires the numeric local MCP listener"
+        );
+        let headers = server["http_headers"]
+            .as_object_mut()
+            .context("native MCP has no command headers")?;
+        let token = headers
+            .get("X-CTOX-Business-Command-Session")
+            .and_then(JsonValue::as_str)
+            .context("native MCP has no command session")?
+            .to_owned();
+        let context =
+            crate::business_os::mcp_channel::verify_internal_command_session_token(root, &token)?;
+        let nonce = uuid::Uuid::new_v4().to_string();
+        headers.insert(
+            crate::business_os::mcp_channel::native_startup::HEADER.into(),
+            JsonValue::String(nonce.clone()),
+        );
+        Ok(Self {
+            nonce,
+            token,
+            endpoint,
+            context,
+        })
+    }
+}
+
 fn configure_managed_linux_sandbox(cli_overrides: &mut Vec<(String, toml::Value)>) {
     #[cfg(target_os = "linux")]
     {
@@ -1836,6 +1901,14 @@ impl PersistentSession {
         Option<Arc<ctox_core::CodexThread>>,
     )> {
         let native_guest = native_guest_authorization.is_some();
+        // Fresh per actual Core construction; never reused from a previous session.
+        let mut native_thread_config =
+            native_guest.then(|| thread_config.cloned().unwrap_or_default());
+        let native_mcp_startup = native_thread_config
+            .as_mut()
+            .map(|config| NativeMcpStartupExpectation::prepare(root, config))
+            .transpose()?;
+        let thread_config = native_thread_config.as_ref().or(thread_config);
         let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
         let runtime_local_preset = resolved_runtime
             .as_ref()
@@ -2087,6 +2160,21 @@ impl PersistentSession {
         configure_worker_tool_stack(&mut cli_overrides, disable_active_tools);
         if native_guest {
             super::session_continuity::constrain_native_guest_startup(&mut cli_overrides);
+            // Both fresh thread/start and protected original-session load use
+            // these canonical overrides; the latter bypasses thread/start config.
+            let native_config = native_thread_config
+                .as_ref()
+                .context("native MCP configuration missing")?;
+            cli_overrides.retain(|(key, _)| key != "mcp_servers" && key != "features.apps");
+            cli_overrides.push((
+                "mcp_servers".into(),
+                toml::Value::try_from(
+                    native_config
+                        .get("mcp_servers")
+                        .context("native MCP servers missing")?,
+                )?,
+            ));
+            cli_overrides.push(("features.apps".into(), toml::Value::Boolean(false)));
         }
         let config = ConfigBuilder::default()
             .cli_overrides(cli_overrides.clone())
@@ -2222,6 +2310,38 @@ impl PersistentSession {
             // Actual object provenance before the first submission; no JSON or
             // renderer field registers this ledger, and it grants no execution.
             actual_thread.register_native_source_factory()?;
+            if let Some(startup) = &native_mcp_startup {
+                actual_thread
+                    .reconcile_native_mcp_startup(|snapshot| {
+                        let verified = (|| -> Result<()> {
+                            if let (Some(binding), Some(authorize)) =
+                                (&native_checkpoint_binding, native_guest_authorization)
+                            {
+                                binding.with_current_contract(|contract| {
+                                    authorize(&model, contract)
+                                })?;
+                            }
+                            crate::business_os::mcp_channel::native_startup::verify(
+                                root,
+                                &startup.nonce,
+                                &startup.token,
+                                &startup.endpoint,
+                                &startup.context,
+                                snapshot,
+                            )?;
+                            if let (Some(binding), Some(authorize)) =
+                                (&native_checkpoint_binding, native_guest_authorization)
+                            {
+                                binding.with_current_contract(|contract| {
+                                    authorize(&model, contract)
+                                })?;
+                            }
+                            Ok(())
+                        })();
+                        verified.map_err(|error| std::io::Error::other(error.to_string()))
+                    })
+                    .await?;
+            }
             if let (Some(binding), Some(authorize)) =
                 (&native_checkpoint_binding, native_guest_authorization)
             {

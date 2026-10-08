@@ -95,13 +95,45 @@ impl CodexThread {
             .read()
             .await;
         let servers = manager
-            .native_original_startup()
+            .native_original_startup(false)
             .await
             .map_err(std::io::Error::other)?;
         Ok(crate::native_mcp_startup::NativeMcpStartupSnapshot::new(
             self.codex.session.conversation_id,
             servers,
         ))
+    }
+
+    /// Trusted native factory verification of the original bounded handshake.
+    /// The verifier runs after releasing the manager lock. Refresh/submission
+    /// fences are checked synchronously afterwards; imported metadata has no path here.
+    pub async fn reconcile_native_mcp_startup<F>(&self, verify: F) -> std::io::Result<()>
+    where
+        F: FnOnce(&crate::native_mcp_startup::NativeMcpStartupSnapshot) -> std::io::Result<()>,
+    {
+        let generation = self.codex.session.native_effects.mcp_generation()?;
+        let servers = {
+            let manager = self
+                .codex
+                .session
+                .services
+                .mcp_connection_manager
+                .read()
+                .await;
+            manager
+                .native_original_startup(true)
+                .await
+                .map_err(std::io::Error::other)?
+        };
+        let snapshot = crate::native_mcp_startup::NativeMcpStartupSnapshot::new(
+            self.codex.session.conversation_id,
+            servers,
+        );
+        verify(&snapshot)?;
+        self.codex
+            .session
+            .native_effects
+            .reconcile_mcp_startup(generation)
     }
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {

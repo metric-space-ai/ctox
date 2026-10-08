@@ -63,6 +63,7 @@ struct Observations {
     registered: bool,
     startup: BTreeSet<String>,
     submissions: u64,
+    mcp_generation: u64,
     unreconciled: u64,
     calls: BTreeMap<String, PlanObservation>,
 }
@@ -119,6 +120,7 @@ impl NativeCoreEffects {
                 registered: false,
                 startup,
                 submissions: 0,
+                mcp_generation: 0,
                 unreconciled: 0,
                 calls: BTreeMap::new(),
             }),
@@ -128,12 +130,38 @@ impl NativeCoreEffects {
     pub(crate) fn observe_mcp_startup(&self, enabled_servers: usize) {
         if enabled_servers != 0 {
             if let Ok(mut state) = self.observations.lock() {
-                // HTTP/stdio initialization is not evidence of a side-effect-free
-                // server. Only a future authenticated production receipt may
-                // reconcile this; tool success/transport metadata cannot.
+                // Every fresh connection invalidates the previous receipt.
+                state.mcp_generation = state.mcp_generation.saturating_add(1);
                 state.startup.insert("mcp-startup".into());
             }
         }
+    }
+
+    /// Refresh fences receipts synchronously, before startup's first await.
+    pub(crate) fn mcp_generation(&self) -> io::Result<u64> {
+        self.observations
+            .lock()
+            .map(|state| state.mcp_generation)
+            .map_err(|_| io::Error::other("native Core effect ledger poisoned"))
+    }
+
+    pub(crate) fn reconcile_mcp_startup(&self, generation: u64) -> io::Result<()> {
+        let mut state = self
+            .observations
+            .lock()
+            .map_err(|_| io::Error::other("native Core effect ledger poisoned"))?;
+        if !state.registered
+            || state.submissions != 0
+            || state.unreconciled != 0
+            || state.mcp_generation != generation
+            || !state.startup.contains("mcp-startup")
+        {
+            return Err(io::Error::other(
+                "native MCP startup receipt is late, repeated or stale",
+            ));
+        }
+        state.startup.remove("mcp-startup");
+        Ok(())
     }
 
     pub(crate) fn register_source_factory(&self) -> io::Result<()> {
@@ -281,6 +309,7 @@ mod tests {
                 registered: false,
                 startup: BTreeSet::new(),
                 submissions: 0,
+                mcp_generation: 0,
                 unreconciled: 0,
                 calls: BTreeMap::new(),
             }),
@@ -350,6 +379,48 @@ mod tests {
         late.observe_submission(&Op::Shutdown);
         assert!(late.register_source_factory().is_err());
     }
+    #[test]
+    fn native_startup_reconciliation_is_factory_bound_and_refresh_fenced() {
+        let ledger = quiet();
+        ledger.observe_mcp_startup(1);
+        let first = ledger.mcp_generation().unwrap();
+        assert!(ledger.reconcile_mcp_startup(first).is_err());
+        ledger.register_source_factory().unwrap();
+        ledger.observe_mcp_startup(1);
+        assert!(ledger.reconcile_mcp_startup(first).is_err());
+        let current = ledger.mcp_generation().unwrap();
+        ledger.reconcile_mcp_startup(current).unwrap();
+        assert!(ledger.reconcile_mcp_startup(current).is_err());
+        assert!(
+            !ledger
+                .capture(ThreadId::default())
+                .unwrap()
+                .requires_reconciliation()
+        );
+        ledger.observe_mcp_startup(1);
+        assert!(
+            ledger
+                .capture(ThreadId::default())
+                .unwrap()
+                .requires_reconciliation()
+        );
+        ledger.observe_unreconciled();
+        assert!(
+            ledger
+                .reconcile_mcp_startup(ledger.mcp_generation().unwrap())
+                .is_err()
+        );
+        let submitted = quiet();
+        submitted.observe_mcp_startup(1);
+        submitted.register_source_factory().unwrap();
+        submitted.observe_submission(&Op::Shutdown);
+        assert!(
+            submitted
+                .reconcile_mcp_startup(submitted.mcp_generation().unwrap())
+                .is_err()
+        );
+    }
+
     #[test]
     fn poison_is_a_failed_capture_not_a_clean_snapshot() {
         let ledger = quiet();

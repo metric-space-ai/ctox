@@ -625,6 +625,7 @@ impl McpConnectionManager {
 
     pub(crate) async fn native_original_startup(
         &self,
+        wait: bool,
     ) -> Result<Vec<crate::native_mcp_startup::NativeMcpStartupObservation>> {
         anyhow::ensure!(
             self.clients.len() <= 32,
@@ -635,7 +636,7 @@ impl McpConnectionManager {
         let mut observations = Vec::with_capacity(servers.len());
         for (_, client) in servers {
             anyhow::ensure!(
-                client.startup_complete.load(Ordering::Acquire),
+                wait || client.startup_complete.load(Ordering::Acquire),
                 "native original MCP startup is still pending"
             );
             observations.push(client.client().await?.startup);
