@@ -78,8 +78,18 @@ registered QEMU child has been fully exported and its process effect completed,
 and current quorum ownership has no pending effects. Source publication checks
 worker, account, policy, controller and quorum observations again after artifact
 IO. Wire metadata, an empty list, completed import or stopped child cannot supply
-these retained witnesses. Unowned external actions and resumed-session effects
-remain unresolved; installed goals 15/16/18 remain open.
+these retained witnesses. Unowned external actions and unprotected resumed-session
+effects remain unresolved; installed goals 15/16/18 remain open.
+
+Protected original-session restoration now binds the actual Core manager's
+loaded input digest to the same retained receiver, original UUID, immutable
+manifest and current account/quorum/owner fences. The source must report clean
+Core effects and its protected manifest must have no pending effects. Only
+that native owner may clear `previous-session-effects` before submission; an
+ordinary resumed history, decoded report, late callback or unknown source
+cannot do so. This reconciles historical input only: MCP startup and every new
+external effect retain their independent checks. It grants no execution or
+installed continuation proof.
 
 Installed acceptance must demonstrate the original session continuing on B,
 A rejected as stale after takeover, reconnect and abort, on isolated tenants.

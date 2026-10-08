@@ -443,6 +443,10 @@ impl ThreadManager {
             .map_err(|_| {
                 CodexErr::Fatal("native target identity or configuration differs".into())
             })?;
+        use sha2::{Digest, Sha256};
+        let previous_input_digest: [u8; 32] = Sha256::digest(native_state.as_bytes()).into();
+        let previous_session = native_state.session_id();
+        let reported_source_clean = native_state.reported_clean_core_effects;
         let threads = self.state.threads.read().await;
         if !threads.is_empty() {
             return Err(CodexErr::Fatal(
@@ -489,6 +493,23 @@ impl ThreadManager {
             user_shell_override: None,
         }))
         .await?;
+        let input_binding = if thread_id == previous_session {
+            codex.session.native_effects.bind_previous_input(
+                thread_id,
+                previous_input_digest,
+                reported_source_clean,
+            )
+        } else {
+            Err(std::io::Error::other(
+                "native restore loaded a foreign session",
+            ))
+        };
+        if input_binding.is_err() {
+            let _ = codex.submit(Op::Shutdown).await;
+            return Err(CodexErr::Fatal(
+                "native restore input binding failed".into(),
+            ));
+        }
         self.state
             .finalize_thread_spawn(codex, thread_id, watch_registration)
             .await
