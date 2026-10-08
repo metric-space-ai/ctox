@@ -144,6 +144,10 @@ pub(super) struct Inputs {
 }
 
 pub(super) fn date(value: &str) -> anyhow::Result<NaiveDate> {
+    ensure!(
+        value.len() == 10 && value.is_ascii(),
+        "date must be YYYY-MM-DD"
+    );
     let parsed = NaiveDate::parse_from_str(value, "%Y-%m-%d").context("date must be YYYY-MM-DD")?;
     ensure!(
         parsed.to_string() == value,
@@ -152,10 +156,12 @@ pub(super) fn date(value: &str) -> anyhow::Result<NaiveDate> {
     Ok(parsed)
 }
 pub(super) fn add_months(value: &str, months: u32) -> anyhow::Result<String> {
-    Ok(date(value)?
+    let shifted = date(value)?
         .checked_add_months(Months::new(months))
         .context("calendar horizon overflow")?
-        .to_string())
+        .to_string();
+    date(&shifted)?;
+    Ok(shifted)
 }
 fn nonnegative(name: &str, value: f64) -> anyhow::Result<()> {
     ensure!(
@@ -583,6 +589,95 @@ pub(super) fn fixture() -> Inputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn operational_reference_example_matches_teaching_kernel() -> anyhow::Result<()> {
+        let mut input = fixture();
+        let yearly = |blocks: [f64; 5]| {
+            blocks
+                .into_iter()
+                .flat_map(|v| std::iter::repeat_n(v, 12))
+                .collect()
+        };
+        input.plan.opening_customers = 0.0;
+        input.plan.opening_cash = 600_000.0;
+        input.plan.paid_marketing = yearly([4000.0, 5000.0, 6000.0, 7000.0, 8000.0]);
+        input.plan.brand_budget = yearly([1000.0, 1250.0, 1500.0, 1750.0, 2000.0]);
+        input.plan.cash_opex = yearly([12000.0, 14000.0, 16000.0, 18000.0, 20000.0]);
+        input.plan.equity_funding = vec![10000.0; 60];
+        input.plan.capex = vec![0.0; 60];
+        input.plan.sales_capacity = yearly([15.0, 20.0, 25.0, 30.0, 35.0]);
+        input.plan.onboarding_capacity = yearly([12.0, 18.0, 24.0, 30.0, 36.0]);
+        input.plan.service_capacity = yearly([300.0, 600.0, 1000.0, 1500.0, 2000.0]);
+        input.plan.reserve_months = 3.0;
+        input.plan.tax_proxy = 0.25;
+        let mut base = input.scenarios.remove(0);
+        base.name = "base".into();
+        base.weight_given_build = 0.5;
+        base.launch_month = 4;
+        base.sales_lag = 2;
+        base.sam0 = 10000.0;
+        base.sam_annual_growth = 0.03;
+        base.cpl = 100.0;
+        base.conversion = 0.20;
+        base.organic_leads0 = 12.0;
+        base.organic_annual_growth = 0.15;
+        base.logo_churn = 0.015;
+        base.arpa0 = 200.0;
+        base.arpa_annual_growth = 0.02;
+        base.gross_margin = 0.80;
+        base.brand0 = 0.10;
+        base.brand_ceiling = 0.60;
+        base.brand_speed = 0.06;
+        base.brand_reference_budget = 2000.0;
+        base.brand_organic_lift = 1.0;
+        base.brand_price_lift = 0.15;
+        base.multiple = 3.0;
+        base.sale_probability = 0.75;
+        base.debt_like_exit = 0.0;
+        base.wc_adjustment = 0.0;
+        base.failure_sale_probability = 0.20;
+        base.failure_equity_price = 10000.0;
+        let mut weak = base.clone();
+        weak.name = "weak".into();
+        weak.weight_given_build = 0.3;
+        weak.launch_month = 10;
+        weak.cpl = 160.0;
+        weak.conversion = 0.07;
+        weak.logo_churn = 0.035;
+        weak.arpa0 = 160.0;
+        weak.organic_leads0 = 5.0;
+        weak.organic_annual_growth = 0.0;
+        weak.brand_ceiling = 0.25;
+        weak.multiple = 1.5;
+        weak.sale_probability = 0.40;
+        let mut strong = base.clone();
+        strong.name = "strong".into();
+        strong.weight_given_build = 0.2;
+        strong.launch_month = 2;
+        strong.cpl = 70.0;
+        strong.conversion = 0.28;
+        strong.logo_churn = 0.008;
+        strong.arpa0 = 240.0;
+        strong.organic_leads0 = 20.0;
+        strong.organic_annual_growth = 0.25;
+        strong.brand_ceiling = 0.85;
+        strong.multiple = 5.0;
+        strong.sale_probability = 0.90;
+        input.scenarios = vec![weak, base, strong];
+        input.build_probability = 0.80;
+        input.technical_failure_sale_probability = 0.20;
+        input.technical_failure_equity_price = 20000.0;
+        assert!(validate(&input, "2026-10-08")?.is_empty());
+        let (result, _) = calculate(&input)?;
+        assert_eq!(
+            result["expected_exit_equity_eur"].as_f64().unwrap().round(),
+            6_119_223.0
+        );
+        assert!((result["sale_probability"].as_f64().unwrap() - 0.58).abs() < 1e-12);
+        assert_eq!(result["p50_eur"].as_f64().unwrap().round(), 265_504.0);
+        assert_eq!(result["p90_eur"].as_f64().unwrap().round(), 25_468_218.0);
+        Ok(())
+    }
     #[test]
     fn cash_and_equity_bridge_preserve_funding_and_failure() -> anyhow::Result<()> {
         let mut input = fixture();
