@@ -89,6 +89,13 @@ function render(root, detail) {
   root.dataset.shellState = state;
   const recovery = root.querySelector('[data-shell-recovery-pill]');
   if (recovery) recovery.hidden = state !== 'recovery';
+  const explanation = root.querySelector('[data-shell-recovery-explanation]');
+  if (explanation) {
+    explanation.hidden = state !== 'recovery';
+    explanation.querySelector('[data-shell-recovery-reason]').textContent = version
+      ? 'Die Instanz meldet den Recovery-Modus. Ein genauer Grund wurde nicht übermittelt.'
+      : 'Die geladene Oberfläche enthält keine bestätigte Shell-Paketversion.';
+  }
   root.querySelector('[data-shell-version-label]').textContent = version ? `v${version}` : 'Recovery';
   const statusButton = root.querySelector('[data-shell-release-status]');
   statusButton.dataset.state = state;

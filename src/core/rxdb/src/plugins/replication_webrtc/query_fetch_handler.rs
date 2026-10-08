@@ -141,6 +141,30 @@ pub(super) struct FetchInflight {
     max_global: u64,
 }
 
+/// Owns only the exact accepted stream. Dropping an aborted task must return
+/// its slot; a retired stream must never remove a newer use of the same key.
+struct FetchPermit<'a> {
+    inflight: &'a FetchInflight,
+    key: String,
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for FetchPermit<'_> {
+    fn drop(&mut self) {
+        self.flag.store(true, Ordering::SeqCst);
+        let mut entries = self.inflight.entries.lock();
+        if entries
+            .get(&self.key)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.flag))
+        {
+            entries.remove(&self.key);
+            self.inflight
+                .count
+                .store(entries.len() as u64, Ordering::SeqCst);
+        }
+    }
+}
+
 const FETCH_INFLIGHT_GLOBAL_PEER_BUDGET: u64 = 8;
 
 impl FetchInflight {
@@ -514,6 +538,7 @@ impl QueryFetchRegistry {
         self.inflight.try_acquire(peer_identity, request_id)
     }
 
+    #[cfg(test)]
     fn release(&self, peer_identity: &str, request_id: &str) {
         self.inflight.release(peer_identity, request_id);
     }
@@ -695,12 +720,17 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         }
     };
 
+    let permit = FetchPermit {
+        inflight: &registry.inflight,
+        key: fetch_inflight_key(&connection_identity, &request.request_id),
+        flag: Arc::clone(&cancel_flag),
+    };
     let mut request = request;
     request.projection =
         match crate::query_fingerprint::normalize_query_projection(&json!(request.projection)) {
             Ok(projection) => projection,
             Err(error) => {
-                registry.release(&connection_identity, &request.request_id);
+                drop(permit);
                 send_error(
                     handler.as_ref(),
                     &peer,
@@ -717,7 +747,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
     let caller_projected = request.projection.is_some();
     if let Some(mut fields) = handler.document_fields_for_peer(&peer, &request.collection_name) {
         if !super::webrtc_types::readable_query_fields(&request.query, &fields) {
-            registry.release(&connection_identity, &request.request_id);
+            drop(permit);
             send_error(
                 handler.as_ref(),
                 &peer,
@@ -771,7 +801,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         caller_projected,
     )
     .await;
-    registry.release(&connection_identity, &request.request_id);
+    drop(permit);
     if let Err(err) = &outcome {
         let (code, retryable) = query_fetch_error_code_for_rx_error(err);
         let message = err.to_string();
@@ -1909,6 +1939,83 @@ mod tests {
         ) -> Option<Arc<DocumentFilterFn>> {
             self.document_filter.lock().clone()
         }
+    }
+
+    #[tokio::test]
+    async fn aborted_query_fetch_returns_its_stream_slot() {
+        let registry = authorized_query_registry(1);
+        registry.register(seeded_collection(1).await);
+        let handler = Arc::new(MockHandler::new());
+        handler
+            .buffered
+            .store(WEBRTC_BUFFERED_HIGH_WATER + 1, Ordering::SeqCst);
+        let task = tokio::spawn(run_query_fetch(
+            Arc::clone(&registry),
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("aborted", "business_records", 0),
+        ));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while handler.sent.lock().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("query ACK did not arrive");
+        assert_eq!(registry.count_inflight(), 1);
+        let flag = registry
+            .inflight
+            .entries
+            .lock()
+            .get(&fetch_inflight_key("p1", "aborted"))
+            .unwrap()
+            .clone();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(flag.load(Ordering::SeqCst));
+        assert_eq!(registry.count_inflight(), 0);
+
+        handler.buffered.store(0, Ordering::SeqCst);
+        handler.sent.lock().clear();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            run_query_fetch(
+                Arc::clone(&registry),
+                Arc::clone(&handler),
+                MockPeer("p1"),
+                "p1".into(),
+                make_request("aborted", "business_records", 0),
+            ),
+        )
+        .await
+        .expect("replacement query timed out")
+        .unwrap();
+        assert_eq!(registry.count_inflight(), 0);
+        assert!(handler.sent.lock().iter().any(|frame| {
+            matches!(frame, WebRTCWireFrame::Message(message)
+                if message.method == CTOX_QUERY_RPC_CHUNK)
+        }));
+    }
+
+    #[test]
+    fn retired_query_permit_cannot_release_replacement_request() {
+        let registry = authorized_query_registry(1);
+        let flag = registry.try_acquire("p1", "same-request").unwrap();
+        let permit = FetchPermit {
+            inflight: &registry.inflight,
+            key: fetch_inflight_key("p1", "same-request"),
+            flag: Arc::clone(&flag),
+        };
+        assert_eq!(registry.cancel_peer("p1"), 1);
+        let replacement = registry.try_acquire("p1", "same-request").unwrap();
+        drop(permit);
+        assert!(flag.load(Ordering::SeqCst));
+        assert!(!replacement.load(Ordering::SeqCst));
+        assert_eq!(registry.count_inflight(), 1);
+        assert!(registry.try_acquire("p1", "another").is_none());
+        registry.release("p1", "same-request");
+        assert_eq!(registry.count_inflight(), 0);
     }
 
     #[tokio::test]

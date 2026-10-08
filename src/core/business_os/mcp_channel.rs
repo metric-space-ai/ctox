@@ -46,7 +46,18 @@ mod crew_plan;
 mod metadata_read;
 #[path = "mcp_project_crew.rs"]
 mod project_crew_request;
+#[path = "mcp_remote_worker.rs"]
+mod remote_worker;
+#[path = "mcp_workjet_worker_dispatch.rs"]
+mod workjet_worker_dispatch;
+
+#[cfg(test)]
+pub(crate) fn workjet_dispatch_service_test_fixture() -> anyhow::Result<(tempfile::TempDir, String)>
+{
+    workjet_worker_dispatch::service_test_fixture()
+}
 pub(crate) use command_writeback::supports_command_writeback;
+pub(crate) use workjet_worker_dispatch::is_supervisor_command as is_workjet_supervisor_command;
 #[path = "mcp_app_authority.rs"]
 mod app_authority;
 pub(super) use app_authority::AuthenticatedMcpAppCommand;
@@ -127,9 +138,29 @@ pub struct McpChannelRequestContext {
     // Caller arguments and persisted contexts cannot manufacture gateway scope.
     #[serde(skip)]
     pub trusted_managed_read_scope: Option<ManagedMcpCollectionReadScope>,
+    // Only the authenticated gateway route can pin an instance, never _context.
+    #[serde(skip)]
+    pub trusted_managed_instance_id: Option<String>,
 }
 
 impl McpChannelRequestContext {
+    fn managed_source_instance(&self) -> anyhow::Result<&str> {
+        anyhow::ensure!(
+            self.trusted_role_source.as_deref() == Some("ctox_dev_managed_mcp_token")
+                && self.channel == "ctox_dev_managed_mcp",
+            "source requires the authenticated managed route"
+        );
+        self.trusted_managed_instance_id
+            .as_deref()
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= 256
+                    && id.trim() == *id
+                    && !id.chars().any(char::is_control)
+            })
+            .context("authenticated managed source instance pin missing")
+    }
+
     pub fn validate(&self) -> Result<(), BusinessOsMcpError> {
         ensure_non_empty("channel", &self.channel)?;
         ensure_non_empty("surface", &self.surface)?;
@@ -546,6 +577,12 @@ struct BusinessOsMcpInternalSessionClaims {
     crew_work_key: Option<String>,
     #[serde(default)]
     crew_only: bool,
+    #[serde(default)]
+    workjet_supervisor_only: bool,
+    #[serde(default)]
+    workjet_supervisor_epoch: Option<i64>,
+    #[serde(default)]
+    workjet_supervisor_lease: Option<workjet_worker_dispatch::SupervisorLease>,
     issued_at_ms: i64,
     expires_at_ms: i64,
 }
@@ -718,6 +755,9 @@ pub(crate) fn issue_internal_command_session_token(
         crew_binding: None,
         crew_work_key: None,
         crew_only: false,
+        workjet_supervisor_only: false,
+        workjet_supervisor_epoch: None,
+        workjet_supervisor_lease: None,
         issued_at_ms,
         expires_at_ms: issued_at_ms.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
@@ -747,7 +787,59 @@ pub(crate) fn restrict_internal_command_session_to_crew(
     sign_internal_command_session_claims(root, &claims)
 }
 
+/// A registered native project supervisor may enqueue only Workjet dispatch.
+/// The signed restriction grants no arbitrary MCP action or source control.
+pub(crate) fn restrict_internal_command_session_to_workjet_supervisor(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<String> {
+    let trusted = verify_internal_command_session_token(root, token)?;
+    let mut claims = decode_internal_command_session_token(root, token)?;
+    anyhow::ensure!(
+        claims.metadata_read_contract.is_none()
+            && claims.allowed_actions.is_empty()
+            && claims.allowed_collections.is_empty(),
+        "supervisor dispatch cannot mix with another command grant"
+    );
+    let command = crate::channels::business_command_projection(root, &claims.command_id)?;
+    anyhow::ensure!(
+        is_workjet_supervisor_command(root, &command)?,
+        "command is not the registered native project supervisor"
+    );
+    let context = context_from_arguments_with_trusted_gateway_context(
+        workjet_worker_dispatch::TOOL,
+        &serde_json::json!({}),
+        Some(&trusted),
+    )?;
+    let policy = store::open_store(root)?;
+    let epoch = workjet_worker_dispatch::current_project(
+        &policy,
+        &context,
+        command["record_id"]
+            .as_str()
+            .context("supervisor project missing")?,
+        command
+            .pointer("/payload/thread_id")
+            .and_then(Value::as_str)
+            .context("supervisor thread missing")?,
+    )?;
+    let core = crew_context::open_read_connection(root)?;
+    claims.workjet_supervisor_lease = Some(workjet_worker_dispatch::current_lease(
+        &core,
+        &claims.command_id,
+    )?);
+    claims.workjet_supervisor_only = true;
+    claims.workjet_supervisor_epoch = Some(epoch);
+    sign_internal_command_session_claims(root, &claims)
+}
+
 fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bool {
+    if context.is_some_and(|context| {
+        string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
+            && context["workjet_supervisor_only"] == true
+    }) {
+        return tool_name == workjet_worker_dispatch::TOOL;
+    }
     let restricted = context.is_some_and(|context| {
         string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
             && context.get("crew_only").and_then(Value::as_bool) == Some(true)
@@ -835,6 +927,9 @@ pub(crate) fn verify_internal_command_session_token(
         "crew_binding": claims.crew_binding,
         "crew_work_key": claims.crew_work_key,
         "crew_only": claims.crew_only,
+        "workjet_supervisor_only": claims.workjet_supervisor_only,
+        "workjet_supervisor_epoch": claims.workjet_supervisor_epoch,
+        "workjet_supervisor_lease": claims.workjet_supervisor_lease,
         "auth_source": MCP_INTERNAL_SESSION_AUTH_SOURCE,
         "channel": "ctox_internal_business_command",
         "surface": "business_os_command_session",
@@ -1344,6 +1439,8 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         project_crew_request::descriptor(),
         project_crew_request::native_project_descriptor(),
         project_crew_request::native_project_cancel_descriptor(),
+        remote_worker::descriptor(),
+        workjet_worker_dispatch::descriptor(),
         read_tool(
             "business_os.list_crew_executions",
             "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
@@ -3104,6 +3201,10 @@ fn call_tool_inner(
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
         metadata_read::TOOL => metadata_read::read(root, trusted_gateway_context, &arguments)?,
+        remote_worker::TOOL => remote_worker::execute(root, &context, &arguments)?,
+        workjet_worker_dispatch::TOOL => {
+            workjet_worker_dispatch::execute(root, &context, &arguments, trusted_gateway_context)?
+        }
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
         }
@@ -3474,7 +3575,11 @@ fn call_tool_inner(
     if tool_name.starts_with("appsec_") {
         compact_appsec_durable_projection_for_mcp(&mut result);
     }
-    let result = redact_mcp_response(result);
+    let result = if tool_name == remote_worker::TOOL {
+        remote_worker::redact_receipt(result)?
+    } else {
+        redact_mcp_response(result)
+    };
     ensure_mcp_response_size(&result)?;
     record_tool_event(
         root,
@@ -7081,6 +7186,8 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "web_browser_prepare"
         | "business_os.start_project_task"
+        | "business_os.remote_worker_admission"
+        | "business_os.workjet_worker_dispatch"
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
         | "business_os.claim_crew_execution"
@@ -7370,6 +7477,13 @@ fn context_from_arguments_with_trusted_gateway_context(
             }
         },
         trusted_role,
+        trusted_managed_instance_id: trusted_gateway_context
+            .filter(|gateway| {
+                string_field(gateway, "auth_source").as_deref()
+                    == Some("ctox_dev_managed_mcp_token")
+                    && string_field(gateway, "channel").as_deref() == Some("ctox_dev_managed_mcp")
+            })
+            .and_then(|gateway| string_field(gateway, "instance_id")),
         trusted_managed_read_scope: trusted_gateway_context
             .filter(|gateway| {
                 string_field(gateway, "auth_source").as_deref()
@@ -7418,6 +7532,13 @@ fn enforce_internal_command_session_scope(
         );
         return Ok(());
     }
+    if context["workjet_supervisor_only"] == true {
+        anyhow::ensure!(
+            tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "dispatch",
+            "supervisor session may only dispatch to its registered Workjet source"
+        );
+        return Ok(());
+    }
     let allowed_actions = context
         .get("allowed_actions")
         .and_then(Value::as_array)
@@ -7430,6 +7551,7 @@ fn enforce_internal_command_session_scope(
     match tool_name {
         "business_os.start_project_task"
         | "business_os.cancel_project_task"
+        | "business_os.remote_worker_admission"
         | "business_os.start_crew_execution" => {
             anyhow::bail!("a command-scoped session cannot admit independent project work")
         }
@@ -9319,6 +9441,7 @@ mod tests {
             trusted_role: None,
             trusted_role_source: None,
             trusted_managed_read_scope: None,
+            trusted_managed_instance_id: None,
         }
     }
 

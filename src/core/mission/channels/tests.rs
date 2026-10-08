@@ -2387,6 +2387,89 @@ fn attempt_bound_hold_and_failed_ack_do_not_rewrite_on_resume() -> Result<()> {
 }
 
 #[test]
+fn attempt_ack_waits_for_a_concurrent_writer_instead_of_failing_locked() -> Result<()> {
+    // thesen 07.10.2026: a deferred ack read the attempt marker while another
+    // connection kept committing; the ack's write then failed at once with
+    // "database is locked" (no busy wait once a read transaction is open, or
+    // SQLite 517 after a commit). The attempt stayed `finalizing` and its
+    // review was repeated on every re-lease without terminalizing the task.
+    let root = tempfile::tempdir()?;
+    fs::create_dir_all(root.path().join("runtime"))?;
+    let db_path = resolve_db_path(root.path(), None);
+    let engine =
+        crate::context::lcm::LcmEngine::open(&db_path, crate::context::lcm::LcmConfig::default())?;
+    let mut tasks = Vec::new();
+    for index in 0..24 {
+        let task = create_queue_task(
+            root.path(),
+            QueueTaskCreateRequest {
+                title: format!("ack under a busy writer {index}"),
+                prompt: "Fail while another connection keeps committing.".to_string(),
+                thread_key: format!("queue/attempt-ack-contended-{index}"),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )?;
+        lease_queue_task(root.path(), &task.message_key, "ctox-test")?;
+        let attempt_id = format!("attempt-ack-contended-{index}");
+        engine.begin_worker_attempt_finalization(
+            crate::context::lcm::WorkerAttemptFinalizationInput {
+                attempt_id: &attempt_id,
+                work_key: &format!("queue:{attempt_id}"),
+                conversation_id: 7300 + index,
+                source_label: "queue-test",
+                agent_outcome: crate::context::lcm::AgentOutcome::Success,
+                reply_text: "reviewed",
+                error_text: None,
+            },
+        )?;
+        tasks.push((attempt_id, task.message_key));
+    }
+    // Warm every lazily created schema object before the writer starts, so
+    // the measured window holds only the ack's own transaction.
+    open_channel_db(&db_path)?;
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer_stop = Arc::clone(&stop);
+    let writer_path = db_path.clone();
+    let writer = thread::spawn(move || -> Result<()> {
+        let mut conn = Connection::open(&writer_path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS ack_lock_probe (value INTEGER);")?;
+        while !writer_stop.load(std::sync::atomic::Ordering::Relaxed) {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute("INSERT INTO ack_lock_probe VALUES (1)", [])?;
+            thread::sleep(std::time::Duration::from_millis(1));
+            tx.commit()?;
+            // Short gaps like the RxDB peer's: a waiting writer gets its turn.
+            thread::sleep(std::time::Duration::from_millis(2));
+        }
+        Ok(())
+    });
+    let mut failures = Vec::new();
+    for (attempt_id, message_key) in &tasks {
+        if let Err(error) = ack_leased_messages_for_attempt(
+            root.path(),
+            attempt_id,
+            std::slice::from_ref(message_key),
+            "failed",
+            Some("terminal completion-review failure"),
+        ) {
+            failures.push(format!("{message_key}: {error}"));
+        }
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    writer.join().expect("busy writer")?;
+    assert!(
+        failures.is_empty(),
+        "acks failed under a busy writer: {failures:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn tui_ingest_sanitizes_minimax_secret_before_persisting_message() -> Result<()> {
     let root = std::env::temp_dir().join(format!(
         "ctox-tui-secret-test-{}",

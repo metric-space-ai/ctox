@@ -39,6 +39,20 @@ struct BusinessProjectionWriter {
     // Append-only ledger position, advanced only after successful delivery.
     // Periodic replay repairs dropped notifications and in-place source repairs.
     event_cursor: Option<i64>,
+    last_event_replay: Option<Instant>,
+}
+
+/// A full event replay re-reads the latest 200 events of every active and
+/// recently finished task. The pump marks maintenance every minute; replaying
+/// on each of those passes kept the projection thread at half a core, with
+/// passes of 6 to 27 minutes, on the customer on-prem host (07.10.2026). The
+/// incremental cursor carries normal delivery; replay is the repair path.
+const EVENT_REPLAY_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+fn event_replay_due(cursor: Option<i64>, last_replay: Option<Instant>, now: Instant) -> bool {
+    cursor.is_none()
+        || last_replay
+            .is_none_or(|last| now.saturating_duration_since(last) >= EVENT_REPLAY_INTERVAL)
 }
 impl BusinessProjectionWriter {
     fn open(root: &Path) -> Result<Self> {
@@ -86,6 +100,7 @@ impl BusinessProjectionWriter {
             crew_sources: BTreeMap::new(),
             crew_maintenance_warned: false,
             event_cursor: None,
+            last_event_replay: None,
         })
     }
     fn upsert_source_projection(
@@ -697,8 +712,14 @@ fn refresh_measured_with(
                 crate::crew::repair_selection_events(root, conn)
             })?;
         }
+        let replay = flags & MAINTENANCE != 0
+            && event_replay_due(
+                writer.event_cursor,
+                writer.last_event_replay,
+                Instant::now(),
+            );
         timing.phase("project_events", || {
-            project_events_since(root, conn, writer, flags & MAINTENANCE != 0)
+            project_events_since(root, conn, writer, replay)
         })?;
     }
     if flags & RUNS != 0 {
@@ -961,6 +982,22 @@ fn project_events_since(
     let since = writer
         .event_cursor
         .filter(|previous| !replay && *previous <= high_water);
+    let unclaimed = (writer.event_cursor, writer.last_event_replay);
+    if since.is_none() {
+        // Claim the replay before running it. A replay that fails part-way
+        // (a busy store, after minutes of work) previously left no cursor, so
+        // every following pass started the full replay again and failed again
+        // (thesen 07.10.2026: 250-530 s passes ending in "database is locked").
+        // Now normal delivery continues from here and the next replay waits
+        // for the interval. Undelivered events (collection not ready) restore
+        // the previous state below and replay again.
+        writer.last_event_replay = Some(Instant::now());
+        writer.event_cursor = Some(
+            writer
+                .event_cursor
+                .map_or(high_water, |c| c.min(high_water)),
+        );
+    }
     let mut delivered = true;
     let mut cursor = String::new();
     loop {
@@ -1072,6 +1109,8 @@ fn project_events_since(
     }
     if delivered {
         writer.event_cursor = Some(high_water);
+    } else if since.is_none() {
+        (writer.event_cursor, writer.last_event_replay) = unclaimed;
     }
     Ok(())
 }

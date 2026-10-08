@@ -1,4 +1,4 @@
-import { collectionFreshnessFromDiagnostics, COLLECTION_FRESHNESS_MAX_AGE_MS } from './sync-contract.js?v=20261007-shell-v2-workjet-weekly-report';
+import { collectionFreshnessFromDiagnostics, COLLECTION_FRESHNESS_MAX_AGE_MS } from './sync-contract.js?v=20261008-shell-v2-recovery-cache-r1';
 
 // A warning changes the interpretation of cached data, not its availability.
 export function renderCollectionFreshnessWarning(warning, { collections = [], diagnostics, language = 'de', compact = false, contextKey, sessionKey, nowMs = Date.now() } = {}) {

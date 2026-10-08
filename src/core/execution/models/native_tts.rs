@@ -47,6 +47,7 @@ enum LocalTtsResponse {
         backend: String,
         artifacts_loaded: bool,
         speech_synthesis_wired: bool,
+        load_error: Option<String>,
     },
     Error {
         code: String,
@@ -75,8 +76,9 @@ pub fn doctor_json(root: &Path) -> serde_json::Value {
             "model_artifact_tensor_count": inspection.as_ref().map(|value| value.tensor_count).unwrap_or(0),
             "model_artifact_required_tensors_present": inspection.as_ref().map(|value| value.required_tensors_present).unwrap_or(false),
             "model_artifact_missing_required_tensors": inspection.as_ref().map(|value| value.missing_required_tensors.clone()).unwrap_or_default(),
-            "speech_synthesis_wired": false,
-            "text_to_audio_graph_wired": false,
+            "speech_synthesis_wired": VoxtralTtsModel::new(VoxtralTtsConfig::default(), default_backend_for_host(engine::ComputeTarget::Gpu)).graph_wired(),
+            "text_to_audio_graph_wired": VoxtralTtsModel::new(VoxtralTtsConfig::default(), default_backend_for_host(engine::ComputeTarget::Gpu)).graph_wired(),
+            "first_audio_streaming": false,
             "returns_fake_audio": false
         }
     })
@@ -94,11 +96,21 @@ pub fn parse_tts_smoke_text(args: &[String]) -> Result<String> {
 }
 
 pub fn tts_smoke_json(root: &Path, text: &str) -> serde_json::Value {
-    let backend = default_backend_for_host(engine::ComputeTarget::Cpu);
-    let model = configured_or_default_model_dir(root)
-        .as_ref()
-        .and_then(|dir| VoxtralTtsModel::from_model_dir(dir, backend).ok())
-        .unwrap_or_else(|| VoxtralTtsModel::new(VoxtralTtsConfig::default(), backend));
+    let gpu_backend = default_backend_for_host(engine::ComputeTarget::Gpu);
+    let backend = if VoxtralTtsModel::new(VoxtralTtsConfig::default(), gpu_backend).graph_wired() {
+        gpu_backend
+    } else {
+        VoxtralTtsBackend::Cpu
+    };
+    let model = match configured_or_default_model_dir(root) {
+        Some(dir) => match VoxtralTtsModel::from_model_dir(dir, backend) {
+            Ok(model) => model,
+            Err(err) => {
+                return json!({"ok": false, "model": VOXTRAL_4B_TTS_2603_CANONICAL_MODEL, "error": err.to_string(), "speech_synthesis_wired": false})
+            }
+        },
+        None => VoxtralTtsModel::new(VoxtralTtsConfig::default(), backend),
+    };
     match model.synthesize(&SpeechRequest {
         input: text,
         voice: None,
@@ -121,17 +133,29 @@ pub fn tts_smoke_json(root: &Path, text: &str) -> serde_json::Value {
 
 pub fn serve_socket(launch: NativeTtsLaunch) -> Result<()> {
     let backend = default_backend_for_host(launch.compute_target);
-    let model = launch
+    let loaded = launch
         .model_dir
         .as_ref()
-        .and_then(|dir| VoxtralTtsModel::from_model_dir(dir, backend).ok())
-        .unwrap_or_else(|| VoxtralTtsModel::new(VoxtralTtsConfig::default(), backend));
+        .map(|dir| VoxtralTtsModel::from_model_dir(dir, backend))
+        .unwrap_or_else(|| {
+            Err(ctox_voxtral_4b_tts_2603::Error::InvalidFormat(
+                "native TTS model directory is not configured",
+            ))
+        });
+    let (model, load_error) = match loaded {
+        Ok(model) => (model, None),
+        Err(error) => (
+            VoxtralTtsModel::new(VoxtralTtsConfig::default(), backend),
+            Some(error.to_string()),
+        ),
+    };
     let mut listener = launch.transport.bind()?;
     loop {
         let stream = listener.accept()?;
         let model = model.clone();
+        let load_error = load_error.clone();
         std::thread::spawn(move || {
-            let _ = handle_connection(stream, model);
+            let _ = handle_connection(stream, model, load_error);
         });
     }
 }
@@ -139,6 +163,7 @@ pub fn serve_socket(launch: NativeTtsLaunch) -> Result<()> {
 fn handle_connection(
     mut stream: crate::inference::local_transport::LocalStream,
     model: VoxtralTtsModel,
+    load_error: Option<String>,
 ) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
@@ -149,7 +174,7 @@ fn handle_connection(
     }
     let response = match serde_json::from_str::<LocalTtsRequest>(line.trim()) {
         Ok(LocalTtsRequest::RuntimeHealth) => LocalTtsResponse::RuntimeHealth {
-            healthy: false,
+            healthy: model.artifacts_loaded() && model.graph_wired(),
             default_model: Some(model.config().model.clone()),
             loaded_models: if model.artifacts_loaded() {
                 vec![model.config().model.clone()]
@@ -158,7 +183,8 @@ fn handle_connection(
             },
             backend: model.backend().label().to_string(),
             artifacts_loaded: model.artifacts_loaded(),
-            speech_synthesis_wired: false,
+            speech_synthesis_wired: model.graph_wired(),
+            load_error: load_error.clone(),
         },
         Ok(LocalTtsRequest::SpeechCreate {
             model: request_model,
@@ -171,7 +197,12 @@ fn handle_connection(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(VOXTRAL_4B_TTS_2603_CANONICAL_MODEL);
-            if request_model != VOXTRAL_4B_TTS_2603_CANONICAL_MODEL {
+            if let Some(message) = load_error {
+                LocalTtsResponse::Error {
+                    code: "model_load_failed".into(),
+                    message,
+                }
+            } else if request_model != VOXTRAL_4B_TTS_2603_CANONICAL_MODEL {
                 LocalTtsResponse::Error {
                     code: "unsupported_model".to_string(),
                     message: format!(
@@ -193,7 +224,7 @@ fn handle_connection(
                         response_format: output.response_format,
                     },
                     Err(err) => LocalTtsResponse::Error {
-                        code: "backend_not_wired".to_string(),
+                        code: "synthesis_failed".to_string(),
                         message: err.to_string(),
                     },
                 }
@@ -281,7 +312,13 @@ mod tests {
         );
         assert_eq!(
             status["native_ctox"]["speech_synthesis_wired"].as_bool(),
-            Some(false)
+            Some(
+                VoxtralTtsModel::new(
+                    VoxtralTtsConfig::default(),
+                    default_backend_for_host(engine::ComputeTarget::Gpu)
+                )
+                .graph_wired()
+            )
         );
         assert_eq!(
             status["native_ctox"]["returns_fake_audio"].as_bool(),
@@ -290,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn tts_smoke_fails_explicitly_until_graph_is_wired() {
+    fn tts_smoke_fails_explicitly_without_model_artifacts() {
         let root = std::env::temp_dir().join(format!(
             "ctox-voxtral-tts-smoke-{}",
             std::time::SystemTime::now()
@@ -304,6 +341,6 @@ mod tests {
         assert!(status["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("not wired"));
+            .contains("not loaded"));
     }
 }

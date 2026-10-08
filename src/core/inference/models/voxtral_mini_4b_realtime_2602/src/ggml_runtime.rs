@@ -25,6 +25,17 @@ pub struct GgmlVoxtralRuntime {
     ctx: GgmlSession,
     backend: VoxtralSttBackend,
     max_decode_tokens: usize,
+    stream_decoder: Option<StreamDecoder>,
+}
+
+struct StreamDecoder {
+    position: i32,
+    token: i32,
+    output: Vec<i32>,
+    prefetched: bool,
+    ended: bool,
+    seen_text: bool,
+    consecutive_pad: usize,
 }
 
 struct GgmlModel {
@@ -42,6 +53,7 @@ struct GgmlModel {
     adapter_0_weight: Tensor,
     adapter_2_weight: Tensor,
     tok_embeddings_weight: Tensor,
+    host_embedding_lookup: Option<HostEmbeddingLookup>,
     dec_norm_weight: Tensor,
     dec_layers: Vec<DecoderLayer>,
     mel_filters: Option<Tensor>,
@@ -49,6 +61,73 @@ struct GgmlModel {
     tokenizer_special_ranks: HashSet<i32>,
     tokenizer_vocab_b64: Vec<String>,
     tokenizer_bytes_cache: HashMap<i32, String>,
+}
+
+/// Vendored CUDA GET_ROWS does not support K-quantized embedding weights.
+/// Keep their exact bytes on the host once; the tied output projection stays
+/// on CUDA. Otherwise the scheduler copies the whole table for every token.
+struct HostEmbeddingLookup {
+    meta: MetaContext,
+    backend: ffi::ggml_backend_t,
+    buffer: ffi::ggml_backend_buffer_t,
+    tensor: Tensor,
+}
+
+impl HostEmbeddingLookup {
+    fn new(source: Tensor) -> Result<Self> {
+        let mut lookup = Self {
+            meta: MetaContext::new(2)?,
+            backend: init_cpu_backend_with_threads(2),
+            buffer: ptr::null_mut(),
+            tensor: ptr::null_mut(),
+        };
+        if lookup.backend.is_null() {
+            return Err(Error::Runtime("host embedding backend unavailable".into()));
+        }
+        unsafe {
+            if (*source).ne[2] != 1 || (*source).ne[3] != 1 {
+                return Err(Error::Unsupported(
+                    "Voxtral embedding table must be two dimensional",
+                ));
+            }
+            lookup.tensor = ffi::ggml_new_tensor_2d(
+                lookup.meta.ctx,
+                (*source).type_,
+                (*source).ne[0],
+                (*source).ne[1],
+            );
+            if lookup.tensor.is_null() {
+                return Err(Error::Runtime("host embedding metadata unavailable".into()));
+            }
+            set_name(lookup.tensor, "tok_embeddings.host_lookup");
+            lookup.buffer = ffi::ggml_backend_alloc_ctx_tensors(lookup.meta.ctx, lookup.backend);
+            if lookup.buffer.is_null() || (*lookup.tensor).data.is_null() {
+                return Err(Error::Runtime("host embedding buffer unavailable".into()));
+            }
+            // One byte-identical copy; quantization and arithmetic remain the
+            // same vendored CPU GET_ROWS implementation used before this fix.
+            ffi::ggml_backend_tensor_get(
+                source,
+                (*lookup.tensor).data,
+                0,
+                ffi::ggml_nbytes(source),
+            );
+        }
+        Ok(lookup)
+    }
+}
+
+impl Drop for HostEmbeddingLookup {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.buffer.is_null() {
+                ffi::ggml_backend_buffer_free(self.buffer);
+            }
+            if !self.backend.is_null() {
+                ffi::ggml_backend_free(self.backend);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -111,6 +190,7 @@ struct GgmlSession {
     mel_filters_cpu: Vec<f32>,
     mel_plan: audio::MelSpectrogramPlan,
     time_emb_cpu: Vec<f32>,
+    decoder_diagnostics: crate::stt::DecoderDiagnostics,
 }
 
 struct MetaContext {
@@ -143,6 +223,7 @@ impl GgmlVoxtralRuntime {
             ctx,
             backend,
             max_decode_tokens: 256,
+            stream_decoder: None,
         })
     }
 
@@ -192,6 +273,110 @@ impl GgmlVoxtralRuntime {
                 tokens.len()
             );
             Ok(text)
+        }
+    }
+
+    pub fn decoder_diagnostics(&self) -> crate::stt::DecoderDiagnostics {
+        self.ctx.decoder_diagnostics.clone()
+    }
+
+    pub fn start_stream(&mut self) {
+        self.ctx.decoder_diagnostics = Default::default();
+        unsafe { self.ctx.clear_kv_cache() };
+
+        self.stream_decoder = Some(StreamDecoder {
+            position: (VOX_N_LEFT_PAD_TOKENS + VOX_N_DELAY_TOKENS) as i32,
+            token: VOX_TOKEN_STREAMING_PAD,
+            output: Vec::new(),
+            prefetched: false,
+            ended: false,
+            seen_text: false,
+            consecutive_pad: 0,
+        });
+    }
+
+    /// Decoder KV persists. The causal encoder is recomputed over the bounded
+    /// utterance; previously generated decoder tokens are never replayed.
+    pub fn stream_samples(&mut self, samples: &[f32], final_audio: bool) -> Result<String> {
+        if samples.is_empty() {
+            return Err(Error::InvalidFormat("stream contains no audio"));
+        }
+        let state = self
+            .stream_decoder
+            .as_ref()
+            .ok_or(Error::InvalidFormat("stream not opened"))?;
+        if state.ended {
+            return Ok(self.model.decode_tokens(&state.output));
+        }
+        // Hold one audio token behind capture: STFT uses a centred 400-sample
+        // window, so its incomplete tail must not enter persistent decoder KV.
+        let available = if final_audio {
+            usize::MAX
+        } else {
+            VOX_N_LEFT_PAD_TOKENS + samples.len() / VOX_RAW_AUDIO_LENGTH_PER_TOK - 1
+        };
+        if !final_audio && available <= state.position as usize {
+            return Ok(self.model.decode_tokens(&state.output));
+        }
+        let padded = audio::pad_audio_streaming(
+            samples,
+            VOX_N_LEFT_PAD_TOKENS,
+            if final_audio {
+                VOX_N_RIGHT_PAD_TOKENS
+            } else {
+                0
+            },
+        );
+        let mel = self.ctx.mel_plan.compute(&padded);
+        let frames = padded.len() / VOX_HOP_LENGTH;
+        let mut logits = vec![0.0f32; VOX_VOCAB_SIZE];
+        unsafe {
+            self.ctx
+                .run_encoder_chunked(&self.model, mel.as_ptr(), frames as i32)?;
+            self.ctx.run_adapter(&self.model)?;
+            let state = self.stream_decoder.as_mut().unwrap();
+            let limit = available.min(self.ctx.dec_seq_len as usize) as i32;
+            if !state.prefetched && limit > state.position {
+                let mut prefix = vec![VOX_TOKEN_STREAMING_PAD; state.position as usize];
+                prefix[0] = VOX_TOKEN_BOS;
+                self.ctx
+                    .run_decoder_prefill(&self.model, &prefix, &mut logits)?;
+                state.prefetched = true;
+            }
+            while state.position < limit && state.output.len() < self.max_decode_tokens {
+                self.ctx.run_decoder_step(
+                    &self.model,
+                    state.token,
+                    state.position,
+                    state.position,
+                    &mut logits,
+                )?;
+                state.position += 1;
+                state.token = argmax(&logits) as i32;
+                if state.token == VOX_TOKEN_EOS {
+                    state.ended = true;
+                    break;
+                }
+                state.output.push(state.token);
+                if state.token == VOX_TOKEN_STREAMING_PAD {
+                    state.consecutive_pad += 1;
+                } else {
+                    state.consecutive_pad = 0;
+                    state.seen_text |= state.token >= self.model.tokenizer_num_special_tokens;
+                }
+                if final_audio && state.seen_text && state.consecutive_pad >= VOX_N_RIGHT_PAD_TOKENS
+                {
+                    state.ended = true;
+                    break;
+                }
+            }
+            if state.output.len() >= self.max_decode_tokens
+                && state.position < limit
+                && !state.ended
+            {
+                return Err(Error::Unsupported("stream decode token limit reached"));
+            }
+            Ok(self.model.decode_tokens(&state.output))
         }
     }
 
@@ -374,7 +559,7 @@ impl GgmlModel {
         let (tokenizer_num_special_tokens, tokenizer_special_ranks, tokenizer_vocab_b64) =
             unsafe { load_tokenizer_metadata(gguf)? };
 
-        Ok(Self {
+        let mut model = Self {
             ctx: meta_ctx,
             gguf,
             weights_backend,
@@ -389,6 +574,7 @@ impl GgmlModel {
             adapter_0_weight,
             adapter_2_weight,
             tok_embeddings_weight,
+            host_embedding_lookup: None,
             dec_norm_weight,
             dec_layers,
             mel_filters,
@@ -396,7 +582,17 @@ impl GgmlModel {
             tokenizer_special_ranks,
             tokenizer_vocab_b64,
             tokenizer_bytes_cache: HashMap::new(),
-        })
+        };
+        if matches!(backend, VoxtralSttBackend::Cuda) {
+            model.host_embedding_lookup = Some(HostEmbeddingLookup::new(tok_embeddings_weight)?);
+        }
+        Ok(model)
+    }
+
+    fn embedding_lookup_weight(&self) -> Tensor {
+        self.host_embedding_lookup
+            .as_ref()
+            .map_or(self.tok_embeddings_weight, |lookup| lookup.tensor)
     }
 
     fn decode_tokens(&mut self, tokens: &[i32]) -> String {
@@ -492,6 +688,7 @@ impl GgmlSession {
             mel_filters_cpu: Vec::new(),
             mel_plan: audio::MelSpectrogramPlan::default(),
             time_emb_cpu: compute_time_embedding(VOX_N_DELAY_TOKENS as f32, VOX_DEC_DIM),
+            decoder_diagnostics: Default::default(),
         };
         unsafe {
             ctx.allocate_persistent()?;
@@ -991,13 +1188,32 @@ impl GgmlSession {
                 ));
             }
 
+            let stage = Instant::now();
             let meta = MetaContext::new(GGML_DEFAULT_GRAPH_SIZE * 4)?;
             let gf = self.build_decoder_step_graph(model, meta.ctx, position, audio_pos);
+            self.decoder_diagnostics.graph_build_us += stage.elapsed().as_micros() as u64;
+            let stage = Instant::now();
             ffi::ggml_backend_sched_reset(self.sched_dec_step);
+
             if !ffi::ggml_backend_sched_alloc_graph(self.sched_dec_step, gf) {
                 return Err(Error::Runtime(
                     "decoder step graph allocation failed".into(),
                 ));
+            }
+            self.decoder_diagnostics.graph_allocate_us += stage.elapsed().as_micros() as u64;
+            if self.has_accel && self.decoder_diagnostics.steps == 0 {
+                for index in 0..ffi::ggml_graph_n_nodes(gf) {
+                    let node = ffi::ggml_graph_node(gf, index);
+                    let backend =
+                        ffi::ggml_backend_sched_get_tensor_backend(self.sched_dec_step, node);
+                    if !backend.is_null() && backend == self.backend_cpu {
+                        *self
+                            .decoder_diagnostics
+                            .host_scheduled_ops
+                            .entry((*node).op)
+                            .or_default() += 1;
+                    }
+                }
             }
 
             let tok_t = graph_tensor(gf, "token_id");
@@ -1028,18 +1244,24 @@ impl GgmlSession {
                 );
             }
 
+            let stage = Instant::now();
             check_status(
                 ffi::ggml_backend_sched_graph_compute(self.sched_dec_step, gf),
                 "decoder step graph compute",
             )?;
+            self.decoder_diagnostics.compute_us += stage.elapsed().as_micros() as u64;
+            let stage = Instant::now();
             ffi::ggml_backend_tensor_get(
                 self.decoder_logits,
                 logits_out.as_mut_ptr() as *mut c_void,
                 0,
                 VOX_VOCAB_SIZE * std::mem::size_of::<f32>(),
             );
+            self.decoder_diagnostics.readback_us += stage.elapsed().as_micros() as u64;
+            self.decoder_diagnostics.steps += 1;
             self.kv_used += 1;
             ffi::ggml_backend_sched_reset(self.sched_dec_step);
+
             Ok(())
         }
     }
@@ -1281,7 +1503,7 @@ impl GgmlSession {
             set_name(time_emb, "time_emb");
             ffi::ggml_backend_sched_set_tensor_backend(self.sched_dec_pre, time_emb, self.backend);
 
-            let tok_emb = ffi::ggml_get_rows(gctx, model.tok_embeddings_weight, token_ids);
+            let tok_emb = ffi::ggml_get_rows(gctx, model.embedding_lookup_weight(), token_ids);
             let audio_emb = ffi::ggml_view_2d(
                 gctx,
                 self.decoder_memory,
@@ -1357,7 +1579,7 @@ impl GgmlSession {
             set_name(time_emb, "time_emb");
             ffi::ggml_backend_sched_set_tensor_backend(self.sched_dec_step, time_emb, self.backend);
 
-            let tok_emb = ffi::ggml_get_rows(gctx, model.tok_embeddings_weight, token_id);
+            let tok_emb = ffi::ggml_get_rows(gctx, model.embedding_lookup_weight(), token_id);
             let audio_emb = ffi::ggml_view_2d(
                 gctx,
                 self.decoder_memory,
@@ -1724,9 +1946,17 @@ fn init_weight_backend(backend: VoxtralSttBackend) -> (ffi::ggml_backend_t, bool
             }
             (init_cpu_backend(), false)
         }
-        VoxtralSttBackend::Cpu | VoxtralSttBackend::Wgsl | VoxtralSttBackend::Cuda => {
-            (init_cpu_backend(), false)
+        VoxtralSttBackend::Cuda => {
+            #[cfg(ctox_ggml_cuda)]
+            unsafe {
+                // Device 0 is relative to the supervisor's admitted devices.
+                let cuda = ffi::ggml_backend_cuda_init(0);
+                return (cuda, !cuda.is_null());
+            }
+            #[cfg(not(ctox_ggml_cuda))]
+            (ptr::null_mut(), false)
         }
+        VoxtralSttBackend::Cpu | VoxtralSttBackend::Wgsl => (init_cpu_backend(), false),
     }
 }
 
@@ -1736,6 +1966,17 @@ fn init_compute_backend(
     threads: i32,
 ) -> (ffi::ggml_backend_t, ffi::ggml_backend_t, bool) {
     match backend {
+        VoxtralSttBackend::Cuda if prefer_accel => {
+            #[cfg(ctox_ggml_cuda)]
+            unsafe {
+                let cuda = ffi::ggml_backend_cuda_init(0);
+                if !cuda.is_null() {
+                    let cpu = init_cpu_backend_with_threads(threads);
+                    return (cuda, cpu, true);
+                }
+            }
+            (ptr::null_mut(), ptr::null_mut(), false)
+        }
         VoxtralSttBackend::Metal if prefer_accel => {
             #[cfg(target_os = "macos")]
             unsafe {

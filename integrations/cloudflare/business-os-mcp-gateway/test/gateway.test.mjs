@@ -315,6 +315,29 @@ const scopedAuthEnv = {
   MCP_REQUIRE_CLIENT_IDENTITY: "true"
 };
 
+test("managed native worker controls require an explicit write-capable tool grant", async () => {
+  for (const tool of ["business_os.remote_worker_admission", "business_os.workjet_worker_dispatch"]) {
+    for (const [policy, expectedField] of [
+      [{ allowWrites: false, allowedTools: [tool] }, "allowWrites"],
+      [{ allowWrites: true, allowedTools: ["business_os.status"] }, "allowedTools"],
+      [{ allowWrites: true, allowedTools: [tool] }, null]
+    ]) {
+      let routed = 0;
+      globalThis.fetch = async () => Response.json(scopedManagedAuth(policy));
+      const response = await handleRequest(scopedManagedRequest(tool, undefined, {
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
+          params: { name: tool, arguments: { action: "poll", source_environment_id: "source-env" } } })
+      }), { ...scopedAuthEnv, BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
+        routed += 1;
+        return Response.json({ jsonrpc: "2.0", id: 1, result: { ok: true } });
+      }) });
+      assert.equal(response.status, expectedField ? 403 : 200, tool);
+      if (expectedField) assert.equal((await response.json()).error.data.field, expectedField, tool);
+      assert.equal(routed, expectedField ? 0 : 1, tool);
+    }
+  }
+});
+
 test("managed collection scope denies all foreign record tools before routing", async () => {
   let routed = 0;
   globalThis.fetch = async () => Response.json(scopedManagedAuth({
