@@ -16,6 +16,7 @@ use std::path::Path;
 
 pub(in crate::business_os) mod jour_fixe_preparation;
 pub(in crate::business_os) mod jour_fixe_owner;
+pub(in crate::business_os) mod jour_fixe_speech;
 mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
 mod supervisor_observation;

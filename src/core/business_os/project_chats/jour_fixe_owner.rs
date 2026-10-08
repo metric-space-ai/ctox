@@ -68,7 +68,7 @@ fn parse(command:&BusinessCommand)->anyhow::Result<(Edit,Value)> {
     ensure!(operation.trim()==operation && meeting.trim()==meeting,"meeting operation identity must be canonical");
     Ok((edit,payload))
 }
-fn owned(conn:&Connection,actor:&str,project_route:Option<&str>,id:&str)->anyhow::Result<wire::Meeting> {
+pub(super) fn owned(conn:&Connection,actor:&str,project_route:Option<&str>,id:&str)->anyhow::Result<wire::Meeting> {
     let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_jour_fixe_meetings')",[],|r|r.get(0))?;
     ensure!(exists,"meeting unavailable to this project owner");
     let owner=workjet_identity::owner_from_connection(conn,actor)?;
@@ -102,6 +102,20 @@ pub(in crate::business_os) struct LiveMeetingBinding {
     meeting_revision: u64,
 }
 impl LiveMeetingBinding {
+    pub(super) fn identity(&self)->Value {
+        json!({"owner":self.owner_user_id,"project":self.project_id,"meeting":self.meeting_id,
+            "supervisor_thread":self.supervisor_thread_id,"supervisor_key":self.supervisor_thread_key,
+            "deck":self.deck_revision})
+    }
+    pub(super) fn revalidate_from_connection(&self,conn:&Connection,actor:&str)->anyhow::Result<Self> {
+        let meeting=owned(conn,actor,Some(&self.project_id),&self.meeting_id)?;
+        ensure!(meeting.state==wire::MeetingState::Live && meeting.deck_revision==self.deck_revision
+            && meeting.owner_user_id==self.owner_user_id
+            && meeting.supervisor.workjet_thread_id==self.supervisor_thread_id
+            && meeting.supervisor.ctox_thread_key==self.supervisor_thread_key,
+            "live meeting execution binding changed");
+        let mut current=self.clone(); current.meeting_revision=meeting.revision; Ok(current)
+    }
     pub(in crate::business_os) fn owner_user_id(&self)->&str { &self.owner_user_id }
     pub(in crate::business_os) fn project_id(&self)->&str { &self.project_id }
     pub(in crate::business_os) fn meeting_id(&self)->&str { &self.meeting_id }
@@ -189,11 +203,14 @@ pub(in crate::business_os) fn handle(
             Edit::Text(request)=>{
                 ensure!(matches!(meeting.state,wire::MeetingState::Live|wire::MeetingState::Review),"meeting does not accept conversation");
                 let turn=&request.turn;
-                ensure!(turn.meeting_id==meeting.id && turn.speaker==wire::Speaker::Owner
-                    && turn.modality==wire::Modality::Text && turn.audio.is_none()
-                    && turn.source_run_id.is_none() && turn.stream_id.is_none()
-                    && turn.sentence_end_latency_ms.is_none(),
-                    "owner text cannot claim another speaker or speech provenance");
+                ensure!(turn.meeting_id==meeting.id && turn.speaker==wire::Speaker::Owner,
+                    "owner transcript cannot claim another speaker or meeting");
+                if turn.modality==wire::Modality::Speech {
+                    super::jour_fixe_speech::consume_in_transaction(tx,&meeting,command,&payload)?;
+                } else {
+                    ensure!(turn.audio.is_none() && turn.source_run_id.is_none() && turn.stream_id.is_none()
+                        && turn.sentence_end_latency_ms.is_none(),"owner text cannot claim speech provenance");
+                }
                 ensure!(turn.ended_at_ms>=turn.started_at_ms,"transcript time range is reversed");
                 let next=meeting.transcript.last().map_or(Ok(1),|v|v.sequence.checked_add(1).context("transcript sequence overflow"))?;
                 ensure!(turn.sequence==next && meeting.transcript.iter().all(|v|v.id!=turn.id),"transcript sequence or identity conflicts");

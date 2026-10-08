@@ -2,7 +2,7 @@
 // License: AGPL-3.0-only
 use super::*;
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
-fn fixture(state: &str) -> anyhow::Result<TempDir> {
+pub(super) fn fixture(state: &str) -> anyhow::Result<TempDir> {
     let root = super::supervisor_turns::fixture()?;
     let corpus:Value = serde_json::from_str(include_str!("../../rxdb/tests/fixtures/workjet-jour-fixe-v1.json"))?;
     let mut meeting = corpus["valid_cases"][0]["value"].clone();
@@ -31,7 +31,7 @@ fn request(operation:&str, revision:u64) -> Value {
 fn rejected(value:anyhow::Result<Value>) {
     assert!(value.is_err() || value.as_ref().is_ok_and(|v|v["status"]=="failed" || v["ok"]==false),"{value:?}");
 }
-fn saved(root:&Path) -> anyhow::Result<Value> {
+pub(super) fn saved(root:&Path) -> anyhow::Result<Value> {
     let raw:String = open_store(root)?.query_row("SELECT metadata_json FROM workjet_jour_fixe_meetings WHERE meeting_id='meeting-1'",[],|r|r.get(0))?;
     Ok(serde_json::from_str(&raw)?)
 }

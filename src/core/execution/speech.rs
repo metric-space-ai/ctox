@@ -1028,7 +1028,7 @@ pub async fn benchmark_pcm(root: &Path, pcm_path: &Path) -> anyhow::Result<Value
 
 #[cfg(test)]
 #[path = "speech_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "speech_runtime_tests.rs"]

@@ -151,7 +151,7 @@ async fn selected_local_stream_without_runtime_reports_local_transport_failure()
     ));
 }
 
-async fn fixture(mode: &'static str) -> (String, JoinHandle<()>) {
+pub(crate) async fn fixture(mode: &'static str) -> (String, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
@@ -236,7 +236,7 @@ async fn fixture(mode: &'static str) -> (String, JoinHandle<()>) {
     (format!("ws://{addr}"), task)
 }
 
-async fn start(endpoint: &str) -> TranscriptionStream {
+pub(crate) async fn start(endpoint: &str) -> TranscriptionStream {
     let socket = connect(endpoint, "fixture-only-not-a-real-secret")
         .await
         .unwrap();
