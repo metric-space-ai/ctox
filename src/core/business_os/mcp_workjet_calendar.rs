@@ -230,8 +230,10 @@ mod tests {
         let root = tempfile::tempdir()?;
         let canonical = "196a89ba-ee86-4413-885c-04ca60e6f291";
         let alias = "owner@example.test";
+        // Managed Workjet tokens carry only chef/admin roles. Record ownership
+        // still restricts each account, including for a foreign administrator.
         for actor in [canonical, alias, "shared", "foreign"] {
-            store::tests::seed_business_user(root.path(), actor, "user")?;
+            store::tests::seed_business_user(root.path(), actor, "admin")?;
         }
         save_mcp_policy(root.path(), &default_mcp_policy())?;
         super::super::super::workjet_identity::remember_managed_identity(
@@ -257,7 +259,7 @@ mod tests {
         };
         save(vec!["shared".into()])?;
         let read = |actor: &str| -> anyhow::Result<Value> {
-            let gateway = json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp","surface":"workjet","actor":actor,"role":"user","workspace":"tenant:instance","instance_id":"source-instance","managed_policy":{"allowReads":true,"allowedCollections":["communication_accounts"]}});
+            let gateway = json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp","surface":"workjet","actor":actor,"role":"admin","workspace":"tenant:instance","instance_id":"source-instance","managed_policy":{"allowReads":true,"allowedCollections":["communication_accounts"]}});
             call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&gateway))
         };
         for actor in [canonical, alias, "shared"] {
@@ -307,6 +309,10 @@ mod tests {
         let read = call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&gateway))?;
         assert_eq!(read["accounts"].as_array().unwrap().len(), 1);
         assert_eq!(read["accounts"][0]["id"], "mine@example.test");
+        let mut unsupported_role = gateway.clone();
+        unsupported_role["role"] = json!("user");
+        assert!(call_tool_inner(root.path(), ACCOUNTS_TOOL, json!({}), Some(&unsupported_role))
+            .is_err());
         assert!(call_tool_inner(
             root.path(),
             EVENTS_TOOL,
