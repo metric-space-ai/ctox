@@ -550,6 +550,14 @@ pub(super) fn desktop_file_chunk_rows_for_file_id(
     root: &Path,
     file_id: &str,
 ) -> anyhow::Result<Vec<Value>> {
+    desktop_file_chunk_rows_for_file_id_with_projection(root, file_id, false)
+}
+
+fn desktop_file_chunk_rows_for_file_id_with_projection(
+    root: &Path,
+    file_id: &str,
+    redact_content: bool,
+) -> anyhow::Result<Vec<Value>> {
     const CHUNKS_TABLE: &str = "\"ctox_business_os__desktop_file_chunks__v0\"";
 
     let database_path = store::rxdb_store_path(root);
@@ -562,8 +570,15 @@ pub(super) fn desktop_file_chunk_rows_for_file_id(
         return Ok(Vec::new());
     }
     let (chunk_id_lower, chunk_id_upper) = desktop_file_chunk_id_bounds(file_id);
+    // Pruning needs generation/revision metadata, never the retained Base64
+    // payload. Redact in SQLite before hydrating the existing bounded scan.
+    let projection = if redact_content {
+        "CASE WHEN json_valid(data) THEN json_set(data, '$.data', '', '$.size_bytes', 0) ELSE data END"
+    } else {
+        "data"
+    };
     let mut stmt = conn.prepare(&format!(
-        "SELECT data FROM {CHUNKS_TABLE}
+        "SELECT {projection} FROM {CHUNKS_TABLE}
          WHERE id >= ?1
            AND id < ?2
            AND COALESCE(deleted, 0) = 0
@@ -599,7 +614,7 @@ pub(super) async fn prune_desktop_file_chunk_generations(
     let chunks = database
         .collection("desktop_file_chunks")
         .context("desktop_file_chunks collection is not registered")?;
-    let chunk_rows = desktop_file_chunk_rows_for_file_id(root, file_id)?;
+    let chunk_rows = desktop_file_chunk_rows_for_file_id_with_projection(root, file_id, true)?;
     if chunk_rows.is_empty() {
         return Ok(0);
     }
@@ -643,7 +658,7 @@ pub(super) async fn prune_desktop_file_chunk_generations(
 
     let removed = stale_chunks.len();
     let pruned_at_ms = now_ms();
-    let mut pruned_chunks = Vec::with_capacity(stale_chunks.len());
+    let mut pruned_chunks = Vec::with_capacity(64);
     for mut chunk in stale_chunks {
         if let Some(object) = chunk.as_object_mut() {
             object.insert("data".to_string(), Value::String(String::new()));
@@ -656,6 +671,14 @@ pub(super) async fn prune_desktop_file_chunk_generations(
             );
         }
         pruned_chunks.push(chunk);
+        if pruned_chunks.len() == 64 {
+            bulk_upsert_or_error(
+                &chunks,
+                std::mem::take(&mut pruned_chunks),
+                "redact stale desktop file chunks",
+            )
+            .await?;
+        }
     }
     bulk_upsert_or_error(&chunks, pruned_chunks, "redact stale desktop file chunks").await?;
     Ok(removed)
