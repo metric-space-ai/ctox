@@ -135,11 +135,18 @@ fn explicit_owner_confirmation_creates_one_exact_executable_core_goal_and_a_shar
         .context("real Core step was not runnable")?;
     // Core plans emit on their durable plan channel, not the queue channel
     // selected by load_queue_task. Verify the actual input, routing and intent.
-    let (channel, routed_thread, direction, prompt, route): (String, String, String, String, String) = conn.query_row(
+    let (channel, routed_thread, direction, prompt, route): (
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = conn.query_row(
         "SELECT m.channel,m.thread_key,m.direction,m.body_text,r.route_status
          FROM communication_messages m JOIN communication_routing_state r USING(message_key)
          WHERE m.message_key=?1",
-        [&emitted.message_key], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)),
+        [&emitted.message_key],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
     assert_eq!(channel, "plan");
     assert_eq!(routed_thread, thread);
