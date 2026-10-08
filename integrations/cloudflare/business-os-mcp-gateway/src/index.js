@@ -1059,7 +1059,8 @@ function managedToolPolicyDecision(tool, policy) {
 
 function managedCollectionPolicyDecision(tool, argumentsValue, policy) {
   if (policy.allowedCollections.length === 0) return { ok: true };
-  const implicitCollection = tool === "business_os.get_command_status" ? "business_commands" : "";
+  const implicitCollection = tool === "business_os.get_command_status" ? "business_commands"
+    : tool === "business_os.upsert_project" ? "workjet_projects" : "";
   if (!implicitCollection && !COLLECTION_SCOPED_TOOLS.has(tool)) return { ok: true };
   const collection = implicitCollection || cleanContextValue(argumentsValue.collection);
   if (!collection || !policy.allowedCollections.includes(collection)) {
@@ -1085,7 +1086,8 @@ function managedModulePolicyDecision(tool, argumentsValue, policy) {
   if (policy.allowedModules.length === 0) {
     return { ok: true };
   }
-  const moduleId = tool === "business_os.open_link"
+  const moduleId = tool === "business_os.upsert_project" ? "ctox"
+    : tool === "business_os.open_link"
     ? cleanContextValue(argumentsValue.module_or_collection)
     : cleanContextValue(argumentsValue.module_id);
   if (!moduleId && MODULE_SCOPED_TOOLS.has(tool)) {
@@ -1120,6 +1122,7 @@ const MODULE_SCOPED_TOOLS = new Set([
 
 const READ_TOOLS = new Set([
   "business_os.luma_configuration_read",
+  "business_os.upsert_project",
   "business_os.status",
   "business_os.list_modules",
   "business_os.get_module",
@@ -1146,6 +1149,7 @@ const READ_TOOLS = new Set([
 
 const WRITE_TOOLS = new Set([
   "business_os.luma_configuration_update",
+  "business_os.upsert_project",
   "business_os.remote_worker_admission",
   "business_os.workjet_worker_dispatch",
   "business_os.propose_action",
