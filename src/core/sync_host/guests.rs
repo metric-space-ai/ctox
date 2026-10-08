@@ -29,9 +29,14 @@ pub(super) struct Configuration {
     provider_assignments: Vec<crate::business_os::ProviderAssignmentInput>,
     #[serde(default)]
     workspace_assignments: Vec<crate::business_os::WorkspaceAssignmentInput>,
+    #[serde(default)]
+    machine: Option<crate::business_os::NativeGuestMachineConfiguration>,
 }
 impl Configuration {
     fn validate(&self) -> Result<()> {
+        if let Some(machine) = &self.machine {
+            machine.validate()?;
+        }
         fn valid(value: &str) -> bool {
             !value.is_empty()
                 && value.len() <= 128
@@ -134,6 +139,7 @@ impl Host {
             return Ok(None);
         };
         let registry = NativeGuestRegistry::new(root, authority, config.required_capabilities)?;
+        registry.configure_machine(config.machine)?;
         registry.attach_frame_transport(peer)?;
         let imports = directory(root).join("guests");
         match std::fs::DirBuilder::new().mode(0o700).create(&imports) {

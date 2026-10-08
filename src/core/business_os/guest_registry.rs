@@ -9,8 +9,14 @@
 pub(crate) mod accounts;
 #[path = "guest_registry_command.rs"]
 mod command;
+#[path = "guest_registry_machine_config.rs"]
+mod machine_config;
 #[path = "guest_registry_protected_import.rs"]
 mod protected_import;
+#[cfg(target_os = "linux")]
+#[path = "guest_registry_target_machine.rs"]
+mod target_machine;
+pub(crate) use machine_config::NativeGuestMachineConfiguration;
 #[path = "guest_registry_source_checkpoint.rs"]
 mod source_checkpoint;
 #[path = "guest_registry_source_effects.rs"]
@@ -347,6 +353,8 @@ struct Registration {
     desktop: Option<super::guest_runtime::RetainedQemuDesktop>,
     #[cfg(target_os = "linux")]
     source_machine: Option<Arc<source_machine::SourceMachineCapture>>,
+    #[cfg(target_os = "linux")]
+    target_machine: Option<Arc<target_machine::TargetMachine>>,
 }
 
 /// One lifecycle owner retains this registry. Restart does not revive live
@@ -370,6 +378,7 @@ pub(crate) struct NativeGuestRegistry {
     instance_file_identity: FileIdentity,
     guests: Mutex<HashMap<String, Arc<Mutex<Registration>>>>,
     frame_budget: Arc<frames::FrameBudget>,
+    machine_configuration: Mutex<Option<NativeGuestMachineConfiguration>>,
     frame_guests: Mutex<HashMap<String, String>>,
     frame_transport: Mutex<Option<std::sync::Weak<frames::Pool>>>,
     frame_registration: Mutex<
@@ -467,6 +476,7 @@ impl NativeGuestRegistry {
             instance_file_identity,
             guests: Mutex::new(HashMap::new()),
             frame_budget: frames::FrameBudget::new(),
+            machine_configuration: Mutex::new(None),
             frame_guests: Mutex::new(HashMap::new()),
             frame_transport: Mutex::new(None),
             frame_registration: Mutex::new(None),
@@ -768,6 +778,8 @@ impl NativeGuestRegistry {
                 desktop: None,
                 #[cfg(target_os = "linux")]
                 source_machine: None,
+                #[cfg(target_os = "linux")]
+                target_machine: None,
             })),
         );
         Ok(assignment)
@@ -957,6 +969,9 @@ impl NativeGuestRegistry {
                     == Some(entry.assignment.destination.human_owner_id.as_str()),
                 "foreign guest stop"
             );
+            if let Some(machine) = &entry.target_machine {
+                machine.retire();
+            }
             let Some(capture) = entry.source_machine.clone() else {
                 return Ok(None);
             };
@@ -980,6 +995,39 @@ impl NativeGuestRegistry {
                 .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
                 .stopped_status = Some(status);
             // Stopping never completes the pending quorum effect.
+            return Ok(status);
+        }
+        let restoring = self.with_policy(|_| {
+            let mut entry = entry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+            if entry.desktop.is_some() {
+                return Ok(None);
+            }
+            let Some(machine) = entry.target_machine.clone() else {
+                return Ok(None);
+            };
+            if !entry.revoked {
+                entry.assignment.destination.controller_generation = entry
+                    .assignment
+                    .destination
+                    .controller_generation
+                    .checked_add(1)
+                    .context("controller generation exhausted")?;
+                entry.revoked = true;
+            }
+            machine.retire();
+            self.retire_frame(&mut entry)?;
+            Ok(Some(machine))
+        })?;
+        if let Some(machine) = restoring {
+            let status = machine.stop()?.context(
+                "target attempt has no child; pending effects still require reconciliation",
+            )?;
+            entry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
+                .stopped_status = Some(status);
             return Ok(status);
         }
         self.with_policy(|_| {
@@ -1044,6 +1092,10 @@ impl NativeGuestRegistry {
             #[cfg(target_os = "linux")]
             if let Some(capture) = &entry.source_machine {
                 capture.retire();
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(machine) = &entry.target_machine {
+                machine.retire();
             }
             self.retire_frame(&mut entry)?;
             Ok(())

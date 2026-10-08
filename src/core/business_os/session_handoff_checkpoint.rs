@@ -12,6 +12,8 @@ const BLOB_LIMIT: u64 = 64 * 1024 * 1024;
 mod guest_enrollment;
 #[path = "session_handoff_guest_import.rs"]
 mod guest_import;
+#[path = "session_handoff_guest_machine.rs"]
+mod guest_machine;
 #[path = "session_handoff_copy_progress.rs"]
 mod progress;
 #[path = "session_handoff_checkpoint_quorum.rs"]
@@ -20,6 +22,38 @@ mod quorum;
 mod reconstruction;
 #[path = "session_handoff_takeover.rs"]
 mod takeover;
+
+#[cfg(test)]
+mod machine_control_tests {
+    use super::*;
+    #[test]
+    fn restore_guest_control_is_identifiers_only_and_mutually_exclusive() {
+        let original = serde_json::json!({"bindingDigest":"a".repeat(64),"guestId":"original-guest","restoreGuest":true});
+        let parsed: CopyRequest = serde_json::from_value(original.clone()).unwrap();
+        assert!(parsed.valid_operation());
+        assert_eq!(
+            parsed.operation_timeout(),
+            std::time::Duration::from_secs(60)
+        );
+        for (field, value) in [
+            ("reconstruct", serde_json::json!(true)),
+            ("acknowledge", serde_json::json!(true)),
+            ("takeOver", serde_json::json!(true)),
+            ("enrollGuest", serde_json::json!(true)),
+            ("sourceRoute", serde_json::json!("peer")),
+            ("guestId", serde_json::json!("")),
+        ] {
+            let mut bad = original.clone();
+            bad[field] = value;
+            assert!(!serde_json::from_value::<CopyRequest>(bad)
+                .unwrap()
+                .valid_operation());
+        }
+        let mut bad = original;
+        bad["baseRaw"] = serde_json::json!("/operator/image.raw");
+        assert!(serde_json::from_value::<CopyRequest>(bad).is_err());
+    }
+}
 
 /// Resolve the native Core credential source in the assigned workspace. The
 /// returned manager pins the actual account, not a client account label. It
@@ -1110,6 +1144,8 @@ pub(crate) struct CopyRequest {
     pub take_over: bool,
     #[serde(default, skip_serializing_if = "copy_only")]
     pub enroll_guest: bool,
+    #[serde(default, skip_serializing_if = "copy_only")]
+    pub restore_guest: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protection_receipts: Vec<ctox_sync::contracts::CheckpointCopyReceipt>,
 }
@@ -1121,6 +1157,15 @@ impl CopyRequest {
         std::time::Duration::from_secs(60)
     }
     fn valid_operation(&self) -> bool {
+        if self.restore_guest {
+            return !self.reconstruct
+                && !self.acknowledge
+                && !self.take_over
+                && !self.enroll_guest
+                && self.protection_receipts.is_empty()
+                && self.source_route.is_empty()
+                && super::super::super::guest_runtime::identifier(&self.guest_id);
+        }
         let controls = [
             self.acknowledge,
             self.take_over,
@@ -1147,6 +1192,12 @@ impl CopyRequest {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum CopyResponse {
+    GuestMachineRestored {
+        checkpoint_digest: String,
+        guest_id: String,
+        guest_service_session_id: String,
+        process_effect_id: String,
+    },
     CopyPending {
         checkpoint_digest: String,
         verified_bytes: u64,
@@ -1278,6 +1329,17 @@ pub(super) fn listen(
                                 )
                                 .await
                             }
+                        } else if r.restore_guest {
+                            let registry = guests
+                                .as_ref()
+                                .ok_or_else(|| anyhow::anyhow!("native guest host unavailable"))?;
+                            guest_machine::restore_machine(
+                                server.clone(),
+                                registry.clone(),
+                                r.binding_digest,
+                                r.guest_id,
+                            )
+                            .await
                         } else if !r.guest_id.is_empty() {
                             let registry = guests
                                 .as_ref()
