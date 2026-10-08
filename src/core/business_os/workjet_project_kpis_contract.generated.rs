@@ -434,7 +434,7 @@ impl WireValidate for KpiSnapshot {
             if value.chars().count() < 1 {
                 return Err("KpiSnapshot.label violates min_chars".into());
             }
-            if value.chars().count() > 24 {
+            if value.chars().count() > 14 {
                 return Err("KpiSnapshot.label violates max_chars".into());
             }
         }
@@ -730,6 +730,103 @@ impl WireValidate for ResolveKpiRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum NativeMetricRecipe {
+    #[serde(rename = "project_tasks_total")]
+    ProjectTasksTotal,
+    #[serde(rename = "project_tasks_completed")]
+    ProjectTasksCompleted,
+    #[serde(rename = "project_tasks_failed")]
+    ProjectTasksFailed,
+    #[serde(rename = "project_tasks_open")]
+    ProjectTasksOpen,
+    #[serde(rename = "project_tasks_success_rate")]
+    ProjectTasksSuccessRate,
+    #[serde(rename = "github_merged_prs")]
+    GithubMergedPrs,
+}
+impl WireValidate for NativeMetricRecipe {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BindKpiRequest {
+    pub(crate) operation_id: String,
+    pub(crate) project_id: String,
+    pub(crate) kpi_id: String,
+    pub(crate) prompt_revision: u64,
+    pub(crate) expected_revision: u64,
+    pub(crate) recipe: NativeMetricRecipe,
+    pub(crate) window_days: u64,
+}
+impl WireValidate for BindKpiRequest {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.operation_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("BindKpiRequest.operation_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("BindKpiRequest.operation_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("BindKpiRequest.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("BindKpiRequest.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.kpi_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("BindKpiRequest.kpi_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("BindKpiRequest.kpi_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.prompt_revision;
+            value.validate()?;
+            if *value < 1 {
+                return Err("BindKpiRequest.prompt_revision violates minimum".into());
+            }
+        }
+        {
+            let value = &self.expected_revision;
+            value.validate()?;
+        }
+        {
+            let value = &self.recipe;
+            value.validate()?;
+        }
+        {
+            let value = &self.window_days;
+            value.validate()?;
+            if *value < 1 {
+                return Err("BindKpiRequest.window_days violates minimum".into());
+            }
+            if *value > 365 {
+                return Err("BindKpiRequest.window_days violates maximum".into());
+            }
+        }
+        validate_rules(
+            "BindKpiRequest",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -778,13 +875,19 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
         "ResolveKpiRequest" => serde_json::from_value::<ResolveKpiRequest>(value)
             .map_err(|e| e.to_string())?
             .validate(),
+        "NativeMetricRecipe" => serde_json::from_value::<NativeMetricRecipe>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "BindKpiRequest" => serde_json::from_value::<BindKpiRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
         _ => Err("unknown contract type".into()),
     }
 }
 
 fn rules() -> &'static serde_json::Value {
     static RULES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
-    RULES.get_or_init(|| serde_json::from_str(r#"{"PromptInput":{"nonblank":["kpi_id","prompt"]},"KpiPrompt":{"nonblank":["kpi_id","prompt"]},"Computation":{"lte":[["window_start_ms","window_end_ms"]],"unique":[{"field":"input_keys"}]},"Freshness":{"lt":[["calculated_at_ms","refresh_at_ms"]],"lte":[["refresh_at_ms","fresh_until_ms"]]},"KpiSnapshot":{"unique":[{"field":"sources","key":"source_key"}],"every_eq":[{"field":"sources","key":"project_id","target":"project_id"}],"every_lte":[{"field":"sources","key":"observed_at_ms","target":"freshness.calculated_at_ms"}],"calculate":true},"KpiResult":{"state_fields":{"field":"status","states":{"resolving":{"forbidden":["snapshot","reason_code","message"]},"ready":{"required":["snapshot"],"forbidden":["reason_code","message"]},"stale":{"required":["snapshot","reason_code","message"]},"missing_source":{"required":["reason_code","message"],"forbidden":["snapshot"]},"failed":{"required":["reason_code","message"],"forbidden":["snapshot"]}}}},"KpiRecord":{"eq":[["prompt.kpi_id","result.snapshot.kpi_id"],["prompt.revision","result.snapshot.prompt_revision"]]},"ProjectKpis":{"unique":[{"field":"items","key":"prompt.kpi_id"}],"every_eq":[{"field":"items","key":"result.snapshot.project_id","target":"project_id"}]},"ReadKpisRequest":{"nonblank":["project_id"]},"ConfigureKpisRequest":{"nonblank":["operation_id","project_id"],"unique":[{"field":"prompts","key":"kpi_id"}]}}"#).expect("generated KPI rules"))
+    RULES.get_or_init(|| serde_json::from_str(r#"{"PromptInput":{"nonblank":["kpi_id","prompt"]},"KpiPrompt":{"nonblank":["kpi_id","prompt"]},"Computation":{"lte":[["window_start_ms","window_end_ms"]],"unique":[{"field":"input_keys"}]},"Freshness":{"lt":[["calculated_at_ms","refresh_at_ms"]],"lte":[["refresh_at_ms","fresh_until_ms"]]},"KpiSnapshot":{"unique":[{"field":"sources","key":"source_key"}],"every_eq":[{"field":"sources","key":"project_id","target":"project_id"}],"every_lte":[{"field":"sources","key":"observed_at_ms","target":"freshness.calculated_at_ms"}],"calculate":true},"KpiResult":{"state_fields":{"field":"status","states":{"resolving":{"forbidden":["snapshot","reason_code","message"]},"ready":{"required":["snapshot"],"forbidden":["reason_code","message"]},"stale":{"required":["snapshot","reason_code","message"]},"missing_source":{"required":["reason_code","message"],"forbidden":["snapshot"]},"failed":{"required":["reason_code","message"],"forbidden":["snapshot"]}}}},"KpiRecord":{"eq":[["prompt.kpi_id","result.snapshot.kpi_id"],["prompt.revision","result.snapshot.prompt_revision"]]},"ProjectKpis":{"unique":[{"field":"items","key":"prompt.kpi_id"}],"every_eq":[{"field":"items","key":"result.snapshot.project_id","target":"project_id"}]},"ReadKpisRequest":{"nonblank":["project_id"]},"ConfigureKpisRequest":{"nonblank":["operation_id","project_id"],"unique":[{"field":"prompts","key":"kpi_id"}]},"BindKpiRequest":{"nonblank":["operation_id","project_id","kpi_id"]}}"#).expect("generated KPI rules"))
 }
 
 // JSON/JS has one numeric type. Preserve integral measurements as integers,

@@ -166,7 +166,7 @@ export const PROJECT_KPIS_TYPES = deepFreeze({
       "label": {
         "type": "String",
         "min_chars": 1,
-        "max_chars": 24
+        "max_chars": 14
       },
       "value": {
         "type": "f64"
@@ -299,6 +299,51 @@ export const PROJECT_KPIS_TYPES = deepFreeze({
       "expected_revision": {
         "type": "u64",
         "minimum": 0
+      }
+    }
+  },
+  "NativeMetricRecipe": {
+    "enum": [
+      "project_tasks_total",
+      "project_tasks_completed",
+      "project_tasks_failed",
+      "project_tasks_open",
+      "project_tasks_success_rate",
+      "github_merged_prs"
+    ]
+  },
+  "BindKpiRequest": {
+    "fields": {
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "kpi_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "prompt_revision": {
+        "type": "u64",
+        "minimum": 1
+      },
+      "expected_revision": {
+        "type": "u64",
+        "minimum": 0
+      },
+      "recipe": {
+        "type": "NativeMetricRecipe"
+      },
+      "window_days": {
+        "type": "u64",
+        "minimum": 1,
+        "maximum": 365
       }
     }
   }
@@ -472,6 +517,13 @@ export const PROJECT_KPIS_RULES = deepFreeze({
         "field": "prompts",
         "key": "kpi_id"
       }
+    ]
+  },
+  "BindKpiRequest": {
+    "nonblank": [
+      "operation_id",
+      "project_id",
+      "kpi_id"
     ]
   }
 });

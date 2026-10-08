@@ -3225,7 +3225,9 @@ fn call_tool_inner(
             &arguments,
             trusted_gateway_context,
         )?,
-        workjet_kpis::TOOL => workjet_kpis::execute(root, &context, &arguments, trusted_gateway_context)?,
+        workjet_kpis::TOOL => {
+            workjet_kpis::execute(root, &context, &arguments, trusted_gateway_context)?
+        }
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
         }
