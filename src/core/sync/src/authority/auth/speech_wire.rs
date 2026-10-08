@@ -167,7 +167,7 @@ fn opaque(value: &str) -> bool {
 fn hex_bytes(value: &str, cap: usize, empty: bool) -> io::Result<usize> {
     ensure(
         (empty || !value.is_empty())
-            && value.len() % 2 == 0
+            && value.len().is_multiple_of(2)
             && value.len() / 2 <= cap
             && value
                 .bytes()
@@ -217,7 +217,7 @@ impl SpeechComputerRequest {
             } => {
                 let bytes = hex_bytes(pcm16_hex, 3200, false)?;
                 ensure(
-                    opaque(stream_id) && *sequence > 0 && bytes % 2 == 0,
+                    opaque(stream_id) && *sequence > 0 && bytes.is_multiple_of(2),
                     "invalid100ms speech chunk or sequence",
                 )?;
                 SpeechWorkload::Transcription
