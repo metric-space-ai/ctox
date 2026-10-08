@@ -159,7 +159,7 @@ fn explicit_owner_confirmation_creates_one_exact_executable_core_goal_and_a_shar
         "DELETE FROM communication_routing_state WHERE message_key=?1",
         [&emitted.message_key],
     )?;
-    channels::ensure_routing_rows_for_inbound(&conn)?;
+    crate::channels::ensure_routing_rows_for_inbound(&conn)?;
     let backfilled: String = conn.query_row(
         "SELECT route_status FROM communication_routing_state WHERE message_key=?1",
         [&emitted.message_key],
