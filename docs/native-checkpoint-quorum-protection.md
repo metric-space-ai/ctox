@@ -83,3 +83,24 @@ Ownership alone does not construct a provider, restore Core, import a guest, or 
 Those operations must freshly validate the resulting ownership and actual completed import
 before execution. This step supplies no installed continuation claim; the remaining native
 source effect proof and original-session target activation are still tracked in issue183.
+
+## Import before original Core creation
+
+After a completed take-over and `handoff-enroll-guest`, the same target operator runs
+`ctox sync handoff-import-guest <binding-digest> <original-guest-id>`. The protected
+controller owns this preparation before the original Core/provider exists. It does not
+manufacture a provider binding or submit a fresh Create job.
+
+The current target account, signed Receive/Resume decisions, exact completed Owned
+record, repository/workspace assignment, controller generation and private import-parent
+identity fence each publication. The guest-restore component separately validates the
+current quorum ownership and protected checkpoint, begins the import effect, commits
+the actual files and completes that exact effect. Only its completed receipt, validated
+again against the current original job, is registered under the retained controller.
+Full staging and quorum awaits do not hold the native publication transaction.
+
+A cancelled or failed publication remains uncertain and cannot repeat the write under
+the same controller. Unknown source effects are still rejected. Import does not start
+QEMU, create a Core turn or report resumed:true. The original-session factory, guarded
+guest activation and authoritative source-effects reconciliation remain separate
+production work; no installed continuation or supported Darwin source release is claimed.

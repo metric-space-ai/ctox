@@ -9,6 +9,8 @@
 pub(crate) mod accounts;
 #[path = "guest_registry_command.rs"]
 mod command;
+#[path = "guest_registry_protected_import.rs"]
+mod protected_import;
 #[path = "guest_registry_source_checkpoint.rs"]
 mod source_checkpoint;
 #[path = "guest_registry_source_effects.rs"]
@@ -1296,18 +1298,36 @@ impl NativeGuestExecution {
     /// Receipt registration revalidates completed quorum effect; presence of an
     /// imported directory can never fabricate successful import completion.
     pub(crate) async fn register_import(&self, receipt: GuestImportReceipt) -> Result<()> {
-        self.validate_import_completion(&receipt).await?;
-        self.with_current(|entry, verify| self.register_import_current(entry, verify, receipt))
+        Self::validate_import_completion(
+            self.registry.authority.as_ref(),
+            &self.binding.spec,
+            &self.binding.ownership,
+            &receipt,
+        )
+        .await?;
+        self.with_current(|entry, verify| {
+            Self::register_import_current(
+                entry,
+                verify,
+                receipt,
+                &self.binding.spec,
+                &self.binding.ownership,
+            )
+        })
     }
 
-    async fn validate_import_completion(&self, receipt: &GuestImportReceipt) -> Result<()> {
-        let job = self
-            .registry
-            .authority
-            .validate_ownership(&self.binding.spec.job_id, &self.binding.ownership)
+    pub(super) async fn validate_import_completion(
+        authority: &dyn ExecutionAuthority,
+        spec: &ExecutionSpec,
+        ownership: &Ownership,
+        receipt: &GuestImportReceipt,
+    ) -> Result<()> {
+        let job = authority
+            .validate_ownership(&spec.job_id, ownership)
             .await?;
         ensure!(
-            job.spec == self.binding.spec
+            job.spec == *spec
+                && job.ownership == *ownership
                 && !job.stopped
                 && job.pending_effects.is_empty()
                 && job.completed_effects.contains(&receipt.effect_id),
@@ -1323,16 +1343,17 @@ impl NativeGuestExecution {
         Ok(())
     }
 
-    fn register_import_current(
-        &self,
+    pub(super) fn register_import_current(
         entry: &mut Registration,
         verify: &dyn Fn() -> Result<()>,
         receipt: GuestImportReceipt,
+        spec: &ExecutionSpec,
+        ownership: &Ownership,
     ) -> Result<()> {
         ensure!(
             receipt.destination == entry.assignment.destination
-                && receipt.spec == self.binding.spec
-                && receipt.ownership == self.binding.ownership,
+                && receipt.spec == *spec
+                && receipt.ownership == *ownership,
             "foreign guest import receipt"
         );
         ensure!(

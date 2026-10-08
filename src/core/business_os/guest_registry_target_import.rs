@@ -9,6 +9,25 @@ use ctox_sync::checkpoint::CheckpointStore;
 /// through the callback. It borrows the existing native policy transaction:
 /// reopening it here would deadlock or split the publication decision.
 pub(crate) trait NativeGuestImportFence: Send + Sync {
+    /// Target preparation precedes the original Core/provider factory. Default
+    /// denial prevents ordinary/import fixtures from manufacturing this owner.
+    fn with_current_checkpoint(
+        &self,
+        _policy: &Connection,
+        _identity: &SigningIdentity,
+        _destination: &GuestRestoreDestination,
+        _binding_digest: &str,
+        _checkpoint_digest: &str,
+        _spec: &ExecutionSpec,
+        _ownership: &Ownership,
+        _publish: &mut dyn FnMut() -> io::Result<()>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "protected target checkpoint owner is unavailable",
+        ))
+    }
+
     fn with_current(
         &self,
         policy: &Connection,
@@ -138,6 +157,25 @@ impl NativeGuestRegistry {
         digest: &str,
         fence: &dyn NativeGuestImportFence,
     ) -> Result<GuestImportReceipt> {
+        let protected = self
+            .registration(guest_id)?
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
+            .restoration
+            .clone();
+        if let Some(protected) = protected {
+            return self
+                .import_protected_checkpoint(
+                    guest_id,
+                    spec,
+                    source_ownership,
+                    store,
+                    digest,
+                    protected,
+                    fence,
+                )
+                .await;
+        }
         let execution = self.retained_execution(guest_id)?;
         ensure!(
             execution.binding.spec == *spec,
@@ -168,12 +206,24 @@ impl NativeGuestRegistry {
         let receipt =
             ctox_sync::guest_restore::commit_guest_restore(self.authority.as_ref(), &owner, staged)
                 .await?;
-        execution.validate_import_completion(&receipt).await?;
+        NativeGuestExecution::validate_import_completion(
+            self.authority.as_ref(),
+            &execution.binding.spec,
+            &execution.binding.ownership,
+            &receipt,
+        )
+        .await?;
         // Fresh combined fence after completion: revocation during the await
         // must deny registration, not merely the eventual response.
         owner.with_current(|entry, verify| {
             self.require_live_transport()?;
-            execution.register_import_current(entry, verify, receipt.clone())
+            NativeGuestExecution::register_import_current(
+                entry,
+                verify,
+                receipt.clone(),
+                &execution.binding.spec,
+                &execution.binding.ownership,
+            )
         })?;
         Ok(receipt)
     }

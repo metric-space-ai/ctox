@@ -10,6 +10,7 @@ pub(super) struct ProtectedEnrollment {
     pub(super) spec: ExecutionSpec,
     pub(super) ownership: Ownership,
     pub(super) service_session: String,
+    pub(super) scope: target_handoff::TargetPolicyScope,
 }
 
 impl NativeGuestRegistry {
@@ -80,6 +81,7 @@ impl NativeGuestRegistry {
             spec: spec.clone(),
             ownership: ownership.clone(),
             service_session: identity.service_session().into(),
+            scope: scope.clone(),
         };
         // Retry only the exact retained original guest. Never revive a revoked
         // controller, convert a fresh job, or replace a different checkpoint.

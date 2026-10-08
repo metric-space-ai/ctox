@@ -8,6 +8,38 @@ use ctox_sync::authority::Ownership;
 type Registry = super::super::super::super::NativeGuestRegistry;
 type Scope = super::super::super::super::guest_registry::target_handoff::TargetPolicyScope;
 
+pub(super) fn verify_owned_target(
+    policy: &Connection,
+    request: &SessionHandoffGateRequest,
+    permit: &SessionHandoffPermit,
+    next: &Ownership,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        next.node_id != request.ownership.node_id
+            && request.ownership.generation.checked_add(1) == Some(next.generation),
+        "target must have the exact next ownership"
+    );
+    let owned: bool = policy.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_native_checkpoint_takeovers
+         WHERE binding_digest=?1 AND checkpoint_digest=?2 AND source_generation=?3
+         AND spec_json=?4 AND source_ownership_json=?5 AND target_ownership_json=?6
+         AND principal_epoch=?7 AND binding_revision=?8 AND phase='Owned')",
+        params![
+            request.binding_digest,
+            request.checkpoint_digest,
+            i64::try_from(request.ownership.generation)?,
+            serde_json::to_string(&request.spec)?,
+            serde_json::to_string(&request.ownership)?,
+            serde_json::to_string(next)?,
+            i64::try_from(permit.principal_epoch)?,
+            i64::try_from(permit.binding_revision)?
+        ],
+        |r| r.get(0),
+    )?;
+    anyhow::ensure!(owned, "target has no completed native takeover; reconcile");
+    Ok(())
+}
+
 fn owned_target<P: Clone + Eq + Hash + Send + Sync + 'static>(
     target: &Target<P>,
     registry: &Registry,
@@ -28,24 +60,7 @@ fn owned_target<P: Clone + Eq + Hash + Send + Sync + 'static>(
         next.node_id != target.request.ownership.node_id,
         "target must be independent"
     );
-    let owned: bool = policy.query_row(
-        "SELECT EXISTS(SELECT 1 FROM business_native_checkpoint_takeovers
-         WHERE binding_digest=?1 AND checkpoint_digest=?2 AND source_generation=?3
-         AND spec_json=?4 AND source_ownership_json=?5 AND target_ownership_json=?6
-         AND principal_epoch=?7 AND binding_revision=?8 AND phase='Owned')",
-        params![
-            target.request.binding_digest,
-            target.request.checkpoint_digest,
-            i64::try_from(target.request.ownership.generation)?,
-            serde_json::to_string(&target.request.spec)?,
-            serde_json::to_string(&target.request.ownership)?,
-            serde_json::to_string(&next)?,
-            i64::try_from(permit.principal_epoch)?,
-            i64::try_from(permit.binding_revision)?
-        ],
-        |r| r.get(0),
-    )?;
-    anyhow::ensure!(owned, "target has no completed native takeover; reconcile");
+    verify_owned_target(policy, &target.request, permit, &next)?;
     let encoded: String = policy.query_row(
         "SELECT n.target_scope_json FROM business_native_target_handoff_bindings n
          JOIN business_session_handoff_bindings b ON b.binding_id=n.binding_id
