@@ -250,7 +250,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         ["run"] => runtime::run(&root, async {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
-        }, |started, _authority, _guests| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
+        }, |started, _authority, _guests, _control| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
         _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-target-challenge | handoff-source-offer <binding> <challenge> | handoff-configure-target-repository (public JSON on stdin) | handoff-enroll-target (public JSON on stdin) | handoff-copy <binding-digest> <source-route> | handoff-reconstruct <binding-digest> | handoff-import-guest <binding-digest> <guest-id> | handoff-acknowledge-copy <binding-digest> | handoff-protect-checkpoint <binding-digest> (public receipt array on stdin) | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
     }
 }
@@ -386,10 +386,14 @@ fn checkpoint_copy(
 pub struct ServiceHost {
     authority: Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
     guest_registry: Option<Arc<crate::business_os::NativeGuestRegistry>>,
+    control_channel: super::NativeControlChannel,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<thread::JoinHandle<()>>,
 }
 impl ServiceHost {
+    pub(crate) fn native_control_channel(&self) -> super::NativeControlChannel {
+        self.control_channel.clone()
+    }
     /// Borrow only the registry attached to this live host's native peer.
     pub(crate) fn guest_registry(&self) -> Option<Arc<crate::business_os::NativeGuestRegistry>> {
         self.guest_registry.clone()
@@ -404,6 +408,7 @@ impl ServiceHost {
 }
 impl Drop for ServiceHost {
     fn drop(&mut self) {
+        self.control_channel.retire();
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -429,9 +434,9 @@ pub fn start_if_configured(root: &Path) -> Result<Option<ServiceHost>> {
                     let _ = stopped.await;
                     Ok(())
                 },
-                move |_, authority, guest_registry| {
+                move |_, authority, guest_registry, control_channel| {
                     ready
-                        .send(Ok((authority, guest_registry)))
+                        .send(Ok((authority, guest_registry, control_channel)))
                         .map_err(|_| anyhow::anyhow!("native Sync service startup receiver closed"))
                 },
             );
@@ -442,9 +447,10 @@ pub fn start_if_configured(root: &Path) -> Result<Option<ServiceHost>> {
             }
         })?;
     match started.recv() {
-        Ok(Ok((authority, guest_registry))) => Ok(Some(ServiceHost {
+        Ok(Ok((authority, guest_registry, control_channel))) => Ok(Some(ServiceHost {
             authority,
             guest_registry,
+            control_channel,
             stop: Some(stop),
             task: Some(task),
         })),

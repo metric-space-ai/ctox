@@ -15,6 +15,13 @@ pub(crate) fn signing_identity_from_record(
     }
 }
 #[cfg(unix)]
+#[path = "sync_host/control_channel.rs"]
+mod control_channel;
+#[cfg(unix)]
+pub(crate) use control_channel::{
+    native_control_channel, NativeControlChannel, NativeControlReplyVerifier,
+};
+#[cfg(unix)]
 #[path = "sync_host/unix.rs"]
 mod unix;
 #[cfg(all(unix, test))]
