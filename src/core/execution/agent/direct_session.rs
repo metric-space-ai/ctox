@@ -182,6 +182,8 @@ const BUSINESS_OS_MCP_SESSION_TOOLS: &[&str] = &[
     "business_os.jour_fixe_read",
     "business_os.jour_fixe_update",
     "business_os.project_kpi",
+    "business_os.presentation_read",
+    "business_os.presentation_update",
     "business_os.list_runs",
     "business_os.get_run",
 ];

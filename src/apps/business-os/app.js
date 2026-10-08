@@ -90,6 +90,11 @@ import {
 } from './shared/startup-deadlines.js?v=20261009-shell-v2-query-ready-diagnostics';
 import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-query-ready-diagnostics';
 import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261008-narration-read';
+import {
+  PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
+  presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
+} from './shared/jour-fixe-presentation.mjs?v=20261009-presentation';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-presentation';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -13702,6 +13707,101 @@ function boundedWorkjetExecutionRequest(value) {
   };
 }
 
+// Jour fixe presentations: native manifest reads and owner canvas saves travel as
+// ctox.workjet.presentation.* commands; document bytes are policy-checked
+// rxdb.file.fetch ranges of the revision's desktop file. No HTTP data path.
+async function workjetPresentationControl(action, request, scope) {
+  const deadline = Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1000;
+  const requestSync = state.sync;
+  const assertSession = () => {
+    if (Date.now() >= deadline || state.session !== scope.requestSession || state.db !== scope.requestDb
+      || state.sync !== requestSync || actorContext(state.session).id !== scope.ownerUserId) {
+      throw Object.assign(new Error('The Workjet project session changed during the presentation request.'),
+        { code: 'PRESENTATION_SCOPE_CHANGED' });
+    }
+  };
+  const dispatch = async (commandId, projectId, commandType, payload, compareKeys) => {
+    assertSession();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox', record_id: projectId,
+      command_type: commandType, inbound_channel: 'ctox', payload: JSON.parse(JSON.stringify(payload)),
+      client_context: { source: 'workjet-project-control', actor: actorContext(scope.requestSession) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: Math.max(1, deadline - Date.now()) });
+    assertSession();
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId || receipt.result?.ok !== true
+      || receipt.result.contract !== PRESENTATION_SCHEMA
+      || compareKeys.some(key => receipt.payload?.[key] !== payload[key])) {
+      const reason = receipt?.result?.error || receipt?.error;
+      throw new Error(typeof reason === 'string' && reason ? reason : 'The presentation command was not confirmed.');
+    }
+    return receipt.result;
+  };
+  await awaitWorkjetProjectListStep(requireWorkjetSupervisorDataPlane(), deadline, 'presentation collections');
+  const readManifest = async scopeRequest => {
+    const commandId = scopeRequest.commandId ?? crypto.randomUUID();
+    const payload = presentationReadPayload({ action: PRESENTATION_READ_ACTION, commandId,
+      projectId: scopeRequest.projectId, meetingId: scopeRequest.meetingId });
+    const result = await dispatch(commandId, scopeRequest.projectId, 'ctox.workjet.presentation.read', payload,
+      Object.keys(payload));
+    return presentationFromReadResult(result, scopeRequest);
+  };
+  if (action === PRESENTATION_READ_ACTION) {
+    presentationReadPayload(request);
+    const presentation = await readManifest(request);
+    return { action, commandId: request.commandId, projectId: request.projectId, meetingId: request.meetingId,
+      contract: PRESENTATION_SCHEMA, presentation };
+  }
+  if (action === PRESENTATION_CANVAS_SAVE_ACTION) {
+    const payload = presentationCanvasSavePayload(request);
+    const result = await dispatch(request.commandId, request.projectId, 'ctox.workjet.presentation.canvas.save',
+      payload, ['operation_id', 'presentation_id', 'expected_revision', 'slide_id']);
+    const { mutation, presentation } = presentationMutationFromResult(result, payload, request);
+    return { action, commandId: request.commandId, projectId: request.projectId, meetingId: request.meetingId,
+      contract: PRESENTATION_SCHEMA, mutation, presentation };
+  }
+  const instance = boundedWorkjetProjectText(
+    state.syncConfig?.instance_id || requestSync?.config?.instance_id, 'native instanceId', 256,
+  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+  const authority = {};
+  let bridge;
+  const assertCurrent = () => {
+    assertSession();
+    if (controller.signal.aborted
+      || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance
+      || (authority.peer && (authority.peer.cancelled
+        || authority.peer.collection.demandLoader !== authority.loader
+        || authority.peer.collectionQueryGenerationToken?.(authority.peer.activeRemotePeerId) !== authority.generation))) {
+      throw Object.assign(new Error('Presentation scope or connection changed.'), { code: 'PRESENTATION_SCOPE_CHANGED' });
+    }
+  };
+  try {
+    return await readJourFixePresentationContent(request, {
+      assertCurrent,
+      readManifest: scopeRequest => readManifest({ projectId: scopeRequest.projectId, meetingId: scopeRequest.meetingId }),
+      readMetadata: async fileId => {
+        bridge ??= await awaitWorkjetProjectListStep(
+          requestSync?.startCollection?.('desktop_files', { pin: false, forceDirect: true }), deadline, 'presentation file bridge',
+        );
+        if (!bridge?.state && bridge?.ready) {
+          bridge = await awaitWorkjetProjectListStep(bridge.ready, deadline, 'presentation file bridge readiness');
+        }
+        const rows = await readWorkjetProjectListRows(bridge, {
+          selector: { id: { $eq: fileId } }, limit: 1,
+        }, crypto.randomUUID(), deadline, controller.signal, authority);
+        return rows[0]?.toJSON?.() || rows[0] || null;
+      },
+      readRange: (fileId, range) => {
+        const loader = bridge?.state?.demandFileLoader;
+        if (!loader?.fetchFile) throw new Error('Presentation file transport is unavailable.');
+        return awaitWorkjetProjectListStep(loader.fetchFile(fileId, { range }), deadline, 'presentation bytes');
+      },
+    });
+  } finally { clearTimeout(timer); controller.abort(); }
+}
+
 async function workjetProjectControl(request = {}) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) {
     throw new TypeError('Workjet project control request must be an object.');
@@ -13761,6 +13861,9 @@ async function workjetProjectControl(request = {}) {
         },
       });
     } finally { clearTimeout(timer); controller.abort(); }
+  }
+  if (PRESENTATION_ACTIONS.includes(action)) {
+    return workjetPresentationControl(action, request, { requestSession, requestDb, ownerUserId });
   }
   if (action === 'project.jour_fixe.speech') {
     const sync = state.sync;
