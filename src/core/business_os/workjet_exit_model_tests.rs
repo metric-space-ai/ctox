@@ -102,8 +102,7 @@ fn proposal_is_retained_without_imaginary_allocations() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let root = dir.path();
     project(root)?;
-    let proposal =
-        json!({"hours_per_week":20.0,"monthly_budget_eur":300.0,"comparison_mode":"equal_resources"});
+    let proposal = json!({"hours_per_week":20.0,"monthly_budget_eur":300.0,"comparison_mode":"equal_resources"});
     let first = mutate(
         root,
         &command(
