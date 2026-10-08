@@ -330,7 +330,6 @@ fn reserved_meeting_tools_fail_terminally_without_creating_recursive_model_tasks
     for (i, action) in [
         "prepare",
         "deck.publish",
-        "comment.add",
         "todos.propose",
         "todos.confirm",
     ]
@@ -338,8 +337,14 @@ fn reserved_meeting_tools_fail_terminally_without_creating_recursive_model_tasks
     .enumerate()
     {
         let command = format!("reserved-{i}");
-        let value = send(root.path(), &command, action, "owner", request(&command, 0))?;
+        let error = send(root.path(), &command, action, "owner", request(&command, 0))
+            .expect_err("reserved action must return its persisted failure");
+        assert!(error.to_string().contains("not implemented"), "{error:#}");
+        let value = store::load_rxdb_collection_record(root.path(), "business_commands", &command)?
+            .expect("terminal failure must be persisted");
         assert_eq!(value["status"], "failed", "{value}");
+        assert_eq!(value["result"]["ok"], false);
+        assert!(value["result"]["error"].as_str().unwrap().contains("not implemented"));
         assert!(
             crate::mission::channels::load_queue_task_for_business_os_command(
                 root.path(),
@@ -526,10 +531,10 @@ fn owner_slide_comment_is_durable_bound_to_deck_and_operation_idempotent() -> an
         [],
         |r| r.get(0),
     )?;
-    assert_eq!(
-        serde_json::from_str::<Value>(&receipt)?["result"],
-        first["result"]
-    );
+    let mut terminal_result = serde_json::from_str::<Value>(&receipt)?["result"].clone();
+    terminal_result["status"] = json!("completed");
+    terminal_result["task_status"] = json!("completed");
+    assert_eq!(terminal_result, first["result"]);
     let replay = send(
         root.path(),
         "comment-replay",

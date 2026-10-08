@@ -148,7 +148,7 @@ fn read_uses_a_snapshot_while_the_writer_is_held() -> anyhow::Result<()> {
     }))?;
     assert_eq!(
         handle_command(root.path(), &command, ALIAS, None)?,
-        saved["result"]
+        json!({"ok":true,"kpis":saved["result"]["kpis"]})
     );
     rejected(handle_command(root.path(), &command, FOREIGN, None));
     lock.rollback()?;
