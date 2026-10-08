@@ -49,6 +49,15 @@ pub(in crate::business_os) enum QemuAcceleration {
     Tcg,
 }
 
+// PR_SET_PDEATHSIG follows the creating thread, including a retiring Tokio
+// blocking worker. A dedicated launch thread waits without polling for this
+// unique owner's drop, so worker retirement cannot kill a still-owned guest.
+// ref: https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html
+struct QemuSpawnParent {
+    _hold: std::sync::mpsc::Sender<()>,
+    _thread: std::thread::JoinHandle<()>,
+}
+
 pub(super) struct QemuProcess {
     child: Child,
     pid: u32,
@@ -59,6 +68,8 @@ pub(super) struct QemuProcess {
     // Dropped after the child. Only the private monitor directory is disposable.
     runtime: TempDir,
     migration: migration::MigrationPhase,
+    // Last: retain the actual launch thread through child/resource teardown.
+    _spawn_parent: QemuSpawnParent,
 }
 
 pub(super) fn regular_file(path: &Path) -> Result<std::fs::Metadata> {
@@ -225,6 +236,33 @@ fn prepare_command(
     Ok(command)
 }
 
+fn spawn_child(mut command: Command) -> Result<(Child, QemuSpawnParent)> {
+    let runtime = tokio::runtime::Handle::try_current()
+        .context("native QEMU launch requires its retained runtime")?;
+    let (created, receive) = std::sync::mpsc::sync_channel(1);
+    let (hold, release) = std::sync::mpsc::channel::<()>();
+    let thread = std::thread::Builder::new()
+        .name("ctox-qemu-parent".into())
+        .spawn(move || {
+            let _runtime = runtime.enter();
+            if created.send(command.spawn()).is_ok() {
+                // The unique QemuProcess owns the only sender. No poller or
+                // external supervisor is needed; its drop releases this wait.
+                let _ = release.recv();
+            }
+        })
+        .context("native QEMU launch thread could not be started")?;
+    let parent = QemuSpawnParent {
+        _hold: hold,
+        _thread: thread,
+    };
+    let child = receive
+        .recv()
+        .context("native QEMU launch thread ended before returning its child")?
+        .context("QEMU could not be started")?;
+    Ok((child, parent))
+}
+
 fn chardev_socket_path<'a>(path: &'a Path, what: &str) -> Result<&'a str> {
     let path = path
         .to_str()
@@ -291,9 +329,7 @@ impl QemuProcess {
             .map_err(|_| anyhow!("private QEMU monitor could not be bound"))?;
         let guest_listener = UnixListener::bind(&guest_socket)
             .map_err(|_| anyhow!("private guest channel could not be bound"))?;
-        let child = command
-            .spawn()
-            .map_err(|_| anyhow!("QEMU could not be started"))?;
+        let (child, spawn_parent) = spawn_child(command)?;
         let pid = child.id().context("QEMU child identity is unavailable")?;
         Ok(Self {
             child,
@@ -308,6 +344,7 @@ impl QemuProcess {
             } else {
                 migration::MigrationPhase::Fresh
             },
+            _spawn_parent: spawn_parent,
         })
     }
 

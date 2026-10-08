@@ -555,6 +555,43 @@ async fn corrupt_memory_retires_incoming_attempt_without_executing_or_releasing_
 }
 
 #[tokio::test]
+async fn real_qemu_survives_retirement_of_its_calling_thread() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let input = config(root.path())?;
+    real_disk(&input).await?;
+    let runtime = tokio::runtime::Handle::current();
+    let caller = std::thread::spawn(move || {
+        let _runtime = runtime.enter();
+        QemuProcess::spawn_paused(&input, "isolated-retired-caller")
+    });
+    // The calling thread has actually exited before the retained owner is used.
+    let mut guest = caller
+        .join()
+        .map_err(|_| anyhow!("native QEMU caller fixture panicked"))??;
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        guest.connect_monitor().await?;
+        ensure!(
+            !guest.status().await?.running,
+            "retained guest executed before authorization"
+        );
+        guest.ensure_alive()?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    let stopped = guest.stop().await;
+    result.context("retired-caller QEMU deadline")??;
+    ensure!(
+        stopped?.success(),
+        "retained guest did not stop successfully"
+    );
+    ensure!(
+        guest.child.try_wait()?.is_some(),
+        "retained child was not reaped"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn real_qemu_cannot_survive_abrupt_native_parent_exit() -> Result<()> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     const CHILD_ROOT: &str = "CTOX_QEMU_PARENT_EXIT_TEST_ROOT";
