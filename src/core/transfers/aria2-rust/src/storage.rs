@@ -210,27 +210,39 @@ fn store_alloc(mode: AllocMode) {
     LAST_ALLOC.store(n, Ordering::SeqCst);
 }
 
-/// One positioned `pwrite` (unix). Windows `seek_write` also moves the file
-/// cursor; every caller in this crate does positional IO only, so that is unobservable.
-#[cfg(unix)]
-fn pwrite_once(f: &std::fs::File, data: &[u8], off: u64) -> std::io::Result<usize> {
-    rustix::io::retry_on_intr(|| rustix::io::pwrite(f, data, off)).map_err(std::io::Error::from)
-}
-
-#[cfg(windows)]
-fn pwrite_once(f: &std::fs::File, data: &[u8], off: u64) -> std::io::Result<usize> {
-    std::os::windows::fs::FileExt::seek_write(f, data, off)
-}
-
-/// One positioned `pread` (unix); Windows `seek_read`, see [`pwrite_once`].
-#[cfg(unix)]
 pub(crate) fn pread_once(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
-    rustix::io::retry_on_intr(|| rustix::io::pread(f, &mut *buf, off)).map_err(std::io::Error::from)
+    #[cfg(unix)]
+    {
+        rustix::io::retry_on_intr(|| rustix::io::pread(f, &mut *buf, off))
+            .map_err(std::io::Error::from)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileExt;
+        loop {
+            match f.seek_read(buf, off) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => return result,
+            }
+        }
+    }
 }
 
-#[cfg(windows)]
-pub(crate) fn pread_once(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
-    std::os::windows::fs::FileExt::seek_read(f, buf, off)
+fn pwrite_once(f: &std::fs::File, data: &[u8], off: u64) -> std::io::Result<usize> {
+    #[cfg(unix)]
+    {
+        rustix::io::retry_on_intr(|| rustix::io::pwrite(f, data, off)).map_err(std::io::Error::from)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileExt;
+        loop {
+            match f.seek_write(data, off) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => return result,
+            }
+        }
+    }
 }
 
 /// C++ `DirectDiskWriter` / `DefaultDiskWriter`: positioned `pwrite` on the
@@ -239,10 +251,7 @@ fn pwrite_all(f: &std::fs::File, mut data: &[u8], mut off: u64) -> std::io::Resu
     while !data.is_empty() {
         let n = pwrite_once(f, data, off)?;
         if n == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::WriteZero,
-                "pwrite",
-            ));
+            return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "pwrite"));
         }
         data = &data[n..];
         off += n as u64;
@@ -512,7 +521,9 @@ impl FileStorage {
 
     pub fn from_opts(path: PathBuf, total: u64, alloc: AllocMode, opts: &OptionSet) -> Self {
         let mut storage = Self::with_cache(path, total, alloc, disk_cache_limit(opts));
-        storage.max_write_length = opts.get("ctox-expected-length").and_then(|v| v.parse().ok());
+        storage.max_write_length = opts
+            .get("ctox-expected-length")
+            .and_then(|v| v.parse().ok());
         storage
     }
 
@@ -578,37 +589,43 @@ impl FileStorage {
                 let f = self.open_held().await?;
                 if self.total > 0 {
                     // C++ DefaultDiskWriter::truncate: ftruncate dest fd on the download thread.
-                    f.set_len(self.total).map_err(|e| Error::Other(e.to_string()))?;
+                    f.set_len(self.total)
+                        .map_err(|e| Error::Other(e.to_string()))?;
                     LAST_SYNC_TRUNC.fetch_add(1, Ordering::Relaxed);
                 }
                 store_alloc(AllocMode::Trunc);
             }
             AllocMode::Falloc => {
-                let f = self.open_held().await?;
-                if self.total > 0 {
-                    // C++ FileAllocationIterator: posix_fallocate on dest fd.
-                    #[cfg(unix)]
-                    rustix::fs::fallocate(
-                        &*f,
-                        rustix::fs::FallocateFlags::empty(),
-                        0,
-                        self.total,
-                    )
-                    .map_err(|e| Error::Other(format!("posix_fallocate: {e}")))?;
-                    // No posix_fallocate on Windows: extending the length makes NTFS
-                    // allocate the clusters, which is what falloc is for.
-                    #[cfg(windows)]
-                    f.set_len(self.total)
-                        .map_err(|e| Error::Other(format!("falloc set_len: {e}")))?;
-                    LAST_SYNC_FALLOC.fetch_add(1, Ordering::Relaxed);
+                #[cfg(unix)]
+                {
+                    let f = self.open_held().await?;
+                    if self.total > 0 {
+                        // C++ FileAllocationIterator: posix_fallocate on dest fd.
+                        rustix::fs::fallocate(
+                            &*f,
+                            rustix::fs::FallocateFlags::empty(),
+                            0,
+                            self.total,
+                        )
+                        .map_err(|e| Error::Other(format!("posix_fallocate: {e}")))?;
+                        LAST_SYNC_FALLOC.fetch_add(1, Ordering::Relaxed);
+                    }
+                    store_alloc(AllocMode::Falloc);
                 }
-                store_alloc(AllocMode::Falloc);
+                #[cfg(not(unix))]
+                {
+                    return Err(Error::Other(
+                        "file-allocation=falloc is not supported on this platform; use prealloc"
+                            .into(),
+                    ));
+                }
             }
             AllocMode::Prealloc => {
                 let f = self.open_held().await?;
                 if self.total > 0 {
                     // C++ FileAllocationIterator PREALLOC: 16KiB zero writes on dest fd.
-                    f.set_len(self.total).map_err(|e| Error::Other(e.to_string()))?;
+                    f.set_len(self.total)
+                        .map_err(|e| Error::Other(e.to_string()))?;
                     let zeros = [0u8; 16 * 1024];
                     let mut off = 0u64;
                     let mut left = self.total;
@@ -718,7 +735,10 @@ impl FileStorage {
     /// C++ DefaultDiskWriter::writeData: lock-free pwrite when dest fd is open.
     fn check_write_length(&self, offset: u64, length: usize) -> Result<()> {
         if let Some(limit) = self.max_write_length {
-            if offset.checked_add(length as u64).is_none_or(|end| end > limit) {
+            if offset
+                .checked_add(length as u64)
+                .is_none_or(|end| end > limit)
+            {
                 return Err(Error::Other("body exceeds pinned content length".into()));
             }
         }
@@ -867,7 +887,10 @@ pub fn parse_size(s: &str) -> Option<u64> {
         Some(b'G' | b'g') => (&s[..s.len() - 1], 1024 * 1024 * 1024),
         _ => (s, 1u64),
     };
-    num.trim().parse::<u64>().ok().map(|n| n.saturating_mul(mul))
+    num.trim()
+        .parse::<u64>()
+        .ok()
+        .map(|n| n.saturating_mul(mul))
 }
 
 /// C++ WrDiskCacheEntry: sequential socket windows append; overlap is the rare path.
@@ -993,7 +1016,10 @@ mod tests {
         opts.set("no-file-allocation-limit", "0");
         assert!(matches!(alloc_mode_for(&opts, 1), AllocMode::Trunc));
         opts.set("file-allocation", "none");
-        assert!(matches!(alloc_mode_for(&opts, 10 * 1024 * 1024), AllocMode::None));
+        assert!(matches!(
+            alloc_mode_for(&opts, 10 * 1024 * 1024),
+            AllocMode::None
+        ));
         opts.set("file-allocation", "falloc");
         opts.set("no-file-allocation-limit", "0");
         assert!(matches!(alloc_mode_for(&opts, 4096), AllocMode::Falloc));
@@ -1028,7 +1054,11 @@ mod tests {
         reset_cache_pwrite();
         st.flush().await.unwrap();
         assert_eq!(st.write_count(), 1, "adjacent writes must coalesce");
-        assert_eq!(last_cache_pwrite(), 1, "C++ WrDiskCache flush is one dest pwrite");
+        assert_eq!(
+            last_cache_pwrite(),
+            1,
+            "C++ WrDiskCache flush is one dest pwrite"
+        );
         assert_eq!(std::fs::read(&path).unwrap(), (0..8u8).collect::<Vec<_>>());
     }
 
@@ -1154,11 +1184,7 @@ mod tests {
         let st = FileStorage::with_cache(path.clone(), 4, AllocMode::None, 0);
         reset_mkdir();
         st.ensure().await.unwrap();
-        assert_eq!(
-            last_mkdir(),
-            1,
-            "C++ File::mkdirs must create dest parents"
-        );
+        assert_eq!(last_mkdir(), 1, "C++ File::mkdirs must create dest parents");
         assert!(path.parent().unwrap().is_dir());
         st.write_body(0, b"NEST").await.unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"NEST");
@@ -1182,6 +1208,7 @@ mod tests {
         assert!(!path.exists());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn file_allocation_falloc_posix_fallocate_dest_match() {
         let dir = tempfile::tempdir().unwrap();
@@ -1201,13 +1228,31 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(windows)]
+    async fn file_allocation_falloc_rejected_without_claiming_allocation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("falloc.bin");
+        let st = FileStorage::with_cache(path.clone(), 32, AllocMode::Falloc, 0);
+        let error = st.ensure().await.unwrap_err().to_string();
+        assert!(error.contains("not supported"));
+        assert!(
+            !path.exists(),
+            "unsupported allocation must not create the destination"
+        );
+    }
+
+    #[tokio::test]
     async fn file_allocation_prealloc_zero_fill_dest_match() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pre.bin");
         let st = FileStorage::with_cache(path.clone(), 20, AllocMode::Prealloc, 0);
         reset_sync_prealloc();
         st.ensure().await.unwrap();
-        assert_eq!(last_sync_prealloc(), 1, "C++ PREALLOC 16KiB zeros on dest fd");
+        assert_eq!(
+            last_sync_prealloc(),
+            1,
+            "C++ PREALLOC 16KiB zeros on dest fd"
+        );
         assert_eq!(last_alloc_kind(), "prealloc");
         assert_eq!(std::fs::read(&path).unwrap(), vec![0u8; 20]);
         st.write_body(0, b"OK").await.unwrap();
@@ -1221,10 +1266,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pool.bin");
         let pool = FilePool::new(1);
-        let st = FileStorage::with_cache(path.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
+        let st = FileStorage::with_cache(path.clone(), 8, AllocMode::None, 0)
+            .with_pool(Arc::clone(&pool));
         st.ensure().await.unwrap();
         for i in 0..8u8 {
-            st.write_at(i as u64, &[i.wrapping_add(0x10)]).await.unwrap();
+            st.write_at(i as u64, &[i.wrapping_add(0x10)])
+                .await
+                .unwrap();
         }
         st.flush().await.unwrap();
         let want: Vec<u8> = (0..8u8).map(|i| i.wrapping_add(0x10)).collect();
@@ -1320,7 +1368,11 @@ mod tests {
         for j in joins {
             j.await.unwrap();
         }
-        assert_eq!(st.open_count(), 1, "one dest fd; lock-free pwrite after open");
+        assert_eq!(
+            st.open_count(),
+            1,
+            "one dest fd; lock-free pwrite after open"
+        );
         assert_eq!(st.write_count(), (total / chunk) as u64);
         assert_eq!(std::fs::read(&path).unwrap(), want);
     }
@@ -1386,8 +1438,10 @@ mod tests {
         let a = dir.path().join("a.bin");
         let b = dir.path().join("b.bin");
         let pool = FilePool::new(2);
-        let sa = FileStorage::with_cache(a.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
-        let sb = FileStorage::with_cache(b.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
+        let sa =
+            FileStorage::with_cache(a.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
+        let sb =
+            FileStorage::with_cache(b.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
         sa.ensure().await.unwrap();
         sb.ensure().await.unwrap();
         sa.write_at(0, b"AAAA").await.unwrap();
@@ -1420,9 +1474,12 @@ mod tests {
         let b = dir.path().join("cold.bin");
         let c = dir.path().join("new.bin");
         let pool = FilePool::new(2);
-        let sa = FileStorage::with_cache(a.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
-        let sb = FileStorage::with_cache(b.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
-        let sc = FileStorage::with_cache(c.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
+        let sa =
+            FileStorage::with_cache(a.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
+        let sb =
+            FileStorage::with_cache(b.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
+        let sc =
+            FileStorage::with_cache(c.clone(), 8, AllocMode::None, 0).with_pool(Arc::clone(&pool));
         sa.ensure().await.unwrap();
         sb.ensure().await.unwrap();
         sc.ensure().await.unwrap();

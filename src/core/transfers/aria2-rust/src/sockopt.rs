@@ -12,7 +12,6 @@ use rustix::net::sockopt::{
 use rustix::net::sockopt::{set_tcp_quickack, tcp_quickack};
 #[cfg(unix)]
 use std::os::fd::AsFd;
-// rustix takes `AsSocket` handles on Windows (its `AsFd` is a blanket over it).
 #[cfg(windows)]
 use std::os::windows::io::AsSocket as AsFd;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -123,10 +122,10 @@ fn send_flags(fd: impl AsFd) -> Result<rustix::net::SendFlags> {
         let _ = fd;
         Ok(rustix::net::SendFlags::NOSIGNAL)
     }
-    // Windows has no SIGPIPE; a closed peer already surfaces as an error.
     #[cfg(windows)]
     {
         let _ = fd;
+        // Winsock does not raise SIGPIPE.
         Ok(rustix::net::SendFlags::empty())
     }
 }
@@ -146,35 +145,36 @@ pub fn apply_recv_buffer(fd: impl AsFd, opts: &OptionSet) -> Result<usize> {
 }
 
 /// C++ `--dscp` (BitTorrent IP TOS: DSCP << 2). Default 0 = leave TOS alone.
-#[cfg(unix)]
 pub fn apply_dscp(fd: impl AsFd, opts: &OptionSet) -> Result<u8> {
     let dscp = opts.u64("dscp", 0).min(63) as u8;
     if dscp == 0 {
         return Ok(0);
     }
-    let tos = dscp << 2;
-    match set_ip_tos(&fd, tos) {
-        Ok(()) => {
-            let got = ip_tos(&fd).unwrap_or(tos);
-            LAST_DSCP_TOS.store(got as u64, Ordering::SeqCst);
-            Ok(got)
-        }
-        Err(_) => {
-            set_ipv6_tclass(&fd, u32::from(tos))
-                .map_err(|e| Error::Other(format!("IPV6_TCLASS DSCP {dscp}: {e}")))?;
-            let got = ipv6_tclass(&fd).unwrap_or(u32::from(tos)) as u8;
-            LAST_DSCP_TOS.store(got as u64, Ordering::SeqCst);
-            Ok(got)
+    #[cfg(unix)]
+    {
+        let tos = dscp << 2;
+        match set_ip_tos(&fd, tos) {
+            Ok(()) => {
+                let got = ip_tos(&fd).unwrap_or(tos);
+                LAST_DSCP_TOS.store(got as u64, Ordering::SeqCst);
+                Ok(got)
+            }
+            Err(_) => {
+                set_ipv6_tclass(&fd, u32::from(tos))
+                    .map_err(|e| Error::Other(format!("IPV6_TCLASS DSCP {dscp}: {e}")))?;
+                let got = ipv6_tclass(&fd).unwrap_or(u32::from(tos)) as u8;
+                LAST_DSCP_TOS.store(got as u64, Ordering::SeqCst);
+                Ok(got)
+            }
         }
     }
-}
-
-/// Windows ignores IP_TOS without QoS policy and rustix has no IP_TOS there,
-/// so `--dscp` leaves TOS alone on Windows.
-#[cfg(windows)]
-pub fn apply_dscp(fd: impl AsFd, opts: &OptionSet) -> Result<u8> {
-    let _ = (fd, opts);
-    Ok(0)
+    #[cfg(not(unix))]
+    {
+        let _ = fd;
+        Err(Error::Other(
+            "dscp is not supported on this platform".into(),
+        ))
+    }
 }
 
 /// C++ SocketCore::writeVector / SocketBuffer::send: writev of BufferEntry iovecs
@@ -214,7 +214,8 @@ pub async fn writev_all(stream: &tokio::net::TcpStream, bufs: &[&[u8]]) -> Resul
                 Err(e) => Err(std::io::Error::from(e)),
             }
         });
-        // No writev on Windows: tokio's WSASend-backed vectored write.
+        // Tokio uses the platform's vectored socket writer and manages readiness
+        // itself; it must not be called from inside try_io.
         #[cfg(windows)]
         let r = stream.try_write_vectored(&iov);
         match r {
@@ -450,6 +451,22 @@ mod tests {
         assert_eq!(got, 46 << 2, "IP_TOS must be DSCP<<2, got {got}");
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn default_dscp_is_unchanged_but_explicit_tos_is_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let mut opts = OptionSet::new();
+        assert_eq!(apply_dscp(&client, &opts).unwrap(), 0);
+        opts.set("dscp", "46");
+        assert!(apply_dscp(&client, &opts)
+            .unwrap_err()
+            .to_string()
+            .contains("not supported"));
+    }
+
     #[tokio::test]
     async fn set_tcp_nodelay_roundtrip() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -469,6 +486,36 @@ mod tests {
         apply_tcp_quickack(&client).unwrap();
         assert!(last_quickack(), "C++ SocketCore TCP_QUICKACK must be on");
         assert!(tcp_quickack(&client).unwrap());
+    }
+
+    #[tokio::test]
+    async fn writev_large_ranges_with_empty_slices_dest_match() {
+        use tokio::io::AsyncReadExt;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let mut got = Vec::new();
+            stream.read_to_end(&mut got).await.unwrap();
+            got
+        });
+        let client = TcpStream::connect(addr).await.unwrap();
+        let first = vec![0x31; 4 * 1024 * 1024];
+        let second = vec![0x72; 1024 * 1024 + 7];
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            writev_all(&client, &[b"", &first, b"", &second, b"END", b""]),
+        )
+        .await
+        .expect("vectored writes must make progress after socket backpressure")
+        .unwrap();
+        drop(client);
+        let got = server.await.unwrap();
+        assert_eq!(got.len(), first.len() + second.len() + 3);
+        assert_eq!(&got[..first.len()], &first);
+        assert_eq!(&got[first.len()..first.len() + second.len()], &second);
+        assert_eq!(&got[first.len() + second.len()..], b"END");
     }
 
     #[tokio::test]
