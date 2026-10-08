@@ -111,6 +111,28 @@ async fn domain_receipt_failure_rolls_back_speech_consumption_and_allows_bounded
     assert_eq!(consumed(root.path())?,1);finish(stream,server).await
 }
 #[tokio::test]
+async fn concurrent_native_final_retries_apply_exactly_one_transcript() -> anyhow::Result<()> {
+    let root=super::jour_fixe_owner::fixture("live")?;
+    let token=owner_token(root.path())?;
+    let (mut stream,server)=bound(root.path(),&token).await?;
+    let receipt=final_receipt(&mut stream).await?;
+    stream.stage_final(root.path(),&token,receipt)?;
+    let gate=std::sync::Arc::new(std::sync::Barrier::new(2));
+    let workers=(0..2).map(|_| {
+        let gate=gate.clone();let root=root.path().to_owned();let token=token.clone();
+        let binding=stream.binding().clone();let stream_id=stream.stream_id().to_owned();
+        std::thread::spawn(move || {gate.wait();submit_staged_final(&root,&token,&binding,&stream_id)})
+    }).collect::<Vec<_>>();
+    let results=workers.into_iter().map(|w|w.join().expect("retry worker panicked")).collect::<Vec<_>>();
+    assert!(results.iter().any(|r|r.as_ref().is_ok_and(|v|v["status"]=="completed")),"{results:?}");
+    assert_eq!(super::jour_fixe_owner::saved(root.path())?["transcript"].as_array().unwrap().len(),1);
+    assert_eq!(consumed(root.path())?,1);
+    let receipts:i64=open_store(root.path())?.query_row("SELECT count(*) FROM business_command_domain_effects
+        WHERE command_id IN (SELECT consumed_command FROM workjet_jour_fixe_speech_receipts)",[],|r|r.get(0))?;
+    assert_eq!(receipts,1);
+    finish(stream,server).await
+}
+#[tokio::test]
 async fn valid_foreign_admin_cannot_bind_an_owners_actual_stream() -> anyhow::Result<()> {
     let root=super::jour_fixe_owner::fixture("live")?;
     let _owner=owner_token(root.path())?;

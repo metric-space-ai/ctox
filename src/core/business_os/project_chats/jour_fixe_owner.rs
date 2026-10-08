@@ -114,6 +114,8 @@ impl LiveMeetingBinding {
             && meeting.supervisor.workjet_thread_id==self.supervisor_thread_id
             && meeting.supervisor.ctox_thread_key==self.supervisor_thread_key,
             "live meeting execution binding changed");
+        ensure!(!meeting.slides.is_empty() && meeting.slides.iter().all(|slide|
+            slide.meeting_id==meeting.id && slide.audio.is_some()),"live meeting deck is unavailable");
         let mut current=self.clone(); current.meeting_revision=meeting.revision; Ok(current)
     }
     pub(in crate::business_os) fn owner_user_id(&self)->&str { &self.owner_user_id }
