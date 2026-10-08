@@ -89,6 +89,9 @@ pub(super) fn recover_applied_domain_effect(
         "applied domain effect conflicts with terminal command outcome; reconciliation required"
     );
 
+    if command.command_type == crate::business_os::project_chats::jour_fixe_local_narration::COMMAND {
+        crate::business_os::project_chats::jour_fixe_local_narration::validate_recovery_scope(root, &conn, command, actor_user_id)?;
+    }
     let mut writers = RxdbProjectionWriterCache::new(root);
     for reference in &applied.projections {
         let mut delivered = false;
