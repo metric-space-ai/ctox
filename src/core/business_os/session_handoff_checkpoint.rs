@@ -644,6 +644,11 @@ async fn copy<H: WebRTCConnectionHandler + 'static>(
             create_private(&binding)?;
             let staging = binding.join(&t.request.checkpoint_digest);
             create_private(&staging)?;
+            // Pending progress must retain newly created directory entries as
+            // well as the fsynced range file itself.
+            for directory in [&parent, &root, &progress, &binding, &staging] {
+                std::fs::File::open(directory)?.sync_all()?;
+            }
             let store = Arc::new(CheckpointStore::open(root, BLOB_LIMIT)?);
             Ok((store, staging))
         })
