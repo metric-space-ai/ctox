@@ -91,6 +91,11 @@ async fn real_incoming_machine_load_is_bound_to_its_exact_retained_child() -> Re
     };
     let mut source = QemuProcess::spawn_paused(&config, "guest-o04")?;
     source.connect_monitor().await?;
+    let initial = source.status().await?;
+    ensure!(
+        !initial.running && initial.status == "prelaunch",
+        "machine checkpoint fixture must preserve a never-started source"
+    );
     let mut ram = tokio::fs::File::from_std(file(&root.path().join("source.ram"), &[])?);
     let state = source.save_memory(&mut ram).await?;
     source.finish_memory_export().await?;
@@ -136,7 +141,11 @@ async fn real_incoming_machine_load_is_bound_to_its_exact_retained_child() -> Re
         "a different staging attempt entered this retained child"
     );
     loaded?;
-    ensure!(stopped.success(), "actual target did not stop successfully");
+    // stop is forced cleanup, never a clean source-checkpoint witness.
+    ensure!(
+        std::os::unix::process::ExitStatusExt::signal(&stopped) == Some(libc::SIGKILL),
+        "actual target was not retained until forced cleanup and reap"
+    );
     Ok(())
 }
 
