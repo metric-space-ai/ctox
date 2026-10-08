@@ -238,7 +238,29 @@ impl TargetPolicy {
                 apply(identity)
             })())
         })
-        .map_err(|_| Denial::RouteRetired)?
+        .map_err(|error| {
+            // Classify only known errors. Never emit secret/store error text.
+            let failure = if error.chain().any(|cause| {
+                cause.to_string() == "secret master-key authority is unavailable"
+            }) {
+                "issuer_busy"
+            } else if error.chain().any(|cause| {
+                matches!(
+                    cause.downcast_ref::<rusqlite::Error>(),
+                    Some(rusqlite::Error::SqliteFailure(code, _))
+                        if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                )
+            }) {
+                "store_busy"
+            } else {
+                "issuer_unavailable"
+            };
+            eprintln!(
+                "{}",
+                serde_json::json!({"schema":"ctox.speech_denial.v1", "boundary":"target_issuer", "failure":failure})
+            );
+            Denial::RouteRetired
+        })?
     }
 
     pub(crate) fn reply(
