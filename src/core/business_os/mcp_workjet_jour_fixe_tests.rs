@@ -407,7 +407,8 @@ fn supervisor_reads_current_meeting_and_only_allowlisted_owned_project_configura
     record["runtime_secret"] = json!("must not escape");
     store::upsert_business_record(&conn, "workjet_projects", "project", 1, record)?;
     let response = call(root.path(), &trusted, READ_TOOL, read_args("read_meeting"))?;
-    assert_eq!(response["meeting"], saved(root.path())?);
+    let expected: wire::Meeting = serde_json::from_value(saved(root.path())?)?;
+    assert_eq!(response["meeting"], serde_json::to_value(expected)?);
     assert_eq!(
         response["project"]["repo_url"],
         "https://github.com/metric-space-ai/ctox"

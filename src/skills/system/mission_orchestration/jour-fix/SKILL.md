@@ -46,6 +46,6 @@ do not simulate them or declare a draft ready.
 Comments bind to exact slide/deck revision. Partials are transient; only
 authenticated ordered final turns belong in the durable transcript. Preserve
 both speakers and actual source runs and latency. Derive proposals from those
-inputs. Only the Owner's explicit confirmation of the current proposal installs
+inputs. Only the owner's explicit confirmation of the current proposal installs
 the next durable Supervisor goal. Later work retains normal permissions,
 completion review and recovery. Never mutate SQLite/RxDB/queue/goals via shell.
