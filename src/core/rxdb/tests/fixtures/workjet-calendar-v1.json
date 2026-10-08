@@ -234,6 +234,7 @@
   "invalid_cases": [
     {
       "type": "CalendarEvent",
+      "reason": "Unicode title exceeds max_chars",
       "value": {
         "id": "unicode-boundary",
         "calendar_id": "account-calendar",
