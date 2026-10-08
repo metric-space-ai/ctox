@@ -14237,7 +14237,7 @@ async function workjetProjectControl(request = {}) {
     }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
     assertCurrentIdentity();
     const nativeProject = receipt?.result?.project;
-    // An authenticated alias can mutate its verified canonical Owner's project.
+    // An authenticated alias can mutate its verified Owner's project.
     // The native writer binds this scope; caller payloads cannot select it.
     let projectOwnerUserId = ownerUserId;
     if (Object.hasOwn(receipt?.result || {}, 'owner_user_id')) {
