@@ -164,6 +164,19 @@ fn validate_configuration(value: &Value) -> anyhow::Result<()> {
         serde_json::to_vec(value)?.len() <= MAX_CONFIGURATION_BYTES,
         "Luma configuration exceeds its size budget"
     );
+    // The MCP result includes both structured data and a text representation.
+    // Reject an unreadable document before persisting it; no client should
+    // successfully save a value that exceeds the canonical response budget.
+    let receipt = mcp_tool_result(json!({
+        "ok": true,
+        "revision": MAX_REVISION,
+        "configuration": value,
+        "updated_at_ms": i64::MAX,
+    }))?;
+    anyhow::ensure!(
+        serde_json::to_vec(&receipt)?.len() + 1024 <= MAX_MCP_RESPONSE_BYTES,
+        "Luma configuration exceeds its readable MCP response budget"
+    );
     Ok(())
 }
 
@@ -194,6 +207,16 @@ fn require_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_configuration_is_rejected_before_it_becomes_unreadable() {
+        assert!(validate_configuration(&json!({
+            "managedSystemPrompt": "x".repeat(200_000)
+        })).is_err());
+        assert!(validate_configuration(&json!({
+            "managedSystemPrompt": "Shared instructions"
+        })).is_ok());
+    }
 
     fn fixture() -> anyhow::Result<tempfile::TempDir> {
         let root = tempfile::tempdir()?;
