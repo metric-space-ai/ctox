@@ -16,6 +16,7 @@ on:
       - "src/scripts/check-office-skill-gating.mjs"
       - ".github/workflows/office-skill-gating.yml"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "src/apps/business-os/office-engine/features.json"
       - "src/core/office-engine/src/main.rs"
@@ -33,6 +34,7 @@ concurrency:
 
 jobs:
   gating:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

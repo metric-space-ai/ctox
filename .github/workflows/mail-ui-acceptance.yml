@@ -1,6 +1,7 @@
 name: Mail UI acceptance
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/apps/business-os/modules/mail/**'
       - '.github/workflows/mail-ui-acceptance.yml'
@@ -12,6 +13,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   mail-ui:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
