@@ -176,6 +176,11 @@ const BUSINESS_OS_MCP_SESSION_TOOLS: &[&str] = &[
     "business_os.execute_writeback",
     "business_os.get_command_status",
     "business_os.workjet_worker_dispatch",
+    // These tools still require the signed, currently leased registered
+    // Supervisor in the native MCP handler. The harness filter must not hide
+    // them from that execution when a scheduled meeting needs preparation.
+    "business_os.jour_fixe_read",
+    "business_os.jour_fixe_update",
     "business_os.list_runs",
     "business_os.get_run",
 ];
@@ -3560,6 +3565,23 @@ mod tests {
             config.get("features.apps").and_then(JsonValue::as_bool),
             Some(false)
         );
+    }
+
+    #[test]
+    fn business_os_mcp_thread_config_exposes_native_jour_fixe_tools() {
+        let config =
+            business_os_mcp_thread_config("127.0.0.1:8788", "test-secret", "command-session")
+                .expect("build scheduled Supervisor MCP config");
+        let tools = config["mcp_servers"][BUSINESS_OS_MCP_SESSION_SERVER_NAME]["enabled_tools"]
+            .as_array()
+            .expect("explicit enabled tools");
+        for name in ["business_os.jour_fixe_read", "business_os.jour_fixe_update"] {
+            assert_eq!(
+                tools.iter().filter(|tool| tool.as_str() == Some(name)).count(),
+                1,
+                "the harness must expose the native meeting tool exactly once: {name}"
+            );
+        }
     }
 
     #[test]
