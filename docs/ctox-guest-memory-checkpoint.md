@@ -26,11 +26,17 @@ A newly booted service session cannot pass restored readiness.
 
 The socket peer must match the retained QEMU PID. No shell, exec migration URI,
 TCP endpoint, renderer-selected path or automatic fallback is introduced.
-The stream is capped at1GiB, uses128KiB buffers and has a120-second deadline.
+The stream is capped at1GiB, uses128KiB heap buffers and has a120-second deadline.
+Keeping those buffers off nested asynchronous futures preserves the normal
+native thread-stack budget.
 Files must be regular, private, native-owned and unaliased. Restore rejects
 mutable files, wrong lengths and wrong hashes. Cancellation or failure retires
 the attempt without releasing the child; stop/reap and effect reconciliation
 remain mandatory. No failed migration is automatically replayed.
+The Linux child also receives a parent-death signal, so an abrupt native-owner
+exit cannot leave QEMU running merely because Rust destructors did not execute.
+Such termination is unclean and requires explicit effect reconciliation; it
+never supplies a successful source checkpoint.
 
 `store_memory_chunks` streams the native readonly RAM descriptor into the existing
 CheckpointStore as ordered8MiB blobs plus bounded native-guest-memory.json.
