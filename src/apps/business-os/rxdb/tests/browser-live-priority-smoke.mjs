@@ -21,6 +21,11 @@ assert.match(
   /method === CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD[\s\S]*?sendImmediateControlFrame/,
   'the typed Sellify read must bypass the bulk send queue on the proven primary channel',
 );
+assert.match(
+  source,
+  /method === 'ctox\.workjet\.jour_fixe\.speech\.v1'[\s\S]*?sendImmediateControlFrame/,
+  'meeting PCM and partial reads must bypass the bulk queue on the authenticated primary channel',
+);
 assert.match(source, /async sendImmediateControlFrame\(/);
 assert.match(source, /async requestAuxiliary\(/);
 assert.match(

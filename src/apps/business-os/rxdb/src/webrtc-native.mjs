@@ -767,6 +767,7 @@ export class CtoxWebRtcNativePeer {
       if (collection) frame.collection = collection;
       const sendPromise = (
         method === 'ctox.browser.live.v1'
+        || method === 'ctox.workjet.jour_fixe.speech.v1'
         || method === CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD
       )
         ? this.sendImmediateControlFrame(remotePeerId, frame)

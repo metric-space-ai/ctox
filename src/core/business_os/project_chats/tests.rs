@@ -28,6 +28,9 @@ mod supervisor_observation;
 mod supervisor_turns;
 #[path = "weekly_report_tests.rs"]
 mod weekly_reports;
+pub(in crate::business_os) fn speech_live_fixture() -> anyhow::Result<TempDir> {
+    jour_fixe_owner::fixture("live")
+}
 
 fn command(kind: &str, id: &str, payload: Value) -> BusinessCommand {
     BusinessCommand {
