@@ -164,6 +164,46 @@ pub fn configure_from_file(root: &Path, path: &Path) -> anyhow::Result<SpeechTar
     Ok(config)
 }
 
+// A TTS task and its native reply may admit concurrent synchronous polls.
+// Wait only before the issuer callback has entered; every attempt rereads the
+// encrypted key. A callback or failed commit is never replayed.
+fn with_speech_key<T>(
+    root: &Path,
+    apply: impl FnOnce(&SigningIdentity) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+    let mut apply = Some(apply);
+    loop {
+        let result = crate::sync_host::with_current_signing_identity(root, |identity| {
+            let callback = apply
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("speech issuer callback already entered"))?;
+            callback(identity)
+        });
+        let busy = result.as_ref().err().is_some_and(|error| {
+            error.chain().any(|cause| {
+                cause.to_string() == "secret master-key authority is unavailable"
+                    || matches!(
+                        cause.downcast_ref::<rusqlite::Error>(),
+                        Some(rusqlite::Error::SqliteFailure(code, _))
+                            if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                    )
+            })
+        });
+        if apply.is_some() && busy && std::time::Instant::now() < deadline {
+            std::thread::sleep(
+                std::time::Duration::from_millis(1)
+                    .min(deadline.saturating_duration_since(std::time::Instant::now())),
+            );
+            if std::time::Instant::now() >= deadline {
+                return result;
+            }
+            continue;
+        }
+        return result;
+    }
+}
+
 /// Private, non-deserializable authority snapshot. Receiver code must still
 /// fence the live host and exact native connection at effects/publication.
 pub(crate) struct TargetPolicy {
@@ -184,7 +224,7 @@ impl TargetPolicy {
     ) -> Result<(Arc<Self>, Arc<VerifiedSpeechRequest>), Denial> {
         let host =
             crate::sync_host::handoff_configuration(root).map_err(|_| Denial::RouteRetired)?;
-        crate::sync_host::with_current_signing_identity(root, |identity| {
+        with_speech_key(root, |identity| {
             Ok((|| {
                 host.validate_key(identity)
                     .map_err(|_| Denial::RouteRetired)?;
@@ -224,7 +264,7 @@ impl TargetPolicy {
         &self,
         apply: impl FnOnce(&SigningIdentity) -> Result<T, Denial>,
     ) -> Result<T, Denial> {
-        crate::sync_host::with_current_signing_identity(&self.root, |identity| {
+        with_speech_key(&self.root, |identity| {
             Ok((|| {
                 if identity.public_identity() != self.grant.target_signing_identity {
                     return Err(Denial::RouteRetired);
