@@ -174,7 +174,11 @@ After the existing native terminal review gate permits the queue reply, the
 adapter validates it, enforces resource bounds, rechecks current owner/policy,
 and submits it through the same typed control. The research admission remains
 immutable; the calculation or blocked result is a new run. A failed queue turn
-also produces an explicit blocked outcome. No numeric E5 is assigned merely
+also produces an explicit blocked outcome. Terminal writeback runs after the
+canonical terminal commit, and refresh reconciles that stored result after its
+run mapping commits. A fast turn completing during admission cannot strand a
+run in researching. Both paths use the same immutable result operation ID.
+No numeric E5 is assigned merely
 because a task was queued or a model emitted a prose valuation.
 
 Research's references are not independently verified by this calculator, and
