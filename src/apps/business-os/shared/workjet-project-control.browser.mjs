@@ -16,8 +16,11 @@ const fixtureStart = tests.indexOf('function nativeProjectListFixture(');
 const fixtureEnd = tests.indexOf("\ntest(", fixtureStart);
 const detailsStart = tests.indexOf('function nativeProjectDetailsFixture(');
 const detailsEnd = tests.indexOf("\ntest(", detailsStart);
+const ownerStart = tests.indexOf('function nativeMeetingOwnerFixture(');
+const ownerEnd = tests.indexOf("\ntest(", ownerStart);
 assert.ok(start >= 0 && end > start && fixtureStart >= 0 && fixtureEnd > fixtureStart);
 assert.ok(detailsStart >= 0 && detailsEnd > detailsStart);
+assert.ok(ownerStart >= 0 && ownerEnd > ownerStart);
 const output = process.argv.includes('--output-dir')
   ? path.resolve(process.argv[process.argv.indexOf('--output-dir') + 1]) : null;
 const browser = await chromium.launch({ headless: true,
@@ -27,7 +30,7 @@ try {
   const context = await browser.newContext();
   await context.route('**/*', (route) => route.abort());
   const page = await context.newPage();
-  const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, executionSource, kpiSource, meetingSource, meeting }) => {
+  const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, ownerSource, executionSource, kpiSource, meetingSource, meeting }) => {
     const assert = {
       ok(value) { if (!value) throw new Error('Expected truthy'); },
       equal(left, right) { if (left !== right) throw new Error(`Expected ${right}, got ${left}`); },
@@ -188,10 +191,38 @@ try {
     assert.ok(foreignMeetingRejected);
     results.push('browser meeting read preserves an actual native binding and rejects foreign scope');
 
+    const ownerControl = new Function('assert', 'vm', 'controlSource', 'JOUR_FIXE_SCHEMA', 'validateJourFixeValue',
+      `${ownerSource}\nreturn { fixture: nativeMeetingOwnerFixture, request: meetingOwnerRequest };`)(
+      assert, vm, controlSource, JOUR_FIXE_SCHEMA, validateJourFixeValue);
+    for (const suffix of ['meeting.start', 'meeting.end', 'transcript.append', 'todos.revise']) {
+      const ownerFixture = ownerControl.fixture();
+      const request = ownerControl.request(`project.jour_fixe.${suffix}`);
+      const value = await ownerFixture.invoke(request);
+      assert.equal(value.mutation.operation_id, request.operationId);
+      assert.equal(value.mutation.revision, request.expectedRevision + 1);
+      assert.equal(ownerFixture.commands[0].command_type, `ctox.workjet.jour_fixe.${suffix}`);
+      assert.equal('meeting' in value, false);
+      results.push(`browser Owner ${suffix} uses a compact correlated native mutation receipt`);
+    }
+    const corruptOwner = ownerControl.fixture(receipt => { receipt.result.mutation.revision = 2; });
+    let staleMutationRejected = false;
+    try { await corruptOwner.invoke(ownerControl.request()); } catch { staleMutationRejected = true; }
+    assert.ok(staleMutationRejected);
+    results.push('browser Owner mutation rejects an unconfirmed revision');
+    const ownerRequest = ownerControl.request('project.jour_fixe.transcript.append');
+    ownerRequest.turn.source_run_id = 'forged-speech-run';
+    const forgedOwner = ownerControl.fixture();
+    let provenanceRejected = false;
+    try { await forgedOwner.invoke(ownerRequest); } catch { provenanceRejected = true; }
+    assert.ok(provenanceRejected);
+    assert.equal(forgedOwner.commands.length, 0);
+    results.push('browser Owner text rejects forged speech provenance before dispatch');
+
     return results;
   }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd),
-    detailsSource: tests.slice(detailsStart, detailsEnd), executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 12);
+    detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
+    executionSource, kpiSource, meetingSource, meeting });
+  assert.equal(results.length, 18);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };

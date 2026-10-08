@@ -23,7 +23,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 8);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 9);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -365,6 +365,115 @@ test('meeting read rejects foreign, malformed and uncorrelated confirmations', a
     await assert.rejects(fixture.invoke({ action: 'project.jour_fixe.meeting.read', commandId: 'details',
       projectId: 'project-1', meetingId: 'meeting-1' }));
   }
+});
+
+function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
+  const commands = [];
+  const state = {
+    session: { id: 'owner-alias' }, db: { collection: () => ({}) },
+    sync: { async startCollection(name) { assert.equal(name, 'business_commands'); return {}; } },
+    commandBus: { async dispatch(command) {
+      commands.push(command);
+      const payload = structuredClone(command.payload);
+      const append = command.command_type.endsWith('.transcript.append');
+      const revise = command.command_type.endsWith('.todos.revise');
+      const receipt = {
+        command_id: command.id, target_record_id: command.record_id,
+        payload, status: 'completed', ok: true,
+        result: { ok: true, contract: JOUR_FIXE_SCHEMA, mutation: {
+          operation_id: payload.operation_id, meeting_id: payload.meeting_id,
+          project_id: command.record_id, revision: payload.expected_revision + 1,
+          state: command.command_type.endsWith('.meeting.start') || append ? 'live' : 'review',
+          ...(append ? { changed_id: payload.turn.id } : {}),
+          ...(revise ? { todos_revision: payload.proposal_revision } : {}),
+        } },
+      };
+      changeReceipt(receipt, state);
+      return receipt;
+    } },
+  };
+  const context = { state, actorContext: session => ({ id: session.id }), JOUR_FIXE_SCHEMA, validateJourFixeValue };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
+}
+
+function meetingOwnerRequest(action = 'project.jour_fixe.meeting.start', extra = {}) {
+  return { action, commandId: 'meeting-control', projectId: 'project-1', operationId: 'operation-1',
+    meetingId: 'meeting-1', expectedRevision: 3,
+    ...(action === 'project.jour_fixe.transcript.append' ? { turn: {
+      id: 'owner-text', sequence: 1, speaker: 'owner', modality: 'text', text: 'Please verify persistence.',
+      started_at_ms: 1000, ended_at_ms: 1001, meeting_id: 'meeting-1',
+    } } : {}),
+    ...(action === 'project.jour_fixe.todos.revise' ? { proposalRevision: 2, items: [{
+      id: 'todo-1', title: 'Verify persistence', acceptance: 'Save survives reopen',
+      priority: 'P1', evidence_ids: ['owner-text'],
+    }] } : {}), ...extra };
+}
+
+test('meeting Owner controls preserve typed intent and compact native revision receipts', async () => {
+  for (const suffix of ['meeting.start', 'meeting.end', 'transcript.append', 'todos.revise']) {
+    const action = `project.jour_fixe.${suffix}`;
+    const fixture = nativeMeetingOwnerFixture();
+    const request = meetingOwnerRequest(action);
+    const result = await fixture.invoke(request);
+    assert.equal(result.contract, JOUR_FIXE_SCHEMA);
+    assert.equal(result.mutation.revision, 4);
+    assert.equal(result.mutation.operation_id, request.operationId);
+    assert.equal(fixture.commands[0].command_type, `ctox.workjet.jour_fixe.${suffix}`);
+    assert.equal(fixture.commands[0].record_id, request.projectId);
+    assert.equal('project_id' in fixture.commands[0].payload, false);
+    assert.equal('meeting' in result, false);
+    if (request.turn) assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].payload.turn)), request.turn);
+    if (request.items) assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].payload.items)), request.items);
+  }
+});
+
+test('meeting Owner controls reject caller authority and unsafe revisions before dispatch', async () => {
+  for (const extra of [{ ownerUserId: 'foreign' }, { owner_user_id: 'foreign' },
+    { expectedRevision: -1 }, { expectedRevision: Number.MAX_SAFE_INTEGER },
+    { operationId: '' }, { meetingId: '' }, { proposalRevision: 2 }]) {
+    const fixture = nativeMeetingOwnerFixture();
+    await assert.rejects(fixture.invoke(meetingOwnerRequest(undefined, extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('Owner text cannot manufacture supervisor or speech provenance', async () => {
+  const request = meetingOwnerRequest('project.jour_fixe.transcript.append');
+  for (const change of [{ speaker: 'supervisor' }, { modality: 'speech' }, { source_run_id: 'forged' },
+    { stream_id: 'forged' }, { sentence_end_latency_ms: 20 }, { sequence: 0 },
+    { meeting_id: 'foreign' }, { ended_at_ms: 999 }, { author_user_id: 'foreign' }]) {
+    const fixture = nativeMeetingOwnerFixture();
+    await assert.rejects(fixture.invoke({ ...request, turn: { ...request.turn, ...change } }));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('meeting mutation rejects unsuccessful, foreign, changed-intent and stale receipts', async () => {
+  const request = meetingOwnerRequest('project.jour_fixe.transcript.append');
+  for (const mutate of [r => { r.command_id = 'foreign'; }, r => { r.target_record_id = 'foreign'; },
+    r => { r.status = 'failed'; }, r => { r.result.contract = 'foreign'; },
+    r => { r.payload.turn.text = 'Different intent'; }, r => { r.result.mutation.project_id = 'foreign'; },
+    r => { r.result.mutation.meeting_id = 'foreign'; }, r => { r.result.mutation.operation_id = 'foreign'; },
+    r => { r.result.mutation.revision = 3; }, r => { r.result.mutation.changed_id = 'foreign'; },
+    r => { r.result.mutation.state = 'confirmed'; }, r => { r.result.mutation.todos_revision = 5; },
+    r => { r.result.mutation.owner_user_id = 'foreign'; },
+    (r, state) => { state.session = { id: 'owner-alias' }; },
+    (r, state) => { state.db = { collection: () => ({}) }; }]) {
+    await assert.rejects(nativeMeetingOwnerFixture(mutate).invoke(request));
+  }
+  await assert.rejects(nativeMeetingOwnerFixture(r => { r.result.mutation.state = 'live'; })
+    .invoke(meetingOwnerRequest('project.jour_fixe.meeting.end')));
+  await assert.rejects(nativeMeetingOwnerFixture(r => { r.result.mutation.todos_revision = 1; })
+    .invoke(meetingOwnerRequest('project.jour_fixe.todos.revise')));
+});
+
+test('meeting mutation snapshots nested intent across the native wait', async () => {
+  const request = meetingOwnerRequest('project.jour_fixe.transcript.append');
+  const fixture = nativeMeetingOwnerFixture(() => { request.turn.text = 'Changed while waiting'; });
+  const result = await fixture.invoke(request);
+  assert.equal(result.mutation.changed_id, 'owner-text');
+  assert.equal(fixture.commands[0].payload.turn.text, 'Please verify persistence.');
 });
 
 function projectConfigurationRequest(extra = {}) {

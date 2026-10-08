@@ -42,3 +42,24 @@ separate required delivery work. Their declared command names fail terminally
 until their handlers land; they cannot fall through into recursive model tasks.
 This slice and isolated source regressions do
 not establish installed meeting acceptance.
+
+## Browser control
+
+`workjetProjectControl` exposes the same four Owner actions as
+`project.jour_fixe.meeting.start`, `project.jour_fixe.meeting.end`,
+`project.jour_fixe.transcript.append` and `project.jour_fixe.todos.revise`.
+All take `commandId`, `projectId`, `operationId`, `meetingId` and
+`expectedRevision`. Text append additionally takes the shared snake-case `turn`
+DTO; todo revision takes `proposalRevision` and the shared `items` DTOs.
+The native payload uses `meeting_id` and routes through `record_id=projectId`;
+project ownership is resolved from the stored meeting, never a caller assertion.
+
+The browser returns `{action, commandId, projectId, contract, mutation}` only
+after a completed receipt matches the command, project, whole nested request
+intent, operation, meeting and next revision. The compact `mutation` follows
+`MeetingMutationReceipt`. Identity/session/database replacement during the wait
+fails closed. Re-read the meeting after an uncertain result and reuse the same
+operation and intent when retrying; a new operation must use the current revision.
+The isolated Node and Chromium regressions exercise the actual control source
+against a controlled transport fixture; they do not establish installed native
+or Workjet room acceptance.
