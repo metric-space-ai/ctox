@@ -459,10 +459,7 @@ mod tests {
             1,
             "C++ CheckIntegrityCommand hashes still-open dest DiskWriter"
         );
-        assert!(
-            crate::storage::last_try_pread() >= 2,
-            "held dest fd pread"
-        );
+        assert!(crate::storage::last_try_pread() >= 2, "held dest fd pread");
         assert!(last_check_pread() >= 2);
         assert_eq!(std::fs::read(&p).unwrap(), body);
     }
