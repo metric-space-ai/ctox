@@ -12,6 +12,7 @@ pub(super) struct SourceMachineCapture {
 }
 struct State {
     desktop: super::super::guest_runtime::RetainedQemuDesktop,
+    io: Option<Arc<super::machine_io::MachineIo>>,
     attempted: bool,
     entries: Option<Vec<WorkspaceEntry>>,
     completion: Completion,
@@ -94,7 +95,8 @@ impl SourceMachineCapture {
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("source machine export poisoned"))?;
-        super::super::guest_commands::block_on_guest(state.desktop.stop())
+        let io = state.io.clone();
+        super::machine_io::run(io.as_deref(), state.desktop.stop())
     }
 
     fn export(&self, store: &ctox_sync::checkpoint::CheckpointStore, parent: &Path) -> Result<()> {
@@ -117,15 +119,17 @@ impl SourceMachineCapture {
         // subscribe marks the current value seen: check it before waiting so a
         // retirement between the first check and subscription cannot be lost.
         ensure!(!*retired.borrow(), "source machine export retired");
-        let witness = super::super::guest_commands::block_on_guest(async {
+        let io = state.io.clone();
+        let desktop = &mut state.desktop;
+        let witness = super::machine_io::run(io.as_deref(), async {
             tokio::select! {
                 biased;
                 _ = retired.changed() => anyhow::bail!("source machine export revoked"),
                 result = tokio::time::timeout(Duration::from_secs(300), async {
-                    let endpoint = state.desktop.probe_live().await?;
+                    let endpoint = desktop.probe_live().await?;
                     ensure!(endpoint.process_instance_id == self.process.process_instance_id,
                         "source machine endpoint differs from the retained child");
-                    let witness = state.desktop.save_checkpoint_live(&endpoint, &mut output).await?;
+                    let witness = desktop.save_checkpoint_live(&endpoint, &mut output).await?;
                     output.sync_all().await?;
                     Ok::<_, anyhow::Error>(witness)
                 }) => result.context("source machine export deadline")?,
@@ -202,6 +206,7 @@ impl NativeGuestExecution {
                         retired,
                         state: Mutex::new(State {
                             desktop,
+                            io: entry.desktop_io.take(),
                             attempted: false,
                             entries: None,
                             completion: Completion::Virgin,
@@ -314,6 +319,7 @@ mod tests {
             retired,
             state: Mutex::new(State {
                 desktop,
+                io: None,
                 attempted: false,
                 entries: None,
                 completion: Completion::Virgin,

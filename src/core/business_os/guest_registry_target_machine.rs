@@ -39,42 +39,7 @@ impl Drop for Attempt {
         }
     }
 }
-/// Retain the runtime that owns the child's signal/monitor/channel resources.
-/// Operations and cancellation run on a bounded scoped thread, even when the
-/// caller is the host's CurrentThread runtime. No async driver is dropped
-/// between migration, activation, readiness and exact-child cleanup.
-struct MachineIo(Option<tokio::runtime::Runtime>);
-impl MachineIo {
-    fn new() -> Result<Self> {
-        Ok(Self(Some(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?,
-        )))
-    }
-    fn run<T: Send>(
-        &self,
-        operation: impl FnOnce(&tokio::runtime::Runtime) -> Result<T> + Send,
-    ) -> Result<T> {
-        let runtime = self.0.as_ref().context("machine runtime retired")?;
-        std::thread::scope(|scope| {
-            scope
-                .spawn(move || {
-                    let _entered = runtime.enter();
-                    operation(runtime)
-                })
-                .join()
-                .map_err(|_| anyhow::anyhow!("target machine operation panicked"))?
-        })
-    }
-}
-impl Drop for MachineIo {
-    fn drop(&mut self) {
-        if let Some(runtime) = self.0.take() {
-            runtime.shutdown_background();
-        }
-    }
-}
+use super::machine_io::MachineIo;
 
 impl TargetMachine {
     pub(super) fn retire(&self) {

@@ -505,9 +505,10 @@ impl NativeGuestExecution {
                     self.registry.retire_frame(entry)?;
                     self.registry.expire_frames()?;
                     let mut permit = self.registry.frame_budget.reserve()?;
+                    let io = entry.desktop_io.clone();
                     let desktop = entry.desktop.as_mut().context("native child missing")?;
                     let (frame, endpoint) =
-                        super::super::guest_commands::block_on_guest(desktop.observe_live())?;
+                        super::machine_io::run(io.as_deref(), desktop.observe_live())?;
                     verify()?;
                     self.current_job(entry)?;
                     permit.retain_bytes(frame.png.len())?;
@@ -553,10 +554,9 @@ impl NativeGuestExecution {
                         "native input observation belongs to a retired transport"
                     );
                     let endpoint = frame.consume_input(&frame_id, actual_turn, &input)?;
+                    let io = entry.desktop_io.clone();
                     let desktop = entry.desktop.as_mut().context("native child missing")?;
-                    super::super::guest_commands::block_on_guest(
-                        desktop.input_live(&endpoint, &input),
-                    )?;
+                    super::machine_io::run(io.as_deref(), desktop.input_live(&endpoint, &input))?;
                     verify()?;
                     self.current_job(entry)?;
                     self.registry.retire_frame(entry)?;

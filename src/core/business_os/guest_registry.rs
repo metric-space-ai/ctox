@@ -11,8 +11,14 @@ pub(crate) mod accounts;
 mod command;
 #[path = "guest_registry_machine_config.rs"]
 mod machine_config;
+#[cfg(target_os = "linux")]
+#[path = "guest_registry_machine_io.rs"]
+mod machine_io;
 #[path = "guest_registry_protected_import.rs"]
 mod protected_import;
+#[cfg(target_os = "linux")]
+#[path = "guest_registry_source_boot.rs"]
+mod source_boot;
 #[cfg(target_os = "linux")]
 #[path = "guest_registry_target_machine.rs"]
 mod target_machine;
@@ -351,6 +357,10 @@ struct Registration {
     stopped_status: Option<std::process::ExitStatus>,
     #[cfg(target_os = "linux")]
     desktop: Option<super::guest_runtime::RetainedQemuDesktop>,
+    #[cfg(target_os = "linux")]
+    desktop_io: Option<Arc<machine_io::MachineIo>>,
+    #[cfg(target_os = "linux")]
+    source_boot: Option<Arc<source_boot::SourceBoot>>,
     #[cfg(target_os = "linux")]
     source_machine: Option<Arc<source_machine::SourceMachineCapture>>,
     #[cfg(target_os = "linux")]
@@ -777,6 +787,10 @@ impl NativeGuestRegistry {
                 #[cfg(target_os = "linux")]
                 desktop: None,
                 #[cfg(target_os = "linux")]
+                desktop_io: None,
+                #[cfg(target_os = "linux")]
+                source_boot: None,
+                #[cfg(target_os = "linux")]
                 source_machine: None,
                 #[cfg(target_os = "linux")]
                 target_machine: None,
@@ -960,6 +974,41 @@ impl NativeGuestRegistry {
         let entry = self.registration(guest_id)?;
         // Retire authority synchronously; no policy/controller lock may wait
         // for a RAM export or the actual source child to finish stopping.
+        let boot = self.with_policy(|_| {
+            let mut entry = entry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+            ensure!(
+                session_user_id(session)
+                    == Some(entry.assignment.destination.human_owner_id.as_str()),
+                "foreign guest stop"
+            );
+            let boot = entry.source_boot.clone();
+            if let Some(boot) = &boot {
+                boot.retire();
+                if !entry.revoked {
+                    entry.assignment.destination.controller_generation = entry
+                        .assignment
+                        .destination
+                        .controller_generation
+                        .checked_add(1)
+                        .context("controller generation exhausted")?;
+                    entry.revoked = true;
+                }
+                self.retire_frame(&mut entry)?;
+            }
+            Ok(boot)
+        })?;
+        if let Some(boot) = boot {
+            boot.stop_helper()?;
+            if let Some(status) = boot.stop_pending_child()? {
+                entry
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
+                    .stopped_status = Some(status);
+                return Ok(status);
+            }
+        }
         let exporting = self.with_policy(|_| {
             let mut entry = entry
                 .lock()
@@ -1049,12 +1098,13 @@ impl NativeGuestRegistry {
                 entry.revoked = true;
             }
             self.retire_frame(&mut entry)?;
+            let io = entry.desktop_io.clone();
             let desktop = entry
                 .desktop
                 .as_mut()
                 .context("guest has no retained process to stop")?;
             // Worker expiry cannot prevent the human from stopping this child.
-            let status = super::guest_commands::block_on_guest(desktop.stop())?;
+            let status = machine_io::run(io.as_deref(), desktop.stop())?;
             entry.stopped_status = Some(status);
             // Preserve the pending quorum effect. A stop observation is not an
             // automatic CompleteEffect or new-controller admission.
@@ -1088,6 +1138,10 @@ impl NativeGuestRegistry {
                     .checked_add(1)
                     .context("controller generation exhausted")?;
                 entry.revoked = true;
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(boot) = &entry.source_boot {
+                boot.retire();
             }
             #[cfg(target_os = "linux")]
             if let Some(capture) = &entry.source_machine {
@@ -1333,6 +1387,10 @@ impl NativeGuestExecution {
                         == entry.imported_identity,
                     "registered import directory was replaced"
                 );
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(boot) = &entry.source_boot {
+                boot.current()?;
             }
             let destination = entry.assignment.destination.clone();
             let verify = || {
@@ -1627,6 +1685,7 @@ impl GuestReadinessOwner for NativeGuestExecution {
                             == entry.assignment.destination.controller_generation,
                     "native child effect binding changed"
                 );
+                let io = entry.desktop_io.clone();
                 let desktop = entry
                     .desktop
                     .as_mut()
@@ -1635,7 +1694,7 @@ impl GuestReadinessOwner for NativeGuestExecution {
                     desktop.process_instance_id() == process_effect.process_instance_id,
                     "registered native child was replaced"
                 );
-                let endpoint = super::guest_commands::block_on_guest(desktop.probe_live())?;
+                let endpoint = machine_io::run(io.as_deref(), desktop.probe_live())?;
                 verify()?;
                 ensure!(
                     endpoint.process_instance_id == process_effect.process_instance_id,
