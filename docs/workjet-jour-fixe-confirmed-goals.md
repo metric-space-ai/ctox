@@ -1,0 +1,11 @@
+# Confirmed JourFix goals
+
+`ctox.workjet.jour_fixe.todos.confirm` accepts the shared ConfirmTodosRequest only through the existing authenticated Owner command plane. It requires the current meeting/proposal revision and the project goal revision (zero for the first confirmation). A review must contain 1–100 distinct tasks, each with an explicit owner and acceptance criterion. Due dates and priority remain part of the exact confirmed instruction; a due date does not defer execution until that date.
+
+Core owns the confirmation. The real planned_goals/planned_steps rows, project definition revision, immutable confirmed meeting snapshot and domain application receipt commit in one Core transaction. A Policy writer reservation protects the current owner/project/registered Supervisor binding until that commit; Policy receives no second authoritative write. Reads overlay the confirmed Core snapshot on the stored draft. Both command replay and stable operation replay return the original goal without duplicating or reactivating it. Post-commit publication failure is recovered by the existing native domain receipt path.
+
+The goal targets the registered Supervisor's existing Core thread. Normal Core due-step production owns execution and completion. A later confirmed appointment supersedes the previous project definition and previous active goals on that exact thread; foreign projects are untouched. The next T−2h preparation stores the real previous GoalRef. Both native meeting.read and the signed Supervisor read_meeting tool return previous_goal_definition with the accepted items and current Core step status/results. This is evidence for the next deck, not an inferred success metric.
+
+No provider operation, browser input masquerading as a receipt, second queue, HTTP data bridge or schema repair occurs on the readonly meeting/goal path. Existing separate ready/live narration requirements remain in force.
+
+Validation is pending the gpu3 lane. New regressions cover real runnable Core steps, replay, stale revisions, missing owners/evidence, foreign or revoked bindings, rollback at receipt failure, lost publication ACK, late edits, next-deck provenance and later-goal supersession. Installed product acceptance remains open with the normal single writer.

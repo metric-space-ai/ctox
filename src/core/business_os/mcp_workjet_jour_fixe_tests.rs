@@ -18,6 +18,7 @@ fn fixture(state: &str) -> anyhow::Result<(tempfile::TempDir, Value)> {
     meeting["comments"] = json!([]);
     meeting["transcript"] = json!([]);
     meeting["todos"] = Value::Null;
+    meeting["previous_goal"] = Value::Null;
     if state == "planned" {
         meeting["slides"] = json!([]);
         meeting["deck_revision"] = json!(0);

@@ -6,6 +6,8 @@ use crate::business_os::{mcp_channel, store, threads, worker_profile_bindings};
 use std::sync::{Arc, Barrier};
 use tempfile::{tempdir, TempDir};
 
+#[path = "jour_fixe_confirmed_goal_tests.rs"]
+mod jour_fixe_confirmed_goal;
 #[path = "jour_fixe_local_candidate_tests.rs"]
 mod jour_fixe_local_candidate;
 #[path = "jour_fixe_owner_tests.rs"]

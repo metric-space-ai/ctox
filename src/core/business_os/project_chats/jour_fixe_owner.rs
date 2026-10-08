@@ -5,7 +5,7 @@
 use super::super::{workjet_identity, workjet_jour_fixe_contract as wire};
 use super::*;
 use crate::business_os::store;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use wire::WireValidate;
 const OPERATIONS: &str = "CREATE TABLE IF NOT EXISTS workjet_jour_fixe_owner_operations (
  operation_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL,
@@ -16,7 +16,8 @@ const MAX_METADATA_BYTES: usize = 1024 * 1024;
 pub(in crate::business_os) fn is_command(kind: &str) -> bool {
     matches!(
         kind,
-        "ctox.workjet.jour_fixe.meeting.start"
+        "ctox.workjet.jour_fixe.todos.confirm"
+            | "ctox.workjet.jour_fixe.meeting.start"
             | "ctox.workjet.jour_fixe.meeting.end"
             | "ctox.workjet.jour_fixe.transcript.append"
             | "ctox.workjet.jour_fixe.transcript.local_candidate"
@@ -32,7 +33,6 @@ pub(in crate::business_os) fn is_reserved_command(kind: &str) -> bool {
         "ctox.workjet.jour_fixe.prepare"
             | "ctox.workjet.jour_fixe.deck.publish"
             | "ctox.workjet.jour_fixe.todos.propose"
-            | "ctox.workjet.jour_fixe.todos.confirm"
     )
 }
 enum Edit {
@@ -300,6 +300,9 @@ pub(in crate::business_os) fn handle(
     actor: &str,
     admission: &DomainEffectAdmission,
 ) -> anyhow::Result<Value> {
+    if command.command_type == "ctox.workjet.jour_fixe.todos.confirm" {
+        return super::jour_fixe_confirmed_goal::handle(root, command, actor, admission);
+    }
     if command.command_type == super::jour_fixe_local_candidate::COMMAND {
         return super::jour_fixe_local_candidate::handle(root, command, actor, admission);
     }
@@ -311,13 +314,22 @@ pub(in crate::business_os) fn handle(
             &json!({"kind":command.command_type,"payload":payload})
         )?)
     );
+    // Serialize owner edits with Core confirmation. A confirmed list can never
+    // be overwritten by a later Policy draft revision, even after lost ACK.
+    let mut core = Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )?;
+    core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let core_tx = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut conn = open_store(root)?;
     owned(&conn, actor, command.record_id.as_deref(), id)?;
     conn.execute_batch(OPERATIONS)?;
     let applied=admission.apply(&mut conn,|tx| {
         // Current project ownership and registered supervisor are checked inside
         // the same writer transaction as both metadata and the domain receipt.
-        let mut meeting=owned(tx,actor,command.record_id.as_deref(),id)?;
+        let mut meeting=super::jour_fixe_confirmed_goal::overlay_from_core(&core_tx,
+            owned(tx,actor,command.record_id.as_deref(),id)?)?;
         let old:Option<(String,String,String)>=tx.query_row(
             "SELECT owner_user_id,intent_hash,receipt_json FROM workjet_jour_fixe_owner_operations WHERE operation_id=?1",
             [operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
@@ -410,5 +422,6 @@ pub(in crate::business_os) fn handle(
         tx.execute("INSERT INTO workjet_jour_fixe_owner_operations VALUES (?1,?2,?3,?4)",params![operation,meeting.owner_user_id,intent,serde_json::to_string(&result)?])?;
         Ok(AppliedDomainEffect{result,projections:vec![]})
     })?;
+    drop(core_tx);
     Ok(applied.result)
 }
