@@ -65,6 +65,24 @@ pub(crate) struct NativeGuestAdmission {
     owner: Arc<dyn NativeGuestAdmissionOwner>,
 }
 impl NativeGuestAdmission {
+    pub(crate) fn ensure_store(tx: &Transaction<'_>) -> Result<()> {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS native_guest_provider_admissions (
+            binding_id TEXT PRIMARY KEY,
+            worker_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL UNIQUE,
+            request_id TEXT NOT NULL UNIQUE,
+            destination_json TEXT NOT NULL,
+            spec_json TEXT NOT NULL,
+            phase TEXT NOT NULL CHECK(phase IN ('PendingCreate','Admitted')),
+            ownership_json TEXT,
+            CHECK((phase='PendingCreate' AND ownership_json IS NULL)
+               OR (phase='Admitted' AND ownership_json IS NOT NULL))
+        )",
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn new(
         authority: Arc<dyn ExecutionAuthority>,
         owner: Arc<dyn NativeGuestAdmissionOwner>,
@@ -108,20 +126,7 @@ impl NativeGuestAdmission {
                         model_id: facts.model_id.clone(),
                         required_capabilities: destination.required_capabilities.clone(),
                     };
-                    tx.execute_batch(
-                        "CREATE TABLE IF NOT EXISTS native_guest_provider_admissions (
-                        binding_id TEXT PRIMARY KEY,
-                        worker_id TEXT NOT NULL,
-                        attempt_id TEXT NOT NULL UNIQUE,
-                        request_id TEXT NOT NULL UNIQUE,
-                        destination_json TEXT NOT NULL,
-                        spec_json TEXT NOT NULL,
-                        phase TEXT NOT NULL CHECK(phase IN ('PendingCreate','Admitted')),
-                        ownership_json TEXT,
-                        CHECK((phase='PendingCreate' AND ownership_json IS NULL)
-                           OR (phase='Admitted' AND ownership_json IS NOT NULL))
-                    )",
-                    )?;
+                    Self::ensure_store(tx)?;
                     tx.execute(
                         "INSERT INTO native_guest_provider_admissions
                     (binding_id,worker_id,attempt_id,request_id,destination_json,spec_json,phase)

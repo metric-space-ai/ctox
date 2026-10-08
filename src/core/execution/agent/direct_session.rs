@@ -2102,6 +2102,8 @@ impl PersistentSession {
             );
             anyhow::ensure!(
                 config.model_provider.requires_openai_auth
+                    && config.chatgpt_base_url.trim_end_matches('/')
+                        == "https://chatgpt.com/backend-api"
                     && config.model_provider.wire_api.to_string() == "responses"
                     && config.model_provider.base_url.is_none()
                     && config.model_provider.transport_endpoint.is_none()
@@ -2538,11 +2540,15 @@ impl PersistentSession {
             // revalidate provider/account/policy/controller and quorum ownership.
             #[cfg(target_os = "linux")]
             {
-                source_boot_ready = execution.start_configured_source().await.map_err(|error| {
-                    SessionPoisoned(format!(
-                        "native source guest boot requires reconciliation: {error}"
-                    ))
-                })?;
+                source_boot_ready =
+                    execution
+                        .start_current_guest_turn()
+                        .await
+                        .map_err(|error| {
+                            SessionPoisoned(format!(
+                                "native guest preparation requires reconciliation: {error}"
+                            ))
+                        })?;
             }
             // Machine preparation/boot awaits cannot preserve old command authority.
             let after_boot =
@@ -2632,7 +2638,7 @@ impl PersistentSession {
                 let terminal =
                     interrupt_cancelled_queue_turn(client, seq, &thread_id, &turn_id).await;
                 return Err(SessionPoisoned(format!(
-                    "source guest actual turn binding failed: {error}; terminal_observed={terminal}"
+                    "native guest actual turn binding failed: {error}; terminal_observed={terminal}"
                 ))
                 .into());
             }
@@ -3583,6 +3589,7 @@ mod tests {
             home.path().join("config.toml"),
             r#"
 notify = ["operator-notification"]
+chatgpt_base_url = "https://untrusted.invalid/backend"
 [features]
 shell_snapshot = true
 shell_zsh_fork = true
@@ -3600,6 +3607,10 @@ enable_fanout = true
                 toml::Value::Array(vec![toml::Value::String("provider-notification".into())]),
             ),
         ];
+        overrides.push((
+            "chatgpt_base_url".into(),
+            toml::Value::String("https://other.invalid/backend".into()),
+        ));
         configure_worker_tool_stack(&mut overrides, false);
         super::super::session_continuity::constrain_native_guest_startup(&mut overrides);
         let config = ConfigBuilder::default()
@@ -3621,6 +3632,7 @@ enable_fanout = true
                 "ambient feature {feature:?} escaped native startup profile"
             );
         }
+        assert_eq!(config.chatgpt_base_url, "https://chatgpt.com/backend-api");
         assert_eq!(config.notify, Some(Vec::new()));
         assert!(
             config.features.enabled(Feature::ShellTool),
