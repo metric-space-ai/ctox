@@ -129,15 +129,37 @@ impl TargetSpeechHost {
                 if !server.alive.load(Ordering::Acquire) {
                     break;
                 }
-                if let Ok(mut entries) = server.entries.lock() {
-                    let pool = server.pool.upgrade();
-                    entries.retain(|_, entry| {
-                        entry.deadline > Instant::now()
-                            && pool
-                                .as_ref()
-                                .is_some_and(|pool| pool.is_peer_ready_for_control(&entry.peer))
-                    });
-                };
+                // Match publication's key -> entries -> pool order: never
+                // inspect current grants while holding the entries mutex.
+                let snapshot = server
+                    .entries
+                    .lock()
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .map(|(id, entry)| (id.clone(), entry.clone()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let pool = server.pool.upgrade();
+                for (id, entry) in snapshot {
+                    let current = entry.deadline > Instant::now()
+                        && pool
+                            .as_ref()
+                            .is_some_and(|pool| pool.is_peer_ready_for_control(&entry.peer))
+                        && entry.policy.with_current(|_| Ok(())).is_ok();
+                    if !current {
+                        if let Ok(mut entries) = server.entries.lock() {
+                            if entries
+                                .get(&id)
+                                .is_some_and(|live| Arc::ptr_eq(live, &entry))
+                            {
+                                entry.release();
+                                entries.remove(&id);
+                            }
+                        }
+                    }
+                }
             }
         });
         Ok(Self { server, reaper })

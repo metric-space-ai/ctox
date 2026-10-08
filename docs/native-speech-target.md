@@ -42,8 +42,8 @@ digests and a cached Finish response. Finish releases its active permit.
 TTS has a 120 s deadline and an 8 MiB audio bound; actual WAV bytes, PCM format,
 duration and SHA-256 are checked before publication. The source releases the
 target's audio buffer after verified transfer. Streams expire after 90 s;
-synthesis artifacts after 150 s. Disconnected native peers are reaped within
-approximately two seconds. Cached objects are separately bounded to 64.
+synthesis artifacts after 150 s. Disconnected peers and revoked grants are reaped within
+approximately two seconds, releasing their active permits. Cached objects are separately bounded to 64.
 
 This is a native transport implementation. Installed two-host meeting
 acceptance, microphone sentence-end latency and first TTS playback latency
