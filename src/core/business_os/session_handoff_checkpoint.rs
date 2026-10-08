@@ -10,6 +10,8 @@ const MANIFEST_LIMIT: u64 = 8 * 1024 * 1024;
 const BLOB_LIMIT: u64 = 64 * 1024 * 1024;
 #[path = "session_handoff_guest_import.rs"]
 mod guest_import;
+#[path = "session_handoff_checkpoint_quorum.rs"]
+mod quorum;
 #[path = "session_handoff_reconstruction.rs"]
 mod reconstruction;
 
@@ -906,6 +908,7 @@ pub(crate) fn assert_native_checkpoint_path(
         .unwrap();
     reconstruction::assert_native_reconstruction(&target, &received);
     guest_import::assert_native_import_fence(&target, &received);
+    quorum::assert_dirty_copy_cannot_acknowledge(&target, &received);
     let (_, foreign) = make_fetch(
         Some(ArtifactRef {
             sha256: "aa".repeat(32),
@@ -986,9 +989,34 @@ pub(crate) struct CopyRequest {
     pub reconstruct: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub guest_id: String,
+    #[serde(default, skip_serializing_if = "copy_only")]
+    pub acknowledge: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protection_receipts: Vec<ctox_sync::contracts::CheckpointCopyReceipt>,
 }
 fn copy_only(reconstruct: &bool) -> bool {
     !reconstruct
+}
+impl CopyRequest {
+    fn valid_operation(&self) -> bool {
+        let ordinary = !self.acknowledge && self.protection_receipts.is_empty();
+        let identifiers_only =
+            !self.reconstruct && self.guest_id.is_empty() && self.source_route.is_empty();
+        (ordinary
+            && ((self.reconstruct && self.guest_id.is_empty() && self.source_route.is_empty())
+                || (!self.reconstruct
+                    && self.source_route.is_empty()
+                    && super::super::super::guest_runtime::identifier(&self.guest_id))
+                || (!self.reconstruct
+                    && self.guest_id.is_empty()
+                    && !self.source_route.is_empty()
+                    && self.source_route.len() <= 256)))
+            || (identifiers_only
+                && ((self.acknowledge && self.protection_receipts.is_empty())
+                    || (!self.acknowledge
+                        && !self.protection_receipts.is_empty()
+                        && self.protection_receipts.len() <= 8)))
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
@@ -1006,6 +1034,14 @@ pub(crate) enum CopyResponse {
         controller_id: String,
         controller_generation: u64,
         effect_id: String,
+    },
+    CopyAcknowledged {
+        receipt: ctox_sync::contracts::CheckpointCopyReceipt,
+    },
+    CheckpointProtected {
+        checkpoint_digest: String,
+        sequence: u64,
+        ownership_generation: u64,
     },
     Denied,
 }
@@ -1046,7 +1082,7 @@ pub(super) fn listen(
             }
             let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
                 let n = stream.read_u32().await? as usize;
-                anyhow::ensure!(n > 0 && n <= 2048, "invalid checkpoint control frame");
+                anyhow::ensure!(n > 0 && n <= 32 * 1024, "invalid checkpoint control frame");
                 let mut bytes = vec![0; n];
                 stream.read_exact(&mut bytes).await?;
                 Ok::<CopyRequest, anyhow::Error>(serde_json::from_slice(&bytes)?)
@@ -1058,21 +1094,30 @@ pub(super) fn listen(
                         && r.binding_digest
                             .bytes()
                             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                        && ((r.reconstruct
-                            && r.source_route.is_empty()
-                            && r.guest_id.is_empty())
-                            || (!r.reconstruct
-                                && r.source_route.is_empty()
-                                && super::super::super::guest_runtime::identifier(
-                                    &r.guest_id,
-                                ))
-                            || (!r.reconstruct
-                                && r.guest_id.is_empty()
-                                && !r.source_route.is_empty()
-                                && r.source_route.len() <= 256)) =>
+                        && r.valid_operation() =>
                 {
                     let operation = async {
-                        if !r.guest_id.is_empty() {
+                        if r.acknowledge || !r.protection_receipts.is_empty() {
+                            let registry = guests.as_ref().ok_or_else(|| {
+                                anyhow::anyhow!("native authority host unavailable")
+                            })?;
+                            if r.acknowledge {
+                                quorum::acknowledge(
+                                    server.clone(),
+                                    registry.clone(),
+                                    r.binding_digest,
+                                )
+                                .await
+                            } else {
+                                quorum::protect(
+                                    server.clone(),
+                                    registry.clone(),
+                                    r.binding_digest,
+                                    r.protection_receipts,
+                                )
+                                .await
+                            }
+                        } else if !r.guest_id.is_empty() {
                             let registry = guests
                                 .as_ref()
                                 .ok_or_else(|| anyhow::anyhow!("native guest host unavailable"))?;

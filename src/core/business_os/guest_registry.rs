@@ -38,6 +38,13 @@ struct NativeGuestAdmissionResolver {
     guest_id: String,
 }
 impl NativeGuestRegistry {
+    /// Borrow the actual live host authority for identifier-only checkpoint control.
+    pub(crate) fn checkpoint_authority(&self, root: &Path) -> Result<Arc<dyn ExecutionAuthority>> {
+        self.verify_runtime_root(root)?;
+        self.require_live_transport()?;
+        Ok(Arc::clone(&self.authority))
+    }
+
     pub(crate) fn admission(
         self: &Arc<Self>,
         guest_id: &str,
