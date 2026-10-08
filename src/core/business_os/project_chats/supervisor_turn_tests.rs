@@ -144,7 +144,7 @@ fn exit_refresh_reconciles_terminal_before_mapping_commit() -> anyhow::Result<()
         &task.message_key,
         "fixture research failure",
     )?;
-    conn.execute("INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json,research_command_id) VALUES(?1,'project','owner',?2,?3)", params![run,raw,research])?;
+    conn.execute("INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json,research_command_id) VALUES(?1,'project','owner',?2,?3)", rusqlite::params![run,raw,research])?;
     drop(conn);
     crate::business_os::workjet_exit_model::reconcile_research(root.path(), &research)?;
     let conn = open_store(root.path())?;
