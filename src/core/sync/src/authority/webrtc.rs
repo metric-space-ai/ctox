@@ -1,5 +1,28 @@
 //! Execution control over the existing multiplexed CTOX Sync DataChannel.
 //! Routing hints may change on reconnect; configured signing keys remain authority.
+
+#[cfg(all(test, unix))]
+mod routing_tests {
+    use super::*;
+    #[tokio::test]
+    async fn unsigned_startup_route_is_not_a_proved_connection() -> io::Result<()> {
+        let pool = RxWebRTCReplicationPool::new_multi(Vec::new(), WebRTCRsConnectionHandler::new());
+        let mut identities = BTreeSet::new();
+        for _ in 0..3 {
+            let bytes = SigningIdentity::generate_pkcs8()?;
+            identities.insert(SigningIdentity::from_pkcs8(&bytes)?.public_identity());
+        }
+        let pin = identities.first().unwrap().clone();
+        let channel = WebRtcControlChannel::new(&pool, identities, Duration::from_secs(1))?;
+        channel.set_route(&pin, "unsigned-route-hint".into())?;
+        assert!(channel.current_peer(&pin)?.is_none());
+        assert_eq!(
+            channel.current_peer("unconfigured").err().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        Ok(())
+    }
+}
 use super::{
     auth::{self, ControlChannel, SigningIdentity},
     network::CONTROL_METHOD,
@@ -10,7 +33,7 @@ use async_trait::async_trait;
 use rxdb::plugins::replication_webrtc::SignalingClient;
 use rxdb::plugins::replication_webrtc::{
     send_message_and_await_answer, RxWebRTCReplicationPool, WebRTCConnectionHandler, WebRTCMessage,
-    WebRTCRsConnectionHandler,
+    WebRTCRsConnection, WebRTCRsConnectionHandler,
 };
 use serde_json::Value;
 use std::{
@@ -24,6 +47,7 @@ pub struct WebRtcControlChannel {
     pool: Weak<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>,
     allowed: BTreeSet<String>,
     routes: RwLock<BTreeMap<String, String>>,
+    authenticated_routes: RwLock<BTreeMap<String, (String, WebRTCRsConnection)>>,
     deadline: Duration,
 }
 impl WebRtcControlChannel {
@@ -45,6 +69,7 @@ impl WebRtcControlChannel {
             pool: Arc::downgrade(pool),
             allowed,
             routes: RwLock::new(BTreeMap::new()),
+            authenticated_routes: RwLock::new(BTreeMap::new()),
             deadline,
         })
     }
@@ -62,6 +87,36 @@ impl WebRtcControlChannel {
             .insert(identity.into(), peer);
         Ok(())
     }
+    /// An already proved current connection, never an unsigned discovery hint.
+    /// Consumers still need their workload grant and must retain this lifetime.
+    pub fn current_peer(&self, identity: &str) -> io::Result<Option<(String, WebRTCRsConnection)>> {
+        if !self.allowed.contains(identity) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "unconfigured control peer",
+            ));
+        }
+        let binding = self
+            .authenticated_routes
+            .read()
+            .map_err(|_| io::Error::other("control route lock poisoned"))?
+            .get(identity)
+            .cloned();
+        let Some((route, peer)) = binding else {
+            return Ok(None);
+        };
+        let pool = self
+            .pool
+            .upgrade()
+            .ok_or_else(|| io::Error::other("authority pool stopped"))?;
+        if pool.connection_handler.connection_for_peer(&route).as_ref() != Some(&peer)
+            || !pool.is_peer_ready_for_control(&peer)
+        {
+            return Ok(None);
+        }
+        Ok(Some((route, peer)))
+    }
+
     /// Probe one admitted connection. Only a fresh proof from a configured key
     /// updates routing; scope, nonce and the signaling lifetime are bound.
     #[cfg(unix)]
@@ -89,7 +144,12 @@ impl WebRtcControlChannel {
         {
             return Err(io::Error::other("authority route changed during discovery"));
         }
-        self.set_route(&identity, route.into())
+        self.set_route(&identity, route.into())?;
+        self.authenticated_routes
+            .write()
+            .map_err(|_| io::Error::other("control route lock poisoned"))?
+            .insert(identity, (route.to_owned(), connection));
+        Ok(())
     }
 
     async fn request_route(&self, route: &str, method: &str, envelope: Value) -> io::Result<Value> {

@@ -27,11 +27,13 @@ Use the existing local Owner/operator CLI, not a browser data endpoint:
 The typed document has optional `transcription` and `synthesis` routes.
 Each route contains:
 - `scope_id`, matching the configured native host;
-- `native_peer_route`, an already accepted native peer route;
+- optional `native_peer_route`, a legacy diagnostic hint; omit it for automatic signed discovery;
 - independent `source_signing_identity` and `target_signing_identity` pins;
 - `binding`: exact source instance, target instance, computer, owner,
   speech-only grant ID/revision, workload and model;
 - `expires_at_unix_ms`, at most one day ahead.
+
+The configured target signing pin resolves through the existing native host's signed route discovery. Unsigned signaling/session claims and startup hints cannot supply a connection. Each stream/run binds the exact proved connection generation before Open/Start and retains it for every PCM/audio request, including cancellation. A rejoin needs a fresh stream; an active stream never moves to a replacement connection. The signing pins and grant configuration remain stable across new streams. A supplied legacy route hint must also match the current proved connection.
 
 The local source pin must match the provisioned secret-store identity.
 Configuration saves under its existing issuer fence into SQLite and mints a

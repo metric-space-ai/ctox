@@ -34,6 +34,7 @@ struct State {
     alive: Mutex<bool>,
     retired: watch::Sender<bool>,
     pool: Weak<Pool>,
+    routes: Option<Weak<ctox_sync::authority::webrtc::WebRtcControlChannel>>,
     runtime: tokio::runtime::Handle,
     pending: Arc<Semaphore>,
 }
@@ -52,6 +53,19 @@ pub(super) struct Owner {
 pub(crate) struct NativeControlChannel {
     state: Weak<State>,
 }
+/// One proved connection retained across an entire workload, without authority.
+#[derive(Clone)]
+pub(crate) struct NativeControlPeer {
+    state: Weak<State>,
+    route: String,
+    identity: String,
+    peer: WebRTCRsConnection,
+}
+impl NativeControlPeer {
+    pub(crate) fn route(&self) -> &str {
+        &self.route
+    }
+}
 /// The workload must authenticate the reply against this independently pinned
 /// signing identity and its own fresh request nonce. A route is never identity.
 pub(crate) trait NativeControlReplyVerifier: Send + Sync {
@@ -59,12 +73,20 @@ pub(crate) trait NativeControlReplyVerifier: Send + Sync {
 }
 impl Owner {
     pub(super) fn start(root: &Path, pool: &NativePool) -> io::Result<Self> {
+        Self::start_with_routes(root, pool, None)
+    }
+    pub(super) fn start_with_routes(
+        root: &Path,
+        pool: &NativePool,
+        routes: Option<Weak<ctox_sync::authority::webrtc::WebRtcControlChannel>>,
+    ) -> io::Result<Self> {
         let root = std::fs::canonicalize(root)?;
         let (retired, _) = watch::channel(false);
         let state = Arc::new(State {
             alive: Mutex::new(true),
             retired,
             pool: Arc::downgrade(pool),
+            routes,
             runtime: tokio::runtime::Handle::try_current().map_err(io::Error::other)?,
             pending: Arc::new(Semaphore::new(MAX_PENDING)),
         });
@@ -204,6 +226,36 @@ impl NativeControlChannel {
         }
     }
 
+    /// Resolve only the existing signed discovery proof for this pin.
+    /// A replacement connection requires a new workload; never move PCM to it.
+    pub(crate) fn bind_identity(&self, identity: &str) -> io::Result<Option<NativeControlPeer>> {
+        if !valid_identity(identity) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid native signing pin",
+            ));
+        }
+        let state = self.current()?;
+        let Some(routes) = state.routes.as_ref().and_then(Weak::upgrade) else {
+            return Ok(None);
+        };
+        let Some((route, peer)) = routes.current_peer(identity)? else {
+            return Ok(None);
+        };
+        let pool = state.pool.upgrade().ok_or_else(unavailable)?;
+        if pool.connection_handler.connection_for_peer(&route).as_ref() != Some(&peer)
+            || pool.with_current_native_control_peer(&peer, || ()).is_err()
+        {
+            return Ok(None);
+        }
+        Ok(Some(NativeControlPeer {
+            state: self.state.clone(),
+            route,
+            identity: identity.into(),
+            peer,
+        }))
+    }
+
     /// Readiness only; the subsequent request still requires current grants
     /// and signing pins. This snapshot creates no peer and authorizes no work.
     pub(crate) fn peer_connected(&self, route: &str) -> io::Result<bool> {
@@ -242,6 +294,56 @@ impl NativeControlChannel {
         publication: Arc<dyn WebRTCPublicationGuard>,
         verifier: Arc<dyn NativeControlReplyVerifier>,
     ) -> io::Result<Value> {
+        self.request_inner(
+            None,
+            route,
+            expected_identity,
+            method,
+            envelope,
+            deadline,
+            publication,
+            verifier,
+        )
+        .await
+    }
+
+    pub(crate) async fn request_on(
+        &self,
+        peer: &NativeControlPeer,
+        expected_identity: &str,
+        method: &str,
+        envelope: Value,
+        deadline: Duration,
+        publication: Arc<dyn WebRTCPublicationGuard>,
+        verifier: Arc<dyn NativeControlReplyVerifier>,
+    ) -> io::Result<Value> {
+        if !Weak::ptr_eq(&self.state, &peer.state) || peer.identity != expected_identity {
+            return Err(unavailable());
+        }
+        self.request_inner(
+            Some(peer),
+            &peer.route,
+            expected_identity,
+            method,
+            envelope,
+            deadline,
+            publication,
+            verifier,
+        )
+        .await
+    }
+
+    async fn request_inner(
+        &self,
+        bound: Option<&NativeControlPeer>,
+        route: &str,
+        expected_identity: &str,
+        method: &str,
+        envelope: Value,
+        deadline: Duration,
+        publication: Arc<dyn WebRTCPublicationGuard>,
+        verifier: Arc<dyn NativeControlReplyVerifier>,
+    ) -> io::Result<Value> {
         if !valid_method(method)
             || !valid_identity(expected_identity)
             || route.is_empty()
@@ -272,6 +374,9 @@ impl NativeControlChannel {
             .connection_handler
             .connection_for_peer(route)
             .ok_or_else(unavailable)?;
+        if bound.is_some_and(|bound| bound.peer != peer) {
+            return Err(unavailable());
+        }
         let guard: Arc<dyn WebRTCPublicationGuard> = Arc::new(Publication {
             state: self.state.clone(),
             peer: Some(peer.clone()),
