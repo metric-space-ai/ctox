@@ -1929,6 +1929,21 @@ heartbeat rather than its own empty aggregate; a missing or stale heartbeat
 keeps performance unknown (`null`). Bind measurements to the heartbeat's PID,
 installed source/binary and freshness before calculating interval deltas.
 
+Native `transport.handshake` diagnostics retain fixed-cardinality lifetime
+counts of received/successfully sent offers, answers and ICE candidates, signal
+failures and connection-state callbacks. They include only static failure-stage
+and state names. `registeredSignalingPeerSha256` hashes the actual signaling
+server Init identity; it is null before Init or after a signaling reset. It is
+not the random native replication session ID or an identity inferred from an
+invite/URL. The digest can be compared with the expected invite peer's SHA256.
+No peer name, room, SDP, ICE address, capability, credential or document is
+retained in this aggregate. Counts include failed/replaced generations and do
+not certify current peer authentication or replication. Read these diagnostics
+with existing socket/join/channel/authentication fields and heartbeat freshness.
+The daemon persists the transport aggregate in its existing status heartbeat.
+An external CLI reads that fresh daemon aggregate, never its own empty handler;
+missing or stale heartbeat transport remains unknown (`null`).
+
 Failed native reads of the current actor role/epoch or collection
 grants propagate as unavailable authority rather than invalid credentials;
 missing/inactive actors, role/epoch mismatches and foreign signed tokens remain
