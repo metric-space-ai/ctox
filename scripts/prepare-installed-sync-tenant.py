@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+import uuid
 
 OWNER = '01a087a0-169a-7e23-ba3d-71352256cbfb'
 SOURCE = 'b48220db385d53f07c8414c21f7ce22cdd8ff44d'
@@ -91,6 +92,7 @@ def prepare(producer_path, acceptance_base, port, host, workjet_revision):
         (root / '.devops-isolated-acceptance.json').write_text(json.dumps(marker))
         contract_hashes = {path: sha(root / 'src/apps/business-os' / path) for path in CONTRACTS}
         config = {'owner': OWNER, 'isolated': True, 'source': SOURCE, 'host': host,
+                  'actorId': str(uuid.uuid4()),
                   'root': str(root), 'acceptanceBase': str(acceptance_base), 'port': port,
                   'binary': str(binary), 'binarySha256': sha(binary),
                   'contractHashes': contract_hashes, 'workjetRevision': workjet_revision,

@@ -118,6 +118,16 @@ impl BusinessProjectionWriter {
         if self.payloads.get(&key) == Some(&comparable) {
             return Ok(());
         }
+        // A fresh writer (after a restart) has no cache yet: skip records the
+        // stores already hold instead of rewriting the whole replay.
+        if !self.payloads.contains_key(&key)
+            && self
+                .inner
+                .stored_projection_matches(collection, id, &comparable)?
+        {
+            self.payloads.insert(key, comparable);
+            return Ok(());
+        }
         let observed = Utc::now().timestamp_millis().max(source_ms);
         payload["updated_at_ms"] = json!(observed);
         self.inner

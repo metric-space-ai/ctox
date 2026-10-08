@@ -1,6 +1,6 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
-//! Bounded source reads and target ingestion. No resume or ownership mutation.
+//! Bounded checkpoint transport and explicit native ownership controls.
 use super::*;
 use ctox_sync::checkpoint::{artifacts, CheckpointStore};
 use ctox_sync::contracts::{ArtifactRef, CheckpointManifest};
@@ -8,8 +8,14 @@ use std::io::{Read, Seek, SeekFrom};
 const CHUNK: usize = 8192;
 const MANIFEST_LIMIT: u64 = 8 * 1024 * 1024;
 const BLOB_LIMIT: u64 = 64 * 1024 * 1024;
+#[path = "session_handoff_guest_import.rs"]
+mod guest_import;
+#[path = "session_handoff_checkpoint_quorum.rs"]
+mod quorum;
 #[path = "session_handoff_reconstruction.rs"]
 mod reconstruction;
+#[path = "session_handoff_takeover.rs"]
+mod takeover;
 
 /// Resolve the native Core credential source in the assigned workspace. The
 /// returned manager pins the actual account, not a client account label. It
@@ -386,14 +392,14 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Target<P> {
         let mut result = None;
         self.server.gate.with_current_authority(|conn, identity| {
             let permit = self.server.gate.resolve_fenced(conn, identity, request)?;
-            if !currency_matches(&self.original, &permit) {
+            if !operation_authority_matches(&self.original, &permit) {
                 return Err(deny("target_authority_changed"));
             }
             if self.request.phase == SessionHandoffPhase::Resume {
                 let mut receive = request.clone();
                 receive.phase = SessionHandoffPhase::Receive;
                 let permit = self.server.gate.resolve_fenced(conn, identity, &receive)?;
-                if !currency_matches(&self.original, &permit) {
+                if !operation_authority_matches(&self.original, &permit) {
                     return Err(deny("target_authority_changed"));
                 }
             }
@@ -725,7 +731,10 @@ pub(crate) fn assert_native_checkpoint_path(
         AuthCredentialsStoreMode::File,
     )
     .unwrap();
-    let original = native_target.gate.authorize(&local).unwrap();
+    let mut original = native_target.gate.authorize(&local).unwrap();
+    // Deterministically exercise a copy outliving its initial local witness.
+    // Actual wire challenges/receive permits are freshly signed per chunk.
+    original.expires_at_ms = 0;
     let live = Arc::new(Mutex::new(true));
     let target = Target {
         server: native_target,
@@ -903,6 +912,9 @@ pub(crate) fn assert_native_checkpoint_path(
         })
         .unwrap();
     reconstruction::assert_native_reconstruction(&target, &received);
+    guest_import::assert_native_import_fence(&target, &received);
+    quorum::assert_dirty_copy_cannot_acknowledge(&target, &received);
+    takeover::assert_dirty_copy_cannot_take_over(&target, &received);
     let (_, foreign) = make_fetch(
         Some(ArtifactRef {
             sha256: "aa".repeat(32),
@@ -981,9 +993,51 @@ pub(crate) struct CopyRequest {
     pub source_route: String,
     #[serde(default, skip_serializing_if = "copy_only")]
     pub reconstruct: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guest_id: String,
+    #[serde(default, skip_serializing_if = "copy_only")]
+    pub acknowledge: bool,
+    #[serde(default, skip_serializing_if = "copy_only")]
+    pub take_over: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protection_receipts: Vec<ctox_sync::contracts::CheckpointCopyReceipt>,
 }
 fn copy_only(reconstruct: &bool) -> bool {
     !reconstruct
+}
+impl CopyRequest {
+    pub(crate) fn operation_timeout(&self) -> std::time::Duration {
+        // Full manifests permit up to 1 GiB of bounded chunks. The local
+        // command deadline is separate from every short-lived wire permit.
+        std::time::Duration::from_secs(if self.source_route.is_empty() {
+            60
+        } else {
+            30 * 60
+        })
+    }
+    fn valid_operation(&self) -> bool {
+        let ordinary = !self.acknowledge && !self.take_over && self.protection_receipts.is_empty();
+        let identifiers_only =
+            !self.reconstruct && self.guest_id.is_empty() && self.source_route.is_empty();
+        (ordinary
+            && ((self.reconstruct && self.guest_id.is_empty() && self.source_route.is_empty())
+                || (!self.reconstruct
+                    && self.source_route.is_empty()
+                    && super::super::super::guest_runtime::identifier(&self.guest_id))
+                || (!self.reconstruct
+                    && self.guest_id.is_empty()
+                    && !self.source_route.is_empty()
+                    && self.source_route.len() <= 256)))
+            || (identifiers_only
+                && ((self.take_over && !self.acknowledge && self.protection_receipts.is_empty())
+                    || (!self.take_over
+                        && self.acknowledge
+                        && self.protection_receipts.is_empty())
+                    || (!self.take_over
+                        && !self.acknowledge
+                        && !self.protection_receipts.is_empty()
+                        && self.protection_receipts.len() <= 8)))
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
@@ -994,6 +1048,27 @@ pub(crate) enum CopyResponse {
     Reconstructed {
         checkpoint_digest: String,
         preparation_id: String,
+    },
+    GuestImported {
+        checkpoint_digest: String,
+        guest_id: String,
+        controller_id: String,
+        controller_generation: u64,
+        effect_id: String,
+    },
+    OwnershipTaken {
+        checkpoint_digest: String,
+        job_id: String,
+        session_id: String,
+        ownership: ctox_sync::authority::Ownership,
+    },
+    CopyAcknowledged {
+        receipt: ctox_sync::contracts::CheckpointCopyReceipt,
+    },
+    CheckpointProtected {
+        checkpoint_digest: String,
+        sequence: u64,
+        ownership_generation: u64,
     },
     Denied,
 }
@@ -1013,6 +1088,7 @@ pub(super) fn listen(
     pool: Arc<
         RxWebRTCReplicationPool<rxdb::plugins::replication_webrtc::WebRTCRsConnectionHandler>,
     >,
+    guests: Option<Arc<super::super::super::NativeGuestRegistry>>,
 ) -> anyhow::Result<CheckpointListener> {
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1033,7 +1109,7 @@ pub(super) fn listen(
             }
             let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
                 let n = stream.read_u32().await? as usize;
-                anyhow::ensure!(n > 0 && n <= 2048, "invalid checkpoint control frame");
+                anyhow::ensure!(n > 0 && n <= 32 * 1024, "invalid checkpoint control frame");
                 let mut bytes = vec![0; n];
                 stream.read_exact(&mut bytes).await?;
                 Ok::<CopyRequest, anyhow::Error>(serde_json::from_slice(&bytes)?)
@@ -1045,13 +1121,48 @@ pub(super) fn listen(
                         && r.binding_digest
                             .bytes()
                             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                        && ((r.reconstruct && r.source_route.is_empty())
-                            || (!r.reconstruct
-                                && !r.source_route.is_empty()
-                                && r.source_route.len() <= 256)) =>
+                        && r.valid_operation() =>
                 {
+                    let deadline = r.operation_timeout();
                     let operation = async {
-                        if r.reconstruct {
+                        if r.take_over {
+                            let registry = guests.as_ref().ok_or_else(|| {
+                                anyhow::anyhow!("native authority host unavailable")
+                            })?;
+                            takeover::take_over(server.clone(), registry.clone(), r.binding_digest)
+                                .await
+                        } else if r.acknowledge || !r.protection_receipts.is_empty() {
+                            let registry = guests.as_ref().ok_or_else(|| {
+                                anyhow::anyhow!("native authority host unavailable")
+                            })?;
+                            if r.acknowledge {
+                                quorum::acknowledge(
+                                    server.clone(),
+                                    registry.clone(),
+                                    r.binding_digest,
+                                )
+                                .await
+                            } else {
+                                quorum::protect(
+                                    server.clone(),
+                                    registry.clone(),
+                                    r.binding_digest,
+                                    r.protection_receipts,
+                                )
+                                .await
+                            }
+                        } else if !r.guest_id.is_empty() {
+                            let registry = guests
+                                .as_ref()
+                                .ok_or_else(|| anyhow::anyhow!("native guest host unavailable"))?;
+                            guest_import::import(
+                                server.clone(),
+                                registry.clone(),
+                                r.binding_digest,
+                                r.guest_id,
+                            )
+                            .await
+                        } else if r.reconstruct {
                             let (checkpoint_digest, preparation_id) =
                                 reconstruction::reconstruct(server.clone(), r.binding_digest)
                                     .await?;
@@ -1070,7 +1181,7 @@ pub(super) fn listen(
                         }
                     };
                     tokio::select! {
-                        result=tokio::time::timeout(std::time::Duration::from_secs(60),operation)=>{
+                        result=tokio::time::timeout(deadline,operation)=>{
                             match result {Ok(Ok(response))=>response,_=>CopyResponse::Denied}
                         },
                         _=stream.read_u8()=>CopyResponse::Denied,

@@ -1,5 +1,38 @@
 # Native session handoff integration boundary
 
+## Host-owned target guest import
+
+After protected copy, `ctox sync handoff-import-guest <binding-digest> <guest-id>`
+uses the running host's existing private checkpoint socket. Only identifiers
+cross this same-UID control socket. It accepts neither a path nor serialized
+provider, ownership, process or clean-effect claims.
+
+The host passes its actual guest registry to the listener. An enrolled directory
+alone cannot import: the guest must retain the real provider and admitted
+execution, with the original session/account/harness contract and the actual
+next target ownership (local node, source generation + 1). Quorum verifies
+the protected checkpoint and denies pending effects or a refresh requirement.
+The target binding's receive/execute grants authorize the original handoff;
+they do not substitute for that current target quorum ownership.
+
+Staging and publication use `stage_guest_restore`/`commit_guest_restore`.
+Worker, issuer, current native policy and controller share the publication fence;
+the handoff check borrows that same policy transaction rather than opening a
+second writer. Current account, exact enrolled human/project/chat/profile and
+host/operation lifetime remain checked through publication. Registration after
+the completion await repeats the combined fence and validates the real completed
+import effect. Cancellation or uncertain publication cannot mint a receipt or
+automatically retry a process/import attempt.
+
+The result reports `imported:true` and `resumed:false`. This command registers
+the completed import; it does **not** boot/restore QEMU, start a Core turn, grant
+new execution ownership or provision a missing target provider. The current
+source journal's unknown external-effect marker stays pending and is rejected.
+A real two-host continuation still needs trusted source effect reconciliation,
+target provider/Core-session binding, native image/RAM restoration and guest
+readiness before activation. These gaps remain goals 16/18 and require installed
+isolated-tenant evidence rather than a successful copy/import response.
+
 ## Core import primitive
 
 The trusted native execution owner can now call
@@ -557,6 +590,14 @@ separate commits: failed metadata publication can leave a private orphan blob;
 a later authority or reply-persistence failure can leave private journal
 input without a successful worker marker and needs reconciliation. Installed
 model/VM/two-host acceptance remains separate from the source storage regressions.
+
+## Native paused QEMU memory
+
+The retained Linux guest owner now has separate paused memory export, incoming
+load and explicit activation primitives. Their limits and required caller-owned
+production authority/disk/checkpoint connections are described in
+[Native paused QEMU memory checkpoint](ctox-guest-memory-checkpoint.md).
+They do not establish installed guest or two-host acceptance.
 
 ## Native producer lifetime
 

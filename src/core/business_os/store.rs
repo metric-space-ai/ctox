@@ -12971,6 +12971,22 @@ pub(super) struct RxdbProjectionWriterCache {
 }
 
 impl RxdbProjectionWriterCache {
+    /// The live mirrored document, or None when the collection or row is absent.
+    fn stored_payload(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+    ) -> anyhow::Result<Option<Value>> {
+        if !matches!(self.writers.get(collection), Some(Some(_))) {
+            let writer = RxdbCollectionWriter::open(&self.root, collection)?;
+            self.writers.insert(collection.to_string(), writer);
+        }
+        match self.writers.get(collection) {
+            Some(Some(writer)) => writer.read_live(record_id),
+            _ => Ok(None),
+        }
+    }
+
     /// Replace current source records, including removed fields and tombstones.
     pub(super) fn replace_domain_record_required(
         &mut self,
@@ -13148,6 +13164,36 @@ impl BusinessProjectionWriter {
         )?;
         self.rxdb_writers
             .upsert(collection, record_id, updated_at_ms, payload)
+    }
+
+    /// True when the Business OS record and its RxDB mirror already hold
+    /// `payload` apart from the fields the writers stamp. Projection pumps use
+    /// it after a restart, when their in-memory dedupe cache is empty: a full
+    /// replay otherwise rewrote every unchanged record and kept
+    /// business-os.sqlite3 write-locked for half an hour (thesen 08.10.2026).
+    pub(crate) fn stored_projection_matches(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        payload: &Value,
+    ) -> anyhow::Result<bool> {
+        let stored = self
+            .conn
+            .query_row(
+                "SELECT payload_json FROM business_records
+                 WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+                params![collection, record_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+        if !stored.is_some_and(|stored| same_projection_payload(&stored, payload)) {
+            return Ok(false);
+        }
+        Ok(self
+            .rxdb_writers
+            .stored_payload(collection, record_id)?
+            .is_some_and(|mirrored| same_projection_payload(&mirrored, payload)))
     }
 
     pub(crate) fn upsert_source_projection(
@@ -13361,6 +13407,24 @@ impl RxdbCollectionWriter {
         tx.commit()?;
         self.notify_committed_change();
         Ok(true)
+    }
+
+    fn read_live(&self, record_id: &str) -> anyhow::Result<Option<Value>> {
+        let Some(raw) = self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT data FROM {} WHERE id = ?1 AND deleted = 0",
+                    self.table
+                ),
+                [record_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_str::<Value>(&raw).ok())
     }
 
     fn read(&self, record_id: &str) -> anyhow::Result<Option<Value>> {
@@ -20504,6 +20568,29 @@ fn overlay_queue_task_on_command_projection(
 thread_local! {
     static AFTER_CANONICAL_COMMAND_MIRROR_UPSERT: RefCell<Option<Box<dyn FnMut()>>> =
         RefCell::new(None);
+}
+
+/// Same document apart from the fields every projection write stamps anew.
+fn same_projection_payload(stored: &Value, expected: &Value) -> bool {
+    const STAMPED: [&str; 6] = [
+        "id",
+        "_rev",
+        "_deleted",
+        "_meta",
+        "_attachments",
+        "updated_at_ms",
+    ];
+    let (Some(stored), Some(expected)) = (stored.as_object(), expected.as_object()) else {
+        return false;
+    };
+    let content = |object: &serde_json::Map<String, Value>| {
+        object
+            .iter()
+            .filter(|(key, _)| !STAMPED.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    content(stored) == content(expected)
 }
 
 fn notify_after_canonical_command_mirror_upsert() {

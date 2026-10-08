@@ -407,3 +407,278 @@ async fn cancellation_retires_guest_channel_handshake_but_keeps_child_owned() ->
     stopped?;
     Ok(())
 }
+
+#[tokio::test]
+async fn real_memory_export_and_incoming_restore_stay_paused_until_explicit_resume() -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = tempfile::tempdir()?;
+    let input = config(root.path())?;
+    real_disk(&input).await?;
+    let path = root.path().join("memory.state");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    let mut file = tokio::fs::File::from_std(file);
+    let mut source = QemuProcess::spawn_paused(&input, "isolated-memory-guest")?;
+    let mut target: Option<QemuProcess> = None;
+    eprintln!(
+        "owned memory source pid={} stop=test-finally; no guest OS",
+        source.pid()
+    );
+    let result = tokio::time::timeout(Duration::from_secs(60), async {
+        source.connect_monitor().await?;
+        source.resume().await?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        source.pause().await?;
+        let memory = source.save_memory(&mut file).await?;
+        ensure!(memory.bytes > 0 && memory.sha256.len() == 64);
+        ensure!(std::fs::metadata(&path)?.permissions().mode() & 0o777 == 0o400);
+        ensure!(
+            source.resume().await.is_err(),
+            "exported source could execute again"
+        );
+        ensure!(source.status().await?.status == "postmigrate");
+        ensure!(
+            source.finish_memory_export().await?.success(),
+            "source quit was not clean"
+        );
+        ensure!(
+            source.child.try_wait()?.is_some(),
+            "source disk writer was not reaped"
+        );
+
+        target = Some(QemuProcess::spawn_incoming(
+            &input,
+            "isolated-memory-guest",
+        )?);
+        let target = target.as_mut().unwrap();
+        eprintln!(
+            "owned memory target pid={} stop=test-finally; no guest OS",
+            target.pid()
+        );
+        target.connect_monitor().await?;
+        ensure!(
+            target.resume().await.is_err(),
+            "incomplete incoming guest executed"
+        );
+        let mut saved = tokio::fs::File::open(&path).await?;
+        target.restore_memory(&mut saved, &memory).await?;
+        let status = target.status().await?;
+        ensure!(
+            !status.running && status.status == "paused",
+            "restore automatically executed"
+        );
+        ensure!(
+            target.restore_memory(&mut saved, &memory).await.is_err(),
+            "restore replayed"
+        );
+        target.resume().await?;
+        ensure!(
+            target.status().await?.running,
+            "explicit native resume failed"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    let target_stopped = match target.as_mut() {
+        Some(target) => target.stop().await.map(|_| ()),
+        None => Ok(()),
+    };
+    let source_stopped = source.stop().await;
+    target_stopped?;
+    source_stopped?;
+    result.context("actual memory roundtrip deadline")??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn corrupt_memory_retires_incoming_attempt_without_executing_or_releasing_child() -> Result<()>
+{
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = tempfile::tempdir()?;
+    let input = config(root.path())?;
+    real_disk(&input).await?;
+    let path = root.path().join("corrupt.state");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    std::io::Write::write_all(&mut file, b"corrupted stream")?;
+    file.sync_all()?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o400))?;
+    drop(file);
+    let mut saved = tokio::fs::File::open(&path).await?;
+    let expected = QemuMemoryState {
+        bytes: 16,
+        sha256: "0".repeat(64),
+    };
+    let mut target = QemuProcess::spawn_incoming(&input, "isolated-corrupt-memory")?;
+    eprintln!(
+        "owned corrupt-memory target pid={} stop=test-finally",
+        target.pid()
+    );
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        target.connect_monitor().await?;
+        ensure!(
+            target.restore_memory(&mut saved, &expected).await.is_err(),
+            "corrupt input accepted"
+        );
+        ensure!(
+            target.restore_memory(&mut saved, &expected).await.is_err(),
+            "failed incoming attempt retried"
+        );
+        ensure!(target.resume().await.is_err(), "failed restore executed");
+        let status = target.status().await?;
+        ensure!(
+            !status.running && status.status == "inmigrate",
+            "corrupt stream reached QEMU"
+        );
+        ensure!(
+            target.child.try_wait()?.is_none(),
+            "failed restore lost child ownership"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    let stopped = target.stop().await;
+    stopped?;
+    result.context("corrupt-memory deadline")??;
+    ensure!(
+        target.child.try_wait()?.is_some(),
+        "failed target was not reaped"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn real_qemu_survives_retirement_of_its_calling_thread() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let input = config(root.path())?;
+    real_disk(&input).await?;
+    let runtime = tokio::runtime::Handle::current();
+    let caller = std::thread::spawn(move || {
+        let _runtime = runtime.enter();
+        QemuProcess::spawn_paused(&input, "isolated-retired-caller")
+    });
+    // The calling thread has actually exited before the retained owner is used.
+    let mut guest = caller
+        .join()
+        .map_err(|_| anyhow!("native QEMU caller fixture panicked"))??;
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        guest.connect_monitor().await?;
+        ensure!(
+            !guest.status().await?.running,
+            "retained guest executed before authorization"
+        );
+        guest.ensure_alive()?;
+        guest.monitor()?.quit().await?;
+        ensure!(
+            guest.wait_for_exit().await?.success(),
+            "retained guest did not confirm a clean QMP quit"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    let stopped = guest.stop().await;
+    result.context("retired-caller QEMU deadline")??;
+    ensure!(
+        stopped?.success(),
+        "retained guest did not stop successfully"
+    );
+    ensure!(
+        guest.child.try_wait()?.is_some(),
+        "retained child was not reaped"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn real_qemu_cannot_survive_abrupt_native_parent_exit() -> Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    const CHILD_ROOT: &str = "CTOX_QEMU_PARENT_EXIT_TEST_ROOT";
+    const TEST: &str =
+        "business_os::guest_runtime::qemu::tests::real_qemu_cannot_survive_abrupt_native_parent_exit";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let root = PathBuf::from(root);
+        let input = config(&root)?;
+        real_disk(&input).await?;
+        let mut guest = QemuProcess::spawn_paused(&input, "isolated-parent-exit-guest")?;
+        guest.connect_monitor().await?;
+        ensure!(!guest.status().await?.running);
+        // A private witness avoids libtest's inline progress prefix on stdout.
+        std::fs::write(root.join("parent-exit-qemu.pid"), guest.pid().to_string())?;
+        // Deliberately bypass every Rust destructor, as SIGABRT does.
+        std::process::exit(0);
+    }
+    let root = tempfile::tempdir()?;
+    let child = Command::new(std::env::current_exe()?)
+        .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+        .env(CHILD_ROOT, root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let output = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
+        .await
+        .context("native parent fixture deadline")??;
+    ensure!(
+        output.status.success(),
+        "native parent fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pid: i32 = std::fs::read_to_string(root.path().join("parent-exit-qemu.pid"))
+        .context("actual QEMU child identity missing")?
+        .parse()?;
+    // SAFETY: pidfd pins this exact process; an already-reaped PID is absent.
+    // It avoids signaling another process if a numeric PID is subsequently reused.
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if raw < 0 {
+        ensure!(
+            std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH),
+            "cannot observe QEMU parent-exit result"
+        );
+        return Ok(());
+    }
+    // SAFETY: successful pidfd_open returns a fresh descriptor owned here.
+    let fd = unsafe { OwnedFd::from_raw_fd(raw as i32) };
+    let mut event = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: event is a valid single pollfd; this wait is bounded.
+    let observed_exit =
+        unsafe { libc::poll(&mut event, 1, 5000) } > 0 && event.revents & libc::POLLIN != 0;
+    if !observed_exit {
+        let argv = std::fs::read(format!("/proc/{pid}/cmdline"))?;
+        let assigned = root.path().as_os_str().as_encoded_bytes();
+        ensure!(
+            argv.windows(assigned.len()).any(|part| part == assigned),
+            "numeric QEMU PID no longer belongs to this test; no signal sent"
+        );
+        // A failed regression must still retire only its exact owned child.
+        // SAFETY: this syscall targets our retained pidfd, with no siginfo.
+        let stopped = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                fd.as_raw_fd(),
+                libc::SIGKILL,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        ensure!(stopped == 0, "cannot retire failed owned parent-exit child");
+        // SAFETY: same live descriptor and bounded wait as above.
+        ensure!(
+            unsafe { libc::poll(&mut event, 1, 5000) } > 0,
+            "failed owned child did not exit"
+        );
+    }
+    ensure!(observed_exit, "QEMU survived abrupt native parent exit");
+    Ok(())
+}

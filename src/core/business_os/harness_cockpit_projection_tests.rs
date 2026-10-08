@@ -1436,3 +1436,50 @@ fn terminal_run_projection_keeps_the_identity_allocated_before_execution() -> Re
     assert_eq!(count, 1);
     Ok(())
 }
+
+#[test]
+fn fresh_writer_replay_keeps_unchanged_records_untouched() -> Result<()> {
+    let (root, conn) = setup()?;
+    conn.execute("INSERT INTO communication_routing_state(message_key,route_status,updated_at) VALUES('task','leased',?1)", [Utc::now().to_rfc3339()])?;
+    for n in 0..3 {
+        conn.execute(
+            "INSERT INTO ctox_harness_flow_events VALUES(?1,'worker.phase','Working','','task',NULL,NULL,'{}',?2)",
+            params![format!("event-{n}"), Utc::now().to_rfc3339()],
+        )?;
+    }
+    let mut first = BusinessProjectionWriter::open(root.path())?;
+    project_events(root.path(), &conn, &mut first)?;
+    let revision = |id: &str| -> Result<String> {
+        Ok(first.inner.source_connection().query_row(
+            "SELECT rev FROM business_records WHERE collection='ctox_harness_events' AND record_id=?1",
+            [id],
+            |r| r.get(0),
+        )?)
+    };
+    let before = revision("event-1")?;
+    assert_eq!(
+        record(root.path(), "ctox_harness_events", "event-1")?["title"],
+        "Working"
+    );
+    // A restarted pump starts with an empty dedupe cache and replays.
+    let mut restarted = BusinessProjectionWriter::open(root.path())?;
+    project_events(root.path(), &conn, &mut restarted)?;
+    assert_eq!(
+        revision("event-1")?,
+        before,
+        "unchanged record was rewritten"
+    );
+    // A changed source is still written.
+    conn.execute(
+        "UPDATE ctox_harness_flow_events SET title='Changed' WHERE event_id='event-1'",
+        [],
+    )?;
+    let mut again = BusinessProjectionWriter::open(root.path())?;
+    project_events(root.path(), &conn, &mut again)?;
+    assert_ne!(revision("event-1")?, before);
+    assert_eq!(
+        record(root.path(), "ctox_harness_events", "event-1")?["title"],
+        "Changed"
+    );
+    Ok(())
+}
