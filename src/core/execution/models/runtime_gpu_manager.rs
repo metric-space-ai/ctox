@@ -666,7 +666,12 @@ mod tests {
             },
             GpuAdmission {
                 visible_devices: Some("2".to_string()),
-                reserved_mb_by_gpu: BTreeMap::from([(2, 12_288)]),
+                reserved_mb_by_gpu: BTreeMap::from([(
+                    2,
+                    runtime_plan::auxiliary_manifest(None, "engineai/Voxtral-4B-TTS-2603")
+                        .unwrap()
+                        .gpu_reserve_mb,
+                )]),
             },
             runtime_contract::RuntimeOwnershipState {
                 version: 1,
@@ -731,6 +736,16 @@ mod tests {
             &ownership,
             &[22],
             |_, _| false,
+        )
+        .is_empty());
+        let mut underreserved = admission.clone();
+        underreserved.reserved_mb_by_gpu.insert(2, 1400);
+        assert!(compatible_speech_gpu_holders_from_state(
+            &descriptor,
+            &underreserved,
+            &ownership,
+            &[22],
+            |_, _| true,
         )
         .is_empty());
         for invalid in 0..8 {
