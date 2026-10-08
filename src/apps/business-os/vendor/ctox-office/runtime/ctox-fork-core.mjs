@@ -135,7 +135,11 @@ export async function createCtoxForkRuntime({ root, bridge, permissions, emit, l
             { code: message.data?.errorCode },
           ));
         } else {
-          emit?.('error', { code: message.data?.errorCode, message: message.data?.errorDescription || `${productName} error` });
+          emit?.('error', {
+            code: message.data?.errorCode,
+            message: message.data?.errorDescription || `${productName} error`,
+            diagnostics: { fontRequests: fontRequestDiagnostics(frame.contentWindow) },
+          });
         }
         break;
     }
@@ -343,6 +347,28 @@ function embeddedEditorDocument(kind, entry) {
   return /<head(?:\s[^>]*)?>/i.test(html)
     ? html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}\n    ${base}`)
     : `<!doctype html><html><head>${base}</head><body>${html}</body></html>`;
+}
+
+// Font files and the WebAssembly font engine are fetched by the editor frame
+// itself, so their HTTP status lives in that frame's resource timing. Reading
+// it at error time keeps the evidence without observing every request.
+const FONT_REQUEST_PATTERN = /\/fonts\/\d{3}$|\/fonts\.wasm$|\/AllFonts\.js$/;
+const FONT_REQUEST_LIMIT = 40;
+
+function fontRequestDiagnostics(contentWindow) {
+  let entries = [];
+  try {
+    entries = contentWindow?.performance?.getEntriesByType?.('resource') || [];
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => FONT_REQUEST_PATTERN.test(entry.name))
+    .slice(-FONT_REQUEST_LIMIT)
+    .map((entry) => ({
+      path: new URL(entry.name).pathname,
+      status: entry.responseStatus ?? null,
+    }));
 }
 
 function escapeHtmlAttribute(value) {
