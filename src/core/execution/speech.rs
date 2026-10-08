@@ -6,6 +6,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fmt,
     io::Read,
@@ -24,6 +25,7 @@ use tokio_tungstenite::{
     },
     MaybeTlsStream, WebSocketStream,
 };
+use uuid::Uuid;
 
 const CONFIG_KEY: &str = "speech_gateway";
 pub const MISTRAL_REALTIME_MODEL: &str = "voxtral-mini-transcribe-realtime-2602";
@@ -107,6 +109,44 @@ pub struct SpeechOutput {
     pub elapsed_ms: u64,
 }
 
+/// Producer provenance, not a meeting permission or a playable-audio verdict.
+/// Only `SpeechGateway::synthesize_verified` can construct this value. The
+/// native meeting adapter must still validate/store the audio through its file
+/// authority and derive duration from the actual bytes before publishing it.
+pub struct VerifiedSpeechOutput {
+    run_id: String,
+    text_sha256: String,
+    audio_sha256: String,
+    output: SpeechOutput,
+}
+
+impl VerifiedSpeechOutput {
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+    pub fn text_sha256(&self) -> &str {
+        &self.text_sha256
+    }
+    pub fn audio_sha256(&self) -> &str {
+        &self.audio_sha256
+    }
+    pub fn audio(&self) -> &[u8] {
+        &self.output.audio
+    }
+    pub fn format(&self) -> SpeechAudioFormat {
+        self.output.format
+    }
+    pub fn model(&self) -> &str {
+        &self.output.model
+    }
+    pub fn input_characters(&self) -> usize {
+        self.output.input_characters
+    }
+    pub fn elapsed_ms(&self) -> u64 {
+        self.output.elapsed_ms
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PcmFormat {
@@ -154,6 +194,55 @@ pub enum TranscriptEvent {
         finish_to_final_ms: Option<u64>,
         audio_duration_ms: u64,
     },
+}
+
+/// Non-deserializable final receipt minted only by an actual gateway stream.
+/// A caller must bind this stream ID to its authenticated meeting at open and
+/// revalidate that same authority before persisting the receipt. This value
+/// alone neither identifies the speaker nor authorizes any meeting mutation.
+#[derive(Debug)]
+pub struct VerifiedTranscriptFinal {
+    stream_id: String,
+    sequence: u64,
+    text: String,
+    model: String,
+    finish_to_final_ms: Option<u64>,
+    audio_duration_ms: u64,
+}
+
+impl VerifiedTranscriptFinal {
+    pub fn stream_id(&self) -> &str {
+        &self.stream_id
+    }
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+    pub fn finish_to_final_ms(&self) -> Option<u64> {
+        self.finish_to_final_ms
+    }
+    pub fn audio_duration_ms(&self) -> u64 {
+        self.audio_duration_ms
+    }
+}
+
+/// Partial text remains transient. Only the branded Final variant is suitable
+/// for native speech persistence; deserializing TranscriptEvent grants none.
+#[derive(Debug)]
+pub enum VerifiedTranscriptEvent {
+    Partial {
+        stream_id: String,
+        sequence: u64,
+        /// Delta, accumulated by the native/UI adapter within this stream.
+        text: String,
+        received_after_start_ms: u64,
+    },
+    Final(VerifiedTranscriptFinal),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -307,6 +396,20 @@ impl SpeechGateway {
         })
     }
 
+    /// Synthesize through the actual configured adapter and brand its result.
+    pub fn synthesize_verified(
+        &self,
+        request: &SpeechRequest,
+    ) -> Result<VerifiedSpeechOutput, SpeechError> {
+        let output = self.synthesize(request)?;
+        Ok(VerifiedSpeechOutput {
+            run_id: Uuid::new_v4().to_string(),
+            text_sha256: format!("{:x}", Sha256::digest(request.text.as_bytes())),
+            audio_sha256: format!("{:x}", Sha256::digest(&output.audio)),
+            output,
+        })
+    }
+
     /// Must run inside the daemon's existing Tokio runtime. No independent daemon or browser token.
     pub async fn open_transcription(
         &self,
@@ -408,6 +511,7 @@ enum Input {
 /// Owned bounded session. Drop aborts its sole task and drops the provider socket.
 /// Backpressure never silently discards microphone audio or builds an unbounded queue.
 pub struct TranscriptionStream {
+    stream_id: String,
     input: mpsc::Sender<Input>,
     events: mpsc::Receiver<Result<TranscriptEvent, SpeechError>>,
     terminal: Option<oneshot::Receiver<Result<(), SpeechError>>>,
@@ -485,6 +589,7 @@ impl TranscriptionStream {
             let _ = done_tx.send(result);
         });
         Ok(Self {
+            stream_id: Uuid::new_v4().to_string(),
             input,
             events,
             terminal: Some(terminal),
@@ -523,6 +628,7 @@ impl TranscriptionStream {
             let _ = done_tx.send(result);
         });
         Ok(Self {
+            stream_id: Uuid::new_v4().to_string(),
             input,
             events,
             terminal: Some(terminal),
@@ -530,6 +636,11 @@ impl TranscriptionStream {
             format,
             finished: false,
         })
+    }
+
+    /// Bind to the verified native meeting before accepting its first PCM.
+    pub fn stream_id(&self) -> &str {
+        &self.stream_id
     }
 
     pub fn append_pcm(&self, pcm: &[u8]) -> Result<(), SpeechError> {
@@ -574,6 +685,41 @@ impl TranscriptionStream {
             Err(_) => Some(Err(SpeechError::Closed)),
             Ok(Ok(())) => None,
         }
+    }
+
+    /// Preferred producer API for meeting persistence. The event is consumed
+    /// once from this stream's private gateway channel, never from caller JSON.
+    pub async fn next_verified_event(
+        &mut self,
+    ) -> Option<Result<VerifiedTranscriptEvent, SpeechError>> {
+        self.next_event().await.map(|result| {
+            result.map(|event| match event {
+                TranscriptEvent::Partial {
+                    sequence,
+                    text,
+                    received_after_start_ms,
+                } => VerifiedTranscriptEvent::Partial {
+                    stream_id: self.stream_id.clone(),
+                    sequence,
+                    text,
+                    received_after_start_ms,
+                },
+                TranscriptEvent::Final {
+                    sequence,
+                    text,
+                    model,
+                    finish_to_final_ms,
+                    audio_duration_ms,
+                } => VerifiedTranscriptEvent::Final(VerifiedTranscriptFinal {
+                    stream_id: self.stream_id.clone(),
+                    sequence,
+                    text,
+                    model,
+                    finish_to_final_ms,
+                    audio_duration_ms,
+                }),
+            })
+        })
     }
 
     pub async fn cancel(mut self) {

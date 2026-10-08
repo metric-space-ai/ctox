@@ -441,6 +441,44 @@ pub(super) fn require_assigned_workjet_computer(
     Ok(computer)
 }
 
+/// Called only inside the source MCP owner's current policy transaction.
+/// Native issuance is independent of environment/host/presentation identities.
+pub(super) fn enroll_worker_computer(
+    conn: &Connection,
+    owner_user_id: &str,
+    display_name: &str,
+    hosting_mode: &str,
+    build: super::computer_capabilities::BuildCapability,
+) -> anyhow::Result<Value> {
+    let owner = bounded_required(owner_user_id, "owner_user_id", 256)?;
+    let display = bounded_required(display_name, "display_name", 256)?;
+    anyhow::ensure!(
+        matches!(hosting_mode, "workstation" | "self_hosted"),
+        "worker enrollment requires workstation or self_hosted mode"
+    );
+    let mut config = vec![ComputerCapability::Build(build)];
+    validate_capabilities(&mut config, false)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    anyhow::ensure!(
+        outbound_load_record(conn, COMPUTERS_COLLECTION, &id)?.is_none(),
+        "native computer identity collision"
+    );
+    let now = super::store::now_ms() as i64;
+    persist_idempotently(
+        conn,
+        COMPUTERS_COLLECTION,
+        &id,
+        now,
+        serde_json::json!({
+            "id":id,"owner_user_id":owner,"display_name":display,"hosting_mode":hosting_mode,
+            "status":"assigned","capabilities":["build"],"self_hosted_colocation":false,
+            "device_binding_id":"","actor_epoch":0,"last_seen_at_ms":0,"replication_up":false,
+            "created_at_ms":now,"updated_at_ms":now,"is_deleted":false,"agentless":false,
+            "capability_epoch":1,"capability_config":config
+        }),
+    )
+}
+
 fn persist_idempotently(
     conn: &Connection,
     collection: &str,
@@ -467,10 +505,17 @@ fn persist_and_project_idempotently(
     desired: Value,
 ) -> anyhow::Result<Value> {
     let record = persist_idempotently(conn, collection, record_id, now, desired)?;
+    project_computer_record(root, &record)?;
+    Ok(record)
+}
+
+/// Publish only an already committed native computer under current owner policy.
+pub(super) fn project_computer_record(root: &Path, record: &Value) -> anyhow::Result<()> {
+    let record_id = record["id"].as_str().context("native computer has no id")?;
     let updated_at_ms = record
         .get("updated_at_ms")
         .and_then(Value::as_i64)
-        .unwrap_or(now);
+        .unwrap_or_else(|| super::store::now_ms() as i64);
     // v1 has additionalProperties:false. Keep operational configuration in
     // the native record until the coordinated Workjet schema upgrade; its
     // stable capability names remain visible on the current WebRTC surface.
@@ -480,8 +525,14 @@ fn persist_and_project_idempotently(
         object.remove("capability_epoch");
         object.remove("agentless");
     }
-    upsert_rxdb_collection_record(root, collection, record_id, updated_at_ms, projection)?;
-    Ok(record)
+    upsert_rxdb_collection_record(
+        root,
+        COMPUTERS_COLLECTION,
+        record_id,
+        updated_at_ms,
+        projection,
+    )?;
+    Ok(())
 }
 
 fn stable_record_content(value: &Value) -> Value {

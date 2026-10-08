@@ -175,6 +175,7 @@ const BUSINESS_OS_MCP_SESSION_TOOLS: &[&str] = &[
     // research task ends in "no successful writeback receipt".
     "business_os.execute_writeback",
     "business_os.get_command_status",
+    "business_os.workjet_worker_dispatch",
     "business_os.list_runs",
     "business_os.get_run",
 ];

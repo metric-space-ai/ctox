@@ -1144,6 +1144,8 @@ const READ_TOOLS = new Set([
 ]);
 
 const WRITE_TOOLS = new Set([
+  "business_os.remote_worker_admission",
+  "business_os.workjet_worker_dispatch",
   "business_os.propose_action",
   "business_os.upsert_record",
   "business_os.upsert_user",
