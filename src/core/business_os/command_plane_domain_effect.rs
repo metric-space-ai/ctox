@@ -78,6 +78,15 @@ pub(super) fn recover_applied_domain_effect(
     let Some(applied) = domain_effect::load(&conn, command_id, payload_hash, actor_user_id)? else {
         return Ok(None);
     };
+    if command.command_type == crate::business_os::project_chats::jour_fixe_local_candidate::COMMAND
+    {
+        crate::business_os::project_chats::jour_fixe_local_candidate::validate_recovery_scope(
+            root,
+            &conn,
+            command,
+            actor_user_id,
+        )?;
+    }
     let canonical = channels::business_command_projection(root, command_id)?;
     anyhow::ensure!(
         canonical["execution_mode"] == "control" && canonical["payload_hash"] == payload_hash,

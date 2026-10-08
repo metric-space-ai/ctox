@@ -1,21 +1,21 @@
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-jour-supervisor-tools';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v2-jour-supervisor-tools';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v2-jour-supervisor-tools';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createAppActions } from './shared/app-actions.js?v=20261008-shell-v2-jour-supervisor-tools';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261008-shell-v2-local-transcript-candidate';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261008-shell-v2-local-transcript-candidate';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261008-shell-v2-local-transcript-candidate';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261008-shell-v2-local-transcript-candidate';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261008-shell-v2-local-transcript-candidate';
+import { CtoxResizer } from './shared/resizer.js?v=20261008-shell-v2-local-transcript-candidate';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261008-shell-v2-local-transcript-candidate';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261008-shell-v2-local-transcript-candidate';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261008-shell-v2-local-transcript-candidate';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261008-shell-v2-local-transcript-candidate';
+import { createAppActions } from './shared/app-actions.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/app-lifecycle.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -24,20 +24,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/permissions.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/branding.js?v=20261008-shell-v2-local-transcript-candidate';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/presentation.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -48,9 +48,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createDocumentsFacade } from './shared/documents.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/shell-permissions-ui.js?v=20261008-shell-v2-local-transcript-candidate';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261008-shell-v2-local-transcript-candidate';
+import { createDocumentsFacade } from './shared/documents.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -58,16 +58,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/maintenance-state.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/workspace-session.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/taskbar-pins.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -75,10 +75,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-shell-v2-jour-supervisor-tools';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261008-shell-v2-local-transcript-candidate';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-shell-v2-jour-supervisor-tools';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261008-shell-v2-local-transcript-candidate';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261008-shell-v2-local-transcript-candidate';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -86,8 +86,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261008-shell-v2-jour-supervisor-tools';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-shell-v2-jour-supervisor-tools';
+} from './shared/startup-deadlines.js?v=20261008-shell-v2-local-transcript-candidate';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261008-shell-v2-local-transcript-candidate';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -105,7 +105,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261008-shell-v2-jour-supervisor-tools';
+const APP_BUILD = '20261008-shell-v2-local-transcript-candidate';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13712,7 +13712,8 @@ async function workjetProjectControl(request = {}) {
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
-    'project.jour_fixe.transcript.append', 'project.jour_fixe.todos.revise',
+    'project.jour_fixe.transcript.append', 'project.jour_fixe.transcript.local_candidate',
+    'project.jour_fixe.todos.revise',
     'project.jour_fixe.comment.add'];
   const acquisition = supervisorActions.includes(action)
     ? requireWorkjetSupervisorDataPlane() : requireWorkjetProjectDataPlane();
@@ -13724,15 +13725,20 @@ async function workjetProjectControl(request = {}) {
     'project.jour_fixe.meeting.start': 'MeetingTransitionRequest',
     'project.jour_fixe.meeting.end': 'MeetingTransitionRequest',
     'project.jour_fixe.transcript.append': 'AppendTranscriptRequest',
+    'project.jour_fixe.transcript.local_candidate': 'LocalTranscriptCandidateRequest',
     'project.jour_fixe.todos.revise': 'ProposeTodosRequest',
     'project.jour_fixe.comment.add': 'AddCommentRequest',
   };
   if (Object.hasOwn(meetingMutationTypes, action)) {
     const appending = action === 'project.jour_fixe.transcript.append';
+    const localCandidate = action === 'project.jour_fixe.transcript.local_candidate';
+    const nativeInstanceId = localCandidate
+      ? boundedWorkjetProjectText(state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'instance_id', 256) : null;
     const revising = action === 'project.jour_fixe.todos.revise';
     const commenting = action === 'project.jour_fixe.comment.add';
     const allowedKeys = new Set(['action', 'commandId', 'projectId', 'operationId', 'meetingId', 'expectedRevision']);
     if (appending) allowedKeys.add('turn');
+    if (localCandidate) for (const key of ['requestId', 'deckRevision', 'text']) allowedKeys.add(key);
     if (revising) for (const key of ['proposalRevision', 'items']) allowedKeys.add(key);
     if (commenting) for (const key of ['commentId', 'slideId', 'deckRevision', 'x', 'y', 'text']) allowedKeys.add(key);
     assertWorkjetProjectPayloadKeys(request, allowedKeys);
@@ -13747,6 +13753,8 @@ async function workjetProjectControl(request = {}) {
       meeting_id: boundedWorkjetProjectText(request.meetingId, 'meetingId', 128),
       expected_revision: request.expectedRevision,
       ...(appending ? { turn: request.turn } : {}),
+      ...(localCandidate ? { request_id: request.requestId, instance_id: nativeInstanceId,
+        project_id: projectId, deck_revision: request.deckRevision, text: request.text } : {}),
       ...(revising ? { proposal_revision: request.proposalRevision, items: request.items } : {}),
       ...(commenting ? { comment_id: request.commentId, slide_id: request.slideId,
         deck_revision: request.deckRevision, x: request.x, y: request.y, text: request.text } : {}),
@@ -13759,7 +13767,13 @@ async function workjetProjectControl(request = {}) {
       || payload.turn.sequence < 1 || payload.turn.ended_at_ms < payload.turn.started_at_ms)) {
       throw new TypeError('Owner text cannot claim another speaker or speech provenance.');
     }
+    if (localCandidate && (!payload.text.trim() || new TextEncoder().encode(payload.text).length > 4096)) {
+      throw new TypeError('Local transcript candidate exceeds the 4096-byte UTF-8 text budget.');
+    }
     const expectedPayload = JSON.parse(JSON.stringify(payload));
+    const candidateTextHash = localCandidate
+      ? [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(expectedPayload.text)))]
+        .map(byte => byte.toString(16).padStart(2, '0')).join('') : null;
     const sameValue = (left, right) => {
       if (left === right) return true;
       if (!left || !right || typeof left !== 'object' || typeof right !== 'object'
@@ -13770,7 +13784,8 @@ async function workjetProjectControl(request = {}) {
     };
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
-        || actorContext(state.session).id !== ownerUserId) {
+        || actorContext(state.session).id !== ownerUserId
+        || (localCandidate && (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== nativeInstanceId)) {
         throw new Error('Workjet project session changed before the meeting mutation was delivered.');
       }
     };
@@ -13791,18 +13806,34 @@ async function workjetProjectControl(request = {}) {
     const mutation = receipt.result.mutation;
     const resultValidation = validateJourFixeValue('MeetingMutationReceipt', mutation);
     if (resultValidation.ok !== true) throw new TypeError(resultValidation.error);
-    const expectedState = action === 'project.jour_fixe.meeting.start' ? 'live'
+    const expectedState = action === 'project.jour_fixe.meeting.start' || localCandidate ? 'live'
       : action === 'project.jour_fixe.meeting.end' || revising ? 'review' : null;
     if (mutation.operation_id !== expectedPayload.operation_id || mutation.meeting_id !== expectedPayload.meeting_id
       || mutation.project_id !== projectId || mutation.revision !== expectedPayload.expected_revision + 1
       || (expectedState ? mutation.state !== expectedState : !['live', 'review'].includes(mutation.state))
-      || (appending ? mutation.changed_id !== expectedPayload.turn.id
+      || (localCandidate ? mutation.changed_id !== receipt.result.local_candidate?.turn_id
+        : appending ? mutation.changed_id !== expectedPayload.turn.id
         : commenting ? mutation.changed_id !== expectedPayload.comment_id : mutation.changed_id != null)
       || (revising ? mutation.todos_revision !== expectedPayload.proposal_revision : mutation.todos_revision != null)) {
       throw new Error('Workjet meeting mutation receipt does not confirm the requested operation.');
     }
+    if (localCandidate) {
+      const stored = receipt.result.local_candidate;
+      const shape = validateJourFixeValue('LocalTranscriptCandidateReceipt', stored);
+      if (shape.ok !== true) throw new TypeError(shape.error);
+      const nativeOwnerId = boundedWorkjetProjectText(receipt.result.owner_user_id, 'owner_user_id', 256);
+      if (stored.operation_id !== expectedPayload.operation_id || stored.request_id !== expectedPayload.request_id
+        || stored.instance_id !== nativeInstanceId || stored.project_id !== projectId
+        || stored.meeting_id !== expectedPayload.meeting_id || stored.deck_revision !== expectedPayload.deck_revision
+        || stored.owner_user_id !== nativeOwnerId || stored.revision !== mutation.revision
+        || stored.turn_id !== mutation.changed_id || stored.text_sha256 !== candidateTextHash
+        || stored.provider_verified !== false || stored.provenance !== 'authenticated_owner_local_candidate') {
+        throw new Error('Local transcript receipt does not confirm the exact Owner candidate and live scope.');
+      }
+    }
     return { action, commandId, projectId, contract: JOUR_FIXE_SCHEMA,
-      mutation: JSON.parse(JSON.stringify(mutation)) };
+      mutation: JSON.parse(JSON.stringify(mutation)),
+      ...(localCandidate ? { localCandidate: JSON.parse(JSON.stringify(receipt.result.local_candidate)) } : {}) };
   }
 
   if (['project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {

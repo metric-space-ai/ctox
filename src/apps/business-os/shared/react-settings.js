@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261008-shell-v2-jour-supervisor-tools';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261008-shell-v2-local-transcript-candidate';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {

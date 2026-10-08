@@ -19,6 +19,7 @@ pub(in crate::business_os) fn is_command(kind: &str) -> bool {
         "ctox.workjet.jour_fixe.meeting.start"
             | "ctox.workjet.jour_fixe.meeting.end"
             | "ctox.workjet.jour_fixe.transcript.append"
+            | "ctox.workjet.jour_fixe.transcript.local_candidate"
             | "ctox.workjet.jour_fixe.todos.revise"
             | "ctox.workjet.jour_fixe.comment.add"
     )
@@ -299,6 +300,9 @@ pub(in crate::business_os) fn handle(
     actor: &str,
     admission: &DomainEffectAdmission,
 ) -> anyhow::Result<Value> {
+    if command.command_type == super::jour_fixe_local_candidate::COMMAND {
+        return super::jour_fixe_local_candidate::handle(root, command, actor, admission);
+    }
     let (edit, payload) = parse(command)?;
     let (operation, id, expected) = edit.identity();
     let intent = format!(
