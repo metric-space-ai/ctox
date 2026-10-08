@@ -5550,7 +5550,7 @@ fn build_continuity_prompt_text(
         String::new(),
         "IMPORTANT: Your reply text does not update memory. You must call `ctox continuity-update` with a shell command. If no update is needed, make no CLI call and reply exactly `noop`.".to_string(),
         String::new(),
-        "Three modes are available. Make ALL changes of this refresh in ONE single `ctox continuity-update` call: MODE B only when exactly one field changes, otherwise one MODE C diff or one MODE A replacement. Never chain several calls; every extra call is another model round trip and the refresh has a short time budget.".to_string(),
+        "Three modes are available. Pick the smallest one that fits your change.".to_string(),
         String::new(),
         "MODE A — full replacement (write the new document body to stdin):".to_string(),
         format!(
