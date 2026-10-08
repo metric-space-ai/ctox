@@ -319,23 +319,94 @@ fn expired_snapshot_read_is_stale_and_does_not_take_writer_locks() -> anyhow::Re
     let mut policy = store::open_store(root.path())?;
     policy.execute("UPDATE workjet_project_kpi_state SET state_json=json_set(state_json,'$.items[0].result.snapshot.freshness.calculated_at_ms',1,'$.items[0].result.snapshot.freshness.refresh_at_ms',2,'$.items[0].result.snapshot.freshness.fresh_until_ms',3,'$.items[0].result.snapshot.sources[0].observed_at_ms',1)",[])?;
     let lock = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let result = read(root.path(), &trusted)?;
+    let request = json!({"action":"read","request":{"project_id":"project"}});
+    let context = super::super::context_from_arguments_with_trusted_gateway_context(
+        TOOL,
+        &request,
+        Some(&trusted),
+    )?;
+    // The native KPI snapshot needs no writer. The outer MCP envelope still
+    // persists an audit/rate-limit event in the Policy DB; that existing layer
+    // intentionally cannot finish while this writer is held.
+    let result = execute(root.path(), &context, &request, Some(&trusted))?;
     assert_eq!(result["kpis"]["items"][0]["result"]["status"], "stale");
+    lock.rollback()?;
+    assert_eq!(
+        read(root.path(), &trusted)?["kpis"]["items"][0]["result"]["status"],
+        "stale"
+    );
+    Ok(())
+}
+
+#[test]
+fn replacing_the_supervisor_immediately_stales_its_snapshot_without_a_writer() -> anyhow::Result<()>
+{
+    let (root, trusted) = fixture()?;
+    call(
+        root.path(),
+        &trusted,
+        args("project_tasks_completed", "bind", 1),
+    )?;
+    let mut policy = store::open_store(root.path())?;
+    policy.execute(
+        "UPDATE workjet_supervisor_bindings SET thread_id='replacement' WHERE project_id='project'",
+        [],
+    )?;
+    let lock = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let reader = Connection::open_with_flags(
+        store::business_os_store_path(root.path()),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let state = super::super::super::workjet_project_kpis::read_state(&reader, "project", "owner")?;
+    assert_eq!(
+        state.items[0].result.status,
+        crate::business_os::workjet_project_kpis_contract::KpiState::Stale
+    );
+    assert_eq!(
+        state.items[0].result.reason_code.as_deref(),
+        Some("source_binding_changed")
+    );
     lock.rollback()?;
     Ok(())
 }
 
 #[test]
-fn replacing_the_supervisor_immediately_stales_its_snapshot_without_a_writer() -> anyhow::Result<()> {
+fn global_write_policy_denies_recipe_binding_but_still_allows_snapshot_reads() -> anyhow::Result<()>
+{
     let (root, trusted) = fixture()?;
-    call(root.path(), &trusted, args("project_tasks_completed", "bind", 1))?;
-    let mut policy = store::open_store(root.path())?;
-    policy.execute("UPDATE workjet_supervisor_bindings SET thread_id='replacement' WHERE project_id='project'",[])?;
-    let lock = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let reader = Connection::open_with_flags(store::business_os_store_path(root.path()), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let state = super::super::super::workjet_project_kpis::read_state(&reader,"project","owner")?;
-    assert_eq!(state.items[0].result.status, crate::business_os::workjet_project_kpis_contract::KpiState::Stale);
-    assert_eq!(state.items[0].result.reason_code.as_deref(), Some("source_binding_changed"));
-    lock.rollback()?;
+    let mut settings = std::collections::BTreeMap::new();
+    settings.insert(
+        "CTOX_BUSINESS_OS_MCP_ALLOW_WRITES".to_owned(),
+        "false".to_owned(),
+    );
+    crate::inference::runtime_env::save_runtime_env_map(root.path(), &settings)?;
+    assert!(call(
+        root.path(),
+        &trusted,
+        args("project_tasks_completed", "denied", 1)
+    )
+    .is_err());
+    assert_eq!(read(root.path(), &trusted)?["kpis"]["revision"], 1);
+    Ok(())
+}
+#[test]
+fn resolving_a_recipe_uses_write_policy_when_global_read_tools_are_disabled() -> anyhow::Result<()>
+{
+    let (root, trusted) = fixture()?;
+    let mut settings = std::collections::BTreeMap::new();
+    settings.insert(
+        "CTOX_BUSINESS_OS_MCP_ALLOW_READS".to_owned(),
+        "false".to_owned(),
+    );
+    crate::inference::runtime_env::save_runtime_env_map(root.path(), &settings)?;
+    assert!(read(root.path(), &trusted).is_err());
+    assert_eq!(
+        call(
+            root.path(),
+            &trusted,
+            args("project_tasks_completed", "write", 1)
+        )?["kpis"]["revision"],
+        2
+    );
     Ok(())
 }

@@ -24,7 +24,7 @@ are generated from the selected recipe and fit fourteen characters. A native
 scheduler reconciliation refreshes due definitions hourly; JourFix preparation
 forces a refresh before dispatching its Supervisor turn. Configuring a different
 prompt retires the old recipe; its monotonic prompt revision rejects late
-results. Reads mark expired snapshots stale without taking a writer lock.
+results. Native snapshot reads mark expired or rebound snapshots stale without a writer lock. The outer MCP envelope retains its existing durable audit and rate-limit writes, so that envelope can still wait for the Policy writer. Resolving a recipe is a write action and obeys the global MCP write policy; snapshot reads obey its read policy.
 
 GitHub merged PRs remain `missing_source` until a verified metric adapter is
 connected. Analytics, revenue and other unregistered sources likewise have no
