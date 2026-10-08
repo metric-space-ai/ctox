@@ -75,6 +75,25 @@ fn target_activation_requires_the_exact_import_and_sole_registered_process_effec
         assert!(validate_process_job(&bad, &imported, "actual-child").is_err());
     }
     assert!(validate_process_job(&job, &imported, "arbitrary-effect").is_err());
+    validate_unchanged_process_job(&job, &job, &imported, "actual-child").unwrap();
+    for mutation in 0..3 {
+        let mut changed = job.clone();
+        match mutation {
+            0 => {
+                changed
+                    .completed_effects
+                    .insert("concurrent-completed-effect".into());
+            }
+            1 => {
+                changed.checkpoint.as_mut().unwrap().replicas.insert(3);
+            }
+            _ => changed.checkpoint_requires_refresh = false,
+        }
+        // These still bind to our import/process, but are not the accepted
+        // BeginEffect state and must fence publication after a machine await.
+        validate_process_job(&changed, &imported, "actual-child").unwrap();
+        assert!(validate_unchanged_process_job(&changed, &job, &imported, "actual-child").is_err());
+    }
 }
 #[test]
 fn cancelled_target_attempt_cannot_load_activate_or_observe_readiness() {
@@ -82,6 +101,7 @@ fn cancelled_target_attempt_cannot_load_activate_or_observe_readiness() {
     let machine = Arc::new(TargetMachine {
         retired,
         state: Mutex::new(State {
+            io: MachineIo::new().unwrap(),
             attempted: false,
             staged: None,
             desktop: None,
@@ -122,7 +142,7 @@ async fn real_registry_restore_does_not_convert_fresh_enrollment_to_target_execu
             store,
             &"ab".repeat(32),
             &"cd".repeat(32),
-            &Reject,
+            Arc::new(Reject),
         )
         .await;
     assert!(result
@@ -137,4 +157,73 @@ async fn real_registry_restore_does_not_convert_fresh_enrollment_to_target_execu
     assert!(
         entry.target_machine.is_none() && entry.process_effect.is_none() && entry.desktop.is_none()
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancellation_on_host_runtime_reaps_the_exact_retained_child() -> Result<()> {
+    use super::super::super::guest_runtime::{
+        PreparedQemuGuest, QemuAcceleration, RetainedQemuDesktop,
+    };
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir()?;
+    let program = root.path().join("owned-process-fixture");
+    // Actual child cleanup; no VM readiness or original service success claim.
+    std::fs::write(&program, b"#!/bin/sh\nexec /bin/sleep 30\n")?;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))?;
+    let base = root.path().join("base.raw");
+    let overlay = root.path().join("root.qcow2");
+    std::fs::File::create(&base)?.set_len(2 * 1024 * 1024)?;
+    std::fs::write(&overlay, b"owned pre-spawn placeholder")?;
+    let config = PreparedQemuGuest {
+        program,
+        runtime_parent: root.path().to_owned(),
+        base_raw: base,
+        overlay_qcow2: overlay,
+        memory_mib: 64,
+        vcpus: 1,
+        acceleration: QemuAcceleration::Tcg,
+    };
+    let io = MachineIo::new()?;
+    let desktop = io.run(|_| RetainedQemuDesktop::spawn_paused(&config, "owned-child".into()))?;
+    let pid = desktop.pid();
+    let (retired, _) = watch::channel(false);
+    let machine = Arc::new(TargetMachine {
+        retired,
+        state: Mutex::new(State {
+            io,
+            attempted: true,
+            staged: None,
+            desktop: Some(desktop),
+            loaded: false,
+        }),
+    });
+    drop(Attempt {
+        machine: machine.clone(),
+        complete: false,
+    });
+    assert!(machine.current().is_err());
+    assert!(
+        machine.stop()?.is_some(),
+        "cleanup must retain the actual exit status"
+    );
+    let exists = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    assert_eq!(exists, -1, "exact child was not reaped");
+    assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retained_machine_runtime_serves_multiple_operations_without_nested_runtime() -> Result<()>
+{
+    let io = MachineIo::new()?;
+    for _ in 0..2 {
+        io.run(|runtime| {
+            runtime.block_on(async {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                Ok(())
+            })
+        })?;
+    }
+    drop(io);
+    Ok(())
 }

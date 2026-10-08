@@ -22,6 +22,8 @@ struct State {
     staged: Option<super::super::guest_runtime::StagedQemuCheckpoint>,
     desktop: Option<super::super::guest_runtime::RetainedQemuDesktop>,
     loaded: bool,
+    // Keep the driver's lifetime until after the retained child is dropped.
+    io: MachineIo,
 }
 struct Attempt {
     machine: Arc<TargetMachine>,
@@ -37,6 +39,43 @@ impl Drop for Attempt {
         }
     }
 }
+/// Retain the runtime that owns the child's signal/monitor/channel resources.
+/// Operations and cancellation run on a bounded scoped thread, even when the
+/// caller is the host's CurrentThread runtime. No async driver is dropped
+/// between migration, activation, readiness and exact-child cleanup.
+struct MachineIo(Option<tokio::runtime::Runtime>);
+impl MachineIo {
+    fn new() -> Result<Self> {
+        Ok(Self(Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?,
+        )))
+    }
+    fn run<T: Send>(
+        &self,
+        operation: impl FnOnce(&tokio::runtime::Runtime) -> Result<T> + Send,
+    ) -> Result<T> {
+        let runtime = self.0.as_ref().context("machine runtime retired")?;
+        std::thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    let _entered = runtime.enter();
+                    operation(runtime)
+                })
+                .join()
+                .map_err(|_| anyhow::anyhow!("target machine operation panicked"))?
+        })
+    }
+}
+impl Drop for MachineIo {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
 impl TargetMachine {
     pub(super) fn retire(&self) {
         self.retired.send_replace(true);
@@ -47,10 +86,10 @@ impl TargetMachine {
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("target machine poisoned"))?;
-        state
-            .desktop
+        let State { io, desktop, .. } = &mut *state;
+        desktop
             .as_mut()
-            .map(|desktop| super::super::guest_commands::block_on_guest(desktop.stop()))
+            .map(|desktop| io.run(|runtime| runtime.block_on(desktop.stop())))
             .transpose()
     }
     fn current(&self) -> Result<()> {
@@ -119,28 +158,32 @@ impl TargetMachine {
             .lock()
             .map_err(|_| anyhow::anyhow!("target machine poisoned"))?;
         self.current()?;
-        let staged = state
-            .staged
-            .as_mut()
-            .context("target machine staging incomplete")?;
-        let desktop = super::super::guest_runtime::RetainedQemuDesktop::spawn_checkpoint(staged)?;
-        // Retain the exact paused child BEFORE the first monitor/migration await.
-        state.desktop = Some(desktop);
-        let mut retired = self.retired.subscribe();
-        self.current()?;
         let State {
-            staged, desktop, ..
+            io,
+            staged,
+            desktop,
+            ..
         } = &mut *state;
-        super::super::guest_commands::block_on_guest(async {
-            tokio::select! {
-                biased;
-                _ = retired.changed() => anyhow::bail!("target machine loading revoked"),
-                result = tokio::time::timeout(Duration::from_secs(45),
-                    desktop.as_mut().unwrap().load_checkpoint(staged.as_mut().unwrap())) =>
-                    result.context("target machine load deadline")?,
-            }
+        io.run(|runtime| {
+            let staged = staged
+                .as_mut()
+                .context("target machine staging incomplete")?;
+            // Retain the exact paused child before awaits, on its own runtime.
+            *desktop =
+                Some(super::super::guest_runtime::RetainedQemuDesktop::spawn_checkpoint(staged)?);
+            let mut retired = self.retired.subscribe();
+            self.current()?;
+            runtime.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = retired.changed() => anyhow::bail!("target machine loading revoked"),
+                    result = tokio::time::timeout(Duration::from_secs(45),
+                        desktop.as_mut().unwrap().load_checkpoint(staged)) =>
+                        result.context("target machine load deadline")?,
+                }
+            })?;
+            self.current()
         })?;
-        self.current()?;
         state.loaded = true;
         Ok(())
     }
@@ -171,18 +214,16 @@ impl TargetMachine {
         state.loaded = false;
         let mut retired = self.retired.subscribe();
         self.current()?;
-        let desktop = state
-            .desktop
-            .as_mut()
-            .context("target child not retained")?;
-        super::super::guest_commands::block_on_guest(async {
+        let State { io, desktop, .. } = &mut *state;
+        let desktop = desktop.as_mut().context("target child not retained")?;
+        io.run(|runtime| runtime.block_on(async {
             tokio::select! {
                 biased;
                 _ = retired.changed() => anyhow::bail!("target activation retired"),
                 result = tokio::time::timeout(Duration::from_secs(10), desktop.activate_restored()) =>
                     result.context("target activation deadline")?,
             }
-        })
+        }))
     }
     fn probe(&self) -> Result<GuestLiveEndpoint> {
         self.current()?;
@@ -190,17 +231,18 @@ impl TargetMachine {
             .state
             .try_lock()
             .map_err(|_| anyhow::anyhow!("target machine busy or poisoned"))?;
-        super::super::guest_commands::block_on_guest(async {
-            tokio::time::timeout(
-                Duration::from_secs(10),
-                state
-                    .desktop
-                    .as_mut()
-                    .context("target child not retained")?
-                    .probe_live(),
-            )
-            .await
-            .context("target probe deadline")?
+        let State { io, desktop, .. } = &mut *state;
+        let desktop = desktop.as_mut().context("target child not retained")?;
+        let mut retired = self.retired.subscribe();
+        io.run(|runtime| {
+            runtime.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = retired.changed() => anyhow::bail!("target probe retired"),
+                    result = tokio::time::timeout(Duration::from_secs(10), desktop.probe_live()) =>
+                        result.context("target probe deadline")?,
+                }
+            })
         })
     }
 }
@@ -223,6 +265,20 @@ fn validate_process_job(job: &Job, imported: &GuestImportReceipt, effect: &str) 
     );
     Ok(())
 }
+fn validate_unchanged_process_job(
+    current: &Job,
+    accepted: &Job,
+    imported: &GuestImportReceipt,
+    effect: &str,
+) -> Result<()> {
+    validate_process_job(current, imported, effect)?;
+    ensure!(
+        current == accepted,
+        "target quorum changed during machine restoration"
+    );
+    Ok(())
+}
+
 struct MachineOwner<'a> {
     protected: ProtectedImport<'a>,
 }
@@ -312,7 +368,7 @@ impl NativeGuestRegistry {
         store: CheckpointStore,
         binding: &str,
         digest: &str,
-        fence: &dyn target_import::NativeGuestImportFence,
+        fence: Arc<dyn target_import::NativeGuestImportFence>,
     ) -> Result<ctox_sync::guest_restore::GuestReadyReceipt> {
         let protected = self
             .registration(guest)?
@@ -330,7 +386,7 @@ impl NativeGuestRegistry {
                 registry: self.clone(),
                 guest_id: guest.into(),
                 protected,
-                fence,
+                fence: fence.as_ref(),
             },
         };
         let imported = owner
@@ -368,6 +424,7 @@ impl NativeGuestRegistry {
                     let machine = Arc::new(TargetMachine {
                         retired,
                         state: Mutex::new(State {
+                            io: MachineIo::new()?,
                             attempted: false,
                             staged: None,
                             desktop: None,
@@ -430,10 +487,28 @@ impl NativeGuestRegistry {
             .authority
             .validate_ownership(&imported.spec.job_id, &imported.ownership)
             .await?;
-        validate_process_job(&current, &imported, &effect)?;
-        owner
-            .protected
-            .with_current_machine(true, |entry, verify| {
+        validate_unchanged_process_job(&current, &job, &imported, &effect)?;
+        let registry = self.clone();
+        let guest_id = guest.to_owned();
+        let protected = owner.protected.protected.clone();
+        let activation_fence = fence.clone();
+        let activation_machine = machine.clone();
+        let activation_import = imported.clone();
+        let activation_effect = effect.clone();
+        // QMP/service awaits run on a blocking worker, including the whole
+        // native publication fence. No CurrentThread runtime nesting and no
+        // interval of unguarded activation between acquiring and using it.
+        tokio::task::spawn_blocking(move || {
+            let owner = ProtectedImport {
+                registry,
+                guest_id,
+                protected,
+                fence: activation_fence.as_ref(),
+            };
+            let machine = activation_machine;
+            let imported = activation_import;
+            let effect = activation_effect;
+            owner.with_current_machine(true, |entry, verify| {
                 ensure!(
                     entry.process_effect.as_deref() == Some(effect.as_str())
                         && entry.desktop.is_none()
@@ -454,18 +529,45 @@ impl NativeGuestRegistry {
                 });
                 let endpoint = machine.activate()?;
                 ensure!(
-                    endpoint.guest_session_id == owner.protected.protected.service_session,
+                    endpoint.guest_session_id == owner.protected.service_session,
                     "original guest service did not survive restore"
                 );
                 verify()?;
                 Ok(())
-            })?;
-        let ready = ctox_sync::guest_restore::confirm_guest_ready(
-            self.authority.as_ref(),
-            &owner,
-            imported,
-        )
-        .await?;
+            })
+        })
+        .await??;
+        let registry = self.clone();
+        let authority = self.authority.clone();
+        let guest_id = guest.to_owned();
+        let protected = owner.protected.protected.clone();
+        let readiness_fence = fence.clone();
+        let readiness_import = imported.clone();
+        let ready = tokio::task::spawn_blocking(move || {
+            let owner = MachineOwner {
+                protected: ProtectedImport {
+                    registry,
+                    guest_id,
+                    protected,
+                    fence: readiness_fence.as_ref(),
+                },
+            };
+            MachineIo::new()?.run(|runtime| {
+                runtime
+                    .block_on(ctox_sync::guest_restore::confirm_guest_ready(
+                        authority.as_ref(),
+                        &owner,
+                        readiness_import,
+                    ))
+                    .map_err(anyhow::Error::from)
+            })
+        })
+        .await??;
+        let current = self
+            .authority
+            .validate_ownership(&imported.spec.job_id, &imported.ownership)
+            .await?;
+        validate_unchanged_process_job(&current, &job, &imported, &effect)?;
         owner.protected.with_current_machine(true, |_, verify| {
             machine.current()?;
             verify()

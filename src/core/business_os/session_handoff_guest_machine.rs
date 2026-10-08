@@ -48,7 +48,7 @@ pub(super) async fn restore_machine<P: Clone + Eq + Hash + Send + Sync + 'static
                 store,
                 &target.request.binding_digest,
                 &target.request.checkpoint_digest,
-                target.as_ref(),
+                target.clone(),
             )
             .await?;
         // Fresh native account/policy/copy/host fence after the readiness await.
