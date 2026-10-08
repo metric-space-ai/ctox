@@ -379,6 +379,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 115] = [
     "ctox.workjet.jour_fixe.meeting.start",
     "ctox.workjet.jour_fixe.meeting.end",
     "ctox.workjet.jour_fixe.transcript.append",
+    "ctox.workjet.jour_fixe.transcript.local_candidate",
     "ctox.workjet.jour_fixe.todos.revise",
     "ctox.workjet.project.supervisor.turn.cancel",
     "ctox.workjet.project.chat.create",
@@ -1732,6 +1733,7 @@ fn dispatch_business_command(
         "ctox.workjet.jour_fixe.meeting.start"
         | "ctox.workjet.jour_fixe.meeting.end"
         | "ctox.workjet.jour_fixe.transcript.append"
+        | "ctox.workjet.jour_fixe.transcript.local_candidate"
         | "ctox.workjet.jour_fixe.todos.revise"
         | "ctox.workjet.jour_fixe.comment.add" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
