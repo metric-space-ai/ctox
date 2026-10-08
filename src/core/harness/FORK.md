@@ -82,6 +82,18 @@ This change does not implement queue-claim cancellation or publication fencing.
 
 ## 2026-10 Actual quiescent native session state
 
+Native guest thread construction happens before producer/quorum admission.
+The CTOX direct-session factory constrains both the canonical app-server loader
+overrides and the higher-priority thread/start configuration: shell snapshots,
+zsh fork setup, hooks (including legacy notification argv), memory startup,
+ghost undo snapshots and free subagents are disabled for this lane. Nested and
+dotted feature overrides cannot re-enable that startup profile. Ordinary
+sessions keep their operator configuration; authorized native turn tools and
+the policy-gated Business OS MCP route retain their existing dispatch guards.
+This removes ambient background execution before admission. It is not a clean
+external-effect receipt: actual tool/submission effects remain unreconciled,
+and imported state still grants no target execution authority.
+
 The retained Core thread can export private state only after successful
 submission-loop termination and checked recorder shutdown, with no active
 turn. The sealed Rust object uses a strict checkpoint decoder for target import. It
