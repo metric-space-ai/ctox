@@ -4,12 +4,11 @@
 //! A signature/Build grant never substitutes for this local operator grant.
 use super::*;
 use ctox_sync::authority::auth::{
-    public_key,
     speech_wire::{
         verify_request, SpeechComputerBinding, SpeechComputerReply, SpeechComputerRequest,
         SpeechDenial as Denial, SpeechOperation as Op, SpeechWorkload, VerifiedSpeechRequest,
     },
-    SigningIdentity,
+    validate_public_identity, SigningIdentity,
 };
 use std::sync::Arc;
 
@@ -74,8 +73,8 @@ fn load(root: &Path) -> Result<Saved, Denial> {
         .ok_or(Denial::GrantDenied)
 }
 fn validate(grant: &SpeechTargetGrant, now: u64) -> anyhow::Result<()> {
-    public_key(&grant.source_signing_identity)?;
-    public_key(&grant.target_signing_identity)?;
+    validate_public_identity(&grant.source_signing_identity)?;
+    validate_public_identity(&grant.target_signing_identity)?;
     anyhow::ensure!(
         grant.source_signing_identity != grant.target_signing_identity,
         "speech target must differ from source"
