@@ -8,6 +8,8 @@ use std::io::{Read, Seek, SeekFrom};
 const CHUNK: usize = 8192;
 const MANIFEST_LIMIT: u64 = 8 * 1024 * 1024;
 const BLOB_LIMIT: u64 = 64 * 1024 * 1024;
+#[path = "session_handoff_guest_import.rs"]
+mod guest_import;
 #[path = "session_handoff_reconstruction.rs"]
 mod reconstruction;
 
@@ -903,6 +905,7 @@ pub(crate) fn assert_native_checkpoint_path(
         })
         .unwrap();
     reconstruction::assert_native_reconstruction(&target, &received);
+    guest_import::assert_native_import_fence(&target, &received);
     let (_, foreign) = make_fetch(
         Some(ArtifactRef {
             sha256: "aa".repeat(32),
@@ -981,6 +984,8 @@ pub(crate) struct CopyRequest {
     pub source_route: String,
     #[serde(default, skip_serializing_if = "copy_only")]
     pub reconstruct: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guest_id: String,
 }
 fn copy_only(reconstruct: &bool) -> bool {
     !reconstruct
@@ -994,6 +999,13 @@ pub(crate) enum CopyResponse {
     Reconstructed {
         checkpoint_digest: String,
         preparation_id: String,
+    },
+    GuestImported {
+        checkpoint_digest: String,
+        guest_id: String,
+        controller_id: String,
+        controller_generation: u64,
+        effect_id: String,
     },
     Denied,
 }
@@ -1013,6 +1025,7 @@ pub(super) fn listen(
     pool: Arc<
         RxWebRTCReplicationPool<rxdb::plugins::replication_webrtc::WebRTCRsConnectionHandler>,
     >,
+    guests: Option<Arc<super::super::super::NativeGuestRegistry>>,
 ) -> anyhow::Result<CheckpointListener> {
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1045,13 +1058,32 @@ pub(super) fn listen(
                         && r.binding_digest
                             .bytes()
                             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                        && ((r.reconstruct && r.source_route.is_empty())
+                        && ((r.reconstruct
+                            && r.source_route.is_empty()
+                            && r.guest_id.is_empty())
                             || (!r.reconstruct
+                                && r.source_route.is_empty()
+                                && super::super::super::guest_runtime::identifier(
+                                    &r.guest_id,
+                                ))
+                            || (!r.reconstruct
+                                && r.guest_id.is_empty()
                                 && !r.source_route.is_empty()
                                 && r.source_route.len() <= 256)) =>
                 {
                     let operation = async {
-                        if r.reconstruct {
+                        if !r.guest_id.is_empty() {
+                            let registry = guests
+                                .as_ref()
+                                .ok_or_else(|| anyhow::anyhow!("native guest host unavailable"))?;
+                            guest_import::import(
+                                server.clone(),
+                                registry.clone(),
+                                r.binding_digest,
+                                r.guest_id,
+                            )
+                            .await
+                        } else if r.reconstruct {
                             let (checkpoint_digest, preparation_id) =
                                 reconstruction::reconstruct(server.clone(), r.binding_digest)
                                     .await?;
