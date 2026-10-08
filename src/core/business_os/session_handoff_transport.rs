@@ -111,13 +111,33 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> NativeHandoffHost<P> {
         Ok(Self { server })
     }
 }
-fn currency_matches(original: &SessionHandoffPermit, current: &SessionHandoffPermit) -> bool {
-    // Full request is held separately. Authority epochs cannot be replaced
-    // by a fresh permit after an older response was prepared and queued.
-    original.principal_epoch == current.principal_epoch
+fn operation_authority_matches(
+    original: &SessionHandoffPermit,
+    current: &SessionHandoffPermit,
+) -> bool {
+    // The operation pins authority identity/revisions, not a reusable grant.
+    // Every local publication resolves and holds a fresh native decision.
+    // Nonce and phase can differ for the next chunk or Receive/Resume check.
+    let now = now_ms() as u64;
+    original.version == current.version
+        && original.binding_digest == current.binding_digest
+        && original.audience == current.audience
+        && original.job_id == current.job_id
+        && original.session_id == current.session_id
+        && original.scope_id == current.scope_id
+        && original.checkpoint_digest == current.checkpoint_digest
+        && original.checkpoint_sequence == current.checkpoint_sequence
+        && original.ownership_generation == current.ownership_generation
+        && original.principal_epoch == current.principal_epoch
         && original.binding_revision == current.binding_revision
-        && original.issued_at_ms <= now_ms() as u64
-        && original.expires_at_ms > now_ms() as u64
+        && original.issued_at_ms <= now
+        && current.issued_at_ms <= now
+        && current.expires_at_ms > now
+}
+fn currency_matches(original: &SessionHandoffPermit, current: &SessionHandoffPermit) -> bool {
+    // Wire challenges and already-prepared responses remain short-lived.
+    // A fresh decision never renews an expired remote response.
+    operation_authority_matches(original, current) && original.expires_at_ms > now_ms() as u64
 }
 impl<P: Clone + Eq + Hash + Send + Sync + 'static> Server<P> {
     fn lock_ledger(&self) -> Result<MutexGuard<'_, Ledger<P>>, SessionHandoffDenial> {

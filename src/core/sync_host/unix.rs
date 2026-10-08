@@ -281,21 +281,23 @@ fn checkpoint_copy(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
+    let request = crate::business_os::NativeCheckpointCopyRequest {
+        binding_digest: binding.into(),
+        source_route: route.into(),
+        reconstruct,
+        guest_id: guest_id.into(),
+        acknowledge,
+        protection_receipts: protection_receipts.clone(),
+    };
+    let deadline = request.operation_timeout() + Duration::from_secs(5);
     let response: crate::business_os::NativeCheckpointCopyResponse = runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(65), async {
+        tokio::time::timeout(deadline, async {
             let mut stream = tokio::net::UnixStream::connect(endpoint).await?;
             anyhow::ensure!(
                 stream.peer_cred()?.uid() == unsafe { libc::geteuid() },
                 "foreign native checkpoint host"
             );
-            let bytes = serde_json::to_vec(&crate::business_os::NativeCheckpointCopyRequest {
-                binding_digest: binding.into(),
-                source_route: route.into(),
-                reconstruct,
-                guest_id: guest_id.into(),
-                acknowledge,
-                protection_receipts: protection_receipts.clone(),
-            })?;
+            let bytes = serde_json::to_vec(&request)?;
             anyhow::ensure!(
                 bytes.len() <= 32 * 1024,
                 "checkpoint control request too large"

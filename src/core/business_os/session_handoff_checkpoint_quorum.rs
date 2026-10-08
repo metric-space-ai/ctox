@@ -73,7 +73,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> Source<P> {
                     .server
                     .gate
                     .resolve_fenced(policy, identity, &self.request)?;
-                if !currency_matches(&self.original, &permit) {
+                if !operation_authority_matches(&self.original, &permit) {
                     return Err(deny("source_authority_changed"));
                 }
                 let ledger = self.server.lock_ledger()?;
@@ -324,10 +324,12 @@ mod tests {
         let legacy = serde_json::json!({"bindingDigest":"a".repeat(64),"sourceRoute":"peer"});
         let mut request: CopyRequest = serde_json::from_value(legacy).unwrap();
         assert!(request.valid_operation());
+        assert_eq!(request.operation_timeout().as_secs(), 1800);
         request.acknowledge = true;
         assert!(!request.valid_operation());
         request.source_route.clear();
         assert!(request.valid_operation());
+        assert_eq!(request.operation_timeout().as_secs(), 60);
         request.reconstruct = true;
         assert!(!request.valid_operation());
         request.reconstruct = false;
