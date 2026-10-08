@@ -13614,6 +13614,9 @@ fn upsert_rxdb_collection_record_with_writer(
 ) -> anyhow::Result<()> {
     let mut previous_revision = None;
     let mut existing_row = false;
+    let mut reviving_tombstone = false;
+    let explicit_deletion_aliases =
+        ["deleted", "is_deleted"].map(|alias| payload.get(alias).is_some());
     if let Some(existing_json) = conn
         .query_row(
             &format!("SELECT data FROM {table} WHERE id = ?1"),
@@ -13624,6 +13627,7 @@ fn upsert_rxdb_collection_record_with_writer(
     {
         existing_row = true;
         if let Ok(mut existing) = serde_json::from_str::<Value>(&existing_json) {
+            reviving_tombstone = existing.get("_deleted").and_then(Value::as_bool) == Some(true);
             previous_revision = existing
                 .get("_rev")
                 .and_then(Value::as_str)
@@ -13656,10 +13660,13 @@ fn upsert_rxdb_collection_record_with_writer(
         object.insert("id".to_string(), Value::String(record_id.to_string()));
         object.insert("_rev".to_string(), Value::String(rev.clone()));
         object.insert("_deleted".to_string(), Value::Bool(deleted));
-        // A live re-projection must clear legacy deletion aliases left by a
-        // merged tombstone, or readers can still treat the revived row as dead.
-        for alias in ["deleted", "is_deleted"] {
-            if object.contains_key(alias) {
+        // Clear inherited tombstone aliases when reviving a row. Explicit
+        // domain soft-deletion fields (e.g. Workjet sessions) stay authoritative
+        // even though the RxDB envelope itself remains live.
+        for (index, alias) in ["deleted", "is_deleted"].into_iter().enumerate() {
+            if object.contains_key(alias)
+                && (deleted || (reviving_tombstone && !explicit_deletion_aliases[index]))
+            {
                 object.insert(alias.to_string(), Value::Bool(deleted));
             }
         }
@@ -45132,6 +45139,52 @@ pub(super) mod tests {
         let payload: Value = serde_json::from_str(&payload)?;
         assert_eq!(payload["_deleted"], true);
         assert_eq!(payload["is_deleted"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn live_rxdb_projection_preserves_domain_soft_deletion() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os__writer_soft_delete_probe__v0 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+        )?;
+        drop(conn);
+
+        let mut writer = RxdbCollectionWriter::open(root, "writer_soft_delete_probe")?
+            .context("soft-delete projection writer")?;
+        writer.upsert(
+            "probe-1",
+            1_000,
+            serde_json::json!({"name":"Hidden", "is_deleted":true, "deleted":true}),
+        )?;
+        writer.upsert("probe-1", 2_000, serde_json::json!({"name":"Still hidden"}))?;
+        let document = writer.read("probe-1")?.context("soft-deleted document")?;
+        assert_eq!(document["_deleted"], false);
+        assert_eq!(document["is_deleted"], true);
+        assert_eq!(document["deleted"], true);
+        assert_eq!(document["name"], "Still hidden");
+
+        writer.tombstone_source_projection("probe-1", 3_000)?;
+        writer.upsert_source_projection(
+            "probe-1",
+            4_000,
+            serde_json::json!({"name":"Revived but hidden", "is_deleted":true, "deleted":true}),
+        )?;
+        let document = writer
+            .read("probe-1")?
+            .context("revived soft-deleted document")?;
+        assert_eq!(document["_deleted"], false);
+        assert_eq!(document["is_deleted"], true);
+        assert_eq!(document["deleted"], true);
         Ok(())
     }
 
