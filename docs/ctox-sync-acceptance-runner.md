@@ -14,7 +14,8 @@ fresh prefix, not replace the state or authority of an earlier attempt.
 The preparation operator checks the finished producer receipt, package hash,
 installed binary, source provenance and seven actual Shell contract files. It
 extracts the official runtime into a **new** prefix and initializes new synthetic
-state. It refuses reused roots and customer/DR authority. Run preparation and
+state with one canonical actor UUID reused by both clients and every re-login.
+It refuses reused roots and customer/DR authority. Run preparation and
 browser measurement through `gpu-build-run.sh --jobs2`; dependency installation
 and the browser belong to that same admitted unit. Reuse the existing shared
 artifact rather than creating another native build.
@@ -72,7 +73,11 @@ Collections travel only over authenticated WebRTC. Native-issued browser
 invitations are exclusively precreated with0600 before the native writer fills
 them, and remain in private host files and browser memory; neither stdout,
 receipts nor browser URLs contain them. Evidence uses a direct local cached
-read and a mode=ro native SQLite readback, not an HTTP record bridge. CLI-generated
+read and a mode=ro readback from native `business-os-rxdb.sqlite3`, table
+`ctox_business_os__desktop_icons__v0`, not an HTTP record bridge. The legacy
+`business_records` projection is not used as proof of native RxDB convergence.
+Revision/lastWriteTime come from the actual storage columns if absent in JSON;
+HLC is exported only if present. CLI-generated
 identities belong only to this synthetic tenant.
 
 For Goal23's one-component backward/forward proof, call
@@ -123,6 +128,17 @@ private CLI logs or browser storage snapshots.
 
 Copy only sanitized goal receipts, screenshots and process cleanup evidence into
 `~/.codex/task-evidence/teilziele/<NN>-<slug>-<date>.json` on the Mac. Preserve
-actual failures with `pass:false`. Include installed revisions, host identity,
+actual failures with `pass:false`. Baseline failures include native/B document
+counts and exact-value matches, bounded client counter/status snapshots and
+failure timestamps. Goal5 records baseline, offline30s, peer kill/respawn,
+B reload, A re-login and catchup separately: actual A/native/B counts, acknowledged
+writes, missing/diverging generated IDs and their returned revision/HLC metadata.
+Null metadata means unavailable in that returned payload. Each phase is saved
+before and after execution; unexecuted phases stay explicitly not_run. Snapshot
+overhead is recorded, and final catchup time excludes its subsequent diagnostic
+snapshot. Timestamped log excerpts export diagnostic vocabulary only; private
+rolling native log files stay on the isolated host. Arbitrary document values,
+credentials and URL errors are excluded. Interrupted waits stop before another fault attempt.
+Include installed revisions, host identity,
 steps, measured values, criterion and artifact references. A syntactically valid
 runner or successful unit test is never evidence that a goal was reached.
