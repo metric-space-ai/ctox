@@ -219,3 +219,11 @@ Git/PR, Terminal und Vorschau sind eigene Blöcke. Sie kommen nach Punkt 8, sofe
 - Dürfen Agenten Geheimnisse und Provider-Konten sehen oder ändern? Vorschlag: nein, nur Status.
 - Dürfen Agenten Terminal-Eingaben schicken? Vorschlag: nein, in der ersten Stufe.
 - Server-Update über MCP? Vorschlag: nein.
+
+## Bewusst gesetzte Grenzen (Stand 2026-10-08)
+
+Diese Grenzen gelten als Default, bis Michael sie ändert. Sie lassen sich später lockern, jede Lockerung braucht einen eigenen PR mit Tests.
+
+- **Geheimnisse und Provider-Konten:** Agenten sehen nur Status (vorhanden, lesbar, Anzahl, Gesundheit). Keine Schreib- oder Leseaktion auf Schlüssel, Tokens oder OAuth-Daten.
+- **Terminal:** Keine Eingabe in Terminals über MCP.
+- **Server-Update:** Kein Update über MCP.
