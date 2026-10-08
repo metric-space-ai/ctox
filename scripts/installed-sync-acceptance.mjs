@@ -35,7 +35,7 @@ export function documentAudit(expected, sources) {
     }
     return { revision: scalar(doc._rev ?? doc.revision ?? null), hlc: Object.keys(hlc).length ? hlc : null,
       lwt: scalar(doc._meta?.lwt ?? null), deleted: Boolean(doc._deleted),
-      metadataScope: 'Returned installed document payload; absent metadata stays null' };
+      metadataScope: 'Returned installed payload plus actual native SQLite revision/lastWriteTime columns; absent HLC stays null' };
   };
   const counts = Object.fromEntries(Object.entries(sources).map(([name, actual]) => [name, actual === null
     ? { available: false } : { available: true, found: expected.filter(d => actual[d.id]).length,
@@ -177,8 +177,8 @@ class OwnedNative {
     return value;
   }
   async read(ids) {
-    const script = `import sqlite3,json,sys\nc=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)\nids=set(json.loads(sys.stdin.read()))\nrows=c.execute('SELECT record_id,payload_json,deleted FROM business_records WHERE collection=?',('desktop_icons',))\nprint(json.dumps({i:json.loads(p) for i,p,d in rows if i in ids and not d}))\n`;
-    const child = spawn('python3', ['-c', script, join(this.config.root, 'runtime', 'business-os.sqlite3')],
+    const script = `import sqlite3,json,sys\nc=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)\nids=set(json.loads(sys.stdin.read()))\nrows=c.execute('SELECT id,data,revision,lastWriteTime,deleted FROM ctox_business_os__desktop_icons__v0')\nout={}\nfor i,p,rev,lwt,deleted in rows:\n if i in ids and not deleted:\n  doc=json.loads(p);doc.setdefault('_rev',rev);doc.setdefault('_meta',{}).setdefault('lwt',lwt);out[i]=doc\nprint(json.dumps(out))\n`;
+    const child = spawn('python3', ['-c', script, join(this.config.root, 'runtime', 'business-os-rxdb.sqlite3')],
       { stdio: ['pipe', 'pipe', 'ignore'] });
     let body = ''; const timer = setTimeout(() => child.kill('SIGKILL'), 10000);
     child.stdout.on('data', b => { body += b; if (body.length > 16 * 2 ** 20) child.kill('SIGKILL'); });
@@ -472,7 +472,8 @@ export async function runAcceptance(browser, configPath) {
         7: { clockOffsetsMs: [-600000, 600000], noFalseClockError: true, distinctFieldMerge: true,
           sameFieldConflictBothValues: true, staleRevisionTypedUnapplied: true },
       };
-      const receipt = { goal, revisions, hosts: [config.host], steps: [], measured: { phases: [], currentPhase: 'client-setup' }, criterion: criteria[goal], pass: false,
+      const receipt = { goal, revisions, hosts: [config.host], steps: [], measured: { phases: [], currentPhase: 'client-setup',
+        nativeReadbackSource: 'mode=ro business-os-rxdb.sqlite3::ctox_business_os__desktop_icons__v0; no legacy projection fallback' }, criterion: criteria[goal], pass: false,
         startedAt: new Date().toISOString(),
         artifacts: [], clientType: 'Installed canonical DB+sync modules in real Chromium; not a Shell UI acceptance',
         transport: 'webrtc', customerWrites: false };

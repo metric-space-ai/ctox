@@ -73,7 +73,11 @@ Collections travel only over authenticated WebRTC. Native-issued browser
 invitations are exclusively precreated with0600 before the native writer fills
 them, and remain in private host files and browser memory; neither stdout,
 receipts nor browser URLs contain them. Evidence uses a direct local cached
-read and a mode=ro native SQLite readback, not an HTTP record bridge. CLI-generated
+read and a mode=ro readback from native `business-os-rxdb.sqlite3`, table
+`ctox_business_os__desktop_icons__v0`, not an HTTP record bridge. The legacy
+`business_records` projection is not used as proof of native RxDB convergence.
+Revision/lastWriteTime come from the actual storage columns if absent in JSON;
+HLC is exported only if present. CLI-generated
 identities belong only to this synthetic tenant.
 
 For Goal23's one-component backward/forward proof, call

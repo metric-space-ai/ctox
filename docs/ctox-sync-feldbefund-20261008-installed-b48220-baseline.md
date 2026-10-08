@@ -29,6 +29,13 @@ The native invitation contained a session capability token; its value was not
 exported. A non-UUID synthetic actor was used; whether it caused this failure
 has not been established.
 
+A subsequent read-only inspection of that retained isolated prefix found zero
+desktop_icons rows in both the legacy business_records projection and the actual
+native RxDB table ctox_business_os__desktop_icons__v0. The old runner had read
+only the projection; the next runner reads the actual RxDB table, including its
+revision/lastWriteTime columns. This corrects the measurement boundary but does
+not establish the earlier root cause or replace the missing live browser counts.
+
 Goals6/7 were interrupted and remain false. No offline, conflict, incremental
 pull or recovery success is inferred. The separate isolated signed79 rollback
 and forward to builtin b48220 did complete and restore the expected bytes.
