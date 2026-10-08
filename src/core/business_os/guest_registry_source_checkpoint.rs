@@ -1,11 +1,9 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
-
-//! Complete Git working-copy capture from the actual stopped native producer.
-//! Local source artifacts are not a disclosure, receipt or resume grant.
+//! Stage complete native artifacts without publication locks; commit only under fresh authority.
 use super::*;
 use ctox_sync::{
-    capture::{CaptureEntry, CaptureRequest},
+    capture::{CaptureEntry, CaptureRequest, CaptureResult},
     checkpoint::CheckpointStore,
     contracts::{SessionManifest, WorkspaceEntryKind},
 };
@@ -16,12 +14,15 @@ pub(crate) struct NativeSourceCheckpointReceipt {
     pub digest: String,
     pub sequence: u64,
 }
+pub(super) struct PreparedSourceCheckpoint {
+    captured: CaptureResult,
+    workspace: workspaces::AssignedWorkspace,
+}
 
-pub(super) fn persist(
-    policy: &Connection,
+pub(super) fn prepare(
     store: &CheckpointStore,
     store_root: &Path,
-    destination: &GuestRestoreDestination,
+    workspace: workspaces::AssignedWorkspace,
     spec: &ExecutionSpec,
     ownership: &Ownership,
     receipt: &source_journal::NativeSourceJournalReceipt,
@@ -29,8 +30,7 @@ pub(super) fn persist(
     state: &ctox_core::NativeSessionState,
     journal: &[u8],
     effects: &source_effects::SourceEffects,
-) -> Result<NativeSourceCheckpointReceipt> {
-    let workspace = workspaces::require(policy, destination, &configuration.cwd)?;
+) -> Result<PreparedSourceCheckpoint> {
     ensure!(
         !store_root.starts_with(&workspace.path),
         "native artifact store cannot be inside its captured workspace"
@@ -46,48 +46,18 @@ pub(super) fn persist(
             && receipt.journal_size_bytes == journal.len() as u64,
         "native checkpoint differs from its actual source journal"
     );
-    let exact_source: bool = policy.query_row(
-        "SELECT EXISTS(SELECT 1 FROM business_native_source_journals
-        WHERE capture_id=?1 AND spec_json=?2 AND ownership_json=?3
-        AND artifact_store_path=?4 AND guest_id=?5 AND controller_id=?6
-        AND controller_generation=?7 AND owner_user_id=?8 AND worker_profile_id=?9
-        AND project_id=?10 AND thread_id=?11 AND source_instance_id=?12)",
-        rusqlite::params![
-            receipt.capture_id,
-            serde_json::to_string(spec)?,
-            serde_json::to_string(ownership)?,
-            store_root
-                .to_str()
-                .context("native store path is not UTF-8")?,
-            destination.guest_id,
-            destination.controller_id,
-            i64::try_from(destination.controller_generation)?,
-            destination.human_owner_id,
-            destination.worker_profile_id,
-            destination.project_id,
-            destination.thread_id,
-            destination.instance_id,
-        ],
-        |row| row.get(0),
-    )?;
-    ensure!(
-        exact_source,
-        "native checkpoint has a foreign source capture"
-    );
-    source_policy::persist(policy, destination, &receipt.capture_id)?;
     ensure!(
         tokio::runtime::Handle::try_current().is_err(),
         "native checkpoint requires the synchronous quiescent owner"
     );
-    // The caller holds the actual worker/account/policy/controller fences
-    // across this bounded local Git IO, including every await and publication.
+    workspace.verify()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(async {
+    let captured = runtime.block_on(async {
         tokio::time::timeout(Duration::from_secs(90), async {
             let repository = store.capture_git_bundle(&workspace.path).await?;
-            store
+            let mut captured = store
                 .capture(CaptureRequest {
                     session: SessionManifest {
                         version: 1,
@@ -101,8 +71,6 @@ pub(super) fn persist(
                         required_capabilities: spec.required_capabilities.clone(),
                         credential_references: BTreeSet::from([spec.gateway_account_id.clone()]),
                     },
-                    // The enrolled producer may publish only its first quiescent capture.
-                    // A later producer requires separately reconciled lifecycle ownership.
                     sequence: 1,
                     workspace_root: workspace.path.clone(),
                     history: vec![journal.to_vec()],
@@ -134,18 +102,78 @@ pub(super) fn persist(
                             executable: false,
                         },
                     ],
-                    // A successful reply is not proof of externally reconciled effects.
-                    // Keep this checkpoint dirty until a separate authoritative
-                    // reconciliation proves which effects completed.
                     pending_effects,
                 })
-                .await
+                .await?;
+            // VM420 chunks/metadata join the SAME protected Core/history/effect
+            // manifest. publish rechecks every hash, path and total byte bound.
+            if !effects.machine_entries().is_empty() {
+                captured
+                    .manifest
+                    .provider_state
+                    .extend_from_slice(effects.machine_entries());
+                captured.digest = store.publish(&captured.manifest)?;
+            }
+            Ok::<_, anyhow::Error>(captured)
         })
         .await
         .context("native workspace capture timed out")?
         .context("native workspace checkpoint capture failed")
     })?;
     workspace.verify()?;
+    Ok(PreparedSourceCheckpoint {
+        captured,
+        workspace,
+    })
+}
+
+pub(super) fn commit(
+    policy: &Connection,
+    store_root: &Path,
+    destination: &GuestRestoreDestination,
+    spec: &ExecutionSpec,
+    ownership: &Ownership,
+    receipt: &source_journal::NativeSourceJournalReceipt,
+    prepared: PreparedSourceCheckpoint,
+) -> Result<NativeSourceCheckpointReceipt> {
+    let current = workspaces::require(policy, destination, &prepared.workspace.path)?;
+    prepared.workspace.verify()?;
+    ensure!(
+        current.working_copy_id == prepared.workspace.working_copy_id
+            && current.revision == prepared.workspace.revision,
+        "native workspace assignment changed during capture"
+    );
+    let workspace = prepared.workspace;
+    let result = prepared.captured;
+    let exact_source: bool = policy.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_native_source_journals
+        WHERE capture_id=?1 AND spec_json=?2 AND ownership_json=?3
+        AND artifact_store_path=?4 AND guest_id=?5 AND controller_id=?6
+        AND controller_generation=?7 AND owner_user_id=?8 AND worker_profile_id=?9
+        AND project_id=?10 AND thread_id=?11 AND source_instance_id=?12)",
+        rusqlite::params![
+            receipt.capture_id,
+            serde_json::to_string(spec)?,
+            serde_json::to_string(ownership)?,
+            store_root
+                .to_str()
+                .context("native store path is not UTF-8")?,
+            destination.guest_id,
+            destination.controller_id,
+            i64::try_from(destination.controller_generation)?,
+            destination.human_owner_id,
+            destination.worker_profile_id,
+            destination.project_id,
+            destination.thread_id,
+            destination.instance_id,
+        ],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        exact_source,
+        "native checkpoint has a foreign source capture"
+    );
+    source_policy::persist(policy, destination, &receipt.capture_id)?;
     policy.execute(
         "INSERT INTO business_native_source_checkpoints
         (capture_id,checkpoint_digest,checkpoint_sequence,working_copy_id,workspace_revision)

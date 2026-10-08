@@ -115,8 +115,11 @@ mod threads;
 mod worker_profile_bindings;
 #[path = "workjet_jour_fixe_contract.generated.rs"]
 pub(crate) mod workjet_jour_fixe_contract;
+mod workjet_project_kpis;
 #[path = "workjet_project_kpis_contract.generated.rs"]
 pub(crate) mod workjet_project_kpis_contract;
+#[path = "workjet_supervisor_execution_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_execution_contract;
 pub mod workjet_transfer_git;
 
 pub(crate) use app_runtime::inspect_module as inspect_app_runtime_module;

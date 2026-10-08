@@ -204,6 +204,7 @@ RUN / EXEC
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
   ctox runtime speech-status
+  ctox runtime speech-route-check
   ctox runtime speech-warmup
   ctox runtime speech-configure <speech-config.json>
   ctox runtime speech-computer-configure <routes.json>
@@ -635,13 +636,13 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 let speech = runtime.block_on(async {
                     #[cfg(unix)]
                     if config.synthesis == execution::speech::SpeechBackend::Computer {
-                        execution::speech::computer::wait_for_route(&root, ctox_sync::authority::auth::speech_wire::SpeechWorkload::Synthesis).await?;
+                        execution::speech::computer::wait_for_route(&root, ctox_sync::authority::auth::speech_wire::SpeechWorkload::Synthesis).await.context("native speech route readiness failed before synthesis")?;
                     }
                     gateway.synthesize_verified_async(&execution::speech::SpeechRequest {
                     text: text.to_string(),
                     format: execution::speech::SpeechAudioFormat::Wav,
                     voice_id: None,
-                    }).await
+                    }).await.context("speech synthesis request failed after route readiness")
                 })?;
                 let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
                 std::io::Write::write_all(&mut file, speech.audio())?;
@@ -685,6 +686,28 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&gateway.status())?);
                 Ok(())
             }
+            #[cfg(unix)]
+            Some("speech-route-check") => {
+                anyhow::ensure!(args.len() == 2, "usage: ctox runtime speech-route-check");
+                let _speech_host = sync_host::start_if_configured(&root)?
+                    .context("configure the native Sync host before speech route diagnostics")?;
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                use ctox_sync::authority::auth::speech_wire::SpeechWorkload;
+                let (transcription, synthesis) = runtime.block_on(async {
+                    tokio::join!(
+                        execution::speech::computer::diagnose_route(&root, SpeechWorkload::Transcription),
+                        execution::speech::computer::diagnose_route(&root, SpeechWorkload::Synthesis)
+                    )
+                });
+                let transcription = transcription.context("transcription route diagnostic failed")?;
+                let synthesis = synthesis.context("synthesis route diagnostic failed")?;
+                let ready = transcription.ready() && synthesis.ready();
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                    "transcription": transcription, "synthesis": synthesis, "ready": ready
+                }))?);
+                anyhow::ensure!(ready, "native speech route was not verified within 15 seconds; see transport snapshot");
+                Ok(())
+            }
             Some("speech-benchmark") => {
                 let pcm = args.get(2).context("usage: ctox runtime speech-benchmark <16khz-mono-s16le.pcm>")?;
                 let config = execution::speech::SpeechRuntimeConfig::load(&root)?;
@@ -695,9 +718,9 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 let result = runtime.block_on(async {
                     #[cfg(unix)]
                     if config.transcription == execution::speech::SpeechBackend::Computer {
-                        execution::speech::computer::wait_for_route(&root, ctox_sync::authority::auth::speech_wire::SpeechWorkload::Transcription).await?;
+                        execution::speech::computer::wait_for_route(&root, ctox_sync::authority::auth::speech_wire::SpeechWorkload::Transcription).await.context("native speech route readiness failed before transcription")?;
                     }
-                    execution::speech::benchmark_pcm(&root, Path::new(pcm)).await
+                    execution::speech::benchmark_pcm(&root, Path::new(pcm)).await.context("speech transcription request failed after route readiness")
                 })?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
                 Ok(())

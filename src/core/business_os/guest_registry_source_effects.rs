@@ -11,6 +11,8 @@ pub(super) struct SourceEffects {
     job: Job,
     process: Option<GuestProcessEffect>,
     child_stop_observed: bool,
+    process_effect_reconciled: bool,
+    machine_entries: Vec<ctox_sync::contracts::WorkspaceEntry>,
 }
 
 impl SourceEffects {
@@ -58,6 +60,8 @@ impl SourceEffects {
             job,
             process: None,
             child_stop_observed: false,
+            process_effect_reconciled: false,
+            machine_entries: Vec::new(),
         })
     }
 
@@ -66,11 +70,15 @@ impl SourceEffects {
     pub(super) fn verify_controller(&mut self, entry: &Registration) -> Result<()> {
         self.process = None;
         self.child_stop_observed = false;
+        self.process_effect_reconciled = false;
+        self.machine_entries.clear();
         match (&entry.process_effect, &entry.registered_process) {
             (None, None) => {
                 #[cfg(target_os = "linux")]
                 ensure!(
-                    entry.desktop.is_none() && entry.stopped_status.is_none(),
+                    entry.desktop.is_none()
+                        && entry.source_machine.is_none()
+                        && entry.stopped_status.is_none(),
                     "native source child has no registered effect"
                 );
             }
@@ -78,7 +86,6 @@ impl SourceEffects {
                 let destination = &entry.assignment.destination;
                 ensure!(
                     id == &process.effect_id
-                        && self.job.pending_effects.contains(id)
                         && process.job_id == self.job.spec.job_id
                         && process.ownership == self.job.ownership
                         && process.controller_id == destination.controller_id
@@ -86,23 +93,61 @@ impl SourceEffects {
                     "native source child differs from the observed quorum effect"
                 );
                 #[cfg(target_os = "linux")]
-                ensure!(
-                    entry.desktop.as_ref().is_some_and(
-                        |desktop| desktop.process_instance_id() == process.process_instance_id
-                    ),
-                    "native source child differs from its retained process"
-                );
+                if let Some(capture) = &entry.source_machine {
+                    ensure!(
+                        entry.desktop.is_none() && capture.matches(process),
+                        "native source export differs from its registered process"
+                    );
+                    self.machine_entries = capture.entries()?;
+                    self.child_stop_observed = true;
+                    self.process_effect_reconciled = capture.process_reconciled(process)?;
+                } else {
+                    ensure!(
+                        entry
+                            .desktop
+                            .as_ref()
+                            .is_some_and(|desktop| desktop.process_instance_id()
+                                == process.process_instance_id),
+                        "native source child differs from its retained process"
+                    );
+                }
                 #[cfg(not(target_os = "linux"))]
                 anyhow::bail!("native source child capture requires retained Linux QEMU");
+                ensure!(
+                    self.job.pending_effects.contains(id)
+                        || (self.process_effect_reconciled
+                            && self.job.completed_effects.contains(id)),
+                    "native source child has no matching current quorum effect"
+                );
             }
             _ => anyhow::bail!("native source process effect is incomplete"),
         }
         self.process = entry.registered_process.clone();
         #[cfg(target_os = "linux")]
         {
-            self.child_stop_observed = entry.stopped_status.is_some();
+            self.child_stop_observed |= entry.stopped_status.is_some();
         }
         Ok(())
+    }
+
+    pub(super) fn machine_entries(&self) -> &[ctox_sync::contracts::WorkspaceEntry] {
+        &self.machine_entries
+    }
+
+    pub(super) fn same_quorum(&self, other: &Self) -> bool {
+        self.job == other.job
+    }
+
+    pub(super) fn quorum_job(&self) -> &Job {
+        &self.job
+    }
+
+    pub(super) fn same_observation(&self, other: &Self) -> bool {
+        self.job == other.job
+            && self.process == other.process
+            && self.child_stop_observed == other.child_stop_observed
+            && self.process_effect_reconciled == other.process_effect_reconciled
+            && self.machine_entries == other.machine_entries
     }
 
     pub(super) fn bytes(&self, spec: &ExecutionSpec, ownership: &Ownership) -> Result<Vec<u8>> {
@@ -120,7 +165,8 @@ impl SourceEffects {
                 "ownership": process.ownership, "controllerId": process.controller_id,
                 "controllerGeneration": process.controller_generation,
                 "processInstanceId": process.process_instance_id,
-                "childStopObserved": self.child_stop_observed
+                "childStopObserved": self.child_stop_observed,
+                "processEffectReconciled": self.process_effect_reconciled
             })),
             "externalEffects": "unknown", "reconciled": false
         }))?;

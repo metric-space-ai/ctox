@@ -86,6 +86,14 @@ async fn native_control_adapter_host_lifetime_is_exact_and_handles_do_not_retain
     assert!(!channel.peer_connected("absent-peer")?);
     let pin = format!("ed25519:{:064x}", 1);
     assert!(channel.bind_identity(&pin)?.is_none());
+    let diagnostic = channel.diagnostic(&pin)?;
+    assert_eq!(diagnostic.peer_count, 0);
+    assert_eq!(diagnostic.open_data_channels, 0);
+    assert_eq!(diagnostic.native_control_ready_peers, 0);
+    assert!(!diagnostic.signaling_socket_connected);
+    assert!(!diagnostic.signaling_join_accepted);
+    assert!(!diagnostic.verified_target_route);
+    assert!(channel.diagnostic("unsigned-route-claim").is_err());
     assert!(channel.bind_identity("unsigned-route-claim").is_err());
     assert!(channel.peer_connected(" invalid-peer ").is_err());
     assert!(Owner::start(root.path(), &pool).is_err());
@@ -97,9 +105,14 @@ async fn native_control_adapter_host_lifetime_is_exact_and_handles_do_not_retain
     assert!(channel.current().is_err());
     assert!(channel.peer_connected("absent-peer").is_err());
     assert!(channel.bind_identity(&pin).is_err());
+    assert!(channel.diagnostic(&pin).is_err());
     assert!(native_control_channel(root.path()).is_err());
     let replacement = Owner::start(root.path(), &pool)?;
     assert!(replacement.channel().current().is_ok());
+    assert!(
+        channel.diagnostic(&pin).is_err(),
+        "diagnostic must not revive a retired host through its replacement"
+    );
     assert!(
         channel.current().is_err(),
         "retired handle cannot select the replacement host"

@@ -136,7 +136,13 @@ writes, missing/diverging generated IDs and their returned revision/HLC metadata
 Null metadata means unavailable in that returned payload. Each phase is saved
 before and after execution; unexecuted phases stay explicitly not_run. Snapshot
 overhead is recorded, and final catchup time excludes its subsequent diagnostic
-snapshot. Timestamped log excerpts export diagnostic vocabulary only; private
+snapshot. Failure snapshots also retain the installed browser peer's actual
+RTC states, offer/answer/candidate counters, candidate types and a bounded
+recent state-event history. Expected-native descriptor matches are exported
+only as flags/counts. Peer IDs, candidate addresses, SDP, arbitrary errors,
+messages, URLs and credentials are excluded. Missing transport evidence stays
+explicitly unavailable; it is not inferred from a collection timeout.
+Timestamped log excerpts export diagnostic vocabulary only; private
 rolling native log files stay on the isolated host. Arbitrary document values,
 credentials and URL errors are excluded. Interrupted waits stop before another fault attempt.
 Include installed revisions, host identity,

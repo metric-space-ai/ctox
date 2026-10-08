@@ -26,6 +26,9 @@ struct ObservePayload {
     project_id: String,
     thread_id: String,
     target_command_id: String,
+    #[serde(default)]
+    execution_page:
+        Option<super::super::workjet_supervisor_execution_contract::ExecutionPageRequest>,
     #[serde(default, rename = "inbound_channel")]
     _inbound_channel: Option<String>,
 }
@@ -57,10 +60,20 @@ pub(super) fn binding(
     thread_id: &str,
     active: bool,
 ) -> anyhow::Result<supervisor_binding::SupervisorBinding> {
+    let conn = open_store(root)?;
+    binding_from_connection(&conn, owner, project_id, thread_id, active)
+}
+
+pub(super) fn binding_from_connection(
+    conn: &Connection,
+    owner: &str,
+    project_id: &str,
+    thread_id: &str,
+    active: bool,
+) -> anyhow::Result<supervisor_binding::SupervisorBinding> {
     let project_id = required(project_id, "project_id", 128)?;
     let thread_id = required(thread_id, "thread_id", 36)?;
-    let conn = open_store(root)?;
-    owned_project(&conn, &project_id, owner, active)?;
+    owned_project(conn, &project_id, owner, active)?;
     let binding = supervisor_binding::for_thread(&conn, owner, &thread_id)?
         .context("register this project's existing supervisor before submitting a turn")?;
     ensure!(
@@ -165,7 +178,18 @@ pub(in crate::business_os) fn control(
             let request: ObservePayload = serde_json::from_value(command.payload.clone())?;
             let binding = binding(root, owner, &request.project_id, &request.thread_id, false)?;
             let turn = owned_turn(root, owner, &binding, &request.target_command_id)?;
-            Ok(json!({"ok": true, "contract": CONTRACT, "binding": binding, "turn": turn}))
+            let mut response =
+                json!({"ok": true, "contract": CONTRACT, "binding": binding, "turn": turn});
+            // Installed v1 decoders reject excess properties. Add observer facts
+            // only when the caller explicitly requests this separately versioned page.
+            if let Some(page) = request.execution_page {
+                let execution =
+                    super::supervisor_observation::page(root, &response["turn"], &page)?;
+                response["execution_contract"] =
+                    json!(super::super::workjet_supervisor_execution_contract::CONTRACT_SCHEMA);
+                response["execution_page"] = serde_json::to_value(execution)?;
+            }
+            Ok(response)
         }
         "ctox.workjet.project.supervisor.turn.cancel" => {
             let request: CancelPayload = serde_json::from_value(command.payload.clone())?;

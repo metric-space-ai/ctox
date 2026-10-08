@@ -9,6 +9,8 @@
 pub(crate) mod accounts;
 #[path = "guest_registry_command.rs"]
 mod command;
+#[path = "guest_registry_protected_import.rs"]
+mod protected_import;
 #[path = "guest_registry_source_checkpoint.rs"]
 mod source_checkpoint;
 #[path = "guest_registry_source_effects.rs"]
@@ -17,8 +19,16 @@ mod source_effects;
 pub(crate) mod source_handoff;
 #[path = "guest_registry_source_journal.rs"]
 mod source_journal;
+#[cfg(target_os = "linux")]
+#[path = "guest_registry_source_machine.rs"]
+mod source_machine;
 #[path = "guest_registry_source_policy.rs"]
 mod source_policy;
+#[cfg(target_os = "linux")]
+#[path = "guest_registry_source_process.rs"]
+mod source_process;
+#[path = "guest_registry_target_enrollment.rs"]
+mod target_enrollment;
 #[path = "guest_registry_target_handoff.rs"]
 pub(crate) mod target_handoff;
 #[path = "guest_registry_target_import.rs"]
@@ -49,7 +59,14 @@ impl NativeGuestRegistry {
         self: &Arc<Self>,
         guest_id: &str,
     ) -> Result<Arc<crate::channels::NativeGuestAdmission>> {
-        self.registration(guest_id)?;
+        ensure!(
+            self.registration(guest_id)?
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
+                .restoration
+                .is_none(),
+            "protected target guest requires existing-job continuation, never fresh Create"
+        );
         let owner = Arc::new(NativeGuestAdmissionResolver {
             registry: Arc::clone(self),
             guest_id: guest_id.into(),
@@ -311,6 +328,7 @@ struct ExecutionBinding {
 }
 
 struct Registration {
+    restoration: Option<target_enrollment::ProtectedEnrollment>,
     workspace_lease: Option<std::fs::File>,
     assignment: NativeGuestAssignment,
     import_identity: FileIdentity,
@@ -327,6 +345,8 @@ struct Registration {
     stopped_status: Option<std::process::ExitStatus>,
     #[cfg(target_os = "linux")]
     desktop: Option<super::guest_runtime::RetainedQemuDesktop>,
+    #[cfg(target_os = "linux")]
+    source_machine: Option<Arc<source_machine::SourceMachineCapture>>,
 }
 
 /// One lifecycle owner retains this registry. Restart does not revive live
@@ -614,6 +634,7 @@ impl NativeGuestRegistry {
                 {
                     ensure!(
                         !entry.revoked
+                            && entry.restoration.is_none()
                             && private_directory(&d.import_parent)? == entry.import_identity,
                         "retained native enrollment is unavailable"
                     );
@@ -647,17 +668,46 @@ impl NativeGuestRegistry {
         );
         let human_owner_id =
             session_user_id(session).context("guest enrollment has no human principal")?;
+        self.enroll_resolved_in_policy(
+            tx,
+            human_owner_id,
+            project_id,
+            thread_id,
+            worker_profile_id,
+            import_parent,
+            format!("guest_{}", uuid::Uuid::new_v4()),
+            None,
+        )
+    }
+
+    fn enroll_resolved_in_policy(
+        &self,
+        tx: &Connection,
+        human_owner_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        worker_profile_id: &str,
+        import_parent: &Path,
+        guest_id: String,
+        restoration: Option<target_enrollment::ProtectedEnrollment>,
+    ) -> Result<NativeGuestAssignment> {
         ensure!(
-            [human_owner_id, project_id, thread_id, worker_profile_id]
-                .iter()
-                .all(|id| identifier(id)),
+            [
+                human_owner_id,
+                project_id,
+                thread_id,
+                worker_profile_id,
+                &guest_id
+            ]
+            .iter()
+            .all(|id| identifier(id)),
             "invalid native guest assignment"
         );
         let import_identity = private_directory(import_parent)?;
         let assignment = NativeGuestAssignment {
             destination: GuestRestoreDestination {
                 instance_id: self.instance_id.clone(),
-                guest_id: format!("guest_{}", uuid::Uuid::new_v4()),
+                guest_id,
                 human_owner_id: human_owner_id.into(),
                 project_id: project_id.into(),
                 thread_id: thread_id.into(),
@@ -674,6 +724,10 @@ impl NativeGuestRegistry {
             .lock()
             .map_err(|_| anyhow::anyhow!("native guest registry poisoned"))?;
         ensure!(entries.len() < 64, "native guest registry capacity reached");
+        ensure!(
+            !entries.contains_key(&assignment.destination.guest_id),
+            "original guest identity is already retained"
+        );
         // Never silently rebind an old process/import or existing assignment.
         for entry in entries.values() {
             let entry = entry
@@ -695,6 +749,7 @@ impl NativeGuestRegistry {
         entries.insert(
             assignment.destination.guest_id.clone(),
             Arc::new(Mutex::new(Registration {
+                restoration,
                 workspace_lease: None,
                 assignment: assignment.clone(),
                 import_identity,
@@ -711,6 +766,8 @@ impl NativeGuestRegistry {
                 stopped_status: None,
                 #[cfg(target_os = "linux")]
                 desktop: None,
+                #[cfg(target_os = "linux")]
+                source_machine: None,
             })),
         );
         Ok(assignment)
@@ -889,6 +946,42 @@ impl NativeGuestRegistry {
             "guest stop requires authenticated human"
         );
         let entry = self.registration(guest_id)?;
+        // Retire authority synchronously; no policy/controller lock may wait
+        // for a RAM export or the actual source child to finish stopping.
+        let exporting = self.with_policy(|_| {
+            let mut entry = entry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+            ensure!(
+                session_user_id(session)
+                    == Some(entry.assignment.destination.human_owner_id.as_str()),
+                "foreign guest stop"
+            );
+            let Some(capture) = entry.source_machine.clone() else {
+                return Ok(None);
+            };
+            if !entry.revoked {
+                entry.assignment.destination.controller_generation = entry
+                    .assignment
+                    .destination
+                    .controller_generation
+                    .checked_add(1)
+                    .context("controller generation exhausted")?;
+                entry.revoked = true;
+            }
+            capture.retire();
+            self.retire_frame(&mut entry)?;
+            Ok(Some(capture))
+        })?;
+        if let Some(capture) = exporting {
+            let status = capture.stop()?;
+            entry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
+                .stopped_status = Some(status);
+            // Stopping never completes the pending quorum effect.
+            return Ok(status);
+        }
         self.with_policy(|_| {
             let mut entry = entry
                 .lock()
@@ -947,6 +1040,10 @@ impl NativeGuestRegistry {
                     .checked_add(1)
                     .context("controller generation exhausted")?;
                 entry.revoked = true;
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(capture) = &entry.source_machine {
+                capture.retire();
             }
             self.retire_frame(&mut entry)?;
             Ok(())
@@ -1204,18 +1301,36 @@ impl NativeGuestExecution {
     /// Receipt registration revalidates completed quorum effect; presence of an
     /// imported directory can never fabricate successful import completion.
     pub(crate) async fn register_import(&self, receipt: GuestImportReceipt) -> Result<()> {
-        self.validate_import_completion(&receipt).await?;
-        self.with_current(|entry, verify| self.register_import_current(entry, verify, receipt))
+        Self::validate_import_completion(
+            self.registry.authority.as_ref(),
+            &self.binding.spec,
+            &self.binding.ownership,
+            &receipt,
+        )
+        .await?;
+        self.with_current(|entry, verify| {
+            Self::register_import_current(
+                entry,
+                verify,
+                receipt,
+                &self.binding.spec,
+                &self.binding.ownership,
+            )
+        })
     }
 
-    async fn validate_import_completion(&self, receipt: &GuestImportReceipt) -> Result<()> {
-        let job = self
-            .registry
-            .authority
-            .validate_ownership(&self.binding.spec.job_id, &self.binding.ownership)
+    pub(super) async fn validate_import_completion(
+        authority: &dyn ExecutionAuthority,
+        spec: &ExecutionSpec,
+        ownership: &Ownership,
+        receipt: &GuestImportReceipt,
+    ) -> Result<()> {
+        let job = authority
+            .validate_ownership(&spec.job_id, ownership)
             .await?;
         ensure!(
-            job.spec == self.binding.spec
+            job.spec == *spec
+                && job.ownership == *ownership
                 && !job.stopped
                 && job.pending_effects.is_empty()
                 && job.completed_effects.contains(&receipt.effect_id),
@@ -1231,16 +1346,17 @@ impl NativeGuestExecution {
         Ok(())
     }
 
-    fn register_import_current(
-        &self,
+    pub(super) fn register_import_current(
         entry: &mut Registration,
         verify: &dyn Fn() -> Result<()>,
         receipt: GuestImportReceipt,
+        spec: &ExecutionSpec,
+        ownership: &Ownership,
     ) -> Result<()> {
         ensure!(
             receipt.destination == entry.assignment.destination
-                && receipt.spec == self.binding.spec
-                && receipt.ownership == self.binding.ownership,
+                && receipt.spec == *spec
+                && receipt.ownership == *ownership,
             "foreign guest import receipt"
         );
         ensure!(

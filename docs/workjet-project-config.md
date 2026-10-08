@@ -9,7 +9,7 @@ An existing project owned by another user cannot be changed.
 | --- | --- |
 | `repo_url` | Absolute HTTP(S) URL, maximum 2048 characters, no embedded credentials |
 | `public_url` | Same URL bounds |
-| `info` | Object with optional `description`, `goal` (4096 characters each), `phase`, `status` (128 each) |
+| `info` | Object with optional `summary`, `goal` (4096 characters each), `phase` (128); legacy `description` (4096) and `status` (128) remain accepted |
 | `jour_fixe` | Object with ISO `weekday` 1–7 (Monday–Sunday), `time` as HH:mm, IANA `timezone` |
 
 The default timezone is `Europe/Berlin`. Project information and goals may
@@ -28,7 +28,7 @@ await workjetProjectControl({
   action: 'project.configure', commandId: 'unique-command-id',
   projectId: 'existing-project-id', title: 'CTOX',
   repoUrl: 'https://github.com/metric-space-ai/ctox', publicUrl: 'https://ctox.dev',
-  info: { goal: 'All twelve projects usable', phase: 'delivery' },
+  info: { summary: 'CTOX project runtime', goal: 'All twelve projects usable', phase: 'delivery' },
   jourFixe: { weekday: 3, time: '09:30', timezone: 'Europe/Berlin' },
 });
 ```
@@ -45,8 +45,12 @@ credential or execution thread is accepted by this configuration action.
 A replaced browser session or a receipt for another actor/project is rejected.
 Business data remains on the command/WebRTC plane; this adds no HTTP data API.
 
-This change supplies the configuration foundation. A configured appointment
-alone does not start a report or meeting: the Jour fixe contract, preparation
-schedule, supervisor delivery bridge, speech and owner-confirmed goal update are
-separate native follow-ups. The confirmed todo list, not an unconfirmed meeting
-proposal, will define the supervisor goal.
+The registered native supervisor binding reconciles a weekly report at the
+configured appointment and a Jour-fixe preparation two hours before it. Both
+use the same IANA calendar and retain a paused schedule. The report/preparation
+paths recheck project policy and the persisted supervisor binding before
+submitting a supervisor turn; a configuration alone cannot invent a supervisor.
+The native meeting read command returns occurrence metadata, not a completed
+deck. Speech, meeting artifacts and owner-confirmed goal updates remain separate
+follow-ups. The confirmed todo list, not an unconfirmed meeting proposal, will
+define the supervisor goal.

@@ -3,6 +3,9 @@ import { webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './workjet-supervisor-execution-contract.generated.mjs';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './workjet-project-kpis-contract.generated.mjs';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './workjet-jour-fixe-contract.generated.mjs';
 
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
@@ -20,7 +23,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 7);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 9);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -217,10 +220,10 @@ test('Workjet project create/list is idempotent across optional copies and compu
   );
 });
 
-function projectConfigurationFixture(changeReceipt = () => {}) {
+function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1') {
   const commands = [];
   const state = {
-    session: { id: 'owner-1' },
+    session: { id: actor },
     db: { collection: () => ({}) },
     sync: { async startCollection() { return {}; } },
     commandBus: {
@@ -238,7 +241,7 @@ function projectConfigurationFixture(changeReceipt = () => {}) {
         const receipt = {
           command_id: command.id, target_record_id: command.payload.project_id,
           status: 'completed', ok: true,
-          result: { ok: true, collection: 'workjet_projects', project },
+          result: { ok: true, collection: 'workjet_projects', owner_user_id: 'owner-1', project },
         };
         changeReceipt(receipt, state);
         return receipt;
@@ -252,6 +255,233 @@ function projectConfigurationFixture(changeReceipt = () => {}) {
     invoke: async (request) => JSON.parse(JSON.stringify(await context.invoke(request))),
   };
 }
+
+function nativeProjectDetailsFixture(changeReceipt = () => {}) {
+  const commands = [];
+  const state = {
+    session: { id: 'owner-alias' }, db: { collection: () => ({}) },
+    sync: { async startCollection(name) { assert.equal(name, 'business_commands'); return {}; } },
+    commandBus: { async dispatch(command) {
+      commands.push(command);
+      const receipt = {
+        command_id: command.id, target_record_id: command.payload.project_id,
+        payload: structuredClone(command.payload), status: 'completed', ok: true,
+        result: command.command_type === 'ctox.workjet.jour_fixe.meeting.read'
+          ? { ok: true, meeting: null }
+          : { ok: true, kpis: { project_id: command.payload.project_id,
+            revision: command.payload.expected_revision === undefined ? 0 : command.payload.expected_revision + 1,
+            items: (command.payload.prompts || []).map(prompt => ({
+              prompt: { ...prompt, revision: 1 },
+              result: { status: 'missing_source', reason_code: 'source_not_bound', message: 'No source.' },
+            })) } },
+      };
+      changeReceipt(receipt, state);
+      return receipt;
+    } },
+  };
+  const context = { state, actorContext: session => ({ id: session.id }),
+    PROJECT_KPIS_SCHEMA, validateProjectKpiValue, JOUR_FIXE_SCHEMA, validateJourFixeValue };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
+}
+
+test('native KPI control reads, configures and clears prompts without a projection pull', async () => {
+  const fixture = nativeProjectDetailsFixture();
+  const base = { commandId: 'details-1', projectId: 'project-1' };
+  const read = await fixture.invoke({ ...base, action: 'project.kpis.read' });
+  assert.deepEqual(read.kpis, { project_id: 'project-1', revision: 0, items: [] });
+  const configured = await fixture.invoke({ ...base, action: 'project.kpis.configure',
+    operationId: 'operation-1', expectedRevision: 0, prompts: [{ prompt: 'Visitors per week', kpi_id: 'visitors' }] });
+  assert.equal(configured.contract, PROJECT_KPIS_SCHEMA);
+  assert.equal(configured.kpis.items[0].result.status, 'missing_source');
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[1].payload)), {
+    project_id: 'project-1', operation_id: 'operation-1', expected_revision: 0,
+    prompts: [{ kpi_id: 'visitors', prompt: 'Visitors per week' }],
+  });
+  const cleared = await fixture.invoke({ ...base, action: 'project.kpis.configure',
+    operationId: 'operation-2', expectedRevision: 1, prompts: [] });
+  assert.deepEqual(cleared.kpis, { project_id: 'project-1', revision: 2, items: [] });
+  assert.equal(fixture.commands[0].command_type, 'ctox.workjet.project.kpis.read');
+  assert.equal(fixture.commands[1].command_type, 'ctox.workjet.project.kpis.configure');
+});
+
+test('native project detail control rejects forged and invalid requests before dispatch', async () => {
+  const configure = { action: 'project.kpis.configure', commandId: 'details', projectId: 'project-1',
+    operationId: 'operation', expectedRevision: 0, prompts: [] };
+  for (const change of [{ value: 3 }, { owner_user_id: 'foreign' }, { expectedRevision: -1 },
+    { expectedRevision: Number.MAX_SAFE_INTEGER + 1 }, { prompts: [{ kpi_id: 'x', prompt: 'x', value: 4 }] },
+    { prompts: [{ kpi_id: 'x', prompt: 'x', constructor: 'forged' }] },
+    { prompts: Array.from({ length: 4 }, (_, i) => ({ kpi_id: String(i), prompt: 'x' })) }]) {
+    const fixture = nativeProjectDetailsFixture();
+    await assert.rejects(fixture.invoke({ ...configure, ...change }));
+    assert.equal(fixture.commands.length, 0);
+  }
+  const fixture = nativeProjectDetailsFixture();
+  await assert.rejects(fixture.invoke({ action: 'project.jour_fixe.meeting.read', commandId: 'details',
+    projectId: 'project-1', meetingId: '', ownerUserId: 'foreign' }));
+  assert.equal(fixture.commands.length, 0);
+});
+
+test('native KPI receipts reject foreign scope, changed intent and session replacement', async () => {
+  const request = { action: 'project.kpis.configure', commandId: 'details', projectId: 'project-1',
+    operationId: 'operation', expectedRevision: 0, prompts: [{ kpi_id: 'visitors', prompt: 'Visitors' }] };
+  for (const mutate of [receipt => { receipt.command_id = 'foreign'; },
+    receipt => { receipt.target_record_id = 'foreign'; }, receipt => { receipt.payload.operation_id = 'foreign'; },
+    receipt => { receipt.payload.prompts[0].prompt = 'Different intent'; },
+    receipt => { receipt.result.kpis.project_id = 'foreign'; },
+    receipt => { receipt.result.kpis.items[0].result = { status: 'ready' }; },
+    (receipt, state) => { state.session = { id: 'owner-alias' }; }]) {
+    await assert.rejects(nativeProjectDetailsFixture(mutate).invoke(request));
+  }
+});
+
+test('meeting read returns null or the authorized typed native meeting for a verified alias', async () => {
+  const request = { action: 'project.jour_fixe.meeting.read', commandId: 'details', projectId: 'project-1' };
+  const empty = await nativeProjectDetailsFixture().invoke(request);
+  assert.equal(empty.meeting, null);
+  assert.equal(empty.contract, JOUR_FIXE_SCHEMA);
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json', import.meta.url), 'utf8'));
+  const meeting = corpus.valid_cases.find(item => item.type === 'Meeting').value;
+  const fixture = nativeProjectDetailsFixture(receipt => {
+    receipt.result.meeting = meeting; receipt.result.preparation_task_id = 'actual-preparation';
+  });
+  const result = await fixture.invoke({ ...request, meetingId: meeting.id });
+  assert.deepEqual(result.meeting, meeting);
+  assert.equal(result.preparationTaskId, 'actual-preparation');
+  assert.equal(fixture.commands[0].command_type, 'ctox.workjet.jour_fixe.meeting.read');
+});
+
+test('meeting read rejects foreign, malformed and uncorrelated confirmations', async () => {
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json', import.meta.url), 'utf8'));
+  for (const mutate of [receipt => { receipt.result.meeting.project_id = 'foreign'; },
+    receipt => { receipt.result.meeting.id = 'foreign'; }, receipt => { delete receipt.result.meeting.supervisor; },
+    receipt => { receipt.payload.meeting_id = 'foreign'; },
+    receipt => { receipt.result.meeting = null; },
+    receipt => { receipt.result.meeting = null; receipt.result.preparation_task_id = 'invented'; }]) {
+    const fixture = nativeProjectDetailsFixture(receipt => {
+      receipt.result.meeting = structuredClone(corpus.valid_cases.find(item => item.type === 'Meeting').value);
+      mutate(receipt);
+    });
+    await assert.rejects(fixture.invoke({ action: 'project.jour_fixe.meeting.read', commandId: 'details',
+      projectId: 'project-1', meetingId: 'meeting-1' }));
+  }
+});
+
+function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
+  const commands = [];
+  const state = {
+    session: { id: 'owner-alias' }, db: { collection: () => ({}) },
+    sync: { async startCollection(name) { assert.equal(name, 'business_commands'); return {}; } },
+    commandBus: { async dispatch(command) {
+      commands.push(command);
+      // Match normalizeCommandDocument's actual transport metadata.
+      const payload = { ...structuredClone(command.payload), inbound_channel: command.inbound_channel || 'ctox' };
+      const append = command.command_type.endsWith('.transcript.append');
+      const revise = command.command_type.endsWith('.todos.revise');
+      const comment = command.command_type.endsWith('.comment.add');
+      const receipt = {
+        command_id: command.id, target_record_id: command.record_id,
+        payload, status: 'completed', ok: true,
+        result: { ok: true, contract: JOUR_FIXE_SCHEMA, mutation: {
+          operation_id: payload.operation_id, meeting_id: payload.meeting_id,
+          project_id: command.record_id, revision: payload.expected_revision + 1,
+          state: command.command_type.endsWith('.meeting.start') || append ? 'live' : 'review',
+          ...(append ? { changed_id: payload.turn.id } : {}),
+          ...(comment ? { changed_id: payload.comment_id } : {}),
+          ...(revise ? { todos_revision: payload.proposal_revision } : {}),
+        } },
+      };
+      changeReceipt(receipt, state);
+      return receipt;
+    } },
+  };
+  const context = { state, actorContext: session => ({ id: session.id }), JOUR_FIXE_SCHEMA, validateJourFixeValue };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
+}
+
+function meetingOwnerRequest(action = 'project.jour_fixe.meeting.start', extra = {}) {
+  return { action, commandId: 'meeting-control', projectId: 'project-1', operationId: 'operation-1',
+    meetingId: 'meeting-1', expectedRevision: 3,
+    ...(action === 'project.jour_fixe.transcript.append' ? { turn: {
+      id: 'owner-text', sequence: 1, speaker: 'owner', modality: 'text', text: 'Please verify persistence.',
+      started_at_ms: 1000, ended_at_ms: 1001, meeting_id: 'meeting-1',
+    } } : {}),
+    ...(action === 'project.jour_fixe.comment.add' ? { commentId: 'comment-1', slideId: 'slide-1',
+      deckRevision: 1, x: 0.25, y: 0.75, text: 'Please prioritize persistence.' } : {}),
+    ...(action === 'project.jour_fixe.todos.revise' ? { proposalRevision: 2, items: [{
+      id: 'todo-1', title: 'Verify persistence', acceptance: 'Save survives reopen',
+      priority: 'P1', evidence_ids: ['owner-text'],
+    }] } : {}), ...extra };
+}
+
+test('meeting Owner controls preserve typed intent and compact native revision receipts', async () => {
+  for (const suffix of ['meeting.start', 'meeting.end', 'transcript.append', 'todos.revise', 'comment.add']) {
+    const action = `project.jour_fixe.${suffix}`;
+    const fixture = nativeMeetingOwnerFixture();
+    const request = meetingOwnerRequest(action);
+    const result = await fixture.invoke(request);
+    assert.equal(result.contract, JOUR_FIXE_SCHEMA);
+    assert.equal(result.mutation.revision, 4);
+    assert.equal(result.mutation.operation_id, request.operationId);
+    assert.equal(fixture.commands[0].command_type, `ctox.workjet.jour_fixe.${suffix}`);
+    assert.equal(fixture.commands[0].record_id, request.projectId);
+    assert.equal('project_id' in fixture.commands[0].payload, false);
+    assert.equal('meeting' in result, false);
+    if (request.turn) assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].payload.turn)), request.turn);
+    if (request.items) assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].payload.items)), request.items);
+  }
+});
+
+test('meeting Owner controls reject caller authority and unsafe revisions before dispatch', async () => {
+  for (const extra of [{ ownerUserId: 'foreign' }, { owner_user_id: 'foreign' },
+    { expectedRevision: -1 }, { expectedRevision: Number.MAX_SAFE_INTEGER },
+    { operationId: '' }, { meetingId: '' }, { proposalRevision: 2 }]) {
+    const fixture = nativeMeetingOwnerFixture();
+    await assert.rejects(fixture.invoke(meetingOwnerRequest(undefined, extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('Owner text cannot manufacture supervisor or speech provenance', async () => {
+  const request = meetingOwnerRequest('project.jour_fixe.transcript.append');
+  for (const change of [{ speaker: 'supervisor' }, { modality: 'speech' }, { source_run_id: 'forged' },
+    { stream_id: 'forged' }, { sentence_end_latency_ms: 20 }, { sequence: 0 },
+    { meeting_id: 'foreign' }, { ended_at_ms: 999 }, { author_user_id: 'foreign' }]) {
+    const fixture = nativeMeetingOwnerFixture();
+    await assert.rejects(fixture.invoke({ ...request, turn: { ...request.turn, ...change } }));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('meeting mutation rejects unsuccessful, foreign, changed-intent and stale receipts', async () => {
+  const request = meetingOwnerRequest('project.jour_fixe.transcript.append');
+  for (const mutate of [r => { r.command_id = 'foreign'; }, r => { r.target_record_id = 'foreign'; },
+    r => { r.status = 'failed'; }, r => { r.result.contract = 'foreign'; },
+    r => { r.payload.turn.text = 'Different intent'; }, r => { r.payload.inbound_channel = 'foreign'; },
+    r => { delete r.payload.inbound_channel; }, r => { r.payload.unexpected = true; },
+    r => { r.result.mutation.project_id = 'foreign'; },
+    r => { r.result.mutation.meeting_id = 'foreign'; }, r => { r.result.mutation.operation_id = 'foreign'; },
+    r => { r.result.mutation.revision = 3; }, r => { r.result.mutation.changed_id = 'foreign'; },
+    r => { r.result.mutation.state = 'confirmed'; }, r => { r.result.mutation.todos_revision = 5; },
+    r => { r.result.mutation.owner_user_id = 'foreign'; },
+    (r, state) => { state.session = { id: 'owner-alias' }; },
+    (r, state) => { state.db = { collection: () => ({}) }; }]) {
+    await assert.rejects(nativeMeetingOwnerFixture(mutate).invoke(request));
+  }
+  await assert.rejects(nativeMeetingOwnerFixture(r => { r.result.mutation.state = 'live'; })
+    .invoke(meetingOwnerRequest('project.jour_fixe.meeting.end')));
+  await assert.rejects(nativeMeetingOwnerFixture(r => { r.result.mutation.todos_revision = 1; })
+    .invoke(meetingOwnerRequest('project.jour_fixe.todos.revise')));
+});
+
+test('meeting mutation snapshots nested intent across the native wait', async () => {
+  const request = meetingOwnerRequest('project.jour_fixe.transcript.append');
+  const fixture = nativeMeetingOwnerFixture(() => { request.turn.text = 'Changed while waiting'; });
+  const result = await fixture.invoke(request);
+  assert.equal(result.mutation.changed_id, 'owner-text');
+  assert.equal(fixture.commands[0].payload.turn.text, 'Please verify persistence.');
+});
 
 function projectConfigurationRequest(extra = {}) {
   return {
@@ -296,6 +526,38 @@ test('configuration preserves omission versus explicit null at the command bound
   }
 });
 
+test('configuration accepts a native verified owner alias without changing its actor', async () => {
+  const alias = 'owner@example.org';
+  const fixture = projectConfigurationFixture(() => {}, alias);
+  const result = await fixture.invoke(projectConfigurationRequest({ info: { summary: 'Saved via alias' } }));
+  assert.equal(result.project.id, 'project-1');
+  assert.equal(result.project.info.summary, 'Saved via alias');
+  assert.equal(fixture.commands[0].client_context.actor.id, alias);
+  assert.equal(Object.hasOwn(fixture.commands[0].payload, 'owner_user_id'), false);
+});
+
+test('configuration retains same-actor compatibility but does not infer aliases from old receipts', async () => {
+  const legacy = (receipt) => { delete receipt.result.owner_user_id; };
+  assert.equal((await projectConfigurationFixture(legacy).invoke(projectConfigurationRequest())).project.id, 'project-1');
+  await assert.rejects(projectConfigurationFixture(legacy, 'owner@example.org')
+    .invoke(projectConfigurationRequest()), /uncorrelated/);
+});
+
+test('project info summary follows the same configuration corpus as native upsert', async () => {
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-project-configuration-v1.json', import.meta.url), 'utf8'));
+  for (const info of corpus.valid) {
+    const fixture = projectConfigurationFixture();
+    const result = await fixture.invoke(projectConfigurationRequest({ info }));
+    assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].payload.info)), info);
+    assert.deepEqual(result.project.info, info);
+  }
+  for (const info of corpus.invalid) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ info })));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
 test('project configuration rejects forged authority and invalid metadata before dispatch', async () => {
   for (const extra of [
     { ownerUserId: 'foreign' }, { owner_user_id: 'foreign' }, { archived: false },
@@ -314,6 +576,11 @@ test('project configuration rejects wrong receipts, foreign projects and session
     (receipt) => { receipt.command_id = 'other-command'; },
     (receipt) => { receipt.target_record_id = 'other-project'; },
     (receipt) => { receipt.result.collection = 'other-collection'; },
+    (receipt) => { receipt.result.owner_user_id = 'foreign'; },
+    (receipt) => { receipt.result.owner_user_id = null; },
+    (receipt) => { receipt.result.owner_user_id = ' owner-1'; },
+    (receipt) => { receipt.result.owner_user_id = 'owner-1\n'; },
+    (receipt) => { receipt.result.owner_user_id = 'x'.repeat(257); },
     (receipt) => { receipt.result.project.owner_user_id = 'foreign'; },
     (receipt) => { receipt.result.project.id = 'other-project'; },
     (receipt) => { receipt.result.project.name = 'other-title'; },
@@ -998,7 +1265,7 @@ function supervisorTurnFixture(change = () => {}) {
       return receipt;
     } },
   };
-  const context = { state, actorContext: session => ({ id: session.id }), URL };
+  const context = { state, actorContext: session => ({ id: session.id }), URL, SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
 }
@@ -1065,4 +1332,111 @@ test('supervisor cancellation never pretends a running worker acknowledged inter
     receipt => { receipt.result.cancellation.side_effects_may_have_started = null; },
     receipt => { receipt.result.cancellation.command_id = ''; },
   ]) await assert.rejects(supervisorTurnFixture(change).invoke(supervisorTurnRequest('cancel')));
+});
+
+
+function nativeExecutionPage() {
+  return {
+    command_id: nativeTurnId, task_id: 'queue:system::supervisor-turn',
+    attempt: { attempt_id: 'native-attempt', attempt_index: 47 },
+    events: [{ id: 'event-actual', sequence: 12, kind: 'worker.tool_completed',
+      title: 'Saved native tool result', created_at_ms: 1791410400000, tool_name: 'native.tool', success: true }],
+    next_cursor: { after_sequence: 12, after_event_id: 'event-actual' }, has_more: false,
+  };
+}
+function executionFixture(change = () => {}) {
+  return supervisorTurnFixture((receipt, state) => {
+    receipt.result.execution_contract = SUPERVISOR_EXECUTION_SCHEMA;
+    receipt.result.execution_page = nativeExecutionPage();
+    change(receipt, state);
+  });
+}
+
+test('legacy supervisor watch has exactly the prior outer shape even if unsolicited facts arrive', async () => {
+  const result = await executionFixture().invoke(supervisorTurnRequest('watch'));
+  assert.deepEqual(Object.keys(result).sort(), ['action', 'binding', 'commandId', 'contract', 'projectId', 'turn']);
+  assert.equal(result.turn.attempt, 0);
+  assert.equal(result.executionPage, undefined);
+});
+
+test('opted-in supervisor watch forwards the bounded fixture contract and actual native facts', async () => {
+  const fixture = executionFixture(receipt => {
+    receipt.payload = { ...receipt.payload, execution_page: { limit: 1, attempt_id: 'native-attempt' } };
+    receipt.result.execution_page.next_cursor = { after_event_id: 'event-actual', after_sequence: 12 };
+  });
+  const result = await fixture.invoke(supervisorTurnRequest('watch', { executionPage: { attempt_id: 'native-attempt', limit: 1 } }));
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].command.payload.execution_page)), { attempt_id: 'native-attempt', limit: 1 });
+  assert.equal(result.executionContract, SUPERVISOR_EXECUTION_SCHEMA);
+  assert.equal(result.executionPage.attempt.attempt_id, 'native-attempt');
+  assert.equal(result.executionPage.attempt.attempt_index, 47);
+  assert.equal(result.executionPage.attempt.run_id, undefined);
+  assert.equal(result.executionPage.events[0].sequence, 12);
+});
+
+test('an opted-in queued supervisor turn preserves the absence of an actual attempt', async () => {
+  const fixture = executionFixture(receipt => {
+    receipt.result.execution_page = { command_id: nativeTurnId, task_id: 'queue:system::supervisor-turn', events: [], has_more: false };
+  });
+  const result = await fixture.invoke(supervisorTurnRequest('watch', { executionPage: {} }));
+  assert.equal(result.executionPage.attempt, undefined);
+  assert.deepEqual(result.executionPage.events, []);
+});
+
+test('execution page invalid bounds and extra caller authority never dispatch', async () => {
+  for (const executionPage of [null, { limit: 0 }, { limit: 51 }, { attempt_id: ' ' },
+    { attempt_id: '\u0085' }, { owner_user_id: 'foreign' },
+    JSON.parse('{"__proto__":{}}'), { cursor: { after_sequence: 0, after_event_id: 'x' } }]) {
+    const fixture = executionFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest('watch', { executionPage })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const action of ['submit', 'cancel']) {
+    const fixture = executionFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest(action, { executionPage: {} })));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('execution pages reject foreign native identities unsafe fields and receipt substitution', async () => {
+  for (const change of [
+    receipt => { receipt.result.execution_contract = 'foreign'; },
+    receipt => { receipt.result.execution_page.command_id = 'foreign'; },
+    receipt => { receipt.result.execution_page.task_id = 'foreign'; },
+    receipt => { receipt.result.execution_page.attempt.attempt_id = 'foreign'; },
+    receipt => { receipt.result.execution_page.events[0].arguments = { secret: 'private' }; },
+    receipt => { receipt.result.execution_page.events[0].sequence = Number.MAX_SAFE_INTEGER + 1; },
+    receipt => { receipt.payload = { ...receipt.payload, execution_page: { attempt_id: 'foreign' } }; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(executionFixture(change).invoke(supervisorTurnRequest('watch', { executionPage: { attempt_id: 'native-attempt' } })));
+});
+
+test('execution page cursor must match the ordered safe native event page', async () => {
+  for (const change of [
+    receipt => { receipt.result.execution_page.next_cursor.after_event_id = 'foreign'; },
+    receipt => { receipt.result.execution_page.events[0].sequence = 3; },
+    receipt => { receipt.result.execution_page.events.push({ ...receipt.result.execution_page.events[0] }); },
+    receipt => { receipt.result.execution_page.events = []; receipt.result.execution_page.has_more = true; },
+    receipt => { delete receipt.result.execution_page.attempt; },
+  ]) await assert.rejects(executionFixture(change).invoke(supervisorTurnRequest('watch', {
+    executionPage: { attempt_id: 'native-attempt', cursor: { after_sequence: 5, after_event_id: 'prior-event' } },
+  })));
+});
+
+test('slide comment rejects unsafe pins and claimed author before dispatch', async () => {
+  for (const extra of [{ x: -0.1 }, { y: 1.1 }, { x: NaN }, { y: Infinity },
+    { slideId: '' }, { commentId: '' }, { text: '' }, { author_user_id: 'owner' },
+    { supervisor_event_id: 'forged' }]) {
+    const fixture = nativeMeetingOwnerFixture();
+    await assert.rejects(fixture.invoke(meetingOwnerRequest('project.jour_fixe.comment.add', extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('slide comment receipt must confirm the same comment identity', async () => {
+  const request = meetingOwnerRequest('project.jour_fixe.comment.add');
+  for (const change of [receipt => { receipt.result.mutation.changed_id = 'foreign-comment'; },
+    receipt => { delete receipt.result.mutation.changed_id; },
+    receipt => { receipt.payload.slide_id = 'another-slide'; }]) {
+    await assert.rejects(nativeMeetingOwnerFixture(change).invoke(request));
+  }
 });

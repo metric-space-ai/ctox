@@ -7,6 +7,37 @@ use super::*;
 use ctox_sync::guest_restore::GuestRestoreDestination;
 
 impl<P: Clone + Eq + Hash + Send + Sync + 'static> NativeGuestImportFence for Target<P> {
+    fn with_current_checkpoint(
+        &self,
+        policy: &Connection,
+        identity: &SigningIdentity,
+        destination: &GuestRestoreDestination,
+        binding: &str,
+        digest: &str,
+        spec: &ctox_sync::contracts::ExecutionSpec,
+        ownership: &ctox_sync::authority::Ownership,
+        publish: &mut dyn FnMut() -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        if binding != self.request.binding_digest
+            || digest != self.request.checkpoint_digest
+            || *spec != self.request.spec
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "protected import belongs to another native binding/checkpoint",
+            ));
+        }
+        self.with_current(policy, identity, destination, &mut || {
+            let permit = self
+                .server
+                .gate
+                .resolve_fenced(policy, identity, &self.request)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            guest_enrollment::verify_owned_target(policy, &self.request, &permit, ownership)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            publish()
+        })
+    }
     fn with_current(
         &self,
         policy: &Connection,
@@ -152,6 +183,27 @@ pub(super) fn assert_native_import_fence<P: Clone + Eq + Hash + Send + Sync + 's
         };
         let mut publish = || { publications += 1; Ok(()) };
         NativeGuestImportFence::with_current(&target, policy, identity, &destination, &mut publish).unwrap();
+        let next = ctox_sync::authority::Ownership {
+            node_id: target.request.ownership.node_id + 1,
+            generation: target.request.ownership.generation + 1,
+        };
+        // This is a genuine received-copy/account/policy fixture, not a
+        // completed takeover. It cannot authorize the pre-provider import.
+        for field in 0..4 {
+            let mut binding = target.request.binding_digest.clone();
+            let mut digest = target.request.checkpoint_digest.clone();
+            let mut spec = target.request.spec.clone();
+            match field {
+                0 => binding = "foreign-binding".into(),
+                1 => digest = "foreign-checkpoint".into(),
+                2 => spec.session_id = "foreign-session".into(),
+                _ => {}
+            }
+            assert!(NativeGuestImportFence::with_current_checkpoint(
+                &target, policy, identity, &destination, &binding, &digest,
+                &spec, &next, &mut publish,
+            ).is_err());
+        }
         for field in 0..4 {
             let mut foreign = destination.clone();
             match field {

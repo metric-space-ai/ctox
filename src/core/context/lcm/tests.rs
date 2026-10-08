@@ -1384,30 +1384,42 @@ fn continuity_prompt_contains_document_and_diff_rules() -> Result<()> {
     )?;
 
     let payload = engine.continuity_build_prompt(12, ContinuityKind::Narrative)?;
-    assert!(payload
-        .prompt
-        .contains("Reply with only a diff that uses the existing sections."));
+    assert!(payload.prompt.contains(
+        "Your reply text does not update memory. You must call `ctox continuity-update`"
+    ));
     assert!(payload.prompt.contains("<CURRENT_DOCUMENT>"));
     assert!(payload.prompt.contains("<RECENT_MESSAGES>"));
     assert!(payload.prompt.contains("## Entries"));
     assert!(payload
         .prompt
-        .contains("The first non-empty diff line must be a `## ...` section header"));
-    assert!(payload.prompt.contains("Example valid diff:"));
+        .contains("Keep the existing `##` section names. Do not invent new headings."));
+    for mode in ["full", "replace", "diff"] {
+        assert!(payload.prompt.contains(&format!("--mode {mode}")));
+    }
+    assert!(payload.prompt.contains("--kind narrative"));
+    assert!(payload.prompt.contains("--conversation-id 12"));
+    assert!(payload
+        .prompt
+        .contains("memory is updated only after the CLI command succeeds"));
+    assert!(!payload.prompt.contains("Reply with only a diff"));
 
     let focus_payload = engine.continuity_build_prompt(12, ContinuityKind::Focus)?;
     assert!(focus_payload.prompt.contains("mission_state:"));
     assert!(focus_payload.prompt.contains("continuation_mode:"));
-    assert!(focus_payload.prompt.contains("next_slice:"));
     assert!(focus_payload
         .prompt
-        .contains("update both `## Status` and `## Contract`/`## State`"));
+        .contains(&focus_payload.current_document));
+    assert!(focus_payload
+        .prompt
+        .contains("whether it is still open, what is blocked, what to do next"));
     assert!(focus_payload
         .prompt
         .contains("Do not keep stale closed fields"));
     assert!(focus_payload
         .prompt
-        .contains("+ Continuation mode: continuous"));
+        .contains("mission_state: active` / `continuation_mode: continuous"));
+    assert!(focus_payload.prompt.contains("--kind focus"));
+    assert!(focus_payload.prompt.contains("--conversation-id 12"));
 
     let _ = std::fs::remove_file(db_path);
     Ok(())

@@ -225,6 +225,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         ["handoff-import-guest", binding, guest] => checkpoint_copy(&root, binding, CheckpointControl::Import(guest)),
         ["handoff-acknowledge-copy", binding] => checkpoint_copy(&root, binding, CheckpointControl::Acknowledge),
         ["handoff-take-over", binding] => checkpoint_copy(&root, binding, CheckpointControl::TakeOver),
+        ["handoff-enroll-guest", binding] => checkpoint_copy(&root, binding, CheckpointControl::EnrollGuest),
         ["handoff-protect-checkpoint", binding] => {
             let receipts: Vec<ctox_sync::contracts::CheckpointCopyReceipt> = serde_json::from_str(&input()?)?;
             anyhow::ensure!(!receipts.is_empty() && receipts.len() <= 8, "expected one to eight independent copy receipts");
@@ -252,7 +253,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
         }, |started, _authority, _guests, _control| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
-        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-target-challenge | handoff-source-offer <binding> <challenge> | handoff-configure-target-repository (public JSON on stdin) | handoff-enroll-target (public JSON on stdin) | handoff-copy <binding-digest> <source-route> | handoff-reconstruct <binding-digest> | handoff-import-guest <binding-digest> <guest-id> | handoff-acknowledge-copy <binding-digest> | handoff-protect-checkpoint <binding-digest> (public receipt array on stdin) | handoff-take-over <binding-digest> | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
+        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-target-challenge | handoff-source-offer <binding> <challenge> | handoff-configure-target-repository (public JSON on stdin) | handoff-enroll-target (public JSON on stdin) | handoff-copy <binding-digest> <source-route> | handoff-reconstruct <binding-digest> | handoff-import-guest <binding-digest> <guest-id> | handoff-acknowledge-copy <binding-digest> | handoff-protect-checkpoint <binding-digest> (public receipt array on stdin) | handoff-take-over <binding-digest> | handoff-enroll-guest <binding-digest> | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
     }
 }
 
@@ -263,10 +264,12 @@ enum CheckpointControl<'a> {
     Acknowledge,
     Protect(Vec<ctox_sync::contracts::CheckpointCopyReceipt>),
     TakeOver,
+    EnrollGuest,
 }
 
 fn checkpoint_copy(root: &Path, binding: &str, operation: CheckpointControl<'_>) -> Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let enroll_guest = matches!(&operation, CheckpointControl::EnrollGuest);
     let (route, reconstruct, guest_id, acknowledge, protection_receipts, take_over) =
         match operation {
             CheckpointControl::Copy(route) => (route, false, "", false, Vec::new(), false),
@@ -275,6 +278,7 @@ fn checkpoint_copy(root: &Path, binding: &str, operation: CheckpointControl<'_>)
             CheckpointControl::Acknowledge => ("", false, "", true, Vec::new(), false),
             CheckpointControl::Protect(receipts) => ("", false, "", false, receipts, false),
             CheckpointControl::TakeOver => ("", false, "", false, Vec::new(), true),
+            CheckpointControl::EnrollGuest => ("", false, "", false, Vec::new(), false),
         };
     let config = configuration(root)?;
     let descriptor: Descriptor = serde_json::from_reader(
@@ -299,6 +303,7 @@ fn checkpoint_copy(root: &Path, binding: &str, operation: CheckpointControl<'_>)
         guest_id: guest_id.into(),
         acknowledge,
         take_over,
+        enroll_guest,
         protection_receipts: protection_receipts.clone(),
     };
     let deadline = request.operation_timeout() + Duration::from_secs(5);
@@ -325,6 +330,33 @@ fn checkpoint_copy(root: &Path, binding: &str, operation: CheckpointControl<'_>)
         .await?
     })?;
     match response {
+        crate::business_os::NativeCheckpointCopyResponse::CopyPending {
+            checkpoint_digest,
+            verified_bytes,
+            partial_bytes,
+            total_bytes,
+        } if !route.is_empty()
+            && !take_over
+            && !enroll_guest
+            && !reconstruct
+            && guest_id.is_empty()
+            && !acknowledge
+            && protection_receipts.is_empty() =>
+        {
+            print(serde_json::json!({"copied":false,"pending":true,
+                "checkpointDigest":checkpoint_digest,"verifiedBytes":verified_bytes,
+                "partialBytes":partial_bytes,"totalBytes":total_bytes,"resumed":false}))
+        }
+        crate::business_os::NativeCheckpointCopyResponse::GuestEnrolled {
+            checkpoint_digest,
+            guest_id: original_guest,
+            controller_id,
+            controller_generation,
+        } if enroll_guest => print(serde_json::json!({
+            "enrolled":true, "checkpointDigest":checkpoint_digest, "guestId":original_guest,
+            "controllerId":controller_id, "controllerGeneration":controller_generation,
+            "resumed":false,
+        })),
         crate::business_os::NativeCheckpointCopyResponse::OwnershipTaken {
             checkpoint_digest,
             job_id,
@@ -349,7 +381,8 @@ fn checkpoint_copy(root: &Path, binding: &str, operation: CheckpointControl<'_>)
             )
         }
         crate::business_os::NativeCheckpointCopyResponse::Copied { checkpoint_digest }
-            if !take_over
+            if !enroll_guest
+                && !take_over
                 && !reconstruct
                 && guest_id.is_empty()
                 && !acknowledge
