@@ -19,6 +19,7 @@ const publicSession = {
   runStatus: 'running',
   fenceEpoch: 0,
   activeTransferId: null,
+  createdAtMs: 1_699_999_000_000,
   updatedAtMs: 1_700_000_000_000,
 };
 

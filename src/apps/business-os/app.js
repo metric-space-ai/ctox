@@ -15189,6 +15189,8 @@ function boundedWorkjetSessionResult(value) {
     fenceEpoch,
     activeTransferId: boundedOptionalWorkjetSessionText(value.active_transfer_id, 'session.activeTransferId', 160),
     updatedAtMs,
+    ...(Number.isSafeInteger(value.created_at_ms) && value.created_at_ms >= 0
+      ? { createdAtMs: value.created_at_ms } : {}),
   });
 }
 
