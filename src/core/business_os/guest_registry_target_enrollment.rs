@@ -16,7 +16,7 @@ impl NativeGuestRegistry {
     /// Called under the target's actual account/issuer/policy/host fence, after
     /// fresh quorum ownership validation. It receives no renderer guest/path IDs.
     #[cfg(target_os = "linux")]
-    pub(crate) fn enroll_protected_target(
+    pub(in crate::business_os) fn enroll_protected_target(
         &self,
         policy: &Connection,
         scope: &target_handoff::TargetPolicyScope,
