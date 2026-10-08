@@ -376,3 +376,74 @@ async fn event_backpressure_remains_an_explicit_terminal_error() {
     assert_eq!(terminal, Some(SpeechError::Backpressure));
     timeout(IO_TIMEOUT, server).await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn verified_final_is_bound_to_its_actual_stream_and_consumed_once() {
+    let (endpoint1, server1) = fixture("normal").await;
+    let (endpoint2, server2) = fixture("normal").await;
+    let (mut first, second) = tokio::join!(start(&endpoint1), start(&endpoint2));
+    let stream_id = first.stream_id().to_owned();
+    assert!(Uuid::parse_str(&stream_id).is_ok());
+    assert_ne!(first.stream_id(), second.stream_id());
+    first.append_pcm(&[0; 640]).unwrap();
+    let partial = timeout(IO_TIMEOUT, first.next_verified_event())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match partial {
+        VerifiedTranscriptEvent::Partial {
+            stream_id: actual,
+            sequence,
+            text,
+            ..
+        } => {
+            assert_eq!(actual, stream_id);
+            assert_eq!(sequence, 1);
+            assert!(!text.is_empty());
+        }
+        _ => panic!("expected transient partial"),
+    }
+    first.finish_audio().unwrap();
+    let event = timeout(IO_TIMEOUT, first.next_verified_event())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match event {
+        VerifiedTranscriptEvent::Final(receipt) => {
+            assert_eq!(receipt.stream_id(), stream_id);
+            assert_eq!(receipt.sequence(), 2);
+            assert_eq!(receipt.text(), "Hallo Welt.");
+            assert_eq!(receipt.model(), MISTRAL_REALTIME_MODEL);
+            assert_eq!(receipt.audio_duration_ms(), 20);
+            assert!(receipt.finish_to_final_ms().unwrap() >= 40);
+        }
+        _ => panic!("expected producer final receipt"),
+    }
+    assert!(timeout(IO_TIMEOUT, first.next_verified_event())
+        .await
+        .unwrap()
+        .is_none());
+    second.cancel().await;
+    timeout(IO_TIMEOUT, server1).await.unwrap().unwrap();
+    timeout(IO_TIMEOUT, server2).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn verified_stream_preserves_provider_failure_instead_of_minting_a_final() {
+    let (endpoint, server) = fixture("error").await;
+    let mut stream = start(&endpoint).await;
+    stream.append_pcm(&[0; 640]).unwrap();
+    assert!(matches!(
+        timeout(IO_TIMEOUT, stream.next_verified_event())
+            .await
+            .unwrap(),
+        Some(Err(SpeechError::ProviderRejected { http_status: None }))
+    ));
+    assert!(timeout(IO_TIMEOUT, stream.next_verified_event())
+        .await
+        .unwrap()
+        .is_none());
+    timeout(IO_TIMEOUT, server).await.unwrap().unwrap();
+}
