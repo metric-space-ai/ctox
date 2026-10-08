@@ -348,5 +348,22 @@ mod tests {
         assert!(!request.valid_operation());
         request.protection_receipts.clear();
         assert!(!request.valid_operation());
+        request.take_over = true;
+        assert!(request.valid_operation());
+        assert_eq!(request.operation_timeout().as_secs(), 60);
+        request.acknowledge = true;
+        assert!(!request.valid_operation());
+        request.acknowledge = false;
+        request.protection_receipts = vec![copy(2)];
+        assert!(!request.valid_operation());
+        request.protection_receipts.clear();
+        request.reconstruct = true;
+        assert!(!request.valid_operation());
+        request.reconstruct = false;
+        request.guest_id = "foreign-guest".into();
+        assert!(!request.valid_operation());
+        request.guest_id.clear();
+        request.source_route = "foreign-route".into();
+        assert!(!request.valid_operation());
     }
 }
