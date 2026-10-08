@@ -17,6 +17,9 @@ mod source_effects;
 pub(crate) mod source_handoff;
 #[path = "guest_registry_source_journal.rs"]
 mod source_journal;
+#[cfg(target_os = "linux")]
+#[path = "guest_registry_source_machine.rs"]
+mod source_machine;
 #[path = "guest_registry_source_policy.rs"]
 mod source_policy;
 #[path = "guest_registry_target_handoff.rs"]
@@ -327,6 +330,8 @@ struct Registration {
     stopped_status: Option<std::process::ExitStatus>,
     #[cfg(target_os = "linux")]
     desktop: Option<super::guest_runtime::RetainedQemuDesktop>,
+    #[cfg(target_os = "linux")]
+    source_machine: Option<Arc<source_machine::SourceMachineCapture>>,
 }
 
 /// One lifecycle owner retains this registry. Restart does not revive live
@@ -711,6 +716,8 @@ impl NativeGuestRegistry {
                 stopped_status: None,
                 #[cfg(target_os = "linux")]
                 desktop: None,
+                #[cfg(target_os = "linux")]
+                source_machine: None,
             })),
         );
         Ok(assignment)
@@ -889,6 +896,42 @@ impl NativeGuestRegistry {
             "guest stop requires authenticated human"
         );
         let entry = self.registration(guest_id)?;
+        // Retire authority synchronously; no policy/controller lock may wait
+        // for a RAM export or the actual source child to finish stopping.
+        let exporting = self.with_policy(|_| {
+            let mut entry = entry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+            ensure!(
+                session_user_id(session)
+                    == Some(entry.assignment.destination.human_owner_id.as_str()),
+                "foreign guest stop"
+            );
+            let Some(capture) = entry.source_machine.clone() else {
+                return Ok(None);
+            };
+            if !entry.revoked {
+                entry.assignment.destination.controller_generation = entry
+                    .assignment
+                    .destination
+                    .controller_generation
+                    .checked_add(1)
+                    .context("controller generation exhausted")?;
+                entry.revoked = true;
+            }
+            capture.retire();
+            self.retire_frame(&mut entry)?;
+            Ok(Some(capture))
+        })?;
+        if let Some(capture) = exporting {
+            let status = capture.stop()?;
+            entry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
+                .stopped_status = Some(status);
+            // Stopping never completes the pending quorum effect.
+            return Ok(status);
+        }
         self.with_policy(|_| {
             let mut entry = entry
                 .lock()
@@ -947,6 +990,10 @@ impl NativeGuestRegistry {
                     .checked_add(1)
                     .context("controller generation exhausted")?;
                 entry.revoked = true;
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(capture) = &entry.source_machine {
+                capture.retire();
             }
             self.retire_frame(&mut entry)?;
             Ok(())

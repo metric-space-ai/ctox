@@ -367,58 +367,105 @@ impl NativeGuestExecution {
         );
         // Verify local capture authority before querying quorum. No worker,
         // issuer or policy lock survives the remote authority await.
+        self.registry.require_live_transport()?;
         self.with_capture_authority(source, |_, _| Ok(()))?;
+        #[cfg(target_os = "linux")]
+        self.export_source_machine(source)?;
         let mut effects = source_effects::SourceEffects::observe(self)?;
-        source.with_current_capture_transaction(|worker, facts| {
-            self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
-                verify()?;
-                effects.verify_controller(entry)?;
-                core_configuration_bytes(&self.binding.spec, configuration)?;
-                validate_session_state(&self.binding.spec, session_state)?;
-                let bytes = journal.read_bytes(PortableJournalLimits::default().max_bytes)?;
-                let (store, store_root, store_identity) =
-                    source_store(&entry.assignment.destination.import_parent)?;
-                let mut receipt = persist(
-                    policy,
-                    &store,
-                    &store_root,
-                    &entry.assignment.destination,
-                    &self.binding.spec,
-                    &self.binding.ownership,
-                    &self.binding.admission.policy_revision,
-                    &bytes,
-                )?;
-                persist_core_configuration(
-                    policy,
-                    &store,
-                    &self.binding.spec,
-                    &receipt,
-                    configuration,
-                )?;
-                persist_session_state(policy, &store, &self.binding.spec, &receipt, session_state)?;
-                // Provisioning without an explicit native workspace remains
-                // journal-only and cannot become a portable checkpoint.
-                if workspaces::snapshot(policy, &entry.assignment.destination)?.is_some() {
-                    receipt.checkpoint = Some(source_checkpoint::persist(
+        let (store, store_root, store_identity, bytes, mut receipt, workspace) = source
+            .with_current_capture_transaction(|worker, facts| {
+                self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
+                    verify()?;
+                    effects.verify_controller(entry)?;
+                    core_configuration_bytes(&self.binding.spec, configuration)?;
+                    validate_session_state(&self.binding.spec, session_state)?;
+                    let bytes = journal.read_bytes(PortableJournalLimits::default().max_bytes)?;
+                    let (store, store_root, store_identity) =
+                        source_store(&entry.assignment.destination.import_parent)?;
+                    let receipt = persist(
                         policy,
                         &store,
                         &store_root,
                         &entry.assignment.destination,
                         &self.binding.spec,
                         &self.binding.ownership,
+                        &self.binding.admission.policy_revision,
+                        &bytes,
+                    )?;
+                    persist_core_configuration(
+                        policy,
+                        &store,
+                        &self.binding.spec,
                         &receipt,
                         configuration,
+                    )?;
+                    persist_session_state(
+                        policy,
+                        &store,
+                        &self.binding.spec,
+                        &receipt,
                         session_state,
-                        &bytes,
-                        &effects,
-                    )?);
-                }
+                    )?;
+                    let workspace =
+                        if workspaces::snapshot(policy, &entry.assignment.destination)?.is_some() {
+                            Some(workspaces::require(
+                                policy,
+                                &entry.assignment.destination,
+                                &configuration.cwd,
+                            )?)
+                        } else {
+                            None
+                        };
+                    Ok((store, store_root, store_identity, bytes, receipt, workspace))
+                })
+            })?;
+        // Actual Core is shut down; the registry retains the working-copy lease
+        // and source child/export owner. Large Git/RAM/disk/hash IO holds no
+        // account/issuer/worker/SQLite/controller publication guard.
+        let prepared = workspace
+            .map(|workspace| {
+                source_checkpoint::prepare(
+                    &store,
+                    &store_root,
+                    workspace,
+                    &self.binding.spec,
+                    &self.binding.ownership,
+                    &receipt,
+                    configuration,
+                    session_state,
+                    &bytes,
+                    &effects,
+                )
+            })
+            .transpose()?;
+        let mut current = source_effects::SourceEffects::observe(self)?;
+        source.with_current_capture_transaction(|worker, facts| {
+            self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
+                self.registry.require_live_transport()?;
+                verify()?;
+                current.verify_controller(entry)?;
+                ensure!(
+                    effects.same_observation(&current),
+                    "native source effects changed during capture; reconcile"
+                );
                 ensure!(
                     private_directory(&store_root)? == store_identity,
                     "native source artifact store changed; reconcile"
                 );
-                // Only the actual stopped Core owner reaches this point.
-                // Immutable checkpoint publication ends its working-copy lease.
+                if let Some(prepared) = prepared {
+                    receipt.checkpoint = Some(source_checkpoint::commit(
+                        policy,
+                        &store_root,
+                        &entry.assignment.destination,
+                        &self.binding.spec,
+                        &self.binding.ownership,
+                        &receipt,
+                        prepared,
+                    )?);
+                }
+                verify()?;
+                // Private staged manifests are not authority. Only this fresh
+                // commit publishes the checkpoint and releases its writer lease.
                 entry.workspace_lease.take();
                 Ok(receipt)
             })
