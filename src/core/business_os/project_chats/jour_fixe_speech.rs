@@ -358,7 +358,8 @@ pub(in crate::business_os) fn committed_revision(
     binding: &LiveMeetingBinding,
     stream_id: &str,
 ) -> anyhow::Result<u64> {
-    let actor = checked(root, token, binding)?;
+    let actor = authenticated_actor(root, token)?;
+    binding.revalidate(root, &actor)?;
     let conn = Connection::open_with_flags(
         store::business_os_store_path(root),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,

@@ -322,7 +322,7 @@ async fn handle<P: Eq + Clone>(
             let mut value = session.snapshot(&id, after)?;
             value["requestId"] = json!(r.request_id);
             return Ok(GuardedAuxiliaryResponse {
-                value,
+                result: value,
                 publication: Arc::clone(&session.authority) as Arc<dyn WebRTCPublicationGuard>,
             });
         }
@@ -408,7 +408,7 @@ async fn handle<P: Eq + Clone>(
             .unwrap()
             .insert(id.clone(), (peer, Arc::clone(&session)));
         return Ok(GuardedAuxiliaryResponse {
-            value: json!({"streamId":id, "state":"open", "events":[], "receipt":null, "error":null, "requestId":r.request_id}),
+            result: json!({"streamId":id, "state":"open", "events":[], "receipt":null, "error":null, "requestId":r.request_id}),
             publication: authority,
         });
     }
@@ -423,7 +423,7 @@ async fn handle<P: Eq + Clone>(
     if r.op == "finish" && session.snapshot.lock().unwrap().committed.is_some() {
         let after = session.snapshot.lock().unwrap().event_sequence;
         return Ok(GuardedAuxiliaryResponse {
-            value: session.snapshot(id, after)?,
+            result: session.snapshot(id, after)?,
             publication: Arc::clone(&session.authority) as Arc<dyn WebRTCPublicationGuard>,
         });
     }
@@ -452,7 +452,7 @@ async fn handle<P: Eq + Clone>(
         .after_sequence
         .unwrap_or_else(|| session.snapshot.lock().unwrap().event_sequence);
     Ok(GuardedAuxiliaryResponse {
-        value: session.snapshot(id, after)?,
+        result: session.snapshot(id, after)?,
         publication: Arc::clone(&session.authority) as Arc<dyn WebRTCPublicationGuard>,
     })
 }

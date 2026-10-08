@@ -91,7 +91,7 @@ async fn call(registry: &Arc<Registry<u64>>, s: &Session, r: Request) -> anyhow:
         r,
     )
     .await?
-    .value)
+    .result)
 }
 #[tokio::test]
 async fn real_final_has_private_handle_only_after_domain_commit() -> anyhow::Result<()> {
