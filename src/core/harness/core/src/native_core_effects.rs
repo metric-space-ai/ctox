@@ -64,8 +64,17 @@ struct Observations {
     startup: BTreeSet<String>,
     submissions: u64,
     mcp_generation: u64,
+    mcp_refreshing: u64,
     unreconciled: u64,
     calls: BTreeMap<String, PlanObservation>,
+}
+
+fn advance_mcp_generation(state: &mut Observations) {
+    if let Some(next) = state.mcp_generation.checked_add(1) {
+        state.mcp_generation = next;
+    } else {
+        state.unreconciled = state.unreconciled.saturating_add(1);
+    }
 }
 
 #[derive(Default)]
@@ -121,6 +130,7 @@ impl NativeCoreEffects {
                 startup,
                 submissions: 0,
                 mcp_generation: 0,
+                mcp_refreshing: 0,
                 unreconciled: 0,
                 calls: BTreeMap::new(),
             }),
@@ -131,8 +141,33 @@ impl NativeCoreEffects {
         if enabled_servers != 0 {
             if let Ok(mut state) = self.observations.lock() {
                 // Every fresh connection invalidates the previous receipt.
-                state.mcp_generation = state.mcp_generation.saturating_add(1);
+                advance_mcp_generation(&mut state);
                 state.startup.insert("mcp-startup".into());
+            }
+        }
+    }
+
+    pub(crate) fn begin_mcp_refresh(&self) {
+        if let Ok(mut state) = self.observations.lock() {
+            if let Some(count) = state.mcp_refreshing.checked_add(1) {
+                state.mcp_refreshing = count;
+            } else {
+                state.unreconciled = state.unreconciled.saturating_add(1);
+            }
+            state.startup.insert("mcp-startup".into());
+            advance_mcp_generation(&mut state);
+        }
+    }
+
+    pub(crate) fn finish_mcp_refresh(&self) {
+        if let Ok(mut state) = self.observations.lock() {
+            // Invalidate snapshots taken from the old manager during refresh,
+            // even if their verifier returns after replacement has finished.
+            advance_mcp_generation(&mut state);
+            if let Some(count) = state.mcp_refreshing.checked_sub(1) {
+                state.mcp_refreshing = count;
+            } else {
+                state.unreconciled = state.unreconciled.saturating_add(1);
             }
         }
     }
@@ -153,6 +188,7 @@ impl NativeCoreEffects {
         if !state.registered
             || state.submissions != 0
             || state.unreconciled != 0
+            || state.mcp_refreshing != 0
             || state.mcp_generation != generation
             || !state.startup.contains("mcp-startup")
         {
@@ -310,6 +346,7 @@ mod tests {
                 startup: BTreeSet::new(),
                 submissions: 0,
                 mcp_generation: 0,
+                mcp_refreshing: 0,
                 unreconciled: 0,
                 calls: BTreeMap::new(),
             }),
@@ -388,6 +425,21 @@ mod tests {
         ledger.register_source_factory().unwrap();
         ledger.observe_mcp_startup(1);
         assert!(ledger.reconcile_mcp_startup(first).is_err());
+        ledger.begin_mcp_refresh();
+        let pending = ledger.mcp_generation().unwrap();
+        assert!(ledger.reconcile_mcp_startup(pending).is_err());
+        ledger.begin_mcp_refresh();
+        ledger.finish_mcp_refresh();
+        assert!(
+            ledger
+                .reconcile_mcp_startup(ledger.mcp_generation().unwrap())
+                .is_err()
+        );
+        ledger.finish_mcp_refresh();
+        assert!(
+            ledger.reconcile_mcp_startup(pending).is_err(),
+            "old manager snapshot survived completed refresh"
+        );
         let current = ledger.mcp_generation().unwrap();
         ledger.reconcile_mcp_startup(current).unwrap();
         assert!(ledger.reconcile_mcp_startup(current).is_err());

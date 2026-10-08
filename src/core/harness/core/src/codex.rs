@@ -4246,7 +4246,7 @@ impl Session {
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
     ) {
-        self.native_effects.observe_mcp_startup(1);
+        self.native_effects.begin_mcp_refresh();
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
         let tool_plugin_provenance = self
@@ -4293,6 +4293,7 @@ impl Session {
 
         let mut manager = self.services.mcp_connection_manager.write().await;
         *manager = refreshed_manager;
+        self.native_effects.finish_mcp_refresh();
     }
 
     async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
