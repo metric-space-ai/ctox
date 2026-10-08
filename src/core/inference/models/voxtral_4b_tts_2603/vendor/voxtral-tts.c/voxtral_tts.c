@@ -309,7 +309,7 @@ int tts_generate(tts_ctx_t *ctx, const char *text, const char *voice_name,
         fprintf(stderr, "Prefill done, KV cache: %d positions\n", ctx->kv_cache_len);
 
     /* Step 5: Autoregressive audio generation */
-    int max_frames = 512; /* ~160 seconds at 12.5 Hz */
+    int max_frames = 512; /* 40.96 seconds at 12.5 Hz */
     int *all_codes = (int *)malloc((size_t)max_frames * TTS_CODES_PER_FRAME * sizeof(int));
     if (!all_codes) goto cleanup;
 

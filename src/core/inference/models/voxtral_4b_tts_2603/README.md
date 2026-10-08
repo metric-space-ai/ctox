@@ -31,7 +31,12 @@ audio generation to 512 frames (40.96 s). Overlong prompts fail before prefill.
 
 This implementation returns completed PCM16 WAV. Genuine first-audio streaming
 is unavailable: the upstream codec decodes after all generated codes. Upstream
-reports substantial CPU prefill/codec overhead even with CUDA decode. Compiled
+reports substantial CPU prefill/codec overhead even with CUDA decode. CTOX
+populates the prompt KV cache through that same vendored causal CUDA decoder
+when CUDA is selected; the original CPU batch path remains the fallback and
+numerical reference. `verification/prefill_parity.c` compares each layer's K/V
+and a continuation hidden state against that reference using actual weights.
+No new CUDA kernel is introduced. The codec still runs on the CPU. Compiled
 graph and successful load do not establish voice quality, realtime latency,
 installed readiness or the Jour fixe 1.5 s target; those require real measured
 artifacts on the admitted GPU and installed stack. No synthetic audio is used.
