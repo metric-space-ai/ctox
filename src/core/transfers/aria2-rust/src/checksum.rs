@@ -176,8 +176,7 @@ pub async fn verify_piece_checksums(path: &Path, opts: &OptionSet) -> Result<()>
 fn pread_fill(f: &std::fs::File, buf: &mut [u8], mut off: u64) -> Result<usize> {
     let mut n = 0usize;
     while n < buf.len() {
-        let r = rustix::io::retry_on_intr(|| rustix::io::pread(f, &mut buf[n..], off))
-            .map_err(std::io::Error::from)?;
+        let r = crate::storage::pread_once(f, &mut buf[n..], off)?;
         if r == 0 {
             break;
         }
