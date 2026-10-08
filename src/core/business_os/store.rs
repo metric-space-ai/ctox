@@ -45179,7 +45179,9 @@ pub(super) mod tests {
             4_000,
             serde_json::json!({"name":"Revived but hidden", "is_deleted":true, "deleted":true}),
         )?;
-        let document = writer.read("probe-1")?.context("revived soft-deleted document")?;
+        let document = writer
+            .read("probe-1")?
+            .context("revived soft-deleted document")?;
         assert_eq!(document["_deleted"], false);
         assert_eq!(document["is_deleted"], true);
         assert_eq!(document["deleted"], true);
