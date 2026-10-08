@@ -17,7 +17,10 @@ forced stop cannot supply a successful machine checkpoint or clean-effect claim.
 
 `RetainedQemuDesktop::spawn_incoming` uses `-S -incoming defer`.
 `load_memory` verifies the entire native-owned readonly stream before feeding
-it to QEMU, verifies the fed bytes again, and returns only with QEMU paused.
+it to QEMU, verifies the fed bytes again, and requires completed QMP migration
+while QEMU remains non-running (`paused` or `prelaunch`). A never-started source
+retains `prelaunch`; neither state grants execution authority. See the
+[QMP migration contract](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#query-migrate).
 `activate_restored` is a separate execution effect. Its caller must hold fresh
 current native account/worker/policy/controller and execution-ownership guards
 through the effect. Readiness requires the original guest-service session from

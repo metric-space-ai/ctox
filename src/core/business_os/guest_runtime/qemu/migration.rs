@@ -235,10 +235,20 @@ impl QemuProcess {
                 self.ensure_alive()?;
                 let status = self.status().await?;
                 ensure!(!status.running, "restored QEMU ran before authorization");
-                match status.status.as_str() {
-                    "paused" => break,
-                    "inmigrate" => tokio::time::sleep(Duration::from_millis(50)).await,
-                    _ => anyhow::bail!("QEMU incoming restore did not complete"),
+                ensure!(
+                    matches!(status.status.as_str(), "paused" | "prelaunch" | "inmigrate"),
+                    "QEMU incoming restore entered an invalid run state: {}",
+                    status.status
+                );
+                let migration = self.monitor()?.migration_status().await?;
+                match migration.as_str() {
+                    "completed" if matches!(status.status.as_str(), "paused" | "prelaunch") => {
+                        break;
+                    }
+                    "completed" | "setup" | "active" | "device" | "wait-unplug" => {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    _ => anyhow::bail!("QEMU incoming restore did not complete: {}", migration),
                 }
             }
             Ok::<_, anyhow::Error>(())
