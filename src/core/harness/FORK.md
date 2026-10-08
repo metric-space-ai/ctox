@@ -220,10 +220,10 @@ initialize results retained by its actual managed MCP connections, including the
 configured HTTP endpoint. The reader does not start pending connections, and
 limits retained metadata to 16 KiB per server and 32 servers per snapshot.
 The snapshot itself changes no effect ledger. The native factory separately
-waits for the actual bounded connection, verifies the native listener\x27s signed
+waits for the actual bounded connection, verifies the native listener's signed
 original initialize result, fresh per-Core nonce, command-session hash, actual
 listener port and short expiry under current command/account/execution guards.
-Only before the first submission may it retire that generation\x27s mcp-startup
+Only before the first submission may it retire that generation's mcp-startup
 uncertainty. Refresh fences the previous generation before its first await;
 failed/repeated/stale receipts and every other uncertainty remain unresolved.
 The protected original-session loader uses the same canonical MCP override as
