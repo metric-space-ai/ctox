@@ -49,7 +49,7 @@ async fn digest_file(file: &mut tokio::fs::File) -> Result<QemuMemoryState> {
     file.rewind().await?;
     let mut hash = Sha256::new();
     let mut bytes = 0u64;
-    let mut buffer = [0u8; 128 * 1024];
+    let mut buffer = vec![0u8; 128 * 1024];
     loop {
         let count = file.read(&mut buffer).await?;
         if count == 0 {
@@ -102,7 +102,7 @@ impl QemuProcess {
             );
             let mut hash = Sha256::new();
             let mut bytes = 0u64;
-            let mut buffer = [0u8; 128 * 1024];
+            let mut buffer = vec![0u8; 128 * 1024];
             loop {
                 let count = stream.read(&mut buffer).await?;
                 if count == 0 {
@@ -212,7 +212,7 @@ impl QemuProcess {
             input.rewind().await?;
             let mut hash = Sha256::new();
             let mut bytes = 0u64;
-            let mut buffer = [0u8; 128 * 1024];
+            let mut buffer = vec![0u8; 128 * 1024];
             loop {
                 let count = input.read(&mut buffer).await?;
                 if count == 0 {
