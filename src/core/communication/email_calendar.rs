@@ -7,8 +7,8 @@ use super::*;
 pub(crate) fn read_registered_calendar(
     root: &Path, account: &super::super::email_accounts::EmailAccountConfig, start_ms: i64, end_ms: i64, limit: usize,
 ) -> Result<Value> {
-    anyhow::ensure!(end_ms.checked_sub(start_ms).is_some_and(|span| span > 0 && span <= 366 * 86_400_000),
-        "calendar range must be ordered and at most 366 days");
+    anyhow::ensure!(end_ms.checked_sub(start_ms).is_some_and(|span| span > 0 && span <= 400 * 86_400_000),
+        "calendar range must be ordered and at most 400 days");
     anyhow::ensure!((1..=100).contains(&limit), "calendar limit must be 1..100");
     let settings = super::super::email_accounts::account_runtime_overrides(root, account);
     let options = base_options_from_runtime(root, &settings, &root.join("runtime/ctox.sqlite3"));

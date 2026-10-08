@@ -5,6 +5,9 @@ use super::*;
 use crate::communication::{email_accounts, email_native};
 use rusqlite::{Connection, OpenFlags};
 use sha2::{Digest, Sha256};
+#[path = "workjet_calendar_contract.generated.rs"]
+mod wire;
+use wire::WireValidate;
 
 pub(super) const ACCOUNTS_TOOL: &str = "business_os.calendar_accounts";
 pub(super) const EVENTS_TOOL: &str = "business_os.calendar_events";
@@ -23,7 +26,7 @@ pub(super) fn descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         "List registered calendars owned by or explicitly shared with the authenticated user. No credentials, instance mailbox fallback or caller identity. Unsupported providers are marked unavailable.",
         json!({"type":"object","additionalProperties":false,"properties":{}})),
         read_tool(EVENTS_TOOL,
-        "Read up to 100 events/recurring occurrences from one owned/shared registered EWS or Graph calendar over an ordered range of at most 366 days. Read-only; truncated is explicit. No arbitrary URL, credentials or caller identity. Uses ctox.workjet.calendar.v1 events.",
+        "Read up to 100 events/recurring occurrences from one owned/shared registered EWS or Graph calendar over an ordered range of at most 400 days. Read-only; truncated is explicit. No arbitrary URL, credentials or caller identity. Uses ctox.workjet.calendar.v1 events.",
         json!({"type":"object","additionalProperties":false,"required":["account_id","start_ms","end_ms"],"properties":{
             "account_id":{"type":"string","minLength":1,"maxLength":256},"start_ms":{"type":"integer"},"end_ms":{"type":"integer"}}}))]
 }
@@ -64,6 +67,9 @@ fn wire_events(account_id: &str, page: &Value) -> anyhow::Result<Value> {
             "all_day":event["all_day"], "timezone":"UTC", "location":event["location"], "revision":revision
         }))
     }).collect::<anyhow::Result<Vec<_>>>()?;
+    for value in &result {
+        serde_json::from_value::<wire::CalendarEvent>(value.clone())?.validate().map_err(anyhow::Error::msg)?;
+    }
     bounded_receipt(json!({"ok":true,"events":result,"truncated":page["truncated"],"synced_at_ms":store::now_ms()}), "events")
 }
 fn bounded_receipt(mut value: Value, list: &str) -> anyhow::Result<Value> {
@@ -90,7 +96,7 @@ pub(super) fn execute(root: &Path, context: &McpChannelRequestContext, tool: &st
         EVENTS_TOOL => {
             let request: EventsRequest = serde_json::from_value(args.clone())?;
             anyhow::ensure!(!request.account_id.is_empty() && request.account_id.chars().count() <= 256, "invalid calendar account");
-            anyhow::ensure!(request.end_ms.checked_sub(request.start_ms).is_some_and(|span| span > 0 && span <= 366 * 86_400_000), "invalid calendar range");
+            anyhow::ensure!(request.end_ms.checked_sub(request.start_ms).is_some_and(|span| span > 0 && span <= 400 * 86_400_000), "invalid calendar range");
             let account = authorized_accounts(root, context)?.into_iter().find(|a| a.address == request.account_id)
                 .context("calendar account is not owned or shared")?;
             anyhow::ensure!(supported(&account.provider), "calendar provider unsupported");
