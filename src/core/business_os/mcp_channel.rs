@@ -57,6 +57,8 @@ pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_se
 mod workjet_jour_fixe;
 #[path = "mcp_workjet_kpis.rs"]
 mod workjet_kpis;
+#[path = "mcp_workjet_luma_config.rs"]
+mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
 mod workjet_narration;
 #[path = "mcp_workjet_worker_dispatch.rs"]
@@ -1478,6 +1480,8 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         workjet_worker_dispatch::descriptor(),
         workjet_jour_fixe::read_descriptor(),
         workjet_jour_fixe::write_descriptor(),
+        workjet_luma_config::read_descriptor(),
+        workjet_luma_config::write_descriptor(),
         workjet_kpis::descriptor(),
         read_tool(
             "business_os.list_crew_executions",
@@ -3246,6 +3250,15 @@ fn call_tool_inner(
         remote_worker::TOOL => remote_worker::execute(root, &context, &arguments)?,
         workjet_worker_dispatch::TOOL => {
             workjet_worker_dispatch::execute(root, &context, &arguments, trusted_gateway_context)?
+        }
+        workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
+            workjet_luma_config::execute(
+                root,
+                &context,
+                tool_name,
+                &arguments,
+                trusted_gateway_context,
+            )?
         }
         workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => workjet_jour_fixe::execute(
             root,
@@ -6941,6 +6954,7 @@ fn collection_requires_typed_mcp_tool(collection: &str) -> bool {
             | "business_consents"
             | "business_credentials"
             | "ctox_runtime_settings"
+            | "workjet_luma_configuration"
             | "ctox_task_approval_requests"
             | "kundenpipeline_entscheidungen"
             | "desktop_files"
@@ -7098,6 +7112,10 @@ fn enforce_argument_scope_policy(
         }
         workjet_kpis::TOOL | workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
             enforce_module_policy(root, "ctox")?;
+        }
+        workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
+            enforce_module_policy(root, "ctox")?;
+            enforce_collection_policy(root, "workjet_luma_configuration")?;
         }
         "business_os.create_app" => {
             if let Ok(module_id) = app_module_id_from_arguments(
@@ -7279,6 +7297,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "business_os.remote_worker_admission"
         | "business_os.workjet_worker_dispatch"
         | "business_os.jour_fixe_update"
+        | workjet_luma_config::WRITE_TOOL
         | workjet_kpis::TOOL
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
