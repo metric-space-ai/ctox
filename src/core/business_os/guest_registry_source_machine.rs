@@ -218,7 +218,12 @@ mod tests {
             .prefix("child-")
             .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in(socket_parent)?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        // Match the running host: its process/signal driver remains live while
+        // the synchronous capture owner uses block_on_guest on another runtime.
+        // A dormant current-thread fixture cannot deliver the original child
+        // registration SIGCHLD to wait(), even after SIGKILL succeeds.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
             .enable_all()
             .build()?;
         let desktop = {
