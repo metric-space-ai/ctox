@@ -279,9 +279,14 @@ fn admit_research(
                 return Ok(Some((run, command_id)));
             }
         }
-        let prior:Option<(String,String)>=conn.query_row("SELECT run_id,research_command_id FROM workjet_exit_model_runs WHERE project_id=?1 AND json_extract(assessment_json,'$.as_of') LIKE ?2 AND research_command_id IS NOT NULL ORDER BY sequence DESC LIMIT 1",params![request.project_id,format!("{}%",&as_of[..7])],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-        if let Some(prior) = prior {
-            return Ok(Some(prior));
+        let prior:Option<(String,String,String)>=conn.query_row("SELECT run_id,research_command_id,assessment_json FROM workjet_exit_model_runs WHERE project_id=?1 AND json_extract(assessment_json,'$.as_of') LIKE ?2 AND research_command_id IS NOT NULL ORDER BY sequence DESC LIMIT 1",params![request.project_id,format!("{}%",&as_of[..7])],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        if let Some((run, command_id, raw)) = prior {
+            let previous: Value = serde_json::from_str(&raw)?;
+            ensure!(
+                previous["resource_proposal"] == serde_json::to_value(resources)?,
+                "a different proposal conflicts with this month's immutable research intent"
+            );
+            return Ok(Some((run, command_id)));
         }
     }
     drop(conn);
