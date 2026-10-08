@@ -78,7 +78,11 @@ Optional audit fields are `resource_proposal` (the resources object),
 `diagnostics[]`: `{state, probability, sale_probability, equity_price_eur,
 source_ids:[string], ev_eur, excess_cash_eur, funding_eur,
 cash_failure_month:null|integer}`. The persisted inputs retain the exact plan,
-source snapshot references, assumptions and calculation parameters.
+source snapshot references, assumptions and calculation parameters. Diagnostic EUR
+values must be finite and nonnegative; cash failure month is null or 1..60.
+Each source ID array has at most 200 items, each a nonempty string of at most
+128 bytes. Accepted joint weights within the 1e-10 sum tolerance are normalized
+before scenario contributions and bounded aggregate probabilities are emitted.
 
 The native shell guest accepts `project.exit_model.read`, `.refresh`, `.submit`
 with `commandId`, `projectId`, optional `asOf`, `inputs`, or camelCase resources

@@ -407,7 +407,26 @@ pub(super) fn handle_command(
     let applied = admitted.apply(&mut conn, |tx| {
         persist(tx, actor, &request, &run, research.as_deref())
     })?;
+    if let Some(research) = research.as_deref() {
+        reconcile_research(root, research)?;
+        return Ok(json!({"ok":true,"assessment":read_state(&conn,&request.project_id,&owner)?}));
+    }
     Ok(applied.result)
+}
+
+/// Reconcile a reviewed terminal command that won the admission race. Both
+/// the terminal hook and this path run after their respective durable commits:
+/// whichever commit is last sees the other, and replay uses the same run id.
+pub(super) fn reconcile_research(root: &Path, research: &str) -> anyhow::Result<()> {
+    let canonical = crate::mission::channels::business_command_projection(root, research)?;
+    if canonical["execution_phase"] != "terminal" {
+        return Ok(());
+    }
+    let reply = canonical
+        .pointer("/result/outbound_text")
+        .and_then(Value::as_str)
+        .unwrap_or("{}");
+    complete_research(root, research, reply)
 }
 
 /// Called only after the existing native terminal review gate has admitted a

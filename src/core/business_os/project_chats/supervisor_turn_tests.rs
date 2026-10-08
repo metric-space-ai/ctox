@@ -113,6 +113,52 @@ fn exit_research_missing_evidence_is_blocked_and_keeps_admission_history() -> an
     Ok(())
 }
 
+#[test]
+fn exit_refresh_reconciles_terminal_before_mapping_commit() -> anyhow::Result<()> {
+    let root = super::weekly_reports::fixture()?;
+    let refresh = |id: &str| {
+        crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({"id":id,"module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":"project",
+        "payload":{"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"}},
+        "client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}}),
+        )
+    };
+    let first = refresh("exit-race-admit")?;
+    ensure!(first["status"] == "completed", "{first}");
+    let conn = open_store(root.path())?;
+    let (run, raw, research): (String,String,String) = conn.query_row(
+        "SELECT run_id,assessment_json,research_command_id FROM workjet_exit_model_runs WHERE project_id='project'", [],
+        |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    // Reproduce the admission window in an isolated fixture: the queue exists,
+    // but its exit-run mapping has not committed when the terminal hook fires.
+    conn.execute(
+        "DELETE FROM workjet_exit_model_runs WHERE run_id=?1",
+        [&run],
+    )?;
+    let task =
+        crate::mission::channels::load_queue_task_for_business_os_command(root.path(), &research)?
+            .context("research queue")?;
+    crate::business_os::store::fail_business_command_from_queue_error(
+        root.path(),
+        &task.message_key,
+        "fixture research failure",
+    )?;
+    conn.execute("INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json,research_command_id) VALUES(?1,'project','owner',?2,?3)", params![run,raw,research])?;
+    drop(conn);
+    let repaired = refresh("exit-race-reconcile")?;
+    ensure!(repaired["status"] == "completed", "{repaired}");
+    let state = &repaired["result"]["assessment"];
+    assert_eq!(state["status"], "blocked");
+    assert!(state["result"].is_null());
+    assert_eq!(state["history"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        refresh("exit-race-replay")?["result"]["assessment"]["history"],
+        state["history"]
+    );
+    Ok(())
+}
+
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 
 pub(super) fn fixture() -> anyhow::Result<TempDir> {

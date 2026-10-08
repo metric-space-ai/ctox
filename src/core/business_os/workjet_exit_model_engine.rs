@@ -206,6 +206,12 @@ pub(super) fn validate(inputs: &Inputs, as_of: &str) -> anyhow::Result<Vec<Strin
     for assumption in &inputs.plan.assumptions {
         text("assumption", assumption, 2048)?;
     }
+    for scenario in &inputs.scenarios {
+        validate_refs(&scenario.source_ids)?;
+    }
+    for outcome in &inputs.outcomes {
+        validate_refs(&outcome.source_ids)?;
+    }
     let mut missing = BTreeSet::new();
     if inputs.plan.mode != "committed_plan" {
         missing.insert("supported_committed_plan".to_owned());
@@ -270,7 +276,8 @@ pub(super) fn validate(inputs: &Inputs, as_of: &str) -> anyhow::Result<Vec<Strin
             missing.insert(format!("current_source:{}", source.id));
         }
     }
-    let mut check_refs = |name: &str, refs: &[String]| {
+    let mut check_refs = |name: &str, refs: &[String]| -> anyhow::Result<()> {
+        validate_refs(refs)?;
         if refs.is_empty() {
             missing.insert(format!("source:{name}"));
         }
@@ -279,10 +286,11 @@ pub(super) fn validate(inputs: &Inputs, as_of: &str) -> anyhow::Result<Vec<Strin
                 missing.insert(format!("source:{id}"));
             }
         }
+        Ok(())
     };
-    check_refs("plan", &inputs.plan.source_ids);
-    check_refs("sale_perimeter", &inputs.perimeter_source_ids);
-    check_refs("probabilities", &inputs.probability_source_ids);
+    check_refs("plan", &inputs.plan.source_ids)?;
+    check_refs("sale_perimeter", &inputs.perimeter_source_ids)?;
+    check_refs("probabilities", &inputs.probability_source_ids)?;
     probability("build_probability", inputs.build_probability)?;
     probability(
         "technical_failure_sale_probability",
@@ -313,7 +321,7 @@ pub(super) fn validate(inputs: &Inputs, as_of: &str) -> anyhow::Result<Vec<Strin
         for s in &inputs.scenarios {
             text("scenario.name", &s.name, 128)?;
             ensure!(names.insert(&s.name), "duplicate scenario name");
-            check_refs(&s.name, &s.source_ids);
+            check_refs(&s.name, &s.source_ids)?;
             for (name, value) in [
                 ("weight_given_build", s.weight_given_build),
                 ("conversion", s.conversion),
@@ -379,7 +387,7 @@ pub(super) fn validate(inputs: &Inputs, as_of: &str) -> anyhow::Result<Vec<Strin
         );
         validate_outcomes(&inputs.outcomes)?;
         for o in &inputs.outcomes {
-            check_refs(&o.state, &o.source_ids);
+            check_refs(&o.state, &o.source_ids)?;
         }
     } else {
         missing.insert("supported_adapter".to_owned());
@@ -488,6 +496,13 @@ fn simulate(p: &Plan, s: &Scenario, joint: f64) -> anyhow::Result<Outcome> {
         cash_failure_month: None,
     })
 }
+fn validate_refs(refs: &[String]) -> anyhow::Result<()> {
+    ensure!(refs.len() <= 200, "too many source references");
+    for id in refs {
+        text("source reference id", id, 128)?;
+    }
+    Ok(())
+}
 fn validate_outcomes(outcomes: &[Outcome]) -> anyhow::Result<()> {
     ensure!(
         !outcomes.is_empty()
@@ -501,27 +516,39 @@ fn validate_outcomes(outcomes: &[Outcome]) -> anyhow::Result<()> {
         probability("state probability", o.probability)?;
         probability("sale probability", o.sale_probability)?;
         nonnegative("equity_price_eur", o.equity_price_eur)?;
+        nonnegative("ev_eur", o.ev_eur)?;
+        nonnegative("excess_cash_eur", o.excess_cash_eur)?;
+        nonnegative("funding_eur", o.funding_eur)?;
+        ensure!(
+            o.cash_failure_month.is_none_or(|m| (1..=60).contains(&m)),
+            "cash failure month must be within 1..60"
+        );
+        validate_refs(&o.source_ids)?;
     }
     Ok(())
 }
 pub(super) fn aggregate(outcomes: &[Outcome]) -> anyhow::Result<Value> {
     validate_outcomes(outcomes)?;
+    let mass: f64 = outcomes.iter().map(|o| o.probability).sum();
     let mut distribution = Vec::new();
     let mut expected = 0.0;
     let mut sale = 0.0;
     for o in outcomes {
-        let sold = o.probability * o.sale_probability;
+        let weight = o.probability / mass;
+        let sold = weight * o.sale_probability;
         expected += sold * o.equity_price_eur;
         sale += sold;
         distribution.push((o.equity_price_eur, sold));
-        distribution.push((0.0, o.probability * (1.0 - o.sale_probability)));
+        distribution.push((0.0, weight * (1.0 - o.sale_probability)));
     }
     ensure!(expected.is_finite(), "aggregate numeric overflow");
+    let sale = sale.clamp(0.0, 1.0);
     let zero: f64 = distribution
         .iter()
         .filter(|(v, _)| *v == 0.0)
         .map(|(_, p)| p)
         .sum();
+    let zero = zero.clamp(0.0, 1.0);
     distribution.retain(|(_, p)| *p > 0.0);
     distribution.sort_by(|a, b| a.0.total_cmp(&b.0));
     let quantile = |q: f64| {
@@ -539,7 +566,7 @@ pub(super) fn aggregate(outcomes: &[Outcome]) -> anyhow::Result<Value> {
     )
 }
 pub(super) fn calculate(inputs: &Inputs) -> anyhow::Result<(Value, Vec<Outcome>)> {
-    let outcomes = if inputs.adapter == "terminal_equity_grid_v1" {
+    let mut outcomes = if inputs.adapter == "terminal_equity_grid_v1" {
         inputs.outcomes.clone()
     } else {
         let mut states = vec![Outcome {
@@ -561,6 +588,11 @@ pub(super) fn calculate(inputs: &Inputs) -> anyhow::Result<(Value, Vec<Outcome>)
         }
         states
     };
+    validate_outcomes(&outcomes)?;
+    let mass: f64 = outcomes.iter().map(|o| o.probability).sum();
+    for outcome in &mut outcomes {
+        outcome.probability /= mass;
+    }
     Ok((aggregate(&outcomes)?, outcomes))
 }
 pub(super) fn plan_summary(plan: &Plan) -> Value {
@@ -734,6 +766,69 @@ mod tests {
         input.plan.cash_opex = vec![100.0; 60];
         input.scenarios[0].multiple_basis = "EBITDA".into();
         assert!(calculate(&input).is_err());
+        Ok(())
+    }
+    #[test]
+    fn exit_diagnostics_refs_and_rounding_are_bounded() -> anyhow::Result<()> {
+        let valid = outcome("sold", 1.0, 1.0, 100.0);
+        for field in 0..3 {
+            for invalid in [-1.0, f64::NAN, f64::INFINITY] {
+                let mut state = valid.clone();
+                match field {
+                    0 => state.ev_eur = invalid,
+                    1 => state.excess_cash_eur = invalid,
+                    _ => state.funding_eur = invalid,
+                }
+                assert!(aggregate(&[state]).is_err());
+            }
+        }
+        for month in [0, 61] {
+            let mut state = valid.clone();
+            state.cash_failure_month = Some(month);
+            assert!(aggregate(&[state]).is_err());
+        }
+        for refs in [vec!["x".repeat(129)], vec!["fixture".into(); 201]] {
+            let mut input = fixture();
+            input.plan.source_ids = refs.clone();
+            assert!(validate(&input, "2026-10-08").is_err());
+            input = fixture();
+            input.perimeter_source_ids = refs.clone();
+            assert!(validate(&input, "2026-10-08").is_err());
+            input = fixture();
+            input.probability_source_ids = refs.clone();
+            assert!(validate(&input, "2026-10-08").is_err());
+            input = fixture();
+            input.scenarios[0].source_ids = refs.clone();
+            assert!(validate(&input, "2026-10-08").is_err());
+            let mut state = valid.clone();
+            state.source_ids = refs;
+            assert!(aggregate(&[state]).is_err());
+        }
+        let mut input = fixture();
+        input.adapter = "terminal_equity_grid_v1".into();
+        input.scenarios.clear();
+        input.build_probability = 1.0;
+        input.technical_failure_sale_probability = 0.0;
+        input.technical_failure_equity_price = 0.0;
+        input.outcomes = vec![
+            outcome("one", 0.5, 1.0, 100.0),
+            outcome("two", 0.50000000002, 1.0, 200.0),
+        ];
+        let (result, states) = calculate(&input)?;
+        assert!(result["sale_probability"].as_f64().unwrap() <= 1.0);
+        assert!(result["probability_zero_proceeds"].as_f64().unwrap() <= 1.0);
+        assert!((states.iter().map(|s| s.probability).sum::<f64>() - 1.0).abs() < 1e-15);
+        let contributions: f64 = states
+            .iter()
+            .map(|s| s.probability * s.sale_probability * s.equity_price_eur)
+            .sum();
+        assert!(
+            (result["expected_exit_equity_eur"].as_f64().unwrap() - contributions).abs() < 1e-12
+        );
+        for state in &mut input.outcomes {
+            state.equity_price_eur = 0.0;
+        }
+        assert_eq!(calculate(&input)?.0["probability_zero_proceeds"], 1.0);
         Ok(())
     }
     fn outcome(name: &str, p: f64, q: f64, price: f64) -> Outcome {
