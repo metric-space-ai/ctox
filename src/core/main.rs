@@ -4702,7 +4702,20 @@ fn execute_continuity_update(
         }
         other => anyhow::bail!("unknown continuity-update mode: {other}"),
     };
-    serde_json::to_string_pretty(&result).context("failed to serialize continuity-update result")
+    // The refresh model calls this once per edit inside one turn, and every
+    // tool result is resent with the next model call. Echoing the whole
+    // document (12 kB on thesen) grew a ten-edit refresh to ~150 kB per call
+    // and ran it into the 45 s refresh timeout 971 times on 08.10.2026. The
+    // document is already in the prompt; the receipt only confirms the commit.
+    let receipt = serde_json::json!({
+        "ok": true,
+        "conversation_id": result.conversation_id,
+        "kind": result.kind,
+        "head_commit_id": result.head_commit_id,
+        "content_chars": result.content.chars().count(),
+        "updated_at": result.updated_at,
+    });
+    serde_json::to_string(&receipt).context("failed to serialize continuity-update result")
 }
 
 fn resolve_workspace_root() -> anyhow::Result<PathBuf> {
@@ -5508,6 +5521,47 @@ mod tests {
             assert!(super::skips_cli_turn_ledger(&args));
             assert!(super::skips_cli_startup_db(&args));
         }
+    }
+
+    #[test]
+    fn continuity_update_answers_with_a_receipt_not_the_document() {
+        let root = unique_test_dir("continuity-update-receipt");
+        std::fs::create_dir_all(&root).expect("create test dir");
+        let db = root.join("ctox.sqlite3");
+        let body = format!(
+            "## Anchors\n{}",
+            "- fact: a durable fact line\n".repeat(600)
+        );
+        let args = [
+            "--db",
+            db.to_str().expect("utf-8 db path"),
+            "--conversation-id",
+            "7",
+            "--kind",
+            "anchors",
+            "--mode",
+            "full",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let output = super::handle_continuity_update_with_stdin(&args, Some(&body))
+            .expect("full replace succeeds");
+        assert!(
+            output.get("content").is_none(),
+            "receipt echoed the document"
+        );
+        assert_eq!(output["kind"], "anchors");
+        assert_eq!(output["conversation_id"], 7);
+        assert!(output["content_chars"].as_u64().unwrap_or(0) > 10_000);
+        assert!(!output["head_commit_id"].as_str().unwrap_or("").is_empty());
+        assert!(serde_json::to_string(&output).unwrap().len() < 400);
+        let stored = crate::context::lcm::run_continuity_show(&db, 7, Some("anchors"))
+            .expect("show stored document");
+        assert!(serde_json::to_string(&stored)
+            .unwrap()
+            .contains("a durable fact line"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
