@@ -10453,12 +10453,11 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
           lead.payload?.research_wait_since_ms || lead.payload?.research_started_at_ms || 0,
         );
         if (!startedAt || Date.now() - startedAt < RESEARCH_RUNNING_MAX_MS) continue;
-        await patchLead(lead.id, fehlerOhneErgebnisverlust(
+        if (await patchLeadImAbgleich(lead.id, fehlerOhneErgebnisverlust(
           lead,
           NICHT_ZURUECKGEMELDET,
           { research_finished_at_ms: Date.now() },
-        ));
-        changed = true;
+        ))) changed = true;
         continue;
       }
       const observedCommandId = String(command.command_id || command.id || '').trim();
@@ -10474,10 +10473,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
         // die Ausfuehrungsphase wechselt (queued -> leased -> retry_wait). Die
         // Phase wird deshalb hier eigens verglichen (Codex-Review 1.0.268).
         const nurPhase = ausfuehrungsphasePatch(lead, command);
-        if (nurPhase) {
-          await patchLead(lead.id, nurPhase);
-          changed = true;
-        }
+        if (nurPhase && await patchLeadImAbgleich(lead.id, nurPhase)) changed = true;
         continue;
       }
       const patch = researchCommandLeadPatch(lead, command);
@@ -10493,8 +10489,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
           : {}),
       };
       abgleichDiagnose('schreiben', { lead: lead.id });
-      await patchLead(lead.id, patch);
-      changed = true;
+      if (await patchLeadImAbgleich(lead.id, patch)) changed = true;
     }
   } finally {
     state.reconcilingCommands = false;
@@ -10511,6 +10506,19 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
     }
   }
   return changed;
+}
+
+// Ein Lead, dessen Schreiben scheitert, darf den Abgleich der uebrigen nicht
+// abbrechen: lead_12a1ulp hielt so am 08.10.2026 bei jedem Durchlauf 35 Leads
+// mit laengst beendetem Vorgang auf "Läuft".
+async function patchLeadImAbgleich(id, patch) {
+  try {
+    await patchLead(id, patch);
+    return true;
+  } catch (error) {
+    console.warn('[olg-abgleich] Lead nicht geschrieben', id, String(error?.message || error).slice(0, 300));
+    return false;
+  }
 }
 
 function newerResearchCommandCanRecoverLead(lead, command) {
