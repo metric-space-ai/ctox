@@ -35,6 +35,11 @@ are restricted to the upstream list, including `de_female` and `de_male`.
 by the local service and health becomes ready only after successful load.
 Clones share one warm Arc session. A mutex serializes upstream process-global
 CUDA/tokenizer state. One different model directory cannot load simultaneously.
+The managed GPU cold-start budget is300s: measured A4500 graph preparation
+was115s in one installed run and exceeded the generic120s ceiling in another
+two-CPU lane run while uploading acoustic weights. This bounded preparation
+budget does not extend a speech request or prove real-time performance. The
+existing CPU auxiliary startup budget remains600s.
 Text turns are bounded to 4096 UTF-8 bytes, the KV cache to 2048 positions, and
 audio generation to 512 frames (40.96 s). Overlong prompts fail before prefill.
 

@@ -43,3 +43,35 @@ fn native_machine_configuration_is_local_immutable_and_bounded() {
     json["arguments"] = serde_json::json!(["-net", "user"]);
     assert!(serde_json::from_value::<NativeGuestMachineConfiguration>(json).is_err());
 }
+
+#[test]
+fn initial_image_helper_must_be_the_canonical_operator_owned_executable_sibling() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let program = root.path().join("qemu-system");
+    let helper = root.path().join("qemu-img");
+    let base = root.path().join("base.raw");
+    std::fs::write(&program, b"operator fixture; never executed")?;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o500))?;
+    std::fs::write(&base, [0u8; 512])?;
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o400))?;
+    let config = NativeGuestMachineConfiguration {
+        program,
+        base_raw: base,
+        memory_mib: 64,
+        vcpus: 1,
+        acceleration: Acceleration::Tcg,
+    };
+    assert!(config.image_program().is_err());
+    std::fs::write(&helper, b"operator fixture; never executed")?;
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o500))?;
+    assert_eq!(config.image_program()?, helper);
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700))?;
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o722))?;
+    assert!(config.image_program().is_err());
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o400))?;
+    assert!(config.image_program().is_err());
+    std::fs::remove_file(&helper)?;
+    std::os::unix::fs::symlink(&config.program, &helper)?;
+    assert!(config.image_program().is_err());
+    Ok(())
+}
