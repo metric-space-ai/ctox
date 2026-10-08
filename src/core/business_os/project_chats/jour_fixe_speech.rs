@@ -13,7 +13,9 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_jour_fixe_speech_receip
  stream_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, project_id TEXT NOT NULL,
  meeting_id TEXT NOT NULL, deck_revision INTEGER NOT NULL, binding_hash TEXT NOT NULL,
  opened_at_ms INTEGER NOT NULL, final_json TEXT, staged_json TEXT, consumed_command TEXT
-);";
+);
+CREATE INDEX IF NOT EXISTS workjet_jour_fixe_speech_by_meeting
+ ON workjet_jour_fixe_speech_receipts(meeting_id);";
 
 /// Owns the real non-cloneable gateway stream. Construct this immediately after
 /// open_transcription and before accepting PCM; a browser stream ID is insufficient.

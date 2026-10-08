@@ -111,6 +111,21 @@ async fn domain_receipt_failure_rolls_back_speech_consumption_and_allows_bounded
     assert_eq!(consumed(root.path())?,1);finish(stream,server).await
 }
 #[tokio::test]
+async fn valid_foreign_admin_cannot_bind_an_owners_actual_stream() -> anyhow::Result<()> {
+    let root=super::jour_fixe_owner::fixture("live")?;
+    let _owner=owner_token(root.path())?;
+    let foreign=store::issue_business_os_capability_token_for_managed_user(root.path(),
+        "foreign","Foreign","admin",chrono::Utc::now().timestamp_millis())?.0;
+    assert!(store::verified_webrtc_capability_claims(root.path(),&foreign).is_some());
+    let binding=check_live_meeting_for_authenticated_actor(root.path(),"owner","project","meeting-1",1)?;
+    let (endpoint,server)=transport_fixture("normal").await;
+    let stream=start(&endpoint).await;
+    assert!(BoundTranscription::bind(root.path(),&foreign,binding,stream).is_err());
+    assert!(super::jour_fixe_owner::saved(root.path())?["transcript"].as_array().unwrap().is_empty());
+    timeout(Duration::from_secs(10),server).await??;
+    Ok(())
+}
+#[tokio::test]
 async fn existing_open_stream_does_not_authorize_browser_fabricated_speech() -> anyhow::Result<()> {
     let root=super::jour_fixe_owner::fixture("live")?;
     let token=owner_token(root.path())?;
