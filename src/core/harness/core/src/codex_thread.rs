@@ -136,6 +136,24 @@ impl CodexThread {
             .reconcile_mcp_startup(generation)
     }
 
+    /// Verify this actual native restore input under the protected receiver's
+    /// current fences. Clears only previous history, never MCP or new effects.
+    pub fn reconcile_native_previous_session<F>(&self, verify: F) -> std::io::Result<()>
+    where
+        F: FnOnce(&crate::NativePreviousSessionSnapshot) -> std::io::Result<()>,
+    {
+        let snapshot = self
+            .codex
+            .session
+            .native_effects
+            .previous_snapshot(self.codex.session.conversation_id)?;
+        verify(&snapshot)?;
+        self.codex
+            .session
+            .native_effects
+            .reconcile_previous(&snapshot)
+    }
+
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
     }

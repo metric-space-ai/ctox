@@ -1,6 +1,7 @@
 {
   "schema": "ctox.workjet.project_kpis.v1",
   "contract_version": 1,
+  "rust_enum_variants": {"SourceKind":{"native_metric":"Native","github_metric":"Github","connected_metric":"Connected"}},
   "types": {
     "KpiState": {"enum":["resolving","ready","stale","missing_source","failed"]},
     "SourceKind": {"enum":["native_metric","github_metric","connected_metric"]},
@@ -39,6 +40,9 @@
     "ctox.workjet.project.kpi.resolve": {"request_type":"ResolveKpiRequest","authorization":"bound_project_supervisor","execution":"native_registered_metric_resolver","accepts_client_result":false}
   },
   "valid_cases": [
+    {"type":"SourceKind","value":"native_metric"},
+    {"type":"SourceKind","value":"github_metric"},
+    {"type":"SourceKind","value":"connected_metric"},
     {"type":"ReadKpisRequest","value":{"project_id":"project-1"}},
     {"type":"ProjectKpis","value":{"project_id":"project-1","revision":4,"items":[{"prompt":{"kpi_id":"runs-7d","prompt":"Wie viele Agent-Runs liefen in den letzten 7 Tagen?","revision":2},"result":{"status":"ready","snapshot":{"project_id":"project-1","kpi_id":"runs-7d","prompt_revision":2,"label":"Runs · 7 T","value":1284,"unit":"runs","display_value":"1.284","sources":[{"source_key":"all-runs","kind":"native_metric","connection_id":"native-instance-1","metric_key":"agent_runs.total","project_id":"project-1","snapshot_revision":"watermark-42","evidence_ref":"native-metric-receipt-42","observed_at_ms":1791370800000,"value":1284}],"computation":{"recipe_id":"runs-7d-v1","revision":1,"operation":"identity","input_keys":["all-runs"],"window_start_ms":1790766000000,"window_end_ms":1791370800000},"freshness":{"calculated_at_ms":1791370801000,"refresh_at_ms":1791370861000,"fresh_until_ms":1791371101000}}}}]}},
     {"type":"KpiRecord","value":{"prompt":{"kpi_id":"visitors","prompt":"Besucher pro Woche","revision":1},"result":{"status":"missing_source","reason_code":"analytics_not_connected","message":"Analytics ist nicht verbunden."}}},
@@ -53,6 +57,7 @@
     {"type":"BindKpiRequest","value":{"operation_id":"bind-1","project_id":"project-1","kpi_id":"runs-7d","prompt_revision":2,"expected_revision":4,"recipe":"project_tasks_total","window_days":7}}
   ],
   "invalid_cases": [
+    {"type":"SourceKind","value":"unknown_source","reason":"Only the existing source wire values are accepted"},
     {"type":"ReadKpisRequest","value":{"project_id":" "},"reason":"Blank project identity"},
     {"type":"ReadKpisRequest","value":{"project_id":"project-1","owner_user_id":"foreign"},"reason":"Owner authority is not caller input"},
     {"type":"ConfigureKpisRequest","value":{"operation_id":" ","project_id":"project-1","expected_revision":0,"prompts":[]},"reason":"Operation identity cannot be blank"},

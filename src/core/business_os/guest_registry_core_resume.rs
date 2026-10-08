@@ -149,6 +149,19 @@ impl NativeGuestCoreResume {
                     "original Core constructor already published"
                 );
                 verify()?;
+                loaded
+                    .thread
+                    .reconcile_native_previous_session(|snapshot| {
+                        if snapshot.session_id() != loaded.thread_id
+                            || snapshot.input_sha256().as_slice() != state_digest.as_slice()
+                        {
+                            return Err(std::io::Error::other(
+                                "actual Core previous input differs from protected source",
+                            ));
+                        }
+                        Ok(())
+                    })?;
+                verify()?;
                 entry.core_ready = true;
                 Ok(())
             })

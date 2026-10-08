@@ -10,6 +10,8 @@ pub struct NativeSessionState {
     provider_id: String,
     bytes: Vec<u8>,
     core_effect_capture: Option<crate::NativeCoreEffectCapture>,
+    // Descriptive input only. Neither decoding nor this bit reconciles anything.
+    pub(crate) reported_clean_core_effects: bool,
 }
 
 impl NativeSessionState {
@@ -43,6 +45,7 @@ impl NativeSessionState {
             provider_id,
             bytes: output.0,
             core_effect_capture: None,
+            reported_clean_core_effects: false,
         })
     }
     pub fn session_id(&self) -> ThreadId {
@@ -65,6 +68,7 @@ impl NativeSessionState {
         if capture.session_id() != self.session_id {
             return Err(io::Error::other("foreign native Core effect capture"));
         }
+        self.reported_clean_core_effects = !capture.requires_reconciliation();
         self.core_effect_capture = Some(capture);
         Ok(self)
     }
@@ -189,6 +193,10 @@ impl NativeSessionState {
             provider_id: expected_provider.to_owned(),
             bytes: bytes.to_vec(),
             core_effect_capture: None,
+            reported_clean_core_effects: payload
+                .core_effects
+                .as_ref()
+                .is_some_and(|report| !report.requires_reconciliation()),
         })
     }
 
