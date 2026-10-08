@@ -75,6 +75,20 @@ fn actual_confirmed_plan_reads_the_goal_and_dispatches_once_without_a_fake_comma
     let result = call(root.path(), &trusted, workjet_jour_fixe::READ_TOOL, read())?;
     assert_eq!(result["meeting"]["state"], "confirmed");
     assert_eq!(result["meeting"]["todos"]["goal"]["revision"], 1);
+    let kpis = call(
+        root.path(),
+        &trusted,
+        workjet_kpis::TOOL,
+        json!({"action":"read","request":{"project_id":"project"}}),
+    )?;
+    assert_eq!(kpis["ok"], true);
+    assert!(call(
+        root.path(),
+        &trusted,
+        workjet_kpis::TOOL,
+        json!({"action":"read","request":{"project_id":"foreign"}}),
+    )
+    .is_err());
     let args =
         json!({"action":"dispatch","dispatch_key":"confirmed-todo-one","task":"Prove reopening"});
     let first = call(
@@ -132,6 +146,7 @@ fn confirmed_plan_can_prepare_the_next_meeting_but_cannot_confirm_owner_todos() 
     next["id"] = json!("meeting-next");
     next["scheduled_at_ms"] = json!(1792054800000i64);
     next["state"] = json!("planned");
+    next["revision"] = json!(0);
     next["deck_revision"] = json!(0);
     next["slides"] = json!([]);
     next["todos"] = Value::Null;

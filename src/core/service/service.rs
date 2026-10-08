@@ -5527,9 +5527,7 @@ fn process_is_running(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// lease-3 (F-002): instance-unique durable worker identity stamped onto
-/// queue-task lease rows. Combines the per-boot service id with a per-slice
-/// attempt id so a recovered lease row names the exact worker that owned it.
+/// Core plan turns retain the same native execution fence as queue turns.
 fn queue_job_needs_native_turn_lease(job: &QueuedPrompt) -> bool {
     !job.leased_message_keys.is_empty()
         && (job.source_label == "queue"
@@ -5538,6 +5536,9 @@ fn queue_job_needs_native_turn_lease(job: &QueuedPrompt) -> bool {
                 && job.leased_message_keys[0].starts_with("plan:system::")))
 }
 
+/// lease-3 (F-002): instance-unique durable worker identity stamped onto
+/// queue-task lease rows. Combines the per-boot service id with a per-slice
+/// attempt id so a recovered lease row names the exact worker that owned it.
 fn queue_lease_worker_id(job: &QueuedPrompt) -> String {
     let boot_id = SERVICE_PERFORMANCE_BOOT_ID
         .get_or_init(|| uuid::Uuid::new_v4().to_string())
