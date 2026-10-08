@@ -153,7 +153,7 @@ impl WebRTCPublicationGuard for Publication {
             }
             if let Some(peer) = &self.peer {
                 let pool = state.pool.upgrade().ok_or_else(denied)?;
-                pool.with_current_native_control_peer(peer, publish)?
+                pool.with_current_native_control_peer(peer, &mut *publish)?
             } else {
                 publish()
             }
