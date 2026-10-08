@@ -13771,14 +13771,15 @@ async function workjetProjectControl(request = {}) {
     assertCurrentIdentity();
     const receipt = await state.commandBus.dispatch({
       id: commandId, command_id: commandId, module: 'ctox', record_id: projectId,
-      command_type: `ctox.workjet.${action.slice('project.'.length)}`,
+      command_type: `ctox.workjet.${action.slice('project.'.length)}`, inbound_channel: 'ctox',
       payload: JSON.parse(JSON.stringify(expectedPayload)),
       client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
     }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
     assertCurrentIdentity();
     if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
       || receipt.target_record_id !== projectId || receipt.result?.ok !== true
-      || receipt.result.contract !== JOUR_FIXE_SCHEMA || !sameValue(receipt.payload, expectedPayload)) {
+      || receipt.result.contract !== JOUR_FIXE_SCHEMA
+      || !sameValue(receipt.payload, { ...expectedPayload, inbound_channel: 'ctox' })) {
       throw new Error('Workjet native meeting command returned an uncorrelated or unsuccessful receipt.');
     }
     const mutation = receipt.result.mutation;

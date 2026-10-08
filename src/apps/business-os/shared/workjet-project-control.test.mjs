@@ -374,7 +374,8 @@ function nativeMeetingOwnerFixture(changeReceipt = () => {}) {
     sync: { async startCollection(name) { assert.equal(name, 'business_commands'); return {}; } },
     commandBus: { async dispatch(command) {
       commands.push(command);
-      const payload = structuredClone(command.payload);
+      // Match normalizeCommandDocument's actual transport metadata.
+      const payload = { ...structuredClone(command.payload), inbound_channel: command.inbound_channel || 'ctox' };
       const append = command.command_type.endsWith('.transcript.append');
       const revise = command.command_type.endsWith('.todos.revise');
       const receipt = {
@@ -453,7 +454,9 @@ test('meeting mutation rejects unsuccessful, foreign, changed-intent and stale r
   const request = meetingOwnerRequest('project.jour_fixe.transcript.append');
   for (const mutate of [r => { r.command_id = 'foreign'; }, r => { r.target_record_id = 'foreign'; },
     r => { r.status = 'failed'; }, r => { r.result.contract = 'foreign'; },
-    r => { r.payload.turn.text = 'Different intent'; }, r => { r.result.mutation.project_id = 'foreign'; },
+    r => { r.payload.turn.text = 'Different intent'; }, r => { r.payload.inbound_channel = 'foreign'; },
+    r => { delete r.payload.inbound_channel; }, r => { r.payload.unexpected = true; },
+    r => { r.result.mutation.project_id = 'foreign'; },
     r => { r.result.mutation.meeting_id = 'foreign'; }, r => { r.result.mutation.operation_id = 'foreign'; },
     r => { r.result.mutation.revision = 3; }, r => { r.result.mutation.changed_id = 'foreign'; },
     r => { r.result.mutation.state = 'confirmed'; }, r => { r.result.mutation.todos_revision = 5; },
