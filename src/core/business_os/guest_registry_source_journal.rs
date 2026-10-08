@@ -370,7 +370,10 @@ impl NativeGuestExecution {
         self.registry.require_live_transport()?;
         self.with_capture_authority(source, |_, _| Ok(()))?;
         #[cfg(target_os = "linux")]
-        self.export_source_machine(source)?;
+        {
+            self.export_source_machine(source)?;
+            self.reconcile_source_process(source)?;
+        }
         let mut effects = source_effects::SourceEffects::observe(self)?;
         let (store, store_root, store_identity, bytes, mut receipt, workspace) = source
             .with_current_capture_transaction(|worker, facts| {

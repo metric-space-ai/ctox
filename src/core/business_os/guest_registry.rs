@@ -24,6 +24,9 @@ mod source_journal;
 mod source_machine;
 #[path = "guest_registry_source_policy.rs"]
 mod source_policy;
+#[cfg(target_os = "linux")]
+#[path = "guest_registry_source_process.rs"]
+mod source_process;
 #[path = "guest_registry_target_enrollment.rs"]
 mod target_enrollment;
 #[path = "guest_registry_target_handoff.rs"]
