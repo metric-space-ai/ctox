@@ -14752,7 +14752,7 @@ function boundedWorkjetProjectMetadata(request) {
         { allowEmpty: key === 'description' });
       if (key !== 'description') {
         const url = new URL(text);
-        if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) {
+        if (!['http:', 'https:'].includes(url.protocol) || !url.host || url.username || url.password) {
           throw new Error(`Invalid Workjet project ${key}.`);
         }
       }
