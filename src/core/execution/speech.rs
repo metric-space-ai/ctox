@@ -2,6 +2,9 @@
 // License: AGPL-3.0-only
 //! Server-side speech contract shared by meeting tools and native Workjet.
 //! Caller owns meeting authorization and persistence; credentials never cross this API.
+#[cfg(unix)]
+#[path = "speech_computer.rs"]
+pub mod computer;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -46,6 +49,7 @@ pub enum SpeechBackend {
     #[default]
     Runtime,
     Mistral,
+    Computer,
 }
 
 /// SQLite runtime configuration, independent of the primary chat model.
@@ -310,6 +314,18 @@ impl SpeechGateway {
             mistral_credential_present: mistral_key(&self.root).is_some(),
             mistral_voice_configured: self.config.voice_id.is_some(),
             streaming_stt_selected: match self.config.transcription {
+                SpeechBackend::Computer => {
+                    #[cfg(unix)]
+                    {
+                        computer::SpeechComputerConfig::load(&self.root)
+                            .ok()
+                            .is_some_and(|c| c.transcription.is_some())
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        false
+                    }
+                }
                 SpeechBackend::Mistral => true,
                 SpeechBackend::Runtime => {
                     crate::inference::runtime_kernel::InferenceRuntimeKernel::resolve(&self.root)
@@ -337,6 +353,9 @@ impl SpeechGateway {
         }
         let started = Instant::now();
         let (audio, model) = match self.config.synthesis {
+            // Native computer RPC is asynchronous. Never block a Tokio thread
+            // by creating a nested runtime or silently use a different model.
+            SpeechBackend::Computer => return Err(SpeechError::UnsupportedBackend),
             SpeechBackend::Runtime => {
                 let model =
                     crate::inference::runtime_env::env_or_config(&self.root, "CTOX_TTS_MODEL")
@@ -411,11 +430,46 @@ impl SpeechGateway {
     }
 
     /// Must run inside the daemon's existing Tokio runtime. No independent daemon or browser token.
+    pub async fn synthesize_verified_async(
+        &self,
+        request: &SpeechRequest,
+    ) -> Result<VerifiedSpeechOutput, SpeechError> {
+        if self.config.synthesis == SpeechBackend::Computer {
+            #[cfg(unix)]
+            {
+                return computer::synthesize(&self.root, request, self.config.voice_id.as_ref())
+                    .await;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(SpeechError::UnsupportedBackend);
+            }
+        }
+        let root = self.root.clone();
+        let request = request.clone();
+        tokio::task::spawn_blocking(move || {
+            SpeechGateway::from_root(&root)?.synthesize_verified(&request)
+        })
+        .await
+        .map_err(|_| SpeechError::Transport)?
+    }
+
+    /// Must run inside the daemon's existing Tokio runtime. No independent daemon or browser token.
     pub async fn open_transcription(
         &self,
         format: PcmFormat,
     ) -> Result<TranscriptionStream, SpeechError> {
         format.validate()?;
+        if self.config.transcription == SpeechBackend::Computer {
+            #[cfg(unix)]
+            {
+                return computer::open_transcription(&self.root, format).await;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(SpeechError::UnsupportedBackend);
+            }
+        }
         if self.config.transcription != SpeechBackend::Mistral {
             let root = self.root.clone();
             let binding = tokio::task::spawn_blocking(move || {
