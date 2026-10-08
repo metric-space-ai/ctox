@@ -8,6 +8,8 @@ use std::io::{Read, Seek, SeekFrom};
 const CHUNK: usize = 8192;
 const MANIFEST_LIMIT: u64 = 8 * 1024 * 1024;
 const BLOB_LIMIT: u64 = 64 * 1024 * 1024;
+#[path = "session_handoff_guest_enrollment.rs"]
+mod guest_enrollment;
 #[path = "session_handoff_guest_import.rs"]
 mod guest_import;
 #[path = "session_handoff_checkpoint_quorum.rs"]
@@ -999,6 +1001,8 @@ pub(crate) struct CopyRequest {
     pub acknowledge: bool,
     #[serde(default, skip_serializing_if = "copy_only")]
     pub take_over: bool,
+    #[serde(default, skip_serializing_if = "copy_only")]
+    pub enroll_guest: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protection_receipts: Vec<ctox_sync::contracts::CheckpointCopyReceipt>,
 }
@@ -1016,10 +1020,18 @@ impl CopyRequest {
         })
     }
     fn valid_operation(&self) -> bool {
-        let ordinary = !self.acknowledge && !self.take_over && self.protection_receipts.is_empty();
+        let controls = [
+            self.acknowledge,
+            self.take_over,
+            self.enroll_guest,
+            !self.protection_receipts.is_empty(),
+        ]
+        .into_iter()
+        .filter(|v| *v)
+        .count();
         let identifiers_only =
             !self.reconstruct && self.guest_id.is_empty() && self.source_route.is_empty();
-        (ordinary
+        (controls == 0
             && ((self.reconstruct && self.guest_id.is_empty() && self.source_route.is_empty())
                 || (!self.reconstruct
                     && self.source_route.is_empty()
@@ -1028,20 +1040,18 @@ impl CopyRequest {
                     && self.guest_id.is_empty()
                     && !self.source_route.is_empty()
                     && self.source_route.len() <= 256)))
-            || (identifiers_only
-                && ((self.take_over && !self.acknowledge && self.protection_receipts.is_empty())
-                    || (!self.take_over
-                        && self.acknowledge
-                        && self.protection_receipts.is_empty())
-                    || (!self.take_over
-                        && !self.acknowledge
-                        && !self.protection_receipts.is_empty()
-                        && self.protection_receipts.len() <= 8)))
+            || (identifiers_only && controls == 1 && self.protection_receipts.len() <= 8)
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum CopyResponse {
+    GuestEnrolled {
+        checkpoint_digest: String,
+        guest_id: String,
+        controller_id: String,
+        controller_generation: u64,
+    },
     Copied {
         checkpoint_digest: String,
     },
@@ -1125,7 +1135,17 @@ pub(super) fn listen(
                 {
                     let deadline = r.operation_timeout();
                     let operation = async {
-                        if r.take_over {
+                        if r.enroll_guest {
+                            let registry = guests
+                                .as_ref()
+                                .ok_or_else(|| anyhow::anyhow!("native guest host unavailable"))?;
+                            guest_enrollment::enroll(
+                                server.clone(),
+                                registry.clone(),
+                                r.binding_digest,
+                            )
+                            .await
+                        } else if r.take_over {
                             let registry = guests.as_ref().ok_or_else(|| {
                                 anyhow::anyhow!("native authority host unavailable")
                             })?;

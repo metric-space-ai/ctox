@@ -22,6 +22,8 @@ mod source_journal;
 mod source_machine;
 #[path = "guest_registry_source_policy.rs"]
 mod source_policy;
+#[path = "guest_registry_target_enrollment.rs"]
+mod target_enrollment;
 #[path = "guest_registry_target_handoff.rs"]
 pub(crate) mod target_handoff;
 #[path = "guest_registry_target_import.rs"]
@@ -52,7 +54,14 @@ impl NativeGuestRegistry {
         self: &Arc<Self>,
         guest_id: &str,
     ) -> Result<Arc<crate::channels::NativeGuestAdmission>> {
-        self.registration(guest_id)?;
+        ensure!(
+            self.registration(guest_id)?
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?
+                .restoration
+                .is_none(),
+            "protected target guest requires existing-job continuation, never fresh Create"
+        );
         let owner = Arc::new(NativeGuestAdmissionResolver {
             registry: Arc::clone(self),
             guest_id: guest_id.into(),
@@ -314,6 +323,7 @@ struct ExecutionBinding {
 }
 
 struct Registration {
+    restoration: Option<target_enrollment::ProtectedEnrollment>,
     workspace_lease: Option<std::fs::File>,
     assignment: NativeGuestAssignment,
     import_identity: FileIdentity,
@@ -619,6 +629,7 @@ impl NativeGuestRegistry {
                 {
                     ensure!(
                         !entry.revoked
+                            && entry.restoration.is_none()
                             && private_directory(&d.import_parent)? == entry.import_identity,
                         "retained native enrollment is unavailable"
                     );
@@ -652,17 +663,46 @@ impl NativeGuestRegistry {
         );
         let human_owner_id =
             session_user_id(session).context("guest enrollment has no human principal")?;
+        self.enroll_resolved_in_policy(
+            tx,
+            human_owner_id,
+            project_id,
+            thread_id,
+            worker_profile_id,
+            import_parent,
+            format!("guest_{}", uuid::Uuid::new_v4()),
+            None,
+        )
+    }
+
+    fn enroll_resolved_in_policy(
+        &self,
+        tx: &Connection,
+        human_owner_id: &str,
+        project_id: &str,
+        thread_id: &str,
+        worker_profile_id: &str,
+        import_parent: &Path,
+        guest_id: String,
+        restoration: Option<target_enrollment::ProtectedEnrollment>,
+    ) -> Result<NativeGuestAssignment> {
         ensure!(
-            [human_owner_id, project_id, thread_id, worker_profile_id]
-                .iter()
-                .all(|id| identifier(id)),
+            [
+                human_owner_id,
+                project_id,
+                thread_id,
+                worker_profile_id,
+                &guest_id
+            ]
+            .iter()
+            .all(|id| identifier(id)),
             "invalid native guest assignment"
         );
         let import_identity = private_directory(import_parent)?;
         let assignment = NativeGuestAssignment {
             destination: GuestRestoreDestination {
                 instance_id: self.instance_id.clone(),
-                guest_id: format!("guest_{}", uuid::Uuid::new_v4()),
+                guest_id,
                 human_owner_id: human_owner_id.into(),
                 project_id: project_id.into(),
                 thread_id: thread_id.into(),
@@ -679,6 +719,10 @@ impl NativeGuestRegistry {
             .lock()
             .map_err(|_| anyhow::anyhow!("native guest registry poisoned"))?;
         ensure!(entries.len() < 64, "native guest registry capacity reached");
+        ensure!(
+            !entries.contains_key(&assignment.destination.guest_id),
+            "original guest identity is already retained"
+        );
         // Never silently rebind an old process/import or existing assignment.
         for entry in entries.values() {
             let entry = entry
@@ -700,6 +744,7 @@ impl NativeGuestRegistry {
         entries.insert(
             assignment.destination.guest_id.clone(),
             Arc::new(Mutex::new(Registration {
+                restoration,
                 workspace_lease: None,
                 assignment: assignment.clone(),
                 import_identity,
