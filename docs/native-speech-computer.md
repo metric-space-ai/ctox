@@ -63,3 +63,20 @@ slice. It must register `ctox.native.speech.v1` on the same native host.
 Until that receiver is installed, this change alone does not enable remote
 speech. Installed two-host audio, intelligibility and latency acceptance remain
 open; fixture tests and signed metadata are not installed product evidence.
+
+## Preparing the local speech computer
+
+After configuring the existing local inference state, both Voxtral model paths,
+and the speech roles' GPU allocation in the SQLite runtime store, run
+`ctox runtime speech-warmup --root <computer-root>` through the normal resource
+admission path. The existing managed runtime supervisor loads the configured
+models and applies their persisted GPU placement. This command creates no
+accounts, downloads no weights, and does not change the chat model.
+
+Warmup validates both local model bindings before starting either role, then
+requires an actual bounded private-IPC health response: the exact model must be
+loaded, its execution graph must be wired, and STT must support streaming. An
+open socket alone is insufficient. The result reports each model, backend and
+preparation time. Cold preparation is separate from measured sentence-end and
+first-audio latency. The operator retains the managed runtime's normal ownership
+and cleanup responsibilities; no cloud or alternate backend is selected.
