@@ -4,6 +4,7 @@ use super::*;
 
 fn fixture() -> anyhow::Result<tempfile::TempDir> {
     let root = tempfile::tempdir()?;
+    drop(crate::business_os::store_projections::tests::create_repair_rxdb_tables(root.path())?);
     crate::business_os::store_workjet_projects::tests::create_workjet_rxdb_projection_tables(
         root.path(),
     )?;

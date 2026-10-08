@@ -14482,7 +14482,17 @@ mod tests {
         let root = temp.path();
         write_module(root, "app-store", "App Store", &[])?;
         seed_default_mcp_admin(root)?;
-        let listener = UnixListener::bind(root.join("runtime/ctox_service.sock"))?;
+        // Use the production resolver: long lane TMPDIR paths use the short
+        // socket path, which must be removed even when an assertion fails.
+        struct SocketCleanup(std::path::PathBuf);
+        impl Drop for SocketCleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let socket_path = crate::service::service_socket_path(root);
+        let listener = UnixListener::bind(&socket_path)?;
+        let _socket_cleanup = SocketCleanup(socket_path);
         listener.set_nonblocking(true)?;
         // Fixture daemon: verifies the actual IPC command envelope; no GitHub
         // call or installation occurs. Native control-claim replay remains the

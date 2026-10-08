@@ -4805,7 +4805,7 @@ fn respond_json<T: Serialize>(
 }
 
 #[cfg(unix)]
-fn service_socket_path(root: &Path) -> std::path::PathBuf {
+pub(crate) fn service_socket_path(root: &Path) -> std::path::PathBuf {
     let canonical = root.join(SERVICE_SOCKET_RELATIVE_PATH);
     // macOS/BSD SUN_LEN limit is 104 bytes; Linux is 108.
     // When the workspace path is too long, fall back to a short /tmp path
