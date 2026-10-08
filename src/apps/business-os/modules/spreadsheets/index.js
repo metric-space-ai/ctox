@@ -11,8 +11,6 @@ const CHUNK_SIZE = 256000;
 const SPREADSHEET_RENDER_DEBOUNCE_MS = 80;
 const SPREADSHEETS_PRIMARY_COLLECTION = 'spreadsheets';
 const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.tsv', '.xlsx'];
-// Asc.c_oAscError.ID.LoadingFontError in the vendored sdkjs.
-const LOADING_FONT_ERROR_CODE = -26;
 // Automation remains an explicit action, never a permanent workspace column.
 const USER_IMPORT_KIND = 'user_import';
 const RESEARCH_GENERATED_KIND = 'research_generated';
@@ -1734,6 +1732,10 @@ async function mountCtoxSpreadsheets(state, host, record, version) {
     // already logged what it asked for, so a reload is the honest retry.
     const fontRequests = Array.isArray(error?.diagnostics?.fontRequests) ? error.diagnostics.fontRequests : [];
     if (fontRequests.length) console.error('[spreadsheets] editor font requests', fontRequests);
+    // Asc.c_oAscError.ID.LoadingFontError in the vendored sdkjs. Kept inside
+    // the handler because scripts/office-notifications.browser.mjs evaluates
+    // this body on its own.
+    const LOADING_FONT_ERROR_CODE = -26;
     const fontLoadFailed = code === String(LOADING_FONT_ERROR_CODE);
     state.ctx.notifications?.show?.({
       type: 'error', message, time: 0,
