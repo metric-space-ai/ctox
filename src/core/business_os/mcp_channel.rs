@@ -55,12 +55,12 @@ pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_se
 mod workjet_jour_fixe;
 #[path = "mcp_workjet_kpis.rs"]
 mod workjet_kpis;
+#[path = "mcp_workjet_luma_config.rs"]
+mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
 mod workjet_narration;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
-#[path = "mcp_workjet_luma_config.rs"]
-mod workjet_luma_config;
 
 #[cfg(test)]
 pub(crate) fn workjet_dispatch_service_test_fixture() -> anyhow::Result<(tempfile::TempDir, String)>
