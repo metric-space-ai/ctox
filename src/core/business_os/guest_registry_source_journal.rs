@@ -382,6 +382,7 @@ impl NativeGuestExecution {
                     effects.verify_controller(entry)?;
                     core_configuration_bytes(&self.binding.spec, configuration)?;
                     validate_session_state(&self.binding.spec, session_state)?;
+                    effects.bind_core_state(session_state)?;
                     let bytes = journal.read_bytes(PortableJournalLimits::default().max_bytes)?;
                     let (store, store_root, store_identity) =
                         source_store(&entry.assignment.destination.import_parent)?;
@@ -447,6 +448,7 @@ impl NativeGuestExecution {
                 self.registry.require_live_transport()?;
                 verify()?;
                 current.verify_controller(entry)?;
+                current.bind_core_state(session_state)?;
                 ensure!(
                     effects.same_observation(&current),
                     "native source effects changed during capture; reconcile"

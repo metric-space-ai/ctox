@@ -94,6 +94,17 @@ This removes ambient background execution before admission. It is not a clean
 external-effect receipt: actual tool/submission effects remain unreconciled,
 and imported state still grants no target execution authority.
 
+The actual Core execution paths now also capture bounded effect observations:
+constructor startup uncertainties, submissions before enqueue, provider tool
+items and tools/MCP before their first await. Factory registration is tied to
+the retained Core object before the first submission. Cancellation or a handler
+result cannot erase observations. The protected source artifact records this
+report under the current native fences after checked Core shutdown. Decoded
+checkpoint JSON carries descriptive metadata only and cannot manufacture the
+opaque local capture. These observations do not certify clean effects: source
+pending effects and target rejection remain until actual effect owners provide
+reconciliation.
+
 The retained Core thread can export private state only after successful
 submission-loop termination and checked recorder shutdown, with no active
 turn. The sealed Rust object uses a strict checkpoint decoder for target import. It

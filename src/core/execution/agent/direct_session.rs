@@ -2157,12 +2157,19 @@ impl PersistentSession {
         let native_capture_thread = if native_guest {
             let actual_id = ctox_protocol::ThreadId::from_string(&thread_id)
                 .context("native producer returned an invalid thread identity")?;
-            Some(
-                thread_manager
-                    .get_thread(actual_id)
-                    .await
-                    .context("native producer has no actual loaded Core Session")?,
-            )
+            let actual_thread = thread_manager
+                .get_thread(actual_id)
+                .await
+                .context("native producer has no actual loaded Core Session")?;
+            // Actual object provenance before the first submission; no JSON or
+            // renderer field registers this ledger, and it grants no execution.
+            actual_thread.register_native_source_factory()?;
+            if let (Some(binding), Some(authorize)) =
+                (&native_checkpoint_binding, native_guest_authorization)
+            {
+                binding.with_current_contract(|contract| authorize(&model, contract))?;
+            }
+            Some(actual_thread)
         } else {
             None
         };

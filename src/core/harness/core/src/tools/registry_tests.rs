@@ -48,3 +48,55 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
     );
 }
+
+#[tokio::test]
+async fn native_effect_observation_precedes_mcp_metadata_await_and_survives_cancellation() {
+    use futures::FutureExt;
+    let (session, turn, _events) = crate::codex::make_session_and_context_with_rx().await;
+    session.native_effects.register_source_factory().unwrap();
+    let registry = ToolRegistry::new(HashMap::new());
+    let manager = session.services.mcp_connection_manager.write().await;
+    let invocation = ToolInvocation {
+        session: Arc::clone(&session),
+        turn,
+        tracker: Arc::new(tokio::sync::Mutex::new(
+            crate::turn_diff_tracker::TurnDiffTracker::new(),
+        )),
+        call_id: "pending-mcp-metadata".into(),
+        tool_name: "unknown".into(),
+        tool_namespace: None,
+        payload: ToolPayload::Mcp {
+            server: "unknown".into(),
+            tool: "unknown".into(),
+            raw_arguments: "{}".into(),
+        },
+    };
+    // Polling reaches the held production await, then cancels the dispatch.
+    assert!(
+        registry
+            .dispatch_any(invocation.clone())
+            .now_or_never()
+            .is_none()
+    );
+    let observed = serde_json::to_value(
+        session
+            .native_effects
+            .capture(session.conversation_id)
+            .unwrap()
+            .report(),
+    )
+    .unwrap();
+    assert_eq!(observed["unreconciledObservations"], 1);
+    drop(manager);
+    assert!(registry.dispatch_any(invocation).await.is_err());
+    let rejected = serde_json::to_value(
+        session
+            .native_effects
+            .capture(session.conversation_id)
+            .unwrap()
+            .report(),
+    )
+    .unwrap();
+    assert_eq!(rejected["unreconciledObservations"], 2);
+    assert!(session.native_effects.register_source_factory().is_err());
+}

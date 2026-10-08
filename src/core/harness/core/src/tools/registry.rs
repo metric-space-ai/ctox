@@ -161,6 +161,7 @@ impl ToolRegistry {
         &self,
         invocation: ToolInvocation,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        invocation.session.native_effects.observe_unreconciled();
         let tool_name = invocation.tool_name.clone();
         let tool_namespace = invocation.tool_namespace.clone();
         let call_id_owned = invocation.call_id.clone();
