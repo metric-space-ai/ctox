@@ -24,9 +24,15 @@ export async function readWorkjetCalendar(sync, request, assertCurrent) {
   if (events && request.endMs - request.startMs > 400 * 86_400_000) throw new TypeError('Calendar range exceeds 400 days.');
   if (typeof sync?.requestNative !== 'function') throw new Error('Calendar transport unavailable.');
   assertCurrent();
-  const response = await sync.requestNative(CALENDAR_READ_METHOD, { action: accounts ? 'accounts' : 'events', ...params }, {
-    collection: 'communication_accounts', timeoutMs: 29_000,
-  });
+  let timer;
+  let response;
+  try {
+    response = await Promise.race([sync.requestNative(CALENDAR_READ_METHOD, { action: accounts ? 'accounts' : 'events', ...params }, {
+      collection: 'communication_accounts', timeoutMs: 29_000,
+    }), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Calendar read timed out.')), 29_000);
+    })]);
+  } finally { clearTimeout(timer); }
   assertCurrent();
   if (!response || Object.keys(response).some(key => !['schema', 'request_id', 'action', 'data'].includes(key))
     || response.schema !== CALENDAR_SCHEMA || response.request_id !== request.commandId

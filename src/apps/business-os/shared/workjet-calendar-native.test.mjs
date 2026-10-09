@@ -50,3 +50,11 @@ test('events preserve range, account and truncation without accepting foreign ac
   data = { ...data, events: [{ ...event, account_id: 'foreign' }] };
   await assert.rejects(readWorkjetCalendar(sync, request, current), /another account/);
 });
+test('the read deadline also covers bridge acquisition before transport readiness', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = readWorkjetCalendar({ requestNative: () => new Promise(() => {}) }, accountsRequest, current);
+  const rejected = assert.rejects(pending, /timed out/);
+  t.mock.timers.tick(29_000);
+  await rejected;
+  t.mock.timers.reset();
+});
