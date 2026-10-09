@@ -488,6 +488,11 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn failed_response_with_text_is_not_accepted() {
+        assert!(!genuine_text(br#"{"object":"response","status":"failed","output":[{"type":"message","content":[{"type":"output_text","text":"Partial"}]}]}"#));
+        assert!(!genuine_text(br#"{"object":"other","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Hi"}]}]}"#));
+    }
+    #[test]
     fn genuine_text_required() {
         for body in [
             b"{}".as_slice(),
