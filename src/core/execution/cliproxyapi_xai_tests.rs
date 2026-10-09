@@ -2,6 +2,40 @@ use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
+async fn catalog_absence_denies_execution() {
+    let root = tempfile::tempdir().unwrap();
+    save_bundle(root.path(), &bundle()).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut data = [0; 8192];
+        let read = socket.read(&mut data).await.unwrap();
+        assert!(data[..read].starts_with(b"GET /models"));
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"data\":[]}",
+            )
+            .await
+            .unwrap();
+        drop(socket);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                .await
+                .is_err()
+        );
+    });
+    assert!(execute_route_at(
+        root.path(),
+        br#"{"model":"grok-4.7","input":"fixture"}"#,
+        &endpoint
+    )
+    .await
+    .is_err());
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn native_router_starts_for_subscription_without_creating_a_default() {
     use ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::{
         OpenAiResponsesRouteHandler, OpenAiResponsesRouteResponse,
