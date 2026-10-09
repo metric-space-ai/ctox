@@ -81,6 +81,7 @@
     "ctox.workjet.computer.endpoint.list",
     "ctox.workjet.computer.endpoint.upsert",
     "ctox.workjet.computer.list",
+    "ctox.workjet.computer.ssh_key.ensure",
     "ctox.workjet.computer.unassign",
     "ctox.workjet.jour_fixe.comment.add",
     "ctox.workjet.jour_fixe.deck.publish",

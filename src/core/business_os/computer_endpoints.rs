@@ -13,13 +13,13 @@ use super::store::{
 };
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
+use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::path::Path;
-use ring::rand::{SecureRandom, SystemRandom};
 use ssh_key::{private::Ed25519Keypair, Algorithm, HashAlg, LineEnding, PrivateKey};
+use std::path::Path;
 use zeroize::Zeroizing;
 
 pub const COMPUTER_ENDPOINT_CONTRACT: &str = "ctox.computer-endpoints.v1";
@@ -480,7 +480,6 @@ pub(super) fn handle_command(root: &Path, command: &BusinessCommand, owner: &str
     Ok(outcome)
 }
 
-
 /// Explicit Owner setup only. The stable native tuple never rotates an existing
 /// credential. Concurrent first calls read the encrypted INSERT winner, not a
 /// discarded candidate; neither private bytes nor a passphrase enter a receipt.
@@ -503,7 +502,11 @@ fn ensure_native_ssh_key(root: &Path, owner: &str, computer_id: &str) -> Result<
         let candidate = PrivateKey::from(Ed25519Keypair::from_seed(&seed));
         let private = candidate.to_openssh(LineEnding::LF)?;
         crate::secrets::create_secret_record_if_absent(
-            root, SCOPE, &name, private.as_str(), metadata.clone()
+            root,
+            SCOPE,
+            &name,
+            private.as_str(),
+            metadata.clone(),
         )?;
     }
     let stored = crate::secrets::list_secret_records(root, Some(SCOPE))?
@@ -515,8 +518,7 @@ fn ensure_native_ssh_key(root: &Path, owner: &str, computer_id: &str) -> Result<
         "existing credential was not issued for this native owner and computer"
     );
     crate::secrets::with_current_secret_value(root, SCOPE, &name, |private| {
-        let key = PrivateKey::from_openssh(private)
-            .context("stored native SSH key is invalid")?;
+        let key = PrivateKey::from_openssh(private).context("stored native SSH key is invalid")?;
         anyhow::ensure!(
             key.algorithm() == Algorithm::Ed25519 && !key.is_encrypted(),
             "stored native SSH key is not the issued Ed25519 key"
