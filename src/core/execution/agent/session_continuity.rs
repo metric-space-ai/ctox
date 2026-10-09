@@ -805,6 +805,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thread_start_and_resume_preserve_read_only_sandbox_and_tool_policy() -> Result<()> {
+        let id = "00000000-0000-0000-0000-000000000001";
+        for read_only in [true, false] {
+            for disable_tools in [true, false] {
+                let mut spec = isolated_spec();
+                spec.read_only_sandbox = read_only;
+                spec.disable_active_tools = disable_tools;
+                let client = ScriptedControlClient::new(vec![start_ok(id)]);
+                let mut seq = RequestIdSeq::new();
+                assert_eq!(
+                    start_session_thread(&client, &mut seq, &spec, Duration::from_secs(1)).await?,
+                    id
+                );
+                let request = &client.params()[0];
+                assert_eq!(
+                    request["sandbox"],
+                    if read_only { "read-only" } else { "workspace-write" }
+                );
+                assert_eq!(request["modelProvider"], "openai");
+                assert_eq!(request["baseInstructions"], "base");
+                if disable_tools {
+                    assert_eq!(request["dynamicTools"], serde_json::json!([]));
+                } else {
+                    assert!(request.get("dynamicTools").is_none_or(JsonValue::is_null));
+                }
+                let client = ScriptedControlClient::new(vec![resume_ok(id, None)]);
+                let mut seq = RequestIdSeq::new();
+                assert_eq!(
+                    resume_identified_thread(&client, &mut seq, &spec, id, Duration::from_secs(1)).await?,
+                    id
+                );
+                assert_eq!(
+                    client.params()[0]["sandbox"],
+                    if read_only { "read-only" } else { "workspace-write" }
+                );
+                assert_eq!(client.calls(), vec!["thread/resume"]);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn durable_guest_starts_fresh_with_persisted_history() -> Result<()> {
         let id = "00000000-0000-0000-0000-000000000001";
         let mut reply = start_ok(id);
