@@ -10364,9 +10364,7 @@ function ensureCtoxSmokeBinary() {
           // installed fixture mounted. Re-apply the scoped fixture metadata so
           // the shell resolves data-module-root to the same module contract.
           applyAgentScopeState();
-          const target = document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)
-            || document.querySelector('[data-module-content]')
-            || document.querySelector('[data-module-root]');
+          const target = document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`);
           if (!target) throw new Error('agent scope fixture DOM target is missing');
           target.scrollIntoView?.({ block: 'center', inline: 'center' });
           const rect = target.getBoundingClientRect();
@@ -10572,12 +10570,21 @@ function ensureCtoxSmokeBinary() {
           await seedAgentScopeModuleCatalog({ force: true });
           applyAgentScopeState();
           await state.openModule(targetModule.id, { force: true, asModule: true });
-          await waitFor(() => ({
-            ok: state.activeModule?.id === targetModule.id
-              && Boolean(document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)),
-            activeModule: state.activeModule?.id || '',
-            fixture: globalThis.__ctoxAgentScopeFixture || null,
-          }), 30000, 'agent scope target module open');
+          await waitFor(() => {
+            const marker = document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`);
+            const window = state.windowManager?.listWindows?.()
+              .find((entry) => entry.ownerId === `desktop-app:${targetModule.id}`);
+            const owner = marker?.closest('.shell-window')?.getAttribute('data-owner-id') || '';
+            return {
+              // Apps mount in their own shell window; desktop stays active.
+              ok: Boolean(window && marker?.getClientRects().length
+                && owner === `desktop-app:${targetModule.id}`),
+              activeModule: state.activeModule?.id || '',
+              windowId: window?.id || '',
+              owner,
+              fixture: globalThis.__ctoxAgentScopeFixture || null,
+            };
+          }, 30000, 'agent scope target module open');
           await waitFor(() => ({
             ok: Boolean(document.querySelector('[data-ctox-chat-root]')),
             hasChatRoot: Boolean(document.querySelector('[data-ctox-chat-root]')),
@@ -10707,7 +10714,9 @@ function ensureCtoxSmokeBinary() {
           await state.openModule(hiddenModule.id, { force: true, asModule: true });
           await delay(150);
           const statusText = document.body?.innerText || '';
-          const appHiddenDenied = !hiddenTab && state.activeModule?.id !== hiddenModule.id;
+          const appHiddenDenied = !hiddenTab && state.activeModule?.id !== hiddenModule.id
+            && !state.windowManager?.listWindows?.()
+              .some((entry) => entry.ownerId === `desktop-app:${hiddenModule.id}`);
           const deniedReasonVisible = /nicht sichtbar|not visible|Privat|private/i.test(statusText);
 
           const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
