@@ -7318,7 +7318,9 @@ enum McpToolPolicyClass {
 }
 
 fn tool_policy_class_for_call(tool_name: &str, arguments: &Value) -> McpToolPolicyClass {
-    if tool_name == workjet_kpis::TOOL && arguments["action"] == "read" {
+    if (tool_name == workjet_kpis::TOOL && arguments["action"] == "read")
+        || (tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "observe")
+    {
         McpToolPolicyClass::Read
     } else {
         tool_policy_class(tool_name)

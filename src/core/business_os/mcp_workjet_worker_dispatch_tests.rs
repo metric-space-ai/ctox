@@ -455,11 +455,16 @@ fn supervisor_observation_is_bounded_read_only_without_schema_repair() -> anyhow
     let core = Connection::open(crate::paths::core_db(root.path()))?;
     let absent: bool = core.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='workjet_worker_dispatch_intents')", [], |row| row.get(0))?;
     assert!(absent);
+    let mut read_only = default_mcp_policy();
+    read_only.allow_writes = false;
+    save_mcp_policy(root.path(), &read_only)?;
     assert_eq!(
         observe_call(root.path(), &trusted, None)?["observations"],
         json!([])
     );
     assert!(core.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='workjet_worker_dispatch_intents')", [], |row| row.get::<_,bool>(0))?);
+    assert!(register(root.path()).is_err());
+    save_mcp_policy(root.path(), &default_mcp_policy())?;
     let registration = register(root.path())?;
     for key in ["first", "second", "third"] {
         let dispatched = super::super::call_tool_inner(
