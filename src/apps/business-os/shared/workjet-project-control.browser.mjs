@@ -331,7 +331,7 @@ try {
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
     configurationSource: tests.slice(configurationStart, configurationEnd),
     executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 29);
+  assert.equal(results.length, 30);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };
