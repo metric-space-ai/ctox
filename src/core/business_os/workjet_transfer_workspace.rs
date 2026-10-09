@@ -178,7 +178,8 @@ fn write_new<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
     }
     serde_json::to_writer(&mut file, value)?;
     file.write_all(b"\n")?;

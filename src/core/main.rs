@@ -193,7 +193,7 @@ INSTALL / UPGRADE
   ctox coding-agent status|providers|install|auth|workspace|session
                                  control desktop coding agents through a unified CLI
   ctox workjet-transfer pack|apply|workspace-export|workspace-start|workspace-status|workspace-pause|workspace-resume|workspace-cancel|workspace-finish
-                                 pack or apply network-free Git transfer artifacts
+                                 transport and verify thread workspaces through native CTOX peers
 
 ENGINE / GPU
   ctox doctor                    health check — update available? hints
