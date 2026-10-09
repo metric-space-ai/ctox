@@ -137,6 +137,48 @@ impl BusinessProjectionWriter {
         }
         Ok(())
     }
+    fn upsert_source_projection_batch(
+        &mut self,
+        collection: &str,
+        records: Vec<(String, i64, Value)>,
+    ) -> Result<()> {
+        for chunk in records.chunks(NativeProjectionWriter::MAX_BATCH_RECORDS) {
+            let mut changed = Vec::new();
+            let mut pending = Vec::new();
+            for (id, source_ms, payload) in chunk {
+                let key = (collection.to_string(), id.clone());
+                let mut comparable = payload.clone();
+                comparable
+                    .as_object_mut()
+                    .map(|object| object.remove("updated_at_ms"));
+                if self.payloads.get(&key) == Some(&comparable) {
+                    continue;
+                }
+                if !self.payloads.contains_key(&key)
+                    && self
+                        .inner
+                        .stored_projection_matches(collection, id, &comparable)?
+                {
+                    self.payloads.insert(key, comparable);
+                    continue;
+                }
+                let observed = Utc::now().timestamp_millis().max(*source_ms);
+                let mut payload = payload.clone();
+                payload["updated_at_ms"] = json!(observed);
+                changed.push((id.clone(), observed, payload));
+                pending.push((key, comparable));
+            }
+            self.inner
+                .upsert_source_projection_batch(collection, &changed)?;
+            // Cache only the chunk whose mirror committed. A later failure
+            // preserves successful chunks and keeps failed delivery retryable.
+            if self.inner.delivered_to_rxdb(collection) {
+                self.payloads.extend(pending);
+            }
+        }
+        Ok(())
+    }
+
     fn tombstone_source_projection(&mut self, collection: &str, id: &str, now: i64) -> Result<()> {
         self.inner
             .tombstone_source_projection(collection, id, now)?;
@@ -544,6 +586,9 @@ fn core(root: &Path) -> Result<Connection> {
                 ON ctox_harness_flow_events(json_extract(metadata_json,'$.attempt_id'), created_at);
              CREATE INDEX IF NOT EXISTS idx_cockpit_flow_task_time
                 ON ctox_harness_flow_events(message_key, created_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_cockpit_flow_plan_time
+                ON ctox_harness_flow_events(message_key, created_at DESC, event_id DESC)
+                WHERE event_kind='worker.plan_updated';
              CREATE INDEX IF NOT EXISTS idx_crew_selection_diagnostic_time
                 ON ctox_harness_flow_events(created_at)
                 WHERE event_kind IN ('crew_selected','crew_selection_unavailable')
@@ -1097,6 +1142,7 @@ fn project_events_since(
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut projected = Vec::with_capacity(events.len());
             for (id, kind, title, attempt, metadata, created_at) in events {
                 let metadata: Value = serde_json::from_str(&metadata)?;
                 let Some(created_at_ms) =
@@ -1124,9 +1170,8 @@ fn project_events_since(
                 };
                 let step_position = event_step_position(conn, &task, &created_at, &metadata)?;
                 // Tool payloads and raw reasoning stay in the authoritative ledger.
-                writer.upsert_source_projection(
-                    "ctox_harness_events", &id,
-                    created_at_ms,
+                projected.push((
+                    id.clone(), created_at_ms,
                     json!({
                         "id":id,"task_id":task,"command_id":metadata.get("command_id"),"attempt":attempt,
                         "kind":event_kind(&kind),"title":title,"tool_type":metadata.pointer("/tool/type"),
@@ -1137,9 +1182,17 @@ fn project_events_since(
                         "runtime_seconds":metadata.pointer("/runtime/seconds"),"step_position":step_position,
                         "created_at_ms":created_at_ms,"updated_at_ms":created_at_ms
                     }),
-                )?;
-                delivered &= writer.inner.delivered_to_rxdb("ctox_harness_events");
+                ));
             }
+            if let Err(error) =
+                writer.upsert_source_projection_batch("ctox_harness_events", projected)
+            {
+                // A failed chunk is not an acknowledgement of the captured
+                // high-water mark. Successful chunks remain deduplicated on retry.
+                (writer.event_cursor, writer.last_event_replay) = unclaimed;
+                return Err(error);
+            }
+            delivered &= writer.inner.delivered_to_rxdb("ctox_harness_events");
             // Enforce the per-task cap immediately with the task/time index.
             // The expensive cross-task age/window sweep stays on maintenance.
             delivered &= retain_task_events(writer, &task)?;
@@ -1183,6 +1236,14 @@ fn retain_task_events(writer: &mut BusinessProjectionWriter, task: &str) -> Resu
 
 /// Resolve the plan at the event's time, not the task's newest revision. This
 /// runs exclusively on the projection pump, never in the harness progress hook.
+// A cold replay asks for the plan at each event's emission. The partial
+// task/time index skips ordinary tool/phase history when no plan exists.
+const EVENT_PLAN_AT_EMISSION_SQL: &str = "SELECT json_extract(metadata_json,'$.plan.plan')
+     FROM ctox_harness_flow_events
+     WHERE message_key=?1 AND event_kind='worker.plan_updated' AND created_at<=?2
+       AND (?3 IS NULL OR json_extract(metadata_json,'$.attempt_id')=?3)
+     ORDER BY created_at DESC, event_id DESC LIMIT 1";
+
 fn event_step_position(
     conn: &Connection,
     task: &str,
@@ -1195,11 +1256,7 @@ fn event_step_position(
     let current_steps = metadata.pointer("/plan/plan").and_then(Value::as_array);
     let prior: Option<String> = if current_steps.is_none() {
         conn.query_row(
-            "SELECT json_extract(metadata_json,'$.plan.plan')
-             FROM ctox_harness_flow_events
-             WHERE message_key=?1 AND event_kind='worker.plan_updated' AND created_at<=?2
-               AND (?3 IS NULL OR json_extract(metadata_json,'$.attempt_id')=?3)
-             ORDER BY created_at DESC, event_id DESC LIMIT 1",
+            EVENT_PLAN_AT_EMISSION_SQL,
             params![
                 task,
                 created,

@@ -13085,6 +13085,28 @@ impl RxdbProjectionWriterCache {
         Ok(false)
     }
 
+    fn upsert_source_projection_batch(
+        &mut self,
+        collection: &str,
+        records: &[(String, i64, Value)],
+    ) -> anyhow::Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        if !matches!(self.writers.get(collection), Some(Some(_))) {
+            let writer = RxdbCollectionWriter::open(&self.root, collection)?;
+            self.writers.insert(collection.to_string(), writer);
+        }
+        if let Some(Some(writer)) = self.writers.get_mut(collection) {
+            let result = writer.upsert_source_projection_batch(records);
+            if result.is_err() {
+                self.writers.remove(collection);
+            }
+            result?;
+        }
+        Ok(())
+    }
+
     fn upsert_source_projection(
         &mut self,
         collection: &str,
@@ -13194,6 +13216,31 @@ impl BusinessProjectionWriter {
             .rxdb_writers
             .stored_payload(collection, record_id)?
             .is_some_and(|mirrored| same_projection_payload(&mirrored, payload)))
+    }
+
+    pub(crate) const MAX_BATCH_RECORDS: usize = 64;
+
+    /// Commit at most 64 prepared records per source/mirror transaction.
+    /// Source delivery remains durable before independently retryable RxDB
+    /// delivery; no reservation spans both stores or a complete replay.
+    pub(crate) fn upsert_source_projection_batch(
+        &mut self,
+        collection: &str,
+        records: &[(String, i64, Value)],
+    ) -> anyhow::Result<()> {
+        for chunk in records.chunks(Self::MAX_BATCH_RECORDS) {
+            let tx = crate::persistence::SqliteWriteTransaction::begin(
+                &self.conn,
+                "projection.source_batch",
+            )?;
+            for (id, updated, payload) in chunk {
+                upsert_business_record(&tx, collection, id, *updated, payload.clone())?;
+            }
+            tx.commit()?;
+            self.rxdb_writers
+                .upsert_source_projection_batch(collection, chunk)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn upsert_source_projection(
@@ -13454,6 +13501,45 @@ impl RxdbCollectionWriter {
         Ok(serde_json::from_str::<Value>(&raw).ok())
     }
 
+    fn upsert_source_projection_batch(
+        &mut self,
+        records: &[(String, i64, Value)],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            records.len() <= BusinessProjectionWriter::MAX_BATCH_RECORDS,
+            "projection batch exceeds {} records",
+            BusinessProjectionWriter::MAX_BATCH_RECORDS
+        );
+        if records.is_empty() {
+            return Ok(());
+        }
+        let mut replication_lwt = self.last_replication_lwt;
+        let tx =
+            crate::persistence::SqliteWriteTransaction::begin(&self.conn, "projection.rxdb_batch")?;
+        for (id, updated, payload) in records {
+            let now = now_ms().min(i64::MAX as u128) as i64;
+            replication_lwt = now.max(replication_lwt.saturating_add(1));
+            upsert_rxdb_collection_record_with_writer(
+                &tx,
+                &self.table,
+                &self.columns,
+                id,
+                *updated,
+                replication_lwt,
+                payload.clone(),
+                self.demand_file_storage,
+                false,
+                true,
+            )?;
+        }
+        tx.commit()?;
+        self.last_replication_lwt = replication_lwt;
+        // One wake observes the complete committed batch; a failed batch
+        // rolls back without publishing any of its rows.
+        self.notify_committed_change();
+        Ok(())
+    }
+
     fn upsert_source_projection(
         &mut self,
         record_id: &str,
@@ -13640,11 +13726,8 @@ fn upsert_rxdb_collection_record_with_writer(
     let explicit_deletion_aliases =
         ["deleted", "is_deleted"].map(|alias| payload.get(alias).is_some());
     if let Some(existing_json) = conn
-        .query_row(
-            &format!("SELECT data FROM {table} WHERE id = ?1"),
-            [record_id],
-            |row| row.get::<_, String>(0),
-        )
+        .prepare_cached(&format!("SELECT data FROM {table} WHERE id = ?1"))?
+        .query_row([record_id], |row| row.get::<_, String>(0))
         .optional()?
     {
         existing_row = true;
@@ -13763,18 +13846,16 @@ fn upsert_rxdb_collection_record_with_writer(
         .map(|index| format!("?{index}"))
         .collect::<Vec<_>>()
         .join(", ");
-    conn.execute(
-        &format!(
-            "INSERT INTO {table} ({columns}) VALUES ({placeholders})
-             ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
-            columns = columns.join(", "),
-            updates = updates.join(", "),
-            guard = canonical_rxdb_table_upsert_guard_sql(table, "data")
-                .map(|guard| format!(" WHERE {guard}"))
-                .unwrap_or_default(),
-        ),
-        params_from_iter(values),
-    )?;
+    conn.prepare_cached(&format!(
+        "INSERT INTO {table} ({columns}) VALUES ({placeholders})
+         ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
+        columns = columns.join(", "),
+        updates = updates.join(", "),
+        guard = canonical_rxdb_table_upsert_guard_sql(table, "data")
+            .map(|guard| format!(" WHERE {guard}"))
+            .unwrap_or_default(),
+    ))?
+    .execute(params_from_iter(values))?;
     Ok(())
 }
 

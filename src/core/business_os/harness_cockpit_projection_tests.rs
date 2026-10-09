@@ -471,7 +471,7 @@ fn setup() -> Result<(TempDir, Connection)> {
 
 // Isolated native-path load test. This is not customer or installed-shell
 // acceptance: the caller must retain the source, binary and measured scope.
-fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
+fn measure_eight_writer_projection(duration: Duration, require_fast_warmup: bool) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     let (root, conn) = setup()?;
     conn.execute_batch("PRAGMA journal_mode=WAL; ALTER TABLE communication_routing_state ADD COLUMN leased_at TEXT")?;
@@ -576,6 +576,9 @@ fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
             "failures":failures
         })
     );
+    if require_fast_warmup {
+        assert!(warm < Duration::from_secs(1), "cold projection {warm:?}");
+    }
     assert_eq!(counts.len(), 8);
     assert!(counts.iter().all(|count| *count > 0));
     assert!(failures.is_empty(), "{failures:?}");
@@ -588,13 +591,13 @@ fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
 
 #[test]
 fn cockpit_projection_survives_eight_concurrent_native_writers() -> Result<()> {
-    measure_eight_writer_projection(Duration::from_secs(10))
+    measure_eight_writer_projection(Duration::from_secs(10), false)
 }
 
 #[test]
 #[ignore = "explicit one-hour isolated acceptance load; run via the gpu lane"]
 fn cockpit_projection_one_hour_eight_native_writers() -> Result<()> {
-    measure_eight_writer_projection(Duration::from_secs(3600))
+    measure_eight_writer_projection(Duration::from_secs(3600), true)
 }
 
 fn record(root: &Path, collection: &str, id: &str) -> Result<Value> {
@@ -1113,6 +1116,146 @@ fn runs_join_real_turn_ids_and_refresh_late_costs_without_double_counting() -> R
 }
 
 #[test]
+fn failed_event_batch_retries_unpublished_rows_without_advancing_cursor() -> Result<()> {
+    let (root, conn) = setup()?;
+    conn.execute(
+        "INSERT INTO communication_routing_state VALUES('batch-task','leased',?1)",
+        [Utc::now().to_rfc3339()],
+    )?;
+    for n in 0..129 {
+        conn.execute("INSERT INTO ctox_harness_flow_events VALUES(?1,'worker.phase','Working','','batch-task',NULL,1,'{}','2026-01-01T00:00:00Z')",
+            [format!("cursor-event-{n:03}")])?;
+    }
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    rxdb.execute_batch(
+        "CREATE TRIGGER fixture_cursor_failure
+        BEFORE INSERT ON ctox_business_os__ctox_harness_events__v0
+        WHEN new.id='cursor-event-025'
+        BEGIN SELECT RAISE(ABORT,'injected replay failure'); END;",
+    )?;
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    assert!(project_events_since(root.path(), &conn, &mut writer, true).is_err());
+    assert_eq!(writer.event_cursor, None);
+    assert_eq!(writer.last_event_replay, None);
+    assert_eq!(
+        rxdb.query_row(
+            "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        64
+    );
+    let before: String = rxdb.query_row("SELECT revision FROM ctox_business_os__ctox_harness_events__v0 WHERE id='cursor-event-128'",
+        [], |r|r.get(0))?;
+    rxdb.execute_batch("DROP TRIGGER fixture_cursor_failure")?;
+    // Exercise the ordinary incremental invocation, not a forced replay:
+    // only restoring the unclaimed cursor keeps the failed rows eligible.
+    project_events_since(root.path(), &conn, &mut writer, false)?;
+    assert_eq!(writer.event_cursor, Some(129));
+    assert_eq!(
+        rxdb.query_row(
+            "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        129
+    );
+    let after: String = rxdb.query_row("SELECT revision FROM ctox_business_os__ctox_harness_events__v0 WHERE id='cursor-event-128'",
+        [], |r|r.get(0))?;
+    assert_eq!(before, after);
+    Ok(())
+}
+
+#[test]
+fn projection_batches_keep_committed_chunks_and_retry_failed_mirror() -> Result<()> {
+    let (root, _) = setup()?;
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    rxdb.execute_batch(
+        "CREATE TRIGGER fixture_batch_failure
+        BEFORE INSERT ON ctox_business_os__ctox_harness_events__v0
+        WHEN new.id='batch-event-080'
+        BEGIN SELECT RAISE(ABORT,'injected batch mirror failure'); END;",
+    )?;
+    let records = (0..129).map(|n| {
+        let id = format!("batch-event-{n:03}");
+        (id.clone(), 1, json!({"id":id,"kind":"phase","task_id":"fixture","created_at_ms":1,"updated_at_ms":1}))
+    }).collect::<Vec<_>>();
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    assert!(writer
+        .upsert_source_projection_batch("ctox_harness_events", records.clone())
+        .is_err());
+    assert_eq!(writer.payloads.len(), 64);
+    let count_source = || -> Result<i64> {
+        Ok(writer.inner.source_connection().query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection='ctox_harness_events'",
+            [],
+            |r| r.get(0),
+        )?)
+    };
+    assert_eq!(count_source()?, 128, "only two source chunks committed");
+    assert_eq!(
+        rxdb.query_row(
+            "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        64,
+        "the failed second mirror chunk rolled back completely"
+    );
+    let first = || -> Result<(String, f64)> {
+        Ok(rxdb.query_row("SELECT revision,lastWriteTime FROM ctox_business_os__ctox_harness_events__v0 WHERE id='batch-event-000'",
+            [], |r|Ok((r.get(0)?,r.get(1)?)))?)
+    };
+    let before = first()?;
+    rxdb.execute_batch("DROP TRIGGER fixture_batch_failure")?;
+    writer.upsert_source_projection_batch("ctox_harness_events", records)?;
+    assert_eq!(writer.payloads.len(), 129);
+    assert_eq!(
+        first()?,
+        before,
+        "successful chunks are not rewritten during retry"
+    );
+    assert_eq!(rxdb.query_row(
+        "SELECT COUNT(*),COUNT(DISTINCT lastWriteTime) FROM ctox_business_os__ctox_harness_events__v0",
+        [], |r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))
+    )?, (129,129));
+    Ok(())
+}
+
+#[test]
+fn projection_batches_recover_late_collection_and_dedupe_after_restart() -> Result<()> {
+    let (root, _) = setup()?;
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    rxdb.execute_batch("DROP TABLE ctox_business_os__ctox_harness_events__v0")?;
+    let payload = json!({"id":"batch-late","kind":"phase","task_id":"fixture","created_at_ms":1,"updated_at_ms":1});
+    let rows = vec![("batch-late".to_string(), 1, payload)];
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    writer.upsert_source_projection_batch("ctox_harness_events", rows.clone())?;
+    assert!(
+        writer.payloads.is_empty(),
+        "missing mirror is not acknowledged"
+    );
+    rxdb.execute_batch("CREATE TABLE ctox_business_os__ctox_harness_events__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER DEFAULT 0,lastWriteTime REAL DEFAULT 0,data TEXT NOT NULL)")?;
+    writer.upsert_source_projection_batch("ctox_harness_events", rows.clone())?;
+    assert_eq!(writer.payloads.len(), 1);
+    let row = || -> Result<(String, f64, String)> {
+        Ok(rxdb.query_row("SELECT revision,lastWriteTime,data FROM ctox_business_os__ctox_harness_events__v0 WHERE id='batch-late'",
+            [], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?)
+    };
+    let before = row()?;
+    drop(writer);
+    let mut restarted = BusinessProjectionWriter::open(root.path())?;
+    restarted.upsert_source_projection_batch("ctox_harness_events", rows)?;
+    assert_eq!(
+        row()?,
+        before,
+        "replay after restart preserves the committed envelope"
+    );
+    assert_eq!(restarted.payloads.len(), 1);
+    Ok(())
+}
+
+#[test]
 fn projection_delivery_recovers_when_rxdb_collection_appears_after_writer_open() -> Result<()> {
     let (root, _) = setup()?;
     let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
@@ -1493,6 +1636,16 @@ fn changed_event_query_and_task_retention_use_bounded_indexes() -> Result<()> {
         "{plan}"
     );
     assert!(!plan.contains("SCAN e"), "{plan}");
+    let plan = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {EVENT_PLAN_AT_EMISSION_SQL}"))?
+        .query_map(
+            params!["task", "2026-01-01", Option::<String>::None],
+            |row| row.get::<_, String>(3),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .join("\n");
+    assert!(plan.contains("idx_cockpit_flow_plan_time"), "{plan}");
+    assert!(!plan.contains("TEMP B-TREE"), "{plan}");
     let plan = writer
         .inner
         .source_connection()
