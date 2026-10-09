@@ -429,10 +429,12 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
     if matches!(
         args.first().map(String::as_str),
         Some("coding-agent" | "coding-agents")
-    ) && coding_agents::coding_models_cli_args_are_valid(&args[1..])
+    ) && (coding_agents::coding_models_cli_args_are_valid(&args[1..])
+        || coding_agents::coding_route_cli_options(&args[1..]).is_some())
     {
-        // Metadata uses the existing private daemon control socket and must
-        // not wait on a second SQLite ledger write in the short-lived CLI.
+        // Presets use the private daemon socket. Route inspection reads native
+        // runtime configuration and may probe its existing upstream model list.
+        // Neither observation may initialize/migrate the DB or write a turn ledger.
         return true;
     }
     if service::sandboxed_cli_command_allowed(args) {
@@ -5399,6 +5401,25 @@ mod tests {
             rooted_models.extend(["--root".to_owned(), "/explicit-root".to_owned()]);
             assert!(super::skips_cli_startup_db(&rooted_models));
             assert!(super::skips_cli_turn_ledger(&rooted_models));
+            for suffix in [
+                vec!["route"],
+                vec!["route", "--probe"],
+                vec!["route", "--root", "/explicit-root", "--probe"],
+            ] {
+                let route = std::iter::once(command)
+                    .chain(suffix)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                assert!(super::skips_cli_startup_db(&route));
+                assert!(super::skips_cli_turn_ledger(&route));
+            }
+            let duplicate_probe = vec![
+                command.to_owned(),
+                "route".to_owned(),
+                "--probe".to_owned(),
+                "--probe".to_owned(),
+            ];
+            assert!(!super::skips_cli_startup_db(&duplicate_probe));
             let turn = vec![command.to_owned(), "turn".to_owned()];
             assert!(!super::skips_cli_turn_ledger(&turn));
             let mut rooted_turn = turn;
