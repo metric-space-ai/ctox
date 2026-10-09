@@ -9,6 +9,7 @@ use super::*;
 use crate::mission::channels;
 
 const CONTRACT: &str = "ctox.workjet.supervisor_turn.v1";
+const CAPABILITIES_CONTRACT: &str = "ctox.workjet.supervisor_turn_capabilities.v1";
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -48,6 +49,15 @@ struct ReplyProvenance {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct CapabilitiesPayload {
+    project_id: String,
+    thread_id: String,
+    #[serde(default, rename = "inbound_channel")]
+    _inbound_channel: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ObservePayload {
     project_id: String,
     thread_id: String,
@@ -76,6 +86,7 @@ pub(in crate::business_os) fn is_command(command_type: &str) -> bool {
         "ctox.workjet.project.supervisor.turn.submit"
             | "ctox.workjet.project.supervisor.turn.watch"
             | "ctox.workjet.project.supervisor.turn.cancel"
+            | "ctox.workjet.project.supervisor.turn.capabilities"
     )
 }
 
@@ -263,6 +274,12 @@ pub(in crate::business_os) fn control(
 ) -> anyhow::Result<Value> {
     let owner = session_user_id(session).context("authenticated supervisor owner is required")?;
     match command.command_type.as_str() {
+        "ctox.workjet.project.supervisor.turn.capabilities" => {
+            let request: CapabilitiesPayload = serde_json::from_value(command.payload.clone())?;
+            let binding = binding(root, owner, &request.project_id, &request.thread_id, false)?;
+            Ok(json!({"ok":true, "contract":CAPABILITIES_CONTRACT, "binding":binding,
+                "turn_kinds":["work","conversation"], "default_turn_kind":"work"}))
+        }
         "ctox.workjet.project.supervisor.turn.submit" => {
             let request: SubmitPayload = serde_json::from_value(command.payload.clone())?;
             let binding = binding(root, owner, &request.project_id, &request.thread_id, true)?;

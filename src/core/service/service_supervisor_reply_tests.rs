@@ -304,3 +304,34 @@ fn generic_threads_request_cannot_copy_supervisor_conversation_provenance() -> R
     assert!(!crate::business_os::mcp_channel::workjet_supervisor_reply_completion_allowed(root, &generic["command"])?);
     Ok(())
 }
+
+#[test]
+fn supervisor_turn_kind_capability_is_owner_scoped_and_does_not_submit_work() -> Result<()> {
+    let (temp, _, command_id) = fixture_for_kind(None)?;
+    let root = temp.path();
+    let original = channels::inspect_business_command(root, &command_id)?.unwrap();
+    let core = Connection::open(crate::paths::core_db(root))?;
+    let before: i64 = core.query_row("SELECT COUNT(*) FROM business_command_task_links", [], |row| row.get(0))?;
+    for actor in ["owner", "foreign"] {
+        let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+            root,
+            json!({"id":format!("turn-kind-capabilities-{actor}"),"module":"ctox",
+                "command_type":"ctox.workjet.project.supervisor.turn.capabilities","record_id":"project",
+                "payload":{"project_id":"project","thread_id":original["command"]["payload"]["thread_id"]},
+                "client_context":{"actor":{"id":actor,"role":"chef","is_admin":true}}}),
+        );
+        if actor == "owner" {
+            let accepted = accepted?;
+            assert_eq!(accepted["status"], "completed");
+            assert_eq!(accepted["result"]["contract"], "ctox.workjet.supervisor_turn_capabilities.v1");
+            assert_eq!(accepted["result"]["binding"]["project_id"], "project");
+            assert_eq!(accepted["result"]["turn_kinds"], json!(["work","conversation"]));
+            assert_eq!(accepted["result"]["default_turn_kind"], "work");
+        } else if let Ok(accepted) = accepted {
+            assert_ne!(accepted["status"], "completed");
+        }
+    }
+    let after: i64 = core.query_row("SELECT COUNT(*) FROM business_command_task_links", [], |row| row.get(0))?;
+    assert_eq!(before, after);
+    Ok(())
+}
