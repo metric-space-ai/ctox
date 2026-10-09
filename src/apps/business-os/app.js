@@ -1,22 +1,22 @@
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-presentation-revisions';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-presentation-revisions';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-presentation-revisions';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-presentation-revisions';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-presentation-revisions';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-presentation-revisions';
-import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-presentation-revisions';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-presentation-revisions';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-presentation-revisions';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-presentation-revisions';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-presentation-revisions';
-import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-presentation-revisions';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-rxdb-bounded-push';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-rxdb-bounded-push';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-rxdb-bounded-push';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-rxdb-bounded-push';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261009-shell-v2-presentation-revisions';
+} from './shared/app-lifecycle.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -25,20 +25,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261009-shell-v2-presentation-revisions';
+} from './shared/permissions.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261009-shell-v2-presentation-revisions';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-presentation-revisions';
+} from './shared/branding.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261009-shell-v2-presentation-revisions';
+} from './shared/presentation.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -49,9 +49,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-presentation-revisions';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-presentation-revisions';
-import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-presentation-revisions';
+} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -59,27 +59,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261009-shell-v2-presentation-revisions';
+} from './shared/maintenance-state.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261009-shell-v2-presentation-revisions';
+} from './shared/workspace-session.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261009-shell-v2-presentation-revisions';
+} from './shared/taskbar-pins.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261009-shell-v2-presentation-revisions';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-presentation-revisions';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-presentation-revisions';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-presentation-revisions';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-presentation-revisions';
+} from './shared/workjet-theme.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -87,14 +87,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261009-shell-v2-presentation-revisions';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-presentation-revisions';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-presentation-revisions';
+} from './shared/startup-deadlines.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-rxdb-bounded-push';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-rxdb-bounded-push';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-presentation-revisions';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-presentation-revisions';
+} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-rxdb-bounded-push';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-rxdb-bounded-push';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -112,7 +112,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261009-shell-v2-presentation-revisions';
+const APP_BUILD = '20261009-shell-v2-rxdb-bounded-push';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);

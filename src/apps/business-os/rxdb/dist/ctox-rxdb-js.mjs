@@ -12152,71 +12152,76 @@ var CtoxWebRtcReplicationState = class {
         await this.persistCheckpointsForPeer(peerId);
         break;
       }
-      let rows = documents.map((doc) => ({
-        newDocumentState: doc,
-        assumedMasterState: null
-      }));
-      let terminalRejection = null;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (this.cancelled) return;
-        const masterWriteResult = await this.peer.request(
-          peerId,
-          "masterWrite",
-          [rows],
-          this.requestTimeoutMsFor("masterWrite"),
-          this.collection.name
-        );
-        if (this.cancelled) return;
-        terminalRejection = terminalPushRejection(masterWriteResult);
-        if (terminalRejection) {
-          rows = [];
-          break;
-        }
-        if (replicationErrorResult(masterWriteResult)) {
-          if (attempt < 2) {
-            await delay2(100);
-            continue;
+      const rejectedIds = /* @__PURE__ */ new Set();
+      for (const slice of boundedDirectPushBatches(documents)) {
+        let rows = slice.map((doc) => ({
+          newDocumentState: doc,
+          assumedMasterState: null
+        }));
+        let terminalRejection = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (this.cancelled) return;
+          const masterWriteResult = await this.peer.request(
+            peerId,
+            "masterWrite",
+            [rows],
+            this.requestTimeoutMsFor("masterWrite"),
+            this.collection.name
+          );
+          if (this.cancelled) return;
+          terminalRejection = terminalPushRejection(masterWriteResult);
+          if (terminalRejection) {
+            rows = [];
+            break;
           }
-          throw replicationErrorResultError(masterWriteResult, this.collection.name);
-        }
-        const conflicts = masterWriteResult;
-        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
-        if (!conflictMap.size) {
-          rows = [];
-          break;
-        }
-        rows = rows.map((row) => {
-          const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
-          const assumedMasterState = conflictMap.get(id);
-          return assumedMasterState ? { ...row, assumedMasterState } : null;
-        }).filter(Boolean);
-        if (!rows.length) break;
-        if (this.collection.storageCollection?.conflictStrategy !== "field-merge") {
-          rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+          if (replicationErrorResult(masterWriteResult)) {
+            if (attempt < 2) {
+              await delay2(100);
+              continue;
+            }
+            throw replicationErrorResultError(masterWriteResult, this.collection.name);
+          }
+          const conflicts = masterWriteResult;
+          const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
+          if (!conflictMap.size) {
+            rows = [];
+            break;
+          }
+          rows = rows.map((row) => {
+            const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
+            const assumedMasterState = conflictMap.get(id);
+            return assumedMasterState ? { ...row, assumedMasterState } : null;
+          }).filter(Boolean);
           if (!rows.length) break;
+          if (this.collection.storageCollection?.conflictStrategy !== "field-merge") {
+            rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+            if (!rows.length) break;
+          }
+          rows = await this.absorbMasterStateIntoConflictRows(rows);
         }
-        rows = await this.absorbMasterStateIntoConflictRows(rows);
-      }
-      if (this.cancelled) return;
-      if (terminalRejection) {
-        await this.reconcileTerminalPushRejection(documents, peerId, terminalRejection);
         if (this.cancelled) return;
-        checkpoint = result?.checkpoint || checkpoint;
-        this.pushCheckpointsByPeer.set(peerId, checkpoint);
-        await this.persistCheckpointsForPeer(peerId);
-        if (documents.length < batchSize) break;
-        continue;
-      }
-      if (rows.length) {
-        rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
-      }
-      if (this.cancelled) return;
-      if (rows.length) {
-        throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
+        if (terminalRejection) {
+          await this.reconcileTerminalPushRejection(slice, peerId, terminalRejection);
+          if (this.cancelled) return;
+          for (const document2 of slice) {
+            const id = primaryValue(document2, this.collection.schema.primaryPath);
+            if (id) rejectedIds.add(id);
+          }
+          continue;
+        }
+        if (rows.length) {
+          rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
+        }
+        if (this.cancelled) return;
+        if (rows.length) {
+          throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
+        }
       }
       for (const document2 of documents) {
         const id = primaryValue(document2, this.collection.schema.primaryPath);
-        if (id) await this.demandSidecar?.markDirty?.(this.collection.name, id, false);
+        if (id && !rejectedIds.has(id)) {
+          await this.demandSidecar?.markDirty?.(this.collection.name, id, false);
+        }
         if (this.cancelled) return;
       }
       checkpoint = result?.checkpoint || checkpoint;
