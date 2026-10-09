@@ -36,7 +36,7 @@ resolution fails closed until all referenced credentials exist and decrypt.
 
 Records live only in native `workjet_computer_endpoints`; no endpoint or
 credential reference is projected into browser RxDB. Workjet must use the
-normal typed command plane and existing data boundary for future UI work.
+normal typed command plane and existing data boundary. The shell computer control bridge exposes computer.ssh_key.ensure through business_commands over RxDB/WebRTC, with correlated command/computer identity and public-only output. It rejects injected ownership, inline secret fields and unsupported result fields.
 
 SSH connection example (all identities, host, pin and paths are examples):
 
