@@ -10552,15 +10552,23 @@ function ensureCtoxSmokeBinary() {
           return waitFor(() => {
             const panel = document.querySelector('[data-agent-grant-boundary]');
             const text = panel?.textContent || '';
+            // Settings reloads the native policy. The local facade grant above
+            // is a permission-helper fixture, never a native policy mutation.
+            const nativeGrants = (originalState.governance?.permission_model?.explicit_grants || [])
+              .filter((grant) => grant && grant.active !== false);
+            const rows = panel?.querySelectorAll('tbody tr') || [];
             return {
               ok: Boolean(
-	                panel
-	                  && /Agent- und App-Zugriff/.test(text)
-	                  && /agent_scope_team/.test(text)
-	                  && /Daten lesen/.test(text)
-                  && /Datenbereich Business Commands/.test(text)
+                panel
+                  && /Agent- und App-Zugriff/.test(text)
                   && /Owner\/Admin-Policy/.test(text)
+                  && rows.length === nativeGrants.length
+                  && nativeGrants.every((grant) => text.includes(grant.subject_id))
+                  && (nativeGrants.length > 0 || /Keine Sonderfreigaben/.test(text))
+                  && !panel.querySelector('input, select, textarea, button')
               ),
+              expectedNativeGrantCount: nativeGrants.length,
+              visibleGrantCount: rows.length,
               text: text.trim().slice(0, 1000),
             };
           }, 15000, 'agent scope Settings grant boundary');
