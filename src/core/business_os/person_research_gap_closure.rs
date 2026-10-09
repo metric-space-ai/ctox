@@ -2756,6 +2756,11 @@ fn person_name_quote_backs(field: &str, value: &str, quote: &str) -> bool {
     if !matches!(field, "person_vorname" | "person_nachname" | "person_titel") {
         return true;
     }
+    // Without an academic title the title is the salutation, derived from the
+    // first name (owner 09.10.2026); it is derived, not quoted.
+    if field == "person_titel" && matches!(value.trim().to_lowercase().as_str(), "herr" | "frau") {
+        return true;
+    }
     let words = |text: &str| {
         text.to_lowercase()
             .split(|character: char| !character.is_alphanumeric())
@@ -6540,6 +6545,9 @@ mod tests {
         ));
         // The same absent name must not verify Robert either.
         assert!(!quote_backs_value("person_vorname", "Robert", bnt));
+        assert!(quote_backs_value("person_titel", "Herr", bnt));
+        assert!(quote_backs_value("person_titel", "Frau", bnt));
+        assert!(!quote_backs_value("person_titel", "Prof.", bnt));
         assert!(quote_backs_value("person_vorname", "Norman", bnt));
     }
 
