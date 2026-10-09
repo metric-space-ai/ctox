@@ -2406,7 +2406,9 @@ mod tests {
                 .ascii_serialization(),
             "https://llm.ctox.dev"
         );
-        assert_ne!(catalog.base_url, inference.base_url);
+        // A proxy may serve both protocols at the same upstream origin.
+        // Their resolution purposes must not require different endpoint strings.
+        assert_eq!(inference.base_url, "https://llm.ctox.dev/v1");
         assert_eq!(catalog.provider, inference.provider);
         assert_eq!(catalog.model_id, inference.model_id);
         assert_eq!(catalog.credential_key, inference.credential_key);

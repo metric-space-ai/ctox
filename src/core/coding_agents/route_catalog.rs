@@ -301,24 +301,36 @@ pub(crate) struct NativeModelCatalogObservation {
     pub private_binding: Option<String>,
 }
 
-fn probe_current(root: &Path, route: &InheritedCodingRoute) -> Probe {
-    if let Some(credential) = read_credential(root, route) {
-        let mut probe = fetch(route, &credential, DEADLINE);
-        let current_route = resolve_inherited_catalog_route(root).ok();
-        let current_credential = current_route
-            .as_ref()
-            .and_then(|route| read_credential(root, route));
-        retain_current_result(
-            &mut probe,
-            route,
-            &credential,
-            current_route.as_ref(),
-            current_credential.as_ref().map(|secret| secret.as_str()),
-        );
-        probe
-    } else {
-        Probe::failed(Failure::CredentialUnavailable)
+fn probe_current(root: &Path, route: &InheritedCodingRoute) -> (Probe, Option<String>) {
+    let Some(credential) = read_credential(root, route) else {
+        return (Probe::failed(Failure::CredentialUnavailable), None);
+    };
+    // Recheck the exact endpoint/key pair BEFORE disclosing the captured key.
+    // A credential read must not combine an old endpoint with a changed route.
+    let current_route = resolve_inherited_catalog_route(root).ok();
+    let current_credential = current_route
+        .as_ref()
+        .and_then(|route| read_credential(root, route));
+    if current_route.as_ref() != Some(route)
+        || current_credential.as_ref().map(|secret| secret.as_str()) != Some(credential.as_str())
+    {
+        return (Probe::failed(Failure::RouteChanged), None);
     }
+    let mut probe = fetch(route, &credential, DEADLINE);
+    let current_route = resolve_inherited_catalog_route(root).ok();
+    let current_credential = current_route
+        .as_ref()
+        .and_then(|route| read_credential(root, route));
+    retain_current_result(
+        &mut probe,
+        route,
+        &credential,
+        current_route.as_ref(),
+        current_credential.as_ref().map(|secret| secret.as_str()),
+    );
+    let binding =
+        (probe.failure != Some(Failure::RouteChanged)).then(|| private_binding(route, &credential));
+    (probe, binding)
 }
 
 /// Called only after native Owner/Admin command admission. The observer reads
@@ -327,16 +339,7 @@ fn probe_current(root: &Path, route: &InheritedCodingRoute) -> Probe {
 pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservation> {
     let route = resolve_inherited_catalog_route(root)
         .map_err(|_| anyhow::anyhow!("native model catalog route is unavailable"))?;
-    let before = account_metadata(root)?.map(|metadata| metadata.private_binding);
-    let mut probe = probe_current(root, &route);
-    let after = account_metadata(root)?.map(|metadata| metadata.private_binding);
-    if before != after {
-        probe.failure = Some(Failure::RouteChanged);
-        probe.models = None;
-        probe.http_status = None;
-        probe.retry_after_seconds = None;
-    }
-    let binding = if before == after { before } else { None };
+    let (probe, binding) = probe_current(root, &route);
     let failure = serde_json::to_value(probe.failure)?
         .as_str()
         .map(str::to_owned);
@@ -358,7 +361,7 @@ pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservati
 /// An observation never authorizes a later turn or certifies capacity.
 pub(super) fn inspect(root: &Path) -> anyhow::Result<Value> {
     let route = resolve_inherited_catalog_route(root)?;
-    let probe = probe_current(root, &route);
+    let (probe, _private_binding) = probe_current(root, &route);
     let selected_model_listed = probe
         .models
         .as_ref()
@@ -423,9 +426,9 @@ mod tests {
         );
         let worker = std::thread::spawn(move || {
             let request = server
-                .recv_timeout(Duration::from_secs(8))
+                .recv_timeout(Duration::from_secs(60))
                 .unwrap()
-                .unwrap();
+                .expect("native preflight must reach the isolated upstream");
             assert_eq!(request.url(), "/v1/models");
             assert!(request
                 .headers()
@@ -457,6 +460,48 @@ mod tests {
         }
         assert_eq!(runtime_env::load_runtime_env_map(root.path())?, before);
         assert!(!root.path().join("coding-agents").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn native_catalog_refuses_a_changed_private_route_before_network_io() -> anyhow::Result<()> {
+        use std::collections::BTreeMap;
+        let root = tempfile::tempdir()?;
+        let old_server = Server::http("127.0.0.1:0").unwrap();
+        let new_server = Server::http("127.0.0.1:0").unwrap();
+        let mut settings = BTreeMap::from([
+            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                format!("http://{}/v1", old_server.server_addr()),
+            ),
+            (
+                "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                "fixture-old-private".to_owned(),
+            ),
+        ]);
+        runtime_env::save_runtime_env_map(root.path(), &settings)?;
+        let captured = resolve_inherited_catalog_route(root.path())?;
+        settings.insert(
+            "CTOX_UPSTREAM_BASE_URL".into(),
+            format!("http://{}/v1", new_server.server_addr()),
+        );
+        settings.insert(
+            "CTOX_LLM_PROXY_API_KEY".into(),
+            "fixture-new-private".into(),
+        );
+        runtime_env::save_runtime_env_map(root.path(), &settings)?;
+        let (probe, binding) = probe_current(root.path(), &captured);
+        assert_eq!(probe.failure, Some(Failure::RouteChanged));
+        assert!(probe.http_status.is_none());
+        assert!(probe.models.is_none());
+        assert!(binding.is_none());
+        assert!(old_server.try_recv()?.is_none());
+        assert!(new_server.try_recv()?.is_none());
+        assert_eq!(runtime_env::load_runtime_env_map(root.path())?, settings);
         Ok(())
     }
 
