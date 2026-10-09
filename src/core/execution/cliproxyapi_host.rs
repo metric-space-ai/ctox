@@ -1711,6 +1711,9 @@ pub fn provider_subscription_status(root: &Path) -> serde_json::Value {
                 }),
         );
     }
+    if crate::execution::cliproxyapi_xai::subscription_installed(root) {
+        accounts.push(serde_json::json!({"id": crate::execution::cliproxyapi_xai::ACCOUNT_ID, "provider": "xai", "enabled": true, "ready": true, "status": "authenticated"}));
+    }
     if instance_codex_runtime_config(root).ok().flatten().is_some()
         && !accounts.iter().any(|a| {
             a.get("id").and_then(serde_json::Value::as_str) == Some(INSTANCE_CODEX_ACCOUNT_ID)
@@ -1728,7 +1731,8 @@ pub fn provider_subscription_status(root: &Path) -> serde_json::Value {
             {"id": "codex", "label": "ChatGPT / Codex", "flow": "device_code"},
             {"id": "claude", "label": "Claude", "flow": "browser_callback"},
             {"id": "antigravity", "label": "Google Antigravity", "flow": "browser_callback"},
-            {"id": "kimi", "label": "Kimi Code", "flow": "device_code"}
+            {"id": "kimi", "label": "Kimi Code", "flow": "device_code"},
+            {"id": "xai", "label": "Grok Build", "flow": "device_code"}
         ]
     })
 }

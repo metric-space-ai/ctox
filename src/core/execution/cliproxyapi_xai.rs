@@ -17,6 +17,7 @@ use zeroize::Zeroizing;
 
 const SCOPE: &str = "provider-subscriptions";
 const NAME: &str = "xai-instance-oauth";
+pub const ACCOUNT_ID: &str = "xai-instance-primary";
 pub fn subscription_installed(root: &Path) -> bool {
     crate::secrets::secret_exists(root, SCOPE, NAME).unwrap_or(false)
 }
@@ -349,6 +350,12 @@ async fn execute_route_at(
     // cannot rotate the same refresh token concurrently.
     static AUTH_USE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = AUTH_USE.lock().await;
+    let requested = ctox_cliproxyapi::internal::api::account_selection::requested_account();
+    anyhow::ensure!(
+        requested.as_deref().is_none_or(|id| id == ACCOUNT_ID),
+        "requested Grok account unavailable"
+    );
+    ctox_cliproxyapi::internal::api::account_selection::record_selected(ACCOUNT_ID);
     let encoded = Zeroizing::new(crate::secrets::read_secret_value(root, SCOPE, NAME)?);
     let mut record: Stored = serde_json::from_str(&encoded)?;
     let client = reqwest::Client::builder()
