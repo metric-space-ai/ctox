@@ -1174,6 +1174,21 @@ or rejection of a replaced promise cannot publish over the current bridge.
 Restart and suspend retain leases; explicit collection stop and runtime shutdown
 revoke them. Releasing an old revoked lease cannot decrement a new lease.
 
+Stopping a bridge records `active:false` even when no cached promise remains,
+so heartbeat repair cannot treat a closed module's old active diagnostic as
+live demand. Single and batch repairs recheck the current lease/pin ownership
+after stopping and before queued startup. A repair whose last owner closed
+does not reopen the collection. Late startup is cancelled by its exact bridge
+generation; its callbacks cannot publish readiness or schedule another repair
+over a stopped or replacement bridge. Cancellation is idempotent.
+
+Tickets uses invalidation-only collection subscriptions to schedule its bounded
+refreshes. Subscribing no longer starts an unused full queue/crew snapshot;
+explicit reads retain native policy errors and existing bounded handling.
+`sync-native-read.test.mjs` covers close-during-repair, remaining ownership and
+late startup, and `tickets.test.mjs` exercises actual RxDB invalidation and
+denied explicit reads. These are component checks, not installed acceptance.
+
 A lease exposes the authoritative `bridge` and `subscribeBridge(listener)`, whose
 subscription is released on lease release/revocation. Command readiness follows
 these transitions within its original deadline, without restarting the room or
