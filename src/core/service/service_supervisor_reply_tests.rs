@@ -9,8 +9,13 @@ fn fixture() -> Result<(tempfile::TempDir, QueuedPrompt, String)> {
         crate::business_os::mcp_channel::workjet_dispatch_service_test_fixture()?;
     let task = channels::load_queue_task_for_business_os_command(temp.path(), &command_id)?
         .context("missing native Supervisor task")?;
-    // The shared tool fixture owns a queue lease but has not started execution.
-    // Use the real command transitions before persisting a worker response.
+    // The tool fixture's manual lease has no execution attempt. Release it
+    // through the queue API and acquire the real lease before starting execution.
+    anyhow::ensure!(
+        channels::ack_leased_messages(temp.path(), &[task.message_key.clone()], "pending")? == 1,
+        "native Supervisor fixture lease was not released"
+    );
+    let task = channels::lease_queue_task(temp.path(), &task.message_key, "fixture-service")?;
     for phase in ["leased", "running"] {
         anyhow::ensure!(
             channels::transition_business_command_for_task(
