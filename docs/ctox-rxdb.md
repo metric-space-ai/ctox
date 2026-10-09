@@ -1,5 +1,16 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Selected task history and role changes
+
+The Crew native history observer uses the existing live `sync.mayReadCollection`
+predicate before leasing `ctox_runs` and `ctox_harness_events`, after acquisition,
+and before accepting a native hint or replacement bridge. A role retirement
+releases its exact lease and subscriptions and exposes unavailable history in the
+Crew UI. A typed `COLLECTION_READ_FORBIDDEN` race follows the same retirement;
+uncoded denials and unexpected failures still reach the error handler. No local
+fallback, projection write or permission grant follows a denial. A new authorized
+observation can acquire fresh leases; a retired one never retries on its own.
+
 ### Native Jour fixe narration retries
 
 The native narration reservation is unique per meeting, deck revision and
