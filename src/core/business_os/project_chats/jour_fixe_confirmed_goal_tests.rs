@@ -440,6 +440,119 @@ fn next_preparation_retains_the_real_previous_core_goal_for_the_next_deck() -> a
     assert_eq!(definition["goal"], first["result"]["goal"]);
     assert_eq!(definition["items"][0]["owner"], "Michael");
     assert_eq!(definition["steps"][0]["status"], "pending");
+    assert_eq!(definition["steps"][0]["dispatch"]["emission_attempts"], 0);
+    assert!(definition["steps"][0]["dispatch"]["message_key"].is_null());
+    assert!(definition["steps"][0]["dispatch"]["completed_at"].is_null());
+
+    // Use the same automatic tick as the daemon. A repeated tick must not
+    // create another delivery while this confirmed step is outstanding.
+    let tick = plan::emit_due_steps(root.path())?;
+    assert_eq!(tick.emitted_count, 1);
+    assert_eq!(tick.failure_count, 0);
+    let message = tick.emitted_steps[0].message_key.clone();
+    assert_eq!(plan::emit_due_steps(root.path())?.emitted_count, 0);
+    let queued =
+        super::super::jour_fixe_confirmed_goal::previous_goal_for_deck(root.path(), &next)?;
+    assert_eq!(queued["steps"][0]["status"], "queued");
+    assert_eq!(queued["steps"][0]["dispatch"]["message_key"], message);
+    assert_eq!(queued["steps"][0]["dispatch"]["emission_attempts"], 1);
+
+    // Admit an actual plan-channel lease, then use the native confirmed-plan
+    // session boundary. No fabricated business command or generic MCP grant.
+    let lease_owner = "cycle-test-service";
+    let worker = "cycle-test-worker";
+    let leased = crate::channels::lease_pending_inbound_messages(root.path(), 32, lease_owner)?;
+    assert!(leased.iter().any(|item| item.message_key == message));
+    assert_eq!(
+        crate::channels::record_queue_lease_worker(
+            root.path(),
+            std::slice::from_ref(&message),
+            lease_owner,
+            worker,
+        )?,
+        1
+    );
+    let token = crate::business_os::mcp_channel::issue_internal_confirmed_plan_session(
+        root.path(),
+        &message,
+        worker,
+        "cycle-test-worktree",
+    )?
+    .context("confirmed step did not admit its bound Supervisor")?;
+    let session = crate::business_os::mcp_channel::verify_internal_command_session_token(
+        root.path(),
+        &token,
+    )?;
+    assert_eq!(session["workjet_confirmed_plan"]["project_id"], "project");
+    assert_eq!(
+        session["workjet_confirmed_plan"]["goal_id"],
+        first["result"]["goal"]["goal_id"]
+    );
+
+    let reviewed_result = "Fixture review: the saved answer survived reopening";
+    assert!(plan::complete_step_by_message_key(root.path(), &message, reviewed_result).is_err());
+    // Simulate only the review boundary; this is not a model/installed-product
+    // acceptance claim. This is the same durable terminal proof as the daemon.
+    use crate::core_state::{
+        CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
+    };
+    crate::core_state::guard::enforce_core_transition(
+        &core(root.path())?,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message.clone(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Leased,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-completion-review-terminal-gate".into(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some("cycle-test-reviewed-summary".into()),
+                verification_id: Some("validation-not-required:cycle-test-summary".into()),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: std::collections::BTreeMap::from([
+                ("completion_review_required".into(), "true".into()),
+                ("completion_review_verdict".into(), "pass".into()),
+                ("reviewed_work_terminal_success".into(), "true".into()),
+                (
+                    "validation_not_required_policy_proof".into(),
+                    "validation-not-required:cycle-test-summary".into(),
+                ),
+            ]),
+        },
+    )?;
+    assert_eq!(
+        plan::complete_step_by_message_key(root.path(), &message, reviewed_result)?,
+        1
+    );
+    assert_eq!(
+        plan::complete_step_by_message_key(root.path(), &message, reviewed_result)?,
+        0
+    );
+    assert!(
+        crate::business_os::mcp_channel::verify_internal_command_session_token(root.path(), &token)
+            .is_err()
+    );
+    assert_eq!(plan::emit_due_steps(root.path())?.emitted_count, 0);
+
+    // A fresh read after completion must reach the persisted Core state even
+    // though preparation occurred earlier. The meeting reference stays stable.
+    let finished =
+        super::super::jour_fixe_confirmed_goal::previous_goal_for_deck(root.path(), &next)?;
+    assert_eq!(finished["goal"], first["result"]["goal"]);
+    assert_eq!(finished["status"], "completed");
+    assert_eq!(finished["steps"][0]["status"], "completed");
+    assert_eq!(finished["steps"][0]["result_excerpt"], reviewed_result);
+    assert_eq!(finished["steps"][0]["dispatch"]["message_key"], message);
+    assert_eq!(finished["steps"][0]["dispatch"]["emission_attempts"], 1);
+    assert!(finished["steps"][0]["dispatch"]["completed_at"].is_string());
+    let mut foreign = next.clone();
+    foreign.owner_user_id = "foreign".into();
+    assert!(
+        super::super::jour_fixe_confirmed_goal::previous_goal_for_deck(root.path(), &foreign)
+            .is_err()
+    );
     assert_eq!(goals(root.path())?, 1);
     Ok(())
 }

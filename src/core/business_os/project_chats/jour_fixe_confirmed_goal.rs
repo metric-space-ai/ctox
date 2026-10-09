@@ -193,11 +193,14 @@ pub(in crate::business_os) fn goal_for_deck(
         |r| r.get(0),
     )?;
     let mut statement = core.prepare(
-        "SELECT step_id,title,status,substr(last_result_excerpt,1,420)
+        "SELECT step_id,title,status,substr(last_result_excerpt,1,420),
+        attempt_count,last_message_key,updated_at,completed_at
         FROM planned_steps WHERE goal_id=?1 ORDER BY step_order LIMIT 101",
     )?;
     let steps=statement.query_map([&reference.goal_id],|r|Ok(json!({"id":r.get::<_,String>(0)?,
-        "title":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"result_excerpt":r.get::<_,Option<String>>(3)?})))?
+        "title":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"result_excerpt":r.get::<_,Option<String>>(3)?,
+        "dispatch":{"emission_attempts":r.get::<_,i64>(4)?,"message_key":r.get::<_,Option<String>>(5)?,
+        "updated_at":r.get::<_,String>(6)?,"completed_at":r.get::<_,Option<String>>(7)?}})))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     ensure!(
         steps.len() == todos.items.len(),
