@@ -1955,18 +1955,18 @@ mod tests {
             &RuntimeSwitchTransaction {
                 version: 3,
                 phase: RuntimeSwitchPhase::Requested,
-                requested_model: "openai/gpt-oss-120b".to_string(),
+                requested_model: "Qwen/Qwen3.6-35B-A3B".to_string(),
                 requested_source: runtime_state::InferenceSource::Local,
                 requested_local_runtime: runtime_state::LocalRuntimeKind::Candle,
                 requested_preset: Some("Quality".to_string()),
                 previous_source: Some(runtime_state::InferenceSource::Local),
                 previous_local_runtime: Some(runtime_state::LocalRuntimeKind::Candle),
-                previous_requested_model: Some("Qwen/Qwen3.5-4B".to_string()),
-                previous_active_model: Some("Qwen/Qwen3.5-4B".to_string()),
+                previous_requested_model: Some("Qwen/Qwen3.6-27B".to_string()),
+                previous_active_model: Some("Qwen/Qwen3.6-27B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
                 previous_api_route: None,
-                next_active_model: Some("openai/gpt-oss-120b".to_string()),
+                next_active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 error: None,
@@ -1984,7 +1984,7 @@ mod tests {
             runtime_contract::BackendRuntimeResidency {
                 role: runtime_contract::BackendRole::Chat,
                 phase: runtime_contract::RuntimeResidencyPhase::Starting,
-                model: "openai/gpt-oss-120b".to_string(),
+                model: "Qwen/Qwen3.6-35B-A3B".to_string(),
                 pid: Some(std::process::id()),
                 port: Some(1234),
                 health_path: Some("/health".to_string()),
@@ -2435,9 +2435,9 @@ mod tests {
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
         let mut state = runtime_state::load_or_resolve_runtime_state(&root).unwrap();
         state.source = runtime_state::InferenceSource::Local;
-        state.active_model = Some("zai-org/GLM-4.7-Flash".to_string());
-        state.requested_model = Some("zai-org/GLM-4.7-Flash".to_string());
-        state.engine_model = Some("zai-org/GLM-4.7-Flash".to_string());
+        state.active_model = Some("Qwen/Qwen3.6-27B".to_string());
+        state.requested_model = Some("Qwen/Qwen3.6-27B".to_string());
+        state.engine_model = Some("Qwen/Qwen3.6-27B".to_string());
         state.engine_port = Some(1236);
         state.upstream_base_url = runtime_state::local_upstream_base_url(1236);
         runtime_env::save_runtime_state_projection(&root, &state, &BTreeMap::new()).unwrap();
@@ -2446,18 +2446,18 @@ mod tests {
             &RuntimeSwitchTransaction {
                 version: 3,
                 phase: RuntimeSwitchPhase::Warming,
-                requested_model: "zai-org/GLM-4.7-Flash".to_string(),
+                requested_model: "Qwen/Qwen3.6-27B".to_string(),
                 requested_source: runtime_state::InferenceSource::Local,
                 requested_local_runtime: runtime_state::LocalRuntimeKind::Candle,
                 requested_preset: Some("Quality".to_string()),
                 previous_source: Some(runtime_state::InferenceSource::Local),
                 previous_local_runtime: Some(runtime_state::LocalRuntimeKind::Candle),
-                previous_requested_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
-                previous_active_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
+                previous_requested_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                previous_active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
                 previous_api_route: None,
-                next_active_model: Some("zai-org/GLM-4.7-Flash".to_string()),
+                next_active_model: Some("Qwen/Qwen3.6-27B".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 error: None,
@@ -2469,7 +2469,7 @@ mod tests {
             runtime_contract::BackendRuntimeResidency {
                 role: runtime_contract::BackendRole::Chat,
                 phase: runtime_contract::RuntimeResidencyPhase::Starting,
-                model: "zai-org/GLM-4.7-Flash".to_string(),
+                model: "Qwen/Qwen3.6-27B".to_string(),
                 pid: Some(999_999),
                 port: Some(1236),
                 health_path: Some("/health".to_string()),
@@ -2645,7 +2645,7 @@ mod tests {
     fn local_runtime_selection_does_not_reuse_stale_persisted_plan_for_new_model() {
         let root = make_temp_root();
         let previous_plan = runtime_plan::ChatRuntimePlan {
-            model: "Qwen/Qwen3.5-4B".to_string(),
+            model: "Qwen/Qwen3.6-27B".to_string(),
             preset: runtime_plan::ChatPreset::Quality,
             quantization: "Q6K".to_string(),
             runtime_isq: Some("Q6K".to_string()),
@@ -2709,29 +2709,29 @@ mod tests {
         runtime_plan::store_persisted_chat_runtime_plan(&root, Some(&previous_plan)).unwrap();
         runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let change = apply_runtime_selection(&root, "Qwen/Qwen3.5-9B", Some("quality")).unwrap();
+        let change = apply_runtime_selection(&root, "Qwen/Qwen3.6-35B-A3B", Some("quality")).unwrap();
 
         assert_eq!(
             change.next_state.active_model.as_deref(),
-            Some("Qwen/Qwen3.5-9B")
+            Some("Qwen/Qwen3.6-35B-A3B")
         );
         let persisted_state = runtime_state::load_runtime_state(&root)
             .unwrap()
             .expect("persisted state");
         assert_eq!(
             persisted_state.active_model.as_deref(),
-            Some("Qwen/Qwen3.5-9B")
+            Some("Qwen/Qwen3.6-35B-A3B")
         );
         let persisted_plan = runtime_plan::load_persisted_chat_runtime_plan(&root)
             .unwrap()
             .expect("persisted plan");
-        assert_eq!(persisted_plan.model, "Qwen/Qwen3.5-9B");
+        assert_eq!(persisted_plan.model, "Qwen/Qwen3.6-35B-A3B");
         let fleet_plan = runtime_plan::load_persisted_runtime_fleet_plan(&root)
             .unwrap()
             .expect("persisted fleet plan");
         assert_eq!(
             fleet_plan.chat.as_ref().map(|plan| plan.model.as_str()),
-            Some("Qwen/Qwen3.5-9B")
+            Some("Qwen/Qwen3.6-35B-A3B")
         );
         assert_eq!(
             change.next_state.embedding.configured_model.as_deref(),
@@ -2746,7 +2746,7 @@ mod tests {
     fn rollback_runtime_switch_restores_previous_runtime_selection() {
         let root = make_temp_root();
         let previous_plan = runtime_plan::ChatRuntimePlan {
-            model: "openai/gpt-oss-120b".to_string(),
+            model: "Qwen/Qwen3.6-27B".to_string(),
             preset: runtime_plan::ChatPreset::Quality,
             quantization: "mq4".to_string(),
             runtime_isq: None,
@@ -2836,7 +2836,7 @@ mod tests {
             .expect("rollback change");
         assert_eq!(
             rollback.next_state.active_model.as_deref(),
-            Some("openai/gpt-oss-120b")
+            Some("Qwen/Qwen3.6-27B")
         );
         assert_eq!(rollback.next_state.local_preset.as_deref(), Some("Quality"));
         assert_eq!(
@@ -2846,7 +2846,7 @@ mod tests {
         let restored_plan = runtime_plan::load_persisted_chat_runtime_plan(&root)
             .unwrap()
             .expect("restored plan");
-        assert_eq!(restored_plan.model, "openai/gpt-oss-120b");
+        assert_eq!(restored_plan.model, "Qwen/Qwen3.6-27B");
     }
 
     #[test]
@@ -3218,18 +3218,18 @@ mod tests {
             &RuntimeSwitchTransaction {
                 version: 3,
                 phase: RuntimeSwitchPhase::CutoverReady,
-                requested_model: "Qwen/Qwen3.5-35B-A3B".to_string(),
+                requested_model: "Qwen/Qwen3.6-35B-A3B".to_string(),
                 requested_source: runtime_state::InferenceSource::Local,
                 requested_local_runtime: runtime_state::LocalRuntimeKind::Candle,
                 requested_preset: Some("Performance".to_string()),
                 previous_source: Some(runtime_state::InferenceSource::Local),
                 previous_local_runtime: Some(runtime_state::LocalRuntimeKind::Candle),
-                previous_requested_model: Some("openai/gpt-oss-120b".to_string()),
-                previous_active_model: Some("openai/gpt-oss-120b".to_string()),
+                previous_requested_model: Some("Qwen/Qwen3.6-27B".to_string()),
+                previous_active_model: Some("Qwen/Qwen3.6-27B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
                 previous_api_route: None,
-                next_active_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
+                next_active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 error: None,
@@ -3242,7 +3242,7 @@ mod tests {
             runtime_contract::BackendRuntimeResidency {
                 role: runtime_contract::BackendRole::Chat,
                 phase: runtime_contract::RuntimeResidencyPhase::Active,
-                model: "Qwen/Qwen3.5-35B-A3B".to_string(),
+                model: "Qwen/Qwen3.6-35B-A3B".to_string(),
                 pid: Some(std::process::id()),
                 port: Some(1234),
                 health_path: Some("/health".to_string()),
@@ -3259,10 +3259,10 @@ mod tests {
             version: 5,
             source: runtime_state::InferenceSource::Local,
             local_runtime: runtime_state::LocalRuntimeKind::Candle,
-            base_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
-            requested_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
-            active_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
-            engine_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
+            base_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+            requested_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+            active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+            engine_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
             engine_port: Some(1234),
             configured_context_tokens: Some(65_536),
             realized_context_tokens: Some(65_536),
