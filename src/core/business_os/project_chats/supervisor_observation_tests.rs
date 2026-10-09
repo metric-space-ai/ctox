@@ -346,7 +346,8 @@ fn run_id_is_exposed_only_from_the_canonical_durable_finalization_record() -> an
 }
 
 #[test]
-fn terminal_finalization_timestamps_preserve_native_history_and_run_identity() -> anyhow::Result<()> {
+fn terminal_finalization_timestamps_preserve_native_history_and_run_identity() -> anyhow::Result<()>
+{
     for timestamp in ["1791514245697", "2026-10-09T02:50:45.697Z"] {
         let (root, turn) = fixture()?;
         let db = crate::paths::core_db(root.path());
