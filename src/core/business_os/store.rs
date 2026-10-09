@@ -27344,6 +27344,7 @@ fn drop_counting_projection_clock_triggers(conn: &Connection) -> anyhow::Result<
 
 fn migrate(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(super::domain_effect::SCHEMA)?;
+    conn.execute_batch(super::provider_federation::SCHEMA)?;
     drop_counting_projection_clock_triggers(conn)?;
     let schema = "
         CREATE TABLE IF NOT EXISTS business_records (
