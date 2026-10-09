@@ -20395,6 +20395,7 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("incomplete response returned")
         || normalized.contains("too many requests")
         || normalized.contains("token plan usage limit")
+        || normalized.contains("high demand")
         || normalized.contains("rate limit")
         || normalized.contains("rate_limit")
         || normalized.contains("http 429")
@@ -24420,7 +24421,11 @@ fn apply_review_feedback_to_queue(
 /// HTTP 429 rate limit), not because of anything in the task.
 fn runtime_error_is_provider_capacity(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
+    // The hold sees the summarized error: a 429 arrives as "the model API is
+    // rate-limited", which "rate limit" does not match.
     lower.contains("token plan usage limit")
+        || lower.contains("high demand")
+        || lower.contains("rate-limited")
         || lower.contains("too many requests")
         || lower.contains("rate limit")
         || lower.contains("rate_limit")
@@ -41221,6 +41226,17 @@ Use shell tools to create or update these files."
             "HTTP 429 Too Many Requests"
         ));
         assert!(!runtime_error_is_provider_capacity("database is locked"));
+        // Summarized 429 and MiniMax's exhausted-plan answer (thesen 09.10.2026).
+        let summarized_rate_limit = turn_loop::summarize_runtime_error(
+            "direct session error: exceeded retry limit, last status: 429 Too Many Requests",
+        );
+        assert!(runtime_error_is_provider_capacity(&summarized_rate_limit));
+        let high_demand = "direct session error: ErrorEvent { message: \"We're currently experiencing high demand, which may cause temporary errors.\", codex_error_info: Some(InternalServerError) }";
+        assert!(runtime_error_is_transient_api_failure(high_demand));
+        assert!(runtime_error_is_provider_capacity(high_demand));
+        assert!(runtime_error_is_provider_capacity(
+            &turn_loop::summarize_runtime_error(high_demand)
+        ));
         assert!(!runtime_error_is_provider_capacity(
             "stream disconnected before completion"
         ));

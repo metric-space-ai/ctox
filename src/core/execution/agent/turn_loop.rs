@@ -2255,6 +2255,13 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
     if lower.contains("token plan usage limit") {
         return Some(120);
     }
+    // MiniMax answers with "We're currently experiencing high demand"
+    // (InternalServerError) once the weekly token plan is used up (thesen
+    // 09.10.2026). Treated as terminal it ended ten research tasks on their
+    // first attempt. It is provider capacity, not a fault in the task.
+    if lower.contains("high demand") {
+        return Some(300);
+    }
     if lower.contains("database is locked")
         || lower.contains("database is busy")
         || lower.contains("sqlite_busy")
