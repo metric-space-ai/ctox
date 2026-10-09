@@ -2430,6 +2430,7 @@ impl KimiResponsesHandler {
 /// CTOX-owned extension router. It keeps the portable three-provider router
 /// unchanged while attaching Kimi as a product-integration route.
 pub struct InstanceResponsesRouter {
+    xai_root: Option<PathBuf>,
     default_provider: String,
     portable: Option<Arc<OpenAiResponsesProviderRouter>>,
     kimi: Option<Arc<KimiResponsesHandler>>,
@@ -2467,6 +2468,11 @@ impl OpenAiResponsesRouteHandler for InstanceResponsesRouter {
     ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
         Box::pin(async move {
             let provider = provider.unwrap_or(&self.default_provider).trim();
+            if provider.eq_ignore_ascii_case("xai") {
+                if let Some(root) = &self.xai_root {
+                    return crate::execution::cliproxyapi_xai::handle_route(root, body).await;
+                }
+            }
             if provider.eq_ignore_ascii_case("kimi") {
                 return match &self.kimi {
                     Some(handler) => handler.handle_route(body).await,
@@ -2763,6 +2769,7 @@ fn build_provider_routes(
     };
     Ok(InstanceProviderRoutes {
         responses: Arc::new(InstanceResponsesRouter {
+            xai_root: Some(root.to_path_buf()),
             default_provider: effective.default_provider.clone(),
             portable,
             kimi,
@@ -5127,6 +5134,7 @@ mod tests {
             )
             .unwrap();
         let router = Arc::new(InstanceResponsesRouter {
+            xai_root: None,
             default_provider: "kimi".to_owned(),
             portable: None,
             kimi: Some(Arc::new(KimiResponsesHandler {
@@ -5881,6 +5889,7 @@ mod tests {
             .unwrap(),
         );
         let router = Arc::new(InstanceResponsesRouter {
+            xai_root: None,
             default_provider: "antigravity".to_owned(),
             portable: Some(portable),
             kimi: None,
@@ -5977,6 +5986,7 @@ mod tests {
             )
             .unwrap();
         let router = Arc::new(InstanceResponsesRouter {
+            xai_root: None,
             default_provider: "kimi".to_owned(),
             portable: None,
             kimi: Some(Arc::new(KimiResponsesHandler {
