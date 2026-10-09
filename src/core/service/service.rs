@@ -17514,8 +17514,20 @@ fn route_external_messages_with_priority_dispatch(
         } else {
             prompt_body.clone()
         };
+        let mut queue_task_metadata = message.metadata.clone();
+        // A founder rework answers the original mail: its stored attachments
+        // become readable for this turn as well.
+        if let Some(attachments) = founder_rework_inbound_key
+            .as_deref()
+            .and_then(|key| load_inbound_email_metadata(root, key))
+            .and_then(|metadata| metadata.get("attachments").cloned())
+        {
+            if let Some(object) = queue_task_metadata.as_object_mut() {
+                object.insert("attachments".to_string(), attachments);
+            }
+        }
         let job = QueuedPrompt {
-            queue_task_metadata: message.metadata.clone(),
+            queue_task_metadata,
             preview: preview_text(&prompt),
             source_label,
             goal,
@@ -19115,6 +19127,11 @@ fn render_founder_communication_rework_execution_prompt(
         .unwrap_or_else(|| {
             "Die urspruengliche Founder-/Owner-Mail konnte nicht direkt geladen werden. Rekonstruiere den aktuellen Thread vor der Antwort aus der Kommunikationshistorie.".to_string()
         });
+    // The rework answers the original mail; its attachments are part of it
+    // (thesen 09.10.2026: the Excel of the mail never reached the rework).
+    let attachments = load_inbound_email_metadata(root, inbound_message_key)
+        .map(|metadata| render_inbound_attachments(&metadata))
+        .unwrap_or_default();
     let title = message.subject.trim();
     let title_line = if title.is_empty() {
         String::new()
@@ -19127,6 +19144,7 @@ Vor einer Antwort musst du den aktuellen Thread und die fachliche Lage pruefen. 
 Wenn ein Ergebnis fehlt, erledige die Nacharbeit zuerst; eine reine Umformulierung reicht nicht.\n\n\
 Aktuelle Founder-/Owner-Nachricht:\n\
 {inbound_context}\n\n\
+{attachments}\
 Konkrete Nacharbeit:\n\
 {rework_body}\n\n\
 Ausgabe-Regel:\n\
@@ -19167,6 +19185,21 @@ fn clean_founder_rework_body_for_agent(raw: &str) -> String {
     } else {
         cleaned
     }
+}
+
+/// Metadata of the original inbound mail behind a founder rework (its stored
+/// attachments live there).
+fn load_inbound_email_metadata(root: &Path, inbound_message_key: &str) -> Option<Value> {
+    let db_path = crate::paths::core_db(&root);
+    let conn = channels::open_channel_db(&db_path).ok()?;
+    let raw: String = conn
+        .query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1 AND channel = 'email' AND direction = 'inbound' LIMIT 1",
+            params![inbound_message_key],
+            |row| row.get(0),
+        )
+        .ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 fn load_founder_inbound_context_for_rework(
@@ -45260,6 +45293,68 @@ Use shell tools to create or update these files."
         assert!(prompt.contains("Aktuelle Rework- und Review-Hinweise"));
         assert!(prompt.contains("ask for a concrete affiliate decision"));
         assert!(prompt.contains("do not claim implementation is done"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn founder_rework_prompt_and_turn_carry_the_original_mail_attachments() {
+        let root = temp_root("ctox-founder-rework-attachments");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("open channel db");
+        let attachment_path = root.join("raw/attachments/m1/Recherche-Test.xlsx");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (?1, 'email', 'email:crew@thesen-ag.com', 'thread-m1', 'm1', 'inbound', 'INBOX',
+                'Michael Welsch', 'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Firmen aus der Excel recherchieren.', '', '', 'normal',
+                'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', ?2)"#,
+            rusqlite::params![
+                "email:crew@thesen-ag.com::inbox::m1",
+                serde_json::json!({"attachments": [{
+                    "name": "Recherche-Test.xlsx", "sizeBytes": 1691,
+                    "path": attachment_path.display().to_string()
+                }]})
+                .to_string()
+            ],
+        )
+        .expect("insert inbound mail");
+        let message = channels::RoutedInboundMessage {
+            message_key: "queue:system::rework".to_string(),
+            channel: "queue".to_string(),
+            account_key: "system".to_string(),
+            thread_key: "thread".to_string(),
+            sender_display: "system".to_string(),
+            sender_address: "system".to_string(),
+            subject: "Founder communication rework: Recherche".to_string(),
+            preview: String::new(),
+            body_text: String::new(),
+            external_created_at: String::new(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        };
+        let prompt = render_founder_communication_rework_execution_prompt(
+            &root,
+            &message,
+            "email:crew@thesen-ag.com::inbox::m1",
+            "Review summary: Die Antwort nannte falsche Firmen.",
+        );
+        assert!(prompt.contains("Bitte die Firmen aus der Excel recherchieren."));
+        assert!(prompt.contains(&format!(
+            "- Recherche-Test.xlsx (1691 Bytes): {}",
+            attachment_path.display()
+        )));
+        let metadata = load_inbound_email_metadata(&root, "email:crew@thesen-ag.com::inbox::m1")
+            .expect("inbound metadata");
+        assert_eq!(
+            inbound_attachment_readable_roots(&metadata),
+            vec![attachment_path.parent().unwrap().to_path_buf()]
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
