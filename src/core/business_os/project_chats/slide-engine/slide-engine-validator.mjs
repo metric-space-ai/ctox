@@ -15877,7 +15877,7 @@ function blockElements(block, x, y, width, files, assets) {
   const id2 = (part) => `${block.id}:${part}`;
   if (block.type === "spacer") return [];
   if (block.type === "scene3d") return [{
-    ...base(id2("scene"), "embeddable", x, y, width, Math.min(430, width * 0.65), block.id),
+    ...base(id2("scene"), "embeddable", x, y, width, Math.min(560, width * 0.74), block.id),
     link: `https://learnordie.invalid/embed/${encodeURIComponent(id2("scene"))}`,
     customData: { sourceBlockId: block.id, learnordie: { type: "scene3d", sceneId: block.sceneId, ...block.caption ? { caption: block.caption } : {}, ...block.accent ? { accent: block.accent } : {}, ...block.data !== void 0 ? { data: block.data } : {} } }
   }];
@@ -15985,14 +15985,19 @@ function canvasSceneForSlide(slide, assets = []) {
   const content = slide.blocks.filter((block) => block !== heading);
   const visual = /figure_(right|left)/.test(slide.layout) ? content.find((block) => block.type === "figure" || block.type === "scene3d") : void 0;
   const leftVisual = slide.layout === "technical_figure_left";
+  const sceneVisual = visual?.type === "scene3d";
+  const visualWidth = sceneVisual ? 760 : 660;
+  const visualX = leftVisual ? 88 : sceneVisual ? 752 : 810;
+  const textX = visual && leftVisual ? sceneVisual ? 888 : 810 : 88;
+  const textWidth = visual ? sceneVisual ? 624 : 660 : 1424;
   const body = [];
   let y = bodyTop;
   for (const block of content.filter((item) => item !== visual)) {
-    const next = blockElements(block, visual && leftVisual ? 810 : 88, y, visual ? 660 : 1424, files, assets);
+    const next = blockElements(block, textX, y, textWidth, files, assets);
     body.push(...next);
     y = Math.max(y + (block.type === "spacer" ? 30 : 0), ...next.map((item) => item.y + item.height)) + 28;
   }
-  if (visual) body.push(...blockElements(visual, leftVisual ? 88 : 810, bodyTop + 10, 660, files, assets));
+  if (visual) body.push(...blockElements(visual, visualX, bodyTop + 10, visualWidth, files, assets));
   const bottom = Math.max(bodyTop, ...body.map((item) => item.y + item.height));
   const scale = Math.min(1, (830 - bodyTop) / (bottom - bodyTop || 1));
   for (const item of body) {
