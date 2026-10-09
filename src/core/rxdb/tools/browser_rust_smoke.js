@@ -12694,6 +12694,7 @@ function ensureCtoxSmokeBinary() {
             restrictedTabVisible: Boolean(restrictedTab),
             previewBadgeState: previewBadge?.getAttribute('data-state') || '',
             previewBadgeText: previewBadge?.textContent?.trim() || '',
+            previewBadgeLabel: previewBadge?.getAttribute('aria-label') || previewBadge?.getAttribute('title') || '',
             restrictedBadgeState: restrictedBadge?.getAttribute('data-state') || '',
             restrictedBadgeText: restrictedBadge?.textContent?.trim() || '',
             activeModule: state.activeModule?.id || '',
@@ -12751,7 +12752,7 @@ function ensureCtoxSmokeBinary() {
               && tabs.previewTabVisible
               && !tabs.restrictedTabVisible
               && tabs.previewBadgeState === 'preview'
-              && tabs.previewBadgeText === 'Vorschau',
+              && /\bVorschau\b/i.test(tabs.previewBadgeLabel),
           );
 
           installAudienceModules(outsideSession);
