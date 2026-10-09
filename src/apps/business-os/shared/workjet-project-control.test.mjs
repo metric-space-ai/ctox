@@ -7,6 +7,7 @@ import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from '.
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './workjet-project-kpis-contract.generated.mjs';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './workjet-jour-fixe-contract.generated.mjs';
 import { readWorkjetCalendar } from './workjet-calendar-native.mjs';
+import { validateSupervisorLumaValue } from './workjet-supervisor-luma-contract.generated.mjs';
 
 
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
@@ -251,7 +252,7 @@ function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1'
           id: command.payload.project_id, name: command.payload.name,
           owner_user_id: 'owner-1', status: 'active', created_at_ms: 1_700_000_000_000,
         };
-        for (const field of ['description', 'repo_url', 'public_url', 'info', 'jour_fixe']) {
+        for (const field of ['description', 'repo_url', 'public_url', 'info', 'jour_fixe', 'supervisor_luma_id']) {
           if (Object.hasOwn(command.payload, field) && command.payload[field] !== null) {
             project[field] = command.payload[field];
           }
@@ -266,7 +267,7 @@ function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1'
       },
     },
   };
-  const context = { state, actorContext: (session) => ({ id: session.id }), URL };
+  const context = { state, actorContext: (session) => ({ id: session.id }), URL, validateSupervisorLumaValue };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return {
     commands,
@@ -599,6 +600,62 @@ function projectConfigurationRequest(extra = {}) {
     projectId: 'project-1', title: 'CTOX', ...extra,
   };
 }
+
+test('Supervisor selection uses the generated native corpus without selecting a producer', async () => {
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-supervisor-luma-v1.json', import.meta.url), 'utf8'));
+  for (const { value } of corpus.valid_cases) {
+    const fixture = projectConfigurationFixture();
+    const extra = Object.hasOwn(value, 'supervisor_luma_id') ? { supervisorLumaId: value.supervisor_luma_id } : {};
+    const result = await fixture.invoke(projectConfigurationRequest(extra));
+    assert.equal(Object.hasOwn(fixture.commands[0].payload, 'supervisor_luma_id'), Object.hasOwn(value, 'supervisor_luma_id'));
+    if (Object.hasOwn(value, 'supervisor_luma_id')) {
+      assert.equal(fixture.commands[0].payload.supervisor_luma_id, value.supervisor_luma_id);
+      assert.equal(result.project.supervisorLumaId, value.supervisor_luma_id);
+    } else {
+      assert.equal(Object.hasOwn(result.project, 'supervisorLumaId'), false);
+    }
+    assert.equal(Object.hasOwn(result.project, 'route'), false);
+    assert.equal(Object.hasOwn(result.project, 'model'), false);
+  }
+});
+
+test('Supervisor selection is bounded, typed and refuses execution or account payloads', async () => {
+  for (const value of ['', ' '.repeat(8), 'x'.repeat(161), 7, {}, undefined, 'luma\nother']) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ supervisorLumaId: value })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const key of ['route', 'model', 'nativeAccountReference', 'ownerUserId']) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ supervisorLumaId: 'luma-physics', [key]: 'foreign' })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  const fixture = projectConfigurationFixture();
+  const id = '🦊'.repeat(160);
+  assert.equal((await fixture.invoke(projectConfigurationRequest({ supervisorLumaId: id }))).project.supervisorLumaId, id);
+});
+
+test('Supervisor configuration rejects an unconfirmed selection or unsuccessful clear', async () => {
+  for (const [requested, returned] of [['luma-physics', undefined], ['luma-physics', 'luma-other'], [null, 'luma-old']]) {
+    const fixture = projectConfigurationFixture(receipt => {
+      if (returned === undefined) delete receipt.result.project.supervisor_luma_id;
+      else receipt.result.project.supervisor_luma_id = returned;
+    });
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ supervisorLumaId: requested })), /unmatched supervisor Luma/);
+  }
+});
+
+test('Project list exposes configured Supervisor selection only on explicit configuration reads', async () => {
+  const fixture = nativeProjectListFixture();
+  fixture.context.validateSupervisorLumaValue = validateSupervisorLumaValue;
+  fixture.rows.workjet_projects[0].supervisor_luma_id = 'luma-physics';
+  assert.equal(Object.hasOwn((await fixture.invoke()).projects[0], 'supervisorLumaId'), false);
+  const selected = (await fixture.invoke({ includeConfiguration: true })).projects[0];
+  assert.equal(selected.supervisorLumaId, 'luma-physics');
+  assert.equal(Object.hasOwn(selected, 'model'), false);
+  delete fixture.rows.workjet_projects[0].supervisor_luma_id;
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeConfiguration: true })).projects[0], 'supervisorLumaId'), false);
+});
 
 test('project configuration forwards bounded metadata and returns native fields to Workjet', async () => {
   const fixture = projectConfigurationFixture();

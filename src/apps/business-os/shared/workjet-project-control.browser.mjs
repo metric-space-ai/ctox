@@ -8,6 +8,7 @@ const tests = readFileSync(new URL('./workjet-project-control.test.mjs', import.
 const executionSource = readFileSync(new URL('./workjet-supervisor-execution-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
 const kpiSource = readFileSync(new URL('./workjet-project-kpis-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
 const meetingSource = readFileSync(new URL('./workjet-jour-fixe-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const lumaSource = readFileSync(new URL('./workjet-supervisor-luma-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
 const meetingCorpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json', import.meta.url), 'utf8'));
 const meeting = meetingCorpus.valid_cases.find(item => item.type === 'Meeting').value;
 const start = app.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
@@ -38,7 +39,8 @@ try {
     : route.abort());
   const page = await context.newPage();
   await page.goto('https://workjet-control.test/');
-  const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, ownerSource, configurationSource, executionSource, kpiSource, meetingSource, meeting }) => {
+  const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, ownerSource, configurationSource, executionSource, kpiSource, meetingSource, lumaSource, meeting }) => {
+    const validateSupervisorLumaValue = new Function(lumaSource + '\nreturn validateSupervisorLumaValue;')();
     const assert = {
       ok(value) { if (!value) throw new Error('Expected truthy'); },
       equal(left, right) { if (left !== right) throw new Error(`Expected ${right}, got ${left}`); },
@@ -51,9 +53,10 @@ try {
     const vm = { runInNewContext(code, scope) {
       scope.invoke = new Function('state', 'actorContext', 'newId', 'AbortController',
         'setTimeout', 'clearTimeout', 'PROJECT_KPIS_SCHEMA', 'validateProjectKpiValue',
-        'JOUR_FIXE_SCHEMA', 'validateJourFixeValue', `${controlSource}\nreturn workjetProjectControl;`)(
+        'JOUR_FIXE_SCHEMA', 'validateJourFixeValue', 'validateSupervisorLumaValue', `${controlSource}\nreturn workjetProjectControl;`)(
         scope.state, scope.actorContext, scope.newId, AbortController, setTimeout, clearTimeout,
         scope.PROJECT_KPIS_SCHEMA, scope.validateProjectKpiValue, scope.JOUR_FIXE_SCHEMA, scope.validateJourFixeValue,
+        scope.validateSupervisorLumaValue ?? validateSupervisorLumaValue,
       );
     } };
     const fixture = new Function('assert', 'vm', 'controlSource',
@@ -120,8 +123,8 @@ try {
       results.push('shared deadline aborts both browser query streams');
     } finally { Date.now = originalNow; }
 
-    const configurationFixture = new Function('vm', 'controlSource',
-      `${configurationSource}\nreturn projectConfigurationFixture;`)(vm, controlSource);
+    const configurationFixture = new Function('vm', 'controlSource', 'validateSupervisorLumaValue',
+      `${configurationSource}\nreturn projectConfigurationFixture;`)(vm, controlSource, validateSupervisorLumaValue);
     const configurationRequest = { action: 'project.configure', commandId: 'alias-save',
       projectId: 'project-1', title: 'CTOX', info: { summary: 'Saved via verified alias' } };
     const aliasConfiguration = configurationFixture(() => {}, 'owner@example.org');
@@ -129,6 +132,19 @@ try {
     assert.equal(saved.project.info.summary, configurationRequest.info.summary);
     assert.equal(aliasConfiguration.commands[0].client_context.actor.id, 'owner@example.org');
     results.push('browser configuration accepts the native canonical Owner for a verified alias');
+    const lumaConfiguration = configurationFixture();
+    const lumaSaved = await lumaConfiguration.invoke({ ...configurationRequest, supervisorLumaId: 'luma-physics' });
+    assert.equal(lumaSaved.project.supervisorLumaId, 'luma-physics');
+    assert.equal(lumaConfiguration.commands[0].payload.supervisor_luma_id, 'luma-physics');
+    const lumaCleared = await lumaConfiguration.invoke({ ...configurationRequest, supervisorLumaId: null });
+    assert.equal(lumaCleared.project.supervisorLumaId, null);
+    assert.equal(lumaConfiguration.commands[1].payload.supervisor_luma_id, null);
+    let badLumaRejected = false;
+    try { await lumaConfiguration.invoke({ ...configurationRequest, supervisorLumaId: 7 }); }
+    catch { badLumaRejected = true; }
+    assert.ok(badLumaRejected);
+    assert.equal(lumaConfiguration.commands.length, 2);
+    results.push('browser selection/clear uses bounded native Luma metadata without a route or producer');
     for (const mutate of [
       receipt => { receipt.result.project.owner_user_id = 'foreign'; },
       receipt => { delete receipt.result.owner_user_id; },
@@ -329,9 +345,9 @@ try {
     return results;
   }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd),
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
-    configurationSource: tests.slice(configurationStart, configurationEnd),
+    configurationSource: tests.slice(configurationStart, configurationEnd), lumaSource,
     executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 30);
+  assert.equal(results.length, 31);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };

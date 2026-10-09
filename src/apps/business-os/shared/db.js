@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261010-shell-v2-supervisor-owner-followup';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261010-shell-v2-supervisor-luma-control';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

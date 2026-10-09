@@ -1,26 +1,27 @@
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261010-shell-v2-supervisor-owner-followup';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-supervisor-owner-followup';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-supervisor-owner-followup';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-supervisor-owner-followup';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-supervisor-owner-followup';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-supervisor-owner-followup';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-supervisor-owner-followup';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-supervisor-owner-followup';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-supervisor-owner-followup';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-supervisor-luma-control';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-supervisor-luma-control';
+import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-supervisor-luma-control';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-supervisor-luma-control';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-supervisor-luma-control';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-supervisor-luma-control';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-supervisor-luma-control';
+import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/app-lifecycle.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -29,20 +30,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/permissions.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/branding.js?v=20261010-shell-v2-supervisor-luma-control';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/presentation.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -53,9 +54,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-supervisor-luma-control';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-supervisor-luma-control';
+import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -63,27 +64,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/maintenance-state.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/workspace-session.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/taskbar-pins.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/workjet-theme.js?v=20261010-shell-v2-supervisor-luma-control';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-supervisor-luma-control';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-supervisor-luma-control';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-supervisor-luma-control';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-supervisor-luma-control';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -91,14 +92,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-supervisor-owner-followup';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/startup-deadlines.js?v=20261010-shell-v2-supervisor-luma-control';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-supervisor-luma-control';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-supervisor-luma-control';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-supervisor-owner-followup';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-supervisor-owner-followup';
+} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-supervisor-luma-control';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-supervisor-luma-control';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -119,7 +120,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261010-shell-v2-supervisor-owner-followup';
+const APP_BUILD = '20261010-shell-v2-supervisor-luma-control';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -14636,7 +14637,7 @@ async function workjetProjectControl(request = {}) {
   if (action === 'project.configure') {
     assertWorkjetProjectPayloadKeys(request, new Set([
       'action', 'commandId', 'projectId', 'title',
-      'description', 'repoUrl', 'publicUrl', 'info', 'jourFixe',
+      'description', 'repoUrl', 'publicUrl', 'info', 'jourFixe', 'supervisorLumaId',
     ]));
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
     const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
@@ -14680,6 +14681,13 @@ async function workjetProjectControl(request = {}) {
     }
     const project = boundedWorkjetProjectResult(nativeProject, { includeConfiguration: true });
     if (!project) throw new Error('Workjet project configuration returned no project.');
+    if (Object.hasOwn(payload, 'supervisor_luma_id')) {
+      const selected = project.supervisorLumaId ?? null;
+      if (selected !== payload.supervisor_luma_id) {
+        throw new Error('Workjet project configuration returned an unmatched supervisor Luma.');
+      }
+      return { action, commandId, project: Object.freeze({ ...project, supervisorLumaId: selected }) };
+    }
     return { action, commandId, project };
   }
 
@@ -15039,10 +15047,12 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {
     ...(Object.hasOwn(value, 'public_url') ? { publicUrl: value.public_url } : {}),
     ...(Object.hasOwn(value, 'info') ? { info: value.info } : {}),
     ...(Object.hasOwn(value, 'jour_fixe') ? { jourFixe: value.jour_fixe } : {}),
+    ...(Object.hasOwn(value, 'supervisor_luma_id') ? { supervisorLumaId: value.supervisor_luma_id } : {}),
   });
   for (const [nativeKey, key] of [
     ['description', 'description'], ['repo_url', 'repoUrl'], ['public_url', 'publicUrl'],
     ['info', 'info'], ['jour_fixe', 'jourFixe'],
+    ['supervisor_luma_id', 'supervisorLumaId'],
   ]) {
     if (Object.hasOwn(metadata, nativeKey)) result[key] = metadata[nativeKey];
   }
@@ -15051,6 +15061,15 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {
 
 function boundedWorkjetProjectMetadata(request) {
   const result = {};
+  if (Object.hasOwn(request, 'supervisorLumaId')) {
+    const value = request.supervisorLumaId;
+    const valid = validateSupervisorLumaValue('ProjectSupervisorLuma', { supervisor_luma_id: value });
+    if (!valid.ok || value === undefined || (typeof value === 'string'
+      && (!value.trim() || /[\u0000-\u001f\u007f]/u.test(value)))) {
+      throw new Error('Invalid Workjet project supervisorLumaId.');
+    }
+    result.supervisor_luma_id = value === null ? null : value.trim();
+  }
   for (const [key, nativeKey] of [
     ['description', 'description'], ['repoUrl', 'repo_url'], ['publicUrl', 'public_url'],
     ['info', 'info'], ['jourFixe', 'jour_fixe'],
