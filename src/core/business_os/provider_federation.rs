@@ -785,7 +785,10 @@ mod catalog_tests;
 #[path = "provider_models.rs"]
 mod models;
 
-pub(crate) use models::{capture_consumable_model, with_consumable_model, ConsumableModel};
+pub(crate) use models::{
+    capture_consumable_model, resolve_supervisor_model, with_consumable_model, ConsumableModel,
+    SupervisorModelEligibility,
+};
 
 #[path = "provider_projection.rs"]
 mod projection;
