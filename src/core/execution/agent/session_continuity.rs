@@ -122,6 +122,7 @@ pub(crate) struct SessionThreadSpec<'a> {
     pub cwd: &'a Path,
     pub base_instructions: &'a str,
     pub disable_active_tools: bool,
+    pub read_only_sandbox: bool,
     pub disable_mcp_servers: bool,
     pub thread_config: Option<&'a HashMap<String, JsonValue>>,
     pub persistent_worker: bool,
@@ -322,7 +323,11 @@ async fn resume_identified_thread<C: DirectSessionControlClient>(
             cwd: Some(spec.cwd.to_string_lossy().to_string()),
             approval_policy: Some(ctox_protocol::protocol::AskForApproval::Never.into()),
             approvals_reviewer: None,
-            sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
+            sandbox: Some(if spec.read_only_sandbox {
+                ctox_app_server_protocol::SandboxMode::ReadOnly
+            } else {
+                ctox_app_server_protocol::SandboxMode::WorkspaceWrite
+            }),
             config: None,
             base_instructions: Some(spec.base_instructions.to_string()),
             developer_instructions: None,
@@ -383,7 +388,11 @@ pub(crate) async fn start_session_thread<C: DirectSessionControlClient>(
             model_provider: spec.model_provider.map(str::to_string),
             cwd: Some(spec.cwd.to_string_lossy().to_string()),
             approval_policy: Some(ctox_protocol::protocol::AskForApproval::Never.into()),
-            sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
+            sandbox: Some(if spec.read_only_sandbox {
+                ctox_app_server_protocol::SandboxMode::ReadOnly
+            } else {
+                ctox_app_server_protocol::SandboxMode::WorkspaceWrite
+            }),
             config: thread_start_config(spec),
             base_instructions: Some(spec.base_instructions.to_string()),
             dynamic_tools: spec.disable_active_tools.then(Vec::new),
@@ -770,6 +779,7 @@ mod tests {
             cwd: Path::new("/tmp"),
             base_instructions: "base",
             disable_active_tools: false,
+            read_only_sandbox: false,
             disable_mcp_servers: false,
             thread_config: None,
             persistent_worker: true,
@@ -785,12 +795,64 @@ mod tests {
             cwd: Path::new("/tmp"),
             base_instructions: "base",
             disable_active_tools: false,
+            read_only_sandbox: false,
             disable_mcp_servers: false,
             thread_config: None,
             persistent_worker: false,
             durable_guest: false,
             persistent_thread_name: None,
         }
+    }
+
+    #[tokio::test]
+    async fn thread_start_and_resume_preserve_read_only_sandbox_and_tool_policy() -> Result<()> {
+        let id = "00000000-0000-0000-0000-000000000001";
+        for read_only in [true, false] {
+            for disable_tools in [true, false] {
+                let mut spec = isolated_spec();
+                spec.read_only_sandbox = read_only;
+                spec.disable_active_tools = disable_tools;
+                let client = ScriptedControlClient::new(vec![start_ok(id)]);
+                let mut seq = RequestIdSeq::new();
+                assert_eq!(
+                    start_session_thread(&client, &mut seq, &spec, Duration::from_secs(1)).await?,
+                    id
+                );
+                let request = &client.params()[0];
+                assert_eq!(
+                    request["sandbox"],
+                    if read_only {
+                        "read-only"
+                    } else {
+                        "workspace-write"
+                    }
+                );
+                assert_eq!(request["modelProvider"], "openai");
+                assert_eq!(request["baseInstructions"], "base");
+                if disable_tools {
+                    assert_eq!(request["dynamicTools"], serde_json::json!([]));
+                } else {
+                    assert!(request.get("dynamicTools").is_none_or(JsonValue::is_null));
+                }
+                let client = ScriptedControlClient::new(vec![resume_ok(id, None)]);
+                let mut seq = RequestIdSeq::new();
+                assert_eq!(
+                    resume_identified_thread(&client, &mut seq, &spec, id, Duration::from_secs(1))
+                        .await?,
+                    id
+                );
+                assert_eq!(
+                    client.params()[0]["sandbox"],
+                    if read_only {
+                        "read-only"
+                    } else {
+                        "workspace-write"
+                    }
+                );
+                assert_eq!(client.methods(), vec!["thread/resume"]);
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]

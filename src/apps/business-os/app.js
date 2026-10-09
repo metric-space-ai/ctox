@@ -1,6 +1,7 @@
 import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261009-shell-v2-supervisor-luma-contract';
 import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-supervisor-luma-contract';
 import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-supervisor-luma-contract';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261009-shell-v2-supervisor-luma-contract';
 import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-supervisor-luma-contract';
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-supervisor-luma-contract';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-supervisor-luma-contract';
@@ -13898,6 +13899,17 @@ async function workjetProjectControl(request = {}) {
   }
   if (action.startsWith('project.presentation.')) {
     return workjetPresentationControl(action, request, { requestSession, requestDb, ownerUserId });
+  }
+  if (action.startsWith('instance.grok.')) {
+    const sync = state.sync;
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
+    return requestWorkjetGrok(sync, request, () => {
+      if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync
+        || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
+        throw new Error('Grok instance or authority changed.');
+      }
+    });
   }
   if (action === 'project.jour_fixe.speech') {
     const sync = state.sync;

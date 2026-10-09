@@ -91,6 +91,7 @@ mod rxdb_peer_transfer_publication;
 mod rxdb_peer_transfer_publication_tests;
 mod transfer_publish;
 pub(crate) use transfer_publish::publish_native_file;
+mod rxdb_peer_grok;
 mod rxdb_peer_jour_fixe_speech;
 mod rxdb_peer_workjet_devices;
 pub mod server;
