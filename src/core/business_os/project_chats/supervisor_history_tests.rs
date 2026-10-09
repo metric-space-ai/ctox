@@ -29,17 +29,30 @@ fn supervisor_history_paginates_real_native_turns_after_another_send_and_reader_
     let first = submit(root.path(), "question-one", "First fixture question")?;
     let second = submit(root.path(), "question-two", "Second fixture question")?;
     let third = submit(root.path(), "question-three", "Third fixture question")?;
-    assert_ne!(first["command_id"],second["command_id"]);
-    assert_ne!(first["command_id"],third["command_id"]);
-    assert_ne!(first["task_id"],second["task_id"]);
+    assert_ne!(first["command_id"], second["command_id"]);
+    assert_ne!(first["command_id"], third["command_id"]);
+    assert_ne!(first["task_id"], second["task_id"]);
     let old = super::supervisor_turns::control(
-        root.path(),"watch-earlier-after-new-send","owner","watch",
+        root.path(),
+        "watch-earlier-after-new-send",
+        "owner",
+        "watch",
         json!({"project_id":"project","thread_id":THREAD,"target_command_id":first["command_id"]}),
     )?;
-    assert_eq!(old["status"],"completed");
-    for field in ["command_id","task_id","execution_phase","status","queue_status","attempt","terminal"] {
-        assert_eq!(old["result"]["turn"][field],first[field],
-            "sending a distinct message must not restart or cancel the earlier turn: {field}");
+    assert_eq!(old["status"], "completed");
+    for field in [
+        "command_id",
+        "task_id",
+        "execution_phase",
+        "status",
+        "queue_status",
+        "attempt",
+        "terminal",
+    ] {
+        assert_eq!(
+            old["result"]["turn"][field], first[field],
+            "sending a distinct message must not restart or cancel the earlier turn: {field}"
+        );
     }
 
     let conn = Connection::open(crate::paths::core_db(root.path()))?;
@@ -139,10 +152,15 @@ fn supervisor_history_denies_foreign_owner_forged_cursor_and_excess_request_fiel
     .is_err());
     let mut conn = Connection::open(crate::paths::core_db(root.path()))?;
     let held = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    held.execute("UPDATE business_command_aggregates SET result_json='null' WHERE command_id=?1",
-        [turn["command_id"].as_str().unwrap()])?;
-    let snapshot = read(root.path(),"owner",json!({}))?;
-    assert_eq!(snapshot["history_page"]["turns"][0]["command_id"],turn["command_id"]);
+    held.execute(
+        "UPDATE business_command_aggregates SET result_json='null' WHERE command_id=?1",
+        [turn["command_id"].as_str().unwrap()],
+    )?;
+    let snapshot = read(root.path(), "owner", json!({}))?;
+    assert_eq!(
+        snapshot["history_page"]["turns"][0]["command_id"],
+        turn["command_id"]
+    );
     held.rollback()?;
     conn.execute(
         "UPDATE business_command_aggregates SET intent_json=
