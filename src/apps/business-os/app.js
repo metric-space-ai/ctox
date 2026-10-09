@@ -75,9 +75,9 @@ import {
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
+} from './shared/workjet-theme.js?v=20261009-shell-v2-presentation-revisions';
 import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-presentation-revisions';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-presentation-revisions';
 import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-presentation-revisions';
 import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-presentation-revisions';
 import {
