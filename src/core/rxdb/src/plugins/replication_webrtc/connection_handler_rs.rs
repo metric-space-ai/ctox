@@ -5148,6 +5148,13 @@ mod tests {
                 "stale token must not enter"
             ))
             .is_none());
+        let retired = handler
+            .peers
+            .lock()
+            .remove("consumer-authority-fixture")
+            .expect("original fixture peer is installed");
+        assert_eq!(retired.generation, 1);
+        drop(retired);
         let replacement = install_test_connection(&handler, "consumer-authority-fixture", 2).await;
         handler.set_peer_capability_token(&replacement, "admitted-a".into());
         assert!(handler
