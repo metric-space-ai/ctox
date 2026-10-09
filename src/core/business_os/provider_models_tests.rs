@@ -313,3 +313,43 @@ fn provider_selection_and_exclusions_survive_store_reopen_without_secret_or_iden
     assert_eq!(expected["accounts"][0]["credentialReady"], true);
     Ok(())
 }
+
+#[test]
+fn captured_binding_rejects_policy_catalog_identity_and_private_configuration_changes() -> Result<()>
+{
+    let f = Fixture::new()?;
+    let state = f.adopt(&[account("native")])?;
+    let id = account_id(&state).to_owned();
+    observe(&f, &id, 1, &[CURRENT], 100)?;
+    select_models(&f, &[CURRENT], 101)?;
+    let facts = f.facts("consumer");
+    let captured = consumable_model(&f.conn, &facts, &id, 1, CURRENT, 101)?;
+    let unchanged = consumable_model(&f.conn, &facts, &id, 1, CURRENT, 101)?;
+    assert_same_binding(&captured, &unchanged)?;
+    assert_eq!(captured.account().account_id, id);
+    assert_eq!(captured.model(), CURRENT);
+    assert_eq!(captured.catalog_checked_at_ms(), 100);
+
+    let mut changed_identity = facts.clone();
+    changed_identity.device_id = "another-device".into();
+    let current = consumable_model(&f.conn, &changed_identity, &id, 1, CURRENT, 101)?;
+    assert!(assert_same_binding(&captured, &current).is_err());
+
+    // Removing and restoring the same choice cannot resurrect an old grant.
+    select_models(&f, &[], 101)?;
+    select_models(&f, &[CURRENT], 101)?;
+    let current = consumable_model(&f.conn, &facts, &id, 1, CURRENT, 101)?;
+    assert!(assert_same_binding(&captured, &current).is_err());
+    let captured = current;
+
+    observe(&f, &id, 1, &[CURRENT], 102)?;
+    let current = consumable_model(&f.conn, &facts, &id, 1, CURRENT, 103)?;
+    assert!(assert_same_binding(&captured, &current).is_err());
+    let captured = current;
+
+    // Model equality never substitutes for the holder-private configuration.
+    set_native_binding(&f.conn, &id, Some(&"a".repeat(64)))?;
+    let current = consumable_model(&f.conn, &facts, &id, 1, CURRENT, 103)?;
+    assert!(assert_same_binding(&captured, &current).is_err());
+    Ok(())
+}

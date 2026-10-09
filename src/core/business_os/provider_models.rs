@@ -244,9 +244,66 @@ pub(super) fn project(conn: &Connection, owner: &str, accounts: &mut [Value]) ->
 /// Sealed native context for one exact model; it contains the holder-private
 /// selector and must never become a renderer/forwarding DTO.
 pub(crate) struct ConsumableModel {
-    pub(crate) account: ConsumableAccount,
-    pub(crate) model: String,
-    pub(crate) catalog_checked_at_ms: i64,
+    account: ConsumableAccount,
+    model: String,
+    catalog_checked_at_ms: i64,
+    consumer: ConsumerFacts,
+    private_configuration_binding: Option<String>,
+    catalog_fingerprint: Vec<u8>,
+}
+
+fn assert_same_binding(expected: &ConsumableModel, current: &ConsumableModel) -> Result<()> {
+    ensure!(
+        expected.consumer == current.consumer
+            && expected.account.account_id == current.account.account_id
+            && expected.account.holder_instance_id == current.account.holder_instance_id
+            && expected.account.provider == current.account.provider
+            && expected.account.private_local_account_id
+                == current.account.private_local_account_id
+            && expected.account.account_revision == current.account.account_revision
+            && expected.account.policy_revision == current.account.policy_revision
+            && expected.model == current.model
+            && expected.catalog_checked_at_ms == current.catalog_checked_at_ms
+            && expected.private_configuration_binding == current.private_configuration_binding
+            && expected.catalog_fingerprint == current.catalog_fingerprint,
+        "captured model binding changed"
+    );
+    Ok(())
+}
+
+impl ConsumableModel {
+    pub(crate) fn account(&self) -> &ConsumableAccount {
+        &self.account
+    }
+    pub(crate) fn model(&self) -> &str {
+        &self.model
+    }
+    pub(crate) fn catalog_checked_at_ms(&self) -> i64 {
+        self.catalog_checked_at_ms
+    }
+
+    /// Revalidate a captured selection around a later bounded dispatch or
+    /// publication. An identity, policy, catalog or private binding change
+    /// retires it even if the model was removed and subsequently reselected.
+    /// No await or network/secret API reentry is permitted inside apply.
+    pub(crate) fn with_current<T>(
+        &self,
+        authority: &AdmittedConsumerAuthority,
+        apply: impl FnOnce(&ConsumerFacts, &ConsumableModel) -> Result<T>,
+    ) -> Result<T> {
+        authority.with_current(|facts, conn| {
+            let current = consumable_model(
+                conn,
+                facts,
+                &self.account.account_id,
+                self.account.account_revision,
+                &self.model,
+                store::now_ms() as i64,
+            )?;
+            assert_same_binding(self, &current)?;
+            apply(facts, &current)
+        })
+    }
 }
 
 fn consumable_model(
@@ -283,6 +340,12 @@ fn consumable_model(
         catalog_checked_at_ms: catalog["lastSuccessAtMs"]
             .as_i64()
             .context("catalog time missing")?,
+        consumer: facts.clone(),
+        private_configuration_binding: native_binding(conn, id)?,
+        catalog_fingerprint: {
+            use sha2::Digest;
+            sha2::Sha256::digest(serde_json::to_vec(&catalog)?).to_vec()
+        },
     })
 }
 
@@ -307,6 +370,27 @@ pub(crate) fn with_consumable_model<T>(
             store::now_ms() as i64,
         )?;
         apply(facts, &selected)
+    })
+}
+
+/// Capture only from the real admitted transport. This object is not a
+/// durable worker execution lease and cannot be reconstructed from wire JSON.
+pub(crate) fn capture_consumable_model(
+    authority: &AdmittedConsumerAuthority,
+    account_id: &str,
+    expected_account_revision: i64,
+    model: &str,
+) -> Result<ConsumableModel> {
+    bounded_id(account_id)?;
+    authority.with_current(|facts, conn| {
+        consumable_model(
+            conn,
+            facts,
+            account_id,
+            expected_account_revision,
+            model,
+            store::now_ms() as i64,
+        )
     })
 }
 
