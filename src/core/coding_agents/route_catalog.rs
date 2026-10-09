@@ -322,6 +322,61 @@ mod tests {
     }
 
     #[test]
+    fn inherited_account_metadata_requires_an_unchanged_private_snapshot() {
+        let original = route("https://llm.ctox.dev/v1");
+        let metadata = native_metadata_from_current(
+            &original,
+            Some("fixture-secret"),
+            Some(&original),
+            Some("fixture-secret"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(metadata.provider, "ctox_proxy");
+        let changed = route("https://llm.ctox.dev/v2");
+        for (current, credential) in [
+            (Some(&changed), Some("fixture-secret")),
+            (Some(&original), Some("other-private")),
+            (None, None),
+        ] {
+            let error = native_metadata_from_current(
+                &original,
+                Some("fixture-secret"),
+                current,
+                credential,
+            )
+            .err()
+            .unwrap()
+            .to_string();
+            assert_eq!(error, "native main account configuration changed");
+            assert!(!error.contains("fixture-secret"));
+            assert!(!error.contains("other-private"));
+        }
+    }
+
+    #[test]
+    fn inherited_account_metadata_does_not_invent_an_account_without_credentials() {
+        let original = route("https://llm.ctox.dev/v1");
+        let oversized = "x".repeat(8193);
+        for credential in [
+            None,
+            Some(""),
+            Some(" "),
+            Some("invalid\nkey"),
+            Some(oversized.as_str()),
+        ] {
+            assert!(native_metadata_from_current(
+                &original,
+                credential,
+                Some(&original),
+                credential,
+            )
+            .unwrap()
+            .is_none());
+        }
+    }
+
+    #[test]
     fn live_models_decode_only_complete_bounded_ids() {
         let body = br#"{"data":[{"id":"MiniMax-M3","private":"ignored"},{"id":"MiniMax-M3"}]}"#;
         assert_eq!(
