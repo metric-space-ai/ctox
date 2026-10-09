@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 128] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 129] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -378,6 +378,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 128] = [
     "ctox.workjet.project.supervisor.turn.submit",
     "ctox.workjet.project.supervisor.turn.watch",
     "ctox.workjet.project.supervisor.turn.capabilities",
+    "ctox.workjet.project.supervisor.turn.history",
     "ctox.workjet.jour_fixe.prepare",
     "ctox.workjet.jour_fixe.deck.publish",
     "ctox.workjet.jour_fixe.comment.add",
@@ -1311,6 +1312,7 @@ impl CentralCommandPolicyRequirement {
         } else if matches!(
             command_type,
             "ctox.workjet.project.supervisor.turn.watch"
+                | "ctox.workjet.project.supervisor.turn.history"
                 | "ctox.workjet.jour_fixe.meeting.read"
                 | "ctox.workjet.presentation.read"
         ) {
@@ -1834,7 +1836,8 @@ fn dispatch_business_command(
         "ctox.workjet.project.supervisor.turn.submit"
         | "ctox.workjet.project.supervisor.turn.watch"
         | "ctox.workjet.project.supervisor.turn.cancel"
-        | "ctox.workjet.project.supervisor.turn.capabilities" => {
+        | "ctox.workjet.project.supervisor.turn.capabilities"
+        | "ctox.workjet.project.supervisor.turn.history" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let mut project_session = session.clone();
             let user = project_session

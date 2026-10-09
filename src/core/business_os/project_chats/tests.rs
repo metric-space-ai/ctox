@@ -24,6 +24,8 @@ mod presentation;
 mod recovery;
 #[path = "supervisor_tests.rs"]
 mod supervisor;
+#[path = "supervisor_history_tests.rs"]
+mod supervisor_history;
 #[path = "supervisor_observation_tests.rs"]
 mod supervisor_observation;
 #[path = "supervisor_turn_tests.rs"]
