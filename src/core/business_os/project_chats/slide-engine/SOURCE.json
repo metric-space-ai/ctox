@@ -2,7 +2,7 @@
   "component": "@workjet/slide-engine validator",
   "source_repository": "https://github.com/metric-space-ai/workjet",
   "source_path": "packages/slide-engine",
-  "source_commit": "67594c1843d3e025e91a7a767da3843d9bde9515",
+  "source_commit": "b3009e6ff61b883885afdf374ccfee590396051a",
   "build": "node packages/slide-engine/scripts/build-validator.mjs (esbuild 0.28.1, ESM, platform node, target node22)",
   "bundle": "slide-engine-validator.mjs",
   "bundle_sha256": "7c5d491de2cfe22d70b32e719012e635c38a965fe966778f3335b2ebff87dfc6",
