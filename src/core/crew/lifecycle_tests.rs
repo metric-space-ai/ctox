@@ -8,7 +8,7 @@ fn crew_idle_retention_does_not_compete_with_an_active_writer() -> Result<()> {
     let conn = Connection::open(&path)?;
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
-        CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT);
+        CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT);
         CREATE TABLE worker_attempt_finalizations(attempt_id TEXT PRIMARY KEY)",
     )?;
     ensure_schema(&conn)?;
