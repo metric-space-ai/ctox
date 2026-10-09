@@ -3151,6 +3151,24 @@ async fn run_native_peer(
                 let workjet_device_root = root.clone();
                 super::rxdb_peer_transfer_publication::register(pool, &root)?;
                 super::rxdb_peer_jour_fixe_speech::register(pool, &root)?;
+                let calendar_read_root = root.clone();
+                pool.register_auxiliary_request_handler(
+                    super::mcp_channel::WORKJET_CALENDAR_READ_METHOD,
+                    Arc::new(move |_peer_identity, capability_token, params| {
+                        let root = calendar_read_root.clone();
+                        Box::pin(async move {
+                            tokio::task::spawn_blocking(move || {
+                                super::mcp_channel::read_workjet_calendar_webrtc(
+                                    &root,
+                                    &capability_token,
+                                    params,
+                                )
+                            })
+                            .await
+                            .map_err(|_| "CALENDAR_READ_UNAVAILABLE".to_string())?
+                        })
+                    }),
+                )?;
                 let business_data_root = root.clone();
 
                 let business_data_database = Arc::clone(&database);

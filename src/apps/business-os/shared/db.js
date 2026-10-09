@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261009-shell-v2-native-calendar-read';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

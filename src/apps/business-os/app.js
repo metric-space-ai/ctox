@@ -1,22 +1,23 @@
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-native-calendar-read';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-native-calendar-read';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-native-calendar-read';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-native-calendar-read';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-native-calendar-read';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-native-calendar-read';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-native-calendar-read';
+import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-native-calendar-read';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-native-calendar-read';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-native-calendar-read';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-native-calendar-read';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-native-calendar-read';
+import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-native-calendar-read';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/app-lifecycle.js?v=20261009-shell-v2-native-calendar-read';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -25,20 +26,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/permissions.js?v=20261009-shell-v2-native-calendar-read';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/branding.js?v=20261009-shell-v2-native-calendar-read';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-native-calendar-read';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/presentation.js?v=20261009-shell-v2-native-calendar-read';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -49,9 +50,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-native-calendar-read';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-native-calendar-read';
+import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-native-calendar-read';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -59,27 +60,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/maintenance-state.js?v=20261009-shell-v2-native-calendar-read';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/workspace-session.js?v=20261009-shell-v2-native-calendar-read';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/taskbar-pins.js?v=20261009-shell-v2-native-calendar-read';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/workjet-theme.js?v=20261009-shell-v2-native-calendar-read';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-native-calendar-read';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-native-calendar-read';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-native-calendar-read';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-native-calendar-read';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -87,14 +88,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/startup-deadlines.js?v=20261009-shell-v2-native-calendar-read';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-native-calendar-read';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-native-calendar-read';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-rxdb-native-owned-terminal';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-rxdb-native-owned-terminal';
+} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-native-calendar-read';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-native-calendar-read';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -112,7 +113,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261009-shell-v2-rxdb-native-owned-terminal';
+const APP_BUILD = '20261009-shell-v2-native-calendar-read';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13715,7 +13716,19 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
+  if (action === 'project.calendar.accounts.read' || action === 'project.calendar.events.read') {
+    const sync = state.sync;
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
+    return readWorkjetCalendar(sync, request, () => {
+      if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync
+        || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
+        throw new Error('Calendar scope changed.');
+      }
+    });
+  }
   if (action === 'project.jour_fixe.narration.read') {
+
     validateNarrationRead(request);
     const requestSync = state.sync;
     const instance = boundedWorkjetProjectText(

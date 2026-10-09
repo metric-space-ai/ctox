@@ -1,5 +1,15 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+
+Registered account-calendar reads use `ctox.workjet.calendar.read.v1` as a typed,
+read-only auxiliary request on the `communication_accounts` WebRTC lane. The
+native peer derives actor/role from the browser capability, enforces collection
+read access and canonical mailbox ownership or explicit sharing, and rechecks
+both after provider I/O. The shell exposes `project.calendar.accounts.read` and
+`project.calendar.events.read` to the existing Workjet guest; no second external
+MCP grant, caller identity or HTTP browser data bridge is required. Calendar
+request/page validators are generated from `workjet-calendar-v1.json` by
+`src/core/rxdb/tools/build_workjet_jour_fixe_contract.mjs`.
 Native checkpoint handoff uses the existing admitted control-only WebRTC pool
 for signed 8KiB blocks, with current source disclosure and target receive checks.
 The same-UID `ctox sync handoff-copy` control socket carries only identifiers and

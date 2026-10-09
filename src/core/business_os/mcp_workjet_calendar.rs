@@ -12,6 +12,99 @@ use wire::WireValidate;
 
 pub(super) const ACCOUNTS_TOOL: &str = "business_os.calendar_accounts";
 pub(super) const EVENTS_TOOL: &str = "business_os.calendar_events";
+pub(crate) const WEBRTC_METHOD: &str = "ctox.workjet.calendar.read.v1";
+
+#[derive(Deserialize)]
+#[serde(tag = "action")]
+enum WebRtcReadRequest {
+    #[serde(rename = "accounts")]
+    Accounts(wire::CalendarAccountsReadRequest),
+    #[serde(rename = "events")]
+    Events(wire::CalendarEventsReadRequest),
+}
+
+/// Borrow the existing browser identity, never an MCP token or caller actor.
+pub(crate) fn read_webrtc(
+    root: &Path,
+    capability_token: &str,
+    params: Vec<Value>,
+) -> Result<Value, String> {
+    let result = (|| -> anyhow::Result<Value> {
+        anyhow::ensure!(params.len() == 1, "one calendar read is required");
+        anyhow::ensure!(
+            serde_json::to_vec(&params)?.len() <= 2048,
+            "calendar read too large"
+        );
+        let request: WebRtcReadRequest = serde_json::from_value(params[0].clone())?;
+        let (actor, role) = store::verify_webrtc_capability_actor(root, capability_token)
+            .ok_or_else(|| anyhow::anyhow!("calendar browser authority unavailable"))?;
+        anyhow::ensure!(
+            store::capability_allows_collection_permission(
+                root,
+                capability_token,
+                "communication_accounts",
+                BusinessOsPermission::DataRead,
+            ),
+            "calendar collection read denied"
+        );
+        let (request_id, action, tool, args) = match request {
+            WebRtcReadRequest::Accounts(read) => {
+                read.validate().map_err(anyhow::Error::msg)?;
+                (read.request_id, "accounts", ACCOUNTS_TOOL, json!({}))
+            }
+            WebRtcReadRequest::Events(read) => {
+                read.validate().map_err(anyhow::Error::msg)?;
+                (
+                    read.request_id,
+                    "events",
+                    EVENTS_TOOL,
+                    json!({"account_id":read.account_id,"start_ms":read.start_ms,"end_ms":read.end_ms}),
+                )
+            }
+        };
+        let context = McpChannelRequestContext {
+            channel: "business_os_webrtc".into(),
+            surface: "workjet_calendar".into(),
+            actor: actor.clone(),
+            workspace: "browser".into(),
+            tool: tool.into(),
+            request_id: request_id.clone(),
+            confirmation_state: McpConfirmationState::NotRequired,
+            trusted_role: Some(role.clone()),
+            trusted_role_source: Some("webrtc_capability".into()),
+            trusted_managed_read_scope: None,
+            trusted_managed_instance_id: None,
+        };
+        // The existing helper enforces canonical owner/shared-account policy,
+        // drops SQLite reads before provider I/O and rechecks the mailbox after it.
+        let data = execute(root, &context, tool, &args, None)?;
+        match action {
+            "accounts" => serde_json::from_value::<wire::CalendarAccountsPage>(data.clone())?
+                .validate()
+                .map_err(anyhow::Error::msg)?,
+            _ => serde_json::from_value::<wire::CalendarEventsPage>(data.clone())?
+                .validate()
+                .map_err(anyhow::Error::msg)?,
+        }
+        anyhow::ensure!(
+            store::verify_webrtc_capability_actor(root, capability_token)
+                .ok_or_else(|| anyhow::anyhow!("calendar browser authority unavailable"))?
+                == (actor, role)
+                && store::capability_allows_collection_permission(
+                    root,
+                    capability_token,
+                    "communication_accounts",
+                    BusinessOsPermission::DataRead,
+                ),
+            "calendar browser authority changed"
+        );
+        Ok(
+            json!({"schema":wire::CONTRACT_SCHEMA,"request_id":request_id,"action":action,"data":data}),
+        )
+    })();
+    // Neither provider bodies nor capability material may enter transport errors.
+    result.map_err(|_| "CALENDAR_READ_UNAVAILABLE".to_string())
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EmptyRequest {}
@@ -224,6 +317,86 @@ pub(super) fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn calendar_browser_reads_use_the_capability_actor_and_recheck_shared_ownership(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        for actor in ["owner", "shared", "foreign"] {
+            store::tests::seed_business_user(root.path(), actor, "admin")?;
+        }
+        let save = |shared: Vec<String>| -> anyhow::Result<()> {
+            crate::inference::runtime_env::save_runtime_env_map(
+                root.path(),
+                &std::collections::BTreeMap::from([(
+                    email_accounts::REGISTRY_ENV_KEY.into(),
+                    serde_json::to_string(&vec![
+                        email_accounts::EmailAccountConfig {
+                            address: "mine@example.test".into(),
+                            owner_user_id: "owner".into(),
+                            shared_user_ids: Some(shared),
+                            provider: "ews".into(),
+                            ..Default::default()
+                        },
+                        email_accounts::EmailAccountConfig {
+                            address: "unowned@example.test".into(),
+                            ..Default::default()
+                        },
+                    ])?,
+                )]),
+            )
+        };
+        save(vec!["shared".into()])?;
+        let issued_at_ms = i64::try_from(store::now_ms())?;
+        let issue = |actor| {
+            store::issue_business_os_capability_token(root.path(), actor, issued_at_ms)
+                .map(|issued| issued.0)
+        };
+        let owner = issue("owner")?;
+        let shared = issue("shared")?;
+        let foreign = issue("foreign")?;
+        let request = json!({"action":"accounts","request_id":"read-1"});
+        for token in [&owner, &shared] {
+            let read = read_webrtc(root.path(), token, vec![request.clone()])
+                .map_err(anyhow::Error::msg)?;
+            assert_eq!(read["schema"], wire::CONTRACT_SCHEMA);
+            assert_eq!(read["request_id"], "read-1");
+            assert_eq!(read["data"]["accounts"].as_array().unwrap().len(), 1);
+            assert_eq!(read["data"]["accounts"][0]["id"], "mine@example.test");
+        }
+        assert_eq!(
+            read_webrtc(root.path(), &foreign, vec![request.clone()]).unwrap()["data"]["accounts"],
+            json!([])
+        );
+        // This foreign event request must fail before any provider request.
+        assert!(read_webrtc(root.path(), &foreign, vec![json!({"action":"events","request_id":"read-2","account_id":"mine@example.test","start_ms":1,"end_ms":2})]).is_err());
+        save(vec![])?;
+        assert_eq!(
+            read_webrtc(root.path(), &shared, vec![request.clone()]).unwrap()["data"]["accounts"],
+            json!([])
+        );
+        for forged in [
+            json!({"action":"accounts","request_id":"read-1","actor":"owner"}),
+            json!({"action":"accounts","request_id":"read-1","_context":{"role":"chef"}}),
+            json!({"action":"events","request_id":"read-1","account_id":"mine@example.test","start_ms":2,"end_ms":1}),
+        ] {
+            assert_eq!(
+                read_webrtc(root.path(), &owner, vec![forged]).unwrap_err(),
+                "CALENDAR_READ_UNAVAILABLE"
+            );
+        }
+        assert!(read_webrtc(root.path(), &owner, vec![]).is_err());
+        assert!(read_webrtc(root.path(), &owner, vec![request.clone(), request.clone()]).is_err());
+        assert_eq!(
+            read_webrtc(root.path(), "not-a-capability", vec![request.clone()]).unwrap_err(),
+            "CALENDAR_READ_UNAVAILABLE"
+        );
+        store::open_store(root.path())?.execute(
+            "UPDATE business_users SET active=0 WHERE user_id='owner'",
+            [],
+        )?;
+        assert!(read_webrtc(root.path(), &owner, vec![request]).is_err());
+        Ok(())
+    }
     #[test]
     fn calendar_shared_user_and_verified_alias_are_record_scoped_and_revocable(
     ) -> anyhow::Result<()> {
