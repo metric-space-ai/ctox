@@ -13726,11 +13726,8 @@ fn upsert_rxdb_collection_record_with_writer(
     let explicit_deletion_aliases =
         ["deleted", "is_deleted"].map(|alias| payload.get(alias).is_some());
     if let Some(existing_json) = conn
-        .query_row(
-            &format!("SELECT data FROM {table} WHERE id = ?1"),
-            [record_id],
-            |row| row.get::<_, String>(0),
-        )
+        .prepare_cached(&format!("SELECT data FROM {table} WHERE id = ?1"))?
+        .query_row([record_id], |row| row.get::<_, String>(0))
         .optional()?
     {
         existing_row = true;
@@ -13849,18 +13846,16 @@ fn upsert_rxdb_collection_record_with_writer(
         .map(|index| format!("?{index}"))
         .collect::<Vec<_>>()
         .join(", ");
-    conn.execute(
-        &format!(
-            "INSERT INTO {table} ({columns}) VALUES ({placeholders})
-             ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
-            columns = columns.join(", "),
-            updates = updates.join(", "),
-            guard = canonical_rxdb_table_upsert_guard_sql(table, "data")
-                .map(|guard| format!(" WHERE {guard}"))
-                .unwrap_or_default(),
-        ),
-        params_from_iter(values),
-    )?;
+    conn.prepare_cached(&format!(
+        "INSERT INTO {table} ({columns}) VALUES ({placeholders})
+         ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
+        columns = columns.join(", "),
+        updates = updates.join(", "),
+        guard = canonical_rxdb_table_upsert_guard_sql(table, "data")
+            .map(|guard| format!(" WHERE {guard}"))
+            .unwrap_or_default(),
+    ))?
+    .execute(params_from_iter(values))?;
     Ok(())
 }
 

@@ -36,7 +36,10 @@ same per-row merge/envelope functions. Source commit precedes mirror delivery;
 notifications follow mirror commit. A failed mirror chunk rolls back together,
 retains completed chunks in the dedupe cache and restores the unclaimed replay
 cursor so its unpublished rows stay eligible. No writer reservation spans a full
-pass or both independently delivered stores.
+pass or both independently delivered stores. Repeated source upserts and mirror
+lookups/upserts reuse the connection's bounded prepared-statement cache. The
+SQL, bound values, secret redaction and per-execution canonical version guards
+remain unchanged; caching does not reuse a policy or write decision.
 
 Cold event replay also looks up the plan at each event's emission. A partial
 Core index on task/time/event ID for worker.plan_updated skips unrelated
