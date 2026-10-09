@@ -306,6 +306,20 @@ function researchFieldLabel(key) {
   return REVIEW_FIELD_LABELS[String(key || '').trim()] || String(key || '').trim();
 }
 
+// Nutzer schreiben den Rechercheablauf mit den Namen, die sie in der App sehen
+// ("Besucheradresse"), nicht mit Datenbankschluesseln (Owner 09.10.2026). Der
+// Agent bekommt die Zuordnung mit; "E-Mail" gibt es fuer Firma und Person,
+// deshalb steht der Bereich davor.
+const REVIEW_FIELD_GROUP_LABELS = Object.freeze(Object.fromEntries(
+  RESEARCH_FIELD_GROUPS.flatMap((group) => group.fields.map(([key]) => [key, group.label])),
+));
+function researchFieldLabelMap(keys) {
+  return Object.fromEntries(keys.map((key) => [
+    key,
+    `${REVIEW_FIELD_GROUP_LABELS[key] || 'Feld'}: ${researchFieldLabel(key)}`,
+  ]));
+}
+
 // Owner 23.09.2026: Nicht jedes Feld muss fuer die Sellify-Uebergabe
 // vorliegen. Optionale Felder werden weiter recherchiert und, wenn belegt,
 // uebertragen, blockieren die Freigabe aber nicht und zaehlen nicht als offen.
@@ -488,17 +502,28 @@ const REPLICATED_COLLECTIONS = Object.freeze([
 ]);
 const DEFAULT_RESEARCH_POLICY = [
   "0. Zuerst prüfen, ob Unternehmen und Ansprechpartner bereits in Sellify vorhanden sind. Der Sellify-Bestand ist der Ausgangswert jedes Feldes und zugleich eine Quelle. Er wird nur geändert, wenn eine externe Quelle etwas anderes belegt.",
-  "1. Identität und Registerdaten zuerst klären: Firmierung (firma_name) einschließlich früherer Namen und Umfirmierungen (firma_fruehere_namen), Rechtsform, Aktivitätsstatus (firma_aktivitaetsstatus) sowie Geschäftsführung (firma_geschaeftsfuehrung) und Prokura (firma_prokura) aus dem Register. Deutschland: Handelsregister, Northdata, Bundesanzeiger, CompanyHouse. Österreich: Firmenbuch/JustizOnline, FirmenABC, Northdata. Schweiz: Zefix/Handelsregister, SHAB, Moneyhouse, Northdata.",
-  "2. Danach Website, Anschrift und Kommunikation ergänzen: Domain (firma_domain) zuerst, weil Impressum und Unternehmensseite ohne sie nicht auffindbar sind. Dann Anschrift (firma_anschrift), Besucheranschrift (firma_besucheranschrift) und Postanschrift (firma_postanschrift) getrennt führen, Postfach (firma_postfach), PLZ (firma_plz), Ort (firma_ort), Land (firma_land), Firmen-E-Mail (firma_email), Telefon (firma_telefon) und Fax (firma_fax, am besten über Google). Priorität der Adresssuche in allen drei Ländern: 1. Impressum der offiziellen Website, 2. FirmenABC (Österreich) bzw. Zefix (Schweiz) bzw. D&B Hoovers (Deutschland, Schweiz), 3. Northdata als letzte Quelle.",
-  "3. Danach die Kennzahlen prüfen: Branche bzw. WZ-Code (wz_code), Umsatz (umsatz), Mitarbeiterzahl (mitarbeiter) und die Geschäftstätigkeit (firma_geschaeftstaetigkeit). WZ-Code in allen drei Ländern ausschließlich aus D&B Hoovers und/oder Leadfeeder; Deutschland zusätzlich Bundesanzeiger. Die Geschäftstätigkeit über D&B Hoovers oder eine Google-Suche nach Unternehmensname und Tätigkeit klären; aus der Homepage einen Firmensteckbrief erstellen (firma_homepage_fact_sheet).",
-  "4. Zuletzt die Ansprechpartner recherchieren: Anrede/Geschlecht (person_geschlecht), Titel (person_titel), Vorname (person_vorname), Nachname (person_nachname), Funktion (person_funktion), Position (person_position), E-Mail (person_email), Telefon (person_telefon), LinkedIn-Profil (person_linkedin) und XING-Profil (person_xing). E-Mail-Adressen aus dem Unternehmensmuster ableiten und über MailTester und Experte validieren (person_email_validation). Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Prokura, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
-  "4a. Die E-Mail-Pruefung (person_email_validation) uebernimmt CTOX selbst: nach jedem Rueckschreiben prueft der Daemon jede gelieferte Kontaktadresse ueber experte.de und haengt das Ergebnis dem Kontakt an. Liefere deshalb jede gefundene persoenliche Adresse als person_email mit Beleg und person_key. Versuche die Pruefung NICHT ueber `ctox web read` und setze person_email_validation NICHT auf no_match, nur weil du sie nicht selbst ausfuehren kannst.",
-  "5. Belegregel (Owner 23.09.2026): Für jedes Feld genügt EINE passende belegte Quelle mit URL und wörtlichem Zitat, das den konkreten Wert tatsächlich nennt. Weitere unabhängige Quellen stärken den Wert und werden angezeigt, sind aber keine Pflicht. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
-  "5a. Selbstauskünfte wie firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder belegt die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als no_match verwerfen mit der Begründung, er stehe nur auf der eigenen Website. Eine persönliche E-Mail-Adresse, die genau so auf der offiziellen Unternehmensseite steht, ist belegt; eine SMTP-Prüfung ist dafür nicht nötig.",
-  "5c. Belege als reine JSON-Liste senden: \"sources\": [ { … }, { … } ]. Kein Trägerobjekt wie {\"item\": [ … ]} — so verpackte Belege gehen beim Speichern verloren. Das gilt auch für result.person_records und result.evidence.",
+  "1. Identität und Registerdaten zuerst klären: Firmenname einschließlich früherer Namen und Umfirmierungen, Rechtsform, Aktivitätsstatus sowie Geschäftsführung und Prokura aus dem Register. Nur amtierende Geschäftsführer und Prokuristen übernehmen; Ausgeschiedene („nicht mehr Geschäftsführer“, „ausgeschieden“, „Prokura erloschen“) nie eintragen. Deutschland: Handelsregister, Northdata, Bundesanzeiger, CompanyHouse. Österreich: Firmenbuch/JustizOnline, FirmenABC, Northdata. Schweiz: Zefix/Handelsregister, SHAB, Moneyhouse, Northdata.",
+  "2. Danach Website, Anschrift und Kommunikation: zuerst die Domain, weil Impressum und Unternehmensseite ohne sie nicht auffindbar sind. Dann Anschrift, PLZ, Ort, Länderkennzeichen, Firmen-E-Mail und Firmen-Telefon. Priorität der Adresssuche in allen drei Ländern: 1. Impressum der offiziellen Website, 2. FirmenABC (Österreich) bzw. Zefix (Schweiz) bzw. D&B Hoovers (Deutschland, Schweiz), 3. Northdata als letzte Quelle.",
+  "2a. Besucheradresse und Postadresse: Nennt keine Quelle eine abweichende Besucher- oder Postadresse, sind beide gleich der Anschrift. Dann beide mit dem Wert und dem Beleg der Anschrift eintragen und als Begründung „keine abweichende Angabe gefunden“ vermerken. Nur eine ausdrücklich abweichende Angabe (z. B. „Besucheranschrift:“, „Postanschrift:“, „Lieferadresse“) wird getrennt geführt.",
+  "2b. Optionale Felder wie Fax, Postfach und frühere Namen nur eintragen, wenn sie bei der Suche nach den anderen Feldern auftauchen. Für sie keine eigene Suche; ihr Fehlen blockiert nichts.",
+  "3. Danach die Kennzahlen: WZ-Code, Umsatz, Mitarbeiter und Geschäftstätigkeit. WZ-Code in allen drei Ländern ausschließlich aus D&B Hoovers und/oder Leadfeeder; Deutschland zusätzlich Bundesanzeiger. Kennzahlen gehören zur exakten juristischen Person des Leads, nicht zum Konzern. Umsatz und Mitarbeiter mit Geschäftsjahr im Zitat; den jüngsten Jahresabschluss im Bundesanzeiger bevorzugen, D&B-Schätzwerte als Schätzung kennzeichnen. Die Geschäftstätigkeit über D&B Hoovers oder eine Google-Suche nach Unternehmensname und Tätigkeit klären; aus der Homepage einen Firmensteckbrief erstellen (Homepage-Fact-Sheet).",
+  "4. Zuletzt die Ansprechpartner: Vorname, Nachname, Funktion, Position, E-Mail, Telefon, LinkedIn und XING. Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Prokura, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
+  "4a. Geschlecht und Titel jeder Person selbst bestimmen, nicht suchen: Das Geschlecht ergibt sich aus dem Vornamen (männlich/weiblich). Als Beleg die Quelle der Person mit dem Zitat, das ihren Vornamen nennt, und als Begründung „aus dem Vornamen abgeleitet“. Nur bei einem nicht eindeutigen Vornamen (z. B. Kim, Andrea im Ausland) das Feld als prüfbedürftig melden. Titel ist ein akademischer Titel, wenn eine Quelle ihn nennt (z. B. Dr., Prof., Dipl.-Ing.); sonst „Herr“ oder „Frau“ nach dem Geschlecht.",
+  "4b. E-Mail der Person: Steht die Adresse wörtlich auf der Unternehmensseite oder in einer anderen Quelle, ist sie damit belegt. Sonst die Adresse aus dem Muster anderer bekannter Adressen derselben Firma bilden: Adressen anderer Mitarbeiter auf der Website, in Sellify, in Registern, Pressemitteilungen, Leadfeeder oder RocketReach (z. B. vorname.nachname@, v.nachname@, vorname@). Umlaute und ß wie im Muster umsetzen (ü → ue). Die gebildete Adresse über den Adapter experte-de prüfen, bei unklarem Ergebnis einmal über mailtester-com. Nur ein Ergebnis „gültig“ bzw. „zustellbar“ belegt die Adresse: dann die E-Mail eintragen mit dem Prüfergebnis als Beleg und der Musterquelle als zweitem Beleg, und das Ergebnis in E-Mail-Prüfung festhalten. Bei „ungültig“ das nächste plausible Muster prüfen, höchstens drei Varianten je Person. Bei „unbekannt“ oder Catch-All die beste Variante eintragen und als prüfbedürftig melden. Jede Adresse höchstens einmal je Prüfdienst; ist ein Dienst blockiert, das Feld als prüfbedürftig mit diesem Grund melden.",
+  "4c. Telefon der Person: Durchwahl aus Website, Signatur, Pressemitteilung, Leadfeeder oder RocketReach. Ohne eigene Durchwahl bleibt das Feld leer; die Zentrale gehört in Firmen-Telefon, nicht zur Person.",
+  "5. Belegregel (Owner 07.10.2026: „Qualität geht immer vor Quantität. Wenn es nur eine Quelle gibt, ist die Recherche nicht gut, das sollte nur im Notfall sein.“): Für jedes Feld, das Dritte unabhängig prüfen können (Firmenname, Anschrift, PLZ, Ort, Länderkennzeichen, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, Prokura, WZ-Code, Umsatz, Mitarbeiter), zwei unabhängige Quellen (verschiedene Anbieter) mit URL und wörtlichem Zitat, das den konkreten Wert nennt. Nur wenn nach allen dafür genannten Quellen nur eine den Wert belegt, den Wert mit Begründung „single source: …“ eintragen. So viele Quellen wie möglich, jede aber nur einmal. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
+  "5a. Selbstauskünfte wie Domain, Firmen-E-Mail, Firmen-Telefon, Fax, Postfach, Besucheradresse, Postadresse, Homepage-Fact-Sheet sowie alle Felder der Ansprechpartner belegt die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als nicht gefunden verwerfen mit der Begründung, er stehe nur auf der eigenen Website.",
   "5b. Werte in der Schreibweise der Quelle übernehmen, mit Umlauten und ß. Keine Umschrift: Nürnberg, nicht Nuernberg; Lechstraße, nicht Lechstrasse. Schweizer Adressen behalten ihr ss.",
-  "6. Bei Zugriffshürden Web-Stack-Unlocking verwenden; bei Anmeldung den CTOX-Browser öffnen und erst nach sichtbarer Bestätigung des Nutzers mit derselben persistenten Sitzung fortsetzen. Eine Quelle, die blockiert oder vorübergehend nicht erreichbar ist, belegt nichts — weder den Wert noch sein Fehlen.",
+  "5c. Belege als reine JSON-Liste senden: \"sources\": [ { … }, { … } ]. Kein Trägerobjekt wie {\"item\": [ … ]}. Das gilt auch für result.person_records und result.evidence.",
+  "6. Bei Zugriffshürden Web-Stack-Unlocking verwenden; bei Anmeldung den CTOX-Browser öffnen und erst nach sichtbarer Bestätigung des Nutzers mit derselben persistenten Sitzung fortsetzen. Eine Quelle, die blockiert oder vorübergehend nicht erreichbar ist, belegt nichts, weder den Wert noch sein Fehlen.",
   "7. Unklare oder widersprüchliche Daten als prüfbedürftig markieren und nicht automatisch an Sellify übergeben. Bei Widerspruch zwischen zwei Quellen das Feld leer lassen und beide Werte mit ihrer Quelle festhalten.",
+  "8. Abschlussbericht: Nach dem letzten Rückschreiben den gespeicherten Lead-Datensatz neu lesen (get_record) und den Bericht ausschließlich daraus erstellen. Zahlen (belegt, nicht gefunden, offen), Personen, Kontakte, E-Mail-Prüfungen, LinkedIn-/XING-Profile und Quellen nur so nennen, wie sie im gespeicherten Datensatz stehen. Was nicht gespeichert werden konnte, ausdrücklich als nicht gespeichert benennen.",
+  "",
+  "Tipps aus den bisherigen Läufen:",
+  "- Zuerst die registrierten Adapter der Quellen ausführen (ctox_web_scrape execute), erst ohne Adapter den Browser. Liefert ein Adapter nichts oder ist er veraltet, das Skript reparieren und testen, dann ausführen.",
+  "- Jede Quelle je Feldgruppe genau einmal fragen. Keine Wiederholung bei blocked, authorization_required oder temporary_unreachable; die nächste Quelle nehmen. „Nicht gefunden“ erst, wenn alle für das Feld genannten Quellen gefragt sind, mit diesen Versuchen als attempts.",
+  "- Registerfelder (Regel 5) erst zurückschreiben, wenn die zweite Quelle gefragt wurde.",
+  "- Zwischenstände früh sichern: nach den Registerdaten einmal zurückschreiben, am Ende höchstens zwei weitere Rückschreibungen.",
 ].join('\n');
 const CURRENT_USER_COPY = Object.freeze({
   de: {
@@ -1768,7 +1793,17 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
     state.lastLeadReloadChanged = Boolean(leadChanges.changedIds.size || leadChanges.removedIds.size);
     state.leadListRows = leads.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
     const revisions = new Map(leads.map(lead => [lead.id, lead._rev]));
+    const vorherigeAuswahl = state.leads.find(lead => lead.id === state.selectedLeadId) || null;
     state.leads = sameBinding ? state.leads.filter(lead => revisions.get(lead.id) === lead._rev) : [];
+    // Eine neue Revision des gewaehlten Leads leerte bisher das Detail ("wird
+    // geladen"), bis die volle Fassung nachkam: die Rechercheangaben
+    // verschwanden und erschienen einen Augenblick spaeter wieder (thesen
+    // 09.10.2026). Bis dahin bleibt die bisherige Fassung sichtbar. Sie dient
+    // nur der Anzeige; Abgleich und Aktionen lesen state.leads.
+    if (sameBinding && vorherigeAuswahl && revisions.has(vorherigeAuswahl.id)
+      && !state.leads.some(lead => lead.id === vorherigeAuswahl.id)) {
+      state.detailAnzeigeVorher = vorherigeAuswahl;
+    }
     if (state.lastLeadReloadChanged) invalidateChangedRecipientEligibility(state.leads);
   }
   if (!fresh.has('leads') && !fresh.has('imports')) return;
@@ -3389,7 +3424,9 @@ function renderDetail() {
   const tabsHost = pane.querySelector('[data-detail-tabs]');
   const body = pane.querySelector('[data-detail-body]');
   if (!title || !body) return;
-  const lead = selectedLead();
+  const aktuelleFassung = selectedLead();
+  if (aktuelleFassung || state.detailAnzeigeVorher?.id !== state.selectedLeadId) state.detailAnzeigeVorher = null;
+  const lead = aktuelleFassung || state.detailAnzeigeVorher;
   if (!lead) {
     // Waehrend eines Sync-Ticks ist die Lead-Liste kurz leer. Solange eine
     // Auswahl existiert und die Spalte Inhalt zeigt, bleibt sie stehen.
@@ -10180,6 +10217,9 @@ async function researchLead(id, options = {}) {
         country: normalizedResearchCountry(lead.country),
         mode: researchMode,
         fields: nurFelder || activeResearchFields(),
+        field_labels: researchFieldLabelMap(nurFelder || activeResearchFields()),
+        field_labels_note: 'Der Rechercheablauf nennt Felder mit ihrem Namen aus der App. field_labels ordnet jedem '
+          + 'Feldschlüssel diesen Namen zu ("Bereich: Name"). Zurückgeschrieben wird immer unter dem Feldschlüssel.',
         ...(fortsetzung ? { continuation: fortsetzung } : {}),
         include_private: enabledPrivateResearchSources(),
         person_priorities: [...PERSON_RESEARCH_PRIORITIES],
