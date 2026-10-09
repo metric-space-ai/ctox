@@ -1,0 +1,34 @@
+{
+  "schema": "ctox.workjet.supervisor_luma.v1",
+  "contract_version": 1,
+  "types": {
+    "ProjectSupervisorLuma": {
+      "fields": {
+        "supervisor_luma_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 160,
+          "optional": true
+        }
+      }
+    }
+  },
+  "commands": {
+    "ctox.workjet.project.upsert": {
+      "supervisor_luma_id": "opaque instance-wide workerProfiles[].id; omission preserves; null clears; not execution authority"
+    }
+  },
+  "valid_cases": [
+    {"type": "ProjectSupervisorLuma", "value": {}},
+    {"type": "ProjectSupervisorLuma", "value": {"supervisor_luma_id": null}},
+    {"type": "ProjectSupervisorLuma", "value": {"supervisor_luma_id": "luma-physics"}}
+  ],
+  "invalid_cases": [
+    {"type": "ProjectSupervisorLuma", "value": {"supervisor_luma_id": ""}},
+    {"type": "ProjectSupervisorLuma", "value": {"supervisor_luma_id": 7}},
+    {"type": "ProjectSupervisorLuma", "value": {"supervisor_luma_id": {"id": "luma-physics"}}},
+    {"type": "ProjectSupervisorLuma", "value": {"supervisor_luma_id": "luma-physics", "owner_user_id": "foreign-owner"}},
+    {"type": "ProjectSupervisorLuma", "value": {"supervisor_luma_id": "luma-physics", "route": {}}},
+    {"type": "ProjectSupervisorLuma", "value": {"supervisor_luma_id": "luma-physics", "model": true}}
+  ]
+}

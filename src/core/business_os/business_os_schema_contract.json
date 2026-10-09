@@ -12255,7 +12255,7 @@
     "additionalProperties": false
   },
   "workjet_projects": {
-    "version": 2,
+    "version": 3,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -12278,6 +12278,11 @@
       "public_url": {
         "type": "string",
         "maxLength": 2048
+      },
+      "supervisor_luma_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
       },
       "info": {
         "type": "object",
