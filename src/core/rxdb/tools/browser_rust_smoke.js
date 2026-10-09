@@ -10197,10 +10197,16 @@ function ensureCtoxSmokeBinary() {
           },
         };
         const allPermissions = Object.values(BusinessOsPermissions);
+        // Keep the principal admitted by the native transport. This fixture
+        // varies the UI role, not the owner of a durable business chat.
+        const nativeActorId = String(state.session?.user?.id || '').trim();
+        if (!state.session?.authenticated || !nativeActorId) {
+          throw new Error('agent scope fixture needs an authenticated native actor');
+        }
         const actorSession = {
           authenticated: true,
           user: {
-            id: 'agent_scope_team',
+            id: nativeActorId,
             display_name: 'Agent Scope Team',
             role: 'user',
           },
@@ -10537,7 +10543,7 @@ function ensureCtoxSmokeBinary() {
           state.session = {
             authenticated: true,
             user: {
-              id: 'agent_scope_owner',
+              id: nativeActorId,
               display_name: 'Agent Scope Owner',
               role: 'chef',
               is_admin: true,
@@ -10732,6 +10738,7 @@ function ensureCtoxSmokeBinary() {
           const auditVisible = Boolean(
             persistedCommand.command
               && persistedCommand.command.command_type === auditCommandType
+              && persistedContext.actor?.id === nativeActorId
               && persistedVisibleScope?.app?.module_id === targetModule.id
               && (dispatchResult?.task_id || dispatchResult?.command_id || commandId)
           );
