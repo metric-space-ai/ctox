@@ -230,12 +230,22 @@ voice reads aloud while that slide is shown. What is spoken must fit the slide:
   the same terms and the same numbers as the slide.
 - It complements the slide and never reads it out: say what the numbers mean,
   why they changed and what the Owner should decide. A sentence that repeats a
-  bullet is rejected.
+  bullet is rejected, and a paraphrase counts as reading aloud: if a spoken
+  sentence says what an on-screen line already says in other words, replace it
+  with the cause, the meaning or the consequence the slide does not show.
+- Speak the slide's exact key terms and names ("messbares
+  Abschlusskriterium", "Exitwert E5", "gemergte Pull Requests"); never soften,
+  shorten or swap them for a vaguer word. When the slide states a choice ("ob A,
+  B oder beides"), say it as a choice, not as a list of topics.
+- Complete spoken sentences only; no headline fragments such as "Danach der
+  Stand und die Lücken."
 - Write as you would speak: spell out units and signs (Euro, Millisekunden,
   Pull Request Nummer 14).
-- Through-line: every slide except the last ends with one short sentence that
-  leads to the next slide's topic. The last slide closes with the decisions the
-  Owner takes today, without repeating "Nächste Schritte".
+- Through-line: every slide except the last ends with one short, complete
+  sentence that leads to the next slide's topic. The last slide closes with what
+  the Owner's decisions today make possible ("Beschließen Sie das heute, ist der
+  Fortschritt ab dem 16.10. messbar"), instead of listing the decisions again or
+  repeating "Nächste Schritte".
 - Never narrate the layout or the slide itself ("links sehen Sie", "auf dieser
   Folie", "Diese Folie zeigt", "Im Folgenden"), never use system terms or ids,
   and never talk about your own choices ("ich zeige keine Werte").
