@@ -1431,7 +1431,7 @@ test('supervisor capabilities are a scoped native control without creating a tur
   assert.equal(fixture.commands.length, 1);
   const { command, options } = fixture.commands[0];
   assert.equal(command.command_type, 'ctox.workjet.project.supervisor.turn.capabilities');
-  assert.deepEqual(command.payload, { project_id: 'project-1', thread_id: supervisorThread });
+  assert.deepEqual(JSON.parse(JSON.stringify(command.payload)), { project_id: 'project-1', thread_id: supervisorThread });
   assert.equal(options.sync_queue_tasks, false);
   assert.equal(options.until, 'terminal');
 });

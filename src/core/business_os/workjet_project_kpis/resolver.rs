@@ -462,19 +462,62 @@ mod tests {
         for (kind, phase, status, owner, thread, project) in [
             (None, "terminal", "completed", "owner", "thread", "project"),
             (Some("work"), "running", "", "owner", "thread", "project"),
-            (Some("work"), "terminal", "failed", "owner", "thread", "project"),
-            (Some("conversation"), "terminal", "completed", "owner", "thread", "project"),
-            (Some("conversation"), "running", "", "owner", "thread", "project"),
-            (Some("work"), "terminal", "completed", "foreign", "thread", "project"),
-            (Some("work"), "terminal", "completed", "owner", "foreign", "project"),
-            (Some("work"), "terminal", "completed", "owner", "thread", "foreign"),
+            (
+                Some("work"),
+                "terminal",
+                "failed",
+                "owner",
+                "thread",
+                "project",
+            ),
+            (
+                Some("conversation"),
+                "terminal",
+                "completed",
+                "owner",
+                "thread",
+                "project",
+            ),
+            (
+                Some("conversation"),
+                "running",
+                "",
+                "owner",
+                "thread",
+                "project",
+            ),
+            (
+                Some("work"),
+                "terminal",
+                "completed",
+                "foreign",
+                "thread",
+                "project",
+            ),
+            (
+                Some("work"),
+                "terminal",
+                "completed",
+                "owner",
+                "foreign",
+                "project",
+            ),
+            (
+                Some("work"),
+                "terminal",
+                "completed",
+                "owner",
+                "thread",
+                "foreign",
+            ),
         ] {
             let mut intent = json!({
                 "payload": {"thread_id": thread, "risk_class": "internal"},
                 "client_context": {"actor": {"id": owner}}
             });
             if let Some(kind) = kind {
-                intent["payload"]["supervisor_turn"] = json!({"kind": kind, "submit_command_id": "submit"});
+                intent["payload"]["supervisor_turn"] =
+                    json!({"kind": kind, "submit_command_id": "submit"});
             }
             core.execute(
                 "INSERT INTO business_command_aggregates VALUES ('ctox','business_os.chat.task','queue',?1,?2,?2,?3,?4,?5)",
@@ -488,9 +531,13 @@ mod tests {
             (NativeMetricRecipe::ProjectTasksOpen, 1.0),
         ] {
             let request = BindKpiRequest {
-                operation_id: "metric".into(), project_id: "project".into(),
-                kpi_id: "tasks".into(), prompt_revision: 1, expected_revision: 0,
-                recipe, window_days: 7,
+                operation_id: "metric".into(),
+                project_id: "project".into(),
+                kpi_id: "tasks".into(),
+                prompt_revision: 1,
+                expected_revision: 0,
+                recipe,
+                window_days: 7,
             };
             let result = calculate(&core, "owner", "thread", &request, now)?;
             assert_eq!(result.status, KpiState::Ready);
