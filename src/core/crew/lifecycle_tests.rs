@@ -39,11 +39,11 @@ fn crew_finished_retention_rechecks_reopened_routes_and_newest_window() -> Resul
     let conn = Connection::open(&path)?;
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
-        CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT)",
+        CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT)",
     )?;
     ensure_schema(&conn)?;
     conn.execute(
-        "INSERT INTO communication_routing_state VALUES('reopened','handled')",
+        "INSERT INTO communication_routing_state(message_key,route_status) VALUES('reopened','handled')",
         [],
     )?;
     for n in 0..503 {
