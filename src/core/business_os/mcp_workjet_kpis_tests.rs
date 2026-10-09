@@ -432,20 +432,66 @@ fn resolving_a_recipe_uses_write_policy_when_global_read_tools_are_disabled() ->
 
 #[test]
 fn real_supervisor_intake_counts_redacted_receipts_for_verified_alias_only() -> anyhow::Result<()> {
-    let (root, trusted) = fixture()?;
-    let conn = core(root.path())?;
-    let initial = required_arg(&trusted, "command_id")?;
-    let mut ids = vec![initial];
-    for (id, goal) in [
-        ("actual-submit-one", "Implement the first real task"),
-        ("actual-submit-two", "Implement the second real task"),
+    let (root, _) = fixture()?;
+    const OWNER: &str = "c64c5b90-19da-4ffa-9b22-1653f572fd4b";
+    const ALIAS: &str = "owner@example.org";
+    const PROJECT: &str = "alias-project";
+    const SUPERVISOR: &str = "357f2099-f11c-42b6-9db5-1249fed3c21f";
+    let now = store::now_ms() as i64;
+    // Only the authenticated managed issuer may bind an email alias to a UUID.
+    let _ = store::issue_business_os_capability_token_for_managed_user_with_email(
+        root.path(),
+        OWNER,
+        Some(ALIAS),
+        "Owner",
+        "chef",
+        now,
+    )?;
+    let _ = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        ALIAS,
+        "Owner alias",
+        "admin",
+        now,
+    )?;
+    for (id, command_type, payload) in [
+        (
+            "actual-project",
+            "ctox.workjet.project.upsert",
+            json!({"project_id":PROJECT,"name":"Real intake fixture"}),
+        ),
+        (
+            "actual-binding",
+            "ctox.workjet.project.supervisor.bind",
+            json!({"project_id":PROJECT,"thread_id":SUPERVISOR}),
+        ),
+        (
+            "actual-config",
+            "ctox.workjet.project.kpis.configure",
+            json!({"project_id":PROJECT,"operation_id":"actual-config","expected_revision":0,"prompts":[{"kpi_id":"k","prompt":"Project tasks in the last seven days"}]}),
+        ),
     ] {
         let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
             root.path(),
-            json!({"id":id,"module":"ctox","record_id":"project",
+            json!({"id":id,"module":"ctox","record_id":PROJECT,
+            "command_type":command_type,"payload":payload,
+            "client_context":{"actor":{"id":ALIAS,"role":"admin"}}}),
+        )?;
+        anyhow::ensure!(accepted["status"] == "completed", "{id}: {accepted}");
+    }
+    let conn = core(root.path())?;
+    let mut ids = Vec::new();
+    for (id, goal) in [
+        ("actual-submit-one", "Implement the first real task"),
+        ("actual-submit-two", "Implement the second real task"),
+        ("actual-submit-three", "Implement the third real task"),
+    ] {
+        let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({"id":id,"module":"ctox","record_id":PROJECT,
             "command_type":"ctox.workjet.project.supervisor.turn.submit",
-            "payload":{"project_id":"project","thread_id":THREAD,"goal":goal},
-            "client_context":{"actor":{"id":"owner","role":"chef"}}}),
+            "payload":{"project_id":PROJECT,"thread_id":SUPERVISOR,"goal":goal},
+            "client_context":{"actor":{"id":ALIAS,"role":"admin"}}}),
         )?;
         anyhow::ensure!(accepted["status"] == "completed", "{accepted}");
         ids.push(
@@ -465,7 +511,7 @@ fn real_supervisor_intake_counts_redacted_receipts_for_verified_alias_only() -> 
         assert_eq!(
             store::load_business_command(&store::open_store(root.path())?, id)?.client_context
                 ["actor"]["id"],
-            "owner"
+            OWNER
         );
     }
     // Only fixture ledger state is advanced; these are receipt-count tests,
@@ -473,22 +519,6 @@ fn real_supervisor_intake_counts_redacted_receipts_for_verified_alias_only() -> 
     for id in &ids[1..] {
         conn.execute("UPDATE business_command_aggregates SET execution_phase='terminal',terminal_status='completed' WHERE command_id=?1",[id])?;
     }
-    let now = store::now_ms() as i64;
-    let _ = store::issue_business_os_capability_token_for_managed_user_with_email(
-        root.path(),
-        "owner",
-        Some("owner@example.org"),
-        "Owner",
-        "chef",
-        now,
-    )?;
-    let _ = store::issue_business_os_capability_token_for_managed_user(
-        root.path(),
-        "owner@example.org",
-        "Owner alias",
-        "admin",
-        now,
-    )?;
     let policy = store::open_store(root.path())?;
     for (i, (recipe, expected)) in [
         ("project_tasks_total", 3),
@@ -498,24 +528,17 @@ fn real_supervisor_intake_counts_redacted_receipts_for_verified_alias_only() -> 
     .into_iter()
     .enumerate()
     {
-        let request: wire::BindKpiRequest = serde_json::from_value(
-            args(recipe, &format!("actual-{i}"), 1 + i as u64)["request"].clone(),
-        )?;
-        let result = resolver::resolve(
-            &conn,
-            &policy,
-            "owner@example.org",
-            "project",
-            THREAD,
-            &request,
-            now,
-        )?;
+        let mut request = args(recipe, &format!("actual-{i}"), 1 + i as u64)["request"].clone();
+        request["project_id"] = json!(PROJECT);
+        let request: wire::BindKpiRequest = serde_json::from_value(request)?;
+        let result = resolver::resolve(&conn, &policy, ALIAS, PROJECT, SUPERVISOR, &request, now)?;
         assert_eq!(
             result["kpis"]["items"][0]["result"]["snapshot"]["value"],
             expected
         );
         assert!(
-            resolver::resolve(&conn, &policy, "foreign", "project", THREAD, &request, now).is_err()
+            resolver::resolve(&conn, &policy, "foreign", PROJECT, SUPERVISOR, &request, now)
+                .is_err()
         );
     }
     Ok(())
