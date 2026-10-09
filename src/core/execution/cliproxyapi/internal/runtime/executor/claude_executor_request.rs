@@ -51,7 +51,7 @@ use crate::internal::auth::claude::utls_transport::{
 };
 #[cfg(feature = "anthropic-fingerprint-transport")]
 use crate::internal::runtime::executor::helps::{
-    CLAUDE_CODE_COUNT_TOKENS_HEADER_ORDER, CLAUDE_CODE_MESSAGES_HEADER_ORDER,
+    claude_retry_delay, CLAUDE_CODE_COUNT_TOKENS_HEADER_ORDER, CLAUDE_CODE_MESSAGES_HEADER_ORDER,
 };
 #[cfg(feature = "anthropic-fingerprint-transport")]
 use crate::sdk::cliproxy::executor::Headers;
@@ -1137,7 +1137,7 @@ impl ClaudeMessagesTransport for ClaudeMessagesHttpTransport {
                 .map_err(classify_transport_error)?;
             let status = response.status().as_u16();
             let mut headers = claude_response_headers(response.headers());
-            let retry_after = parse_retry_delay(
+            let standard_retry_after = parse_retry_delay(
                 response
                     .headers()
                     .get("Retry-After")
@@ -1148,6 +1148,7 @@ impl ClaudeMessagesTransport for ClaudeMessagesHttpTransport {
                     .and_then(|value| value.to_str().ok()),
                 SystemTime::now(),
             );
+            let retry_after = claude_retry_delay(&headers, SystemTime::now(), standard_retry_after);
             let content_encoding = response
                 .headers()
                 .get("Content-Encoding")
@@ -1189,7 +1190,7 @@ impl ClaudeMessagesTransport for ClaudeMessagesHttpTransport {
                 .map_err(classify_transport_error)?;
             let status = response.status().as_u16();
             let mut headers = claude_response_headers(response.headers());
-            let retry_after = parse_retry_delay(
+            let standard_retry_after = parse_retry_delay(
                 response
                     .headers()
                     .get("Retry-After")
@@ -1200,6 +1201,7 @@ impl ClaudeMessagesTransport for ClaudeMessagesHttpTransport {
                     .and_then(|value| value.to_str().ok()),
                 SystemTime::now(),
             );
+            let retry_after = claude_retry_delay(&headers, SystemTime::now(), standard_retry_after);
             let content_encoding = response
                 .headers()
                 .get("Content-Encoding")
@@ -1245,7 +1247,7 @@ impl ClaudeMessagesStreamingTransport for ClaudeMessagesHttpTransport {
                 .map_err(classify_transport_error)?;
             let status = response.status().as_u16();
             let mut headers = claude_response_headers(response.headers());
-            let retry_after = parse_retry_delay(
+            let standard_retry_after = parse_retry_delay(
                 response
                     .headers()
                     .get("Retry-After")
@@ -1256,6 +1258,7 @@ impl ClaudeMessagesStreamingTransport for ClaudeMessagesHttpTransport {
                     .and_then(|value| value.to_str().ok()),
                 SystemTime::now(),
             );
+            let retry_after = claude_retry_delay(&headers, SystemTime::now(), standard_retry_after);
             let content_encoding = response
                 .headers()
                 .get("Content-Encoding")
@@ -1927,6 +1930,105 @@ mod tests {
         let lower = captured.to_ascii_lowercase();
         assert!(lower.contains("accept: text/event-stream"));
         assert!(lower.contains("accept-encoding: identity"));
+    }
+
+    #[tokio::test]
+    async fn loopback_unified_resets_reach_messages_count_tokens_and_stream_retry_paths() {
+        for shared in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let authority = listener.local_addr().unwrap().to_string();
+            let reset = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                + 60;
+            let server = tokio::spawn(async move {
+                for _ in 0..3 {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    loop {
+                        let count = socket.read(&mut buffer).await.unwrap();
+                        if count == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buffer[..count]);
+                        if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                            let end = end + 4;
+                            let length = String::from_utf8_lossy(&request[..end])
+                                .lines()
+                                .find_map(|line| {
+                                    line.to_ascii_lowercase()
+                                        .strip_prefix("content-length: ")
+                                        .and_then(|value| value.parse::<usize>().ok())
+                                })
+                                .unwrap_or(0);
+                            if request.len() >= end + length {
+                                break;
+                            }
+                        }
+                    }
+                    let extra = if shared {
+                        format!("Anthropic-Ratelimit-Unified-5h-Status: rejected\r\nAnthropic-Ratelimit-Unified-5h-Reset: {reset}\r\n")
+                    } else {
+                        "Anthropic-Ratelimit-Unified-Representative-Claim: overage\r\nAnthropic-Ratelimit-Unified-Overage-Reset: 4102444800\r\n".to_owned()
+                    };
+                    let body = br#"{"type":"error"}"#;
+                    let headers = format!("HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nAnthropic-Ratelimit-Unified-Status: rejected\r\nAnthropic-Ratelimit-Unified-Reset: 4102444800\r\nRetry-After: 7\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    socket.write_all(headers.as_bytes()).await.unwrap();
+                    socket.write_all(body).await.unwrap();
+                }
+            });
+            let transport = ClaudeMessagesHttpTransport::new(None).unwrap();
+            for path in 0..3 {
+                let request = ClaudeMessagesRequest::new(
+                    ClaudeUpstreamTarget::new("http", authority.clone()).unwrap(),
+                    ClaudeCredentialMode::ApiKey,
+                    &SecretString::new("isolated-transport-fixture").unwrap(),
+                    br#"{"messages":[]}"#.to_vec(),
+                    path == 2,
+                )
+                .unwrap();
+                let (status, delay) = match path {
+                    0 => {
+                        let response = transport
+                            .execute(&request, Duration::from_secs(5))
+                            .await
+                            .unwrap();
+                        (response.status(), response.retry_after())
+                    }
+                    1 => {
+                        let response = transport
+                            .execute_count_tokens(&request, Duration::from_secs(5))
+                            .await
+                            .unwrap();
+                        (response.status(), response.retry_after())
+                    }
+                    _ => {
+                        let response = transport
+                            .execute_stream(&request, Duration::from_secs(5))
+                            .await
+                            .unwrap();
+                        (response.status(), response.retry_after())
+                    }
+                };
+                assert_eq!(status, 429);
+                if shared {
+                    assert!(delay
+                        .is_some_and(|delay| delay > Duration::from_secs(50)
+                            && delay <= Duration::from_secs(60)));
+                } else {
+                    assert_eq!(
+                        delay, None,
+                        "billing reset must not enter the conductor retry delay"
+                    );
+                }
+            }
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
     }
 
     #[test]

@@ -4,13 +4,13 @@
 use super::super::{capability::CapabilityDeviceBinding, mobile_invites, store_workjet_computers};
 use super::*;
 
-struct Fixture {
-    root: tempfile::TempDir,
-    conn: Connection,
+pub(super) struct Fixture {
+    pub(super) root: tempfile::TempDir,
+    pub(super) conn: Connection,
 }
 
 impl Fixture {
-    fn new() -> Result<Self> {
+    pub(super) fn new() -> Result<Self> {
         let root = tempfile::tempdir()?;
         store::issue_business_os_capability_token_for_managed_user(
             root.path(),
@@ -29,7 +29,7 @@ impl Fixture {
         Ok(Self { root, conn })
     }
 
-    fn enroll(&self, computer: &str) -> Result<()> {
+    pub(super) fn enroll(&self, computer: &str) -> Result<()> {
         let binding = CapabilityDeviceBinding {
             device_pairing_id: format!("pairing-{computer}"),
             device_id: format!("device-{computer}"),
@@ -59,7 +59,7 @@ impl Fixture {
         Ok(())
     }
 
-    fn adopt(&self, accounts: &[NativeAccountObservation]) -> Result<Value> {
+    pub(super) fn adopt(&self, accounts: &[NativeAccountObservation]) -> Result<Value> {
         let tx = rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
@@ -73,7 +73,7 @@ impl Fixture {
     // Policy-unit input only. Production has no ConsumerFacts-based public
     // constructor: with_consumable_account requires Architecture's sealed,
     // possession-bound transport authority and revalidates current enrollment.
-    fn facts(&self, computer: &str) -> ConsumerFacts {
+    pub(super) fn facts(&self, computer: &str) -> ConsumerFacts {
         ConsumerFacts {
             owner_user_id: "owner".into(),
             owner_epoch: 0,
@@ -89,7 +89,7 @@ impl Fixture {
     }
 }
 
-fn command(kind: &str, payload: Value) -> BusinessCommand {
+pub(super) fn command(kind: &str, payload: Value) -> BusinessCommand {
     BusinessCommand {
         id: None,
         module: "ctox".into(),
@@ -101,16 +101,17 @@ fn command(kind: &str, payload: Value) -> BusinessCommand {
     }
 }
 
-fn account(local: &str) -> NativeAccountObservation {
+pub(super) fn account(local: &str) -> NativeAccountObservation {
     NativeAccountObservation {
         provider: "minimax".into(),
         local_account_id: local.into(),
         enabled: true,
         credential_ready: true,
+        private_binding: None,
     }
 }
 
-fn account_id(state: &Value) -> &str {
+pub(super) fn account_id(state: &Value) -> &str {
     state["accounts"][0]["id"].as_str().unwrap()
 }
 

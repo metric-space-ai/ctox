@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 123] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 127] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -359,11 +359,15 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 123] = [
     "ctox.task.update",
     "ctox.workjet.providers.list",
     "ctox.workjet.providers.adopt_native",
+    "ctox.workjet.providers.observe_native",
+    "ctox.workjet.providers.models.select",
+    "ctox.workjet.providers.models.exclude",
     "ctox.workjet.providers.withdraw",
     "ctox.workjet.computer.assign",
     "ctox.workjet.computer.endpoint.upsert",
     "ctox.workjet.computer.endpoint.disable",
     "ctox.workjet.computer.endpoint.list",
+    "ctox.workjet.computer.ssh_key.ensure",
     "ctox.workjet.computer.list",
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
@@ -1213,10 +1217,17 @@ enum CentralCommandPolicyRequirement {
 impl CentralCommandPolicyRequirement {
     fn for_command(command: &BusinessCommand) -> Option<Self> {
         let command_type = command.command_type.as_str();
-        let fixed = if matches!(
+        let fixed = if command_type == "ctox.workjet.computer.ssh_key.ensure" {
+            Some(CommandPolicyRequirement::workspace(
+                BusinessOsPermission::SecretsManage,
+            ))
+        } else if matches!(
             command_type,
             "ctox.workjet.providers.list"
                 | "ctox.workjet.providers.adopt_native"
+                | "ctox.workjet.providers.observe_native"
+                | "ctox.workjet.providers.models.select"
+                | "ctox.workjet.providers.models.exclude"
                 | "ctox.workjet.providers.withdraw"
         ) || super::store_workjet_computers::requires_capability_management(command)
         {
@@ -1912,6 +1923,7 @@ fn dispatch_business_command(
         | "ctox.workjet.computer.endpoint.upsert"
         | "ctox.workjet.computer.endpoint.disable"
         | "ctox.workjet.computer.endpoint.list"
+        | "ctox.workjet.computer.ssh_key.ensure"
         | "ctox.workjet.computer.list"
         | "ctox.workjet.computer.unassign" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
@@ -1975,6 +1987,9 @@ fn dispatch_business_command(
         }
         "ctox.workjet.providers.list"
         | "ctox.workjet.providers.adopt_native"
+        | "ctox.workjet.providers.observe_native"
+        | "ctox.workjet.providers.models.select"
+        | "ctox.workjet.providers.models.exclude"
         | "ctox.workjet.providers.withdraw" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let actor = session_user_id(session)

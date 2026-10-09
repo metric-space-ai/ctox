@@ -1,4 +1,5 @@
-// ref: sdk/cliproxy/service_executors.go:164-326 @ d7914afdedca7af95ee974a42453dc49fc1388ce
+// ref: sdk/cliproxy/service_executors.go @ a88197f845c979132c8978ea223c6af05cc81536
+// Candidate adaptation: sdk/cliproxy/service_executors.go:164-326 @ d7914afdedca7af95ee974a42453dc49fc1388ce
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
