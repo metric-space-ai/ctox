@@ -318,7 +318,9 @@ async fn handle(
         Request::CheckTranscription { .. } => {
             let gateway = SpeechGateway::from_root(&authority.root)?;
             let active = authority.clone();
-            let result = gateway.check_transcription(move || (active.current)()).await;
+            let result = gateway
+                .check_transcription(move || (active.current)())
+                .await;
             authority.check()?;
             ensure!(
                 binding(&authority.root)? == before,
@@ -432,7 +434,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transcription_check_persists_its_own_result_without_inventing_readiness() -> anyhow::Result<()> {
+    async fn transcription_check_persists_its_own_result_without_inventing_readiness(
+    ) -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let auth = authority(root.path(), "chef", true)?;
         let mut config = SpeechRuntimeConfig::default();
@@ -443,18 +446,34 @@ mod tests {
         let before = binding(root.path())?;
         let tts = json!({"state":"error","errorClass":"missing_credential"});
         save_check(root.path(), &before, "tts", tts.clone())?;
-        let response = handle(auth.clone(), vec![command("speech.settings.check.transcription")]).await?.result;
+        let response = handle(
+            auth.clone(),
+            vec![command("speech.settings.check.transcription")],
+        )
+        .await?
+        .result;
         assert_eq!(response["sttCheck"]["state"], "error");
         assert_eq!(response["sttCheck"]["errorClass"], "missing_credential");
         assert_eq!(response["ttsCheck"], tts);
         assert!(response.get("transcript").is_none());
-        let readback = handle(auth, vec![command("speech.settings.read")]).await?.result;
+        let readback = handle(auth, vec![command("speech.settings.read")])
+            .await?
+            .result;
         assert_eq!(readback["sttCheck"], response["sttCheck"]);
         assert_eq!(readback["ttsCheck"], response["ttsCheck"]);
         let member = authority(root.path(), "user", true)?;
-        assert!(handle(member, vec![command("speech.settings.check.transcription")]).await.is_err());
+        assert!(
+            handle(member, vec![command("speech.settings.check.transcription")])
+                .await
+                .is_err()
+        );
         let retired = authority(root.path(), "chef", false)?;
-        assert!(handle(retired, vec![command("speech.settings.check.transcription")]).await.is_err());
+        assert!(handle(
+            retired,
+            vec![command("speech.settings.check.transcription")]
+        )
+        .await
+        .is_err());
         Ok(())
     }
 

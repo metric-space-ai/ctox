@@ -14,8 +14,10 @@ pub struct SpeechTranscriptionProbe {
 }
 
 fn wav_pcm(audio: &[u8]) -> Result<(PcmFormat, &[u8]), SpeechError> {
-    if audio.len() < 44 || audio.len() > 1_000_000
-        || &audio[..4] != b"RIFF" || &audio[8..12] != b"WAVE"
+    if audio.len() < 44
+        || audio.len() > 1_000_000
+        || &audio[..4] != b"RIFF"
+        || &audio[8..12] != b"WAVE"
         || u32::from_le_bytes(audio[4..8].try_into().unwrap()) as usize + 8 != audio.len()
     {
         return Err(SpeechError::InvalidResponse);
@@ -26,11 +28,14 @@ fn wav_pcm(audio: &[u8]) -> Result<(PcmFormat, &[u8]), SpeechError> {
     while at + 8 <= audio.len() {
         let size = u32::from_le_bytes(audio[at + 4..at + 8].try_into().unwrap()) as usize;
         let start = at + 8;
-        let end = start.checked_add(size).filter(|end| *end <= audio.len())
+        let end = start
+            .checked_add(size)
+            .filter(|end| *end <= audio.len())
             .ok_or(SpeechError::InvalidResponse)?;
         match &audio[at..at + 4] {
             b"fmt " => {
-                if format.is_some() || size < 16
+                if format.is_some()
+                    || size < 16
                     || audio[start..start + 2] != 1u16.to_le_bytes()
                     || audio[start + 2..start + 4] != 1u16.to_le_bytes()
                     || audio[start + 12..start + 14] != 2u16.to_le_bytes()
@@ -39,7 +44,9 @@ fn wav_pcm(audio: &[u8]) -> Result<(PcmFormat, &[u8]), SpeechError> {
                     return Err(SpeechError::InvalidResponse);
                 }
                 let rate = u32::from_le_bytes(audio[start + 4..start + 8].try_into().unwrap());
-                let pcm = PcmFormat { sample_rate_hz: rate };
+                let pcm = PcmFormat {
+                    sample_rate_hz: rate,
+                };
                 pcm.validate().map_err(|_| SpeechError::InvalidResponse)?;
                 if audio[start + 8..start + 12] != (rate * 2).to_le_bytes() {
                     return Err(SpeechError::InvalidResponse);
@@ -47,14 +54,16 @@ fn wav_pcm(audio: &[u8]) -> Result<(PcmFormat, &[u8]), SpeechError> {
                 format = Some(pcm);
             }
             b"data" => {
-                if data.is_some() || size == 0 || size % 2 != 0 {
+                if data.is_some() || size == 0 || !size.is_multiple_of(2) {
                     return Err(SpeechError::InvalidResponse);
                 }
                 data = Some(&audio[start..end]);
             }
             _ => {}
         }
-        at = end.checked_add(size % 2).ok_or(SpeechError::InvalidResponse)?;
+        at = end
+            .checked_add(size % 2)
+            .ok_or(SpeechError::InvalidResponse)?;
     }
     let format = format.ok_or(SpeechError::InvalidResponse)?;
     let data = data.ok_or(SpeechError::InvalidResponse)?;
@@ -132,21 +141,32 @@ impl SpeechGateway {
         {
             return Err(SpeechError::UnsupportedBackend);
         }
-        if !current() { return Err(SpeechError::Closed); }
+        if !current() {
+            return Err(SpeechError::Closed);
+        }
         tokio::time::timeout(Duration::from_secs(25), async {
             let gateway = SpeechGateway::from_root(&self.root)?;
-            let output = tokio::task::spawn_blocking(move || gateway.synthesize_with_timeout(
-                &SpeechRequest {
-                    text: "Der Sprachtest für Workjet ist bereit.".into(),
-                    format: SpeechAudioFormat::Wav,
-                    voice_id: None,
-                }, Duration::from_secs(8),
-            )).await.map_err(|_| SpeechError::ExecutionUnavailable)??;
-            if !current() { return Err(SpeechError::Closed); }
+            let output = tokio::task::spawn_blocking(move || {
+                gateway.synthesize_with_timeout(
+                    &SpeechRequest {
+                        text: "Der Sprachtest für Workjet ist bereit.".into(),
+                        format: SpeechAudioFormat::Wav,
+                        voice_id: None,
+                    },
+                    Duration::from_secs(8),
+                )
+            })
+            .await
+            .map_err(|_| SpeechError::ExecutionUnavailable)??;
+            if !current() {
+                return Err(SpeechError::Closed);
+            }
             let (format, pcm) = wav_pcm(&output.audio)?;
             let stream = self.open_transcription(format).await?;
             replay(stream, format, pcm, current).await
-        }).await.map_err(|_| SpeechError::TimedOut)?
+        })
+        .await
+        .map_err(|_| SpeechError::TimedOut)?
     }
 }
 
@@ -199,19 +219,29 @@ mod tests {
     async fn actual_gateway_final_and_partial_define_probe_diagnostics() {
         let (endpoint, server) = super::super::tests::fixture("normal").await;
         let stream = super::super::tests::start(&endpoint).await;
-        let result = replay(stream, PcmFormat::default(), &[0; 640], || true).await.unwrap();
+        let result = replay(stream, PcmFormat::default(), &[0; 640], || true)
+            .await
+            .unwrap();
         assert_eq!(result.text, "Hallo Welt.");
         assert_eq!(result.audio_duration_ms, 20);
         assert!(result.finish_to_final_ms >= 40);
         assert!(result.partial_before_audio_end);
-        tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
     #[tokio::test]
     async fn retired_probe_closes_its_stream_without_accepting_final() {
         let (endpoint, server) = super::super::tests::fixture("normal").await;
         let stream = super::super::tests::start(&endpoint).await;
-        assert!(matches!(replay(stream, PcmFormat::default(), &[0; 640], || false).await, Err(SpeechError::Closed)));
-        tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap();
+        assert!(matches!(
+            replay(stream, PcmFormat::default(), &[0; 640], || false).await,
+            Err(SpeechError::Closed)
+        ));
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }
-
