@@ -27,6 +27,35 @@ pub(crate) fn coding_models_cli_args_are_valid(args: &[String]) -> bool {
             && flag == "--root" && !value.is_empty() && !value.starts_with('-'))
 }
 
+/// The native root is already selected by main. This read-only command takes
+/// one optional probe and one validated global root pair, in either order.
+pub(crate) fn coding_route_cli_options(args: &[String]) -> Option<bool> {
+    if args.first().map(String::as_str) != Some("route") {
+        return None;
+    }
+    let mut probe = false;
+    let mut rooted = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--probe" if !probe => {
+                probe = true;
+                index += 1;
+            }
+            "--root" if !rooted => {
+                let root = args.get(index + 1)?;
+                if root.is_empty() || root.starts_with('-') {
+                    return None;
+                }
+                rooted = true;
+                index += 2;
+            }
+            _ => return None,
+        }
+    }
+    Some(probe)
+}
+
 pub(crate) fn handle_cli(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let outcome = execute_cli(root, args)?;
     println!("{}", serde_json::to_string_pretty(&outcome)?);
@@ -54,8 +83,13 @@ fn execute_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
             pi_sidecar::coding_model_capabilities_for_cli(root)
         }
         Some("route") => {
-            anyhow::ensure!(args.len() == 1, "usage: ctox coding-agent route");
-            pi_sidecar::inherited_coding_route_status(root)
+            let probe = coding_route_cli_options(args)
+                .context("usage: ctox coding-agent route [--probe] [--root <root>]")?;
+            if probe {
+                pi_sidecar::inherited_coding_route_models_probe(root)
+            } else {
+                pi_sidecar::inherited_coding_route_status(root)
+            }
         }
         Some(other) => bail!(
             "unknown coding-agent subcommand '{other}' (usage: ctox coding-agent turn \
@@ -175,7 +209,7 @@ fn help_outcome() -> Value {
     json!({
         "ok": true,
         "operation": "help",
-        "stdout": "ctox coding-agent turn --module <id> --prompt <text> [--faux] [--preset <id> | --model <json>]\nctox coding-agent smoke --preset <id> [--prompt <text>]\nctox coding-agent models  (daemon-published opaque presets and readiness)\nctox coding-agent route  (nonsecret inherited provider, origin and wire API)\n",
+        "stdout": "ctox coding-agent turn --module <id> --prompt <text> [--faux] [--preset <id> | --model <json>]\nctox coding-agent smoke --preset <id> [--prompt <text>]\nctox coding-agent models  (daemon-published opaque presets and readiness)\nctox coding-agent route [--probe] [--root <root>]  (public route; optional authenticated live model list)\n",
         "stderr": "",
         "exit_code": 0,
     })
@@ -184,6 +218,30 @@ fn help_outcome() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_route_options_are_exact_and_keep_main_root_authority() {
+        for (suffix, expected) in [
+            (vec![], Some(false)),
+            (vec!["--probe"], Some(true)),
+            (vec!["--root", "/native-root"], Some(false)),
+            (vec!["--probe", "--root", "/native-root"], Some(true)),
+            (vec!["--root", "/native-root", "--probe"], Some(true)),
+            (vec!["--root"], None),
+            (vec!["--root", ""], None),
+            (vec!["--root", "--probe"], None),
+            (vec!["--probe", "--probe"], None),
+            (vec!["--root", "/one", "--root", "/two"], None),
+            (vec!["--endpoint", "https://example.com"], None),
+            (vec!["--model", "MiniMax-M3"], None),
+            (vec!["--token", "fixture-secret"], None),
+        ] {
+            let args = std::iter::once("route").chain(suffix)
+                .map(str::to_owned).collect::<Vec<_>>();
+            assert_eq!(coding_route_cli_options(&args), expected);
+        }
+        assert_eq!(coding_route_cli_options(&["turn".to_owned()]), None);
+    }
 
     #[test]
     fn operator_turn_rejects_ambiguous_preset_and_raw_model() {

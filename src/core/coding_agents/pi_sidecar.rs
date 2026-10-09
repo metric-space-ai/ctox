@@ -661,6 +661,7 @@ fn prepare_coding_turn_model(
     })
 }
 
+#[derive(PartialEq, Eq)]
 struct InheritedCodingRoute {
     provider: String,
     model_id: String,
@@ -727,6 +728,13 @@ fn resolve_inherited_coding_route(root: &Path) -> anyhow::Result<InheritedCoding
         credential_key,
         api,
     })
+}
+
+#[path = "route_catalog.rs"]
+mod route_catalog;
+
+pub fn inherited_coding_route_models_probe(root: &Path) -> anyhow::Result<Value> {
+    route_catalog::inspect(root)
 }
 
 /// Operator-only nonsecret route evidence. No sidecar/listener/network call or
