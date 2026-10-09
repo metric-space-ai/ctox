@@ -15,6 +15,17 @@ rejected:
   `{endpoint_ref, computer_id, connection}`.
 - `ctox.workjet.computer.endpoint.disable`: `{endpoint_ref}`.
 - `ctox.workjet.computer.endpoint.list`: `{limit?}`, at most 100 owned entries.
+- `ctox.workjet.computer.ssh_key.ensure`: `{computer_id}`. Explicit native
+  Owner/Admin setup also requires secrets.manage. The computer must already
+  be assigned to that verified owner. Native generates a fresh Ed25519 key in
+  SecretStore and returns only contract ctox.workjet.computer-ssh-key.v1,
+  computer_id, private_key: {scope,name}, public_key, and public_key_sha256.
+  The stable owner/computer tuple reuses the stored key on repeat or lost
+  acknowledgement; it never imports or overwrites an existing credential.
+  A preexisting unissued record fails closed. Authorize only the returned
+  public key on the intended target, then use the reference in endpoint.upsert.
+  The action does not install a key on the target or prove network readiness,
+  and it does not route the desktop's private key elsewhere.
 
 The computer must currently be assigned and owned, with hosting mode workstation
 or self_hosted. An agentless NAS is eligible for storage. The endpoint's owner
@@ -25,7 +36,7 @@ resolution fails closed until all referenced credentials exist and decrypt.
 
 Records live only in native `workjet_computer_endpoints`; no endpoint or
 credential reference is projected into browser RxDB. Workjet must use the
-normal typed command plane and existing data boundary for future UI work.
+normal typed command plane and existing data boundary. The shell computer control bridge exposes computer.ssh_key.ensure through business_commands over RxDB/WebRTC, with correlated command/computer identity and public-only output. It rejects injected ownership, inline secret fields and unsupported result fields.
 
 SSH connection example (all identities, host, pin and paths are examples):
 
