@@ -258,6 +258,17 @@ pub(crate) fn reply_completion_allowed(root: &Path, canonical: &Value) -> anyhow
     );
     drop(conn);
     let turn = owned_turn(root, owner, &binding, id)?;
+    let submission = channels::inspect_business_command(root, &provenance.submit_command_id)?
+        .context("Supervisor conversation has no native submission receipt")?;
+    let receipt = &submission["command"]["result"];
+    ensure!(
+        receipt["contract"] == CONTRACT
+            && receipt["binding"]["project_id"] == binding.project_id
+            && receipt["binding"]["thread_id"] == binding.thread_id
+            && receipt["turn"]["command_id"] == id
+            && receipt["turn"]["task_id"] == turn["task_id"],
+        "Supervisor conversation provenance conflicts with its actual native submission receipt"
+    );
     let result = &turn["result"];
     ensure!(
         matches!(

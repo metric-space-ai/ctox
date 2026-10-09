@@ -236,22 +236,22 @@ fn supervisor_reply_policy_does_not_exempt_writebacks_or_external_work() -> Resu
 #[test]
 fn supervisor_work_and_legacy_turns_retain_work_completion_review() -> Result<()> {
     for kind in [None, Some("work")] {
-        let (temp, job, command_id) = fixture_for_kind(kind)?;
-        let root = temp.path();
-        // Like PR42: no mode, writeback or required-artifact metadata. Only the
-        // explicit kind, not metadata absence or reply words, grants the policy.
+        // Each immutable attempt gets its own actual admitted fixture.
+        // Like PR42: metadata absence and reply words confer no exemption.
         for reply in [
             "Der PR-Head ist nicht zugänglich; die Prüfung ist offen.",
             "Die Prüfung ist erledigt.",
         ] {
+            let (temp, job, command_id) = fixture_for_kind(kind)?;
+            let root = temp.path();
             persist_typed_business_command_result(root, &job, reply)?;
             assert!(!supervisor_conversation_reply_ready(root, &job)?);
+            let context = channels::inspect_business_command(root, &command_id)?.unwrap();
+            assert_eq!(
+                context["command"]["payload"]["supervisor_turn"]["kind"],
+                "work"
+            );
         }
-        let context = channels::inspect_business_command(root, &command_id)?.unwrap();
-        assert_eq!(
-            context["command"]["payload"]["supervisor_turn"]["kind"],
-            "work"
-        );
     }
     Ok(())
 }
@@ -270,6 +270,25 @@ fn supervisor_conversation_requires_the_original_owner_submit_kind() -> Result<(
     let policy = crate::business_os::store::open_store(root)?;
     assert_eq!(policy.execute(
         "UPDATE business_commands SET payload_json=json_set(payload_json,'$.turn_kind','work') WHERE command_id=?1",
+        [submitted],
+    )?, 1);
+    assert!(supervisor_conversation_reply_ready(root, &job).is_err());
+    Ok(())
+}
+
+#[test]
+fn supervisor_conversation_requires_its_actual_native_submission_receipt() -> Result<()> {
+    let (temp, job, command_id) = fixture()?;
+    let root = temp.path();
+    persist_typed_business_command_result(root, &job, "Antwort.")?;
+    assert!(supervisor_conversation_reply_ready(root, &job)?);
+    let context = channels::inspect_business_command(root, &command_id)?.unwrap();
+    let submitted = context["command"]["payload"]["supervisor_turn"]["submit_command_id"]
+        .as_str()
+        .context("original Owner submit")?;
+    let core = rusqlite::Connection::open(crate::paths::core_db(root))?;
+    assert_eq!(core.execute(
+        "UPDATE business_command_aggregates SET result_json=json_set(result_json,'$.turn.command_id','another-native-turn') WHERE command_id=?1",
         [submitted],
     )?, 1);
     assert!(supervisor_conversation_reply_ready(root, &job).is_err());
