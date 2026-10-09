@@ -36,6 +36,15 @@ fn begin(root: &Path, turn: &Value, worker: &str, attempt: &str) -> anyhow::Resu
     ensure!(channels::transition_business_command_for_task(
         root,
         task(turn),
+        "leased",
+        None,
+        None,
+        None,
+        "actual worker fixture acquired its queue lease"
+    )?);
+    ensure!(channels::transition_business_command_for_task(
+        root,
+        task(turn),
         "running",
         None,
         None,
@@ -88,6 +97,15 @@ fn supervisor_owner_input_batch_waits_for_every_task_effect() -> anyhow::Result<
         .clone();
     begin(root.path(), &first, "batch-worker", "batch-attempt")?;
     channels::lease_queue_task(root.path(), task(&second), "batch-worker")?;
+    ensure!(channels::transition_business_command_for_task(
+        root.path(),
+        task(&second),
+        "leased",
+        None,
+        None,
+        None,
+        "actual worker fixture acquired its queue lease"
+    )?);
     assert!(channels::transition_business_command_for_task(
         root.path(),
         task(&second),

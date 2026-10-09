@@ -323,6 +323,15 @@ fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyh
         assert_eq!(original.client_context["actor"]["id"], ALIAS);
         assert_eq!(delegated.client_context["actor"]["id"], OWNER);
         channels::lease_queue_task(root.path(), task_id, "actual-test-worker")?;
+        ensure!(channels::transition_business_command_for_task(
+            root.path(),
+            task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "actual worker fixture acquired its queue lease"
+        )?);
         assert!(channels::transition_business_command_for_task(
             root.path(),
             task_id,
