@@ -7557,10 +7557,15 @@ const PRUEF_FIRMEN = {
   AT: 'voestalpine AG',
   CH: 'Lonza Group AG',
 };
+// Ein E-Mail-Pruefer beantwortet eine Frage zu genau einer Adresse. Ohne sie
+// endete jede Pruefung von experte.de als portal_drift, obwohl der Pruefer
+// laeuft (thesen 09.10.2026). Oeffentlich genannte Firmenadresse.
+const PRUEF_EMAIL = 'info@weicon.de';
 function pruefFirma(item) {
   const laender = Array.isArray(item.countries) ? item.countries : [];
   const country = ['DE', 'AT', 'CH'].find((land) => laender.includes(land)) || 'DE';
-  return { company: PRUEF_FIRMEN[country], country };
+  const istPruefer = Array.isArray(item.field_keys) && item.field_keys.includes('person_email_validation');
+  return { company: PRUEF_FIRMEN[country], country, ...(istPruefer ? { email: PRUEF_EMAIL } : {}) };
 }
 
 async function runAdapterCommand(sourceId, commandType) {

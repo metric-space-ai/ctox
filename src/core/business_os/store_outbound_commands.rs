@@ -4026,7 +4026,7 @@ fn outbound_research_scrape_test_input(
     let operation_timeout_ms = outbound_scrape_operation_timeout_ms(
         command.payload.pointer("/test_input/operation_timeout_ms"),
     )?;
-    Ok(serde_json::json!({
+    let mut input = serde_json::json!({
         "company": company,
         "country": country,
         "source_id": source_id,
@@ -4034,7 +4034,16 @@ fn outbound_research_scrape_test_input(
         // Correlation only: the auth service must authorize this command.
         "task_id": command.id.as_deref().map(str::trim).filter(|id| !id.is_empty()),
         "operation_timeout_ms": operation_timeout_ms,
-    }))
+    });
+    // An e-mail validator answers about one address. Without it every test of
+    // experte-de ended as portal_drift ("CTOX_SCRAPE_INPUT_JSON.email
+    // missing") although the validator works (thesen 09.10.2026).
+    if let Some(email) = outbound_string(&command.payload, &["test_input", "email"])
+        .filter(|email| email.len() <= 254 && email.split('@').count() == 2)
+    {
+        input["email"] = Value::String(email);
+    }
+    Ok(input)
 }
 
 fn outbound_scrape_operation_timeout_ms(value: Option<&Value>) -> anyhow::Result<u64> {
@@ -8849,6 +8858,17 @@ mod tests {
         };
         let input = outbound_research_scrape_test_input(&command, &adapter, "fixture.example")?;
         assert_eq!(input["task_id"], "native-command");
+        assert!(
+            input.get("email").is_none(),
+            "no address unless the test supplies one"
+        );
+        let mut validator = command.clone();
+        validator.payload = serde_json::json!({"test_input": {
+            "company": "Fixture GmbH", "email": "info@fixture.example"
+        }});
+        let validator_input =
+            outbound_research_scrape_test_input(&validator, &adapter, "fixture.example")?;
+        assert_eq!(validator_input["email"], "info@fixture.example");
         assert!(input.get("owner_user_id").is_none());
         assert!(input.get("command_session").is_none());
         let args = outbound_scrape_test_execution_args("fixture-example", &input)?;
