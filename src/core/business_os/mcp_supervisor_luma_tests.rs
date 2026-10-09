@@ -343,7 +343,7 @@ fn configured_route_read_reveals_requested_facts_but_never_private_accounts_or_c
         "native-holder",
         "holder-local-workjet-id",
         "private-selector-not-exported",
-        "unverified-claim",
+        "unverified_claim",
     ] {
         assert!(!result.to_string().contains(secret), "{secret}");
     }
