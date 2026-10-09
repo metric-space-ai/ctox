@@ -1031,6 +1031,8 @@ function prepareBusinessOsAgentScopeModuleFixture(fixture) {
 
   const moduleRoot = path.join(installedModulesRoot, id);
   fs.mkdirSync(moduleRoot, { recursive: true });
+  // Runtime assets are served only for a complete, authorizable manifest.
+  fs.writeFileSync(path.join(moduleRoot, 'module.json'), `${JSON.stringify(module, null, 2)}\n`);
   fs.writeFileSync(path.join(moduleRoot, 'index.html'), '<section data-agent-scope-fixture>Phase 12 Agent Scope fixture</section>\n');
   fs.writeFileSync(path.join(moduleRoot, 'index.css'), ':host { display: block; }\n');
   fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
@@ -1059,6 +1061,14 @@ function prepareBusinessOsAgentScopeModuleFixture(fixture) {
 
   const hiddenModuleRoot = path.join(installedModulesRoot, hiddenId);
   fs.mkdirSync(hiddenModuleRoot, { recursive: true });
+  fs.writeFileSync(path.join(hiddenModuleRoot, 'module.json'), `${JSON.stringify({
+    ...module,
+    id: hiddenId,
+    title: 'Phase 12 Hidden Agent Scope App',
+    version: '0.2.0',
+    entry: `installed-modules/${hiddenId}/index.js`,
+    lifecycle: { runtime_installed: true, visibility_state: 'private', audience: 'private' },
+  }, null, 2)}\n`);
   fs.writeFileSync(path.join(hiddenModuleRoot, 'index.html'), '<section data-agent-scope-hidden-fixture>Phase 12 hidden Agent Scope fixture</section>\n');
   fs.writeFileSync(path.join(hiddenModuleRoot, 'index.css'), ':host { display: block; }\n');
   fs.writeFileSync(path.join(hiddenModuleRoot, 'schema.js'), 'export const collections = {};\n');
