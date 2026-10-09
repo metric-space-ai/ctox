@@ -99,7 +99,7 @@ Supervisor stores:
   Folie", "bleibt leer", "erscheint hier", "links steht". State the fact.
 - Never make the data plumbing the message: no "laut Katalog", "aus der
   Konfiguration", "keine frühere Präsentation". Say what is missing for the
-  project ("Gemergte PRs: Quelle noch nicht angebunden").
+  project: name the measure and say that its source is not connected yet.
 - No internal ids, field names, recipe names or system states in slides or
   notes: no `missing_source`, `project_tasks_total`, "KPI-Prompts", "Rezepte",
   "gebundene Werte", "Native-Quellen". Use the Owner's words.
@@ -243,9 +243,27 @@ voice reads aloud while that slide is shown. What is spoken must fit the slide:
   Pull Request Nummer 14).
 - Through-line: every slide except the last ends with one short, complete
   sentence that leads to the next slide's topic. The last slide closes with what
-  the Owner's decisions today make possible ("Beschließen Sie das heute, ist der
-  Fortschritt ab dem 16.10. messbar"), instead of listing the decisions again or
-  repeating "Nächste Schritte".
+  the Owner's decisions today make possible, instead of listing them again or
+  repeating "Nächste Schritte". Its closing sentence names each decision by the
+  key term on the slide (for example the goal, the data sources, the exit value
+  E5) and the date from which it takes effect; a bare "das" carries nothing a
+  listener has not heard.
+- Complementing is not leaving out: use the budget for two to four sentences on
+  every slide after the title, and speak the date or number that carries the
+  slide's point (a deadline, a change). A sentence that would fit any project
+  says nothing; say what is true for this one.
+- Speak to the Owner as "Sie". Never talk about the Owner in the third person
+  or by name. The title slide's narration speaks the project name and today's
+  date once (the listener hears the voice, not the subtitle); later slides do
+  not repeat them.
+- Never point at what the slide shows ("diese drei Punkte", "hier oben"); state
+  the scope as a fact. When the slide offers a choice, say what follows from
+  each option instead of repeating the options.
+- Do not add lines to a slide only so the narration may cite them; slide and
+  narration carry each fact once. Say nothing about the future you cannot know:
+  no forecast of what will or will not change.
+- Never copy wording from this guide into a deck. Its examples show a shape,
+  not a sentence to reuse.
 - Never narrate the layout or the slide itself ("links sehen Sie", "auf dieser
   Folie", "Diese Folie zeigt", "Im Folgenden"), never use system terms or ids,
   and never talk about your own choices ("ich zeige keine Werte").
