@@ -241,6 +241,30 @@ mod channel_binding_tests {
 }
 
 impl WebRTCRsConnectionHandler {
+    /// One bounded native authority operation on the exact admitted connection
+    /// and captured token. No await, transport reentry or blocking lock waits
+    /// inside apply. In particular, policy callers use busy_timeout(0).
+    pub fn with_current_peer_capability<T>(
+        &self,
+        peer: &WebRTCRsConnection,
+        expected_token: &str,
+        apply: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let _lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer)
+            || self
+                .peer_capability_tokens
+                .lock()
+                .get(&peer.peer_id)
+                .map(String::as_str)
+                != Some(expected_token)
+            || expected_token.is_empty()
+        {
+            return None;
+        }
+        Some(apply())
+    }
+
     /// Resolve a routing hint to the currently open local connection.
     pub fn connection_for_peer(&self, peer_id: &str) -> Option<WebRTCRsConnection> {
         if self.closed.load(Ordering::SeqCst) {
@@ -5101,6 +5125,52 @@ mod tests {
             state,
             available,
         }
+    }
+
+    #[tokio::test]
+    async fn consumer_authority_operation_keeps_exact_connection_and_token_fenced() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = install_test_connection(&handler, "consumer-authority-fixture", 1).await;
+        assert!(handler
+            .with_current_peer_capability(&peer, "admitted-a", || ())
+            .is_none());
+        handler.set_peer_capability_token(&peer, "admitted-a".into());
+        assert_eq!(
+            handler.with_current_peer_capability(&peer, "admitted-a", || {
+                assert!(handler.peer_lifecycle.try_lock().is_none());
+                42
+            }),
+            Some(42)
+        );
+        handler.set_peer_capability_token(&peer, "admitted-b".into());
+        assert!(handler
+            .with_current_peer_capability(&peer, "admitted-a", || panic!(
+                "stale token must not enter"
+            ))
+            .is_none());
+        let retired = handler
+            .peers
+            .lock()
+            .remove("consumer-authority-fixture")
+            .expect("original fixture peer is installed");
+        assert_eq!(retired.generation, 1);
+        drop(retired);
+        let replacement = install_test_connection(&handler, "consumer-authority-fixture", 2).await;
+        handler.set_peer_capability_token(&replacement, "admitted-a".into());
+        assert!(handler
+            .with_current_peer_capability(&peer, "admitted-a", || panic!(
+                "old generation must not enter"
+            ))
+            .is_none());
+        assert!(handler
+            .with_current_peer_capability(&replacement, "admitted-a", || ())
+            .is_some());
+        handler.close().await.unwrap();
+        assert!(handler
+            .with_current_peer_capability(&replacement, "admitted-a", || panic!(
+                "closed transport must not enter"
+            ))
+            .is_none());
     }
 
     #[tokio::test]

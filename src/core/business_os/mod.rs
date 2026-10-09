@@ -67,6 +67,7 @@ pub mod build_delivery;
 pub mod build_source;
 pub mod computer_capabilities;
 pub mod computer_endpoints;
+pub(crate) mod consumer_authority;
 mod rxdb_peer;
 mod rxdb_peer_browser;
 mod rxdb_peer_business_data;

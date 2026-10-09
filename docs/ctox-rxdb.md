@@ -1,6 +1,41 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
 
+### Native federation consumer authority
+
+`ctox.workjet.consumer.v1` is a read-only, guarded auxiliary request on the
+existing authenticated WebRTC pool: exactly one `{version:1}` parameter,
+maximum 1 KiB serialized parameters. It resolves the accepted connection and
+captured capability to its possession-bound pairing, retained inviter, and an
+explicitly associated assigned Workjet computer. The reply is
+`{version:1,consumer:{ownerUserId,ownerEpoch,actorUserId,actorEpoch,computerId,
+computerRevision,pairingId,deviceId,proofKeyThumbprint,pairingRevision}}`.
+These public facts are not a forwarded authorization token. Unknown identity
+fields are rejected; ambiguous, revoked, unassigned and legacy unowned pairings
+fail closed. No credential or model ID enters this surface.
+
+An owner associates an existing, proven pairing using the existing
+`ctox.workjet.computer.assign` command's optional `device_binding_id`. Omission
+preserves the association; an empty string removes it. The pairing must have
+been created by that verified owner through the native device-control channel.
+Existing operator/legacy invites without retained inviter identity are not
+silently attributed to an owner. Native association details stay out of the
+computer projection. Computer IDs remain opaque; device IDs and hostnames are
+never substituted for them. This is computer enrollment, not an account opt-in.
+All enrolled computers remain eligible for all federation accounts by default;
+only the account-routing owner's explicit per-computer withdrawal restricts use.
+
+Native adapters use `consumer_authority::AdmittedConsumerAuthority::capture`
+with the exact accepted connection and captured token from a guarded auxiliary
+handler, then `with_current` after awaits and around bounded dispatch work.
+The sealed context holds the origin connection, issuer, actor/device and
+membership revision fences. Response publication rechecks the same revisions
+at physical IO through the existing guarded transport. No await, network wait
+or transport/secret API reentry is allowed inside the current-authority callback.
+This local origin authority does not prove a distributed holder/account fence;
+Models owns account registry, withdrawals, signed forwarding and holder dispatch.
+Installed account routing and session-continuation acceptance remain separate.
+
 Registered account-calendar reads use `ctox.workjet.calendar.read.v1` as a typed,
 read-only auxiliary request on the `communication_accounts` WebRTC lane. The
 native peer derives actor/role from the browser capability, enforces collection
