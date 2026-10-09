@@ -37,3 +37,35 @@ SSE is currently bounded-buffered as for the existing native Kimi route, with a
 60-second HTTP bound and 32 MiB response bound. Progressive SSE delivery requires
 a generic streaming owner in the portable server and is not claimed here.
 Production login, deployment and installed acceptance are operator/parent duties.
+
+## Authorized Workjet native control
+
+The retained daemon controller registers `ctox.workjet.grok.v1` with capability
+`ctox-workjet-grok-v1`. The shell `workjetProjectControl` forwards
+`instance.grok.read`, `.start`, `.poll`, `.cancel`, `.check`, and `.remove` over
+`requestNative`. Native admission uses the actual current peer and its admitted
+capability token; Owner (`chef`) or Admin is required. Login polling watches the
+creator's authority independently of renderer requests and revalidates it
+immediately before encrypted credential storage. Peer retirement cancels pending
+polling. Poll/cancel require the original token and retained login ID.
+
+Requests have `version: 1`, `action`, and UUID `operationId`. Poll/cancel also
+require UUID `loginId`; check requires `modelId`. No other fields are accepted.
+The public reply echoes those first three fields and contains `installed`
+(credential presence only), `accountLabel`, `login` (nullable), `models` (live IDs),
+and `check` (nullable). Login contains `loginId`, `phase`, `verificationUri`,
+`userCode`, and integer UTC milliseconds `expiresAt`. Phases are `pending`,
+`accepted`, `cancelled`, `failed`, and `expired`. The check contains `modelId`,
+`status` (`ok` or `error`), integer UTC milliseconds `checkedAt`, nullable
+`latencyMs`, and nullable fixed `errorCode` (`timeout`, `missing_credential`,
+`model_unavailable`, `invalid_response`, or `request_failed`).
+
+Read and accepted polling fetch the authenticated catalog with an eight-second
+bound. Hi checks have a total twenty-second async budget including discovery,
+use the shared native instance Responses router with explicit xAI provider, and
+require actual nonempty output text. Persisted checks contain a private secret
+content binding; a changed/deleted credential invalidates the previous result.
+Removal cancels retained login and deletes only the subscription credential under
+the same serialization used by native refresh/inference, then clears its check.
+No enabled toggle is exposed. Fixed errors do not promise upstream error-class
+fidelity, and this control does not change the instance default model.

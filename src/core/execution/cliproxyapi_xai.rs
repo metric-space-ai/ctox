@@ -15,11 +15,15 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+static AUTH_USE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SCOPE: &str = "provider-subscriptions";
 const NAME: &str = "xai-instance-oauth";
 pub const ACCOUNT_ID: &str = "xai-instance-primary";
 pub fn subscription_installed(root: &Path) -> bool {
     crate::secrets::secret_exists(root, SCOPE, NAME).unwrap_or(false)
+}
+pub(crate) fn credential_binding(root: &Path) -> anyhow::Result<Option<String>> {
+    crate::secrets::secret_record_content_version(root, SCOPE, NAME)
 }
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -90,6 +94,17 @@ impl CtoxXaiLogin {
         }
     }
     pub async fn start(&self) -> anyhow::Result<XaiDeviceLogin> {
+        self.start_authorized(Arc::new(|| true), Arc::new(|| Ok(())))
+            .await
+    }
+    /// The native caller owns current-peer admission and must revalidate the
+    /// admitted token immediately before the encrypted credential commit.
+    pub async fn start_authorized(
+        &self,
+        current: Arc<dyn Fn() -> bool + Send + Sync>,
+        authorize_commit: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
+    ) -> anyhow::Result<XaiDeviceLogin> {
+        authorize_commit()?;
         anyhow::ensure!(
             !crate::secrets::secret_exists(&self.root, SCOPE, NAME)?,
             "Grok subscription already installed"
@@ -143,24 +158,34 @@ impl CtoxXaiLogin {
         let sessions = self.sessions.clone();
         let root = self.root.clone();
         tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                Duration::from_secs(1800),
-                auth.wait_for_authorization(&cancel, &code),
-            )
-            .await;
+            let expires = Duration::from_secs(code.expires_in.clamp(1, 1800) as u64);
+            let retirement = async {
+                loop {
+                    if !current() {
+                        cancel.cancel();
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            };
+            let result = tokio::select! {
+                result = tokio::time::timeout(expires, auth.wait_for_authorization(&cancel, &code)) => Some(result),
+                () = retirement => None,
+            };
             if let Ok(mut state) = sessions.lock() {
                 if let Some(login) = state.get_mut(&id) {
                     if login.progress != XaiLoginProgress::Pending {
                         return;
                     }
                     login.progress = match result {
-                        Ok(Ok(bundle)) if !cancel.is_cancelled() => {
-                            if save_bundle(&root, &bundle).is_ok() {
+                        Some(Ok(Ok(bundle))) if !cancel.is_cancelled() && current() => {
+                            if authorize_commit().is_ok() && save_bundle(&root, &bundle).is_ok() {
                                 XaiLoginProgress::Accepted
                             } else {
                                 XaiLoginProgress::Failed
                             }
                         }
+                        None => XaiLoginProgress::Cancelled,
                         _ => XaiLoginProgress::Failed,
                     };
                 }
@@ -168,6 +193,21 @@ impl CtoxXaiLogin {
         });
         pending.transferred = true;
         Ok(public)
+    }
+    pub fn cancel_all(&self) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            for login in sessions.values_mut() {
+                login.cancel.cancel();
+                if login.progress == XaiLoginProgress::Pending {
+                    login.progress = XaiLoginProgress::Cancelled;
+                }
+            }
+        }
+    }
+    pub async fn remove(&self) -> anyhow::Result<()> {
+        self.cancel_all();
+        let _guard = AUTH_USE.lock().await;
+        crate::secrets::delete_secret_record(&self.root, SCOPE, NAME)
     }
     fn set_progress(&self, id: &str, value: XaiLoginProgress) {
         if let Ok(mut sessions) = self.sessions.lock() {
@@ -313,6 +353,32 @@ fn save_bundle(root: &Path, bundle: &AuthBundle) -> anyhow::Result<()> {
 }
 
 /// Fetch the actual account catalog for native settings/control callers.
+#[cfg(test)]
+static TEST_ENDPOINTS: Mutex<Option<HashMap<PathBuf, String>>> = Mutex::new(None);
+#[cfg(test)]
+pub(crate) fn test_endpoint(root: &Path, endpoint: Option<String>) {
+    let mut endpoints = TEST_ENDPOINTS.lock().unwrap();
+    let map = endpoints.get_or_insert_with(HashMap::new);
+    if let Some(endpoint) = endpoint {
+        map.insert(root.into(), endpoint);
+    } else {
+        map.remove(root);
+    }
+}
+fn endpoint(root: &Path) -> String {
+    #[cfg(test)]
+    if let Some(endpoint) = TEST_ENDPOINTS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(root))
+        .cloned()
+    {
+        return endpoint;
+    }
+    let _ = root;
+    CLI_CHAT_PROXY_BASE_URL.into()
+}
 pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
     use ctox_cliproxyapi::internal::runtime::executor::xai_executor_request::apply_xai_chat_headers;
     use ctox_cliproxyapi::sdk::cliproxy::auth::Auth;
@@ -328,7 +394,7 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
         .insert("base_url".into(), CLI_CHAT_PROXY_BASE_URL.into());
     let mut headers = std::collections::BTreeMap::new();
     apply_xai_chat_headers(&mut headers, Some(&auth), &record.access, false, "");
-    let mut request = client.get(format!("{CLI_CHAT_PROXY_BASE_URL}/models"));
+    let mut request = client.get(format!("{}/models", endpoint(root)));
     for (key, values) in headers {
         for value in values {
             request = request.header(&key, value);
@@ -364,7 +430,7 @@ pub async fn handle_route(root: &Path, body: &[u8]) -> ctox_cliproxyapi::sdk::ap
     }
 }
 async fn execute_route(root: &Path, body: &[u8]) -> anyhow::Result<(bool, Vec<u8>)> {
-    execute_route_at(root, body, CLI_CHAT_PROXY_BASE_URL).await
+    execute_route_at(root, body, &endpoint(root)).await
 }
 async fn execute_route_at(
     root: &Path,
@@ -377,7 +443,6 @@ async fn execute_route_at(
     use ctox_cliproxyapi::sdk::cliproxy::auth::Auth;
     // Serialize native refresh/use, including encrypted writeback, so two calls
     // cannot rotate the same refresh token concurrently.
-    static AUTH_USE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = AUTH_USE.lock().await;
     let requested = ctox_cliproxyapi::internal::api::account_selection::requested_account();
     anyhow::ensure!(

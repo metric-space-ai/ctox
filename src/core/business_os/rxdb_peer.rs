@@ -877,6 +877,7 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-workjet-device-control-v1",
     super::rxdb_peer_speech_settings::CAPABILITY,
     super::rxdb_peer_jour_fixe_speech::CAPABILITY,
+    super::rxdb_peer_grok::CAPABILITY,
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 /// Standby reconciliation is a safety net, not the normal data path. Runtime
@@ -3152,6 +3153,7 @@ async fn run_native_peer(
                 let workjet_device_root = root.clone();
                 super::rxdb_peer_transfer_publication::register(pool, &root)?;
                 super::rxdb_peer_jour_fixe_speech::register(pool, &root)?;
+                super::rxdb_peer_grok::register(pool, &root)?;
                 let calendar_read_root = root.clone();
                 pool.register_auxiliary_request_handler(
                     super::mcp_channel::WORKJET_CALENDAR_READ_METHOD,
