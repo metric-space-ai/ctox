@@ -443,6 +443,7 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
       optionCount: Array.isArray(reviewerOption.options) ? reviewerOption.options.length : 0,
       error: reviewerOption.error || '',
     });
+    console.log('threads_reviewer_picker=' + JSON.stringify(reviewerPickerEvidence.at(-1)));
     const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
     const form = menu?.querySelector('form');
     const input = menu?.querySelector(`input[name="contextMode"][value="${css(mode)}"]`);
