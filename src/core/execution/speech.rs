@@ -77,10 +77,14 @@ pub struct SpeechRuntimeConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpeechRate(u16);
 impl Default for SpeechRate {
-    fn default() -> Self { Self(115) }
+    fn default() -> Self {
+        Self(115)
+    }
 }
 impl SpeechRate {
-    pub fn value(self) -> f64 { f64::from(self.0) / 100.0 }
+    pub fn value(self) -> f64 {
+        f64::from(self.0) / 100.0
+    }
 }
 impl Serialize for SpeechRate {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -91,7 +95,9 @@ impl<'de> Deserialize<'de> for SpeechRate {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let rate = f64::deserialize(deserializer)?;
         if !rate.is_finite() || !(0.8..=1.5).contains(&rate) {
-            return Err(serde::de::Error::custom("speech rate must be between 0.8 and 1.5"));
+            return Err(serde::de::Error::custom(
+                "speech rate must be between 0.8 and 1.5",
+            ));
         }
         Ok(Self((rate * 100.0).round() as u16))
     }

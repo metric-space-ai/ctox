@@ -111,7 +111,7 @@ mod tests {
             synthesis: SpeechBackend::Mistral,
             transcription: SpeechBackend::Computer,
             voice_id: None,
-        rate: Default::default(),
+            rate: Default::default(),
         }
         .save(root.path())?;
         assert!(warm_local_runtime(root.path())
