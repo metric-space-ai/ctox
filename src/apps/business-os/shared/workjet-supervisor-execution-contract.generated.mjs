@@ -32,6 +32,10 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
         "minimum": 1,
         "maximum": 50,
         "optional": true
+      },
+      "include_public_text": {
+        "type": "bool",
+        "optional": true
       }
     }
   },
@@ -67,6 +71,40 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
         "type": "i64",
         "minimum": 0,
         "optional": true
+      }
+    }
+  },
+  "PublicAssistantText": {
+    "fields": {
+      "turn_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "item_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "phase": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 32
+      },
+      "offset": {
+        "type": "u64",
+        "minimum": 0,
+        "maximum": 65536
+      },
+      "text": {
+        "type": "String",
+        "max_chars": 4096
+      },
+      "completed": {
+        "type": "bool"
+      },
+      "truncated": {
+        "type": "bool"
       }
     }
   },
@@ -109,6 +147,10 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
       "success": {
         "type": "bool",
         "optional": true
+      },
+      "public_text": {
+        "type": "PublicAssistantText",
+        "optional": true
       }
     }
   },
@@ -138,6 +180,10 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
       },
       "has_more": {
         "type": "bool"
+      },
+      "public_text_supported": {
+        "type": "bool",
+        "optional": true
       }
     }
   }

@@ -32,6 +32,10 @@
           "minimum": 1,
           "maximum": 50,
           "optional": true
+        },
+        "include_public_text": {
+          "type": "bool",
+          "optional": true
         }
       }
     },
@@ -68,6 +72,17 @@
           "minimum": 0,
           "optional": true
         }
+      }
+    },
+    "PublicAssistantText": {
+      "fields": {
+        "turn_id": { "type": "String", "min_chars": 1, "max_chars": 128 },
+        "item_id": { "type": "String", "min_chars": 1, "max_chars": 128 },
+        "phase": { "type": "String", "min_chars": 1, "max_chars": 32 },
+        "offset": { "type": "u64", "minimum": 0, "maximum": 65536 },
+        "text": { "type": "String", "max_chars": 4096 },
+        "completed": { "type": "bool" },
+        "truncated": { "type": "bool" }
       }
     },
     "ExecutionEvent": {
@@ -109,6 +124,10 @@
         "success": {
           "type": "bool",
           "optional": true
+        },
+        "public_text": {
+          "type": "PublicAssistantText",
+          "optional": true
         }
       }
     },
@@ -138,6 +157,10 @@
         },
         "has_more": {
           "type": "bool"
+        },
+        "public_text_supported": {
+          "type": "bool",
+          "optional": true
         }
       }
     }
@@ -153,6 +176,15 @@
     }
   },
   "valid_cases": [
+    {
+      "type": "ExecutionPageRequest",
+      "value": { "include_public_text": true }
+    },
+    {
+      "type": "PublicAssistantText",
+      "value": { "turn_id": "native-turn", "item_id": "native-item", "phase": "final_answer",
+        "offset": 0, "text": "Public model reply", "completed": false, "truncated": false }
+    },
     {
       "type": "ExecutionPageRequest",
       "value": {}
@@ -196,6 +228,17 @@
     }
   ],
   "invalid_cases": [
+    {
+      "type": "PublicAssistantText",
+      "value": { "turn_id": "native-turn", "item_id": "native-item", "phase": "final_answer",
+        "offset": 65537, "text": "Public model reply", "completed": false, "truncated": false }
+    },
+    {
+      "type": "PublicAssistantText",
+      "value": { "turn_id": "native-turn", "item_id": "native-item", "phase": "final_answer",
+        "offset": 0, "text": "Public model reply", "completed": false, "truncated": false,
+        "raw_reasoning": "excluded" }
+    },
     {
       "type": "ExecutionPageRequest",
       "value": {

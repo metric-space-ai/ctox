@@ -59,6 +59,8 @@ pub(crate) use native_guest_admission::{
 };
 #[cfg(unix)]
 pub(crate) use queue_execution_fence::{QueueExecutionFence, QueueWorkerLifetime};
+#[cfg(all(unix, test))]
+pub(crate) use queue_provider_binding::tests::public_text_provider_fixture;
 #[cfg(unix)]
 pub(crate) use queue_provider_binding::{
     lookup_native_provider_binding, NativeProviderAdmission, NativeProviderBinding,
