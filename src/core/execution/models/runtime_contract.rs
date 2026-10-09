@@ -161,11 +161,17 @@ pub fn clear_chat_capacity_contract(root: &Path) -> Result<()> {
     )
 }
 
+/// Historical residency metadata for failure diagnosis, never liveness or
+/// execution authority. Capacity/readiness readers must use the pruned API.
+pub(crate) fn load_persisted_runtime_ownership_state(root: &Path) -> Result<RuntimeOwnershipState> {
+    Ok(persistence::load_json_payload(root, RUNTIME_OWNERSHIP_STATE_STORAGE_KEY)?
+        .unwrap_or_else(RuntimeOwnershipState::default))
+}
+
 pub fn load_runtime_ownership_state(root: &Path) -> Result<RuntimeOwnershipState> {
     let legacy_path = legacy_backend_gpu_lease_ledger_path(root);
     let legacy_exists = legacy_path.exists();
-    let mut state = persistence::load_json_payload(root, RUNTIME_OWNERSHIP_STATE_STORAGE_KEY)?
-        .unwrap_or_else(RuntimeOwnershipState::default);
+    let mut state = load_persisted_runtime_ownership_state(root)?;
     let original = state.clone();
     prune_dead_runtime_residency(root, &mut state);
     if legacy_exists || state != original {
