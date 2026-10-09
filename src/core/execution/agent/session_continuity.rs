@@ -122,6 +122,7 @@ pub(crate) struct SessionThreadSpec<'a> {
     pub cwd: &'a Path,
     pub base_instructions: &'a str,
     pub disable_active_tools: bool,
+    pub read_only_sandbox: bool,
     pub disable_mcp_servers: bool,
     pub thread_config: Option<&'a HashMap<String, JsonValue>>,
     pub persistent_worker: bool,
@@ -322,7 +323,11 @@ async fn resume_identified_thread<C: DirectSessionControlClient>(
             cwd: Some(spec.cwd.to_string_lossy().to_string()),
             approval_policy: Some(ctox_protocol::protocol::AskForApproval::Never.into()),
             approvals_reviewer: None,
-            sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
+            sandbox: Some(if spec.read_only_sandbox {
+                ctox_app_server_protocol::SandboxMode::ReadOnly
+            } else {
+                ctox_app_server_protocol::SandboxMode::WorkspaceWrite
+            }),
             config: None,
             base_instructions: Some(spec.base_instructions.to_string()),
             developer_instructions: None,
@@ -383,7 +388,11 @@ pub(crate) async fn start_session_thread<C: DirectSessionControlClient>(
             model_provider: spec.model_provider.map(str::to_string),
             cwd: Some(spec.cwd.to_string_lossy().to_string()),
             approval_policy: Some(ctox_protocol::protocol::AskForApproval::Never.into()),
-            sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
+            sandbox: Some(if spec.read_only_sandbox {
+                ctox_app_server_protocol::SandboxMode::ReadOnly
+            } else {
+                ctox_app_server_protocol::SandboxMode::WorkspaceWrite
+            }),
             config: thread_start_config(spec),
             base_instructions: Some(spec.base_instructions.to_string()),
             dynamic_tools: spec.disable_active_tools.then(Vec::new),
@@ -770,6 +779,7 @@ mod tests {
             cwd: Path::new("/tmp"),
             base_instructions: "base",
             disable_active_tools: false,
+            read_only_sandbox: false,
             disable_mcp_servers: false,
             thread_config: None,
             persistent_worker: true,
@@ -785,6 +795,7 @@ mod tests {
             cwd: Path::new("/tmp"),
             base_instructions: "base",
             disable_active_tools: false,
+            read_only_sandbox: false,
             disable_mcp_servers: false,
             thread_config: None,
             persistent_worker: false,

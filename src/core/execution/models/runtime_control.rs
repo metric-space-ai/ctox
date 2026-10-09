@@ -163,7 +163,7 @@ pub fn apply_runtime_selection_with_context(
     let previous_env = runtime_env::effective_operator_env_map(root)?;
     let previous_api_route =
         (previous_state.source == runtime_state::InferenceSource::Api).then(|| RuntimeApiRoute {
-            provider: runtime_state::infer_api_provider_from_env_map(&previous_env),
+            provider: runtime_state::api_provider_for_runtime_state(&previous_state).into(),
             upstream_base_url: previous_state.upstream_base_url.clone(),
             subscription_provider: previous_env
                 .get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV)

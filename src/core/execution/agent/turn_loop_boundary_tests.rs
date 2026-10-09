@@ -64,6 +64,7 @@ fn production_turn_loop_stays_model_agnostic() {
 #[test]
 fn production_reviewers_are_read_only_and_workers_protect_runtime_state() {
     let production = production_source(include_str!("direct_session.rs"));
+    let continuity = production_source(include_str!("session_continuity.rs"));
 
     assert!(
         production.contains("start_review_with_read_only_tools")
@@ -72,7 +73,11 @@ fn production_reviewers_are_read_only_and_workers_protect_runtime_state() {
             && production.contains("SandboxMode::ReadOnly")
             && production.contains("SandboxPolicy::new_read_only_policy()")
             && !production.contains("SessionSource::SubAgent")
-            && production.contains("dynamic_tools: disable_active_tools.then(Vec::new)"),
+            && production.contains("read_only_sandbox,")
+            && continuity.contains("dynamic_tools: spec.disable_active_tools.then(Vec::new)")
+            && continuity.contains("sandbox: Some(if spec.read_only_sandbox")
+            && continuity.contains("SandboxMode::ReadOnly")
+            && !continuity.contains("sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite)"),
         "completion reviewers must be server-owned read-only sessions, never child agents"
     );
 }
