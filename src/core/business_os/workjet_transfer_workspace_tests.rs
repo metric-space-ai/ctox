@@ -25,7 +25,7 @@ fn repository(root: &Path) -> PathBuf {
         &repository,
         &["config", "user.email", "workspace-test@example.invalid"],
     );
-    fs::write(repository.join("tracked"), b"base\n").unwrap();
+    fs::write(repository.join("tracked"), b"top\nbase\nbottom\n").unwrap();
     git_command(&repository, &["add", "."]);
     git_command(&repository, &["commit", "-m", "base"]);
     repository
@@ -64,9 +64,9 @@ fn linked_worktree_roundtrip_retains_staged_unstaged_untracked_without_git_point
         &["worktree", "add", "-b", "worker", source.to_str().unwrap()],
     );
     assert!(source.join(".git").is_file());
-    fs::write(source.join("tracked"), b"staged\n").unwrap();
+    fs::write(source.join("tracked"), b"top\nstaged\nbottom\n").unwrap();
     git_command(&source, &["add", "tracked"]);
-    fs::write(source.join("tracked"), b"unstaged\n").unwrap();
+    fs::write(source.join("tracked"), b"top\nunstaged\nbottom\n").unwrap();
     fs::write(source.join("new-staged"), [0, 1, 255]).unwrap();
     git_command(&source, &["add", "new-staged"]);
     fs::remove_file(source.join("new-staged")).unwrap();
@@ -93,6 +93,7 @@ fn linked_worktree_roundtrip_retains_staged_unstaged_untracked_without_git_point
     assert_eq!(first.manifest, second);
     let returned = scratch.path().join("returned");
     git::apply_git_working_copy(&second_artifacts, &second, &returned).unwrap();
+    git_command(&returned, &["config", "diff.context", "0"]);
     git::verify_git_working_copy(&returned, &first.manifest).unwrap();
     assert_eq!(first.status_sha256, status_sha256(&returned).unwrap());
     assert!(returned.join(".git").is_dir());

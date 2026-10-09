@@ -474,25 +474,9 @@ pub fn verify_git_working_copy(source: &Path, manifest: &GitPackManifest) -> any
         git_text(source, &["write-tree"])? == index.tree,
         "{APPLY_HASH_MISMATCH}: workspace index changed"
     );
-    let patch = git_output(
-        source,
-        &[
-            "diff",
-            "--binary",
-            "--full-index",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-renames",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            "HEAD",
-            "--",
-        ],
-    )?;
-    ensure!(
-        patch.status.success() && sha256_bytes(&patch.stdout) == manifest.git.patch_sha256,
-        "{APPLY_HASH_MISMATCH}: workspace patch changed"
-    );
+    // File content/modes and the index tree prove the working state. Recreating
+    // patch bytes here would depend on this computer's diff.context/algorithm.
+    // apply_in_temp separately verifies the original transferred patch digests.
     Ok(())
 }
 
