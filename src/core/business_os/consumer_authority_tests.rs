@@ -122,6 +122,27 @@ fn foreign_owner_legacy_invite_duplicate_enrollment_and_unbind_fail_closed() -> 
 }
 
 #[test]
+fn legacy_paired_inviter_keeps_device_control_without_inventing_an_owner() -> Result<()> {
+    let f = Fixture::new(None)?;
+    let actor = store::verified_webrtc_capability_claims(f.root.path(), &f.token)
+        .unwrap()
+        .user_id;
+    let child = mobile_invites::create_for_owner(f.root.path(), 300, None, None, Some(&actor))?;
+    let child_actor = child["invite"]["session"]["user"]["id"].as_str().unwrap();
+    let conn = store::open_store(f.root.path())?;
+    let owner: Option<String> = conn.query_row(
+        "SELECT created_by_user_id FROM business_mobile_invites WHERE user_id=?1",
+        [child_actor],
+        |row| row.get(0),
+    )?;
+    assert!(owner.is_none());
+    assert!(f
+        .assign("owner", "opaque-computer", Some(&f.pairing))
+        .is_err());
+    Ok(())
+}
+
+#[test]
 fn paired_inviter_retains_the_original_owner_without_new_account_grants() -> Result<()> {
     let f = Fixture::new(Some("owner"))?;
     let actor = store::verified_webrtc_capability_claims(f.root.path(), &f.token)

@@ -250,7 +250,8 @@ pub(super) fn create_for_owner(
 ) -> anyhow::Result<Value> {
     let owner_user_id = owner_user_id
         .map(|inviter| retained_inviter_owner(root, inviter))
-        .transpose()?;
+        .transpose()?
+        .flatten();
     anyhow::ensure!(
         (MIN_TTL_SECONDS..=MAX_TTL_SECONDS).contains(&ttl_seconds),
         "mobile invite ttlSeconds must be between {MIN_TTL_SECONDS} and {MAX_TTL_SECONDS}"
@@ -390,7 +391,7 @@ pub(super) fn create_for_owner(
 /// A paired device can invite another device, but does not become its owner.
 /// Follow only retained native inviter edges; never infer an owner from email,
 /// display names or a legacy invitation without provenance.
-fn retained_inviter_owner(root: &Path, inviter: &str) -> anyhow::Result<String> {
+fn retained_inviter_owner(root: &Path, inviter: &str) -> anyhow::Result<Option<String>> {
     let conn = super::store::open_store(root)?;
     ensure_table(&conn)?;
     let mut current = inviter.to_owned();
@@ -415,13 +416,18 @@ fn retained_inviter_owner(root: &Path, inviter: &str) -> anyhow::Result<String> 
                 revoked.is_none() && proof.is_some(),
                 "inviter device is not paired or was revoked"
             );
-            current = parent.context("inviter has no retained owner")?;
+            // Existing paired devices keep their device-control workflow, but
+            // an unknown historical inviter never creates federation ownership.
+            let Some(parent) = parent else {
+                return Ok(None);
+            };
+            current = parent;
         } else {
             anyhow::ensure!(
                 matches!(role.as_str(), "chef" | "admin" | "founder"),
                 "inviter is not an owner"
             );
-            return Ok(current);
+            return Ok(Some(current));
         }
     }
     anyhow::bail!("retained inviter chain is cyclic or exceeds its bound")
