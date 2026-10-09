@@ -2655,20 +2655,34 @@ mod tests {
         assert!(!overrides.contains_key("model_providers.ctox_core_api.env_key"));
     }
 
-
     #[test]
     fn grok_subscription_harness_uses_native_provider_header() {
         let settings = BTreeMap::from([
             ("CTOX_API_PROVIDER".into(), "ctox_subscription".into()),
-            (runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV.into(), "xai".into()),
-            ("CTOX_UPSTREAM_BASE_URL".into(), "https://llm.ctox.dev/v1".into()),
+            (
+                runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV.into(),
+                "xai".into(),
+            ),
+            (
+                "CTOX_UPSTREAM_BASE_URL".into(),
+                "https://llm.ctox.dev/v1".into(),
+            ),
         ]);
         let spec = resolve_api_model_provider_spec("grok-4.7", &settings, None).unwrap();
-        assert_eq!(spec.base_url, crate::execution::cliproxyapi_host::instance_codex_proxy_base_url());
-        assert_eq!(spec.subscription_provider.as_deref(), Some("xai"));
-        let overrides = spec.ctox_core_cli_overrides().into_iter().collect::<BTreeMap<_, _>>();
         assert_eq!(
-            overrides.get("model_providers.ctox_core_api.http_headers").and_then(TomlValue::as_table).and_then(|headers| headers.get("X-CTOX-Provider")),
+            spec.base_url,
+            crate::execution::cliproxyapi_host::instance_codex_proxy_base_url()
+        );
+        assert_eq!(spec.subscription_provider.as_deref(), Some("xai"));
+        let overrides = spec
+            .ctox_core_cli_overrides()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            overrides
+                .get("model_providers.ctox_core_api.http_headers")
+                .and_then(TomlValue::as_table)
+                .and_then(|headers| headers.get("X-CTOX-Provider")),
             Some(&TomlValue::String("xai".into()))
         );
     }

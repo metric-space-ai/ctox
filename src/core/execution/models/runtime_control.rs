@@ -38,10 +38,16 @@ pub struct RuntimeApiRoute {
 impl RuntimeApiRoute {
     fn project(&self, env_map: &mut BTreeMap<String, String>) {
         env_map.insert("CTOX_API_PROVIDER".into(), self.provider.clone());
-        env_map.insert("CTOX_UPSTREAM_BASE_URL".into(), self.upstream_base_url.clone());
+        env_map.insert(
+            "CTOX_UPSTREAM_BASE_URL".into(),
+            self.upstream_base_url.clone(),
+        );
         env_map.remove(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV);
         if let Some(provider) = &self.subscription_provider {
-            env_map.insert(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV.into(), provider.clone());
+            env_map.insert(
+                runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV.into(),
+                provider.clone(),
+            );
         }
     }
 }
@@ -155,11 +161,13 @@ pub fn apply_runtime_selection_with_context(
     let previous_plan = runtime_plan::load_persisted_chat_runtime_plan(root)?;
     let previous_state = runtime_state::load_or_resolve_runtime_state(root)?;
     let previous_env = runtime_env::effective_operator_env_map(root)?;
-    let previous_api_route = (previous_state.source == runtime_state::InferenceSource::Api)
-        .then(|| RuntimeApiRoute {
+    let previous_api_route =
+        (previous_state.source == runtime_state::InferenceSource::Api).then(|| RuntimeApiRoute {
             provider: runtime_state::infer_api_provider_from_env_map(&previous_env),
             upstream_base_url: previous_state.upstream_base_url.clone(),
-            subscription_provider: previous_env.get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV).cloned(),
+            subscription_provider: previous_env
+                .get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV)
+                .cloned(),
         });
     let change = persist_runtime_selection(root, model, preset, context)?;
     let now = runtime_contract::current_epoch_secs();
@@ -1118,7 +1126,8 @@ fn select_grok_subscription_route(
         provider: runtime_state::API_PROVIDER_CTOX_SUBSCRIPTION.into(),
         upstream_base_url: runtime_state::default_api_upstream_base_url_for_provider(
             runtime_state::API_PROVIDER_CTOX_SUBSCRIPTION,
-        ).into(),
+        )
+        .into(),
         subscription_provider: Some("xai".into()),
     }))
 }
@@ -1151,8 +1160,12 @@ fn prepare_grok_subscription_selection(
     )?;
     if let Some(route) = route {
         route.project(env_map);
-    } else if env_map.get("CTOX_API_PROVIDER").is_some_and(|provider| provider == runtime_state::API_PROVIDER_CTOX_SUBSCRIPTION)
-        && env_map.get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV).is_some_and(|provider| provider == "xai")
+    } else if env_map
+        .get("CTOX_API_PROVIDER")
+        .is_some_and(|provider| provider == runtime_state::API_PROVIDER_CTOX_SUBSCRIPTION)
+        && env_map
+            .get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV)
+            .is_some_and(|provider| provider == "xai")
     {
         // A later model-family switch must not inherit the Grok-only route.
         let provider = if engine::is_api_chat_model(model) {
@@ -1161,8 +1174,10 @@ fn prepare_grok_subscription_selection(
             runtime_state::API_PROVIDER_LOCAL
         };
         env_map.insert("CTOX_API_PROVIDER".into(), provider.into());
-        env_map.insert("CTOX_UPSTREAM_BASE_URL".into(),
-            runtime_state::default_api_upstream_base_url_for_provider(provider).into());
+        env_map.insert(
+            "CTOX_UPSTREAM_BASE_URL".into(),
+            runtime_state::default_api_upstream_base_url_for_provider(provider).into(),
+        );
         env_map.remove(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV);
     }
     Ok(())
@@ -1748,31 +1763,66 @@ mod tests {
         }
     }
 
-
     #[test]
     fn grok_selection_requires_an_installed_account_and_live_model_membership() {
-        assert!(select_grok_subscription_route("grok-4.7", false, || panic!("no account, no discovery")).is_err());
+        assert!(select_grok_subscription_route("grok-4.7", false, || panic!(
+            "no account, no discovery"
+        ))
+        .is_err());
         assert!(select_grok_subscription_route("grok-4.7", true, || Ok(Vec::new())).is_err());
-        assert!(select_grok_subscription_route("grok-4.7", true, || anyhow::bail!("bounded discovery failed")).is_err());
-        assert!(select_grok_subscription_route("glm-5.3-flash", true, || panic!("unrelated provider")).unwrap().is_none());
+        assert!(
+            select_grok_subscription_route("grok-4.7", true, || anyhow::bail!(
+                "bounded discovery failed"
+            ))
+            .is_err()
+        );
+        assert!(
+            select_grok_subscription_route("glm-5.3-flash", true, || panic!("unrelated provider"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn live_grok_selection_replaces_the_cloud_proxy_route() {
         let root = make_temp_root();
-        let route = select_grok_subscription_route("grok-4.7", true, || Ok(vec!["grok-4.7".into()])).unwrap().unwrap();
+        let route =
+            select_grok_subscription_route("grok-4.7", true, || Ok(vec!["grok-4.7".into()]))
+                .unwrap()
+                .unwrap();
         let mut previous = test_runtime_state(runtime_state::InferenceSource::Api);
         previous.upstream_base_url = "https://llm.ctox.dev/v1".into();
-        let mut next = build_selected_runtime_state(&previous, runtime_state::InferenceSource::Api, None, "grok-4.7", None, 131_072);
+        let mut next = build_selected_runtime_state(
+            &previous,
+            runtime_state::InferenceSource::Api,
+            None,
+            "grok-4.7",
+            None,
+            131_072,
+        );
         let mut env_map = BTreeMap::from([
             ("CTOX_API_PROVIDER".into(), "ctox_proxy".into()),
-            ("CTOX_UPSTREAM_BASE_URL".into(), previous.upstream_base_url.clone()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".into(),
+                previous.upstream_base_url.clone(),
+            ),
         ]);
         route.project(&mut env_map);
         apply_selection_runtime_projection(&root, &mut env_map, &mut next, None).unwrap();
-        assert_eq!(next.upstream_base_url, runtime_state::default_api_upstream_base_url_for_provider("ctox_subscription"));
-        assert_eq!(env_map.get("CTOX_API_PROVIDER").map(String::as_str), Some("ctox_subscription"));
-        assert_eq!(env_map.get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV).map(String::as_str), Some("xai"));
+        assert_eq!(
+            next.upstream_base_url,
+            runtime_state::default_api_upstream_base_url_for_provider("ctox_subscription")
+        );
+        assert_eq!(
+            env_map.get("CTOX_API_PROVIDER").map(String::as_str),
+            Some("ctox_subscription")
+        );
+        assert_eq!(
+            env_map
+                .get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV)
+                .map(String::as_str),
+            Some("xai")
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1781,13 +1831,27 @@ mod tests {
         let root = make_temp_root();
         let mut env_map = BTreeMap::from([
             ("CTOX_API_PROVIDER".into(), "ctox_subscription".into()),
-            ("CTOX_UPSTREAM_BASE_URL".into(), runtime_state::default_api_upstream_base_url_for_provider("ctox_subscription").into()),
-            (runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV.into(), "xai".into()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".into(),
+                runtime_state::default_api_upstream_base_url_for_provider("ctox_subscription")
+                    .into(),
+            ),
+            (
+                runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV.into(),
+                "xai".into(),
+            ),
         ]);
         prepare_grok_subscription_selection(&root, "glm-5.3-flash", &mut env_map).unwrap();
-        assert_eq!(env_map.get("CTOX_API_PROVIDER").map(String::as_str), Some("ctox_proxy"));
-        assert_eq!(env_map.get("CTOX_UPSTREAM_BASE_URL").map(String::as_str),
-            Some(runtime_state::default_api_upstream_base_url_for_provider("ctox_proxy")));
+        assert_eq!(
+            env_map.get("CTOX_API_PROVIDER").map(String::as_str),
+            Some("ctox_proxy")
+        );
+        assert_eq!(
+            env_map.get("CTOX_UPSTREAM_BASE_URL").map(String::as_str),
+            Some(runtime_state::default_api_upstream_base_url_for_provider(
+                "ctox_proxy"
+            ))
+        );
         assert!(!env_map.contains_key(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV));
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1802,22 +1866,44 @@ mod tests {
         state.upstream_base_url = "https://llm.ctox.dev/v1".into();
         let mut env_map = BTreeMap::from([
             ("CTOX_API_PROVIDER".into(), "ctox_proxy".into()),
-            ("CTOX_UPSTREAM_BASE_URL".into(), state.upstream_base_url.clone()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".into(),
+                state.upstream_base_url.clone(),
+            ),
         ]);
         runtime_state::apply_runtime_state_to_env_map(&mut env_map, &state);
         runtime_env::save_runtime_state_projection(&root, &state, &env_map).unwrap();
         apply_runtime_selection(&root, "glm-5.3-flash", None).unwrap();
         let transaction = load_runtime_switch_transaction(&root).unwrap().unwrap();
-        assert_eq!(transaction.previous_api_route.as_ref().unwrap().provider, "ctox_proxy");
-        let grok_route = select_grok_subscription_route("grok-4.7", true, || Ok(vec!["grok-4.7".into()])).unwrap().unwrap();
+        assert_eq!(
+            transaction.previous_api_route.as_ref().unwrap().provider,
+            "ctox_proxy"
+        );
+        let grok_route =
+            select_grok_subscription_route("grok-4.7", true, || Ok(vec!["grok-4.7".into()]))
+                .unwrap()
+                .unwrap();
         grok_route.project(&mut env_map);
-        let mut next = build_selected_runtime_state(&state, runtime_state::InferenceSource::Api, None, "grok-4.7", None, 131_072);
+        let mut next = build_selected_runtime_state(
+            &state,
+            runtime_state::InferenceSource::Api,
+            None,
+            "grok-4.7",
+            None,
+            131_072,
+        );
         apply_selection_runtime_projection(&root, &mut env_map, &mut next, None).unwrap();
         let rollback = rollback_runtime_switch(&root).unwrap().unwrap();
-        assert_eq!(rollback.next_state.upstream_base_url, state.upstream_base_url);
+        assert_eq!(
+            rollback.next_state.upstream_base_url,
+            state.upstream_base_url
+        );
         assert_eq!(rollback.next_state.active_model, state.active_model);
         let restored = runtime_env::load_runtime_env_map(&root).unwrap();
-        assert_eq!(restored.get("CTOX_API_PROVIDER").map(String::as_str), Some("ctox_proxy"));
+        assert_eq!(
+            restored.get("CTOX_API_PROVIDER").map(String::as_str),
+            Some("ctox_proxy")
+        );
         assert!(!restored.contains_key(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV));
         std::fs::remove_dir_all(root).unwrap();
     }
