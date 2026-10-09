@@ -25,6 +25,14 @@ operation returns its retained receipt and projects the same stored WAV bytes.
 A failed attempt is not a narrated slide: only committed audio can make the
 meeting ready.
 
+Local HTTP MCP dispatches tools on ordinary OS threads. Narration drives the
+configured speech adapter on a current-thread Tokio runtime only when no
+runtime is present; managed gateway workers retain their existing runtime.
+Executor setup failure is `execution_unavailable`, never a speech-configuration
+failure. Preparation retrospectives use the retained meeting state and actual
+stored audio references; worker claims and speculative provider learnings do
+not replace that evidence.
+
 
 
 ### Native federation consumer authority

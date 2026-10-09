@@ -5,6 +5,36 @@ use tokio::{
 };
 use tokio_tungstenite::accept_async;
 
+// Test-only, root-scoped transport override. Production has no configurable
+// Mistral endpoint; parallel HTTP regressions cannot redirect another root.
+static MISTRAL_TEST_ENDPOINTS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, String>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+pub(crate) struct MistralTestEndpoint(PathBuf);
+
+impl MistralTestEndpoint {
+    pub(crate) fn new(root: &Path, endpoint: String) -> Self {
+        assert!(endpoint.starts_with("http://127.0.0.1:"));
+        assert!(MISTRAL_TEST_ENDPOINTS
+            .lock()
+            .unwrap()
+            .insert(root.to_owned(), endpoint)
+            .is_none());
+        Self(root.to_owned())
+    }
+}
+
+impl Drop for MistralTestEndpoint {
+    fn drop(&mut self) {
+        MISTRAL_TEST_ENDPOINTS.lock().unwrap().remove(&self.0);
+    }
+}
+
+pub(super) fn mistral_test_endpoint(root: &Path) -> Option<String> {
+    MISTRAL_TEST_ENDPOINTS.lock().unwrap().get(root).cloned()
+}
+
 #[test]
 fn pcm_contract_bounds_and_formats() {
     let f = PcmFormat::default();
