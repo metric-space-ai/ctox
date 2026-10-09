@@ -72,15 +72,41 @@ fn projection_does_not_read_worker_messages_or_initialize_lcm() -> Result<()> {
         "UPDATE communication_routing_state SET attempt=1 WHERE message_key=?1",
         [task_id],
     )?;
-    // Replace transcript sources by views that fail if read. A large history
-    // must have exactly the same cost/behavior as an absent history.
+    // Admission may already have initialized LCM. Hide its fixture tables so
+    // the projection must still neither read transcripts nor initialize LCM.
+    for (table, hidden) in [
+        ("messages", "hidden_lcm_messages"),
+        ("task_execution_plan_revisions", "hidden_plan_revisions"),
+    ] {
+        if core.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            [table],
+            |row| row.get::<_, bool>(0),
+        )? {
+            core.execute_batch(&format!("ALTER TABLE {table} RENAME TO {hidden};"))?;
+        }
+    }
+    // Both views fail if read, regardless of the schema created by admission.
     core.execute_batch(
         "ALTER TABLE communication_messages RENAME TO hidden_communication_messages;
         CREATE VIEW communication_messages AS SELECT * FROM missing_transcript_source;
         CREATE VIEW messages AS SELECT * FROM missing_lcm_source;",
     )?;
-    project(root.path(), &core)?;
-    assert!(!core.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_execution_plan_revisions')", [], |row| row.get::<_, bool>(0))?, "projection must not initialize worker history");
+    assert!(core
+        .prepare("SELECT * FROM communication_messages")
+        .is_err());
+    assert!(core.prepare("SELECT * FROM messages").is_err());
+    for _ in 0..2 {
+        project(root.path(), &core)?;
+        assert!(
+            !core.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_execution_plan_revisions')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )?,
+            "projection must not initialize worker history"
+        );
+    }
     let business = store::open_store(root.path())?;
     assert_eq!(
         business.query_row(
@@ -90,7 +116,6 @@ fn projection_does_not_read_worker_messages_or_initialize_lcm() -> Result<()> {
         )?,
         1
     );
-    project(root.path(), &core)?;
     Ok(())
 }
 
