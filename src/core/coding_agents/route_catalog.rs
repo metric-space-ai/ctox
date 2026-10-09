@@ -482,6 +482,9 @@ mod tests {
             ),
         ]);
         runtime_env::save_runtime_env_map(root.path(), &settings)?;
+        // Warm the inference cache before changing the endpoint/key pair.
+        // Discovery must not combine its retired endpoint with the new key.
+        crate::execution::models::runtime_kernel::InferenceRuntimeKernel::resolve(root.path())?;
         let captured = resolve_inherited_catalog_route(root.path())?;
         settings.insert(
             "CTOX_UPSTREAM_BASE_URL".into(),

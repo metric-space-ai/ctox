@@ -689,9 +689,19 @@ fn resolve_inherited_route(
 ) -> anyhow::Result<InheritedCodingRoute> {
     use crate::execution::models::{runtime_env, runtime_kernel, runtime_state};
 
-    let runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root)?;
+    // Discovery must fence the current private endpoint against the current
+    // credential. The inference kernel cache can retain an old endpoint after
+    // a configuration change; combining it with a fresh key discloses that key
+    // to the retired endpoint before the post-request check can reject it.
+    let runtime = matches!(purpose, InheritedRoutePurpose::Inference)
+        .then(|| runtime_kernel::InferenceRuntimeKernel::resolve(root))
+        .transpose()?;
+    let state = match runtime.as_ref() {
+        Some(runtime) => runtime.state.clone(),
+        None => runtime_state::load_or_resolve_runtime_state(root)?,
+    };
     let mut settings = runtime_env::load_persisted_runtime_env_map_cached(root)?;
-    runtime_state::apply_runtime_state_to_env_map(&mut settings, &runtime.state);
+    runtime_state::apply_runtime_state_to_env_map(&mut settings, &state);
     let provider = runtime_state::infer_api_provider_from_env_map(&settings);
     // The main spec owns provider/model, endpoint and credential selection.
     // Pi's existing wire adapters handle the actual provider edge: direct
@@ -703,8 +713,7 @@ fn resolve_inherited_route(
         ),
         "inherited Pi route does not support main provider {provider}; select a supported coding preset"
     );
-    let model_id = runtime
-        .state
+    let model_id = state
         .active_or_selected_model()
         .filter(|model| !model.trim().is_empty())
         .context("CTOX main route has no selected model")?
@@ -712,13 +721,16 @@ fn resolve_inherited_route(
     let spec = crate::execution::agent::turn_loop::resolve_api_model_provider_spec(
         &model_id,
         &settings,
-        matches!(purpose, InheritedRoutePurpose::Inference).then_some(&runtime),
+        runtime.as_ref(),
     );
     let (base_url, credential_key) = if provider == "openai" {
         let base = match purpose {
-            InheritedRoutePurpose::Inference => runtime.internal_responses_base_url(),
+            InheritedRoutePurpose::Inference => runtime
+                .as_ref()
+                .context("inherited inference runtime is unavailable")?
+                .internal_responses_base_url(),
             InheritedRoutePurpose::ModelCatalog => {
-                let upstream = runtime.state.upstream_base_url.trim_end_matches('/');
+                let upstream = state.upstream_base_url.trim_end_matches('/');
                 if upstream.ends_with("/v1") {
                     upstream.to_owned()
                 } else {
