@@ -67,5 +67,7 @@ require actual nonempty output text. Persisted checks contain a private secret
 content binding; a changed/deleted credential invalidates the previous result.
 Removal cancels retained login and deletes only the subscription credential under
 the same serialization used by native refresh/inference, then clears its check.
+Once the native live catalog confirms a requested Grok model, an explicit `ctox runtime switch` selects the instance subscription route (`ctox_subscription`, provider `xai`) rather than retaining the cloud proxy. Discovery has an eight-second bound before persistence; missing credentials, unavailable models and discovery failures leave the current selection intact. The transaction saves public provider/URL metadata so rollback restores the previous route. This implementation does not perform that production switch; the operator switches only after installed login and a real Hi check.
+
 No enabled toggle is exposed. Fixed errors do not promise upstream error-class
 fidelity, and this control does not change the instance default model.
