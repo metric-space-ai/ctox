@@ -56,6 +56,15 @@ fn add(
       json_set(intent_json,'$.client_context.actor.id',?4,'$.payload.thread_id',?5,'$.record_id',?6),?7,?7
       FROM business_command_aggregates WHERE command_id=?8",
       rusqlite::params![id,phase,status,owner,thread,project,created,command])?;
+    let payload: String = core(root)?.query_row(
+        "SELECT json_extract(intent_json,'$.payload') FROM business_command_aggregates WHERE command_id=?1",
+        [id], |row| row.get(0),
+    )?;
+    store::open_store(root)?.execute(
+        "INSERT INTO business_commands (command_id,module,command_type,record_id,status,payload_json,client_context_json,observed_at_ms)
+         VALUES (?1,'ctox','business_os.chat.task',?2,'accepted',?3,?4,?5)",
+        rusqlite::params![id,project,payload,serde_json::to_string(&json!({"actor":{"id":owner}}))?,created],
+    )?;
     Ok(())
 }
 #[test]
@@ -418,5 +427,96 @@ fn resolving_a_recipe_uses_write_policy_when_global_read_tools_are_disabled() ->
         )?["kpis"]["revision"],
         2
     );
+    Ok(())
+}
+
+#[test]
+fn real_supervisor_intake_counts_redacted_receipts_for_verified_alias_only() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    let conn = core(root.path())?;
+    let initial = required_arg(&trusted, "command_id")?;
+    let mut ids = vec![initial];
+    for (id, goal) in [
+        ("actual-submit-one", "Implement the first real task"),
+        ("actual-submit-two", "Implement the second real task"),
+    ] {
+        let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({"id":id,"module":"ctox","record_id":"project",
+            "command_type":"ctox.workjet.project.supervisor.turn.submit",
+            "payload":{"project_id":"project","thread_id":THREAD,"goal":goal},
+            "client_context":{"actor":{"id":"owner","role":"chef"}}}),
+        )?;
+        anyhow::ensure!(accepted["status"] == "completed", "{accepted}");
+        ids.push(
+            accepted["result"]["turn"]["command_id"]
+                .as_str()
+                .context("accepted task")?
+                .to_owned(),
+        );
+    }
+    for id in &ids {
+        let audited: Value = serde_json::from_str(&conn.query_row(
+            "SELECT intent_json FROM business_command_aggregates WHERE command_id=?1",
+            [id],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert!(audited.pointer("/client_context/actor/id").is_none());
+        assert_eq!(
+            store::load_business_command(&store::open_store(root.path())?, id)?.client_context
+                ["actor"]["id"],
+            "owner"
+        );
+    }
+    // Only fixture ledger state is advanced; these are receipt-count tests,
+    // never claims that an actual model or product acceptance ran.
+    for id in &ids[1..] {
+        conn.execute("UPDATE business_command_aggregates SET execution_phase='terminal',terminal_status='completed' WHERE command_id=?1",[id])?;
+    }
+    let now = store::now_ms() as i64;
+    let _ = store::issue_business_os_capability_token_for_managed_user_with_email(
+        root.path(),
+        "owner",
+        Some("owner@example.org"),
+        "Owner",
+        "chef",
+        now,
+    )?;
+    let _ = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner@example.org",
+        "Owner alias",
+        "admin",
+        now,
+    )?;
+    let policy = store::open_store(root.path())?;
+    for (i, (recipe, expected)) in [
+        ("project_tasks_total", 3),
+        ("project_tasks_completed", 2),
+        ("project_tasks_open", 1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request: wire::BindKpiRequest = serde_json::from_value(
+            args(recipe, &format!("actual-{i}"), 1 + i as u64)["request"].clone(),
+        )?;
+        let result = resolver::resolve(
+            &conn,
+            &policy,
+            "owner@example.org",
+            "project",
+            THREAD,
+            &request,
+            now,
+        )?;
+        assert_eq!(
+            result["kpis"]["items"][0]["result"]["snapshot"]["value"],
+            expected
+        );
+        assert!(
+            resolver::resolve(&conn, &policy, "foreign", "project", THREAD, &request, now).is_err()
+        );
+    }
     Ok(())
 }
