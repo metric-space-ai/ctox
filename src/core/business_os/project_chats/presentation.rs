@@ -23,7 +23,7 @@ pub(in crate::business_os) const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 const FILE_SOURCE: &str = "ctox-workjet-presentation";
 const LINKED_COLLECTION: &str = "workjet_presentations";
 const CHUNK_CHARS: usize = 16 * 1024;
-const MAX_ISSUES_IN_ERROR: usize = 6;
+const MAX_ISSUES_IN_ERROR: usize = 12;
 
 pub(in crate::business_os) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS workjet_presentations (
@@ -243,6 +243,49 @@ pub(in crate::business_os) fn validate_report(
     document: Value,
 ) -> anyhow::Result<Value> {
     super::presentation_validator::run(root, &json!({"op":"validate","document":document}))
+}
+
+/// The slide engine's content rules for decks the Supervisor writes (validator
+/// op `lintMeeting`): no title repeated as a heading, no slide that only says
+/// evidence is missing, no wording about the slide or the system, no internal
+/// ids. The Owner's own canvas saves are not linted.
+pub(in crate::business_os) fn meeting_content(
+    root: &Path,
+    document: &Value,
+) -> anyhow::Result<Value> {
+    super::presentation_validator::run(root, &json!({"op":"lintMeeting","document":document}))
+}
+
+/// Rejects a Supervisor deck that breaks the content rules, with repair hints.
+pub(in crate::business_os) fn ensure_meeting_content(
+    root: &Path,
+    document: &Value,
+) -> anyhow::Result<()> {
+    let answer = meeting_content(root, document)?;
+    if answer["ok"] != true {
+        return Err(rejection(&answer));
+    }
+    Ok(())
+}
+
+/// The Supervisor's dry run: schema validation, then the content rules, as one
+/// report with every issue and warning.
+pub(in crate::business_os) fn supervisor_report(
+    root: &Path,
+    document: Value,
+) -> anyhow::Result<Value> {
+    let mut answer = validate_report(root, document.clone())?;
+    if answer["ok"] != true {
+        return Ok(answer);
+    }
+    let content = meeting_content(root, &document)?;
+    for key in ["issues", "warnings"] {
+        let mut merged = answer[key].as_array().cloned().unwrap_or_default();
+        merged.extend(content[key].as_array().cloned().unwrap_or_default());
+        answer[key] = Value::Array(merged);
+    }
+    answer["ok"] = Value::Bool(content["ok"] == true);
+    Ok(answer)
 }
 
 /// Compact outline of a stored document for agents.
