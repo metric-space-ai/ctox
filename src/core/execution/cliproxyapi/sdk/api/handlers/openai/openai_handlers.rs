@@ -1,4 +1,5 @@
-// ref: sdk/api/handlers/openai/openai_handlers.go:135-438 @ a4acc9f752bd46571f737a10c04bf413656ab06b
+// ref: sdk/api/handlers/openai/openai_handlers.go @ a88197f845c979132c8978ea223c6af05cc81536
+// Candidate adaptation: sdk/api/handlers/openai/openai_handlers.go:135-438 @ a4acc9f752bd46571f737a10c04bf413656ab06b
 // Port-Status: candidate — public OpenAI conversions
 // License: MIT (upstream); modifications AGPL-3.0-only
 
