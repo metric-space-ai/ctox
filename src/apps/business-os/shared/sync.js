@@ -292,7 +292,7 @@ export function createSyncRuntime({
       `Direct multi-tab failover for ${collection} did not reach the native WebRTC peer before the deadline.`
     ));
   };
-  const recordCollection = (collection, update) => {
+  const recordCollection = (collection, update, options = {}) => {
     const current = diagnostics.collections[collection] || {};
     const updatedAt = new Date().toISOString();
     const declaredSyncProfile = declaredCollectionSyncProfile(collection);
@@ -335,7 +335,7 @@ export function createSyncRuntime({
       ...next,
     };
     emitDiagnostic({ phase: 'collection-sync' }, {
-      immediate: isUrgentCollectionDiagnostic(update, nextStatus),
+      immediate: options.immediate ?? isUrgentCollectionDiagnostic(update, nextStatus),
     });
   };
   const stopAllBridges = async () => {
@@ -974,7 +974,7 @@ export function createSyncRuntime({
         active: false,
         lastError: null,
         reconnectingSince: options.preserveLeases ? new Date().toISOString() : null,
-      });
+      }, { immediate: false });
       if (!bridgePromise) return false;
       try {
         const bridge = await withTimeout(bridgePromise, 3000);
@@ -1037,12 +1037,12 @@ export function createSyncRuntime({
       ));
       for (const collection of requested) {
         if (restartable.includes(collection) || !mayReadCollection(collection)) continue;
-        const hadIntent = hasRepairIntent(collection);
+        const demandOnly = isModuleDemandOnlyCollection(collection);
         activeCollections.delete(collection);
         recordCollection(collection, {
-          status: hadIntent ? 'skipped' : 'stopped',
-          connectionStatus: hadIntent ? 'demand-only' : 'stopped',
-          reason: hadIntent ? 'demand-only-requires-lease' : 'collection-lease-ended',
+          status: demandOnly ? 'skipped' : 'stopped',
+          connectionStatus: demandOnly ? 'demand-only' : 'stopped',
+          reason: demandOnly ? 'demand-only-requires-lease' : 'collection-lease-ended',
           active: false,
           lastError: null,
           reconnectingSince: null,

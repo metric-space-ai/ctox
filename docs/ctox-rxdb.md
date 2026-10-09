@@ -1183,6 +1183,9 @@ bridges with no window lease or pin. A repair whose last owner closed
 does not reopen the collection. Late startup is cancelled by its exact bridge
 generation; its callbacks cannot publish readiness or schedule another repair
 over a stopped or replacement bridge. Cancellation is idempotent.
+Expected local stop diagnostics coalesce with the existing collection burst;
+native faults retain their immediate diagnostic path. Unleased demand-only
+collections keep their explicit skipped/demand-only contract.
 
 Tickets uses invalidation-only collection subscriptions to schedule its bounded
 refreshes. Subscribing no longer starts an unused full queue/crew snapshot;
