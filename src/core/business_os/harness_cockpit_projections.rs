@@ -586,6 +586,9 @@ fn core(root: &Path) -> Result<Connection> {
                 ON ctox_harness_flow_events(json_extract(metadata_json,'$.attempt_id'), created_at);
              CREATE INDEX IF NOT EXISTS idx_cockpit_flow_task_time
                 ON ctox_harness_flow_events(message_key, created_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_cockpit_flow_plan_time
+                ON ctox_harness_flow_events(message_key, created_at DESC, event_id DESC)
+                WHERE event_kind='worker.plan_updated';
              CREATE INDEX IF NOT EXISTS idx_crew_selection_diagnostic_time
                 ON ctox_harness_flow_events(created_at)
                 WHERE event_kind IN ('crew_selected','crew_selection_unavailable')
@@ -1233,6 +1236,14 @@ fn retain_task_events(writer: &mut BusinessProjectionWriter, task: &str) -> Resu
 
 /// Resolve the plan at the event's time, not the task's newest revision. This
 /// runs exclusively on the projection pump, never in the harness progress hook.
+// A cold replay asks for the plan at each event's emission. The partial
+// task/time index skips ordinary tool/phase history when no plan exists.
+const EVENT_PLAN_AT_EMISSION_SQL: &str = "SELECT json_extract(metadata_json,'$.plan.plan')
+     FROM ctox_harness_flow_events
+     WHERE message_key=?1 AND event_kind='worker.plan_updated' AND created_at<=?2
+       AND (?3 IS NULL OR json_extract(metadata_json,'$.attempt_id')=?3)
+     ORDER BY created_at DESC, event_id DESC LIMIT 1";
+
 fn event_step_position(
     conn: &Connection,
     task: &str,
@@ -1245,11 +1256,7 @@ fn event_step_position(
     let current_steps = metadata.pointer("/plan/plan").and_then(Value::as_array);
     let prior: Option<String> = if current_steps.is_none() {
         conn.query_row(
-            "SELECT json_extract(metadata_json,'$.plan.plan')
-             FROM ctox_harness_flow_events
-             WHERE message_key=?1 AND event_kind='worker.plan_updated' AND created_at<=?2
-               AND (?3 IS NULL OR json_extract(metadata_json,'$.attempt_id')=?3)
-             ORDER BY created_at DESC, event_id DESC LIMIT 1",
+            EVENT_PLAN_AT_EMISSION_SQL,
             params![
                 task,
                 created,

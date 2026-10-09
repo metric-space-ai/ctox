@@ -1636,6 +1636,16 @@ fn changed_event_query_and_task_retention_use_bounded_indexes() -> Result<()> {
         "{plan}"
     );
     assert!(!plan.contains("SCAN e"), "{plan}");
+    let plan = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {EVENT_PLAN_AT_EMISSION_SQL}"))?
+        .query_map(
+            params!["task", "2026-01-01", Option::<String>::None],
+            |row| row.get::<_, String>(3),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .join("\n");
+    assert!(plan.contains("idx_cockpit_flow_plan_time"), "{plan}");
+    assert!(!plan.contains("TEMP B-TREE"), "{plan}");
     let plan = writer
         .inner
         .source_connection()

@@ -38,6 +38,11 @@ retains completed chunks in the dedupe cache and restores the unclaimed replay
 cursor so its unpublished rows stay eligible. No writer reservation spans a full
 pass or both independently delivered stores.
 
+Cold event replay also looks up the plan at each event's emission. A partial
+Core index on task/time/event ID for worker.plan_updated skips unrelated
+phase/tool history, including tasks with no plan. The query and its attempt
+filter are unchanged; the query-plan regression requires the ordered index.
+
 ## Writer diagnostics
 
 Slow native transactions emit `[ctox sqlite writer]` after their own lock
