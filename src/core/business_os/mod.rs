@@ -126,6 +126,8 @@ mod workjet_project_kpis;
 pub(crate) mod workjet_project_kpis_contract;
 #[path = "workjet_supervisor_execution_contract.generated.rs"]
 pub(crate) mod workjet_supervisor_execution_contract;
+#[path = "workjet_supervisor_luma_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_luma_contract;
 pub mod workjet_transfer_git;
 
 pub(crate) use app_runtime::inspect_module as inspect_app_runtime_module;
