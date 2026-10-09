@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_withdrawals (
     computer_id TEXT NOT NULL,
     PRIMARY KEY(account_id,computer_id),
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
+);
+CREATE TABLE IF NOT EXISTS business_provider_federation_model_observations (
+    account_id TEXT PRIMARY KEY,
+    account_revision INTEGER NOT NULL,
+    last_success_at_ms INTEGER,
+    models_json TEXT,
+    last_attempt_json TEXT NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
 );";
 
 const MAX_ACCOUNTS: usize = 256;
@@ -65,9 +73,16 @@ struct WithdrawRequest {
     expected_revision: i64,
 }
 
-/// Only the native gateway's existing metadata adapter constructs this type.
-/// It deliberately drops preset/configured model names: those are not a live
-/// provider model-list observation, and credential presence is not a Hi check.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObserveNativeRequest {
+    #[serde(default, rename = "inbound_channel")]
+    _inbound_channel: Option<String>,
+    account_id: String,
+    expected_account_revision: i64,
+}
+
+/// Only native account metadata constructs this type; this is not live health.
 struct NativeAccountObservation {
     provider: String,
     local_account_id: String,
@@ -198,6 +213,45 @@ pub(super) fn handle_command(
                     )?;
                 }
                 adopt(tx, &owner, &holder, &accounts, now)?;
+                Ok(AppliedDomainEffect {
+                    result: list(tx, &owner)?,
+                    projections: vec![],
+                })
+            })?;
+            Ok(applied.result)
+        }
+        "ctox.workjet.providers.observe_native" => {
+            let request: ObserveNativeRequest = serde_json::from_value(command.payload.clone())?;
+            bounded_id(&request.account_id)?;
+            ensure!(
+                request.expected_account_revision > 0,
+                "provider account revision is missing"
+            );
+            let admitted =
+                admission.context("native model observation requires domain admission")?;
+            let holder = store::existing_instance_id(root)?;
+            let provider = {
+                let conn = store::open_store(root)?;
+                let owner = management_owner(&conn, actor)?;
+                native_catalog_target(&conn, &owner, &holder, &request)?
+            };
+            // Network wait is outside the policy transaction. Caller-supplied
+            // endpoints, credentials and model lists are never accepted.
+            let observation =
+                crate::coding_agents::pi_sidecar::inherited_coding_model_catalog(root)?;
+            ensure!(
+                observation.provider == provider,
+                "native account provider changed"
+            );
+            let mut conn = store::open_store(root)?;
+            let applied = admitted.apply(&mut conn, |tx| {
+                let owner = management_owner(tx, actor)?;
+                let current = native_catalog_target(tx, &owner, &holder, &request)?;
+                ensure!(
+                    current == observation.provider,
+                    "native account provider changed"
+                );
+                retain_catalog_observation(tx, &request, &observation)?;
                 Ok(AppliedDomainEffect {
                     result: list(tx, &owner)?,
                     projections: vec![],
@@ -448,12 +502,125 @@ fn withdraw(conn: &Connection, owner: &str, request: &WithdrawRequest) -> Result
     Ok(())
 }
 
+const CATALOG_FRESHNESS_MS: i64 = 86_400_000;
+
+fn native_catalog_target(
+    conn: &Connection,
+    owner: &str,
+    holder: &str,
+    request: &ObserveNativeRequest,
+) -> Result<String> {
+    conn.query_row(
+        "SELECT provider FROM business_provider_federation_accounts
+         WHERE account_id=?1 AND owner_user_id=?2 AND holder_instance_id=?3
+           AND private_local_account_id=?4 AND revision=?5 AND enabled=1 AND credential_ready=1",
+        params![
+            request.account_id,
+            owner,
+            holder,
+            INHERITED_NATIVE_ACCOUNT_ID,
+            request.expected_account_revision
+        ],
+        |row| row.get(0),
+    )
+    .context("selected native catalog account is unavailable or changed")
+}
+
+fn retain_catalog_observation(
+    conn: &Connection,
+    request: &ObserveNativeRequest,
+    observation: &crate::coding_agents::pi_sidecar::NativeModelCatalogObservation,
+) -> Result<()> {
+    ensure!(
+        observation.checked_at_ms > 0,
+        "invalid native observation time"
+    );
+    let observed = observation.failure.is_none()
+        && observation.http_status == Some(200)
+        && observation.models.is_some();
+    ensure!(
+        observation.models.is_none() || observed,
+        "invalid native model observation"
+    );
+    let previous: Option<(Option<i64>,Option<String>)> = conn.query_row(
+        "SELECT last_success_at_ms,models_json FROM business_provider_federation_model_observations
+         WHERE account_id=?1 AND account_revision=?2",
+        params![request.account_id, request.expected_account_revision],
+        |row| Ok((row.get(0)?,row.get(1)?)),
+    ).optional()?;
+    let (success_at, models_json) = if observed {
+        (
+            Some(observation.checked_at_ms),
+            Some(serde_json::to_string(observation.models.as_ref().unwrap())?),
+        )
+    } else {
+        previous.unwrap_or((None, None))
+    };
+    // Persist only allowlisted metadata. A failed GET never changes account
+    // enablement, credentials, cooldown, session affinity or previous live IDs.
+    let attempt = json!({
+        "checkedAtMs":observation.checked_at_ms,"httpStatus":observation.http_status,
+        "elapsedMs":observation.elapsed_ms,"retryAfterSeconds":observation.retry_after_seconds,
+        "failure":observation.failure,"success":observed,
+    });
+    conn.execute(
+        "INSERT INTO business_provider_federation_model_observations
+         (account_id,account_revision,last_success_at_ms,models_json,last_attempt_json)
+         VALUES (?1,?2,?3,?4,?5)
+         ON CONFLICT(account_id) DO UPDATE SET account_revision=excluded.account_revision,
+         last_success_at_ms=excluded.last_success_at_ms,models_json=excluded.models_json,
+         last_attempt_json=excluded.last_attempt_json",
+        params![
+            request.account_id,
+            request.expected_account_revision,
+            success_at,
+            models_json,
+            serde_json::to_string(&attempt)?
+        ],
+    )?;
+    Ok(())
+}
+
+fn catalog_projection(
+    conn: &Connection,
+    account_id: &str,
+    revision: i64,
+    now: i64,
+) -> Result<Value> {
+    let row: Option<(Option<i64>, Option<String>, String)> = conn
+        .query_row(
+            "SELECT last_success_at_ms,models_json,last_attempt_json
+         FROM business_provider_federation_model_observations
+         WHERE account_id=?1 AND account_revision=?2",
+            params![account_id, revision],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((success_at, models, attempt)) = row else {
+        return Ok(
+            json!({"observed":false,"fresh":false,"models":[],"lastSuccessAtMs":null,"lastAttempt":null}),
+        );
+    };
+    let attempt: Value = serde_json::from_str(&attempt)?;
+    let models: Value = models
+        .map(|value| serde_json::from_str(&value))
+        .transpose()?
+        .unwrap_or(json!([]));
+    let fresh = success_at
+        .is_some_and(|checked| now >= checked && now - checked <= CATALOG_FRESHNESS_MS)
+        && attempt["success"] == true;
+    Ok(
+        json!({"observed":success_at.is_some(),"fresh":fresh,"models":models,
+        "lastSuccessAtMs":success_at,"lastAttempt":attempt}),
+    )
+}
+
 fn list(conn: &Connection, owner: &str) -> Result<Value> {
     let mut stmt = conn.prepare(
         "SELECT account_id,holder_instance_id,provider,enabled,credential_ready,revision,observed_at_ms
          FROM business_provider_federation_accounts WHERE owner_user_id=?1 ORDER BY provider,account_id LIMIT ?2",
     )?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map(params![owner, MAX_ACCOUNTS as i64 + 1], |row| {
             Ok(json!({
                 "id":row.get::<_,String>(0)?,
@@ -469,6 +636,18 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     ensure!(rows.len() <= MAX_ACCOUNTS, "owner account limit exceeded");
+    let now = store::now_ms() as i64;
+    for entry in &mut rows {
+        let id = entry["id"]
+            .as_str()
+            .context("native account id is missing")?;
+        let revision = entry["revision"]
+            .as_i64()
+            .context("native account revision is missing")?;
+        let catalog = catalog_projection(conn, id, revision, now)?;
+        entry["modelCatalogObserved"] = catalog["observed"].clone();
+        entry["modelCatalog"] = catalog;
+    }
     Ok(
         json!({"ok":true,"schema":"ctox.provider-federation-registry.v1",
         "revision":policy_revision(conn, owner)?,"accounts":rows}),
@@ -543,3 +722,7 @@ pub(crate) fn with_consumable_account<T>(
 #[cfg(test)]
 #[path = "provider_federation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "provider_federation_catalog_tests.rs"]
+mod catalog_tests;

@@ -263,20 +263,29 @@ fn retain_current_result(
     }
 }
 
-/// Only the trusted local operator CLI can request this network observation.
-/// It uses the same native provider/model/endpoint/secret selector as real Pi
-/// turns. An observation never authorizes a later turn or certifies capacity.
-pub(super) fn inspect(root: &Path) -> anyhow::Result<Value> {
-    let route = resolve_inherited_coding_route(root)?;
-    let probe = if let Some(credential) = read_credential(root, &route) {
-        let mut probe = fetch(&route, &credential, DEADLINE);
+/// A real, bounded GET /models observation. No endpoint, selected model,
+/// credential selector or secret is represented in this metadata value.
+#[derive(Serialize)]
+pub(crate) struct NativeModelCatalogObservation {
+    pub provider: String,
+    pub checked_at_ms: i64,
+    pub models: Option<Vec<String>>,
+    pub http_status: Option<u16>,
+    pub elapsed_ms: u64,
+    pub retry_after_seconds: Option<u64>,
+    pub failure: Option<String>,
+}
+
+fn probe_current(root: &Path, route: &InheritedCodingRoute) -> Probe {
+    if let Some(credential) = read_credential(root, route) {
+        let mut probe = fetch(route, &credential, DEADLINE);
         let current_route = resolve_inherited_coding_route(root).ok();
         let current_credential = current_route
             .as_ref()
             .and_then(|route| read_credential(root, route));
         retain_current_result(
             &mut probe,
-            &route,
+            route,
             &credential,
             current_route.as_ref(),
             current_credential.as_ref().map(|secret| secret.as_str()),
@@ -284,7 +293,36 @@ pub(super) fn inspect(root: &Path) -> anyhow::Result<Value> {
         probe
     } else {
         Probe::failed(Failure::CredentialUnavailable)
-    };
+    }
+}
+
+/// Called only after native Owner/Admin command admission. The observer reads
+/// the actual route and rechecks its private credential after the network wait.
+/// This is metadata, never authorization for inference or a capacity check.
+pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservation> {
+    let route = resolve_inherited_coding_route(root)
+        .map_err(|_| anyhow::anyhow!("native model catalog route is unavailable"))?;
+    let probe = probe_current(root, &route);
+    let failure = serde_json::to_value(probe.failure)?
+        .as_str()
+        .map(str::to_owned);
+    Ok(NativeModelCatalogObservation {
+        provider: route.provider,
+        checked_at_ms: chrono::Utc::now().timestamp_millis(),
+        models: probe.models,
+        http_status: probe.http_status,
+        elapsed_ms: probe.elapsed_ms,
+        retry_after_seconds: probe.retry_after_seconds,
+        failure,
+    })
+}
+
+/// Only the trusted local operator CLI can request this network observation.
+/// It uses the same native provider/model/endpoint/secret selector as real Pi
+/// turns. An observation never authorizes a later turn or certifies capacity.
+pub(super) fn inspect(root: &Path) -> anyhow::Result<Value> {
+    let route = resolve_inherited_coding_route(root)?;
+    let probe = probe_current(root, &route);
     let selected_model_listed = probe
         .models
         .as_ref()
@@ -319,6 +357,65 @@ mod tests {
             credential_key: "CTOX_LLM_PROXY_API_KEY",
             api: "openai-responses",
         }
+    }
+
+    #[test]
+    fn native_catalog_observer_reads_the_stored_route_and_never_exports_private_state(
+    ) -> anyhow::Result<()> {
+        use std::collections::BTreeMap;
+        let root = tempfile::tempdir()?;
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let address = format!("http://{}/v1", server.server_addr());
+        let settings = BTreeMap::from([
+            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_UPSTREAM_BASE_URL".to_owned(), address.clone()),
+            (
+                "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                "fixture-private-proxy".to_owned(),
+            ),
+        ]);
+        runtime_env::save_runtime_env_map(root.path(), &settings)?;
+        let before = runtime_env::load_runtime_env_map(root.path())?;
+        let worker = std::thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+            assert_eq!(request.url(), "/v1/models");
+            assert!(request
+                .headers()
+                .iter()
+                .any(|header| header.field.equiv("Authorization")
+                    && header.value.as_str() == "Bearer fixture-private-proxy"));
+            request
+                .respond(Response::from_string(
+                    r#"{"data":[{"id":"MiniMax-M3","private":"fixture-private-proxy"}]}"#,
+                ))
+                .unwrap();
+        });
+        let observation = observe(root.path())?;
+        worker.join().unwrap();
+        assert_eq!(observation.provider, "ctox_proxy");
+        assert_eq!(
+            observation.models.as_deref(),
+            Some(&["MiniMax-M3".to_owned()][..])
+        );
+        assert_eq!(observation.http_status, Some(200));
+        assert!(observation.failure.is_none());
+        let public = serde_json::to_string(&observation)?;
+        for private in [
+            "fixture-private-proxy",
+            "CTOX_LLM_PROXY_API_KEY",
+            address.as_str(),
+        ] {
+            assert!(!public.contains(private));
+        }
+        assert_eq!(runtime_env::load_runtime_env_map(root.path())?, before);
+        assert!(!root.path().join("coding-agents").exists());
+        Ok(())
     }
 
     #[test]

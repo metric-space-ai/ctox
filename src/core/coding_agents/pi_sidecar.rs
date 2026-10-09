@@ -733,7 +733,13 @@ fn resolve_inherited_coding_route(root: &Path) -> anyhow::Result<InheritedCoding
 #[path = "route_catalog.rs"]
 mod route_catalog;
 
-pub(crate) use route_catalog::NativeInheritedAccountMetadata;
+pub(crate) use route_catalog::{NativeInheritedAccountMetadata, NativeModelCatalogObservation};
+
+pub(crate) fn inherited_coding_model_catalog(
+    root: &Path,
+) -> anyhow::Result<NativeModelCatalogObservation> {
+    route_catalog::observe(root)
+}
 
 pub(crate) fn inherited_coding_account_metadata(
     root: &Path,
