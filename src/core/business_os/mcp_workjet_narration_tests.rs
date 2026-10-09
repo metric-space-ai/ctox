@@ -400,6 +400,44 @@ fn running_and_uncertain_slot_conflicts_name_the_existing_operation() -> anyhow:
 }
 
 #[test]
+fn failed_operation_id_cannot_be_rebound_to_another_slide() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    let mut meeting = saved(root.path())?;
+    meeting["slides"].as_array_mut().unwrap().push(json!({"id":"slide-2","meeting_id":"meeting-1","position":1,"title":"Decisions","body_markdown":"A decision is pending."}));
+    store::open_store(root.path())?.execute(
+        "UPDATE workjet_jour_fixe_meetings SET metadata_json=?1",
+        [meeting.to_string()],
+    )?;
+    assert!(call(root.path(), &trusted, args(), |_| Err(
+        SpeechError::ConfigurationUnavailable
+    ))
+    .is_err());
+    let mut other = args();
+    other["request"]["slide_id"] = json!("slide-2");
+    other["request"]["narration_text_sha256"] = json!(hash(b"A decision is pending."));
+    let error = call(root.path(), &trusted, other, |_| {
+        panic!("operation ID rebound")
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("narration operation intent conflicts"),
+        "{error}"
+    );
+    let policy = store::open_store(root.path())?;
+    assert_eq!(policy.query_row(
+        "SELECT slide_id,state,attempts FROM workjet_jour_fixe_native_narration WHERE operation_id='narrate-op'",
+        [], |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, u64>(2)?)),
+    )?, ("slide-1".into(), "failed_prerequisite".into(), 1));
+    let mut retry = args();
+    retry["request"]["operation_id"] = json!("same-slide-retry");
+    call(root.path(), &trusted, retry, output)?;
+    assert!(saved(root.path())?["slides"][0]["audio"].is_object());
+    assert!(saved(root.path())?["slides"][1]["audio"].is_null());
+    Ok(())
+}
+
+#[test]
 fn invalid_wav_or_wrong_native_text_receipt_never_creates_ready_audio() -> anyhow::Result<()> {
     for change in ["wav", "text"] {
         let (root, trusted) = fixture()?;
