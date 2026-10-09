@@ -142,11 +142,12 @@ pub(super) async fn handle_workjet_device_webrtc_request(
             ttl_seconds,
             display_name,
         } => WorkjetDeviceWebRtcResponseV1::InviteCreate(typed_response(
-            mobile_invites::create(
+            mobile_invites::create_for_owner(
                 root,
                 ttl_seconds.unwrap_or(mobile_invites::DEFAULT_TTL_SECONDS),
                 display_name.as_deref(),
                 None,
+                Some(&claims.user_id),
             )
             .map_err(|error| format!("workjet device invite create failed: {error}"))?,
         )?),

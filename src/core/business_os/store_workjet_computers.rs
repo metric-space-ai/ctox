@@ -41,6 +41,10 @@ struct ComputerAssignPayload {
     hosting_mode: String,
     #[serde(default)]
     capabilities: Vec<String>,
+    /// Native pairing identity, explicitly associated by this computer's owner.
+    /// Omission preserves the association; an empty string removes it.
+    #[serde(default)]
+    device_binding_id: Option<String>,
     /// Omitted by older Workjet clients: preserve native operational settings.
     #[serde(default)]
     capability_config: Option<Vec<ComputerCapability>>,
@@ -95,7 +99,8 @@ pub(super) fn requires_capability_management(command: &BusinessCommand) -> bool 
     super::computer_endpoints::is_endpoint_command(&command.command_type)
         || (command.command_type == "ctox.workjet.computer.assign"
             && (command.payload.get("capability_config").is_some()
-                || command.payload.get("agentless").is_some()))
+                || command.payload.get("agentless").is_some()
+                || command.payload.get("device_binding_id").is_some()))
 }
 
 fn migrate_signed_owner_alias(
@@ -234,6 +239,11 @@ fn handle_workjet_computer_assign_command(
     let conn = open_store(root)?;
     let existing = outbound_load_record(&conn, COMPUTERS_COLLECTION, &computer_id)?;
     ensure_owned(existing.as_ref(), &owner_user_id)?;
+    let binding = payload
+        .device_binding_id
+        .as_deref()
+        .map(|id| super::consumer_authority::validate_owner_binding(&conn, &owner_user_id, id))
+        .transpose()?;
     let existing_config = existing
         .as_ref()
         .and_then(|record| record.get("capability_config"));
@@ -309,6 +319,10 @@ fn handle_workjet_computer_assign_command(
         .and_then(|record| record.get("device_binding_id"))
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let device_binding_id = payload
+        .device_binding_id
+        .as_deref()
+        .unwrap_or(device_binding_id);
     let actor_epoch = existing
         .as_ref()
         .and_then(|record| record.get("actor_epoch"))
@@ -340,6 +354,16 @@ fn handle_workjet_computer_assign_command(
         "updated_at_ms": now,
         "is_deleted": false,
     });
+    // Retain the complete native association. These fields never enter the
+    // public v1 computer projection and are never inferred from a device label.
+    if let Some(binding) = binding {
+        computer["native_device_binding"] = binding;
+    } else if let Some(binding) = existing
+        .as_ref()
+        .and_then(|row| row.get("native_device_binding"))
+    {
+        computer["native_device_binding"] = binding.clone();
+    }
     if configured {
         computer["capability_config"] = capability_value;
         computer["capability_epoch"] = Value::from(capability_epoch);
@@ -524,6 +548,7 @@ pub(super) fn project_computer_record(root: &Path, record: &Value) -> anyhow::Re
         object.remove("capability_config");
         object.remove("capability_epoch");
         object.remove("agentless");
+        object.remove("native_device_binding");
     }
     upsert_rxdb_collection_record(
         root,

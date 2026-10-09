@@ -50,6 +50,7 @@ fn ensure_table(conn: &rusqlite::Connection) -> anyhow::Result<()> {
         ("device_pairing_id", "TEXT"),
         ("device_id", "TEXT"),
         ("proof_key_thumbprint", "TEXT"),
+        ("created_by_user_id", "TEXT"),
     ] {
         if !table_has_column(conn, column)? {
             conn.execute(
@@ -235,6 +236,18 @@ pub fn create(
     display_name: Option<&str>,
     device_binding: Option<&super::capability::CapabilityDeviceBinding>,
 ) -> anyhow::Result<Value> {
+    create_for_owner(root, ttl_seconds, display_name, device_binding, None)
+}
+
+/// The native caller supplies the verified inviter, never a wire owner field.
+/// Legacy/operator invites stay unassociated until explicitly re-paired.
+pub(super) fn create_for_owner(
+    root: &Path,
+    ttl_seconds: i64,
+    display_name: Option<&str>,
+    device_binding: Option<&super::capability::CapabilityDeviceBinding>,
+    owner_user_id: Option<&str>,
+) -> anyhow::Result<Value> {
     anyhow::ensure!(
         (MIN_TTL_SECONDS..=MAX_TTL_SECONDS).contains(&ttl_seconds),
         "mobile invite ttlSeconds must be between {MIN_TTL_SECONDS} and {MAX_TTL_SECONDS}"
@@ -294,8 +307,9 @@ pub fn create(
         tx.execute(
             "INSERT INTO business_mobile_invites
                 (invite_id_hash, user_id, created_at_ms, expires_at_ms, revoked_at_ms,
-                 redeemed_at_ms, display_name, device_pairing_id, device_id, proof_key_thumbprint)
-             VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?6, ?7, ?8)",
+                 redeemed_at_ms, display_name, device_pairing_id, device_id, proof_key_thumbprint,
+                 created_by_user_id)
+             VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?6, ?7, ?8, ?9)",
             params![
                 invite_id_hash,
                 user_id,
@@ -305,6 +319,7 @@ pub fn create(
                 device_binding.map(|binding| binding.device_pairing_id.as_str()),
                 device_binding.map(|binding| binding.device_id.as_str()),
                 device_binding.map(|binding| binding.proof_key_thumbprint.as_str()),
+                owner_user_id,
             ],
         )?;
         tx.commit()

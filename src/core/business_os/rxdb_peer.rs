@@ -3225,6 +3225,29 @@ async fn run_native_peer(
                         })
                     }),
                 )?;
+                let consumer_root = root.clone();
+                let consumer_transport = pool.connection_handler.clone();
+                pool.register_guarded_auxiliary_request_handler(
+                    super::consumer_authority::CONSUMER_AUTHORITY_METHOD,
+                    Arc::new(move |peer, admitted_token, params| {
+                        let root = consumer_root.clone();
+                        let transport = consumer_transport.clone();
+                        Box::pin(async move {
+                            tokio::task::spawn_blocking(move || {
+                                super::consumer_authority::resolve_response(
+                                    &root,
+                                    transport,
+                                    peer,
+                                    &admitted_token,
+                                    params,
+                                )
+                                .map_err(|_| "consumer authority unavailable".to_string())
+                            })
+                            .await
+                            .map_err(|_| "consumer authority task failed".to_string())?
+                        })
+                    }),
+                )?;
                 Ok(())
             },
         );
