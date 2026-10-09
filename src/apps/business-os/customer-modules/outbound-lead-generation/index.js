@@ -32,6 +32,9 @@ import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs'
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
+import {
+  CUSTOM_GROUP_LABEL, customFieldKey, fieldGroupsFor, isCustomFieldKey, normalizeCustomFields, normalizeFieldLabels,
+} from './field-catalog.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -302,8 +305,38 @@ const REVIEW_FIELD_LABELS = Object.freeze(Object.fromEntries(
   RESEARCH_FIELD_GROUPS.flatMap((group) => group.fields.map(([key, label]) => [key, label])),
 ));
 
+// Die Feldliste, wie der Nutzer sie im Reiter „Pflichtfelder“ pflegt:
+// umbenannt, abgeschaltet, eigene Felder (Owner 09.10.2026).
+function fieldCatalogFrom(record) {
+  return {
+    labels: normalizeFieldLabels(record?.field_labels),
+    disabled: new Set((Array.isArray(record?.disabled_field_keys) ? record.disabled_field_keys : [])
+      .map(String).filter((key) => RESEARCH_FIELD_SET.has(key))),
+    custom: normalizeCustomFields(record?.custom_fields),
+  };
+}
+function fieldCatalog() {
+  const record = state.researchPolicyRecord || null;
+  if (state.fieldCatalogCache?.record !== record) state.fieldCatalogCache = { record, catalog: fieldCatalogFrom(record) };
+  return state.fieldCatalogCache.catalog;
+}
+function fieldCatalogDraft() {
+  return state.fieldCatalogDraft || fieldCatalog();
+}
+function reviewFieldGroups(catalog = fieldCatalog()) {
+  return fieldGroupsFor(RESEARCH_FIELD_GROUPS, catalog);
+}
+function isResearchFieldKey(key) {
+  return RESEARCH_FIELD_SET.has(key) || isCustomFieldKey(key);
+}
+
 function researchFieldLabel(key) {
-  return REVIEW_FIELD_LABELS[String(key || '').trim()] || String(key || '').trim();
+  const k = String(key || '').trim();
+  const catalog = fieldCatalog();
+  return catalog.labels[k]
+    || catalog.custom.find((field) => field.key === k)?.label
+    || REVIEW_FIELD_LABELS[k]
+    || k;
 }
 
 // Nutzer schreiben den Rechercheablauf mit den Namen, die sie in der App sehen
@@ -316,7 +349,7 @@ const REVIEW_FIELD_GROUP_LABELS = Object.freeze(Object.fromEntries(
 function researchFieldLabelMap(keys) {
   return Object.fromEntries(keys.map((key) => [
     key,
-    `${REVIEW_FIELD_GROUP_LABELS[key] || 'Feld'}: ${researchFieldLabel(key)}`,
+    `${REVIEW_FIELD_GROUP_LABELS[key] || (isCustomFieldKey(key) ? CUSTOM_GROUP_LABEL : 'Feld')}: ${researchFieldLabel(key)}`,
   ]));
 }
 
@@ -338,7 +371,10 @@ function optionalResearchFields() {
     return new Set(lokal.keys);
   }
   const gespeichert = record?.optional_field_keys;
-  return new Set(Array.isArray(gespeichert) ? gespeichert : DEFAULT_OPTIONAL_FIELDS);
+  const optional = new Set(Array.isArray(gespeichert) ? gespeichert : DEFAULT_OPTIONAL_FIELDS);
+  // Abgeschaltete Felder werden nicht recherchiert und blockieren nichts.
+  for (const key of fieldCatalog().disabled) optional.add(key);
+  return optional;
 }
 function optionalFieldsDraft() {
   return state.optionalFieldsDraft instanceof Set ? state.optionalFieldsDraft : optionalResearchFields();
@@ -367,7 +403,7 @@ function leerFreigebbar(key) {
 }
 
 function researchAnsweredNotFound(lead, key) {
-  const status = lead?.field_status?.[key];
+  const status = isCustomFieldKey(key) ? lead?.payload?.custom_field_status?.[key] : lead?.field_status?.[key];
   return ['no_match', 'unsupported'].includes(String(status?.status || '').trim())
     && Boolean(String(status?.reason || '').trim());
 }
@@ -1554,7 +1590,9 @@ function normalizeResearchFieldKeys(value) {
 }
 
 function activeResearchFields() {
-  return state.researchFieldKeys.length ? [...state.researchFieldKeys] : [...RESEARCH_FIELDS];
+  const disabled = fieldCatalog().disabled;
+  return (state.researchFieldKeys.length ? [...state.researchFieldKeys] : [...RESEARCH_FIELDS])
+    .filter((key) => !disabled.has(key));
 }
 
 function researchPolicyRecord(
@@ -2320,44 +2358,142 @@ function renderSourcePanel() {
     </div>`);
 }
 
-function requiredResearchFieldCount(optional = optionalFieldsDraft()) {
-  return RESEARCH_FIELD_GROUPS.flatMap(group => group.fields).filter(([key]) => !optional.has(key)).length;
+function requiredResearchFieldCount(optional = optionalFieldsDraft(), catalog = fieldCatalogDraft()) {
+  return reviewFieldGroups(catalog).flatMap(group => group.fields).filter(([key]) => !optional.has(key)).length;
+}
+
+function editableFieldCatalogDraft() {
+  if (!state.fieldCatalogDraft) {
+    const saved = fieldCatalog();
+    state.fieldCatalogDraft = { labels: { ...saved.labels }, disabled: new Set(saved.disabled), custom: saved.custom.map((field) => ({ ...field })) };
+  }
+  return state.fieldCatalogDraft;
+}
+function fieldCatalogSignature(catalog) {
+  return JSON.stringify([catalog.labels, [...catalog.disabled].sort(), catalog.custom]);
 }
 
 function renderOptionalFieldSettings() {
   const draft = optionalFieldsDraft();
   const gespeichert = optionalResearchFields();
-  const geaendert = draft.size !== gespeichert.size || [...draft].some((key) => !gespeichert.has(key));
+  const katalog = fieldCatalogDraft();
+  const geaendert = draft.size !== gespeichert.size || [...draft].some((key) => !gespeichert.has(key))
+    || fieldCatalogSignature(katalog) !== fieldCatalogSignature(fieldCatalog());
+  // Abgeschaltete Felder bleiben sichtbar, damit man sie wieder einschalten kann.
+  const gruppen = fieldGroupsFor(RESEARCH_FIELD_GROUPS, { labels: katalog.labels, custom: katalog.custom });
+  const zeile = (key, label) => {
+    const aus = katalog.disabled.has(key);
+    const eigen = isCustomFieldKey(key);
+    const beschreibung = eigen ? katalog.custom.find((field) => field.key === key)?.description || '' : '';
+    return `<div class="leadgen-optional-field${aus ? ' is-off' : ''}">
+      <label><input type="checkbox" data-action="toggle-optional-field" data-field="${escapeHtml(key)}"${!draft.has(key) && !aus ? ' checked' : ''}${aus ? ' disabled' : ''}> <span title="${escapeHtml(beschreibung)}">${escapeHtml(label)}</span></label>
+      <span class="leadgen-field-tools">
+        <button type="button" class="ctox-button ctox-button--sm" data-action="rename-field" data-field="${escapeHtml(key)}" title="Umbenennen" aria-label="${escapeHtml(label)} umbenennen">✎</button>
+        ${eigen
+          ? `<button type="button" class="ctox-button ctox-button--sm" data-action="delete-custom-field" data-field="${escapeHtml(key)}">Löschen</button>`
+          : `<button type="button" class="ctox-button ctox-button--sm" data-action="toggle-field-off" data-field="${escapeHtml(key)}" title="${aus ? 'Wieder recherchieren' : 'Nicht mehr recherchieren'}">${aus ? 'Einschalten' : 'Aus'}</button>`}
+      </span>
+    </div>`;
+  };
   return `<section class="leadgen-optional-fields" aria-label="Pflichtfelder">
-    <label class="leadgen-policy-label">Pflichtfelder<span class="leadgen-policy-hint"> — angehakt = Pflicht: diese Felder müssen für die Freigabe geprüft sein. Nicht angehakte Felder sind optional; sie werden weiterhin recherchiert und belegte Werte an Sellify übertragen.</span></label>
-    ${RESEARCH_FIELD_GROUPS.map((group) => `<fieldset class="leadgen-optional-group"><legend>${escapeHtml(group.label)}</legend>
-      ${group.fields.map(([key, label]) => `<label class="leadgen-optional-field"><input type="checkbox" data-action="toggle-optional-field" data-field="${escapeHtml(key)}"${!draft.has(key) ? ' checked' : ''}> <span>${escapeHtml(label)}</span></label>`).join('')}
+    <label class="leadgen-policy-label">Pflichtfelder<span class="leadgen-policy-hint"> — angehakt = Pflicht für die Freigabe, ohne Haken optional (wird recherchiert, blockiert nicht). ✎ benennt um; der Name gilt in der App und im Rechercheablauf. „Aus“ = wird nicht recherchiert. Eigene Felder unten anlegen.</span></label>
+    ${gruppen.map((group) => `<fieldset class="leadgen-optional-group"><legend>${escapeHtml(group.label)}</legend>
+      ${group.fields.map(([key, label]) => zeile(key, label)).join('')}
     </fieldset>`).join('')}
+    <div class="leadgen-field-add" role="group" aria-label="Feld hinzufügen">
+      <input type="text" data-field-add="label" maxlength="80" placeholder="Neues Feld, z. B. Zertifikate">
+      <select data-field-add="area" aria-label="Bereich"><option value="company">Unternehmen</option><option value="contact">Ansprechpartner</option></select>
+      <input type="text" data-field-add="description" maxlength="400" placeholder="Was genau gesucht wird (für die Recherche)">
+      <label><input type="checkbox" data-field-add="required"> Pflicht</label>
+      <button type="button" class="ctox-button ctox-button--sm" data-action="add-custom-field">Feld hinzufügen</button>
+    </div>
     <div class="leadgen-optional-actions">
-      <span class="leadgen-muted">${requiredResearchFieldCount(draft)} Pflichtfelder${geaendert ? ' · nicht gespeichert' : ''}</span>
+      <span class="leadgen-muted">${requiredResearchFieldCount(draft, katalog)} Pflichtfelder${geaendert ? ' · nicht gespeichert' : ''}</span>
       <button class="ctox-button ctox-button--sm${geaendert ? ' is-primary' : ''}" data-action="save-optional-fields"${geaendert ? '' : ' disabled'}>Pflichtfelder speichern</button>
     </div>
   </section>`;
 }
 
+async function renameResearchField(key) {
+  const katalog = editableFieldCatalogDraft();
+  const eigen = katalog.custom.find((field) => field.key === key);
+  const bisher = katalog.labels[key] || eigen?.label || REVIEW_FIELD_LABELS[key] || key;
+  const name = String(await showBusinessPrompt('Neuer Name für das Feld', {
+    title: 'Feld umbenennen', defaultValue: bisher, confirmLabel: 'Übernehmen', cancelLabel: 'Abbrechen',
+  }) || '').trim().slice(0, 80);
+  if (!name || name === bisher) return;
+  if (eigen) eigen.label = name;
+  else if (name === REVIEW_FIELD_LABELS[key]) delete katalog.labels[key];
+  else katalog.labels[key] = name;
+  renderSourcePanel();
+}
+
+function addCustomResearchField(trigger) {
+  const form = trigger.closest('.leadgen-field-add');
+  const wert = (name) => form?.querySelector(`[data-field-add="${name}"]`);
+  const label = String(wert('label')?.value || '').trim().slice(0, 80);
+  if (!label) { showBusinessAlert('Bitte einen Namen für das neue Feld eingeben.'); return; }
+  const katalog = editableFieldCatalogDraft();
+  const vorhanden = [...RESEARCH_FIELDS, ...katalog.custom.map((field) => field.key)];
+  const key = customFieldKey(label, vorhanden);
+  katalog.custom.push({
+    key,
+    label,
+    area: wert('area')?.value === 'contact' ? 'contact' : 'company',
+    description: String(wert('description')?.value || '').trim().slice(0, 400),
+  });
+  const optional = new Set(optionalFieldsDraft());
+  if (wert('required')?.checked) optional.delete(key); else optional.add(key);
+  state.optionalFieldsDraft = optional;
+  renderSourcePanel();
+}
+
+async function deleteCustomResearchField(key) {
+  const katalog = editableFieldCatalogDraft();
+  const feld = katalog.custom.find((field) => field.key === key);
+  if (!feld) return;
+  const ok = await showBusinessConfirm(`Das Feld „${feld.label}“ löschen? Bereits recherchierte Werte bleiben an den Leads gespeichert, werden aber nicht mehr angezeigt.`, {
+    title: 'Feld löschen', confirmLabel: 'Löschen', kind: 'confirm',
+  });
+  if (!ok) return;
+  katalog.custom = katalog.custom.filter((field) => field.key !== key);
+  delete katalog.labels[key];
+  const optional = new Set(optionalFieldsDraft());
+  optional.delete(key);
+  state.optionalFieldsDraft = optional;
+  renderSourcePanel();
+}
+
 async function saveOptionalFields() {
   const draft = optionalFieldsDraft();
-  const keys = [...draft].sort();
+  const katalog = fieldCatalogDraft();
+  const eigeneSchluessel = new Set(katalog.custom.map((field) => field.key));
+  const keys = [...draft].filter((key) => !isCustomFieldKey(key) || eigeneSchluessel.has(key)).sort();
   const doc = await mitKanalHeilung(() => state.collections.researchPolicies.findOne(RESEARCH_POLICY_ID).exec(), 'save-optional-read');
   if (!doc) {
     showBusinessAlert('Der Rechercheablauf ist noch nicht geladen. Bitte kurz warten und erneut speichern.');
     return;
   }
-  // Nur dieses Feld aendern: kein neuer Prompt, keine Version, kein
-  // Adapter-Abgleich - die Adapter lesen die Pflichtfeld-Auswahl nicht.
+  // Nur die Feldliste aendern: kein neuer Prompt, keine Version, kein
+  // Adapter-Abgleich - die Adapter lesen die Feldliste nicht.
   const jetzt = Date.now();
-  await mitKanalHeilung(() => doc.incrementalPatch({ optional_field_keys: keys, updated_at_ms: jetzt }), 'save-optional-write');
+  const felder = { optional_field_keys: keys };
+  // Die Feldliste nur schreiben, wenn sie geaendert wurde.
+  if (fieldCatalogSignature(katalog) !== fieldCatalogSignature(fieldCatalog())) {
+    Object.assign(felder, {
+      field_labels: normalizeFieldLabels(katalog.labels),
+      disabled_field_keys: [...katalog.disabled].sort(),
+      custom_fields: normalizeCustomFields(katalog.custom),
+    });
+  }
+  await mitKanalHeilung(() => doc.incrementalPatch({ ...felder, updated_at_ms: jetzt }), 'save-optional-write');
   state.optionalFieldsSaved = { keys, at: jetzt };
-  state.researchPolicyRecord = { ...(state.researchPolicyRecord || {}), optional_field_keys: keys, updated_at_ms: jetzt };
+  state.researchPolicyRecord = { ...(state.researchPolicyRecord || {}), ...felder, updated_at_ms: jetzt };
   state.optionalFieldsDraft = null;
+  state.fieldCatalogDraft = null;
   renderSourcePanel();
   render();
-  showBusinessAlert(`${requiredResearchFieldCount(new Set(keys))} Pflichtfelder gespeichert. Nicht angehakte Felder bleiben optional.`);
+  showBusinessAlert(`${requiredResearchFieldCount(new Set(keys), fieldCatalog())} Pflichtfelder gespeichert. Nicht angehakte Felder bleiben optional.`);
 }
 
 // Ein Feld ohne gefundene Information fuer DIESEN Lead freigeben: es bleibt
@@ -3873,6 +4009,16 @@ async function handleClick(event) {
     return;
   }
   if (action === 'save-optional-fields') await saveOptionalFields();
+  if (action === 'rename-field') { await renameResearchField(String(trigger.dataset.field || '')); return; }
+  if (action === 'add-custom-field') { addCustomResearchField(trigger); return; }
+  if (action === 'delete-custom-field') { await deleteCustomResearchField(String(trigger.dataset.field || '')); return; }
+  if (action === 'toggle-field-off') {
+    const key = String(trigger.dataset.field || '');
+    const katalog = editableFieldCatalogDraft();
+    if (katalog.disabled.has(key)) katalog.disabled.delete(key); else katalog.disabled.add(key);
+    renderSourcePanel();
+    return;
+  }
   if (action === 'release-empty-field') await setEmptyFieldRelease(String(trigger.dataset.field || ''), true);
   if (action === 'unrelease-empty-field') await setEmptyFieldRelease(String(trigger.dataset.field || ''), false);
   if (action === 'make-field-optional') {
@@ -10217,7 +10363,13 @@ async function researchLead(id, options = {}) {
         country: normalizedResearchCountry(lead.country),
         mode: researchMode,
         fields: nurFelder || activeResearchFields(),
-        field_labels: researchFieldLabelMap(nurFelder || activeResearchFields()),
+        field_labels: researchFieldLabelMap([...(nurFelder || activeResearchFields()), ...fieldCatalog().custom.map((field) => field.key)]),
+        custom_fields: fieldCatalog().custom,
+        custom_fields_note: fieldCatalog().custom.length
+          ? 'Die eigenen Felder (custom_fields) zusätzlich recherchieren, mit derselben Belegregel. Zurückschreiben '
+            + 'nur in result.custom_fields.<key> = {"value": …, "sources": [{"url": …, "quote": …, "source_id": …}], '
+            + '"reason": …}; nie in field_status oder result.fields. Nicht gefunden: value null und reason.'
+          : '',
         field_labels_note: 'Der Rechercheablauf nennt Felder mit ihrem Namen aus der App. field_labels ordnet jedem '
           + 'Feldschlüssel diesen Namen zu ("Bereich: Name"). Zurückgeschrieben wird immer unter dem Feldschlüssel.',
         ...(fortsetzung ? { continuation: fortsetzung } : {}),
@@ -12938,6 +13090,9 @@ function feldImEditor(fieldKey) {
 }
 
 function researchFieldValue(lead, fieldKey) {
+  if (isCustomFieldKey(fieldKey)) {
+    return String(lead?.data?.[fieldKey] || lead?.payload?.custom_field_status?.[fieldKey]?.value || '').trim();
+  }
   const aliases = RESEARCH_FIELD_VALUE_KEYS[fieldKey] || [fieldKey];
   if (fieldKey.startsWith('person_')) {
     return String(firstValue(lead?.contacts?.[0], aliases) || '').trim();
@@ -13096,7 +13251,7 @@ function operatorAttestedField(lead, key) {
     && (!istPerson || !entry?.person_key || String(entry.person_key) === personKey));
 }
 function researchFieldReview(lead) {
-  const groups = RESEARCH_FIELD_GROUPS.map((group) => ({
+  const groups = reviewFieldGroups().map((group) => ({
     id: group.id,
     label: group.label,
     fields: group.fields.map(([key, label]) => {
@@ -13134,7 +13289,7 @@ function researchFieldReview(lead) {
     field.notFound = !field.filled && (researchAnsweredNotFound(lead, field.key) || field.releasedEmpty);
   }
   const fields = groups.flatMap((group) => group.fields);
-  const researchFields = fields.filter((field) => RESEARCH_FIELD_SET.has(field.key));
+  const researchFields = fields.filter((field) => isResearchFieldKey(field.key));
   const researchedKeys = new Set((Array.isArray(lead?.payload?.researched_field_keys)
     ? lead.payload.researched_field_keys : []).map((key) => String(key || '')));
   const loadedEvidenceCount = (Array.isArray(lead?.evidence) ? lead.evidence.length : 0)
@@ -13229,6 +13384,13 @@ function validationBlockerDetails(lead) {
       && !(recherchierbar && researchAnsweredNotFound(lead, key))) {
       blockers.push(`${label} fehlt`);
       feldZuBlocker.set(`${label} fehlt`, key);
+    }
+  }
+  for (const field of fieldCatalog().custom) {
+    if (optional.has(field.key) || leerFreigegeben(lead, field.key)) continue;
+    if (!researchFieldValue(lead, field.key) && !researchAnsweredNotFound(lead, field.key)) {
+      blockers.push(`${field.label} fehlt`);
+      feldZuBlocker.set(`${field.label} fehlt`, field.key);
     }
   }
   const activity = normalizeProtectionText(researchFieldValue(lead, 'firma_aktivitaetsstatus'));
