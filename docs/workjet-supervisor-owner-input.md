@@ -11,7 +11,8 @@ unchanged for installed decoders. Opt-in support returns
 `inputDelivery: next_slice`, and `maxInputChars: 4096`.
 
 Input uses the existing projectId, threadId and targetCommandId plus body
-and a stable operationId. It is admitted by the active verified Owner
+and a stable commandId (the operation identity). There is no separate
+operationId wire field. It is admitted by the active verified Owner
 binding into the existing command/task. A retry of the same operation
 has the same input ID and sequence; changed intent is rejected. Terminal,
 foreign and external-worker targets are rejected explicitly.
