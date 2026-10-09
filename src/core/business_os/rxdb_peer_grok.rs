@@ -155,6 +155,11 @@ fn genuine_text(body: &[u8]) -> bool {
     let Ok(v) = serde_json::from_slice::<Value>(body) else {
         return false;
     };
+    if v.get("object").and_then(Value::as_str) != Some("response")
+        || v.get("status").and_then(Value::as_str) != Some("completed")
+    {
+        return false;
+    }
     v.get("output")
         .and_then(Value::as_array)
         .is_some_and(|items| {
@@ -450,7 +455,7 @@ mod tests {
                         assert!(request.starts_with("POST /responses"));
                         format!(
                             "data: {}\n\n",
-                            json!({"type":"response.completed","response":{"object":"response","output":output}})
+                            json!({"type":"response.completed","response":{"object":"response","status":"completed","output":output}})
                         )
                     };
                     stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
@@ -492,7 +497,7 @@ mod tests {
             assert!(!genuine_text(body));
         }
         assert!(genuine_text(
-            br#"{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi"}]}]}"#
+            br#"{"object":"response","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Hi"}]}]}"#
         ));
     }
     fn auth(
