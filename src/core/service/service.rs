@@ -18688,10 +18688,13 @@ fn decorate_service_event_with_skill(event: &str, suggested_skill: Option<&str>)
 }
 
 fn serial_prompt_admission_is_busy(shared: &SharedState) -> bool {
-    shared.busy
-        || shared.worker_active_count > 0
-        || shared.serial_prompt_starting
-        || !shared.parallel_queue_jobs.is_empty()
+    // Isolated Business OS chats run in their own sessions and slots and do
+    // not share the serial context (see lease_business_queue_capacity). Any
+    // registered chat used to veto serial admission, so during a research
+    // campaign no routed mail and no founder rework ever started (thesen
+    // 09.10.2026). A serial worker still blocks, also when a finishing chat
+    // cleared the busy flag: it is counted apart from the chats.
+    shared.busy || shared.serial_prompt_starting || serial_worker_count_locked(shared) > 0
 }
 
 fn maybe_start_next_queued_prompt_locked(
