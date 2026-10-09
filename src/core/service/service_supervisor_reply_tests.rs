@@ -9,6 +9,24 @@ fn fixture() -> Result<(tempfile::TempDir, QueuedPrompt, String)> {
         crate::business_os::mcp_channel::workjet_dispatch_service_test_fixture()?;
     let task = channels::load_queue_task_for_business_os_command(temp.path(), &command_id)?
         .context("missing native Supervisor task")?;
+    // The shared tool fixture owns a queue lease but has not started execution.
+    // Use the real command transitions before persisting a worker response.
+    for phase in ["leased", "running"] {
+        anyhow::ensure!(
+            channels::transition_business_command_for_task(
+                temp.path(),
+                &task.message_key,
+                phase,
+                None,
+                None,
+                None,
+                "native Supervisor reply fixture starts execution",
+            )?,
+            "native Supervisor fixture transition was not applied"
+        );
+    }
+    let task = channels::load_queue_task_for_business_os_command(temp.path(), &command_id)?
+        .context("missing started native Supervisor task")?;
     let job = queued_prompt_from_queue_task(task);
     Ok((temp, job, command_id))
 }
