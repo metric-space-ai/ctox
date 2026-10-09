@@ -55,6 +55,17 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_native_bindings (
     account_id TEXT PRIMARY KEY,
     fingerprint TEXT NOT NULL,
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
+);
+CREATE TABLE IF NOT EXISTS business_provider_federation_models (
+    owner_user_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    models_json TEXT NOT NULL,
+    PRIMARY KEY(owner_user_id,provider)
+);
+CREATE TABLE IF NOT EXISTS business_provider_federation_model_exclusions (
+    account_id TEXT PRIMARY KEY,
+    models_json TEXT NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
 );";
 
 const MAX_ACCOUNTS: usize = 256;
@@ -271,6 +282,9 @@ pub(super) fn handle_command(
                 })
             })?;
             Ok(applied.result)
+        }
+        "ctox.workjet.providers.models.select" | "ctox.workjet.providers.models.exclude" => {
+            models::handle_command(root, command, actor, admission)
         }
         "ctox.workjet.providers.withdraw" => {
             let request: WithdrawRequest = serde_json::from_value(command.payload.clone())?;
@@ -690,9 +704,10 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
         entry["modelCatalogObserved"] = catalog["observed"].clone();
         entry["modelCatalog"] = catalog;
     }
+    let providers = models::project(conn, owner, &mut rows)?;
     Ok(
         json!({"ok":true,"schema":"ctox.provider-federation-registry.v1",
-        "revision":policy_revision(conn, owner)?,"accounts":rows}),
+        "revision":policy_revision(conn, owner)?,"accounts":rows,"providers":providers}),
     )
 }
 
@@ -768,3 +783,8 @@ mod tests;
 #[cfg(test)]
 #[path = "provider_federation_catalog_tests.rs"]
 mod catalog_tests;
+
+#[path = "provider_models.rs"]
+mod models;
+
+pub(crate) use models::{capture_consumable_model, with_consumable_model, ConsumableModel};
