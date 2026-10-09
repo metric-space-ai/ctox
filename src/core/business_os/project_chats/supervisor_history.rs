@@ -108,7 +108,9 @@ pub(super) fn history(root: &Path, owner: &str, payload: Value) -> anyhow::Resul
     });
     page.validate().map_err(anyhow::Error::msg)?;
     let limit = page.limit.unwrap_or(10);
-    let business = open_store(root)?;
+    let business_connection = open_store(root)?;
+    // Size checks and admitted-envelope loads share the same read snapshot.
+    let business = business_connection.unchecked_transaction()?;
     let mut conn = Connection::open_with_flags(
         crate::paths::core_db(root),
         OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -188,6 +190,7 @@ pub(super) fn history(root: &Path, owner: &str, payload: Value) -> anyhow::Resul
         });
     }
     tx.commit()?;
+    business.commit()?;
     let has_more = turns.len() > limit as usize;
     turns.truncate(limit as usize);
     let next_cursor = if has_more {
