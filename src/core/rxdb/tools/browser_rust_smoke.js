@@ -10584,6 +10584,9 @@ function ensureCtoxSmokeBinary() {
         };
         const openAgentGrantBoundarySettings = async () => {
           applyAgentScopeState();
+          // The read-grant above exercises the facade only. Restore the native
+          // policy snapshot before testing the Settings policy projection.
+          state.governance = originalState.governance;
           state.session = {
             authenticated: true,
             user: {
