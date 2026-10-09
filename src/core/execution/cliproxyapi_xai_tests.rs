@@ -1,6 +1,55 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+struct FixtureLogin;
+impl XaiHttpTransport for FixtureLogin {
+    fn execute<'a>(
+        &'a self,
+        request: &'a XaiHttpRequest,
+        _: Duration,
+        _: &'a LoginCancellation,
+    ) -> XaiHttpFuture<'a> {
+        Box::pin(async move {
+            let body = if request.url.ends_with("openid-configuration") {
+                r#"{"device_authorization_endpoint":"https://auth.x.ai/device","token_endpoint":"https://auth.x.ai/token"}"#
+            } else if request.url.ends_with("/device") {
+                r#"{"device_code":"private-device-fixture","user_code":"PUBLIC-CODE","verification_uri":"https://auth.x.ai/activate","expires_in":600,"interval":5}"#
+            } else {
+                r#"{"access_token":"fixture-access","refresh_token":"fixture-refresh","token_type":"Bearer","expires_in":3600}"#
+            };
+            Ok(XaiHttpResponse::new(200, body.as_bytes().to_vec()))
+        })
+    }
+}
+#[tokio::test]
+async fn device_start_projects_only_public_code_and_accepts_into_secret_store() {
+    let root = tempfile::tempdir().unwrap();
+    let controller = CtoxXaiLogin::with_auth(
+        root.path(),
+        Arc::new(XaiAuth::new(
+            Arc::new(FixtureLogin),
+            Arc::new(SystemXaiClock),
+            Arc::new(XaiRefreshCoordinator::default()),
+        )),
+    );
+    let public = controller.start().await.unwrap();
+    let json = serde_json::to_string(&public).unwrap();
+    assert!(json.contains("PUBLIC-CODE"));
+    assert!(!json.contains("private-device-fixture"));
+    assert!(!json.contains("fixture-access"));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if controller.poll(&public.login_id).unwrap() == XaiLoginProgress::Accepted {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(crate::secrets::secret_exists(root.path(), SCOPE, NAME).unwrap());
+}
+
 fn bundle() -> AuthBundle {
     AuthBundle {
         token_data: TokenData::new(
