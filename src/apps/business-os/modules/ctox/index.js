@@ -1,11 +1,11 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20261009-shell-v2-excel-header-search';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20261009-shell-v2-task-history-permissions';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
 import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
-import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261009-shell-v2-excel-header-search';
+import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261009-shell-v2-task-history-permissions';
 
 const FLOW_WIDTH = 1760;
 const FLOW_HEIGHT = 1050;
@@ -31,7 +31,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20261009-shell-v2-excel-header-search';
+const CTOX_STYLE_BUILD = '20261009-shell-v2-task-history-permissions';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -1026,6 +1026,7 @@ function wireLocalRealtime(state) {
       }, {emitPendingChanges: collectionName === "ctox_harness_status"}) || null;
     })
     .filter(Boolean);
+  state.taskHistoryUnavailable = new Set();
   const nativeHistoryCleanup = subscribeTaskHistoryChanges({
     sync: state.ctx.sync,
     getSelection: () => {
@@ -1037,8 +1038,15 @@ function wireLocalRealtime(state) {
       state.taskHistoryRevision = { key, revision };
       scheduleRender();
     },
+    onUnavailable: ({ collection }) => {
+      if (state.disposed) return;
+      state.taskHistoryUnavailable.add(collection);
+      scheduleRender();
+    },
     onError: (error) => {
-      if (!state.disposed) console.warn('[ctox] task history native observer failed', error);
+      if (state.disposed) return;
+      console.warn('[ctox] task history native observer failed', error);
+      showDataError(state, error);
     },
   });
   state.realtimeCollectionCount = subscriptions.length;
@@ -2418,6 +2426,12 @@ function taskStatusSteps(task, state) {
   return steps.map((step) => ({ ...step, timelineIndex: findIndex(step.id), detail: clip(cleanUiCopy(step.detail), 180) }));
 }
 
+function taskHistoryPermissionNotice(state) {
+  if (!state.taskHistoryUnavailable?.size) return '';
+  const t = labels[state.lang];
+  return `<span class="ctox-history-connection" data-task-history-unavailable role="status" title="${escapeAttr(`COLLECTION_READ_FORBIDDEN: ${[...state.taskHistoryUnavailable].join(', ')}`)}">${escapeHtml(`${t.timeline}: ${t.notPermittedForRole}`)}</span>`;
+}
+
 function renderMain(state) {
   const t = labels[state.lang];
   const model = state.model;
@@ -2503,10 +2517,10 @@ function renderMain(state) {
       </div>
     </div>`}
     <details class="ctox-history-fold" ${state.historyOpen && hasHistory ? 'open' : ''} ${hasHistory ? '' : 'hidden'}>
-      <summary>${escapeHtml(t.timeline)}${dataNotice ? `<span class="ctox-history-connection">${dataNotice}</span>` : ''}</summary>
+      <summary>${escapeHtml(t.timeline)}${dataNotice ? `<span class="ctox-history-connection">${dataNotice}</span>` : ''}${taskHistoryPermissionNotice(state)}</summary>
       <div class="ctox-history-content">${history}${executionProgressBar(metrics, state)}${metricsStripMarkup(metrics, elapsedSeconds, live, state)}</div>
     </details>
-    ${!hasHistory && dataNotice ? `<footer class="ctox-harness-footer" data-harness-health-tooltip>${dataNotice}</footer>` : ''}
+    ${!hasHistory && (dataNotice || state.taskHistoryUnavailable?.size) ? `<footer class="ctox-harness-footer" data-harness-health-tooltip>${dataNotice}${taskHistoryPermissionNotice(state)}</footer>` : ''}
   `;
   restoreFlowViewport(state, previousViewport);
   const editor = main.querySelector('[data-job-panel]');
