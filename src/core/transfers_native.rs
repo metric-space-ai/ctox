@@ -196,7 +196,54 @@ fn account_host(
 
 #[path = "transfers_admission.rs"]
 mod admission;
-pub(crate) use admission::{enqueue_peer, pair, PeerDownload};
+pub(crate) use admission::{enqueue_peer, enqueue_workspace_peer, pair, PeerDownload};
+
+/// A local workspace consumer uses its own query database/session lifetime,
+/// revalidating the original grants before and after synchronous reconstruction.
+/// This never takes the running daemon-owned database or creates a replacement grant.
+pub(crate) fn consume_workspace_peers<T>(
+    root: &Path,
+    store: &ctox_transfers::Store,
+    originals: &[DownloadRequest],
+    consume: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let directory = crate::paths::runtime_dir(root).join("transfers/admission");
+    std::fs::create_dir_all(&directory)?;
+    let temporary = tempfile::Builder::new()
+        .prefix("workspace-")
+        .tempdir_in(directory)?;
+    let database = QueryDatabase::new(temporary.path());
+    let host = account_host(root, database.clone());
+    let peer = crate::transfers_peer::NativeTransferPeerResolver::with_account_host(host);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let result = async {
+            for original in originals {
+                ensure!(
+                    store.get(&original.id)?.request == *original,
+                    "workspace job changed"
+                );
+                peer.authorize(original).await?;
+            }
+            let value = consume()?;
+            for original in originals {
+                ensure!(
+                    store.get(&original.id)?.request == *original,
+                    "workspace job changed during reconstruction"
+                );
+                peer.authorize(original).await?;
+            }
+            Ok(value)
+        }
+        .await;
+        peer.shutdown().await?;
+        database.close().await?;
+        result
+    })
+}
 
 #[cfg(test)]
 mod tests {

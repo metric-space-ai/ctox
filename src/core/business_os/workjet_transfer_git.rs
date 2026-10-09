@@ -456,6 +456,46 @@ fn sync_materialized_directory(path: &Path) -> anyhow::Result<()> {
     }
 }
 
+/// Verify an existing workspace without rewriting its index or copying Git metadata.
+pub fn verify_git_working_copy(source: &Path, manifest: &GitPackManifest) -> anyhow::Result<()> {
+    validate_manifest(manifest)?;
+    ensure!(
+        git_text(source, &["rev-parse", "--verify", "HEAD"])? == manifest.git.head
+            && current_branch(source)? == manifest.git.branch
+            && collect_manifest_files(source)? == manifest.files,
+        "{APPLY_HASH_MISMATCH}: workspace HEAD, branch or file contents changed"
+    );
+    let index = manifest
+        .git
+        .index
+        .as_ref()
+        .context("workspace requires index proof")?;
+    ensure!(
+        git_text(source, &["write-tree"])? == index.tree,
+        "{APPLY_HASH_MISMATCH}: workspace index changed"
+    );
+    let patch = git_output(
+        source,
+        &[
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+        ],
+    )?;
+    ensure!(
+        patch.status.success() && sha256_bytes(&patch.stdout) == manifest.git.patch_sha256,
+        "{APPLY_HASH_MISMATCH}: workspace patch changed"
+    );
+    Ok(())
+}
+
 /// Returns a lowercase SHA-256 digest for a regular file's bytes.
 pub fn sha256_file(path: &Path) -> anyhow::Result<String> {
     let mut file = File::open(path)
