@@ -1372,7 +1372,7 @@ pub(super) struct NativePeer {
     pub(super) database: Arc<RxDatabase>,
     peer_session_id: String,
     shutdown_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    _process_lock: File,
+    _process_lock: NativePeerProcessLock,
     _pools: Vec<ctox_sync::native::NativeSyncSession>,
     business_data_sources: Vec<Arc<ctox_sync::business_data_remote::BusinessDataSource>>,
     _command_consumer: tokio::task::JoinHandle<()>,
@@ -4194,10 +4194,27 @@ fn open_native_peer_lock_file(root: &Path) -> anyhow::Result<File> {
         })
 }
 
-pub(super) fn acquire_native_peer_process_lock(root: &Path) -> anyhow::Result<Option<File>> {
+/// Owns the peer flock and releases it on every duplicated descriptor before close.
+pub(super) struct NativePeerProcessLock {
+    file: File,
+}
+
+impl Drop for NativePeerProcessLock {
+    fn drop(&mut self) {
+        // A concurrent spawn may retain the open file description until exec.
+        // Closing our descriptor alone would leave its duplicate holding flock.
+        if let Err(error) = self.file.unlock() {
+            eprintln!("[business-os] failed to unlock native RxDB peer process lock: {error}");
+        }
+    }
+}
+
+pub(super) fn acquire_native_peer_process_lock(
+    root: &Path,
+) -> anyhow::Result<Option<NativePeerProcessLock>> {
     let lock_file = open_native_peer_lock_file(root)?;
     match lock_file.try_lock() {
-        Ok(()) => Ok(Some(lock_file)),
+        Ok(()) => Ok(Some(NativePeerProcessLock { file: lock_file })),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(std::fs::TryLockError::Error(err)) => {
             Err(err).context("failed to acquire native RxDB peer process lock")
@@ -4210,7 +4227,10 @@ fn native_peer_process_lock_is_held(root: &Path) -> bool {
         return false;
     };
     match lock_file.try_lock() {
-        Ok(()) => false,
+        Ok(()) => {
+            drop(NativePeerProcessLock { file: lock_file });
+            false
+        }
         Err(std::fs::TryLockError::WouldBlock) => true,
         Err(std::fs::TryLockError::Error(_)) => false,
     }
@@ -10298,6 +10318,41 @@ pub(in crate::business_os) mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[cfg(unix)]
+    #[test]
+    fn native_peer_lock_drop_releases_inherited_description_before_close() -> anyhow::Result<()> {
+        for unwind in [false, true] {
+            let root = tempfile::tempdir()?;
+            let guard = acquire_native_peer_process_lock(root.path())?.expect("first owner");
+            // dup shares the open file description, exactly as fork does before
+            // the child reaches exec. Keep it alive beyond the owner teardown.
+            let inherited = guard.file.try_clone()?;
+            assert!(acquire_native_peer_process_lock(root.path())?.is_none());
+            assert!(native_peer_process_lock_is_held(root.path()));
+            if unwind {
+                assert!(std::panic::catch_unwind(move || {
+                    let _owner = guard;
+                    panic!("peer teardown fixture");
+                })
+                .is_err());
+            } else {
+                drop(guard);
+            }
+            assert!(!native_peer_process_lock_is_held(root.path()));
+            let replacement = acquire_native_peer_process_lock(root.path())?
+                .expect("duplicate must not retain the retired owner lock");
+            assert!(acquire_native_peer_process_lock(root.path())?.is_none());
+            drop(inherited);
+            assert!(
+                native_peer_process_lock_is_held(root.path()),
+                "closing the old duplicate must not unlock the replacement"
+            );
+            drop(replacement);
+            assert!(acquire_native_peer_process_lock(root.path())?.is_some());
+        }
+        Ok(())
+    }
 
     #[test]
     fn initialize_rxdb_registers_empty_canonical_schemas_idempotently() -> anyhow::Result<()> {

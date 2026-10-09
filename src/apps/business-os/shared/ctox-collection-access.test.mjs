@@ -136,11 +136,12 @@ test('App Store target metadata and owning window take precedence over the deskt
 });
 
 test('a private app route creates no window and its visible denial survives a desktop fallback',async()=>{
-  const alerts=[];const desktop={id:'desktop'},hidden={id:'private-app',title:'Secret title'};
+  const alerts=[];let dialogLoads=0;const desktop={id:'desktop'},hidden={id:'private-app',title:'Secret title'};
   const scope={state:{modules:[desktop,hidden],activeModule:desktop},moduleAliases:{},parseHashWithParams:name=>({name}),searchParamsToObject:()=>({}),
     currentHashModuleId:()=>'',canSeeModuleForAppVersion:mod=>mod.id==='desktop',appLifecycleState:()=>({reason:'private'}),
     visibleModuleFallbackId:()=> 'desktop',moduleDisplayTitle:mod=>mod.title||mod.id,setStatus:()=>{},shellLang:()=> 'de',
-    showBusinessAlert:text=>alerts.push(text),moduleLaunchesAsDesktopApp:()=>false,openDesktopApp:()=>assert.fail('private app must not open')};
+    loadShellDialogsModule:async()=>{dialogLoads++;return {showBusinessAlert:text=>alerts.push(text)};},
+    moduleLaunchesAsDesktopApp:()=>false,openDesktopApp:()=>assert.fail('private app must not open')};
   const open=Function(...Object.keys(scope),body('openModule',shell)+'\nreturn openModule;')(...Object.values(scope));
-  await open('private-app');assert.equal(alerts.length,1);assert.match(alerts[0],/nicht sichtbar/);assert.doesNotMatch(alerts[0],/Secret title|private-app/);
+  await open('private-app');assert.equal(dialogLoads,1);assert.equal(alerts.length,1);assert.match(alerts[0],/nicht sichtbar/);assert.doesNotMatch(alerts[0],/Secret title|private-app/);
 });

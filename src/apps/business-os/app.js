@@ -6259,6 +6259,7 @@ async function openModule(moduleId, options = {}) {
     });
     const fallbackId = visibleModuleFallbackId(mod.id);
     setStatus(`${moduleDisplayTitle(mod)} ist für diesen Account nicht sichtbar. ${lifecycle.reason || ''}`.trim());
+    const { showBusinessAlert } = await loadShellDialogsModule();
     showBusinessAlert(shellLang() === 'de'
       ? 'Diese App ist für diesen Account nicht sichtbar.'
       : 'This app is not visible to this account.');

@@ -2641,6 +2641,78 @@ mod event_publication_tests {
     }
 
     #[tokio::test]
+    async fn ack_release_during_receive_preserves_buffered_snapshot_order() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let published = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let authority: EventAuthorityCheck = {
+            let published = published.clone();
+            Arc::new(move || {
+                published.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { true })
+            })
+        };
+        let release_slot = Arc::new(Mutex::new(None::<Arc<AtomicBool>>));
+        let mut start = event(1);
+        start.payload = EventPayload::SnapshotStart {
+            snapshot_id: "subscription".into(),
+        };
+        let mut end = event(2);
+        end.payload = EventPayload::SnapshotEnd {
+            snapshot_id: "subscription".into(),
+            cursor: "end".into(),
+        };
+        let mut caught_up = event(3);
+        caught_up.payload = EventPayload::CaughtUp {
+            cursor: "caught-up".into(),
+        };
+        let messages = futures_util::stream::iter([start, end, caught_up])
+            .inspect({
+                let release_slot = release_slot.clone();
+                let published = published.clone();
+                move |event| {
+                    if event.sequence == 2 {
+                        // The loop already observed release=false and buffered
+                        // Start. ACK completes while the next receive is polled,
+                        // before that item is processed. No scheduler luck needed.
+                        assert_eq!(published.load(Ordering::SeqCst), 0);
+                        release_slot
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .unwrap()
+                            .store(true, Ordering::SeqCst);
+                    }
+                }
+            })
+            .chain(futures_util::stream::pending());
+        let pump = spawn_filtered_event_pump(
+            messages,
+            event(1).session,
+            sender,
+            authority,
+            Arc::new(crate::business_data_ipc::WatchLifetime::new()),
+        );
+        pump.accept("subscription");
+        *release_slot.lock().unwrap() = Some(pump.release.clone());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            for sequence in 1..=3 {
+                let delivered = receiver.recv().await.unwrap().event;
+                assert_eq!(
+                    delivered.sequence, sequence,
+                    "a post-ACK receive overtook the buffered snapshot"
+                );
+                assert_eq!(delivered.subscription_id, "subscription");
+                assert_eq!(delivered.session, event(1).session);
+            }
+        })
+        .await
+        .expect("released snapshot must drain");
+        assert_eq!(published.load(Ordering::SeqCst), 3);
+        pump.shutdown().await;
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn authorized_publication_preserves_event_identity() {
         let (sender, mut receiver) = mpsc::channel(1);
         let authority: EventAuthorityCheck = Arc::new(|| Box::pin(async { true }));
@@ -2705,6 +2777,37 @@ pub fn spawn_remote_event_pump(
     authority: EventAuthorityCheck,
     publication: Arc<crate::business_data_ipc::WatchLifetime>,
 ) -> OwnedEventPump {
+    // Register the transport stream synchronously, before the remote request.
+    let expected_session = session.clone();
+    let messages = pool
+        .connection_handler
+        .message_stream()
+        .filter_map(move |item| {
+            let session = expected_session.clone();
+            let peer = peer.clone();
+            async move {
+                if item.peer != peer || item.message.method != BUSINESS_DATA_EVENT_METHOD {
+                    return None;
+                }
+                let value = item.message.params.into_iter().next()?;
+                let event = serde_json::from_value::<Event>(value).ok()?;
+                (event.version == CTOX_BUSINESS_DATA_PROTOCOL_VERSION
+                    && event.session == session
+                    && !event.subscription_id.is_empty()
+                    && event.sequence != 0)
+                    .then_some(event)
+            }
+        });
+    spawn_filtered_event_pump(messages, session, events, authority, publication)
+}
+
+fn spawn_filtered_event_pump(
+    messages: impl futures_util::Stream<Item = Event> + Send + 'static,
+    session: SessionRef,
+    events: mpsc::Sender<crate::business_data_ipc::QueuedBusinessDataEvent>,
+    authority: EventAuthorityCheck,
+    publication: Arc<crate::business_data_ipc::WatchLifetime>,
+) -> OwnedEventPump {
     let alive = Arc::new(crate::business_data_ipc::WatchLifetime::for_watch(
         &publication,
     ));
@@ -2715,7 +2818,7 @@ pub fn spawn_remote_event_pump(
     // Subscribe before returning to the caller that starts the remote request.
     // The spawned task may not be polled before the source publishes its first
     // snapshot event; registering inside it would silently lose that event.
-    let mut messages = pool.connection_handler.message_stream();
+    let mut messages = Box::pin(messages);
     let task = {
         let alive = alive.clone();
         let failed = failed.clone();
@@ -2769,26 +2872,17 @@ pub fn spawn_remote_event_pump(
                 tokio::select! {
                     _ = notify.notified() => {}
                     item = messages.next() => {
-                        let Some(item) = item else { return; };
-                        if item.peer != peer || item.message.method != BUSINESS_DATA_EVENT_METHOD {
-                            continue;
-                        }
-                        let Some(value) = item.message.params.into_iter().next() else { continue; };
-                        let Ok(event) = serde_json::from_value::<Event>(value) else { continue; };
-                        if event.version != CTOX_BUSINESS_DATA_PROTOCOL_VERSION
-                            || event.session != session
-                            || event.subscription_id.is_empty()
-                            || event.sequence == 0
-                        {
-                            continue;
-                        }
+                        let Some(event) = item else { return; };
                         if release.load(Ordering::SeqCst) {
                             let accepted = accepted_subscription.lock().ok()
                                 .and_then(|accepted| accepted.clone());
                             if accepted.as_deref() != Some(event.subscription_id.as_str()) {
                                 continue;
                             }
-                            if !publish_authorized_event(&events, &authority, &alive, &failed, event).await { return; }
+                            // Release may race this receive after the loop checked
+                            // the flag. Join the FIFO instead of overtaking its
+                            // pre-ACK SnapshotStart and pages.
+                            queue.push_back(event);
                         } else if queue.len() >= CLIENT_EVENT_BUFFER {
                             // Defer the explicit reset until exact subscription
                             // acceptance; never invent a subscription identity.
