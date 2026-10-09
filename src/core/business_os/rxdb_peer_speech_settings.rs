@@ -56,6 +56,11 @@ enum Request {
         #[serde(rename = "commandId")]
         command_id: String,
     },
+    #[serde(rename = "speech.settings.check.transcription")]
+    CheckTranscription {
+        #[serde(rename = "commandId")]
+        command_id: String,
+    },
     #[serde(rename = "speech.settings.playback")]
     Playback {
         #[serde(rename = "commandId")]
@@ -70,6 +75,7 @@ impl Request {
             | Self::Key { command_id, .. }
             | Self::Voices { command_id }
             | Self::Check { command_id }
+            | Self::CheckTranscription { command_id }
             | Self::Playback { command_id } => command_id,
         }
     }
@@ -80,6 +86,7 @@ impl Request {
             Self::Key { .. } => "speech.settings.key",
             Self::Voices { .. } => "speech.settings.voices",
             Self::Check { .. } => "speech.settings.check",
+            Self::CheckTranscription { .. } => "speech.settings.check.transcription",
             Self::Playback { .. } => "speech.settings.playback",
         }
     }
@@ -131,10 +138,19 @@ fn snapshot(root: &Path) -> anyhow::Result<Value> {
     let status = SpeechGateway::from_root(root)?.status();
     let checks: Option<Value> = crate::persistence::load_json_payload(root, CHECK_KEY)?;
     let current_binding = binding(root)?;
-    let tts = checks
+    let checks = checks
         .filter(|c| c.get("binding").and_then(Value::as_str) == Some(current_binding.as_str()))
-        .and_then(|c| c.get("tts").cloned());
-    Ok(json!({"status":status, "ttsCheck":tts}))
+        .unwrap_or_else(|| json!({}));
+    Ok(json!({"status":status, "ttsCheck":checks.get("tts"), "sttCheck":checks.get("stt")}))
+}
+fn save_check(root: &Path, current_binding: &str, path: &str, check: Value) -> anyhow::Result<()> {
+    let saved: Option<Value> = crate::persistence::load_json_payload(root, CHECK_KEY)?;
+    let mut saved = saved
+        .filter(|s| s.get("binding").and_then(Value::as_str) == Some(current_binding))
+        .unwrap_or_else(|| json!({"binding":current_binding}));
+    saved[path] = check;
+    crate::persistence::store_json_payload(root, CHECK_KEY, Some(&saved))?;
+    Ok(())
 }
 fn error_class(error: &SpeechError) -> &'static str {
     match error {
@@ -297,11 +313,37 @@ async fn handle(
                     json!({"state":"error", "checkedAt":chrono::Utc::now().to_rfc3339(), "latencyMs":null, "errorClass":error_class(&error)})
                 }
             };
-            crate::persistence::store_json_payload(
-                &authority.root,
-                CHECK_KEY,
-                Some(&json!({"binding":before,"tts":check})),
-            )?;
+            save_check(&authority.root, &before, "tts", check)?;
+        }
+        Request::CheckTranscription { .. } => {
+            let gateway = SpeechGateway::from_root(&authority.root)?;
+            let active = authority.clone();
+            let result = gateway.check_transcription(move || (active.current)()).await;
+            authority.check()?;
+            ensure!(
+                binding(&authority.root)? == before,
+                "speech configuration changed during check"
+            );
+            let check = match result {
+                Ok(output) => {
+                    extras["transcript"] = json!(output.text);
+                    json!({
+                        "state":"ok", "checkedAt":chrono::Utc::now().to_rfc3339(),
+                        "latencyMs":output.finish_to_final_ms, "errorClass":null,
+                        "model":output.model, "audioDurationMs":output.audio_duration_ms,
+                        "partialBeforeAudioEnd":output.partial_before_audio_end,
+                        "measurementBoundary":"gateway_audio_end_to_final"
+                    })
+                }
+                Err(error) => json!({
+                    "state":"error", "checkedAt":chrono::Utc::now().to_rfc3339(),
+                    "latencyMs":null,
+                    "errorClass":if error == SpeechError::InvalidResponse {
+                        "invalid_transcript"
+                    } else { error_class(&error) }
+                }),
+            };
+            save_check(&authority.root, &before, "stt", check)?;
         }
     }
     // Playback returns above and never exposes configuration/credential presence.
@@ -387,6 +429,33 @@ mod tests {
     }
     fn command(action: &str) -> Value {
         json!({"action":action,"commandId":uuid::Uuid::new_v4().to_string()})
+    }
+
+    #[tokio::test]
+    async fn transcription_check_persists_its_own_result_without_inventing_readiness() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let auth = authority(root.path(), "chef", true)?;
+        let mut config = SpeechRuntimeConfig::default();
+        config.synthesis = crate::execution::speech::SpeechBackend::Mistral;
+        config.transcription = crate::execution::speech::SpeechBackend::Mistral;
+        config.voice_id = Some("fixture-saved-voice".into());
+        config.save(root.path())?;
+        let before = binding(root.path())?;
+        let tts = json!({"state":"error","errorClass":"missing_credential"});
+        save_check(root.path(), &before, "tts", tts.clone())?;
+        let response = handle(auth.clone(), vec![command("speech.settings.check.transcription")]).await?.result;
+        assert_eq!(response["sttCheck"]["state"], "error");
+        assert_eq!(response["sttCheck"]["errorClass"], "missing_credential");
+        assert_eq!(response["ttsCheck"], tts);
+        assert!(response.get("transcript").is_none());
+        let readback = handle(auth, vec![command("speech.settings.read")]).await?.result;
+        assert_eq!(readback["sttCheck"], response["sttCheck"]);
+        assert_eq!(readback["ttsCheck"], response["ttsCheck"]);
+        let member = authority(root.path(), "user", true)?;
+        assert!(handle(member, vec![command("speech.settings.check.transcription")]).await.is_err());
+        let retired = authority(root.path(), "chef", false)?;
+        assert!(handle(retired, vec![command("speech.settings.check.transcription")]).await.is_err());
+        Ok(())
     }
 
     #[tokio::test]

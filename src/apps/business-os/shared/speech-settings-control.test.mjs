@@ -15,6 +15,17 @@ test('secret input goes directly to the native auxiliary channel and is never ec
   assert.equal(calls,1);
   assert.equal(JSON.stringify(result).includes('private-fixture'),false);
 });
+test('transcription probes keep scope/correlation and their bounded native deadline', async () => {
+  const input={action:'speech.settings.check.transcription',commandId};
+  const result=await requestSpeechSettings({async requestNative(method,request,options) {
+    assert.equal(method,'ctox.workjet.speech.settings.v1');
+    assert.equal(options.timeoutMs,30000);
+    assert.equal(options.requiredCapability,'ctox-workjet-speech-settings-v1');
+    return {...request,sttCheck:{state:'error',errorClass:'missing_credential'}};
+  }},input,()=>{});
+  assert.equal(result.sttCheck.state,'error');
+});
+
 test('stale scope and mismatched receipts are discarded', async () => {
   const request={action:'speech.settings.read',commandId};
   let current=true;

@@ -6,7 +6,7 @@ DataChannel method `ctox.workjet.speech.settings.v1`, capability
 voice discovery and checks require the current native Owner/Admin peer.
 Settings are not Business OS collection data and have no HTTP fallback.
 
-Actions are read, configure, key, voices, check and playback, prefixed
+Actions are read, configure, key, voices, check, check.transcription and playback, prefixed
 `speech.settings.`, with a UUID commandId echoed in each receipt. Key inputs
 are transient: the native handler writes only the encrypted credential
 `CTOX_MISTRAL_API_KEY`; it never projects, logs or returns the key. Discovery
@@ -28,7 +28,18 @@ configuration or credential replacement. Configuration alone remains
 unchecked. HTTP rejection classes come from actual upstream status codes;
 missing key or voice remain local prerequisites. No provider body is returned.
 
-This slice exposes API configuration and a TTS check. It does not claim a live
-STT check, installed narration acceptance or local GPU readiness. Computer-pool
-enrollment and STT acceptance remain separate work on the existing native
-speech computer and authorized meeting transport contracts.
+The transcription check synthesizes a short German reference clip with the saved
+Mistral voice and replays its actual mono signed-16-bit WAV PCM at capture cadence
+through the configured Mistral realtime gateway. It requires both speech paths
+to select Mistral; it never silently substitutes a backend or records the microphone.
+A nonempty branded gateway final defines success. The persisted latency measures
+gateway audio-end to provider final, excluding synthesis, connection setup,
+client transport and VAD. Partial-before-audio-end and audio duration are retained.
+The probe has a 25-second total deadline and closes its stream on peer retirement.
+TTS and STT results persist separately under the same configuration/credential
+binding. Diagnostics confer no authority to append a meeting transcript.
+
+Reference: https://docs.mistral.ai/studio/audio/speech_to_text/realtime_transcription
+
+Installed microphone/narration acceptance and local GPU readiness remain open.
+Computer-pool enrollment uses the existing authorized speech computer contract.
