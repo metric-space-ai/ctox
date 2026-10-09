@@ -492,6 +492,77 @@ mod tests {
         }
         Ok(())
     }
+    #[tokio::test]
+    async fn credential_replacement_during_discovery_discards_catalog_and_old_check(
+    ) -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let root = tempfile::tempdir()?;
+        let authority = auth(root.path(), "chef", Arc::new(|| true))?;
+        let record = json!({"access":"private-before","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
+        crate::secrets::write_secret_record(
+            root.path(),
+            "provider-subscriptions",
+            "xai-instance-oauth",
+            &record.to_string(),
+            None,
+            json!({}),
+        )?;
+        crate::persistence::store_json_payload(
+            root.path(),
+            CHECK_KEY,
+            Some(&json!({"binding":xai::credential_binding(root.path())?,"check":{"status":"ok"}})),
+        )?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        xai::test_endpoint(
+            root.path(),
+            Some(format!("http://{}", listener.local_addr()?)),
+        );
+        let server_root = root.path().to_path_buf();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut data = [0; 8192];
+            let n = stream.read(&mut data).await.unwrap();
+            assert!(String::from_utf8_lossy(&data[..n])
+                .to_ascii_lowercase()
+                .contains("authorization: bearer private-before"));
+            let mut changed = record;
+            changed["access"] = json!("private-after");
+            crate::secrets::write_secret_record(
+                &server_root,
+                "provider-subscriptions",
+                "xai-instance-oauth",
+                &changed.to_string(),
+                None,
+                json!({}),
+            )
+            .unwrap();
+            let body = json!({"data":[{"id":"grok-4.7"}]}).to_string();
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let response = handle(
+            Arc::new(Controller::new(root.path())?),
+            authority,
+            vec![request("instance.grok.read")],
+        )
+        .await?
+        .result;
+        server.await?;
+        xai::test_endpoint(root.path(), None);
+        assert!(response["check"].is_null());
+        assert_eq!(response["models"], json!([]));
+        assert!(!response.to_string().contains("private-"));
+        Ok(())
+    }
     #[test]
     fn failed_response_with_text_is_not_accepted() {
         assert!(!genuine_text(br#"{"object":"response","status":"failed","output":[{"type":"message","content":[{"type":"output_text","text":"Partial"}]}]}"#));
