@@ -10,5 +10,11 @@ pub use flow::*;
 pub use token::*;
 pub use types::*;
 
+/// CTOX native host uses the gateway's already linked HTTP implementation.
+/// No additional HTTP/TLS dependency is introduced into the daemon.
+#[cfg(feature = "antigravity-http-transport")]
+pub mod native_http {
+    pub use wreq::{redirect, Client, Method, Response};
+}
 #[cfg(test)]
 mod xai_auth_test;
