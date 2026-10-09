@@ -821,7 +821,11 @@ mod tests {
                 let request = &client.params()[0];
                 assert_eq!(
                     request["sandbox"],
-                    if read_only { "read-only" } else { "workspace-write" }
+                    if read_only {
+                        "read-only"
+                    } else {
+                        "workspace-write"
+                    }
                 );
                 assert_eq!(request["modelProvider"], "openai");
                 assert_eq!(request["baseInstructions"], "base");
@@ -833,12 +837,17 @@ mod tests {
                 let client = ScriptedControlClient::new(vec![resume_ok(id, None)]);
                 let mut seq = RequestIdSeq::new();
                 assert_eq!(
-                    resume_identified_thread(&client, &mut seq, &spec, id, Duration::from_secs(1)).await?,
+                    resume_identified_thread(&client, &mut seq, &spec, id, Duration::from_secs(1))
+                        .await?,
                     id
                 );
                 assert_eq!(
                     client.params()[0]["sandbox"],
-                    if read_only { "read-only" } else { "workspace-write" }
+                    if read_only {
+                        "read-only"
+                    } else {
+                        "workspace-write"
+                    }
                 );
                 assert_eq!(client.calls(), vec!["thread/resume"]);
             }

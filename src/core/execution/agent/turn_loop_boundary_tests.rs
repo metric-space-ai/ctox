@@ -77,7 +77,8 @@ fn production_reviewers_are_read_only_and_workers_protect_runtime_state() {
             && continuity.contains("dynamic_tools: spec.disable_active_tools.then(Vec::new)")
             && continuity.contains("sandbox: Some(if spec.read_only_sandbox")
             && continuity.contains("SandboxMode::ReadOnly")
-            && !continuity.contains("sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite)"),
+            && !continuity
+                .contains("sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite)"),
         "completion reviewers must be server-owned read-only sessions, never child agents"
     );
 }

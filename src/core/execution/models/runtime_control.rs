@@ -2709,7 +2709,8 @@ mod tests {
         runtime_plan::store_persisted_chat_runtime_plan(&root, Some(&previous_plan)).unwrap();
         runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let change = apply_runtime_selection(&root, "Qwen/Qwen3.6-35B-A3B", Some("quality")).unwrap();
+        let change =
+            apply_runtime_selection(&root, "Qwen/Qwen3.6-35B-A3B", Some("quality")).unwrap();
 
         assert_eq!(
             change.next_state.active_model.as_deref(),
