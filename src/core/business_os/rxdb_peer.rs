@@ -12286,18 +12286,18 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
-    fn workjet_project_schema_migration_preserves_populated_v0_identity_and_history(
+    fn workjet_project_schema_migration_preserves_populated_v0_v1_v2_identity_and_history(
     ) -> anyhow::Result<()> {
-        for source_version in [0, 1] {
+        for source_version in [0, 1, 2] {
             let root = tempfile::tempdir()?;
             std::fs::create_dir_all(root.path().join("runtime"))?;
             let collection = "workjet_projects";
-            assert_eq!(expected_rxdb_collection_version(collection), 2);
-            for version in [0, 1, 2] {
+            assert_eq!(expected_rxdb_collection_version(collection), 3);
+            for version in [0, 1, 2, 3] {
                 create_runtime_migration_source_table(root.path(), collection, version)?;
             }
             let source = rxdb_collection_version_table_name(collection, source_version);
-            let target = rxdb_collection_version_table_name(collection, 2);
+            let target = rxdb_collection_version_table_name(collection, 3);
             let read_rows = || -> anyhow::Result<Vec<(String, String, i64, f64, Value)>> {
                 let conn = Connection::open(store::rxdb_store_path(root.path()))?;
                 let mut statement = conn.prepare(&format!(
@@ -12325,7 +12325,15 @@ pub(in crate::business_os) mod tests {
                 let revision = format!("{}-retained", n + 1);
                 let deleted = i64::from(n == 15);
                 let lwt = 100.0 + f64::from(n);
-                let document = json!({"id":id,"name":format!("Existing project {n}"),"status":if n<12 {"active"} else {"archived"},"owner_user_id":"196a89ba-ee86-4413-885c-04ca60e6f291","created_at_ms":50,"updated_at_ms":100+n,"is_deleted":n==15,"_rev":revision,"_deleted":n==15,"_meta":{"lwt":lwt}});
+                let mut document = json!({"id":id,"name":format!("Existing project {n}"),"status":if n<12 {"active"} else {"archived"},"owner_user_id":"196a89ba-ee86-4413-885c-04ca60e6f291","created_at_ms":50,"updated_at_ms":100+n,"is_deleted":n==15,"_rev":revision,"_deleted":n==15,"_meta":{"lwt":lwt}});
+                if source_version > 0 {
+                    document["repo_url"] = json!("https://github.com/metric-space-ai/ctox");
+                    document["public_url"] = json!("https://ctox.dev");
+                    document["info"] = json!({"summary":"Existing summary","goal":"Existing goal","phase":"development"});
+                    document["jour_fixe"] =
+                        json!({"weekday":1,"time":"13:00","timezone":"Europe/Berlin"});
+                }
+                assert!(document.get("supervisor_luma_id").is_none());
                 conn.execute(
                     &format!("INSERT INTO {source} VALUES (?1,?2,?3,?4,?5)"),
                     params![id, revision, deleted, lwt, document.to_string()],
@@ -12342,6 +12350,7 @@ pub(in crate::business_os) mod tests {
             newer["public_url"] = json!("https://ctox.dev");
             newer["info"] = json!({"goal":"Retained current goal"});
             newer["jour_fixe"] = json!({"weekday":1,"time":"13:00","timezone":"Europe/Berlin"});
+            newer["supervisor_luma_id"] = json!("luma-retained-owner-selection");
             newer["updated_at_ms"] = json!(300);
             let conn = Connection::open(store::rxdb_store_path(root.path()))?;
             conn.execute(&format!("UPDATE {target} SET revision='20-newer',lastWriteTime=300,data=?1 WHERE id='project-00'"),params![newer.to_string()])?;
