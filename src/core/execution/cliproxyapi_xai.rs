@@ -185,7 +185,7 @@ impl CtoxXaiLogin {
                                 XaiLoginProgress::Failed
                             }
                         }
-                        None => XaiLoginProgress::Cancelled,
+                        _ if cancel.is_cancelled() || !current() => XaiLoginProgress::Cancelled,
                         _ => XaiLoginProgress::Failed,
                     };
                 }
