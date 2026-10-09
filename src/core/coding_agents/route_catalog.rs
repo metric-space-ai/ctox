@@ -2,7 +2,9 @@
 // License: AGPL-3.0-only
 //! Operator-requested live model discovery for the inherited Pi route.
 //! No inference, queue mutation, credential export or fallback selection.
-use super::{resolve_inherited_coding_route, InheritedCodingRoute};
+use super::{
+    resolve_inherited_catalog_route, resolve_inherited_coding_route, InheritedCodingRoute,
+};
 use crate::execution::models::runtime_env;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -279,7 +281,7 @@ pub(crate) struct NativeModelCatalogObservation {
 fn probe_current(root: &Path, route: &InheritedCodingRoute) -> Probe {
     if let Some(credential) = read_credential(root, route) {
         let mut probe = fetch(route, &credential, DEADLINE);
-        let current_route = resolve_inherited_coding_route(root).ok();
+        let current_route = resolve_inherited_catalog_route(root).ok();
         let current_credential = current_route
             .as_ref()
             .and_then(|route| read_credential(root, route));
@@ -300,7 +302,7 @@ fn probe_current(root: &Path, route: &InheritedCodingRoute) -> Probe {
 /// the actual route and rechecks its private credential after the network wait.
 /// This is metadata, never authorization for inference or a capacity check.
 pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservation> {
-    let route = resolve_inherited_coding_route(root)
+    let route = resolve_inherited_catalog_route(root)
         .map_err(|_| anyhow::anyhow!("native model catalog route is unavailable"))?;
     let probe = probe_current(root, &route);
     let failure = serde_json::to_value(probe.failure)?
@@ -318,10 +320,11 @@ pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservati
 }
 
 /// Only the trusted local operator CLI can request this network observation.
-/// It uses the same native provider/model/endpoint/secret selector as real Pi
-/// turns. An observation never authorizes a later turn or certifies capacity.
+/// It uses Pi's stored provider/model/secret selection, with the configured
+/// upstream endpoint for discovery instead of the internal inference edge.
+/// An observation never authorizes a later turn or certifies capacity.
 pub(super) fn inspect(root: &Path) -> anyhow::Result<Value> {
-    let route = resolve_inherited_coding_route(root)?;
+    let route = resolve_inherited_catalog_route(root)?;
     let probe = probe_current(root, &route);
     let selected_model_listed = probe
         .models
@@ -379,9 +382,15 @@ mod tests {
         ]);
         runtime_env::save_runtime_env_map(root.path(), &settings)?;
         let before = runtime_env::load_runtime_env_map(root.path())?;
+        // Assert the selected private endpoint before any network IO. A
+        // fixture must never silently probe a live or shared gateway.
+        assert_eq!(
+            resolve_inherited_catalog_route(root.path())?.base_url,
+            address
+        );
         let worker = std::thread::spawn(move || {
             let request = server
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(Duration::from_secs(8))
                 .unwrap()
                 .unwrap();
             assert_eq!(request.url(), "/v1/models");

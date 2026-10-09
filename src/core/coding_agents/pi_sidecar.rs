@@ -671,6 +671,22 @@ struct InheritedCodingRoute {
 }
 
 fn resolve_inherited_coding_route(root: &Path) -> anyhow::Result<InheritedCodingRoute> {
+    resolve_inherited_route(root, InheritedRoutePurpose::Inference)
+}
+
+fn resolve_inherited_catalog_route(root: &Path) -> anyhow::Result<InheritedCodingRoute> {
+    resolve_inherited_route(root, InheritedRoutePurpose::ModelCatalog)
+}
+
+enum InheritedRoutePurpose {
+    Inference,
+    ModelCatalog,
+}
+
+fn resolve_inherited_route(
+    root: &Path,
+    purpose: InheritedRoutePurpose,
+) -> anyhow::Result<InheritedCodingRoute> {
     use crate::execution::models::{runtime_env, runtime_kernel, runtime_state};
 
     let runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root)?;
@@ -696,10 +712,21 @@ fn resolve_inherited_coding_route(root: &Path) -> anyhow::Result<InheritedCoding
     let spec = crate::execution::agent::turn_loop::resolve_api_model_provider_spec(
         &model_id,
         &settings,
-        Some(&runtime),
+        matches!(purpose, InheritedRoutePurpose::Inference).then_some(&runtime),
     );
     let (base_url, credential_key) = if provider == "openai" {
-        (runtime.internal_responses_base_url(), "OPENAI_API_KEY")
+        let base = match purpose {
+            InheritedRoutePurpose::Inference => runtime.internal_responses_base_url(),
+            InheritedRoutePurpose::ModelCatalog => {
+                let upstream = runtime.state.upstream_base_url.trim_end_matches('/');
+                if upstream.ends_with("/v1") {
+                    upstream.to_owned()
+                } else {
+                    format!("{upstream}/v1")
+                }
+            }
+        };
+        (base, "OPENAI_API_KEY")
     } else {
         let spec = spec.context("CTOX main provider/model route is not available to Pi")?;
         anyhow::ensure!(
@@ -2371,6 +2398,18 @@ mod tests {
         let prepared = prepare_coding_turn_model(root, None, None, false)?;
         assert_eq!(prepared.provider, "ctox_proxy");
         assert_eq!(prepared.model_id, "MiniMax-M3");
+        let inference = resolve_inherited_coding_route(root)?;
+        let catalog = resolve_inherited_catalog_route(root)?;
+        assert_eq!(
+            url::Url::parse(&catalog.base_url)?
+                .origin()
+                .ascii_serialization(),
+            "https://llm.ctox.dev"
+        );
+        assert_ne!(catalog.base_url, inference.base_url);
+        assert_eq!(catalog.provider, inference.provider);
+        assert_eq!(catalog.model_id, inference.model_id);
+        assert_eq!(catalog.credential_key, inference.credential_key);
         assert!(prepared.coding_plan_bridge.is_some());
         let public = prepared.model.to_string();
         assert!(!public.contains("selected-proxy-secret"));
