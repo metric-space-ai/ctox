@@ -14,7 +14,12 @@ Retention now discovers candidates outside a transaction and reserves an
 IMMEDIATE writer separately for each orphan. It rechecks the attempt identity,
 start/finalization state, current lease and durable finalization before deleting
 the selection event, tombstone outbox, attempt and assignment together.
-A candidate started or leased in the meantime survives. The existing limits
+A candidate started or leased in the meantime survives. Empty maintenance is
+read-only: SQLite reserves its sole writer even for an UPDATE or DELETE that
+matches zero rows. Finalization evidence and finished-retention candidates are
+therefore discovered outside a transaction, and current guards are rechecked
+under one short IMMEDIATE reservation per candidate. Reopened routes and rows
+that entered the newest-500 window survive. The existing limits
 (128 orphans and 128 completed rows; newest 500 completed rows retained) remain.
 
 Batch queue admission previously reserved IMMEDIATE before ranking all pending
@@ -59,7 +64,8 @@ document content or credentials are logged. The fixed threshold is 50 ms.
 
 Operations covered: queue.lease_task, queue.lease_batch, queue.ack_attempt,
 queue.ack_messages,
-crew.retention_orphan, crew.finalize_attempt, projection.source_upsert,
+crew.retention_orphan, crew.retention_start_evidence, crew.retention_finished,
+crew.finalize_attempt, projection.source_upsert,
 projection.source_tombstone, projection.rxdb_upsert and
 projection.rxdb_tombstone, projection.source_batch and projection.rxdb_batch.
 Queue operations may reserve attached projection
