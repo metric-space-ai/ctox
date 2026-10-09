@@ -29,7 +29,7 @@ fn native_catalog_target_is_owner_holder_revision_and_account_bound() -> Result<
         expected_account_revision: 1,
     };
     assert_eq!(
-        native_catalog_target(&f.conn, "owner", "native-instance", &request)?,
+        native_catalog_target(&f.conn, "owner", "native-instance", &request)?.provider,
         "ctox_proxy"
     );
     assert!(native_catalog_target(&f.conn, "foreign", "native-instance", &request).is_err());
@@ -56,6 +56,31 @@ fn native_catalog_target_is_owner_holder_revision_and_account_bound() -> Result<
     assert!(
         native_catalog_target(&f.conn, "owner", "native-instance", &subscription_request).is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn native_claude_catalog_target_is_exact_account_and_holder_bound() -> Result<()> {
+    let f = Fixture::new()?;
+    let mut claude = account("claude-holder-account");
+    claude.provider = "claude".into();
+    claude.private_binding = Some("holder-private-fingerprint".into());
+    let state = f.adopt(&[claude])?;
+    let request = ObserveNativeRequest {
+        _inbound_channel: None,
+        account_id: account_id(&state).into(),
+        expected_account_revision: 1,
+    };
+    let target = native_catalog_target(&f.conn, "owner", "native-instance", &request)?;
+    assert_eq!(target.provider, "claude");
+    assert_eq!(target.local_account_id, "claude-holder-account");
+    assert!(native_catalog_target(&f.conn, "owner", "different-holder", &request).is_err());
+    assert!(native_catalog_target(&f.conn, "foreign", "native-instance", &request).is_err());
+    f.conn.execute(
+        "UPDATE business_provider_federation_accounts SET enabled=0 WHERE account_id=?1",
+        [&request.account_id],
+    )?;
+    assert!(native_catalog_target(&f.conn, "owner", "native-instance", &request).is_err());
     Ok(())
 }
 

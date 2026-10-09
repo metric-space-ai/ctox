@@ -201,6 +201,17 @@ pub(super) fn handle_command(
             // transaction. No network call, auth refresh or credential mutation.
             let snapshot = store::provider_subscription_status_for_control_plane(root);
             let mut accounts = observations(&snapshot["provider_subscriptions"])?;
+            for account in accounts
+                .iter_mut()
+                .filter(|account| account.provider == "claude")
+            {
+                account.private_binding =
+                    crate::execution::cliproxyapi_claude_catalog::account_binding(
+                        root,
+                        &account.local_account_id,
+                    )?;
+                account.credential_ready &= account.private_binding.is_some();
+            }
             let inherited =
                 crate::coding_agents::pi_sidecar::inherited_coding_account_metadata(root);
             if let Ok(Some(metadata)) = &inherited {
@@ -246,17 +257,23 @@ pub(super) fn handle_command(
             let admitted =
                 admission.context("native model observation requires domain admission")?;
             let holder = store::existing_instance_id(root)?;
-            let provider = {
+            let target = {
                 let conn = store::open_store(root)?;
                 let owner = management_owner(&conn, actor)?;
                 native_catalog_target(&conn, &owner, &holder, &request)?
             };
             // Network wait is outside the policy transaction. Caller-supplied
             // endpoints, credentials and model lists are never accepted.
-            let observation =
-                crate::coding_agents::pi_sidecar::inherited_coding_model_catalog(root)?;
+            let observation = if target.local_account_id == INHERITED_NATIVE_ACCOUNT_ID {
+                crate::coding_agents::pi_sidecar::inherited_coding_model_catalog(root)?
+            } else {
+                crate::execution::cliproxyapi_claude_catalog::observe(
+                    root,
+                    &target.local_account_id,
+                )?
+            };
             ensure!(
-                observation.provider == provider,
+                observation.provider == target.provider,
                 "native account provider changed"
             );
             let mut conn = store::open_store(root)?;
@@ -269,14 +286,14 @@ pub(super) fn handle_command(
                 );
                 let current = native_catalog_target(tx, &owner, &holder, &request)?;
                 ensure!(
-                    current == observation.provider,
+                    current == target && current.provider == observation.provider,
                     "native account provider changed"
                 );
                 retain_catalog_observation(tx, &request, &observation)?;
                 models::initialize_inherited_selection(
                     tx,
                     &owner,
-                    &current,
+                    &current.provider,
                     observation.inherited_selected_model.as_deref(),
                     store::now_ms() as i64,
                 )?;
@@ -558,16 +575,23 @@ fn set_native_binding(conn: &Connection, id: &str, binding: Option<&str>) -> Res
     Ok(())
 }
 
+#[derive(PartialEq, Eq)]
+struct NativeCatalogTarget {
+    provider: String,
+    local_account_id: String,
+}
+
 fn native_catalog_target(
     conn: &Connection,
     owner: &str,
     holder: &str,
     request: &ObserveNativeRequest,
-) -> Result<String> {
+) -> Result<NativeCatalogTarget> {
     conn.query_row(
-        "SELECT provider FROM business_provider_federation_accounts
+        "SELECT provider,private_local_account_id FROM business_provider_federation_accounts
          WHERE account_id=?1 AND owner_user_id=?2 AND holder_instance_id=?3
-           AND private_local_account_id=?4 AND revision=?5 AND enabled=1 AND credential_ready=1",
+           AND (private_local_account_id=?4 OR provider='claude')
+           AND revision=?5 AND enabled=1 AND credential_ready=1",
         params![
             request.account_id,
             owner,
@@ -575,7 +599,12 @@ fn native_catalog_target(
             INHERITED_NATIVE_ACCOUNT_ID,
             request.expected_account_revision
         ],
-        |row| row.get(0),
+        |row| {
+            Ok(NativeCatalogTarget {
+                provider: row.get(0)?,
+                local_account_id: row.get(1)?,
+            })
+        },
     )
     .context("selected native catalog account is unavailable or changed")
 }
@@ -684,6 +713,12 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
                 "credentialReady":row.get::<_,bool>(4)?,
                 "revision":row.get::<_,i64>(5)?,
                 "observedAtMs":row.get::<_,i64>(6)?,
+                // Explicit native reference; never a conversion from Workjet-local IDs.
+                "nativeAccountReference":{
+                    "accountId":row.get::<_,String>(0)?,
+                    "holderInstanceId":row.get::<_,String>(1)?,
+                    "accountRevision":row.get::<_,i64>(5)?,
+                },
                 "modelCatalogObserved":false,
                 "inferenceVerified":false
             }))
