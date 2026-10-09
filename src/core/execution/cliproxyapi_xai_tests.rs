@@ -1,6 +1,48 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+struct StalledLogin;
+impl XaiHttpTransport for StalledLogin {
+    fn execute<'a>(
+        &'a self,
+        _: &'a XaiHttpRequest,
+        _: Duration,
+        _: &'a LoginCancellation,
+    ) -> XaiHttpFuture<'a> {
+        Box::pin(futures_util::future::pending())
+    }
+}
+#[tokio::test]
+async fn abandoned_start_releases_pending_admission() {
+    let root = tempfile::tempdir().unwrap();
+    let controller = CtoxXaiLogin::with_auth(
+        root.path(),
+        Arc::new(XaiAuth::new(
+            Arc::new(StalledLogin),
+            Arc::new(SystemXaiClock),
+            Arc::new(XaiRefreshCoordinator::default()),
+        )),
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), controller.start())
+            .await
+            .is_err()
+    );
+    assert!(controller
+        .sessions
+        .lock()
+        .unwrap()
+        .values()
+        .all(|login| login.progress == XaiLoginProgress::Cancelled && login.cancel.is_cancelled()));
+    // A second request is admitted (it times out in the fixture transport),
+    // rather than failing immediately with "login already pending".
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), controller.start())
+            .await
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn catalog_absence_denies_execution() {
     let root = tempfile::tempdir().unwrap();
