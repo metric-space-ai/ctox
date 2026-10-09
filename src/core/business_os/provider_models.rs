@@ -424,6 +424,10 @@ pub(crate) fn capture_consumable_model(
     })
 }
 
+#[path = "provider_supervisor_models.rs"]
+mod supervisor;
+pub(crate) use supervisor::{resolve_supervisor_model, SupervisorModelEligibility};
+
 #[cfg(test)]
 #[path = "provider_models_tests.rs"]
 mod tests;
