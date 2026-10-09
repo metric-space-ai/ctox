@@ -13902,9 +13902,14 @@ async function workjetProjectControl(request = {}) {
   }
   if (action.startsWith('instance.grok.')) {
     const sync = state.sync;
-    const result = await requestWorkjetGrok(sync, request);
-    if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync) throw new Error('Grok control scope retired');
-    return result;
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
+    return requestWorkjetGrok(sync, request, () => {
+      if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync
+        || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
+        throw new Error('Grok instance or authority changed.');
+      }
+    });
   }
   if (action === 'project.jour_fixe.speech') {
     const sync = state.sync;

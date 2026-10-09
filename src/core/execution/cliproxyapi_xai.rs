@@ -379,15 +379,57 @@ fn endpoint(root: &Path) -> String {
     let _ = root;
     CLI_CHAT_PROXY_BASE_URL.into()
 }
+async fn active_record(root: &Path, client: &native_http::Client) -> anyhow::Result<Stored> {
+    let encoded = Zeroizing::new(crate::secrets::read_secret_value(root, SCOPE, NAME)?);
+    let mut record: Stored = serde_json::from_str(&encoded)?;
+    if record.expires_at.is_some_and(|expiry| {
+        expiry
+            <= std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                + 300
+    }) {
+        let auth = XaiAuth::new(
+            Arc::new(LoginTransport(client.clone())),
+            Arc::new(SystemXaiClock),
+            Arc::new(XaiRefreshCoordinator::default()),
+        );
+        let token = auth
+            .refresh_tokens(
+                SecretString::new(
+                    record
+                        .refresh
+                        .clone()
+                        .ok_or_else(|| anyhow::anyhow!("refresh unavailable"))?,
+                )?,
+                Some(&record.token_endpoint),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("Grok refresh failed"))?;
+        let bundle = AuthBundle {
+            token_data: token,
+            last_refresh: std::time::SystemTime::now(),
+            base_url: CLI_CHAT_PROXY_BASE_URL.into(),
+            redirect_uri: String::new(),
+            token_endpoint: record.token_endpoint.clone(),
+        };
+        save_bundle(root, &bundle)?;
+        record = serde_json::from_str(&Zeroizing::new(crate::secrets::read_secret_value(
+            root, SCOPE, NAME,
+        )?))?;
+    }
+    Ok(record)
+}
 pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
     use ctox_cliproxyapi::internal::runtime::executor::xai_executor_request::apply_xai_chat_headers;
     use ctox_cliproxyapi::sdk::cliproxy::auth::Auth;
-    let encoded = Zeroizing::new(crate::secrets::read_secret_value(root, SCOPE, NAME)?);
-    let record: Stored = serde_json::from_str(&encoded)?;
+    let _guard = AUTH_USE.lock().await;
     let client = native_http::Client::builder()
         .redirect(native_http::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .build()?;
+    let record = active_record(root, &client).await?;
     let mut auth = Auth::default();
     auth.attributes.insert("auth_kind".into(), "oauth".into());
     auth.attributes
@@ -450,49 +492,11 @@ async fn execute_route_at(
         "requested Grok account unavailable"
     );
     ctox_cliproxyapi::internal::api::account_selection::record_selected(ACCOUNT_ID);
-    let encoded = Zeroizing::new(crate::secrets::read_secret_value(root, SCOPE, NAME)?);
-    let mut record: Stored = serde_json::from_str(&encoded)?;
     let client = native_http::Client::builder()
         .redirect(native_http::redirect::Policy::none())
         .timeout(Duration::from_secs(60))
         .build()?;
-    if record.expires_at.is_some_and(|expiry| {
-        expiry
-            <= std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                + 300
-    }) {
-        let auth = XaiAuth::new(
-            Arc::new(LoginTransport(client.clone())),
-            Arc::new(SystemXaiClock),
-            Arc::new(XaiRefreshCoordinator::default()),
-        );
-        let token = auth
-            .refresh_tokens(
-                SecretString::new(
-                    record
-                        .refresh
-                        .clone()
-                        .ok_or_else(|| anyhow::anyhow!("refresh unavailable"))?,
-                )?,
-                Some(&record.token_endpoint),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("Grok refresh failed"))?;
-        let bundle = AuthBundle {
-            token_data: token,
-            last_refresh: std::time::SystemTime::now(),
-            base_url: CLI_CHAT_PROXY_BASE_URL.into(),
-            redirect_uri: String::new(),
-            token_endpoint: record.token_endpoint.clone(),
-        };
-        save_bundle(root, &bundle)?;
-        record = serde_json::from_str(&Zeroizing::new(crate::secrets::read_secret_value(
-            root, SCOPE, NAME,
-        )?))?;
-    }
+    let record = active_record(root, &client).await?;
     let request: serde_json::Value = serde_json::from_slice(body)?;
     let model = request
         .get("model")
