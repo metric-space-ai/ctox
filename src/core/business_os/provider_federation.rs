@@ -167,11 +167,37 @@ pub(super) fn handle_command(
             // Resolve existing account metadata before taking the policy writer
             // transaction. No network call, auth refresh or credential mutation.
             let snapshot = store::provider_subscription_status_for_control_plane(root);
-            let accounts = observations(&snapshot["provider_subscriptions"])?;
+            let mut accounts = observations(&snapshot["provider_subscriptions"])?;
+            let inherited =
+                crate::coding_agents::pi_sidecar::inherited_coding_account_metadata(root);
+            if let Ok(Some(metadata)) = &inherited {
+                accounts.push(NativeAccountObservation {
+                    provider: metadata.provider.clone(),
+                    local_account_id: INHERITED_NATIVE_ACCOUNT_ID.into(),
+                    enabled: true,
+                    credential_ready: true,
+                });
+            }
+            ensure!(
+                accounts.len() <= MAX_ACCOUNTS,
+                "native account limit exceeded"
+            );
             let mut conn = store::open_store(root)?;
             let applied = admitted.apply(&mut conn, |tx| {
                 let owner = management_owner(tx, actor)?;
-                adopt(tx, &owner, &holder, &accounts, store::now_ms() as i64)?;
+                let now = store::now_ms() as i64;
+                // Unsupported/unreadable main routes do not erase the last
+                // observation or prevent independent subscription adoption.
+                if let Ok(current) = &inherited {
+                    retire_inherited_route(
+                        tx,
+                        &owner,
+                        &holder,
+                        current.as_ref().map(|metadata| metadata.provider.as_str()),
+                        now,
+                    )?;
+                }
+                adopt(tx, &owner, &holder, &accounts, now)?;
                 Ok(AppliedDomainEffect {
                     result: list(tx, &owner)?,
                     projections: vec![],
@@ -201,6 +227,55 @@ pub(super) fn handle_command(
         }
         _ => anyhow::bail!("unsupported provider federation command"),
     }
+}
+
+const INHERITED_NATIVE_ACCOUNT_ID: &str = "@ctox/native-main-route";
+
+// A provider switch or an explicitly absent credential retires consumption
+// metadata, preserving UUIDs, withdrawals, secrets and provider configuration.
+fn retire_inherited_route(
+    conn: &Connection,
+    owner: &str,
+    holder: &str,
+    current_provider: Option<&str>,
+    now: i64,
+) -> Result<()> {
+    let rows = {
+        let mut stmt = conn.prepare(
+            "SELECT account_id,provider,revision FROM business_provider_federation_accounts
+             WHERE owner_user_id=?1 AND holder_instance_id=?2 AND private_local_account_id=?3
+             AND (enabled=1 OR credential_ready=1)",
+        )?;
+        let collected = stmt
+            .query_map(params![owner, holder, INHERITED_NATIVE_ACCOUNT_ID], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        collected
+    };
+    let mut changed = false;
+    for (id, provider, revision) in rows {
+        if current_provider == Some(provider.as_str()) {
+            continue;
+        }
+        let revision = revision
+            .checked_add(1)
+            .context("account revision exhausted")?;
+        conn.execute(
+            "UPDATE business_provider_federation_accounts
+             SET enabled=0,credential_ready=0,revision=?2,observed_at_ms=?3 WHERE account_id=?1",
+            params![id, revision, now],
+        )?;
+        changed = true;
+    }
+    if changed {
+        bump_policy(conn, owner)?;
+    }
+    Ok(())
 }
 
 fn policy_revision(conn: &Connection, owner: &str) -> Result<i64> {

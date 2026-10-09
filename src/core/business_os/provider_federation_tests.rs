@@ -115,6 +115,116 @@ fn account_id(state: &Value) -> &str {
 }
 
 #[test]
+fn inherited_main_account_retirement_preserves_identity_withdrawals_and_other_accounts(
+) -> Result<()> {
+    let f = Fixture::new()?;
+    f.enroll("first")?;
+    let mut main = account(INHERITED_NATIVE_ACCOUNT_ID);
+    main.provider = "ctox_proxy".into();
+    let original = f.adopt(&[main, account("private-subscription")])?;
+    let entry = original["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["provider"] == "ctox_proxy")
+        .unwrap();
+    let id = entry["id"].as_str().unwrap().to_owned();
+    withdraw(
+        &f.conn,
+        "owner",
+        &WithdrawRequest {
+            _inbound_channel: None,
+            account_id: id.clone(),
+            computer_id: "first".into(),
+            withdrawn: true,
+            expected_revision: 1,
+        },
+    )?;
+    let before = policy_revision(&f.conn, "owner")?;
+    retire_inherited_route(&f.conn, "foreign", "native-instance", None, 101)?;
+    retire_inherited_route(&f.conn, "owner", "other-holder", None, 101)?;
+    retire_inherited_route(&f.conn, "owner", "native-instance", Some("ctox_proxy"), 101)?;
+    assert_eq!(policy_revision(&f.conn, "owner")?, before);
+    retire_inherited_route(&f.conn, "owner", "native-instance", None, 102)?;
+    let retired_revision = policy_revision(&f.conn, "owner")?;
+    assert_eq!(retired_revision, before + 1);
+    retire_inherited_route(&f.conn, "owner", "native-instance", None, 103)?;
+    assert_eq!(policy_revision(&f.conn, "owner")?, retired_revision);
+    assert!(consumable(&f.conn, &f.facts("second"), &id, 1).is_err());
+    let retired = list(&f.conn, "owner")?;
+    let main = retired["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == id)
+        .unwrap();
+    assert_eq!(main["enabled"], false);
+    assert_eq!(main["credentialReady"], false);
+    assert_eq!(main["revision"], 2);
+    let subscription = retired["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["provider"] == "minimax")
+        .unwrap();
+    assert_eq!(subscription["enabled"], true);
+    assert_eq!(subscription["credentialReady"], true);
+
+    let mut main = account(INHERITED_NATIVE_ACCOUNT_ID);
+    main.provider = "ctox_proxy".into();
+    let restored = f.adopt(&[main])?;
+    let restored_main = restored["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == id)
+        .unwrap();
+    assert_eq!(restored_main["revision"], 3);
+    assert!(consumable(&f.conn, &f.facts("first"), &id, 3).is_err());
+    assert!(consumable(&f.conn, &f.facts("second"), &id, 3).is_ok());
+    for private in [INHERITED_NATIVE_ACCOUNT_ID, "private-subscription"] {
+        assert!(!restored.to_string().contains(private));
+    }
+    Ok(())
+}
+
+#[test]
+fn inherited_provider_switch_retires_only_the_previous_provider_and_keeps_its_uuid() -> Result<()> {
+    let f = Fixture::new()?;
+    let mut original = account(INHERITED_NATIVE_ACCOUNT_ID);
+    original.provider = "ctox_proxy".into();
+    let first = f.adopt(&[original])?;
+    let original_id = account_id(&first).to_owned();
+    retire_inherited_route(&f.conn, "owner", "native-instance", Some("zai"), 101)?;
+    let mut current = account(INHERITED_NATIVE_ACCOUNT_ID);
+    current.provider = "zai".into();
+    let switched = f.adopt(&[current])?;
+    let entries = switched["accounts"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    let old = entries
+        .iter()
+        .find(|entry| entry["provider"] == "ctox_proxy")
+        .unwrap();
+    let new = entries
+        .iter()
+        .find(|entry| entry["provider"] == "zai")
+        .unwrap();
+    assert_eq!(old["id"], original_id);
+    assert_eq!(old["enabled"], false);
+    assert_eq!(new["enabled"], true);
+    assert_ne!(new["id"], original_id);
+    assert!(consumable(&f.conn, &f.facts("consumer"), &original_id, 1).is_err());
+    assert!(consumable(
+        &f.conn,
+        &f.facts("consumer"),
+        new["id"].as_str().unwrap(),
+        1
+    )
+    .is_ok());
+    Ok(())
+}
+
+#[test]
 fn adoption_is_stable_private_and_does_not_invent_model_or_health_proof() -> Result<()> {
     let f = Fixture::new()?;
     let trusted = observations(&json!({"accounts":[{

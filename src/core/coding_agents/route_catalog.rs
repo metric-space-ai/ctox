@@ -14,6 +14,59 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+pub(crate) struct NativeInheritedAccountMetadata {
+    pub provider: String,
+}
+
+// This is configured account existence only: neither a model-list observation
+// nor a credential/limit/Hi validation. No model or credential leaves the host.
+fn native_metadata_from_current(
+    route: &InheritedCodingRoute,
+    credential: Option<&str>,
+    current_route: Option<&InheritedCodingRoute>,
+    current_credential: Option<&str>,
+) -> anyhow::Result<Option<NativeInheritedAccountMetadata>> {
+    anyhow::ensure!(
+        current_route == Some(route) && current_credential == credential,
+        "native main account configuration changed"
+    );
+    let Some(credential) = credential else {
+        return Ok(None);
+    };
+    if credential.trim().is_empty()
+        || credential.len() > 8192
+        || credential.chars().any(char::is_control)
+    {
+        return Ok(None);
+    }
+    Ok(Some(NativeInheritedAccountMetadata {
+        provider: route.provider.clone(),
+    }))
+}
+
+pub(super) fn account_metadata(
+    root: &Path,
+) -> anyhow::Result<Option<NativeInheritedAccountMetadata>> {
+    let route = resolve_inherited_coding_route(root)
+        .map_err(|_| anyhow::anyhow!("native main account route is unavailable"))?;
+    let credential = runtime_env::load_runtime_env_map(root)
+        .map_err(|_| anyhow::anyhow!("native main credential metadata is unavailable"))?
+        .remove(route.credential_key)
+        .map(Zeroizing::new);
+    let current_route = resolve_inherited_coding_route(root)
+        .map_err(|_| anyhow::anyhow!("native main account route is unavailable"))?;
+    let current_credential = runtime_env::load_runtime_env_map(root)
+        .map_err(|_| anyhow::anyhow!("native main credential metadata is unavailable"))?
+        .remove(current_route.credential_key)
+        .map(Zeroizing::new);
+    native_metadata_from_current(
+        &route,
+        credential.as_ref().map(|value| value.as_str()),
+        Some(&current_route),
+        current_credential.as_ref().map(|value| value.as_str()),
+    )
+}
+
 const MAX_BODY: u64 = 65_536;
 const MAX_MODELS: usize = 1024;
 const DEADLINE: Duration = Duration::from_secs(8);
@@ -265,6 +318,96 @@ mod tests {
             base_url: base.to_owned(),
             credential_key: "CTOX_LLM_PROXY_API_KEY",
             api: "openai-responses",
+        }
+    }
+
+    #[test]
+    fn inherited_account_metadata_reads_only_the_native_store_and_keeps_configuration(
+    ) -> anyhow::Result<()> {
+        use std::collections::BTreeMap;
+        let root = tempfile::tempdir()?;
+        let settings = BTreeMap::from([
+            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                "https://llm.ctox.dev".to_owned(),
+            ),
+            (
+                "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                "fixture-private-proxy".to_owned(),
+            ),
+            (
+                "MINIMAX_API_KEY".to_owned(),
+                "fixture-unrelated-private".to_owned(),
+            ),
+        ]);
+        runtime_env::save_runtime_env_map(root.path(), &settings)?;
+        let before = runtime_env::load_runtime_env_map(root.path())?;
+        let NativeInheritedAccountMetadata { provider } = account_metadata(root.path())?.unwrap();
+        assert_eq!(provider, "ctox_proxy");
+        assert_eq!(runtime_env::load_runtime_env_map(root.path())?, before);
+        assert!(
+            !root.path().join("coding-agents").exists(),
+            "metadata must not prepare or start Pi"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_account_metadata_requires_an_unchanged_private_snapshot() {
+        let original = route("https://llm.ctox.dev/v1");
+        let metadata = native_metadata_from_current(
+            &original,
+            Some("fixture-secret"),
+            Some(&original),
+            Some("fixture-secret"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(metadata.provider, "ctox_proxy");
+        let changed = route("https://llm.ctox.dev/v2");
+        for (current, credential) in [
+            (Some(&changed), Some("fixture-secret")),
+            (Some(&original), Some("other-private")),
+            (None, None),
+        ] {
+            let error = native_metadata_from_current(
+                &original,
+                Some("fixture-secret"),
+                current,
+                credential,
+            )
+            .err()
+            .unwrap()
+            .to_string();
+            assert_eq!(error, "native main account configuration changed");
+            assert!(!error.contains("fixture-secret"));
+            assert!(!error.contains("other-private"));
+        }
+    }
+
+    #[test]
+    fn inherited_account_metadata_does_not_invent_an_account_without_credentials() {
+        let original = route("https://llm.ctox.dev/v1");
+        let oversized = "x".repeat(8193);
+        for credential in [
+            None,
+            Some(""),
+            Some(" "),
+            Some("invalid\nkey"),
+            Some(oversized.as_str()),
+        ] {
+            assert!(native_metadata_from_current(
+                &original,
+                credential,
+                Some(&original),
+                credential,
+            )
+            .unwrap()
+            .is_none());
         }
     }
 
