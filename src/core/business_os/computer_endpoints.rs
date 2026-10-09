@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use ring::rand::{SecureRandom, SystemRandom};
+use ssh_key::{private::Ed25519Keypair, Algorithm, HashAlg, LineEnding, PrivateKey};
+use zeroize::Zeroizing;
 
 pub const COMPUTER_ENDPOINT_CONTRACT: &str = "ctox.computer-endpoints.v1";
 const ENDPOINTS: &str = "workjet_computer_endpoints";
@@ -344,6 +347,14 @@ fn resolve_record(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SshKeyPayload {
+    computer_id: String,
+    #[serde(default, rename = "inbound_channel")]
+    _inbound_channel: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpsertPayload {
     endpoint_ref: String,
     computer_id: String,
@@ -375,6 +386,7 @@ pub(super) fn is_endpoint_command(command_type: &str) -> bool {
         "ctox.workjet.computer.endpoint.upsert"
             | "ctox.workjet.computer.endpoint.disable"
             | "ctox.workjet.computer.endpoint.list"
+            | "ctox.workjet.computer.ssh_key.ensure"
     )
 }
 
@@ -384,6 +396,12 @@ pub(super) fn handle_command(root: &Path, command: &BusinessCommand, owner: &str
     let mut conn = open_store(root)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let outcome = match command.command_type.as_str() {
+        "ctox.workjet.computer.ssh_key.ensure" => {
+            let payload: SshKeyPayload = serde_json::from_value(command.payload.clone())?;
+            label(&payload.computer_id, 256)?;
+            assigned_computer(&tx, owner, &payload.computer_id)?;
+            ensure_native_ssh_key(root, owner, &payload.computer_id)?
+        }
         "ctox.workjet.computer.endpoint.upsert" => {
             let payload: UpsertPayload = serde_json::from_value(command.payload.clone())?;
             opaque_ref(&payload.endpoint_ref)?;
@@ -460,6 +478,57 @@ pub(super) fn handle_command(root: &Path, command: &BusinessCommand, owner: &str
     };
     tx.commit()?;
     Ok(outcome)
+}
+
+
+/// Explicit Owner setup only. The stable native tuple never rotates an existing
+/// credential. Concurrent first calls read the encrypted INSERT winner, not a
+/// discarded candidate; neither private bytes nor a passphrase enter a receipt.
+fn ensure_native_ssh_key(root: &Path, owner: &str, computer_id: &str) -> Result<Value> {
+    const CONTRACT: &str = "ctox.workjet.computer-ssh-key.v1";
+    const SCOPE: &str = "computer-access";
+    let _lifecycle = crate::secrets::credential_lifecycle_guard();
+    let name = format!(
+        "workjet-ssh-{:x}",
+        Sha256::digest(serde_json::to_vec(&(owner, computer_id))?)
+    );
+    let metadata = json!({
+        "contract": CONTRACT, "owner_user_id": owner, "computer_id": computer_id
+    });
+    if !crate::secrets::secret_exists(root, SCOPE, &name)? {
+        let mut seed = Zeroizing::new([0u8; 32]);
+        SystemRandom::new()
+            .fill(seed.as_mut())
+            .map_err(|_| anyhow::anyhow!("native SSH key randomness is unavailable"))?;
+        let candidate = PrivateKey::from(Ed25519Keypair::from_seed(&seed));
+        let private = candidate.to_openssh(LineEnding::LF)?;
+        crate::secrets::create_secret_record_if_absent(
+            root, SCOPE, &name, private.as_str(), metadata.clone()
+        )?;
+    }
+    let stored = crate::secrets::list_secret_records(root, Some(SCOPE))?
+        .into_iter()
+        .find(|record| record.secret_name == name)
+        .context("native SSH key metadata is unavailable")?;
+    anyhow::ensure!(
+        stored.metadata == metadata,
+        "existing credential was not issued for this native owner and computer"
+    );
+    crate::secrets::with_current_secret_value(root, SCOPE, &name, |private| {
+        let key = PrivateKey::from_openssh(private)
+            .context("stored native SSH key is invalid")?;
+        anyhow::ensure!(
+            key.algorithm() == Algorithm::Ed25519 && !key.is_encrypted(),
+            "stored native SSH key is not the issued Ed25519 key"
+        );
+        let public = key.public_key();
+        Ok(json!({
+            "ok": true, "contract": CONTRACT, "computer_id": computer_id,
+            "private_key": {"scope": SCOPE, "name": name},
+            "public_key": public.to_openssh()?,
+            "public_key_sha256": public.fingerprint(HashAlg::Sha256).to_string()
+        }))
+    })
 }
 
 fn assigned_computer(conn: &Connection, owner: &str, computer_id: &str) -> Result<Value> {
