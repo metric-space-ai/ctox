@@ -1,5 +1,20 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Native Jour fixe narration retries
+
+The native narration reservation is unique per meeting, deck revision and
+slide. A `failed` or `failed_prerequisite` reservation without an audio receipt
+can be retried with either the same operation ID or a new one after readiness
+is restored. A new ID reuses the existing slot atomically and retains its
+three-attempt budget. Current Supervisor, lease, owner, deck and file-policy
+checks still run before synthesis and before audio publication.
+Running, uncertain and completed reservations cannot start another synthesis;
+conflicts identify the existing operation ID and status. Replaying the committed
+operation returns its retained receipt and projects the same stored WAV bytes.
+A failed attempt is not a narrated slide: only committed audio can make the
+meeting ready.
+
+
 
 ### Native federation consumer authority
 
