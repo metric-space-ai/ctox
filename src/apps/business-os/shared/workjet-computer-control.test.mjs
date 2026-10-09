@@ -5,8 +5,11 @@ import vm from 'node:vm';
 
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_COMPUTER_CONTROL_MAX_RESULTS');
-const controlEnd = appSource.indexOf('async function waitForSyncBridgeReady', controlStart);
+// Computer control ends where project control begins; project control has its own guard below.
+const controlEnd = appSource.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS', controlStart);
 const controlSource = appSource.slice(controlStart, controlEnd);
+const projectControlEnd = appSource.indexOf('async function waitForSyncBridgeReady', controlEnd);
+const projectControlSource = appSource.slice(controlEnd, projectControlEnd);
 test('computer list opts into bounded operational details without changing legacy replies or owner filtering', async () => {
   const gpu = { kind: 'gpu', model: 'A4500', vram_gib: 20 };
   const own = { id: 'gpu3', display_name: 'gpu3', hosting_mode: 'workstation',
@@ -64,6 +67,13 @@ test('Workjet guest computer control is installed and WebRTC/RxDB-only', () => {
   assert.match(controlSource, /startCollection\?\.\('workjet_computers'\)/);
   assert.doesNotMatch(controlSource, /fetch\s*\(|XMLHttpRequest|\/api\/|https?:\/\//);
   assert.doesNotMatch(controlSource, /hostname|presentation|environment/i);
+});
+
+test('Workjet guest project control stays WebRTC/RxDB-only without host details', () => {
+  assert.ok(projectControlEnd > controlEnd, 'project control implementation exists');
+  assert.match(projectControlSource, /async function workjetProjectControl/);
+  assert.doesNotMatch(projectControlSource, /fetch\s*\(|XMLHttpRequest|\/api\/|https?:\/\//);
+  assert.doesNotMatch(projectControlSource, /hostname|environment/i);
 });
 
 test('Workjet guest computer control rejects managed hosts and gates co-location', async () => {
