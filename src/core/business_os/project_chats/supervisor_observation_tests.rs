@@ -3,6 +3,91 @@
 use super::*;
 use crate::business_os::workjet_supervisor_execution_contract as wire;
 use crate::service::harness_flow::{record_harness_flow_event, RecordHarnessFlowEventRequest};
+
+#[test]
+fn public_text_is_opt_in_and_backfills_exact_native_chunks_without_private_progress(
+) -> anyhow::Result<()> {
+    let (root, turn) = fixture()?;
+    let attempt = "worker-attempt:public";
+    let start = event(
+        root.path(),
+        &turn,
+        attempt,
+        "worker.turn_started",
+        json!({}),
+    )?;
+    let chunk = json!({"turn_id":"provider-turn","item_id":"provider-item","phase":"final_answer",
+        "offset":0,"text":"Actual public model text 🦊","completed":false,"truncated":false});
+    let public = event(
+        root.path(),
+        &turn,
+        attempt,
+        "worker.assistant_text",
+        json!({"public_text":chunk,"cockpit_eligible":false}),
+    )?;
+    let legacy = watch(
+        root.path(),
+        &turn,
+        "legacy-public",
+        Some(json!({"attempt_id":attempt})),
+    )?;
+    assert_eq!(page(&legacy)["events"].as_array().unwrap().len(), 1);
+    assert_eq!(page(&legacy)["events"][0]["id"], start);
+    assert!(page(&legacy).get("public_text_supported").is_none());
+    assert!(page(&legacy)["events"][0].get("public_text").is_none());
+    let first = watch(
+        root.path(),
+        &turn,
+        "public-first",
+        Some(json!({"attempt_id":attempt,"include_public_text":true,"limit":1})),
+    )?;
+    assert_eq!(page(&first)["public_text_supported"], cfg!(unix));
+    if !cfg!(unix) {
+        return Ok(());
+    }
+    let second = watch(
+        root.path(),
+        &turn,
+        "public-second",
+        Some(json!({"attempt_id":attempt,
+        "include_public_text":true,"limit":1,"cursor":page(&first)["next_cursor"]})),
+    )?;
+    assert_eq!(page(&second)["events"][0]["id"], public);
+    assert_eq!(page(&second)["events"][0]["public_text"], chunk);
+    assert!(!serde_json::to_string(page(&second))?.contains("PRIVATE RAW REASONING"));
+    let reopened = watch(
+        root.path(),
+        &turn,
+        "public-reopened",
+        Some(json!({"attempt_id":attempt,"include_public_text":true})),
+    )?;
+    assert_eq!(page(&reopened)["events"][1], page(&second)["events"][0]);
+    let tail = watch(
+        root.path(),
+        &turn,
+        "public-tail",
+        Some(json!({"attempt_id":attempt,
+        "include_public_text":true,"cursor":page(&second)["next_cursor"]})),
+    )?;
+    assert_eq!(page(&tail)["events"], json!([]));
+    assert_eq!(page(&tail)["next_cursor"], page(&second)["next_cursor"]);
+    let mut bad = chunk;
+    bad["phase"] = json!("thinking");
+    event(
+        root.path(),
+        &turn,
+        attempt,
+        "worker.assistant_text",
+        json!({"public_text":bad,"cockpit_eligible":false}),
+    )?;
+    rejected(watch(
+        root.path(),
+        &turn,
+        "public-invalid-phase",
+        Some(json!({"attempt_id":attempt,"include_public_text":true})),
+    ));
+    Ok(())
+}
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 fn fixture() -> anyhow::Result<(TempDir, Value)> {
     let root = super::supervisor_turns::fixture()?;
@@ -438,6 +523,7 @@ fn event_reader_uses_a_read_snapshot_while_a_core_writer_holds_an_uncommitted_tr
             attempt_id: None,
             cursor: None,
             limit: None,
+            include_public_text: None,
         },
     )?;
     assert_eq!(observed.events.len(), 1);

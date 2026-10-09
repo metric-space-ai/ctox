@@ -60,6 +60,9 @@ use super::session_continuity::{
 #[path = "direct_session_reply.rs"]
 mod reply_capture;
 use reply_capture::DirectSessionReplyCapture;
+#[cfg(unix)]
+#[path = "direct_session_public_text.rs"]
+mod public_text;
 
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
@@ -2774,6 +2777,18 @@ impl PersistentSession {
         }
         // Event loop
         let mut reply_capture = DirectSessionReplyCapture::default();
+        #[cfg(unix)]
+        let public_text_provider = provider_owner
+            .as_ref()
+            .filter(|_| {
+                native_command_context
+                    .and_then(|context| context.get("workjet_supervisor_only"))
+                    .and_then(JsonValue::as_bool)
+                    == Some(true)
+            })
+            .map(crate::channels::NativeProviderTurnOwner::binding);
+        #[cfg(unix)]
+        let mut public_text_capture = public_text::PublicTextCapture::default();
         let mut completion_message: Option<String> = None;
         // `AgentMessage` events carry no turn id, so an orphaned message from
         // a prior/interrupted turn still queued on this reused thread could
@@ -2903,6 +2918,32 @@ impl PersistentSession {
             match event {
                 InProcessServerEvent::ServerRequest(_) => {}
                 InProcessServerEvent::ServerNotification(notification) => {
+                    #[cfg(unix)]
+                    if let Some(provider) = public_text_provider.as_ref() {
+                        let publication = public_text_capture
+                            .observe(
+                                &notification,
+                                &thread_id,
+                                &turn_id,
+                                turn_started_at.elapsed(),
+                            )
+                            .and_then(|chunks| {
+                                for chunk in chunks {
+                                    public_text::publish(
+                                        root, provider, &thread_id, &turn_id, &chunk,
+                                    )?;
+                                }
+                                Ok(())
+                            });
+                        if let Err(error) = publication {
+                            let terminal =
+                                interrupt_cancelled_queue_turn(client, seq, &thread_id, &turn_id)
+                                    .await;
+                            return Err(SessionPoisoned(format!(
+                                "public assistant text publication failed: {error}; terminal_observed={terminal}"
+                            )).into());
+                        }
+                    }
                     // V2 notifications carry their own thread/turn identity and
                     // must not depend on seeing a legacy TurnStarted first.
                     if let Some(plan) = current_turn_plan_event(&notification, &thread_id, &turn_id)

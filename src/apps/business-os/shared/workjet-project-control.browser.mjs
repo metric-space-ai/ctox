@@ -143,10 +143,14 @@ try {
     const turnId = 'actual-native-command';
     const threadId = 'cc6cfe73-2824-4360-9daf-3b3efb079931';
     let corrupt = false;
+    const publicText = { turn_id: 'provider-turn', item_id: 'provider-item', phase: 'final_answer',
+      offset: 0, text: 'Public reply 🦊', completed: false, truncated: false };
+    let lastPayload;
     const state = {
       session: { id: 'owner' }, db: { collection: name => name === 'business_commands' ? {} : null },
       sync: { async startCollection() {} },
       commandBus: { async dispatch(command) {
+        lastPayload = command.payload;
         return { command_id: command.id, ok: true, status: 'completed', target_record_id: 'project', payload: command.payload,
           result: { ok: true, contract: 'ctox.workjet.supervisor_turn.v1',
             binding: { project_id: 'project', thread_id: threadId, thread_key: `business-os/threads/${threadId}` },
@@ -156,7 +160,9 @@ try {
             execution_contract: 'ctox.workjet.supervisor_execution.v1',
             execution_page: { command_id: turnId, task_id: corrupt ? 'foreign-task' : 'actual-native-task',
               attempt: { attempt_id: 'actual-native-attempt', attempt_index: 47 },
-              events: [{ id: 'actual-event', sequence: 22, kind: 'worker.phase', title: 'Recorded step', created_at_ms: 1791410400000 }],
+              events: [{ id: 'actual-event', sequence: 22, kind: 'worker.phase', title: 'Recorded step', created_at_ms: 1791410400000,
+                ...(command.payload.execution_page?.include_public_text ? { public_text: publicText, kind: 'worker.assistant_text' } : {}) }],
+              ...(command.payload.execution_page?.include_public_text ? { public_text_supported: true } : {}),
               next_cursor: { after_sequence: 22, after_event_id: 'actual-event' }, has_more: false },
           } };
       } },
@@ -172,6 +178,11 @@ try {
     assert.equal(observed.executionPage.attempt.attempt_index, 47);
     assert.equal(observed.executionPage.events[0].id, 'actual-event');
     results.push('opted-in browser watch returns actual native attempt and event');
+    const streamed = await invoke({ ...request, executionPage: { limit: 1, include_public_text: true } });
+    assert.equal(lastPayload.execution_page.include_public_text, true);
+    assert.equal(streamed.executionPage.public_text_supported, true);
+    assert.deepEqual(streamed.executionPage.events[0].public_text, publicText);
+    results.push('browser public-text opt-in reaches native and returns its exact chunk');
     corrupt = true;
     let foreignRejected = false;
     try { await invoke({ ...request, executionPage: {} }); } catch { foreignRejected = true; }
@@ -320,7 +331,7 @@ try {
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
     configurationSource: tests.slice(configurationStart, configurationEnd),
     executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 29);
+  assert.equal(results.length, 30);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };

@@ -69,3 +69,41 @@ The reader opens an ordinary read-only Core snapshot. It initializes no tables,
 requires no writer fence, and publishes no projection or task. Shared fixture
 `workjet-supervisor-execution-v1.json` generates the native and browser consumers
 together. The source regressions are not an installed goals 8/9/A0 acceptance.
+
+## Public assistant text (explicit opt-in)
+
+A caller sets `execution_page.include_public_text: true` to request actual public
+assistant chunks. The page returns `public_text_supported` and events of kind
+`worker.assistant_text`, with a bounded `public_text` object. A request without
+that flag retains the original page shape and event whitelist. Older natives
+reject the new request field; callers must retain their ordinary history read
+and explicitly report unavailable public-text support. Non-Unix natives return
+`public_text_supported: false`; they do not invent a transcript stream.
+
+The Shell forwards `include_public_text` inside `executionPage` to the native
+payload without stripping either boolean value. This needs the matching signed
+Shell slot as well as the native binary; changing the desktop alone does not
+enable the stream. The generation stamp advances with the generated validator.
+
+The producer consumes V2 assistant item start/delta/completion notifications
+for the exact provider thread and turn, only in the verified Workjet supervisor
+session. It excludes reasoning and tool items and filters private ctox-crew
+blocks even when their delimiters span model tokens. Commentary stays labelled
+as commentary; a completion marker is not a successful task review.
+
+Publication borrows the existing live native provider/worker transaction. The
+native lease, worker lifetime, retained provider witness, actual turn and store
+are rechecked at each write. Stable chunk IDs reject conflicting replays. Write
+failure interrupts that exact provider turn and fails the slice; it never falls
+back to the lossy progress recorder or a UI-generated text animation. Chunks
+remain private to this authorized reader, excluded from cockpit projection.
+
+Offsets count Unicode characters per provider item. Each chunk has at most 4096
+characters, each item 65536, and the turn 262144, with at most 64 assistant items.
+The first text is published immediately and following tokens are coalesced for
+100 ms or 128 characters. Item completion flushes pending text; explicit
+`truncated`/`completed` markers preserve limits and item lifecycle. The ordinary
+terminal result remains the authoritative full public reply. The existing
+retained event cursor supports backfill after reader reopen; a removed anchor
+still requires restarting that attempt's page. No provider transport replay
+sequence or new execution authority is claimed.

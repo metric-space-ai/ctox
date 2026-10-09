@@ -80,6 +80,8 @@ pub(crate) struct ExecutionPageRequest {
     pub(crate) cursor: Option<EventCursor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) include_public_text: Option<bool>,
 }
 impl WireValidate for ExecutionPageRequest {
     fn validate(&self) -> Result<(), String> {
@@ -106,6 +108,9 @@ impl WireValidate for ExecutionPageRequest {
             if *value > 50 {
                 return Err("ExecutionPageRequest.limit violates maximum".into());
             }
+        }
+        if let Some(value) = &self.include_public_text {
+            value.validate()?;
         }
         Ok(())
     }
@@ -184,6 +189,83 @@ impl WireValidate for AttemptRef {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct PublicAssistantText {
+    pub(crate) turn_id: String,
+    pub(crate) item_id: String,
+    pub(crate) phase: String,
+    pub(crate) offset: u64,
+    pub(crate) text: String,
+    pub(crate) completed: bool,
+    pub(crate) truncated: bool,
+}
+impl WireValidate for PublicAssistantText {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.turn_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("PublicAssistantText.turn_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("PublicAssistantText.turn_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("PublicAssistantText.turn_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.item_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("PublicAssistantText.item_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("PublicAssistantText.item_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("PublicAssistantText.item_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.phase;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("PublicAssistantText.phase is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("PublicAssistantText.phase violates min_chars".into());
+            }
+            if value.chars().count() > 32 {
+                return Err("PublicAssistantText.phase violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.offset;
+            value.validate()?;
+            if *value > 65536 {
+                return Err("PublicAssistantText.offset violates maximum".into());
+            }
+        }
+        {
+            let value = &self.text;
+            value.validate()?;
+            if value.chars().count() > 4096 {
+                return Err("PublicAssistantText.text violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.completed;
+            value.validate()?;
+        }
+        {
+            let value = &self.truncated;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ExecutionEvent {
     pub(crate) id: String,
     pub(crate) sequence: u64,
@@ -196,6 +278,8 @@ pub(crate) struct ExecutionEvent {
     pub(crate) call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) success: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) public_text: Option<PublicAssistantText>,
 }
 impl WireValidate for ExecutionEvent {
     fn validate(&self) -> Result<(), String> {
@@ -273,6 +357,9 @@ impl WireValidate for ExecutionEvent {
         if let Some(value) = &self.success {
             value.validate()?;
         }
+        if let Some(value) = &self.public_text {
+            value.validate()?;
+        }
         Ok(())
     }
 }
@@ -287,6 +374,8 @@ pub(crate) struct ExecutionPage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) next_cursor: Option<EventCursor>,
     pub(crate) has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) public_text_supported: Option<bool>,
 }
 impl WireValidate for ExecutionPage {
     fn validate(&self) -> Result<(), String> {
@@ -333,6 +422,9 @@ impl WireValidate for ExecutionPage {
             let value = &self.has_more;
             value.validate()?;
         }
+        if let Some(value) = &self.public_text_supported {
+            value.validate()?;
+        }
         Ok(())
     }
 }
@@ -346,6 +438,9 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "AttemptRef" => serde_json::from_value::<AttemptRef>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "PublicAssistantText" => serde_json::from_value::<PublicAssistantText>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         "ExecutionEvent" => serde_json::from_value::<ExecutionEvent>(value)
