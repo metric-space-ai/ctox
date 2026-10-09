@@ -10901,9 +10901,19 @@ function ensureCtoxSmokeBinary() {
         ];
         const renderStartedAt = performance.now();
         await state.openModule('threads', { force: true, asModule: true });
-        await Promise.all(requiredCollections.map((name) => state.sync?.startCollection?.(name).catch(() => null)));
+        await Promise.all(requiredCollections.map((name) => state.sync.startCollection(name)));
+        let historyViewSelected = false;
         const rendered = await waitFor(() => {
           const root = document.querySelector('[data-threads-root]');
+          const historyView = root?.querySelector('.threads-left select[data-pg-name="view"]');
+          if (historyView && !historyViewSelected) {
+            // These are historical records, with no pending work in Handeln.
+            // Exercise the normal wide-history selector instead of the inbox.
+            root.querySelector('.threads-left [data-pg-tray-toggle]')?.click();
+            historyView.value = 'all';
+            historyView.dispatchEvent(new Event('change', { bubbles: true }));
+            historyViewSelected = true;
+          }
           const visibleThreadRows = root?.querySelectorAll?.('[data-thread-id]')?.length || 0;
           return {
             ok: Boolean(root && visibleThreadRows > 0 && visibleThreadRows <= 200),
