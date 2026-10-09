@@ -471,7 +471,7 @@ fn setup() -> Result<(TempDir, Connection)> {
 
 // Isolated native-path load test. This is not customer or installed-shell
 // acceptance: the caller must retain the source, binary and measured scope.
-fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
+fn measure_eight_writer_projection(duration: Duration, require_fast_warmup: bool) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     let (root, conn) = setup()?;
     conn.execute_batch("PRAGMA journal_mode=WAL; ALTER TABLE communication_routing_state ADD COLUMN leased_at TEXT")?;
@@ -576,6 +576,9 @@ fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
             "failures":failures
         })
     );
+    if require_fast_warmup {
+        assert!(warm < Duration::from_secs(1), "cold projection {warm:?}");
+    }
     assert_eq!(counts.len(), 8);
     assert!(counts.iter().all(|count| *count > 0));
     assert!(failures.is_empty(), "{failures:?}");
@@ -588,13 +591,13 @@ fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
 
 #[test]
 fn cockpit_projection_survives_eight_concurrent_native_writers() -> Result<()> {
-    measure_eight_writer_projection(Duration::from_secs(10))
+    measure_eight_writer_projection(Duration::from_secs(10), false)
 }
 
 #[test]
 #[ignore = "explicit one-hour isolated acceptance load; run via the gpu lane"]
 fn cockpit_projection_one_hour_eight_native_writers() -> Result<()> {
-    measure_eight_writer_projection(Duration::from_secs(3600))
+    measure_eight_writer_projection(Duration::from_secs(3600), true)
 }
 
 fn record(root: &Path, collection: &str, id: &str) -> Result<Value> {
