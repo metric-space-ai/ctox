@@ -14303,6 +14303,7 @@ async function workjetProjectControl(request = {}) {
     else if (!capabilities) allowedKeys.add('targetCommandId');
     if (cancelling) allowedKeys.add('reason');
     if (inputting) allowedKeys.add('body');
+    if (capabilities) allowedKeys.add('includeInput');
     const observing = action === 'project.supervisor.turn.watch' && request.executionPage !== undefined;
     if (action === 'project.supervisor.turn.watch') allowedKeys.add('executionPage');
     assertWorkjetProjectPayloadKeys(request, allowedKeys);
@@ -14314,6 +14315,10 @@ async function workjetProjectControl(request = {}) {
       throw new TypeError('Workjet supervisor threadId must be its existing lowercase CodeThread UUID.');
     }
     const payload = { project_id: projectId, thread_id: threadId };
+    if (capabilities && Object.hasOwn(request, 'includeInput')) {
+      if (typeof request.includeInput !== 'boolean') throw new TypeError('includeInput must be boolean.');
+      payload.include_input = request.includeInput;
+    }
     if (submitting) {
       payload.goal = boundedWorkjetProjectText(request.goal, 'goal', 4096);
       if (Object.hasOwn(request, 'turnKind')) {
@@ -14363,12 +14368,22 @@ async function workjetProjectControl(request = {}) {
         || kinds[0] !== 'work' || kinds[1] !== 'conversation' || receipt.result.default_turn_kind !== 'work') {
         throw new Error('Workjet supervisor capabilities returned an invalid or unmatched confirmation.');
       }
-      return {
+      const result = {
         action, commandId, projectId, contract: capabilityContract,
         binding: { contract: 'ctox.workjet.supervisor_binding.v1', projectId,
           threadId, threadKey },
         turnKinds: kinds, defaultTurnKind: receipt.result.default_turn_kind,
       };
+      if (request.includeInput === true) {
+        if (receipt.result.input_contract !== 'ctox.workjet.supervisor_input.v1'
+          || receipt.result.input_delivery !== 'next_slice' || receipt.result.max_input_chars !== 4096) {
+          throw new Error('The connected instance does not support same-task Supervisor input.');
+        }
+        result.inputContract = receipt.result.input_contract;
+        result.inputDelivery = 'next_slice';
+        result.maxInputChars = 4096;
+      }
+      return result;
     }
     if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
       || receipt.target_record_id !== projectId || receipt.result?.ok !== true

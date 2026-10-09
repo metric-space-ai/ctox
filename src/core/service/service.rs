@@ -6947,8 +6947,11 @@ fn start_prompt_worker(
                         },
                     )?;
                     let execution_prompt = append_supervisor_owner_inputs(
-                        &root, &job, &attempt_id,
-                        worker_activity.lease_worker_id.as_deref(), execution_prompt,
+                        &root,
+                        &job,
+                        &attempt_id,
+                        worker_activity.lease_worker_id.as_deref(),
+                        execution_prompt,
                     )?;
                     if let Some(command_id) =
                         metadata_string(&job.queue_task_metadata, "business_os_command_id")
@@ -10809,7 +10812,10 @@ fn append_supervisor_owner_inputs(
 ) -> Result<String> {
     for task_id in &job.leased_message_keys {
         let inputs = channels::supervisor_owner_input::capture(
-            root, task_id, attempt_id, worker_id.unwrap_or_default(),
+            root,
+            task_id,
+            attempt_id,
+            worker_id.unwrap_or_default(),
         )?;
         if !inputs.is_empty() {
             prompt.push_str(
@@ -10881,7 +10887,13 @@ fn terminalize_reviewed_queue_messages(
         updated = updated.saturating_add(channels::ack_leased_messages_for_attempt(
             root, attempt_id, &ordinary, "handled", None,
         )?);
-    } else if !continued {
+    }
+    if continued {
+        anyhow::ensure!(
+            channels::supervisor_owner_input::mark_finished_slice(root, attempt_id, message_keys)?,
+            "Owner-input slice has unapplied queue effects"
+        );
+    } else if ordinary.is_empty() {
         anyhow::ensure!(
             channels::mark_worker_attempt_queue_effects_applied_if_status(
                 root,

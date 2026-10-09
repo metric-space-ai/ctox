@@ -3922,7 +3922,9 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
             lease_worker_id TEXT NOT NULL,
             through_sequence INTEGER NOT NULL,
             created_at TEXT NOT NULL,
-            PRIMARY KEY(task_id, attempt_id)
+            continued_at TEXT,
+            PRIMARY KEY(task_id, attempt_id),
+            UNIQUE(task_id, command_id, command_attempt)
         );
 
         CREATE INDEX IF NOT EXISTS idx_communication_routing_status_owner

@@ -146,15 +146,23 @@ pub mod stream_counters {
 
 type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
-fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
-    // Must match the facade classifier in `ctox-app-server-client`
-    // (`event_requires_delivery`): if this layer treats a notification as
-    // droppable while the facade treats it as required, the event is dropped
-    // here before the facade's buffer can protect it (ctox#21 P1 review).
-    matches!(
-        notification,
-        ServerNotification::TurnCompleted(_) | ServerNotification::ContextCompacted(_)
-    )
+/// Shared by the runtime and client facade: assistant text and its item
+/// lifecycle must survive bounded backpressure just like turn completion.
+/// Tool/reasoning progress remains droppable; the existing required-event
+/// buffer fails a wedged consumer without stalling interrupt/control requests.
+pub fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
+    match notification {
+        ServerNotification::TurnCompleted(_)
+        | ServerNotification::ContextCompacted(_)
+        | ServerNotification::AgentMessageDelta(_) => true,
+        ServerNotification::ItemStarted(item) => {
+            matches!(&item.item, ctox_app_server_protocol::ThreadItem::AgentMessage { .. })
+        }
+        ServerNotification::ItemCompleted(item) => {
+            matches!(&item.item, ctox_app_server_protocol::ThreadItem::AgentMessage { .. })
+        }
+        _ => false,
+    }
 }
 
 fn legacy_notification_requires_delivery(notification: &JSONRPCNotification) -> bool {
@@ -1074,6 +1082,63 @@ mod tests {
             .shutdown()
             .await
             .expect("in-process runtime should shutdown cleanly");
+    }
+
+    #[test]
+    fn assistant_text_delivery_survives_saturated_runtime_in_order() {
+        use ctox_app_server_protocol::{
+            AgentMessageDeltaNotification, ItemCompletedNotification, ItemStartedNotification,
+            ServerNotification, ThreadItem,
+        };
+        let (tx, mut rx) = mpsc::channel::<InProcessServerEvent>(1);
+        let mut pending = VecDeque::new();
+        let mut gone = false;
+        let answer = "Gerne – Rätselraten 🦊 **geänderten** Deine Freigabe";
+        let mut notifications = vec![ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread".into(), turn_id: "turn".into(),
+            item: ThreadItem::AgentMessage { id: "item".into(), text: String::new(), phase: None },
+        })];
+        for ch in answer.chars() {
+            notifications.push(ServerNotification::AgentMessageDelta(AgentMessageDeltaNotification {
+                thread_id: "thread".into(), turn_id: "turn".into(),
+                item_id: "item".into(), delta: ch.to_string(),
+            }));
+        }
+        notifications.push(ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread".into(), turn_id: "turn".into(),
+            item: ThreadItem::AgentMessage { id: "item".into(), text: answer.into(), phase: None },
+        }));
+        let count = notifications.len();
+        for notification in notifications {
+            let required = server_notification_requires_delivery(&notification);
+            assert!(required);
+            assert!(!enqueue_in_process_event(&tx, &mut pending, &mut gone,
+                InProcessServerEvent::ServerNotification(notification), required, 1024, "test"));
+        }
+        // The producer returned synchronously despite a full consumer queue.
+        assert_eq!(pending.len(), count - 1);
+        assert!(matches!(rx.try_recv().unwrap(),
+            InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(_))));
+        let mut streamed = String::new();
+        while let Some(event) = pending.pop_front() {
+            tx.try_send(event).unwrap();
+            match rx.try_recv().unwrap() {
+                InProcessServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(n)) =>
+                    streamed.push_str(&n.delta),
+                InProcessServerEvent::ServerNotification(ServerNotification::ItemCompleted(_)) =>
+                    assert_eq!(streamed, answer),
+                _ => panic!("unexpected assistant stream event"),
+            }
+        }
+        assert_eq!(streamed, answer);
+        let private = ServerNotification::ItemStarted(
+            ItemStartedNotification {
+                thread_id: "thread".into(), turn_id: "turn".into(),
+                item: ThreadItem::Reasoning { id: "private".into(),
+                    summary: vec!["private".into()], content: vec![] },
+            });
+        assert!(!server_notification_requires_delivery(&private));
+        assert!(!gone);
     }
 
     #[test]

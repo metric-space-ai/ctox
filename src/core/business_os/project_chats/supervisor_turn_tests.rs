@@ -4,7 +4,16 @@ use super::*;
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 
 pub(super) fn fixture() -> anyhow::Result<TempDir> {
+    fixture_for_owner("owner")
+}
+
+fn fixture_for_owner(owner: &str) -> anyhow::Result<TempDir> {
     let root = project_fixture()?;
+    let conn = open_store(root.path())?;
+    let mut project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
+    project["owner_user_id"] = json!(owner);
+    store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
+    drop(conn);
     let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
     let schemas: Value = serde_json::from_str(include_str!("../business_os_schema_contract.json"))?;
     for collection in ["user_thread_states", "user_notifications"] {
@@ -20,7 +29,7 @@ pub(super) fn fixture() -> anyhow::Result<TempDir> {
     let bound = control(
         root.path(),
         "bind",
-        "owner",
+        owner,
         "bind",
         json!({"project_id":"project","thread_id":THREAD}),
     )?;
@@ -272,3 +281,55 @@ fn archived_project_cannot_submit_a_new_supervisor_turn() -> anyhow::Result<()> 
     assert_eq!(count(root.path(), "user_thread_messages")?, 0);
     Ok(())
 }
+
+#[test]
+fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyhow::Result<()> {
+    use crate::mission::channels;
+    const OWNER: &str = "b257efbf-7b24-490c-8189-81a0f5b88cb9";
+    const ALIAS: &str = "owner@example.test";
+    for revoked in [None, Some(ALIAS), Some(OWNER)] {
+        let root = fixture_for_owner(OWNER)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        store::issue_business_os_capability_token_for_managed_user_with_email(
+            root.path(), OWNER, Some(ALIAS), "Owner", "chef", now,
+        )?;
+        store::issue_business_os_capability_token_for_managed_user(
+            root.path(), ALIAS, "Owner", "admin", now,
+        )?;
+        let submitted = control(root.path(), "alias-conversation", ALIAS, "submit",
+            json!({"project_id":"project","thread_id":THREAD,
+                "goal":"Erkläre den nächsten Schritt.","turn_kind":"conversation"}))?;
+        assert_eq!(submitted["status"], "completed");
+        let turn = &submitted["result"]["turn"];
+        let command_id = turn["command_id"].as_str().context("native command")?;
+        let task_id = turn["task_id"].as_str().context("native task")?;
+        let conn = open_store(root.path())?;
+        let original = store::load_business_command(&conn, "alias-conversation")?;
+        let delegated = store::load_business_command(&conn, command_id)?;
+        assert_eq!(original.client_context["actor"]["id"], ALIAS);
+        assert_eq!(delegated.client_context["actor"]["id"], OWNER);
+        channels::lease_queue_task(root.path(), task_id, "actual-test-worker")?;
+        assert!(channels::transition_business_command_for_task(
+            root.path(), task_id, "running", None, None, None, "actual test worker starts")?);
+        channels::persist_business_command_worker_result(
+            root.path(), task_id, "Hier ist der nächste Schritt.")?;
+        let canonical = channels::inspect_business_command(root.path(), command_id)?.unwrap();
+        assert!(super::supervisor_turns::reply_completion_allowed(
+            root.path(), &canonical["command"])?);
+        if let Some(revoked) = revoked {
+            conn.execute("UPDATE business_users SET active=0 WHERE user_id=?1", [revoked])?;
+            assert!(super::supervisor_turns::reply_completion_allowed(
+                root.path(), &canonical["command"]).is_err());
+        } else {
+            // Simulate a changed private provenance actor, not a new trusted
+            // alias. Display names and profile fields cannot supply authority.
+            conn.execute("UPDATE business_commands SET client_context_json=json_set(
+                client_context_json,'$.actor.id','foreign@example.test',
+                '$.actor.email',?1) WHERE command_id='alias-conversation'", [ALIAS])?;
+            assert!(super::supervisor_turns::reply_completion_allowed(
+                root.path(), &canonical["command"]).is_err());
+        }
+    }
+    Ok(())
+}
+

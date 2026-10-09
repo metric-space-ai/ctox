@@ -229,10 +229,9 @@ fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
     // them under backpressure can leave exec/TUI waiting forever even though
     // the underlying turn has already ended.
     match event {
-        InProcessServerEvent::ServerNotification(
-            ctox_app_server_protocol::ServerNotification::TurnCompleted(_)
-            | ctox_app_server_protocol::ServerNotification::ContextCompacted(_),
-        ) => true,
+        InProcessServerEvent::ServerNotification(notification) => {
+            ctox_app_server::in_process::server_notification_requires_delivery(notification)
+        }
         InProcessServerEvent::LegacyNotification(notification) => matches!(
             notification
                 .method
@@ -1702,6 +1701,62 @@ mod tests {
         ));
 
         client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[test]
+    fn assistant_text_delivery_survives_saturated_facade_in_order() {
+        use ctox_app_server_protocol::{
+            AgentMessageDeltaNotification, ItemCompletedNotification, ItemStartedNotification,
+            ServerNotification, ThreadItem,
+        };
+        let (tx, mut rx) = mpsc::channel::<InProcessServerEvent>(1);
+        let mut pending = VecDeque::new();
+        let answer = "Gerne – Rätselraten 🦊 **geänderten** Deine Freigabe";
+        let mut notifications = vec![ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread".into(), turn_id: "turn".into(),
+            item: ThreadItem::AgentMessage { id: "item".into(), text: String::new(), phase: None },
+        })];
+        for ch in answer.chars() {
+            notifications.push(ServerNotification::AgentMessageDelta(AgentMessageDeltaNotification {
+                thread_id: "thread".into(), turn_id: "turn".into(),
+                item_id: "item".into(), delta: ch.to_string(),
+            }));
+        }
+        notifications.push(ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread".into(), turn_id: "turn".into(),
+            item: ThreadItem::AgentMessage { id: "item".into(), text: answer.into(), phase: None },
+        }));
+        let count = notifications.len();
+        for notification in notifications {
+            let event = InProcessServerEvent::ServerNotification(notification);
+            let required = event_requires_delivery(&event);
+            assert!(required);
+            assert!(matches!(forward_event(&tx, &mut pending, event, required, 1024),
+                ForwardOutcome::Forwarded));
+        }
+        // The producer returned synchronously despite a full consumer queue.
+        assert_eq!(pending.len(), count - 1);
+        assert!(matches!(rx.try_recv().unwrap(),
+            InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(_))));
+        let mut streamed = String::new();
+        while let Some(event) = pending.pop_front() {
+            tx.try_send(event).unwrap();
+            match rx.try_recv().unwrap() {
+                InProcessServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(n)) =>
+                    streamed.push_str(&n.delta),
+                InProcessServerEvent::ServerNotification(ServerNotification::ItemCompleted(_)) =>
+                    assert_eq!(streamed, answer),
+                _ => panic!("unexpected assistant stream event"),
+            }
+        }
+        assert_eq!(streamed, answer);
+        let private = InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(
+            ItemStartedNotification {
+                thread_id: "thread".into(), turn_id: "turn".into(),
+                item: ThreadItem::Reasoning { id: "private".into(),
+                    summary: vec!["private".into()], content: vec![] },
+            }));
+        assert!(!event_requires_delivery(&private));
     }
 
     #[test]

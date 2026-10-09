@@ -1821,3 +1821,24 @@ test('Owner follow-up rejects forged approvals routes oversize text and mismatch
     supervisorTurnRequest('input', { body: 'Keep the same task and its approvals.' }),
   ));
 });
+
+test('same-task input capability is opt-in and comes from the actual scoped native receipt', async () => {
+  const fixture = supervisorCapabilitiesFixture(receipt => {
+    receipt.result.input_contract = 'ctox.workjet.supervisor_input.v1';
+    receipt.result.input_delivery = 'next_slice';
+    receipt.result.max_input_chars = 4096;
+  });
+  const result = await fixture.invoke({ ...supervisorCapabilitiesRequest, includeInput: true });
+  assert.equal(fixture.commands[0].command.payload.include_input, true);
+  assert.equal(result.inputContract, 'ctox.workjet.supervisor_input.v1');
+  assert.equal(result.inputDelivery, 'next_slice');
+  assert.equal(result.maxInputChars, 4096);
+  const legacy = await fixture.invoke(supervisorCapabilitiesRequest);
+  assert.equal(Object.hasOwn(legacy, 'inputContract'), false);
+  await assert.rejects(supervisorCapabilitiesFixture().invoke({
+    ...supervisorCapabilitiesRequest, includeInput: true,
+  }), /does not support same-task/);
+  const invalid = supervisorCapabilitiesFixture();
+  await assert.rejects(invalid.invoke({ ...supervisorCapabilitiesRequest, includeInput: 'yes' }));
+  assert.equal(invalid.commands.length, 0);
+});
