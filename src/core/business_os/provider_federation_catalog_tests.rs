@@ -13,6 +13,7 @@ fn model_observation(time: i64) -> crate::coding_agents::pi_sidecar::NativeModel
         retry_after_seconds: None,
         failure: None,
         private_binding: None,
+        inherited_selected_model: None,
     }
 }
 
