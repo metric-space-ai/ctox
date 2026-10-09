@@ -201,3 +201,53 @@ fn replaced_native_lease_or_project_owner_cannot_capture_a_selection() -> anyhow
     assert_eq!(routes(root.path())?, 0);
     Ok(())
 }
+
+#[test]
+fn same_lease_cannot_rewrite_its_requested_route() -> anyhow::Result<()> {
+    let (root, token) = fixture(true)?;
+    assert_eq!(
+        code(require_executor(root.path(), Some(&token)).unwrap_err()),
+        "claude_code_holding_executor_unavailable"
+    );
+    let policy = store::open_store(root.path())?;
+    let mut record =
+        store::outbound_load_record(&policy, "workjet_luma_configuration", "instance")?.unwrap();
+    record["revision"] = json!(2);
+    store::upsert_business_record(&policy, "workjet_luma_configuration", "instance", 2, record)?;
+    assert_eq!(
+        code(require_executor(root.path(), Some(&token)).unwrap_err()),
+        "supervisor_selection_changed_during_lease"
+    );
+    assert_eq!(routes(root.path())?, 1);
+    Ok(())
+}
+
+#[test]
+fn withdrawn_or_foreign_computer_and_stale_catalog_cannot_capture() -> anyhow::Result<()> {
+    for sql in [
+        "UPDATE business_provider_federation_model_observations SET last_success_at_ms=0",
+        "UPDATE business_provider_federation_model_observations SET last_attempt_json='{\"success\":false}'",
+    ] {
+        let (root, token) = fixture(true)?;
+        store::open_store(root.path())?.execute_batch(sql)?;
+        assert_eq!(code(require_executor(root.path(), Some(&token)).unwrap_err()), "supervisor_account_model_unavailable");
+        assert_eq!(routes(root.path())?, 0);
+    }
+    for (key, value) in [("owner_user_id", "foreign"), ("status", "unassigned")] {
+        let (root, token) = fixture(true)?;
+        let policy = store::open_store(root.path())?;
+        let mut computer =
+            store::outbound_load_record(&policy, "workjet_computers", "network-computer")?.unwrap();
+        computer[key] = json!(value);
+        store::upsert_business_record(
+            &policy,
+            "workjet_computers",
+            "network-computer",
+            2,
+            computer,
+        )?;
+        assert!(require_executor(root.path(), Some(&token)).is_err());
+        assert_eq!(routes(root.path())?, 0);
+    }
+    Ok(())
+}

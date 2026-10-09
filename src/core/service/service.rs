@@ -41663,6 +41663,18 @@ Use shell tools to create or update these files."
     }
 
     #[test]
+    fn missing_project_supervisor_holding_executor_is_not_a_transient_retry() {
+        for code in [
+            "claude_code_holding_executor_unavailable",
+            "project_supervisor_holding_executor_unavailable",
+            "missing_native_account_binding",
+        ] {
+            let error = format!("{code}: selected project Luma has no admitted holding producer; instance-default fallback was not invoked");
+            assert!(!runtime_error_is_transient_api_failure(&error));
+        }
+    }
+
+    #[test]
     fn local_context_overflow_is_terminal_runtime_failure() {
         let error = "stream disconnected before completion: llama-server /completion returned status 400: {\"error\":{\"type\":\"exceed_context_size_error\",\"message\":\"request (132458 tokens) exceeds the available context size (131072 tokens)\"}}";
         assert_eq!(
