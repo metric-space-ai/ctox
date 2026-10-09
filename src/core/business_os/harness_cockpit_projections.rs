@@ -1153,7 +1153,14 @@ fn project_events_since(
                     }),
                 ));
             }
-            writer.upsert_source_projection_batch("ctox_harness_events", projected)?;
+            if let Err(error) =
+                writer.upsert_source_projection_batch("ctox_harness_events", projected)
+            {
+                // A failed chunk is not an acknowledgement of the captured
+                // high-water mark. Successful chunks remain deduplicated on retry.
+                (writer.event_cursor, writer.last_event_replay) = unclaimed;
+                return Err(error);
+            }
             delivered &= writer.inner.delivered_to_rxdb("ctox_harness_events");
             // Enforce the per-task cap immediately with the task/time index.
             // The expensive cross-task age/window sweep stays on maintenance.
