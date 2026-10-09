@@ -1103,6 +1103,20 @@ function prepareBusinessOsFreshProfileModuleAssets() {
   for (const moduleId of moduleIds) {
     const moduleRoot = path.join(installedModulesRoot, moduleId);
     fs.mkdirSync(moduleRoot, { recursive: true });
+    const scaleIndex = moduleId.startsWith('phase14-scale-app-')
+      ? Number(moduleId.slice(-2)) - 1 : -1;
+    const version = scaleIndex >= 0 ? `1.${Math.floor(scaleIndex / 8)}.${scaleIndex % 8}`
+      : moduleId.includes('private') ? '0.5.0'
+        : moduleId.includes('restricted') ? '1.2.0' : '1.0.0';
+    const title = scaleIndex >= 0 ? `Phase 14 Scale App ${scaleIndex + 1}`
+      : moduleId.includes('private') ? 'Phase 14 Fresh Private App'
+        : moduleId.includes('restricted') ? 'Phase 14 Fresh Restricted App' : 'Phase 14 Fresh Team App';
+    fs.writeFileSync(path.join(moduleRoot, 'module.json'), JSON.stringify({
+      id: moduleId, title, version, source: 'installed', install_scope: 'installed',
+      entry: `installed-modules/${moduleId}/index.js`, collections: ['business_commands'],
+    }, null, 2));
+    fs.writeFileSync(path.join(moduleRoot, 'index.js'),
+      'export async function mount({ container }) { container.textContent = "Fresh profile fixture"; return () => { container.replaceChildren(); }; }\n');
     fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
     fs.writeFileSync(path.join(moduleRoot, 'icon.svg'), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="${moduleId}">
   <rect width="24" height="24" rx="5" fill="#23665f"/>
@@ -6072,19 +6086,31 @@ function ensureCtoxSmokeBinary() {
             };
           };
           try {
+            await seedFreshProfileModuleCatalog();
             const renderTimings = [installModules(builderSession)];
             const builderTabs = await waitFor(() => {
               const tabs = tabEvidence();
               return {
-                ok: tabs.privateTab
-                  && tabs.teamTab
-                  && tabs.restrictedTab
-                  && tabs.privateState === 'private'
-                  && tabs.teamState === 'team'
-                  && tabs.restrictedState === 'restricted',
+                ok: tabs.privateTab && tabs.teamTab && tabs.restrictedTab,
                 ...tabs,
               };
             }, 8000, 'fresh-profile lifecycle tabs');
+            const builderLifecycle = [];
+            for (const mod of [privateModule, teamModule, restrictedModule]) {
+              smoke.openAppLifecycleDrawer(mod);
+              const evidence = await waitFor(() => {
+                const panel = document.querySelector('.module-lifecycle-drawer');
+                const summary = panel?.querySelector('.module-lifecycle-summary');
+                return {
+                  ok: Boolean(panel && panel.textContent.includes(mod.id) && summary),
+                  state: summary?.getAttribute('data-state') || '',
+                  label: summary?.querySelector('strong')?.textContent?.trim() || '',
+                  text: panel?.textContent || '',
+                };
+              }, 5000, `fresh-profile lifecycle details ${mod.id}`);
+              builderLifecycle.push(evidence);
+              document.querySelector('[data-close-lifecycle]')?.click();
+            }
             const startMenu = await openStartMenu();
             const startMenuText = startMenu.text || document.querySelector('.shell-start-menu-panel')?.innerText || '';
             const privateLifecycle = appLifecycleBadge(privateModule, { session: builderSession, governance });
@@ -6152,18 +6178,22 @@ function ensureCtoxSmokeBinary() {
             if (scopedTaskbarPinsKey) localStorage.removeItem(scopedTaskbarPinsKey);
             localStorage.removeItem('ctox.businessOs.taskbarPins');
 
-            const lifecycleLabelsVisible = builderTabs.privateText === 'Privat'
-              && builderTabs.teamText === 'Team'
-              && builderTabs.restrictedText === 'Eingeschränkt'
-              && privateLifecycle.text === 'Privat'
+            const lifecycleLabelsVisible = builderLifecycle[0].state === 'private'
+              && builderLifecycle[0].label === 'Privat'
+              && builderLifecycle[1].state === 'team'
+              && builderLifecycle[1].label === 'Team'
+              && builderLifecycle[2].state === 'restricted'
+              && builderLifecycle[2].label === 'Eingeschränkt'
+              && privateLifecycle.text === 'App privat'
               && teamLifecycle.text === 'Team'
               && restrictedLifecycle.text === 'Eingeschränkt';
             const versionBadgesVisible = privateLifecycle.version === 'v0.5.0'
               && teamLifecycle.version === 'v1.0.0'
               && restrictedLifecycle.version === 'v1.2.0'
-              && /v0\.5\.0\s+Privat/.test(startMenuText)
-              && /v1\.0\.0\s+Team/.test(startMenuText)
-              && /v1\.2\.0\s+Eingeschränkt/.test(startMenuText)
+              && builderLifecycle[0].text.includes('v0.5.0')
+              && builderLifecycle[1].text.includes('v1.0.0')
+              && builderLifecycle[2].text.includes('v1.2.0')
+              && [privateModule, teamModule, restrictedModule].every((mod) => startMenuText.includes(mod.title))
               && /v1\.0\.0\s*·\s*Team/.test(appStore.lifecycleText);
             const disabledReasonsVisible = /Nur Owner|Admins|App-Freigaberecht/.test(appStore.disabledReason)
               || /Nur Owner|Admins|App-Freigaberecht/.test(appStore.cardText);
