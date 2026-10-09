@@ -204,6 +204,12 @@ impl Default for CollectionPolicy {
             // dataset is roughly 380-414 KiB per document). Keep one response
             // below the WebRTC transfer ceiling when older peers ask for more.
             .with_transfer_ceiling_bytes("knowledge_tables", 512 * 1024)
+            // Researched leads carry their evidence (73 KiB on average, up to
+            // 237 KiB; 848 leads / 61 MB on thesen, 09.10.2026). At the 4 MiB
+            // default one masterChangesSince answer was several MB and timed
+            // out over relayed WebRTC, so a browser never finished the
+            // collection and held the post-upgrade read-only window open.
+            .with_transfer_ceiling_bytes("outbound_lead_generation_leads", 1024 * 1024)
             .with_demand_only_chunk_collection("desktop_file_chunks")
             .with_demand_only_chunk_collection("document_blob_chunks")
             .with_demand_only_chunk_collection("spreadsheet_blob_chunks")
@@ -289,6 +295,10 @@ mod tests {
         assert_eq!(
             policy.transfer_ceiling_bytes("knowledge_tables"),
             Some(512 * 1024)
+        );
+        assert_eq!(
+            policy.transfer_ceiling_bytes("outbound_lead_generation_leads"),
+            Some(1024 * 1024)
         );
         assert_eq!(policy.transfer_ceiling_bytes("documents"), None);
         assert_eq!(
