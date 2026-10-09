@@ -122,6 +122,31 @@ fn foreign_owner_legacy_invite_duplicate_enrollment_and_unbind_fail_closed() -> 
 }
 
 #[test]
+fn paired_inviter_retains_the_original_owner_without_new_account_grants() -> Result<()> {
+    let f = Fixture::new(Some("owner"))?;
+    let actor = store::verified_webrtc_capability_claims(f.root.path(), &f.token)
+        .unwrap()
+        .user_id;
+    let child = CapabilityDeviceBinding {
+        device_pairing_id: "child-pairing".into(),
+        device_id: "child-device".into(),
+        proof_key_thumbprint: format!("{}A", "C".repeat(42)),
+    };
+    mobile_invites::create_for_owner(f.root.path(), 300, None, Some(&child), Some(&actor))?;
+    let conn = store::open_store(f.root.path())?;
+    assert!(validate_owner_binding(&conn, "owner", &child.device_pairing_id).is_ok());
+    assert!(validate_owner_binding(&conn, &actor, &child.device_pairing_id).is_err());
+    conn.execute(
+        "UPDATE business_users SET active=0 WHERE user_id='owner'",
+        [],
+    )?;
+    assert!(
+        mobile_invites::create_for_owner(f.root.path(), 300, None, None, Some(&actor)).is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn current_resolver_rejects_actor_pairing_owner_and_membership_revocation() -> Result<()> {
     for revoke in ["actor", "pairing", "owner", "membership"] {
         let f = Fixture::new(Some("owner"))?;

@@ -248,6 +248,9 @@ pub(super) fn create_for_owner(
     device_binding: Option<&super::capability::CapabilityDeviceBinding>,
     owner_user_id: Option<&str>,
 ) -> anyhow::Result<Value> {
+    let owner_user_id = owner_user_id
+        .map(|inviter| retained_inviter_owner(root, inviter))
+        .transpose()?;
     anyhow::ensure!(
         (MIN_TTL_SECONDS..=MAX_TTL_SECONDS).contains(&ttl_seconds),
         "mobile invite ttlSeconds must be between {MIN_TTL_SECONDS} and {MAX_TTL_SECONDS}"
@@ -319,7 +322,7 @@ pub(super) fn create_for_owner(
                 device_binding.map(|binding| binding.device_pairing_id.as_str()),
                 device_binding.map(|binding| binding.device_id.as_str()),
                 device_binding.map(|binding| binding.proof_key_thumbprint.as_str()),
-                owner_user_id,
+                owner_user_id.as_deref(),
             ],
         )?;
         tx.commit()
@@ -382,6 +385,46 @@ pub(super) fn create_for_owner(
         "pairingUri": pairing_uri,
         "qrSvg": qr_svg
     }))
+}
+
+/// A paired device can invite another device, but does not become its owner.
+/// Follow only retained native inviter edges; never infer an owner from email,
+/// display names or a legacy invitation without provenance.
+fn retained_inviter_owner(root: &Path, inviter: &str) -> anyhow::Result<String> {
+    let conn = super::store::open_store(root)?;
+    ensure_table(&conn)?;
+    let mut current = inviter.to_owned();
+    for _ in 0..32 {
+        let role: String = conn
+            .query_row(
+                "SELECT role FROM business_users WHERE user_id=?1 AND active=1",
+                [&current],
+                |row| row.get(0),
+            )
+            .context("inviter or retained owner is inactive")?;
+        let parent: Option<(Option<String>, Option<i64>, Option<String>)> = conn
+            .query_row(
+                "SELECT created_by_user_id,revoked_at_ms,proof_key_thumbprint
+             FROM business_mobile_invites WHERE user_id=?1",
+                [&current],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((parent, revoked, proof)) = parent {
+            anyhow::ensure!(
+                revoked.is_none() && proof.is_some(),
+                "inviter device is not paired or was revoked"
+            );
+            current = parent.context("inviter has no retained owner")?;
+        } else {
+            anyhow::ensure!(
+                matches!(role.as_str(), "chef" | "admin" | "founder"),
+                "inviter is not an owner"
+            );
+            return Ok(current);
+        }
+    }
+    anyhow::bail!("retained inviter chain is cyclic or exceeds its bound")
 }
 
 /// Bind a one-time QR invite to the first P-256 key that proves possession on
