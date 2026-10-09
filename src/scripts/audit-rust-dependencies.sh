@@ -64,13 +64,15 @@ while IFS= read -r lockfile; do
       --file "$lockfile" \
       "${audit_args[@]}" \
       --ignore RUSTSEC-2026-0258
-  elif [ "$lockfile" = "src/core/transfers/Cargo.lock" ]; then
+  elif [ "$lockfile" = "src/core/transfers/Cargo.lock" ] ||
+    [ "$lockfile" = "src/core/transfers/vendor/smb/Cargo.lock" ]; then
     # Known risk, tracked in metric-space-ai/ctox#506: russh's `rsa` feature
     # pulls rsa 0.10.0-rc.18, and SSH/SFTP transfers sign with a
-    # user-supplied RSA client key (ssh_exec.rs, storage_ssh.rs). RustSec
-    # lists no patched rsa release. Unlike the root and harness exceptions
-    # this one IS reachable; it stays scoped to this lockfile and must be
-    # removed as soon as a fixed rsa release exists.
+    # user-supplied RSA client key (ssh_exec.rs, storage_ssh.rs); the
+    # vendored smb crate pulls the same rsa through picky/sspi (Kerberos).
+    # RustSec lists no patched rsa release. Unlike the root and harness
+    # exceptions this one IS reachable; it stays scoped to these two
+    # lockfiles and must be removed as soon as a fixed rsa release exists.
     cargo audit \
       --no-fetch \
       --file "$lockfile" \
