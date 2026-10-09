@@ -1177,7 +1177,9 @@ revoke them. Releasing an old revoked lease cannot decrement a new lease.
 Stopping a bridge records `active:false` even when no cached promise remains,
 so heartbeat repair cannot treat a closed module's old active diagnostic as
 live demand. Single and batch repairs recheck the current lease/pin ownership
-after stopping and before queued startup. A repair whose last owner closed
+at repair entry, after stopping and before queued startup. Explicit retirement
+also fences an already captured repair generation, including legacy direct
+bridges with no window lease or pin. A repair whose last owner closed
 does not reopen the collection. Late startup is cancelled by its exact bridge
 generation; its callbacks cannot publish readiness or schedule another repair
 over a stopped or replacement bridge. Cancellation is idempotent.

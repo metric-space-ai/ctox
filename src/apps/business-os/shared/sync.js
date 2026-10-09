@@ -169,8 +169,13 @@ export function createSyncRuntime({
   // it. App windows use reference-counted leases instead, so closing the last
   // window can return the sync runtime to its pre-launch resource baseline.
   const pinnedCollections = new Set();
-  const hasRepairOwner = (collection, required) => !required
-    || pinnedCollections.has(collection) || bridges.leaseCount(collection) > 0;
+  const retirementGenerations = new Map();
+  const hasRepairIntent = (collection) => activeCollections.has(collection)
+    || pinnedCollections.has(collection) || bridges.leaseCount(collection) > 0
+    || diagnostics.collections[collection]?.active === true;
+  const hasRepairOwner = (collection, required, retirement = null) => (
+    retirement === null || (retirementGenerations.get(collection) || 0) === retirement
+  ) && (!required || pinnedCollections.has(collection) || bridges.leaseCount(collection) > 0);
   const retiredBridge = (collection) => ({
     mode: 'stopped', collection, state: null,
     reason: 'collection-lease-ended', stop: async () => {},
@@ -770,7 +775,8 @@ export function createSyncRuntime({
       }
       const coordinator = await ensureMultiTabCoordinator();
       const requiresOwner = options.requireOwner === true;
-      if (!hasRepairOwner(collection, requiresOwner)) return retiredBridge(collection);
+      const repairRetirement = options.repairRetirement ?? null;
+      if (!hasRepairOwner(collection, requiresOwner, repairRetirement)) return retiredBridge(collection);
       if (isModuleDemandOnlyCollection(collection) && !bridges.leaseCount(collection)) {
         const error = new Error(`${collection} is demand-only and must be started through leaseCollection().`);
         error.code = DEMAND_ONLY_COLLECTION_START_ERROR;
@@ -819,7 +825,7 @@ export function createSyncRuntime({
         // Only a replication state that is actually cancelled is replaced.
         const currentBridge = await withTimeout(currentBridgePromise, 3000);
         if (bridges.get(collection) !== currentBridgePromise
-          || !hasRepairOwner(collection, requiresOwner)) return retiredBridge(collection);
+          || !hasRepairOwner(collection, requiresOwner, repairRetirement)) return retiredBridge(collection);
         if (!currentBridge) {
           // Keep repeated acquisitions bounded while the authoritative bridge
           // is still opening. The ready promise remains available to callers,
@@ -880,7 +886,7 @@ export function createSyncRuntime({
       const startBridge = () => {
         if (stopped) throw new Error('Business OS sync runtime has been stopped');
         const ownsBridge = () => bridges.get(collection) === bridgePromise
-          && hasRepairOwner(collection, requiresOwner);
+          && hasRepairOwner(collection, requiresOwner, repairRetirement);
         if (!ownsBridge()) return retiredBridge(collection);
         return startWebRtcReplication({
           db,
@@ -916,7 +922,7 @@ export function createSyncRuntime({
       try {
         const bridge = await withTimeout(bridgePromise, 3000);
         if (bridges.get(collection) !== bridgePromise
-          || !hasRepairOwner(collection, requiresOwner)) return retiredBridge(collection);
+          || !hasRepairOwner(collection, requiresOwner, repairRetirement)) return retiredBridge(collection);
         if (!bridge) {
           const pendingBridge = createPendingCollectionBridge(collection, bridgePromise);
           recordCollection(collection, {
@@ -954,7 +960,10 @@ export function createSyncRuntime({
     async stopCollection(collection, options = {}) {
       collection = normalizeCollectionName(collection);
       activeCollections.delete(collection);
-      if (!options?.preserveLeases) bridges.revokeLeases(collection);
+      if (!options?.preserveLeases) {
+        retirementGenerations.set(collection, (retirementGenerations.get(collection) || 0) + 1);
+        bridges.revokeLeases(collection);
+      }
       if (!options?.preservePin) pinnedCollections.delete(collection);
       const bridgePromise = bridges.get(collection);
       bridges.delete(collection);
@@ -991,13 +1000,15 @@ export function createSyncRuntime({
         });
         throw collectionReadForbiddenError(collection);
       }
+      if (!hasRepairIntent(collection)) return retiredBridge(collection);
+      const repairRetirement = retirementGenerations.get(collection) || 0;
       const wasPinned = pinnedCollections.has(collection);
       const hadOwner = wasPinned || bridges.leaseCount(collection) > 0;
       activeCollections.add(collection);
       await this.stopCollection(collection, { preserveLeases: true, preservePin: true });
-      if (!hasRepairOwner(collection, hadOwner)) return retiredBridge(collection);
+      if (!hasRepairOwner(collection, hadOwner, repairRetirement)) return retiredBridge(collection);
       return this.startCollection(collection, {
-        pin: wasPinned && pinnedCollections.has(collection), requireOwner: hadOwner,
+        pin: wasPinned && pinnedCollections.has(collection), requireOwner: hadOwner, repairRetirement,
       });
     },
     async restartCollections(collections) {
@@ -1021,15 +1032,18 @@ export function createSyncRuntime({
       }
       const restartable = requested.filter((collection) => (
         mayReadCollection(collection)
+        && hasRepairIntent(collection)
         && (!isModuleDemandOnlyCollection(collection) || bridges.leaseCount(collection) > 0)
       ));
       for (const collection of requested) {
         if (restartable.includes(collection) || !mayReadCollection(collection)) continue;
+        const hadIntent = hasRepairIntent(collection);
         activeCollections.delete(collection);
         recordCollection(collection, {
-          status: 'skipped',
-          connectionStatus: 'demand-only',
-          reason: 'demand-only-requires-lease',
+          status: hadIntent ? 'skipped' : 'stopped',
+          connectionStatus: hadIntent ? 'demand-only' : 'stopped',
+          reason: hadIntent ? 'demand-only-requires-lease' : 'collection-lease-ended',
+          active: false,
           lastError: null,
           reconnectingSince: null,
         });
@@ -1041,7 +1055,12 @@ export function createSyncRuntime({
         restartable.map((collection) => [collection,
           pinnedCollections.has(collection) || bridges.leaseCount(collection) > 0]),
       );
-      const stillOwned = (collection) => hasRepairOwner(collection, ownedBeforeRestart.get(collection));
+      const retirementBeforeRestart = new Map(
+        restartable.map((collection) => [collection, retirementGenerations.get(collection) || 0]),
+      );
+      const stillOwned = (collection) => hasRepairOwner(
+        collection, ownedBeforeRestart.get(collection), retirementBeforeRestart.get(collection),
+      );
       for (const collection of requested) suspendedCollections.delete(collection);
       if (!suspendedCollections.size) suspensionReason = '';
       for (const collection of restartable) activeCollections.add(collection);
@@ -1058,6 +1077,7 @@ export function createSyncRuntime({
           starts.push(this.startCollection(collection, {
             pin: pinnedBeforeRestart.get(collection) === true && pinnedCollections.has(collection),
             requireOwner: ownedBeforeRestart.get(collection) === true,
+            repairRetirement: retirementBeforeRestart.get(collection),
           }).then(
             (bridge) => ({ collection, bridge }),
             (error) => ({ collection, error }),

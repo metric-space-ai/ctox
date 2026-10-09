@@ -253,3 +253,61 @@ test('a late native bridge is cancelled once and cannot republish active diagnos
     assert.equal(f.calls.cancels, 1);
   } finally { finishStartup(); await f.close(); }
 });
+
+
+for (const batch of [false, true]) {
+  test(`a queued ${batch ? 'batch' : 'single'} repair cannot revive a candidate closed before invocation`, async () => {
+    let resumeQueue;
+    const precedingRepair = new Promise(resolve => { resumeQueue = resolve; });
+    const f = fixture({ leader: true });
+    try {
+      const lease = await f.runtime.leaseCollection('desktop_layout', 'closing-before-repair');
+      const candidates = __ctoxSyncTestHooks.repairCandidateCollectionNames(
+        new Set(f.runtime.resourceSnapshot().activeCollections), f.runtime.diagnostics.collections,
+      );
+      assert.deepEqual(candidates, ['desktop_layout']);
+      const queued = precedingRepair.then(() => batch
+        ? f.runtime.restartCollections(candidates)
+        : f.runtime.restartCollection(candidates[0]));
+      await lease.release();
+      resumeQueue();
+      const result = await queued;
+      if (batch) assert.deepEqual(result, []);
+      else assert.equal(result.mode, 'stopped');
+      assert.equal(f.calls.starts, 1, 'a captured name does not retain repair authority');
+      assert.equal(f.calls.cancels, 1);
+      assert.deepEqual(f.runtime.resourceSnapshot(), {
+        activeCollections: [], bridgeCollections: [], pinnedCollections: [], leaseCounts: {},
+      });
+      assert.equal(f.runtime.diagnostics.collections.desktop_layout.active, false);
+    } finally { resumeQueue(); await f.close(); }
+  });
+}
+
+test('an active legacy direct bridge still repairs without a window lease or pin', async () => {
+  const f = fixture({ leader: true });
+  try {
+    await f.runtime.startCollection('desktop_layout', { pin: false });
+    const repaired = await f.runtime.restartCollection('desktop_layout');
+    assert.equal(repaired.mode, 'webrtc');
+    assert.equal(f.calls.starts, 2);
+    assert.deepEqual(f.runtime.resourceSnapshot().activeCollections, ['desktop_layout']);
+  } finally { await f.close(); }
+});
+
+test('an explicit retirement also fences a legacy direct repair already in progress', async () => {
+  let finishCancel, enteredCancel;
+  const cancelGate = new Promise(resolve => { finishCancel = resolve; });
+  const cancelling = new Promise(resolve => { enteredCancel = resolve; });
+  const f = fixture({ leader: true, cancelGate, onCancel: enteredCancel });
+  try {
+    await f.runtime.startCollection('desktop_layout', { pin: false });
+    const repairing = f.runtime.restartCollection('desktop_layout');
+    await cancelling;
+    await f.runtime.stopCollection('desktop_layout');
+    finishCancel();
+    assert.equal((await repairing).mode, 'stopped');
+    assert.equal(f.calls.starts, 1);
+    assert.deepEqual(f.runtime.resourceSnapshot().activeCollections, []);
+  } finally { finishCancel(); await f.close(); }
+});
