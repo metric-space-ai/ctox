@@ -40,5 +40,6 @@ pending approval or claims that an imported vendor session can be resumed live.
 
 The additive request/page types are generated from the existing native/browser
 wire fixture. Matching native and signed Shell delivery, followed by the Workjet
-consumer, are required before installed acceptance can pass. Unit and integration
-checks and installed B3/B6 acceptance are pending for this draft.
+consumer, are required before installed acceptance can pass. The native and wire
+checks cover current Owner/binding admission, bounded reads and stable paging.
+Installed B3/B6 acceptance remains open until that complete stack is delivered.
