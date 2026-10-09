@@ -588,7 +588,8 @@ only and do not decide refresh behavior.
 ## Review And Outcome Gates
 
 A successful model turn does not automatically close work. The service starts a
-completion review unless the source is internal queue-guard maintenance. The
+completion review for durable work. Internal queue-guard maintenance and
+validated Workjet Supervisor dialogue replies use explicit native policies. The
 reviewer runs as a separate skeptical pass over the worker result and returns a
 typed disposition. Review reports separately declare
 `TASK_OUTCOME: completed|blocked|unverified`. Only `completed` with acceptable
@@ -596,6 +597,23 @@ independent proof can pass. Missing, unknown, or conflicting declarations fail
 closed. A truthful blocker report does not complete requested execution; a
 verified query with zero matches can complete it. Review admission preserves
 incomplete plan steps and their actual progress.
+
+The `workjet.supervisor.conversation-reply.v1` policy validates the private
+admitted Owner envelope against the current project/Supervisor binding, the
+canonical queue link, and a stored response for the exact command/task/attempt.
+It requires an explicit `turn_kind: "conversation"` on the originating Owner
+`ctox.workjet.project.supervisor.turn.submit`, linked by native producer
+provenance. `turn_kind: "work"` and omitted legacy kinds retain work review;
+unknown or null kinds are rejected. The Owner-scoped
+`ctox.workjet.project.supervisor.turn.capabilities` control advertises supported
+kinds without submitting or retrying a turn; legacy native versions are explicitly
+unsupported. A caller must offer a deliberate conversation
+action rather than infer intent from the text or change a waiting work turn.
+It records `reply_validated` policy evidence and finishes only that dialogue
+turn; it does not call a second model reviewer or claim project completion.
+Coding/worker tasks, writeback contracts, external executors, required artifacts,
+and incomplete durable plans remain subject to their existing guards. Prompt
+text and a model's claimed success cannot grant the reply policy.
 
 When an otherwise accepted Business OS chat queue result still has incomplete
 durable plan steps, finalization records a terminal failure with the same

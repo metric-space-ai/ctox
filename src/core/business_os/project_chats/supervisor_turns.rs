@@ -9,6 +9,24 @@ use super::*;
 use crate::mission::channels;
 
 const CONTRACT: &str = "ctox.workjet.supervisor_turn.v1";
+const CAPABILITIES_CONTRACT: &str = "ctox.workjet.supervisor_turn_capabilities.v1";
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TurnKind {
+    #[default]
+    Work,
+    Conversation,
+}
+
+impl TurnKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Work => "work",
+            Self::Conversation => "conversation",
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +34,24 @@ struct SubmitPayload {
     project_id: String,
     thread_id: String,
     goal: String,
+    #[serde(default)]
+    turn_kind: TurnKind,
+    #[serde(default, rename = "inbound_channel")]
+    _inbound_channel: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplyProvenance {
+    kind: TurnKind,
+    submit_command_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilitiesPayload {
+    project_id: String,
+    thread_id: String,
     #[serde(default, rename = "inbound_channel")]
     _inbound_channel: Option<String>,
 }
@@ -50,6 +86,7 @@ pub(in crate::business_os) fn is_command(command_type: &str) -> bool {
         "ctox.workjet.project.supervisor.turn.submit"
             | "ctox.workjet.project.supervisor.turn.watch"
             | "ctox.workjet.project.supervisor.turn.cancel"
+            | "ctox.workjet.project.supervisor.turn.capabilities"
     )
 }
 
@@ -145,6 +182,109 @@ fn owned_turn(
     }))
 }
 
+/// Native policy for completing a dialogue reply, not the project's work.
+/// Prompt text and a model's claimed status never confer this exemption.
+pub(crate) fn reply_completion_allowed(root: &Path, canonical: &Value) -> anyhow::Result<bool> {
+    let payload = &canonical["payload"];
+    let empty_array = |field: &str| {
+        payload
+            .get(field)
+            .is_none_or(|value| value.as_array().is_some_and(Vec::is_empty))
+    };
+    if canonical["command_type"] != "business_os.chat.task"
+        || canonical["module"] != "ctox"
+        || payload["risk_class"] != "internal"
+        || payload.get("mode").is_some()
+        || payload.get("writeback_contract").is_some()
+        || payload.get("external_executor").is_some()
+        || !empty_array("attachments")
+        || !empty_array("dependencies")
+    {
+        return Ok(false);
+    }
+    let Some(provenance) = payload.get("supervisor_turn") else {
+        return Ok(false);
+    };
+    let Ok(provenance) = serde_json::from_value::<ReplyProvenance>(provenance.clone()) else {
+        return Ok(false);
+    };
+    if provenance.kind != TurnKind::Conversation {
+        return Ok(false);
+    }
+    let Some(id) = canonical["command_id"].as_str() else {
+        return Ok(false);
+    };
+    let conn = open_store(root)?;
+    let admitted = store::load_business_command(&conn, id)?;
+    let owner = admitted
+        .client_context
+        .pointer("/actor/id")
+        .and_then(Value::as_str)
+        .context("Supervisor reply has no admitted owner")?;
+    let Some(thread_id) = admitted.payload["thread_id"].as_str() else {
+        return Ok(false);
+    };
+    // Ordinary Business OS chats and coding workers have no Supervisor binding.
+    let Some(binding) = supervisor_binding::for_thread(&conn, owner, thread_id)? else {
+        return Ok(false);
+    };
+    let binding = binding_from_connection(&conn, owner, &binding.project_id, thread_id, true)?;
+    ensure!(
+        canonical["module"] == admitted.module
+            && canonical["command_type"] == admitted.command_type
+            && canonical["record_id"].as_str() == admitted.record_id.as_deref()
+            && canonical["payload"] == admitted.payload,
+        "Supervisor reply conflicts with its admitted native command"
+    );
+    let submitted = store::load_business_command(&conn, &provenance.submit_command_id)?;
+    let request: SubmitPayload = serde_json::from_value(submitted.payload.clone())?;
+    ensure!(
+        submitted.module == "ctox"
+            && submitted.command_type == "ctox.workjet.project.supervisor.turn.submit"
+            && submitted
+                .client_context
+                .pointer("/actor/id")
+                .and_then(Value::as_str)
+                == Some(owner)
+            && submitted
+                .record_id
+                .as_deref()
+                .is_none_or(|id| id == binding.project_id)
+            && request.project_id == binding.project_id
+            && request.thread_id == binding.thread_id
+            && request.turn_kind == TurnKind::Conversation
+            && admitted.payload["user_message"].as_str() == Some(request.goal.trim()),
+        "Supervisor conversation kind conflicts with its admitted Owner submit"
+    );
+    drop(conn);
+    let turn = owned_turn(root, owner, &binding, id)?;
+    let submission = channels::inspect_business_command(root, &provenance.submit_command_id)?
+        .context("Supervisor conversation has no native submission receipt")?;
+    let receipt = &submission["command"]["result"];
+    ensure!(
+        receipt["contract"] == CONTRACT
+            && receipt["binding"]["project_id"] == binding.project_id
+            && receipt["binding"]["thread_id"] == binding.thread_id
+            && receipt["turn"]["command_id"] == id
+            && receipt["turn"]["task_id"] == turn["task_id"],
+        "Supervisor conversation provenance conflicts with its actual native submission receipt"
+    );
+    let result = &turn["result"];
+    ensure!(
+        matches!(
+            turn["execution_phase"].as_str(),
+            Some("awaiting_review" | "validating")
+        ) && result["command_id"] == id
+            && result["execution_task_id"] == turn["task_id"]
+            && result["attempt"] == turn["attempt"]
+            && result["user_reply"]
+                .as_str()
+                .is_some_and(|reply| !reply.trim().is_empty()),
+        "Supervisor reply lacks a persisted response for this exact command, task and attempt"
+    );
+    Ok(true)
+}
+
 pub(in crate::business_os) fn control(
     root: &Path,
     command: &BusinessCommand,
@@ -152,6 +292,14 @@ pub(in crate::business_os) fn control(
 ) -> anyhow::Result<Value> {
     let owner = session_user_id(session).context("authenticated supervisor owner is required")?;
     match command.command_type.as_str() {
+        "ctox.workjet.project.supervisor.turn.capabilities" => {
+            let request: CapabilitiesPayload = serde_json::from_value(command.payload.clone())?;
+            let binding = binding(root, owner, &request.project_id, &request.thread_id, false)?;
+            Ok(
+                json!({"ok":true, "contract":CAPABILITIES_CONTRACT, "binding":binding,
+                "turn_kinds":["work","conversation"], "default_turn_kind":"work"}),
+            )
+        }
         "ctox.workjet.project.supervisor.turn.submit" => {
             let request: SubmitPayload = serde_json::from_value(command.payload.clone())?;
             let binding = binding(root, owner, &request.project_id, &request.thread_id, true)?;
@@ -165,7 +313,13 @@ pub(in crate::business_os) fn control(
                 "thread_id": binding.thread_id, "goal": goal, "risk_class": "internal",
                 "message_id": stable_id("workjet_supervisor_message", &[owner, operation]),
             });
-            let result = super::super::threads::handle_business_command(root, session, &delegated)?;
+            let result = super::super::threads::create_supervisor_ai_request(
+                root,
+                session,
+                &delegated,
+                request.turn_kind.as_str(),
+                operation,
+            )?;
             let ai_id = result["ai_command"]["command_id"]
                 .as_str()
                 .or_else(|| result["ai_command"]["id"].as_str())

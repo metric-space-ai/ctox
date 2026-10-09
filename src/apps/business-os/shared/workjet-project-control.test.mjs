@@ -1387,6 +1387,74 @@ function supervisorTurnRequest(action, extra = {}) {
   };
 }
 
+test('explicit supervisor kinds survive the shell bridge and legacy submits omit them', async () => {
+  for (const kind of [undefined, 'work', 'conversation']) {
+    const fixture = supervisorTurnFixture();
+    await fixture.invoke(supervisorTurnRequest('submit', kind === undefined ? {} : { turnKind: kind }));
+    assert.equal(fixture.commands.length, 1);
+    assert.equal(fixture.commands[0].command.payload.turn_kind, kind);
+    assert.equal(Object.hasOwn(fixture.commands[0].command.payload, 'turn_kind'), kind !== undefined);
+  }
+  for (const turnKind of [null, 'chat', {}, true]) {
+    const fixture = supervisorTurnFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest('submit', { turnKind })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  await assert.rejects(supervisorTurnFixture(receipt => {
+    receipt.payload = { ...receipt.payload, turn_kind: 'work' };
+  }).invoke(supervisorTurnRequest('submit', { turnKind: 'conversation' })));
+});
+
+function supervisorCapabilitiesFixture(change = () => {}) {
+  return supervisorTurnFixture((receipt, state) => {
+    receipt.result = {
+      ok: true, contract: 'ctox.workjet.supervisor_turn_capabilities.v1',
+      binding: receipt.result.binding,
+      turn_kinds: ['work', 'conversation'], default_turn_kind: 'work',
+    };
+    change(receipt, state);
+  });
+}
+const supervisorCapabilitiesRequest = {
+  action: 'project.supervisor.turn.capabilities', commandId: 'capabilities-1',
+  projectId: 'project-1', threadId: supervisorThread,
+};
+
+test('supervisor capabilities are a scoped native control without creating a turn', async () => {
+  const fixture = supervisorCapabilitiesFixture();
+  const result = await fixture.invoke(supervisorCapabilitiesRequest);
+  assert.deepEqual(result.turnKinds, ['work', 'conversation']);
+  assert.equal(result.defaultTurnKind, 'work');
+  assert.equal(result.binding.threadId, supervisorThread);
+  assert.equal(result.contract, 'ctox.workjet.supervisor_turn_capabilities.v1');
+  assert.equal(Object.hasOwn(result, 'turn'), false);
+  assert.equal(fixture.commands.length, 1);
+  const { command, options } = fixture.commands[0];
+  assert.equal(command.command_type, 'ctox.workjet.project.supervisor.turn.capabilities');
+  assert.deepEqual(JSON.parse(JSON.stringify(command.payload)), { project_id: 'project-1', thread_id: supervisorThread });
+  assert.equal(options.sync_queue_tasks, false);
+  assert.equal(options.until, 'terminal');
+});
+
+test('supervisor capabilities refuse foreign malformed stale and unsupported confirmations', async () => {
+  for (const change of [
+    receipt => { receipt.command_id = 'foreign'; },
+    receipt => { receipt.target_record_id = 'foreign'; },
+    receipt => { receipt.payload = { ...receipt.payload, thread_id: 'foreign' }; },
+    receipt => { receipt.result.binding.thread_key = 'foreign'; },
+    receipt => { receipt.result.contract = 'ctox.workjet.supervisor_turn.v1'; },
+    receipt => { receipt.result.turn_kinds = ['conversation', 'work']; },
+    receipt => { receipt.result.turn_kinds.push('invented'); },
+    receipt => { receipt.result.default_turn_kind = 'conversation'; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(supervisorCapabilitiesFixture(change).invoke(supervisorCapabilitiesRequest));
+  for (const extra of [{ goal: 'Do work' }, { targetCommandId: nativeTurnId }, { turnKind: 'conversation' }]) {
+    const fixture = supervisorCapabilitiesFixture();
+    await assert.rejects(fixture.invoke({ ...supervisorCapabilitiesRequest, ...extra }));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
 test('supervisor submit watch cancel use the native control plane on the same CodeThread', async () => {
   for (const action of ['submit', 'watch', 'cancel']) {
     const fixture = supervisorTurnFixture();
