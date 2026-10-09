@@ -528,6 +528,18 @@ fn supervisor_observation_rejects_old_leases_and_foreign_owner_rows() -> anyhow:
     dispatch(root.path(), &trusted)?;
     let core = Connection::open(crate::paths::core_db(root.path()))?;
     core.execute(
+        "UPDATE workjet_worker_dispatch_sources SET project_id='another-project'",
+        [],
+    )?;
+    assert_eq!(
+        observe_call(root.path(), &trusted, None)?["observations"],
+        json!([])
+    );
+    core.execute(
+        "UPDATE workjet_worker_dispatch_sources SET project_id='project'",
+        [],
+    )?;
+    core.execute(
         "UPDATE workjet_worker_dispatch_sources SET owner_user_id='foreign'",
         [],
     )?;
