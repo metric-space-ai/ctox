@@ -10593,6 +10593,10 @@ function ensureCtoxSmokeBinary() {
           const menu = await openGlobalContextMenu();
           const submitted = await submitGlobalContextMenu();
           const detail = submitted.detail || {};
+          const auditCommandType = detail.command_type || detail.type || '';
+          if (auditCommandType !== 'business_os.context.ask') {
+            throw new Error(`agent scope ask emitted a different command type: ${auditCommandType}`);
+          }
           const visibleScope = detail.client_context?.visible_scope || null;
           const clientContextMatchesUi = Boolean(
             visibleScope
@@ -10614,7 +10618,7 @@ function ensureCtoxSmokeBinary() {
               && appStoreDetail.client_context?.app_id === targetModule.id
               && appStoreDetail.client_context?.actor?.id === actorSession.user.id
               && appStoreDetail.payload?.mode === 'ask'
-              && appStoreDetail.command_type === 'business_os.context.ask'
+              && (appStoreDetail.command_type || appStoreDetail.type) === 'business_os.context.ask'
               && scopeRowsMatchVisibleScope(appStoreMenu.rows, appStoreVisibleScope)
           );
           const businessChatScope = await waitForBusinessChatScope(appStoreDetail);
@@ -10676,7 +10680,7 @@ function ensureCtoxSmokeBinary() {
             id: commandId,
             wait_timeout_ms: 45000,
             module: targetModule.id,
-            type: detail.command_type || 'business_os.chat.task',
+            type: auditCommandType,
             record_id: detail.record_id || targetModule.id,
             inbound_channel: 'business_os.agent_scope_smoke',
             payload: {
@@ -10708,18 +10712,18 @@ function ensureCtoxSmokeBinary() {
           });
           const commandCollection = state.db?.raw?.business_commands || state.db?.collection?.('business_commands');
           const persistedCommand = await waitFor(async () => {
-            const docs = docsToJson(await commandCollection.find().exec());
-            const doc = docs.find((item) => item.id === commandId || item.command_id === commandId);
+            const record = await commandCollection.findOne(commandId).exec();
+            const doc = record?.toJSON?.() || record;
             return {
-              ok: Boolean(doc),
+              ok: Boolean(doc && doc.replication_phase === 'native_observed'),
               command: doc || null,
-              count: docs.length,
             };
           }, 15000, 'agent scope persisted command');
           const persistedContext = persistedCommand.command?.client_context || {};
           const persistedVisibleScope = persistedContext.visible_scope || persistedContext.scope || null;
           const auditVisible = Boolean(
             persistedCommand.command
+              && persistedCommand.command.command_type === auditCommandType
               && persistedVisibleScope?.app?.module_id === targetModule.id
               && (dispatchResult?.task_id || dispatchResult?.command_id || commandId)
           );
