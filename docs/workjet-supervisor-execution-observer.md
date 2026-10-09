@@ -29,6 +29,9 @@ Only an opted-in result adds `execution_contract` (constant
   prove current worker liveness or completion. Finalization recovery
   does not allocate a second run. Historical attempts without this ledger retain
   their finalization key, and an unregistered active attempt has no `run_id`.
+  `finished_at_ms` reads the finalization ledger's Unix-millisecond TEXT value
+  as well as historical RFC3339 values. Event timestamps remain RFC3339 in Core;
+  the wire exposes safe nonnegative millisecond integers without rewriting rows.
 - `events`: at most 50 eligible safe events. IDs and insertion sequences are
   native ledger facts; raw thinking text, tool arguments, tool output and raw
   metadata are not returned. Titles are bounded to 256 characters.

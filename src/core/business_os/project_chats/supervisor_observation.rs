@@ -20,6 +20,14 @@ fn table(conn: &Connection, name: &str) -> anyhow::Result<bool> {
 fn millis(value: &str) -> anyhow::Result<i64> {
     Ok(chrono::DateTime::parse_from_rfc3339(value)?.timestamp_millis())
 }
+fn terminal_millis(value: &str) -> anyhow::Result<i64> {
+    // The finalization ledger writes Unix milliseconds as TEXT. Keep reading
+    // historical RFC3339 rows too; flow event timestamps remain RFC3339.
+    if let Ok(value) = value.parse::<i64>() {
+        return Ok(value);
+    }
+    millis(value)
+}
 fn ordinal(value: Option<i64>) -> anyhow::Result<Option<u64>> {
     value
         .map(|value| u64::try_from(value).context("negative native attempt ordinal"))
@@ -141,7 +149,7 @@ pub(super) fn page(
         finished_at_ms: run
             .as_ref()
             .and_then(|r| r.1.as_deref())
-            .map(millis)
+            .map(terminal_millis)
             .transpose()?,
     });
     let after = if let Some(cursor) = &request.cursor {
