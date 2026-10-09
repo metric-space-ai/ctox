@@ -29,7 +29,7 @@ impl Fixture {
         Ok(Self { root, conn })
     }
 
-    fn enroll(&self, computer: &str) -> Result<()> {
+    pub(super) fn enroll(&self, computer: &str) -> Result<()> {
         let binding = CapabilityDeviceBinding {
             device_pairing_id: format!("pairing-{computer}"),
             device_id: format!("device-{computer}"),
@@ -107,6 +107,7 @@ pub(super) fn account(local: &str) -> NativeAccountObservation {
         local_account_id: local.into(),
         enabled: true,
         credential_ready: true,
+        private_binding: None,
     }
 }
 

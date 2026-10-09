@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_observations (
     models_json TEXT,
     last_attempt_json TEXT NOT NULL,
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
+);
+CREATE TABLE IF NOT EXISTS business_provider_federation_native_bindings (
+    account_id TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
 );";
 
 const MAX_ACCOUNTS: usize = 256;
@@ -88,6 +93,7 @@ struct NativeAccountObservation {
     local_account_id: String,
     enabled: bool,
     credential_ready: bool,
+    private_binding: Option<String>,
 }
 
 fn bounded_id(value: &str) -> Result<()> {
@@ -133,6 +139,7 @@ fn observations(projection: &Value) -> Result<Vec<NativeAccountObservation>> {
                 // The source's ready status means credential configured, never
                 // provider health, available quota or successful inference.
                 credential_ready: matches!(phase, "ready" | "connected"),
+                private_binding: None,
             })
         })
         .collect()
@@ -191,6 +198,7 @@ pub(super) fn handle_command(
                     local_account_id: INHERITED_NATIVE_ACCOUNT_ID.into(),
                     enabled: true,
                     credential_ready: true,
+                    private_binding: Some(metadata.private_binding.clone()),
                 });
             }
             ensure!(
@@ -246,6 +254,11 @@ pub(super) fn handle_command(
             let mut conn = store::open_store(root)?;
             let applied = admitted.apply(&mut conn, |tx| {
                 let owner = management_owner(tx, actor)?;
+                ensure!(
+                    observation.private_binding.is_some()
+                        && native_binding(tx, &request.account_id)? == observation.private_binding,
+                    "native account configuration changed; refresh account metadata"
+                );
                 let current = native_catalog_target(tx, &owner, &holder, &request)?;
                 ensure!(
                     current == observation.provider,
@@ -388,7 +401,11 @@ fn adopt(
                 previous_owner == owner,
                 "native account already belongs to another owner"
             );
-            if enabled != observation.enabled || configured != observation.credential_ready {
+            let previous_binding = native_binding(conn, &id)?;
+            if enabled != observation.enabled
+                || configured != observation.credential_ready
+                || previous_binding != observation.private_binding
+            {
                 let revision = revision
                     .checked_add(1)
                     .context("account revision exhausted")?;
@@ -411,6 +428,7 @@ fn adopt(
                     params![id, now],
                 )?;
             }
+            set_native_binding(conn, &id, observation.private_binding.as_deref())?;
         } else {
             let count: i64 = conn.query_row(
                 "SELECT count(*) FROM business_provider_federation_accounts WHERE owner_user_id=?1",
@@ -418,13 +436,14 @@ fn adopt(
                 |row| row.get(0),
             )?;
             ensure!(count < MAX_ACCOUNTS as i64, "owner account limit exceeded");
+            let id = uuid::Uuid::new_v4().to_string();
             conn.execute(
                 "INSERT INTO business_provider_federation_accounts
                  (account_id,owner_user_id,holder_instance_id,provider,private_local_account_id,
                   enabled,credential_ready,revision,observed_at_ms)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,1,?8)",
                 params![
-                    uuid::Uuid::new_v4().to_string(),
+                    id,
                     owner,
                     holder,
                     observation.provider,
@@ -434,6 +453,7 @@ fn adopt(
                     now
                 ],
             )?;
+            set_native_binding(conn, &id, observation.private_binding.as_deref())?;
             changed = true;
         }
     }
@@ -503,6 +523,28 @@ fn withdraw(conn: &Connection, owner: &str, request: &WithdrawRequest) -> Result
 }
 
 const CATALOG_FRESHNESS_MS: i64 = 86_400_000;
+
+fn native_binding(conn: &Connection, id: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT fingerprint FROM business_provider_federation_native_bindings WHERE account_id=?1",
+        [id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn set_native_binding(conn: &Connection, id: &str, binding: Option<&str>) -> Result<()> {
+    if let Some(binding) = binding {
+        conn.execute("INSERT INTO business_provider_federation_native_bindings(account_id,fingerprint) VALUES (?1,?2) ON CONFLICT(account_id) DO UPDATE SET fingerprint=excluded.fingerprint", params![id,binding])?;
+    } else {
+        conn.execute(
+            "DELETE FROM business_provider_federation_native_bindings WHERE account_id=?1",
+            [id],
+        )?;
+    }
+    Ok(())
+}
 
 fn native_catalog_target(
     conn: &Connection,

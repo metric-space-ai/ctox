@@ -2,9 +2,7 @@
 // License: AGPL-3.0-only
 //! Operator-requested live model discovery for the inherited Pi route.
 //! No inference, queue mutation, credential export or fallback selection.
-use super::{
-    resolve_inherited_catalog_route, resolve_inherited_coding_route, InheritedCodingRoute,
-};
+use super::{resolve_inherited_catalog_route, InheritedCodingRoute};
 use crate::execution::models::runtime_env;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,6 +16,28 @@ use zeroize::Zeroizing;
 
 pub(crate) struct NativeInheritedAccountMetadata {
     pub provider: String,
+    // Holder-private configuration/credential fingerprint. Never serialize.
+    pub private_binding: String,
+}
+
+fn private_binding(route: &InheritedCodingRoute, credential: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"ctox/native-account-binding/v1");
+    for value in [
+        route.provider.as_str(),
+        route.base_url.as_str(),
+        route.credential_key,
+        credential,
+    ] {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
+    }
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 // This is configured account existence only: neither a model-list observation
@@ -43,19 +63,20 @@ fn native_metadata_from_current(
     }
     Ok(Some(NativeInheritedAccountMetadata {
         provider: route.provider.clone(),
+        private_binding: private_binding(route, credential),
     }))
 }
 
 pub(super) fn account_metadata(
     root: &Path,
 ) -> anyhow::Result<Option<NativeInheritedAccountMetadata>> {
-    let route = resolve_inherited_coding_route(root)
+    let route = resolve_inherited_catalog_route(root)
         .map_err(|_| anyhow::anyhow!("native main account route is unavailable"))?;
     let credential = runtime_env::load_runtime_env_map(root)
         .map_err(|_| anyhow::anyhow!("native main credential metadata is unavailable"))?
         .remove(route.credential_key)
         .map(Zeroizing::new);
-    let current_route = resolve_inherited_coding_route(root)
+    let current_route = resolve_inherited_catalog_route(root)
         .map_err(|_| anyhow::anyhow!("native main account route is unavailable"))?;
     let current_credential = runtime_env::load_runtime_env_map(root)
         .map_err(|_| anyhow::anyhow!("native main credential metadata is unavailable"))?
@@ -276,6 +297,8 @@ pub(crate) struct NativeModelCatalogObservation {
     pub elapsed_ms: u64,
     pub retry_after_seconds: Option<u64>,
     pub failure: Option<String>,
+    #[serde(skip)]
+    pub private_binding: Option<String>,
 }
 
 fn probe_current(root: &Path, route: &InheritedCodingRoute) -> Probe {
@@ -304,7 +327,16 @@ fn probe_current(root: &Path, route: &InheritedCodingRoute) -> Probe {
 pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservation> {
     let route = resolve_inherited_catalog_route(root)
         .map_err(|_| anyhow::anyhow!("native model catalog route is unavailable"))?;
-    let probe = probe_current(root, &route);
+    let before = account_metadata(root)?.map(|metadata| metadata.private_binding);
+    let mut probe = probe_current(root, &route);
+    let after = account_metadata(root)?.map(|metadata| metadata.private_binding);
+    if before != after {
+        probe.failure = Some(Failure::RouteChanged);
+        probe.models = None;
+        probe.http_status = None;
+        probe.retry_after_seconds = None;
+    }
+    let binding = if before == after { before } else { None };
     let failure = serde_json::to_value(probe.failure)?
         .as_str()
         .map(str::to_owned);
@@ -316,6 +348,7 @@ pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservati
         elapsed_ms: probe.elapsed_ms,
         retry_after_seconds: probe.retry_after_seconds,
         failure,
+        private_binding: binding,
     })
 }
 
@@ -452,8 +485,18 @@ mod tests {
         ]);
         runtime_env::save_runtime_env_map(root.path(), &settings)?;
         let before = runtime_env::load_runtime_env_map(root.path())?;
-        let NativeInheritedAccountMetadata { provider } = account_metadata(root.path())?.unwrap();
-        assert_eq!(provider, "ctox_proxy");
+        let metadata = account_metadata(root.path())?.unwrap();
+        assert_eq!(metadata.provider, "ctox_proxy");
+        let mut rotated = before.clone();
+        rotated.insert(
+            "CTOX_LLM_PROXY_API_KEY".into(),
+            "fixture-rotated-proxy".into(),
+        );
+        runtime_env::save_runtime_env_map(root.path(), &rotated)?;
+        let changed = account_metadata(root.path())?.unwrap();
+        assert_ne!(metadata.private_binding, changed.private_binding);
+        assert_eq!(runtime_env::load_runtime_env_map(root.path())?, rotated);
+        runtime_env::save_runtime_env_map(root.path(), &before)?;
         assert_eq!(runtime_env::load_runtime_env_map(root.path())?, before);
         assert!(
             !root.path().join("coding-agents").exists(),

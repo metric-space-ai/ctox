@@ -12,6 +12,7 @@ fn model_observation(time: i64) -> crate::coding_agents::pi_sidecar::NativeModel
         elapsed_ms: 12,
         retry_after_seconds: None,
         failure: None,
+        private_binding: None,
     }
 }
 
@@ -145,5 +146,67 @@ fn native_catalog_rejects_model_names_without_a_successful_real_response() -> Re
         catalog_projection(&f.conn, &id, 1, 101)?["models"],
         json!([])
     );
+    Ok(())
+}
+
+#[test]
+fn native_private_credential_change_invalidates_catalog_without_replacing_account_or_withdrawal(
+) -> Result<()> {
+    let f = Fixture::new()?;
+    f.enroll("consumer")?;
+    let mut native = account(INHERITED_NATIVE_ACCOUNT_ID);
+    native.private_binding = Some("a".repeat(64));
+    let state = f.adopt(&[native])?;
+    let id = account_id(&state).to_owned();
+    withdraw(
+        &f.conn,
+        "owner",
+        &WithdrawRequest {
+            _inbound_channel: None,
+            account_id: id.clone(),
+            computer_id: "consumer".into(),
+            withdrawn: true,
+            expected_revision: policy_revision(&f.conn, "owner")?,
+        },
+    )?;
+    let request = ObserveNativeRequest {
+        _inbound_channel: None,
+        account_id: id.clone(),
+        expected_account_revision: 1,
+    };
+    let mut observation = model_observation(100);
+    observation.private_binding = Some("a".repeat(64));
+    retain_catalog_observation(&f.conn, &request, &observation)?;
+    assert_eq!(catalog_projection(&f.conn, &id, 1, 101)?["fresh"], true);
+    let before = policy_revision(&f.conn, "owner")?;
+    let mut rotated = account(INHERITED_NATIVE_ACCOUNT_ID);
+    rotated.private_binding = Some("b".repeat(64));
+    let state = f.adopt(&[rotated])?;
+    assert_eq!(account_id(&state), id);
+    assert_eq!(state["accounts"][0]["revision"], 2);
+    assert_eq!(state["accounts"][0]["enabled"], true);
+    assert_eq!(state["accounts"][0]["credentialReady"], true);
+    assert_eq!(state["accounts"][0]["modelCatalog"]["models"], json!([]));
+    assert_eq!(state["accounts"][0]["modelCatalog"]["fresh"], false);
+    assert_eq!(policy_revision(&f.conn, "owner")?, before + 1);
+    let withdrawn: bool = f.conn.query_row("SELECT EXISTS(SELECT 1 FROM business_provider_federation_withdrawals WHERE account_id=?1 AND computer_id='consumer')",
+        [&id], |row| row.get(0))?;
+    assert!(withdrawn);
+    assert_eq!(native_binding(&f.conn, &id)?, Some("b".repeat(64)));
+    assert!(!state.to_string().contains(&"b".repeat(64)));
+    let mut same = account(INHERITED_NATIVE_ACCOUNT_ID);
+    same.private_binding = Some("b".repeat(64));
+    assert_eq!(f.adopt(&[same])?["accounts"][0]["revision"], 2);
+    assert_eq!(policy_revision(&f.conn, "owner")?, before + 1);
+    Ok(())
+}
+
+#[test]
+fn native_private_catalog_binding_cannot_enter_public_metadata() -> Result<()> {
+    let mut observation = model_observation(100);
+    observation.private_binding = Some("a".repeat(64));
+    let public = serde_json::to_value(&observation)?;
+    assert!(public.get("private_binding").is_none());
+    assert!(!public.to_string().contains(&"a".repeat(64)));
     Ok(())
 }
