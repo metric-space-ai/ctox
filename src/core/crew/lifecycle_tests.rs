@@ -86,6 +86,44 @@ fn crew_retention_revalidates_start_and_lease_after_candidate_reads() -> Result<
 }
 
 #[test]
+fn crew_retention_preserves_first_finalization_committed_after_scan() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("retention.sqlite3");
+    let conn = Connection::open(&path)?;
+    conn.execute_batch("PRAGMA journal_mode=WAL;
+        CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT)")?;
+    ensure_schema(&conn)?;
+    conn.execute("INSERT INTO crew_attempts(attempt_id,task_id,member_id,selected_at) VALUES('first-finalization','closed','crew-milo','2020-01-01T00:00:00Z')", [])?;
+    super::lifecycle::AFTER_RETENTION_READS.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let other = Connection::open(&path).unwrap();
+            // The first worker can initialize its durable ledger after the
+            // cockpit's initial schema check. Revalidate that evidence too.
+            other
+                .execute_batch(
+                    "CREATE TABLE worker_attempt_finalizations(attempt_id TEXT PRIMARY KEY);
+                INSERT INTO worker_attempt_finalizations VALUES('first-finalization')",
+                )
+                .unwrap();
+        }));
+    });
+    let result = retain_attempts(&conn, chrono::Utc::now().timestamp_millis());
+    super::lifecycle::AFTER_RETENTION_READS.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    result?;
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM crew_attempts WHERE attempt_id='first-finalization'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    Ok(())
+}
+
+#[test]
 fn crew_migration_keeps_flow_ledger_lazy_until_admission() -> Result<()> {
     let (root, conn, task) = leased()?;
     assert!(!conn.query_row(

@@ -532,6 +532,10 @@ fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
     let mut max_pass = Duration::ZERO;
     let mut failures = Vec::new();
     while started.elapsed() < duration {
+        if workers.iter().any(std::thread::JoinHandle::is_finished) {
+            failures.push("fixture writer ended before the load interval".to_string());
+            break;
+        }
         let pass_started = Instant::now();
         if let Err(error) = refresh_selected(
             root.path(),
@@ -540,6 +544,7 @@ fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
             ALL | MAINTENANCE,
         ) {
             failures.push(format!("{error:#}"));
+            break;
         }
         max_pass = max_pass.max(pass_started.elapsed());
         passes += 1;

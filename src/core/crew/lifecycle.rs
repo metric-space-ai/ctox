@@ -133,7 +133,11 @@ pub(crate) fn retain_attempts(conn: &Connection, now: i64) -> Result<()> {
             continue;
         }
         // Do not discard finalizations outside this batch's migration window.
-        if has_finalizations
+        let current_finalizations = has_finalizations || tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_attempt_finalizations')",
+            [], |r|r.get::<_, bool>(0),
+        )?;
+        if current_finalizations
             && tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM worker_attempt_finalizations WHERE attempt_id=?1)",
                 [&attempt],
