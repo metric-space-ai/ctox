@@ -5437,6 +5437,14 @@ async fn sync_business_record_projections_with_database_if_changed(
     chat_tracking_repair_stamp: &mut Option<ChatTrackingRepairProjectionStamp>,
     last_source_stamp: &mut Option<BusinessRecordProjectionSourceStamp>,
 ) -> anyhow::Result<usize> {
+    if last_source_stamp.is_none() {
+        let projection_root = root.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            super::provider_federation::repair_projections(&projection_root)
+        })
+        .await
+        .context("join provider registry projection backfill")??;
+    }
     let source_stamp = business_record_projection_source_stamp(root).await?;
     if last_source_stamp.as_ref() == Some(&source_stamp) {
         return Ok(0);

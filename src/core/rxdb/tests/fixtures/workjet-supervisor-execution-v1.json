@@ -76,13 +76,36 @@
     },
     "PublicAssistantText": {
       "fields": {
-        "turn_id": { "type": "String", "min_chars": 1, "max_chars": 128 },
-        "item_id": { "type": "String", "min_chars": 1, "max_chars": 128 },
-        "phase": { "type": "String", "min_chars": 1, "max_chars": 32 },
-        "offset": { "type": "u64", "minimum": 0, "maximum": 65536 },
-        "text": { "type": "String", "max_chars": 4096 },
-        "completed": { "type": "bool" },
-        "truncated": { "type": "bool" }
+        "turn_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "item_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "phase": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 32
+        },
+        "offset": {
+          "type": "u64",
+          "minimum": 0,
+          "maximum": 65536
+        },
+        "text": {
+          "type": "String",
+          "max_chars": 4096
+        },
+        "completed": {
+          "type": "bool"
+        },
+        "truncated": {
+          "type": "bool"
+        }
       }
     },
     "ExecutionEvent": {
@@ -163,6 +186,88 @@
           "optional": true
         }
       }
+    },
+    "TurnHistoryCursor": {
+      "fields": {
+        "before_created_at_ms": {
+          "type": "i64",
+          "minimum": 0
+        },
+        "before_command_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        }
+      }
+    },
+    "TurnHistoryRequest": {
+      "fields": {
+        "cursor": {
+          "type": "TurnHistoryCursor",
+          "optional": true
+        },
+        "limit": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 20,
+          "optional": true
+        }
+      }
+    },
+    "TurnHistoryEntry": {
+      "fields": {
+        "command_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "task_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "created_at_ms": {
+          "type": "i64",
+          "minimum": 0
+        },
+        "user_text": {
+          "type": "String",
+          "max_chars": 4096
+        },
+        "user_text_truncated": {
+          "type": "bool"
+        }
+      }
+    },
+    "TurnHistoryPage": {
+      "fields": {
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "thread_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 36
+        },
+        "thread_key": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "turns": {
+          "type": "Vec<TurnHistoryEntry>",
+          "max_items": 20
+        },
+        "next_cursor": {
+          "type": "TurnHistoryCursor",
+          "optional": true
+        },
+        "has_more": {
+          "type": "bool"
+        }
+      }
     }
   },
   "commands": {
@@ -173,17 +278,34 @@
       "response_type": "ExecutionPage",
       "response_contract_field": "execution_contract",
       "authorization": "current_native_project_owner"
+    },
+    "ctox.workjet.project.supervisor.turn.history": {
+      "request_field": "history_page",
+      "request_type": "TurnHistoryRequest",
+      "response_field": "history_page",
+      "response_type": "TurnHistoryPage",
+      "response_contract_field": "history_contract",
+      "authorization": "current_native_project_owner"
     }
   },
   "valid_cases": [
     {
       "type": "ExecutionPageRequest",
-      "value": { "include_public_text": true }
+      "value": {
+        "include_public_text": true
+      }
     },
     {
       "type": "PublicAssistantText",
-      "value": { "turn_id": "native-turn", "item_id": "native-item", "phase": "final_answer",
-        "offset": 0, "text": "Public model reply", "completed": false, "truncated": false }
+      "value": {
+        "turn_id": "native-turn",
+        "item_id": "native-item",
+        "phase": "final_answer",
+        "offset": 0,
+        "text": "Public model reply",
+        "completed": false,
+        "truncated": false
+      }
     },
     {
       "type": "ExecutionPageRequest",
@@ -225,19 +347,57 @@
       "value": {
         "attempt_id": "﻿"
       }
+    },
+    {
+      "type": "TurnHistoryRequest",
+      "value": {}
+    },
+    {
+      "type": "TurnHistoryRequest",
+      "value": {
+        "limit": 20,
+        "cursor": {
+          "before_created_at_ms": 1,
+          "before_command_id": "native-command"
+        }
+      }
+    },
+    {
+      "type": "TurnHistoryPage",
+      "value": {
+        "project_id": "project",
+        "thread_id": "cc6cfe73-2824-4360-9daf-3b3efb079931",
+        "thread_key": "business-os/threads/cc6cfe73-2824-4360-9daf-3b3efb079931",
+        "turns": [],
+        "has_more": false
+      }
     }
   ],
   "invalid_cases": [
     {
       "type": "PublicAssistantText",
-      "value": { "turn_id": "native-turn", "item_id": "native-item", "phase": "final_answer",
-        "offset": 65537, "text": "Public model reply", "completed": false, "truncated": false }
+      "value": {
+        "turn_id": "native-turn",
+        "item_id": "native-item",
+        "phase": "final_answer",
+        "offset": 65537,
+        "text": "Public model reply",
+        "completed": false,
+        "truncated": false
+      }
     },
     {
       "type": "PublicAssistantText",
-      "value": { "turn_id": "native-turn", "item_id": "native-item", "phase": "final_answer",
-        "offset": 0, "text": "Public model reply", "completed": false, "truncated": false,
-        "raw_reasoning": "excluded" }
+      "value": {
+        "turn_id": "native-turn",
+        "item_id": "native-item",
+        "phase": "final_answer",
+        "offset": 0,
+        "text": "Public model reply",
+        "completed": false,
+        "truncated": false,
+        "raw_reasoning": "excluded"
+      }
     },
     {
       "type": "ExecutionPageRequest",
@@ -299,6 +459,32 @@
       "type": "ExecutionPageRequest",
       "value": {
         "__proto__": {}
+      }
+    },
+    {
+      "type": "TurnHistoryRequest",
+      "value": {
+        "limit": 21
+      }
+    },
+    {
+      "type": "TurnHistoryRequest",
+      "value": {
+        "owner_user_id": "foreign"
+      }
+    },
+    {
+      "type": "TurnHistoryCursor",
+      "value": {
+        "before_created_at_ms": -1,
+        "before_command_id": "native-command"
+      }
+    },
+    {
+      "type": "TurnHistoryCursor",
+      "value": {
+        "before_created_at_ms": 1,
+        "before_command_id": ""
       }
     }
   ]
