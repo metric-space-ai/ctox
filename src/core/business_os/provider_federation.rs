@@ -278,7 +278,7 @@ pub(super) fn handle_command(
                     &owner,
                     &current,
                     observation.inherited_selected_model.as_deref(),
-                    observation.checked_at_ms,
+                    store::now_ms() as i64,
                 )?;
                 projection::applied(tx, &owner)
             })?;
