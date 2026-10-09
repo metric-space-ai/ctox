@@ -8035,18 +8035,47 @@ function ensureCtoxSmokeBinary() {
         }
         if (needsCommandCollections) {
           const commandCollectionsStartedAt = Date.now();
-          const commandBridge = await appState.sync.startCollection('business_commands');
-          const queueBridge = await appState.sync.startCollection('ctox_queue_tasks');
+          const commandCollectionsDeadline = Date.now() + nativePeerOpenTimeoutMs;
+          const remaining = () => Math.max(0, commandCollectionsDeadline - Date.now());
+          const acquireDirectBridge = async (collection) => {
+            const bridge = await appState.sync.startCollection(collection, { forceDirect: true });
+            console.log(`smoke_command_bridge_acquisition=${JSON.stringify({ collection, mode: bridge?.mode || 'unknown', hasState: !!bridge?.state, hasReady: !!bridge?.ready })}`);
+            if (bridge?.state) return bridge;
+            if (!bridge?.ready) {
+              throw new Error(`No replication state or ready promise for ${collection} (mode=${bridge?.mode || 'missing'})`);
+            }
+            let timer;
+            try {
+              // A bounded pending handle keeps state=null after its real bridge
+              // opens. Resolve ready before retaining the state for the probe.
+              const readyBridge = await Promise.race([
+                bridge.ready,
+                new Promise((_, reject) => {
+                  timer = setTimeout(() => reject(new Error(
+                    `Timed out waiting for replication bridge readiness on ${collection}`,
+                  )), remaining());
+                }),
+              ]);
+              if (!readyBridge?.state) {
+                throw new Error(`Ready replication bridge has no state for ${collection}`);
+              }
+              return readyBridge;
+            } finally {
+              clearTimeout(timer);
+            }
+          };
+          const commandBridge = await acquireDirectBridge('business_commands');
+          const queueBridge = await acquireDirectBridge('ctox_queue_tasks');
           commandBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app business_commands replication error', error));
           queueBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app ctox_queue_tasks replication error', error));
           appCommandReplicationState = commandBridge?.state || null;
           appQueueReplicationState = queueBridge?.state || null;
-          await bounded(appCommandReplicationState?.awaitInitialReplication?.(), 15000);
-          await bounded(appQueueReplicationState?.awaitInitialReplication?.(), 15000);
-          await bounded(appCommandReplicationState?.awaitInSync?.(), 15000);
-          await bounded(appQueueReplicationState?.awaitInSync?.(), 15000);
-          await waitForNativePeerOpen(appCommandReplicationState, 'business_commands', nativePeerOpenTimeoutMs);
-          await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks', nativePeerOpenTimeoutMs);
+          await bounded(appCommandReplicationState?.awaitInitialReplication?.(), Math.min(15000, remaining()));
+          await bounded(appQueueReplicationState?.awaitInitialReplication?.(), Math.min(15000, remaining()));
+          await bounded(appCommandReplicationState?.awaitInSync?.(), Math.min(15000, remaining()));
+          await bounded(appQueueReplicationState?.awaitInSync?.(), Math.min(15000, remaining()));
+          await waitForNativePeerOpen(appCommandReplicationState, 'business_commands', remaining());
+          await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks', remaining());
           setupPhaseTimings.commandCollectionsReadyMs = Date.now() - commandCollectionsStartedAt;
         }
         if (needsCodingAgentCollections) {

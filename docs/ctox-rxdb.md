@@ -16,6 +16,14 @@ it cannot overtake SnapshotStart or earlier pages. Exact peer, session and
 accepted subscription checks, bounded pre-ACK buffering and current publication
 authority remain required.
 
+The production browser smoke must resolve the bounded `startCollection()`
+pending handle through its `ready` promise before retaining a replication state.
+A pending stub keeps `state: null` even after its underlying bridge opens;
+polling that captured null cannot diagnose native transport availability.
+Command/queue peer probes request a direct bridge and share the existing
+startup deadline across acquisition and peer readiness. Readiness rejection,
+timeout, missing state and a closed or absent native peer remain failures.
+
 
 ### Native federation consumer authority
 
