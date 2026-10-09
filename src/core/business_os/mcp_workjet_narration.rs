@@ -168,20 +168,28 @@ pub(super) fn execute(
     args: &Value,
     trusted: &Value,
 ) -> anyhow::Result<Value> {
-    // MCP gateway dispatches tools on spawn_blocking within this existing
-    // runtime. No nested runtime, separate daemon, browser credential or fallback.
+    // Managed MCP uses spawn_blocking in its runtime; local HTTP MCP uses bare
+    // std threads. Drive the same configured adapter in either context, creating
+    // a runtime only when this thread has none. Never nest a runtime or mistake
+    // a missing executor for missing speech configuration.
     execute_with(root, context, args, trusted, |request| {
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
         let gateway = SpeechGateway::from_root(root)?;
-        handle.block_on(async {
+        let synthesis = async {
             tokio::time::timeout(
                 std::time::Duration::from_secs(90),
                 gateway.synthesize_verified_async(request),
             )
             .await
             .map_err(|_| SpeechError::TimedOut)?
-        })
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(synthesis),
+            Err(_) => tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| SpeechError::ExecutionUnavailable)?
+                .block_on(synthesis),
+        }
     })
 }
 fn execute_with<F>(
@@ -303,7 +311,15 @@ where
                     | SpeechError::InvalidRequest
                     | SpeechError::UnsupportedBackend
             );
-            store::open_store(root)?.execute("UPDATE workjet_jour_fixe_native_narration SET state=?2,error_class=?3 WHERE operation_id=?1 AND state='reserved'",params![r.operation_id,if known {"failed_prerequisite"} else {"uncertain"},serde_json::to_string(&error)?])?;
+            let state = if known {
+                "failed_prerequisite"
+            } else if error == SpeechError::ExecutionUnavailable {
+                // Runtime creation failed before the provider could be called.
+                "failed"
+            } else {
+                "uncertain"
+            };
+            store::open_store(root)?.execute("UPDATE workjet_jour_fixe_native_narration SET state=?2,error_class=?3 WHERE operation_id=?1 AND state='reserved'",params![r.operation_id,state,serde_json::to_string(&error)?])?;
             anyhow::bail!("native narration readiness failure: {error}; no audio was published");
         }
     };
