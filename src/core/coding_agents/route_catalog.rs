@@ -405,14 +405,16 @@ mod tests {
         let root = tempfile::tempdir()?;
         let server = Server::http("127.0.0.1:0").unwrap();
         let address = format!("http://{}/v1", server.server_addr());
+        // Runtime state classifies custom loopback upstreams as OpenAI.
+        // Exercise that actual persisted credential selector, not a guessed proxy key.
         let settings = BTreeMap::from([
             ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
-            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "openai".to_owned()),
             ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
             ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
             ("CTOX_UPSTREAM_BASE_URL".to_owned(), address.clone()),
             (
-                "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                "OPENAI_API_KEY".to_owned(),
                 "fixture-private-proxy".to_owned(),
             ),
         ]);
@@ -443,7 +445,7 @@ mod tests {
         });
         let observation = observe(root.path())?;
         worker.join().unwrap();
-        assert_eq!(observation.provider, "ctox_proxy");
+        assert_eq!(observation.provider, "openai");
         assert_eq!(
             observation.models.as_deref(),
             Some(&["MiniMax-M3".to_owned()][..])
@@ -451,11 +453,7 @@ mod tests {
         assert_eq!(observation.http_status, Some(200));
         assert!(observation.failure.is_none());
         let public = serde_json::to_string(&observation)?;
-        for private in [
-            "fixture-private-proxy",
-            "CTOX_LLM_PROXY_API_KEY",
-            address.as_str(),
-        ] {
+        for private in ["fixture-private-proxy", "OPENAI_API_KEY", address.as_str()] {
             assert!(!public.contains(private));
         }
         assert_eq!(runtime_env::load_runtime_env_map(root.path())?, before);
@@ -471,7 +469,7 @@ mod tests {
         let new_server = Server::http("127.0.0.1:0").unwrap();
         let mut settings = BTreeMap::from([
             ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
-            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "openai".to_owned()),
             ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
             ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
             (
@@ -479,7 +477,7 @@ mod tests {
                 format!("http://{}/v1", old_server.server_addr()),
             ),
             (
-                "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                "OPENAI_API_KEY".to_owned(),
                 "fixture-old-private".to_owned(),
             ),
         ]);
@@ -489,10 +487,7 @@ mod tests {
             "CTOX_UPSTREAM_BASE_URL".into(),
             format!("http://{}/v1", new_server.server_addr()),
         );
-        settings.insert(
-            "CTOX_LLM_PROXY_API_KEY".into(),
-            "fixture-new-private".into(),
-        );
+        settings.insert("OPENAI_API_KEY".into(), "fixture-new-private".into());
         runtime_env::save_runtime_env_map(root.path(), &settings)?;
         let (probe, binding) = probe_current(root.path(), &captured);
         assert_eq!(probe.failure, Some(Failure::RouteChanged));
