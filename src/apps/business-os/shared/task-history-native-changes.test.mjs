@@ -113,6 +113,7 @@ function hydrationHarness(state, getSelected, load) {
   const noop = () => {};
   const scope = {
     refreshConfirmedHarnessStatus: noop, loadLocalCommands: async () => [], loadLocalQueueTasks: async () => [],
+    loadTaskSource: Function(body('isTaskSourceReadDenied')+'\n'+body('loadTaskSource')+'\nreturn loadTaskSource;')(),
     loadLocalBugReports: async () => [], loadLocalWebStackOverview: async () => ({ok:true}),
     loadHarnessFlowSnapshot: async () => ({ok:true}), emptyHarnessFlow: () => ({}),
     loadLocalCrewMembers: async () => [], loadLocalChannelAccounts: async () => [], armExpressionRefresh: noop,

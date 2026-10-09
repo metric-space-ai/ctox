@@ -23,6 +23,24 @@ polling that captured null cannot diagnose native transport availability.
 Command/queue peer probes request a direct bridge and share the existing
 startup deadline across acquisition and peer readiness. Readiness rejection,
 timeout, missing state and a closed or absent native peer remain failures.
+
+### Unavailable app and task collections
+
+A typed app data-read denial opens the existing permission surface inside the
+same window, with an action to inspect app rights. It is not a failed mount or
+an automatic retry; unexpected mount errors keep their recovery diagnostics.
+Crew observes ordinary collections through invalidation-only subscriptions,
+then executes its bounded reads. A native collection-specific read denial
+retires that task source and its exact local/readiness listeners for the current
+mount. Authorized command rows can still render, but the unavailable source is
+marked as restricted instead of empty, idle or syncing. Denials never trigger a
+sort fallback, read retry, local data fallback, permission grant or write. A new
+mount under new authority starts fresh; unrelated errors remain visible.
+Global context resolves known target-card module metadata before its owning
+window and the desktop route. Unknown DOM IDs never become a module identity.
+A hidden app route preserves its visibility denial and shows a visible reason;
+it neither creates a window nor changes native access.
+
 ### Selected task history and role changes
 
 The Crew native history observer uses the existing live `sync.mayReadCollection`
