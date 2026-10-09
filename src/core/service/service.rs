@@ -16678,14 +16678,18 @@ fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
     // lease_business_queue_capacity). Counting them kept the router asleep
     // for as long as a research campaign ran: no e-mail was routed on thesen
     // between 09:16 and 11:30Z on 09.10.2026.
+    shared.busy || shared.serial_prompt_starting || serial_worker_count_locked(&shared) > 0
+}
+
+/// Workers on the serial loop: all active workers minus isolated Business OS
+/// chat sessions (the same count lease_business_queue_capacity uses).
+fn serial_worker_count_locked(shared: &SharedState) -> usize {
     let active_chats = shared
         .parallel_queue_jobs
         .keys()
         .filter(|key| shared.active_worker_lease_keys.contains(*key))
         .count();
-    shared.busy
-        || shared.serial_prompt_starting
-        || shared.worker_active_count.saturating_sub(active_chats) > 0
+    shared.worker_active_count.saturating_sub(active_chats)
 }
 
 /// A communication message (email, jami, teams, meeting) waits for the serial
@@ -17837,8 +17841,14 @@ fn durable_queue_dispatch_blocked_locked(
         return true;
     }
     match guard {
+        // Isolated research chats run in their own slots; only serial work
+        // holds the slot this dispatch hands out. Counting the chats meant no
+        // serial queue task (founder rework, app work) ever ran during a
+        // research campaign (thesen 09.10.2026).
         DurableQueueDispatchGuard::StrictIdle
-        | DurableQueueDispatchGuard::CurrentWorkerFinalizing => shared.worker_active_count > 0,
+        | DurableQueueDispatchGuard::CurrentWorkerFinalizing => {
+            serial_worker_count_locked(shared) > 0
+        }
     }
 }
 
@@ -42804,6 +42814,77 @@ Use shell tools to create or update these files."
             &serde_json::json!({"attachments": [{"path": "relative/x"}]})
         )
         .is_empty());
+    }
+
+    /// thesen 09.10.2026, 18:10Z: a founder rework (serial queue work) never ran
+    /// while research chats occupied their own slots.
+    #[test]
+    fn serial_queue_work_runs_beside_isolated_research_chats() {
+        let root = temp_root("ctox-serial-queue-beside-chats");
+        let chat = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Neurecherche 1".to_string(),
+                prompt: "Research one lead.".to_string(),
+                thread_key: "research-chat-1".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(
+                    serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
+                ),
+            },
+        )
+        .expect("seed research chat");
+        channels::lease_queue_task(&root, &chat.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease research chat");
+        let rework = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder communication rework: Recherche".to_string(),
+                prompt: "Answer the owner's mail.".to_string(),
+                thread_key: "founder-rework".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("seed rework");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            let job = queued_prompt_from_queue_task(
+                channels::load_queue_task(&root, &chat.message_key)
+                    .expect("load chat")
+                    .expect("chat exists"),
+            );
+            shared
+                .parallel_queue_jobs
+                .insert(chat.message_key.clone(), job);
+            shared
+                .active_worker_lease_keys
+                .insert(chat.message_key.clone());
+            shared.worker_active_count = 1;
+        }
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("durable dispatch")
+            .expect("the rework must take the serial slot");
+        assert_eq!(leased.leased_message_keys, vec![rework.message_key.clone()]);
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.durable_queue_lease_in_progress = false;
+            // A real serial worker still blocks the slot.
+            shared.worker_active_count = 2;
+        }
+        assert!(
+            maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+                .expect("durable dispatch")
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// thesen 09.10.2026, 17:29Z: the owner's mail waited for its rework task
