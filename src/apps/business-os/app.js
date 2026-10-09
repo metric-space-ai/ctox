@@ -1,25 +1,26 @@
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-speech-transcription-check';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-speech-transcription-check';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-speech-transcription-check';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-speech-transcription-check';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-speech-transcription-check';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-speech-transcription-check';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-speech-transcription-check';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-speech-transcription-check';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-speech-transcription-check';
-import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-speech-transcription-check';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-speech-transcription-check';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-speech-transcription-check';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-speech-transcription-check';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-speech-transcription-check';
-import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-speech-transcription-check';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261010-shell-v2-native-provider-models';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-native-provider-models';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-native-provider-models';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-native-provider-models';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-native-provider-models';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-native-provider-models';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-native-provider-models';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-native-provider-models';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-native-provider-models';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-native-provider-models';
+import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-native-provider-models';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-native-provider-models';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-native-provider-models';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-native-provider-models';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-native-provider-models';
+import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-native-provider-models';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/app-lifecycle.js?v=20261010-shell-v2-native-provider-models';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -28,20 +29,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/permissions.js?v=20261010-shell-v2-native-provider-models';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261010-shell-v2-speech-transcription-check';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/branding.js?v=20261010-shell-v2-native-provider-models';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-native-provider-models';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/presentation.js?v=20261010-shell-v2-native-provider-models';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -52,9 +53,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-speech-transcription-check';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-speech-transcription-check';
-import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-native-provider-models';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-native-provider-models';
+import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-native-provider-models';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -62,27 +63,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/maintenance-state.js?v=20261010-shell-v2-native-provider-models';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/workspace-session.js?v=20261010-shell-v2-native-provider-models';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/taskbar-pins.js?v=20261010-shell-v2-native-provider-models';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261010-shell-v2-speech-transcription-check';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-speech-transcription-check';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-speech-transcription-check';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-speech-transcription-check';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/workjet-theme.js?v=20261010-shell-v2-native-provider-models';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-native-provider-models';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-native-provider-models';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-native-provider-models';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-native-provider-models';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -90,14 +91,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261010-shell-v2-speech-transcription-check';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-speech-transcription-check';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/startup-deadlines.js?v=20261010-shell-v2-native-provider-models';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-native-provider-models';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-native-provider-models';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-speech-transcription-check';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-speech-transcription-check';
+} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-native-provider-models';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-native-provider-models';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -118,7 +119,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261010-shell-v2-speech-transcription-check';
+const APP_BUILD = '20261010-shell-v2-native-provider-models';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13899,6 +13900,26 @@ async function workjetProjectControl(request = {}) {
   }
   if (action.startsWith('project.presentation.')) {
     return workjetPresentationControl(action, request, { requestSession, requestDb, ownerUserId });
+  }
+  if (action.startsWith('instance.providers.')) {
+    const sync = state.sync;
+    const commandBus = state.commandBus;
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
+    const assertCurrent = () => {
+      if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync
+        || state.commandBus !== commandBus || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
+        throw Object.assign(new Error('Provider instance or authority changed.'), { code: 'PROVIDER_SCOPE_CHANGED' });
+      }
+    };
+    if (typeof commandBus?.dispatch !== 'function') throw new Error('Provider command transport is unavailable.');
+    return requestNativeProviders(request, {
+      assertCurrent,
+      dispatch: (command, options) => commandBus.dispatch({
+        ...command,
+        client_context: { source: 'workjet-provider-control', actor: actorContext(requestSession) },
+      }, options),
+    });
   }
   if (action.startsWith('instance.grok.')) {
     const sync = state.sync;
