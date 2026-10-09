@@ -33,7 +33,11 @@ remain atomic. Single-record writes keep their existing boundaries. Cold event
 delivery prepares payloads and deduplication outside the writer, then commits at
 most 64 source records and 64 mirror records per separate transaction, using the
 same per-row merge/envelope functions. Source commit precedes mirror delivery;
-notifications follow mirror commit. A failed mirror chunk rolls back together,
+notifications follow mirror commit. Batch replication clocks are reserved from the
+persisted collection high-water mark under that mirror's IMMEDIATE transaction,
+including when another retained writer has advanced it since this cache opened.
+Each row is strictly later than the earlier feed cursor; rollback publishes no
+reservation. A failed mirror chunk rolls back together,
 retains completed chunks in the dedupe cache and restores the unclaimed replay
 cursor so its unpublished rows stay eligible. No writer reservation spans a full
 pass or both independently delivered stores. Repeated source upserts and mirror
