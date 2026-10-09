@@ -53,8 +53,8 @@ impl CtoxXaiLogin {
             root,
             Arc::new(XaiAuth::new(
                 Arc::new(LoginTransport(
-                    reqwest::Client::builder()
-                        .redirect(reqwest::redirect::Policy::none())
+                    native_http::Client::builder()
+                        .redirect(native_http::redirect::Policy::none())
                         .build()?,
                 )),
                 Arc::new(SystemXaiClock),
@@ -185,7 +185,7 @@ impl Drop for CtoxXaiLogin {
         }
     }
 }
-struct LoginTransport(reqwest::Client);
+struct LoginTransport(native_http::Client);
 impl XaiHttpTransport for LoginTransport {
     fn execute<'a>(
         &'a self,
@@ -199,8 +199,8 @@ impl XaiHttpTransport for LoginTransport {
                     .0
                     .request(
                         match request.method {
-                            XaiHttpMethod::Get => reqwest::Method::GET,
-                            XaiHttpMethod::Post => reqwest::Method::POST,
+                            XaiHttpMethod::Get => native_http::Method::GET,
+                            XaiHttpMethod::Post => native_http::Method::POST,
                         },
                         &request.url,
                     )
@@ -209,15 +209,18 @@ impl XaiHttpTransport for LoginTransport {
                 for (key, value) in &request.headers {
                     builder = builder.header(key, value);
                 }
-                let mut response = builder
+                let response = builder
                     .send()
                     .await
                     .map_err(|_| XaiTransportFailure::Protocol)?;
                 let status = response.status().as_u16();
+                use futures_util::StreamExt as _;
+                let mut response = response.bytes_stream();
                 let mut body = Vec::new();
                 while let Some(chunk) = response
-                    .chunk()
+                    .next()
                     .await
+                    .transpose()
                     .map_err(|_| XaiTransportFailure::Protocol)?
                 {
                     if body.len().saturating_add(chunk.len()) > 1024 * 1024 {
@@ -289,8 +292,8 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
     use ctox_cliproxyapi::sdk::cliproxy::auth::Auth;
     let encoded = Zeroizing::new(crate::secrets::read_secret_value(root, SCOPE, NAME)?);
     let record: Stored = serde_json::from_str(&encoded)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    let client = native_http::Client::builder()
+        .redirect(native_http::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .build()?;
     let mut auth = Auth::default();
@@ -358,8 +361,8 @@ async fn execute_route_at(
     ctox_cliproxyapi::internal::api::account_selection::record_selected(ACCOUNT_ID);
     let encoded = Zeroizing::new(crate::secrets::read_secret_value(root, SCOPE, NAME)?);
     let mut record: Stored = serde_json::from_str(&encoded)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    let client = native_http::Client::builder()
+        .redirect(native_http::redirect::Policy::none())
         .timeout(Duration::from_secs(60))
         .build()?;
     if record.expires_at.is_some_and(|expiry| {
@@ -463,15 +466,17 @@ async fn execute_route_at(
     ))
 }
 async fn bounded_response(
-    mut response: reqwest::Response,
+    response: native_http::Response,
     limit: usize,
 ) -> anyhow::Result<Vec<u8>> {
     anyhow::ensure!(
         response.status().is_success(),
         "Grok upstream rejected request"
     );
+    use futures_util::StreamExt as _;
+    let mut response = response.bytes_stream();
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
+    while let Some(chunk) = response.next().await.transpose()? {
         anyhow::ensure!(
             body.len().saturating_add(chunk.len()) <= limit,
             "Grok response too large"
