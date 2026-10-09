@@ -363,7 +363,7 @@ fn pump() -> Option<&'static Pump> {
                         let stats = work.entry(root.clone()).or_default();
                         stats.passes += 1;
                         stats.elapsed += started.elapsed();
-                        schedule.completed(root.clone(), Instant::now());
+                        complete_projection_pass(&mut schedule, root.clone(), flags, Instant::now(), &outcome);
                         if let Err(error) = outcome {
                             eprintln!(
                                 "[ctox cockpit] projection deferred for {}: {error:#}",
@@ -419,6 +419,34 @@ fn pump_root(root: &Path) -> PathBuf {
         .entry(key)
         .or_insert_with(|| root.to_path_buf())
         .clone()
+}
+
+fn complete_projection_pass(
+    schedule: &mut schedule::Schedule,
+    root: PathBuf,
+    flags: u8,
+    completed_at: Instant,
+    outcome: &Result<()>,
+) {
+    schedule.completed(root.clone(), completed_at);
+    // A lock defers delivery but must retain the work through the full cooldown.
+    if outcome.as_ref().err().is_some_and(is_sqlite_busy) {
+        schedule.mark(root, flags);
+    }
+}
+
+fn is_sqlite_busy(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<rusqlite::Error>()
+            .and_then(rusqlite::Error::sqlite_error_code)
+            .is_some_and(|code| {
+                matches!(
+                    code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                )
+            })
+    })
 }
 
 fn wake(root: &Path, flags: u8) {

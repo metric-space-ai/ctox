@@ -747,6 +747,9 @@ const state = {
   knowledgeProjectionDisabled: false,
   knowledgeProjectionSignature: '',
   refreshTimer: null,
+  refreshEnabled: false,
+  refreshInFlight: false,
+  refreshQueued: false,
   knowledgeWatchTimer: null,
   centerRenderTimer: null,
   operationalRefreshPending: false,
@@ -1908,14 +1911,29 @@ function stringValue(value) {
 }
 
 function wireRealtime() {
+  state.refreshEnabled = true;
+  // business_commands / ctox_queue_tasks are not read by loadAll(); every
+  // knowledge command the module dispatches writes one, so routing them into a
+  // full reload turned the 2.5 s knowledge watch into a reload loop.
+  for (const collection of [
+    outboundCollection('business_commands'),
+    optionalReadableCollection('ctox_queue_tasks'),
+  ].filter(Boolean)) {
+    const subscription = collection.$?.subscribe?.(() => scheduleOperationalRefresh());
+    if (subscription?.unsubscribe) state.cleanup.push(() => subscription.unsubscribe());
+  }
+  state.cleanup.push(() => {
+    state.refreshEnabled = false;
+    state.refreshQueued = false;
+    if (state.operationalRefreshTimer) window.clearTimeout(state.operationalRefreshTimer);
+    state.operationalRefreshTimer = null;
+  });
   const collections = [
     outboundCollection('outbound_campaigns'),
     outboundCollection('outbound_sources'),
     outboundCollection('outbound_companies'),
     outboundCollection('outbound_pipeline_items'),
     outboundCollection('outbound_research_runs'),
-    outboundCollection('business_commands'),
-    optionalReadableCollection('ctox_queue_tasks'),
     outboundCollection('outbound_engagements'),
     outboundCollection('outbound_messages'),
     outboundCollection('outbound_approvals'),
@@ -1928,7 +1946,7 @@ function wireRealtime() {
     outboundCollection('outbound_letter_templates'),
   ].filter(Boolean);
   for (const collection of collections) {
-    const subscription = collection.$?.subscribe?.(() => scheduleDataRefresh(20));
+    const subscription = collection.$?.subscribe?.(() => scheduleDataRefresh(150));
     if (subscription?.unsubscribe) state.cleanup.push(() => subscription.unsubscribe());
   }
   startKnowledgeProjectionWatch();
@@ -1953,24 +1971,67 @@ function syncingStateHint() {
 }
 
 function scheduleDataRefresh(delay = 80) {
-  if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
-  state.refreshTimer = window.setTimeout(async () => {
-    state.refreshTimer = null;
+  if (!state.refreshEnabled) return;
+  if (state.refreshInFlight) {
+    state.refreshQueued = true;
+    return;
+  }
+  // Coalesce bursts without pushing the first deadline back indefinitely.
+  if (state.refreshTimer) return;
+  state.refreshTimer = window.setTimeout(runDataRefresh, delay);
+}
+
+async function runDataRefresh() {
+  state.refreshTimer = null;
+  if (!state.refreshEnabled) return;
+  // Never overlap full reloads; replication bursts collapse into one trailing run.
+  if (state.refreshInFlight) {
+    state.refreshQueued = true;
+    return;
+  }
+  state.refreshInFlight = true;
+  try {
     await loadAll({ hydrateKnowledge: false });
+    if (!state.refreshEnabled) return;
     const activeLoaded = await loadActiveOutreachData().then(() => true).catch((error) => {
       console.warn('[outbound] active outreach refresh failed', error);
       return false;
     });
+    if (!state.refreshEnabled) return;
     render();
     if (activeLoaded) reportUnavailableOutboundFocus();
-  }, delay);
+  } catch (error) {
+    console.warn('[outbound] data refresh failed', error);
+  } finally {
+    state.refreshInFlight = false;
+    if (state.refreshEnabled && state.refreshQueued) {
+      state.refreshQueued = false;
+      scheduleDataRefresh(150);
+    }
+  }
+}
+
+function scheduleOperationalRefresh() {
+  if (!state.refreshEnabled) return;
+  if (state.operationalRefreshTimer) return;
+  const wait = Math.max(250, 10000 - (Date.now() - Number(state.lastOperationalRefreshMs || 0)));
+  state.operationalRefreshTimer = window.setTimeout(() => {
+    state.operationalRefreshTimer = null;
+    refreshOperationalStateInBackground();
+  }, wait);
 }
 
 function startKnowledgeProjectionWatch() {
   if (state.knowledgeWatchTimer) window.clearInterval(state.knowledgeWatchTimer);
   const tick = async () => {
-    const changed = await refreshKnowledgeProjectionIfChanged();
-    if (changed) render();
+    if (state.knowledgeWatchBusy) return;
+    state.knowledgeWatchBusy = true;
+    try {
+      const changed = await refreshKnowledgeProjectionIfChanged();
+      if (changed) render();
+    } finally {
+      state.knowledgeWatchBusy = false;
+    }
   };
   state.knowledgeWatchTimer = window.setInterval(tick, 2500);
   state.cleanup.push(() => {
@@ -4797,7 +4858,7 @@ function firstObjectValue(object, keys) {
 function pipelineItemForCompany(companyOrId) {
   const company = typeof companyOrId === 'object' ? companyOrId : state.companies.find((item) => item.id === companyOrId);
   const ids = new Set([typeof companyOrId === 'string' ? companyOrId : company?.id, ...(company?.duplicate_company_ids || [])].filter(Boolean));
-  return currentPipeline().find((item) => ids.has(item.company_id)) || state.pipeline.find((item) => ids.has(item.company_id));
+  return firstRowForIds(currentScope().pipeline, 'company_id', ids) || firstRowForIds(state.pipeline, 'company_id', ids);
 }
 
 function openResearchSettingsDrawer() {
@@ -6309,18 +6370,59 @@ function pipelineResearchStatus(item, stage) {
   return commandStatusForRun(run) || run?.status || '';
 }
 
+// rows -> Map(key -> ascending positions), cached per array identity.
+const positionsCache = new WeakMap();
+function positionsBy(rows, cacheKey, keysOf) {
+  let byKey = positionsCache.get(rows);
+  if (!byKey) positionsCache.set(rows, byKey = new Map());
+  let index = byKey.get(cacheKey);
+  if (!index) {
+    index = new Map();
+    rows.forEach((row, position) => {
+      for (const key of new Set(keysOf(row))) {
+        if (!key) continue;
+        const list = index.get(key);
+        if (list) list.push(position);
+        else index.set(key, [position]);
+      }
+    });
+    byKey.set(cacheKey, index);
+  }
+  return index;
+}
+
+// Newest row among the matched positions; ties keep array order (stable sort).
+function newestRowAt(rows, index, keys, timeOf) {
+  let best = -1;
+  let bestTime = 0;
+  for (const key of keys) {
+    for (const position of index.get(key) || []) {
+      const time = timeOf(rows[position]);
+      if (best < 0 || time > bestTime || (time === bestTime && position < best)) {
+        best = position;
+        bestTime = time;
+      }
+    }
+  }
+  return best < 0 ? null : rows[best];
+}
+
 function latestAutomationRun(runType, recordIds) {
   const ids = recordIds instanceof Set ? recordIds : new Set(recordIds || []);
-  if (!ids.size) return null;
-  return state.runs
-    .filter((run) => run.run_type === runType && [run.company_id, run.pipeline_id, run.record_id, run.id].some((id) => ids.has(id)))
-    .sort((a, b) => Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0))[0] || null;
+  if (!ids.size || !Array.isArray(state.runs)) return null;
+  const index = positionsBy(state.runs, 'run-record', (run) => (
+    [run.company_id, run.pipeline_id, run.record_id, run.id].filter(Boolean).map((id) => `${run.run_type}\u0000${id}`)
+  ));
+  return newestRowAt(state.runs, index, [...ids].map((id) => `${runType}\u0000${id}`),
+    (run) => Number(run.updated_at_ms || run.created_at_ms || 0));
 }
 
 function commandStatusForRun(run) {
   if (!run?.command_id) return '';
-  const command = state.commands.find((item) => item.command_id === run.command_id || item.id === run.command_id);
-  return commandStatusForCommand(command || run);
+  const commands = Array.isArray(state.commands) ? state.commands : [];
+  const index = positionsBy(commands, 'command-ref', (item) => [item.command_id, item.id]);
+  const command = (index.get(run.command_id) || [])[0];
+  return commandStatusForCommand(command === undefined ? run : commands[command]);
 }
 
 function commandStatusForCommand(command) {
@@ -6332,12 +6434,14 @@ function queueTaskForCommand(commandOrRun) {
   if (!commandOrRun) return null;
   const commandId = commandOrRun.command_id || commandOrRun.id || '';
   const taskId = commandOrRun.task_id || '';
-  return state.queueTasks
-    .filter((task) => (
-      (commandId && (task.command_id === commandId || task.client_command_id === commandId))
-      || (taskId && task.id === taskId)
-    ))
-    .sort((a, b) => Number(b.updated_at_ms || b.updated_at || 0) - Number(a.updated_at_ms || a.updated_at || 0))[0] || null;
+  const tasks = Array.isArray(state.queueTasks) ? state.queueTasks : [];
+  const index = positionsBy(tasks, 'task-ref', (task) => [
+    task.command_id && `c\u0000${task.command_id}`,
+    task.client_command_id && `c\u0000${task.client_command_id}`,
+    task.id && `t\u0000${task.id}`,
+  ]);
+  const keys = [commandId && `c\u0000${commandId}`, taskId && `t\u0000${taskId}`].filter(Boolean);
+  return newestRowAt(tasks, index, keys, (task) => Number(task.updated_at_ms || task.updated_at || 0));
 }
 
 function companyRecordIds(company) {
@@ -7862,12 +7966,53 @@ function currentSources() {
   return campaignScopedRows(state, state.selectedCampaignId).sources;
 }
 
+// Derived per (campaigns, sources, companies, pipeline, campaign) identity.
+// loadAll() and every local update replace these arrays, never mutate them.
+let currentScopeCache = null;
+function currentScope() {
+  const key = [state.campaigns, state.sources, state.companies, state.pipeline, state.selectedCampaignId];
+  if (currentScopeCache && currentScopeCache.key.every((value, index) => value === key[index])) return currentScopeCache;
+  const scoped = campaignScopedRows(state, state.selectedCampaignId);
+  const companies = dedupeCompanies(scoped.companies);
+  const pipeline = dedupePipelineItems(scoped.pipeline);
+  currentScopeCache = { key, companies, pipeline };
+  return currentScopeCache;
+}
+
 function currentCompanies() {
-  return dedupeCompanies(campaignScopedRows(state, state.selectedCampaignId).companies);
+  return currentScope().companies.slice();
 }
 
 function currentPipeline() {
-  return dedupePipelineItems(campaignScopedRows(state, state.selectedCampaignId).pipeline);
+  return currentScope().pipeline.slice();
+}
+
+// First index per key, cached per array identity (same result as Array#find).
+const firstIndexCache = new WeakMap();
+function firstIndexBy(rows, field) {
+  let byField = firstIndexCache.get(rows);
+  if (!byField) firstIndexCache.set(rows, byField = new Map());
+  let index = byField.get(field);
+  if (!index) {
+    index = new Map();
+    rows.forEach((row, position) => {
+      const value = row?.[field];
+      if (value && !index.has(value)) index.set(value, position);
+    });
+    byField.set(field, index);
+  }
+  return index;
+}
+
+function firstRowForIds(rows, field, ids) {
+  if (!Array.isArray(rows) || !rows.length) return undefined;
+  const index = firstIndexBy(rows, field);
+  let best = -1;
+  for (const id of ids) {
+    const position = index.get(id);
+    if (position !== undefined && (best < 0 || position < best)) best = position;
+  }
+  return best < 0 ? undefined : rows[best];
 }
 
 function selectedCompany() {

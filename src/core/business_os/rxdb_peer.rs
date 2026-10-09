@@ -875,6 +875,7 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-checkpoint-generation-v2",
     "ctox-app-runtime-v1",
     "ctox-workjet-device-control-v1",
+    super::rxdb_peer_speech_settings::CAPABILITY,
     super::rxdb_peer_jour_fixe_speech::CAPABILITY,
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
@@ -3226,6 +3227,7 @@ async fn run_native_peer(
                     }),
                 )?;
                 let consumer_root = root.clone();
+                super::rxdb_peer_speech_settings::register(&pool, &root)?;
                 let consumer_transport = pool.connection_handler.clone();
                 pool.register_guarded_auxiliary_request_handler(
                     super::consumer_authority::CONSUMER_AUTHORITY_METHOD,
