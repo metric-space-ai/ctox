@@ -20,9 +20,10 @@ struct PublicFilter {
     hidden: bool,
 }
 impl PublicFilter {
-    fn push(&mut self, text: &str) -> String {
+    fn push(&mut self, text: &str, limit: usize) -> (String, bool) {
         const OPEN: &str = "```ctox-crew";
         let mut public = String::new();
+        let mut count = 0;
         for ch in text.chars() {
             self.pending.push(ch);
             loop {
@@ -36,12 +37,16 @@ impl PublicFilter {
                     let first = self.pending.chars().next().expect("nonempty pending");
                     self.pending.drain(..first.len_utf8());
                     if !self.hidden {
+                        if count == limit {
+                            return (public, true);
+                        }
                         public.push(first);
+                        count += 1;
                     }
                 }
             }
         }
-        public
+        (public, false)
     }
     fn finish(&mut self) -> String {
         let tail = std::mem::take(&mut self.pending);
@@ -136,17 +141,21 @@ impl PublicTextCapture {
             return Ok(vec![]);
         }
         item.had_content |= !text.is_empty();
-        let mut public = item.filter.push(text);
-        if completed {
+        let allowance = (ITEM_CHARS - item.accepted).min(TURN_CHARS - self.accepted);
+        let (mut public, overflow) = if item.truncated {
+            (String::new(), false)
+        } else {
+            item.filter.push(text, allowance)
+        };
+        if completed && !item.truncated && !overflow {
             public.push_str(&item.filter.finish());
         }
-        let allowance = (ITEM_CHARS - item.accepted).min(TURN_CHARS - self.accepted);
         let count = public.chars().count();
         let accepted = count.min(allowance);
         item.pending.extend(public.chars().take(accepted));
         item.accepted += accepted;
         self.accepted += accepted;
-        item.truncated |= count > accepted;
+        item.truncated |= overflow || count > accepted;
         let flush = completed
             || item.truncated
             || item.offset == 0
@@ -360,6 +369,15 @@ mod tests {
         assert_eq!(text(&all), "Public\n\nEnde");
         assert!(!text(&all).contains("private"));
     }
+    #[test]
+    fn public_text_filter_bounds_auxiliary_memory_for_a_large_provider_chunk() {
+        let mut filter = PublicFilter::default();
+        let (public, truncated) = filter.push(&"x".repeat(1024 * 1024), 128);
+        assert_eq!(public.len(), 128);
+        assert!(truncated);
+        assert!(filter.pending.len() <= 16);
+    }
+
     #[test]
     fn public_text_unicode_bounds_are_explicit_and_no_snapshot_is_replayed() {
         let mut c = PublicTextCapture::default();
