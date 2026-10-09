@@ -28,6 +28,7 @@ pub(super) const READABLE_COLLECTIONS: &[&str] = &[
     "ctox_crew_members",
     "ctox_harness_status",
     "workjet_computers",
+    super::provider_federation::REGISTRY_COLLECTION,
     "workjet_projects",
     "workjet_sessions",
     "workjet_transfers",

@@ -199,10 +199,7 @@ pub(super) fn handle_command(
             }
             _ => anyhow::bail!("unsupported provider model command"),
         }
-        Ok(AppliedDomainEffect {
-            result: list(tx, &owner)?,
-            projections: vec![],
-        })
+        projection::applied(tx, &owner)
     })?;
     Ok(applied.result)
 }
