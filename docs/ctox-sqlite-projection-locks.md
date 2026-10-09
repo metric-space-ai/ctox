@@ -17,6 +17,16 @@ the selection event, tombstone outbox, attempt and assignment together.
 A candidate started or leased in the meantime survives. The existing limits
 (128 orphans and 128 completed rows; newest 500 completed rows retained) remain.
 
+Batch queue admission previously reserved IMMEDIATE before ranking all pending
+messages with window functions. Ranking now happens in a released read snapshot.
+The bounded selected rows are reloaded by primary key under IMMEDIATE, checking
+current inbound direction, message/channel/account/thread/remote identity, pending
+status, retry_not_before and metadata not_before. Concurrent leases, deferrals or
+identity changes are skipped without transition proofs. Updated payloads are
+returned from the current row. Ranking remains a candidate snapshot; newly arrived
+messages participate in the next pass. Lease changes, transition proofs and
+attached canonical projection writes still commit together.
+
 Finalization parses/validates bounded retrospective metadata before reserving
 the writer. Its finalized_at guard, statistics, learning state and commit
 remain atomic. Source and RxDB projection writers reserve one record at a time;
@@ -30,7 +40,8 @@ has been released. The fields are operation, primary database path, wait_us,
 hold_us, outcome and (for failed acquisition) SQLite error code. No SQL,
 document content or credentials are logged. The fixed threshold is 50 ms.
 
-Operations covered: queue.lease_task, queue.ack_attempt, queue.ack_messages,
+Operations covered: queue.lease_task, queue.lease_batch, queue.ack_attempt,
+queue.ack_messages,
 crew.retention_orphan, crew.finalize_attempt, projection.source_upsert,
 projection.source_tombstone, projection.rxdb_upsert and
 projection.rxdb_tombstone. Queue operations may reserve attached projection

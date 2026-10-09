@@ -63,19 +63,30 @@ pub(crate) use queue_execution_fence::{QueueExecutionFence, QueueWorkerLifetime}
 pub(crate) use queue_provider_binding::tests::public_text_provider_fixture;
 #[cfg(unix)]
 pub(crate) use queue_provider_binding::{
-    lookup_native_provider_binding, NativeProviderAdmission, NativeProviderBinding,
-    NativeProviderCaptureOwner, NativeProviderCommand, NativeProviderCommandEmitter,
-    NativeProviderFacts, NativeProviderTurnOwner,
+    NativeProviderAdmission, NativeProviderBinding, NativeProviderCaptureOwner,
+    NativeProviderCommand, NativeProviderCommandEmitter, NativeProviderFacts,
+    NativeProviderTurnOwner, lookup_native_provider_binding,
 };
 mod outbound_review;
 use crate::communication_store::parse_string_json_array;
 pub(crate) use crate::communication_store::{
-    now_iso_string, open_channel_db, preview_text, refresh_thread, refresh_thread_tx,
-    upsert_communication_message, upsert_communication_message_tx, UpsertMessage,
+    UpsertMessage, now_iso_string, open_channel_db, preview_text, refresh_thread,
+    refresh_thread_tx, upsert_communication_message, upsert_communication_message_tx,
 };
 use account_helpers::*;
 pub(crate) use account_helpers::{
     record_communication_sync_run, stable_digest, upsert_communication_account,
+};
+pub(crate) use outbound_review::{
+    PolicyReportEmail, default_email_account_key, ensure_founder_outbound_body_text_clean,
+    ensure_founder_reply_deliverables_present, is_reviewed_external_chat_channel,
+    prepare_reviewed_external_chat_reply, prepare_reviewed_founder_reply,
+    record_and_send_external_chat_escalation_reply, record_and_send_founder_escalation_reply,
+    record_and_send_policy_report_email, record_external_chat_review_approval,
+    record_founder_outbound_review_approval, record_founder_reply_review_approval,
+    required_founder_reply_deliverables, reviewed_send_result_has_durable_outbound_artifact,
+    send_reviewed_external_chat_action, send_reviewed_founder_outbound_action,
+    terminal_founder_outbound_artifact_count,
 };
 use outbound_review::{
     cached_queue_task_count, cached_queue_task_list, channel_projection_tables_exist,
@@ -112,17 +123,6 @@ use outbound_review::{
     reviewed_outbound_evidence, stranded_outbound_send_attempt, update_pending_send_to_accepted,
     update_pending_send_to_failed,
 };
-pub(crate) use outbound_review::{
-    default_email_account_key, ensure_founder_outbound_body_text_clean,
-    ensure_founder_reply_deliverables_present, is_reviewed_external_chat_channel,
-    prepare_reviewed_external_chat_reply, prepare_reviewed_founder_reply,
-    record_and_send_external_chat_escalation_reply, record_and_send_founder_escalation_reply,
-    record_and_send_policy_report_email, record_external_chat_review_approval,
-    record_founder_outbound_review_approval, record_founder_reply_review_approval,
-    required_founder_reply_deliverables, reviewed_send_result_has_durable_outbound_artifact,
-    send_reviewed_external_chat_action, send_reviewed_founder_outbound_action,
-    terminal_founder_outbound_artifact_count, PolicyReportEmail,
-};
 pub(crate) use outbound_review::{ensure_open_routing_rows_once, ensure_schema_once};
 pub use outbound_review::{
     inbound_message_has_terminal_no_send, inbound_message_is_auto_submitted,
@@ -135,27 +135,26 @@ mod command_saga;
 use command_saga::transition_business_command_for_task_in_transaction;
 mod route_status;
 pub(crate) use command_saga::{
-    audit_and_migrate_business_command_storage, business_command_core_diagnostics,
-    business_command_projection, business_command_projection_from_conn,
-    business_command_retention_maintenance, business_command_saga_pending_compensation_steps,
-    business_command_saga_status, business_command_saga_step_evidence,
-    canonical_command_mirror_projection, claim_business_command_saga_step,
-    claim_business_command_waiting_dependencies, claim_business_command_with_queue,
-    claim_business_control_command, communication_projection_clock_version,
-    complete_business_command_saga_step, complete_business_control_command,
-    fail_business_command_saga_step, inspect_business_command, inspect_business_command_for_task,
-    inspect_business_command_for_task_from_conn, load_business_command_projection_if_present,
-    load_business_os_queue_mirror_snapshot, load_business_os_queue_mirror_snapshot_from_conn,
-    mark_business_command_outbox_delivered, mark_business_command_outbox_failed,
-    pending_business_command_outbox, persist_business_command_worker_result,
-    progress_business_control_command, reconcile_business_command_invariants,
-    record_business_command_applied_effect_delivery_failure,
+    BusinessOsQueueMirrorSnapshot, audit_and_migrate_business_command_storage,
+    business_command_core_diagnostics, business_command_projection,
+    business_command_projection_from_conn, business_command_retention_maintenance,
+    business_command_saga_pending_compensation_steps, business_command_saga_status,
+    business_command_saga_step_evidence, canonical_command_mirror_projection,
+    claim_business_command_saga_step, claim_business_command_waiting_dependencies,
+    claim_business_command_with_queue, claim_business_control_command,
+    communication_projection_clock_version, complete_business_command_saga_step,
+    complete_business_control_command, fail_business_command_saga_step, inspect_business_command,
+    inspect_business_command_for_task, inspect_business_command_for_task_from_conn,
+    load_business_command_projection_if_present, load_business_os_queue_mirror_snapshot,
+    load_business_os_queue_mirror_snapshot_from_conn, mark_business_command_outbox_delivered,
+    mark_business_command_outbox_failed, pending_business_command_outbox,
+    persist_business_command_worker_result, progress_business_control_command,
+    reconcile_business_command_invariants, record_business_command_applied_effect_delivery_failure,
     record_business_command_intake_failure, record_business_command_review,
     record_business_command_saga_step_evidence, reject_legacy_unowned_external_sql_command,
     resolve_business_command_intake_failures, retry_failed_app_create_business_command,
     runtime_business_command_action_snapshot, start_business_command_saga,
     start_runtime_business_command_saga, transition_business_command_for_task,
-    BusinessOsQueueMirrorSnapshot,
 };
 pub(crate) use route_status::QueueRouteStatus;
 
@@ -177,19 +176,19 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
-use qrcode::types::Color as QrColor;
 use qrcode::QrCode;
-use rusqlite::params;
-use rusqlite::params_from_iter;
-use rusqlite::types::Value as SqlValue;
+use qrcode::types::Color as QrColor;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
+use rusqlite::params;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -209,8 +208,8 @@ use crate::communication::adapters as communication_adapters;
 use crate::communication::adapters::CommunicationTransportAdapter;
 use crate::communication::gateway as communication_gateway;
 use crate::core_state::guard::{
-    enforce_core_spawn, enforce_core_spawn_in_transaction, enforce_core_transition,
-    ensure_core_transition_guard_schema, evaluate_core_spawn, CoreSpawnProof, CoreSpawnRequest,
+    CoreSpawnProof, CoreSpawnRequest, enforce_core_spawn, enforce_core_spawn_in_transaction,
+    enforce_core_transition, ensure_core_transition_guard_schema, evaluate_core_spawn,
 };
 use crate::core_state::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
@@ -218,7 +217,7 @@ use crate::core_state::{
 use crate::mission::review::HoldReason;
 use crate::secrets;
 use crate::service::harness_flow::{
-    record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
+    RecordHarnessFlowEventRequest, record_harness_flow_event_lossy,
 };
 
 const DEFAULT_TAKE_LIMIT: usize = 10;
@@ -5973,6 +5972,47 @@ fn take_messages(
     take_messages_with_projection(None, conn, channel, limit, lease_owner)
 }
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_BATCH_LEASE_READS: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
+fn revalidate_pending_message(
+    conn: &Connection,
+    candidate: &ChannelMessageView,
+) -> Result<Option<ChannelMessageView>> {
+    conn.query_row(
+        r#"SELECT m.message_key, m.channel, m.account_key, m.thread_key, m.remote_id,
+                  m.direction, m.folder_hint, m.sender_display, m.sender_address,
+                  m.subject, m.preview, m.body_text, m.status, m.seen,
+                  m.external_created_at, m.observed_at, m.metadata_json,
+                  r.route_status, r.lease_owner, r.leased_at, r.acked_at,
+                  r.last_error, r.updated_at
+           FROM communication_messages m
+           JOIN communication_routing_state r ON r.message_key=m.message_key
+           WHERE m.message_key=?1 AND m.channel=?2 AND m.account_key=?3
+             AND m.thread_key=?4 AND m.remote_id=?5 AND m.direction='inbound'
+             AND r.route_status='pending'
+             AND (r.retry_not_before IS NULL
+                  OR datetime(r.retry_not_before)<=datetime('now'))
+             AND (json_extract(m.metadata_json,'$.not_before') IS NULL
+                  OR json_extract(m.metadata_json,'$.not_before')=''
+                  OR json_extract(m.metadata_json,'$.not_before')
+                     <=strftime('%Y-%m-%dT%H:%M:%SZ','now'))"#,
+        params![
+            candidate.message_key,
+            candidate.channel,
+            candidate.account_key,
+            candidate.thread_key,
+            candidate.remote_id
+        ],
+        map_channel_message_row,
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
+}
+
 fn take_messages_with_projection(
     projection_root: Option<&Path>,
     conn: &mut Connection,
@@ -6179,19 +6219,14 @@ fn take_messages_with_projection(
         "#
     };
 
-    // Hold a write lock for the whole check-then-act window so a concurrent
-    // leaser on a different connection cannot steal a lease between our
-    // eligibility SELECT and our UPDATE (lost-update). The lease UPDATE is a
-    // check-and-set: its WHERE mirrors the eligibility predicate above, so a
-    // losing racer flips 0 rows and we record neither the row nor a
-    // core-transition proof for it.
     if let Some(root) = projection_root {
         attach_queue_projection_store(root, conn)?;
     }
-    let tx =
-        rusqlite::Transaction::new_unchecked(&*conn, rusqlite::TransactionBehavior::Immediate)?;
+    // Rank candidates without reserving the writer. Release the statement/read
+    // snapshot before acquiring IMMEDIATE; eligibility and message identity are
+    // then rechecked by primary key under the writer before any lease or proof.
     let rows = {
-        let mut statement = tx.prepare(sql)?;
+        let mut statement = conn.prepare(sql)?;
         let mapped = if let Some(channel) = channel {
             statement.query_map(
                 params![channel, lease_owner, limit as i64],
@@ -6202,10 +6237,21 @@ fn take_messages_with_projection(
         };
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
+    #[cfg(test)]
+    if let Some(mut callback) = AFTER_BATCH_LEASE_READS.with(|slot| slot.borrow_mut().take()) {
+        callback();
+    }
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "queue.lease_batch")?;
     let leased_at = now_iso_string();
     let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
     let mut taken = Vec::new();
-    for mut item in rows {
+    for candidate in rows {
+        let Some(mut item) = revalidate_pending_message(&tx, &candidate)? else {
+            continue;
+        };
         let updated = tx.execute(
             r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, lease_worker_id, acked_at, last_error, updated_at, attempt)
                VALUES (?1, ?5, ?2, ?3, ?3, ?4, NULL, NULL, NULL, ?3, 1)
