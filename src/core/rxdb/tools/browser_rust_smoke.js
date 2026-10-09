@@ -6039,11 +6039,14 @@ function ensureCtoxSmokeBinary() {
             await seedFreshProfileModuleCatalog();
             document.querySelector('[data-app-store-root] [data-scope="installed"]')?.click();
             return waitFor(() => {
-              const card = document.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
-              const disabled = card?.querySelector('[data-disabled-reason]');
-              const lifecycle = card?.querySelector('.app-card-version-row .ctox-badge[data-state]');
+              const storeRoot = document.querySelector('[data-app-store-root]');
+              const card = storeRoot?.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
+              const detail = storeRoot?.querySelector('[data-detail-drawer]');
+              if (card && (detail?.hidden || detail?.querySelector('[data-detail-title]')?.textContent !== teamModule.title)) card.click();
+              const disabled = detail?.querySelector('[data-disabled-reason]');
+              const lifecycle = detail?.querySelector('[data-detail-version]');
               return {
-                ok: Boolean(card && disabled && lifecycle),
+                ok: Boolean(card && detail && !detail.hidden && disabled && lifecycle?.textContent?.trim() === 'v1.0.0'),
                 cardText: card?.innerText || '',
                 disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
                 lifecycleText: lifecycle?.textContent?.trim() || '',
@@ -6137,15 +6140,18 @@ function ensureCtoxSmokeBinary() {
             await seedFreshProfileModuleCatalog();
             document.querySelector('[data-app-store-root] [data-scope="installed"]')?.click();
             const appStore = await waitFor(() => {
-              const card = document.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
-              const disabled = card?.querySelector('[data-disabled-reason]');
-              const lifecycle = card?.querySelector('.app-card-version-row .ctox-badge[data-state]');
+              const storeRoot = document.querySelector('[data-app-store-root]');
+              const card = storeRoot?.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
+              const detail = storeRoot?.querySelector('[data-detail-drawer]');
+              if (card && (detail?.hidden || detail?.querySelector('[data-detail-title]')?.textContent !== teamModule.title)) card.click();
+              const disabled = detail?.querySelector('[data-disabled-reason]');
+              const lifecycle = detail?.querySelector('[data-detail-version]');
               const cards = [...document.querySelectorAll('[data-app-id]')];
               const scaleCardCount = scaleModuleIds
                 .filter((id) => document.querySelector(`[data-app-id="${css(id)}"]`))
                 .length;
               return {
-                ok: Boolean(card && disabled && lifecycle),
+                ok: Boolean(card && detail && !detail.hidden && disabled && lifecycle?.textContent?.trim() === 'v1.0.0'),
                 cardText: card?.innerText || '',
                 disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
                 lifecycleText: lifecycle?.textContent?.trim() || '',
@@ -6194,7 +6200,7 @@ function ensureCtoxSmokeBinary() {
               && builderLifecycle[1].text.includes('v1.0.0')
               && builderLifecycle[2].text.includes('v1.2.0')
               && [privateModule, teamModule, restrictedModule].every((mod) => startMenuText.includes(mod.title))
-              && /v1\.0\.0\s*·\s*Team/.test(appStore.lifecycleText);
+              && appStore.lifecycleText === 'v1.0.0';
             const disabledReasonsVisible = /Nur Owner|Admins|App-Freigaberecht/.test(appStore.disabledReason)
               || /Nur Owner|Admins|App-Freigaberecht/.test(appStore.cardText);
             const desktopViewportVerified = window.innerWidth >= 1200
@@ -6300,12 +6306,12 @@ function ensureCtoxSmokeBinary() {
               const root = document.querySelector('[data-app-store-root]') || document.body;
               const targetCard = document.querySelector('[data-app-id="phase14-fresh-team-app"]');
               targetCard?.scrollIntoView?.({ block: 'center', inline: 'nearest' });
-              const visibleLifecycle = [...document.querySelectorAll('.module-tab-lifecycle, .app-card-version-row .ctox-badge[data-state]')]
+              const visibleLifecycle = [...root.querySelectorAll('[data-detail-drawer]:not([hidden]) [data-detail-version]')]
                 .filter((el) => {
                   const rect = el.getBoundingClientRect();
                   return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < window.innerWidth;
                 });
-              const disabled = targetCard?.querySelector('[data-disabled-reason]');
+              const disabled = root.querySelector('[data-detail-drawer]:not([hidden]) [data-disabled-reason]');
               const disabledReason = disabled?.getAttribute('data-disabled-reason') || '';
               return {
                 ok: window.innerWidth <= 430
