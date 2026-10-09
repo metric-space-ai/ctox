@@ -12,7 +12,7 @@ use wire::WireValidate;
 
 pub(super) const ACCOUNTS_TOOL: &str = "business_os.calendar_accounts";
 pub(super) const EVENTS_TOOL: &str = "business_os.calendar_events";
-pub(super) const WEBRTC_METHOD: &str = "ctox.workjet.calendar.read.v1";
+pub(crate) const WEBRTC_METHOD: &str = "ctox.workjet.calendar.read.v1";
 
 #[derive(Deserialize)]
 #[serde(tag = "action")]
@@ -24,7 +24,7 @@ enum WebRtcReadRequest {
 }
 
 /// Borrow the existing browser identity, never an MCP token or caller actor.
-pub(super) fn read_webrtc(
+pub(crate) fn read_webrtc(
     root: &Path,
     capability_token: &str,
     params: Vec<Value>,
