@@ -10,14 +10,40 @@ use crate::mission::channels;
 
 const CONTRACT: &str = "ctox.workjet.supervisor_turn.v1";
 
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TurnKind {
+    #[default]
+    Work,
+    Conversation,
+}
+
+impl TurnKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Work => "work",
+            Self::Conversation => "conversation",
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SubmitPayload {
     project_id: String,
     thread_id: String,
     goal: String,
+    #[serde(default)]
+    turn_kind: TurnKind,
     #[serde(default, rename = "inbound_channel")]
     _inbound_channel: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplyProvenance {
+    kind: TurnKind,
+    submit_command_id: String,
 }
 
 #[derive(Deserialize)]
@@ -165,6 +191,15 @@ pub(crate) fn reply_completion_allowed(root: &Path, canonical: &Value) -> anyhow
     {
         return Ok(false);
     }
+    let Some(provenance) = payload.get("supervisor_turn") else {
+        return Ok(false);
+    };
+    let Ok(provenance) = serde_json::from_value::<ReplyProvenance>(provenance.clone()) else {
+        return Ok(false);
+    };
+    if provenance.kind != TurnKind::Conversation {
+        return Ok(false);
+    }
     let Some(id) = canonical["command_id"].as_str() else {
         return Ok(false);
     };
@@ -189,6 +224,19 @@ pub(crate) fn reply_completion_allowed(root: &Path, canonical: &Value) -> anyhow
             && canonical["record_id"].as_str() == admitted.record_id.as_deref()
             && canonical["payload"] == admitted.payload,
         "Supervisor reply conflicts with its admitted native command"
+    );
+    let submitted = store::load_business_command(&conn, &provenance.submit_command_id)?;
+    let request: SubmitPayload = serde_json::from_value(submitted.payload.clone())?;
+    ensure!(
+        submitted.module == "ctox"
+            && submitted.command_type == "ctox.workjet.project.supervisor.turn.submit"
+            && submitted.client_context.pointer("/actor/id").and_then(Value::as_str) == Some(owner)
+            && submitted.record_id.as_deref().is_none_or(|id| id == binding.project_id)
+            && request.project_id == binding.project_id
+            && request.thread_id == binding.thread_id
+            && request.turn_kind == TurnKind::Conversation
+            && admitted.payload["user_message"].as_str() == Some(request.goal.trim()),
+        "Supervisor conversation kind conflicts with its admitted Owner submit"
     );
     drop(conn);
     let turn = owned_turn(root, owner, &binding, id)?;
@@ -228,7 +276,13 @@ pub(in crate::business_os) fn control(
                 "thread_id": binding.thread_id, "goal": goal, "risk_class": "internal",
                 "message_id": stable_id("workjet_supervisor_message", &[owner, operation]),
             });
-            let result = super::super::threads::handle_business_command(root, session, &delegated)?;
+            let result = super::super::threads::create_supervisor_ai_request(
+                root,
+                session,
+                &delegated,
+                request.turn_kind.as_str(),
+                operation,
+            )?;
             let ai_id = result["ai_command"]["command_id"]
                 .as_str()
                 .or_else(|| result["ai_command"]["id"].as_str())

@@ -2195,6 +2195,31 @@ fn create_ai_request(
     session: &BusinessOsSession,
     command: &BusinessCommand,
 ) -> anyhow::Result<Value> {
+    create_ai_request_with_supervisor_turn(root, session, command, None)
+}
+
+pub(super) fn create_supervisor_ai_request(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+    turn_kind: &str,
+    submit_command_id: &str,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(matches!(turn_kind, "conversation" | "work"), "invalid Supervisor turn kind");
+    create_ai_request_with_supervisor_turn(
+        root,
+        session,
+        command,
+        Some(json!({"kind": turn_kind, "submit_command_id": submit_command_id})),
+    )
+}
+
+fn create_ai_request_with_supervisor_turn(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+    supervisor_turn: Option<Value>,
+) -> anyhow::Result<Value> {
     let goal = required_string(&command.payload, &["goal", "prompt", "instruction"])?;
     let mut delegated = command.clone();
     delegated.command_type = "threads.message.create".to_owned();
@@ -2213,7 +2238,7 @@ fn create_ai_request(
         .with_context(|| format!("thread {thread_id} not found"))?;
     let module = first_non_empty_owned([value_string(&thread, "source_module"), "ctox".to_owned()]);
     let ai_command_id = format!("cmd_{}", Uuid::new_v4());
-    let ai_command = json!({
+    let mut ai_command = json!({
         "id": ai_command_id,
         "command_id": ai_command_id,
         "module": module,
@@ -2239,6 +2264,11 @@ fn create_ai_request(
             "app_id": module,
         },
     });
+    // Only the authenticated native Supervisor adapter supplies this provenance.
+    // A generic Threads request cannot copy it from a caller-controlled payload.
+    if let Some(supervisor_turn) = supervisor_turn {
+        ai_command["payload"]["supervisor_turn"] = supervisor_turn;
+    }
     let accepted = store::accept_rxdb_business_command_with_origin(
         root,
         ai_command,

@@ -5,16 +5,37 @@ use super::*;
 use serde_json::json;
 
 fn fixture() -> Result<(tempfile::TempDir, QueuedPrompt, String)> {
+    fixture_for_kind(Some("conversation"))
+}
+
+fn fixture_for_kind(turn_kind: Option<&str>) -> Result<(tempfile::TempDir, QueuedPrompt, String)> {
     let (temp, command_id) =
         crate::business_os::mcp_channel::workjet_dispatch_service_test_fixture()?;
+    let command_id = if let Some(kind) = turn_kind {
+        let original = channels::inspect_business_command(temp.path(), &command_id)?.unwrap();
+        let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+            temp.path(),
+            json!({"id": format!("submit-reply-{kind}"), "module":"ctox",
+                "command_type":"ctox.workjet.project.supervisor.turn.submit", "record_id":"project",
+                "payload":{"project_id":"project", "thread_id":original["command"]["payload"]["thread_id"],
+                    "goal":"Erkläre mir den nächsten Schritt.", "turn_kind":kind},
+                "client_context":{"actor":{"id":"owner","role":"chef","is_admin":true}}}),
+        )?;
+        anyhow::ensure!(accepted["status"] == "completed", "reply submit was not admitted");
+        accepted["result"]["turn"]["command_id"].as_str().context("reply command")?.to_owned()
+    } else {
+        command_id
+    };
     let task = channels::load_queue_task_for_business_os_command(temp.path(), &command_id)?
         .context("missing native Supervisor task")?;
     // The tool fixture's manual lease has no execution attempt. Release it
     // through the queue API and acquire the real lease before starting execution.
-    anyhow::ensure!(
-        channels::ack_leased_messages(temp.path(), &[task.message_key.clone()], "pending")? == 1,
-        "native Supervisor fixture lease was not released"
-    );
+    if task.route_status == "leased" {
+        anyhow::ensure!(
+            channels::ack_leased_messages(temp.path(), &[task.message_key.clone()], "pending")? == 1,
+            "native Supervisor fixture lease was not released"
+        );
+    }
     let task = channels::lease_queue_task(temp.path(), &task.message_key, "fixture-service")?;
     for phase in ["leased", "running"] {
         anyhow::ensure!(
@@ -202,5 +223,84 @@ fn supervisor_reply_policy_does_not_exempt_writebacks_or_external_work() -> Resu
             root, &worker
         )?
     );
+    Ok(())
+}
+
+#[test]
+fn supervisor_work_and_legacy_turns_retain_work_completion_review() -> Result<()> {
+    for kind in [None, Some("work")] {
+        let (temp, job, command_id) = fixture_for_kind(kind)?;
+        let root = temp.path();
+        // Like PR42: no mode, writeback or required-artifact metadata. Only the
+        // explicit kind, not metadata absence or reply words, grants the policy.
+        for reply in ["Der PR-Head ist nicht zugänglich; die Prüfung ist offen.", "Die Prüfung ist erledigt."] {
+            persist_typed_business_command_result(root, &job, reply)?;
+            assert!(!supervisor_conversation_reply_ready(root, &job)?);
+        }
+        let context = channels::inspect_business_command(root, &command_id)?.unwrap();
+        assert_eq!(context["command"]["payload"]["supervisor_turn"]["kind"], "work");
+    }
+    Ok(())
+}
+
+#[test]
+fn supervisor_conversation_requires_the_original_owner_submit_kind() -> Result<()> {
+    let (temp, job, command_id) = fixture()?;
+    let root = temp.path();
+    persist_typed_business_command_result(root, &job, "Antwort.")?;
+    assert!(supervisor_conversation_reply_ready(root, &job)?);
+    let context = channels::inspect_business_command(root, &command_id)?.unwrap();
+    let submitted = context["command"]["payload"]["supervisor_turn"]["submit_command_id"]
+        .as_str().context("original Owner submit")?;
+    // A copied marker cannot upgrade a different admitted work request.
+    let policy = crate::business_os::store::open_store(root)?;
+    assert_eq!(policy.execute(
+        "UPDATE business_commands SET payload_json=json_set(payload_json,'$.turn_kind','work') WHERE command_id=?1",
+        [submitted],
+    )?, 1);
+    assert!(supervisor_conversation_reply_ready(root, &job).is_err());
+    Ok(())
+}
+
+#[test]
+fn supervisor_submit_rejects_unknown_or_null_kind() -> Result<()> {
+    let (temp, _, command_id) = fixture_for_kind(None)?;
+    let original = channels::inspect_business_command(temp.path(), &command_id)?.unwrap();
+    for (index, kind) in [Value::Null, json!("completed"), json!({"kind":"conversation"})].into_iter().enumerate() {
+        let admitted = crate::business_os::command_plane::accept_rxdb_business_command(
+            temp.path(),
+            json!({"id":format!("invalid-kind-{index}"), "module":"ctox",
+                "command_type":"ctox.workjet.project.supervisor.turn.submit", "record_id":"project",
+                "payload":{"project_id":"project", "thread_id":original["command"]["payload"]["thread_id"],
+                    "goal":"Frage.","turn_kind":kind},
+                "client_context":{"actor":{"id":"owner","role":"chef","is_admin":true}}}),
+        );
+        if let Ok(admitted) = admitted {
+            assert_ne!(admitted["status"], "completed");
+            assert!(admitted["result"]["turn"]["command_id"].as_str().is_none());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn generic_threads_request_cannot_copy_supervisor_conversation_provenance() -> Result<()> {
+    let (temp, _, command_id) = fixture()?;
+    let root = temp.path();
+    let original = channels::inspect_business_command(root, &command_id)?.unwrap();
+    let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+        root,
+        json!({"id":"generic-ai-forged-kind", "module":"threads", "command_type":"threads.ai.request",
+            "record_id": original["command"]["payload"]["thread_id"],
+            "payload":{"thread_id":original["command"]["payload"]["thread_id"],"goal":"Frage.",
+                "supervisor_turn":original["command"]["payload"]["supervisor_turn"]},
+            "client_context":{"actor":{"id":"owner","role":"chef","is_admin":true}}}),
+    )?;
+    assert_eq!(accepted["status"], "completed");
+    let id = accepted["result"]["ai_command"]["command_id"].as_str()
+        .or_else(|| accepted["result"]["ai_command"]["id"].as_str()).context("generic AI command")?;
+    let generic = channels::inspect_business_command(root, id)?.unwrap();
+    assert!(generic["command"]["payload"].get("supervisor_turn").is_none());
+    assert!(!crate::business_os::mcp_channel::workjet_supervisor_reply_completion_allowed(root, &generic["command"])?);
     Ok(())
 }

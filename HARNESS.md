@@ -601,6 +601,11 @@ incomplete plan steps and their actual progress.
 The `workjet.supervisor.conversation-reply.v1` policy validates the private
 admitted Owner envelope against the current project/Supervisor binding, the
 canonical queue link, and a stored response for the exact command/task/attempt.
+It requires an explicit `turn_kind: "conversation"` on the originating Owner
+`ctox.workjet.project.supervisor.turn.submit`, linked by native producer
+provenance. `turn_kind: "work"` and omitted legacy kinds retain work review;
+unknown or null kinds are rejected. A caller must offer a deliberate conversation
+action rather than infer intent from the text or change a waiting work turn.
 It records `reply_validated` policy evidence and finishes only that dialogue
 turn; it does not call a second model reviewer or claim project completion.
 Coding/worker tasks, writeback contracts, external executors, required artifacts,
