@@ -40,6 +40,26 @@ struct Login {
     cancel: LoginCancellation,
     progress: XaiLoginProgress,
 }
+struct PendingStart {
+    sessions: Arc<Mutex<HashMap<String, Login>>>,
+    id: String,
+    transferred: bool,
+}
+impl Drop for PendingStart {
+    fn drop(&mut self) {
+        if self.transferred {
+            return;
+        }
+        if let Ok(mut sessions) = self.sessions.lock() {
+            if let Some(login) = sessions.get_mut(&self.id) {
+                if login.progress == XaiLoginProgress::Pending {
+                    login.cancel.cancel();
+                    login.progress = XaiLoginProgress::Cancelled;
+                }
+            }
+        }
+    }
+}
 /// Kept by the authorized native controller, never by a renderer. Drop cancels
 /// all outstanding polls. At most one pending login exists per instance.
 pub struct CtoxXaiLogin {
@@ -97,6 +117,11 @@ impl CtoxXaiLogin {
                 },
             );
         }
+        let mut pending = PendingStart {
+            sessions: self.sessions.clone(),
+            id: id.clone(),
+            transferred: false,
+        };
         let code = match self.auth.start_device_flow(&cancel).await {
             Ok(code) => code,
             Err(_) => {
@@ -141,6 +166,7 @@ impl CtoxXaiLogin {
                 }
             }
         });
+        pending.transferred = true;
         Ok(public)
     }
     fn set_progress(&self, id: &str, value: XaiLoginProgress) {
