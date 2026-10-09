@@ -430,6 +430,7 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
         .timeout(Duration::from_secs(30))
         .build()?;
     let record = active_record(root, &client).await?;
+    let catalog_binding = credential_binding(root)?;
     let mut auth = Auth::default();
     auth.attributes.insert("auth_kind".into(), "oauth".into());
     auth.attributes
@@ -443,6 +444,10 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
         }
     }
     let bytes = bounded_response(request.send().await?, 1024 * 1024).await?;
+    anyhow::ensure!(
+        credential_binding(root)? == catalog_binding,
+        "Grok credential changed during discovery"
+    );
     let catalog: serde_json::Value = serde_json::from_slice(&bytes)?;
     let rows = catalog
         .get("data")

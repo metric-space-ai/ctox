@@ -360,6 +360,11 @@ async fn handle(
         _ => {}
     }
     authority.check()?;
+    // Discovery can refresh the credential; never publish a cached green check
+    // bound to the version that existed before that request.
+    if request.action != "instance.grok.check" || returned_check["status"] == "ok" {
+        returned_check = saved_check(&authority.root)?;
+    }
     Ok(GuardedAuxiliaryResponse {
         result: json!({"version":1,"action":request.action,"operationId":request.operation_id,"installed":xai::subscription_installed(&authority.root),"accountLabel":"Grok Build subscription","login":controller.public_login(&authority)?,"models":models,"check":returned_check}),
         publication: authority,
