@@ -501,6 +501,10 @@ fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
         ALL | MAINTENANCE,
     )?;
     let warm = warm_started.elapsed();
+    anyhow::ensure!(
+        !writer.crew_maintenance_warned,
+        "fixture warm-up deferred Crew maintenance"
+    );
     let stop = Arc::new(AtomicBool::new(false));
     let mut workers = Vec::new();
     for id in 0..8 {
@@ -544,6 +548,10 @@ fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
             ALL | MAINTENANCE,
         ) {
             failures.push(format!("{error:#}"));
+            break;
+        }
+        if writer.crew_maintenance_warned {
+            failures.push("fixture projection deferred Crew maintenance".to_string());
             break;
         }
         max_pass = max_pass.max(pass_started.elapsed());
