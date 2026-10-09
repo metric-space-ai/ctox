@@ -1556,13 +1556,21 @@ pub fn reconcile_runtime_switch_transaction(
             );
         }
     }
+    // Capture failure metadata before the capacity reader prunes dead PIDs.
+    // Only current live ownership below may authorize readiness/commit.
+    let persisted_ownership =
+        runtime_contract::load_persisted_runtime_ownership_state(root).unwrap_or_default();
     let ownership = runtime_contract::load_runtime_ownership_state(root).unwrap_or_default();
     let primary_workload = ownership
         .workloads
         .iter()
         .find(|entry| entry.role == runtime_contract::BackendRole::Chat);
+    let persisted_primary = persisted_ownership
+        .workloads
+        .iter()
+        .find(|entry| entry.role == runtime_contract::BackendRole::Chat);
     let requested_workload_lost = current_state.as_ref().is_some_and(|state| {
-        primary_workload.is_some_and(|workload| {
+        persisted_primary.is_some_and(|workload| {
             workload
                 .model
                 .trim()
@@ -1949,7 +1957,12 @@ mod tests {
     #[test]
     fn reconciliation_marks_local_switch_as_warming_when_backend_is_starting() {
         let root = make_temp_root();
-        runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
+        let mut state = test_runtime_state(runtime_state::InferenceSource::Local);
+        state.active_model = Some("Qwen/Qwen3.6-35B-A3B".into());
+        state.requested_model = state.active_model.clone();
+        state.engine_model = state.active_model.clone();
+        state.engine_port = Some(1234);
+        runtime_env::save_runtime_state_projection(&root, &state, &BTreeMap::new()).unwrap();
         persist_runtime_switch_transaction(
             &root,
             &RuntimeSwitchTransaction {
@@ -3207,6 +3220,12 @@ mod tests {
     #[test]
     fn cutover_ready_local_switch_commits_immediately_when_backend_is_ready() {
         let root = make_temp_root();
+        fs::write(
+            root.join("runtime")
+                .join(runtime_contract::BackendRole::Chat.pid_file_name()),
+            format!("{}\n", std::process::id()),
+        )
+        .unwrap();
         let ipc_path = runtime_kernel::managed_runtime_ipc_path(
             &root,
             runtime_kernel::InferenceWorkloadRole::PrimaryGeneration,
