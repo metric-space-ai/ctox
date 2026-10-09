@@ -202,7 +202,10 @@ an empty string. `previous` is the value shown at the
 penultimate Regeltermin and is omitted when that value is not stored (no delta then);
 `better` is `lower` for costs, bugs, latency. The scene computes the ±% itself;
 do not write percentages into labels. Bullets name the change in words or in
-absolute numbers (`412 statt 301`).
+absolute numbers (`412 statt 301`). Bars are drawn on one common scale only when
+every item has the same unit; otherwise each bar is scaled on its own and equal
+heights mislead. So one scene holds KPIs of one unit (for example the task
+counts), and a rate such as a success rate goes into a bullet, not a bar.
 
 `business.trend` — one value over time:
 
