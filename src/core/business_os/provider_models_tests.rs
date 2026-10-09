@@ -7,10 +7,16 @@ use super::*;
 // These exact IDs were returned by the authenticated llm.ctox.dev catalog,
 // retained in Models evidence llm-public-catalog-20261009T084220Z.json.
 // Tests omit a real ID from an account list rather than inventing fake models.
-const CURRENT: &str = "MiniMax-M3";
-const OTHER: &str = "MiniMax-M2.7";
+pub(super) const CURRENT: &str = "MiniMax-M3";
+pub(super) const OTHER: &str = "MiniMax-M2.7";
 
-fn observe(f: &Fixture, id: &str, revision: i64, models: &[&str], time: i64) -> Result<()> {
+pub(super) fn observe(
+    f: &Fixture,
+    id: &str,
+    revision: i64,
+    models: &[&str],
+    time: i64,
+) -> Result<()> {
     retain_catalog_observation(
         &f.conn,
         &ObserveNativeRequest {
@@ -27,11 +33,12 @@ fn observe(f: &Fixture, id: &str, revision: i64, models: &[&str], time: i64) -> 
             retry_after_seconds: None,
             failure: None,
             private_binding: None,
+            inherited_selected_model: None,
         },
     )
 }
 
-fn select_models(f: &Fixture, models: &[&str], now: i64) -> Result<()> {
+pub(super) fn select_models(f: &Fixture, models: &[&str], now: i64) -> Result<()> {
     select(
         &f.conn,
         "owner",
@@ -235,6 +242,7 @@ fn discovery_failure_or_model_disappearance_never_cools_the_whole_account() -> R
         retry_after_seconds: None,
         failure: Some("upstream_unavailable".into()),
         private_binding: None,
+        inherited_selected_model: None,
     };
     retain_catalog_observation(
         &f.conn,

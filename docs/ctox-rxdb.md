@@ -17,6 +17,40 @@ window and the desktop route. Unknown DOM IDs never become a module identity.
 A hidden app route preserves its visibility denial and shows a visible reason;
 it neither creates a window nor changes native access.
 
+### Provider registry projection
+
+The native provider-federation policy publishes `workjet_provider_registry`
+through existing BusinessData/RxDB/WebRTC, one snapshot per canonical Owner.
+Adoption, catalog observations, shared selection, exclusions and withdrawals
+persist public metadata atomically with their domain effect. Receipts retain
+only its reference; normal projection repair reads the latest native record.
+The existing business-record loop backfills adopted accounts at startup.
+
+Only logical account/holder identities, configured enablement, actual observed
+IDs/timestamps and selected/effective/excluded models are serialized. No
+credential, private selector, fingerprint or secret reference leaves the holder.
+Configured credentials/catalog success do not prove inference; this adapter's
+`inferenceVerified` remains false. Freshness expires from attempt/success
+timestamps and `catalog_freshness_ms`. Disabled accounts keep their rows.
+
+Readers validate current active Owner/Admin identity and verified canonical
+alias before generic administrative access. Held and ordinary readers require
+current native owner/record/account associations. Foreign administrators,
+forged envelopes and revoked users fail closed; peers cannot
+write this collection. Older metadata snapshots remain readable across normal
+configuration changes; execution uses separate current authority and bindings.
+Startup backfill is bounded at 256 owners and snapshots
+at 1 MiB. This is metadata, not execution authority or holder dispatch.
+Computer-held adoption, routed inference and unified Settings remain open.
+
+On first native main-route discovery, a previously unset provider selection
+inherits only the existing configured model if the authenticated live list
+confirms it. An explicit provider selection, including an empty one, is never
+overwritten. Missing, rejected, stale or disabled discovery does not create a
+default; the catalog is not automatically selected in full. The adoption hint
+stays local to the holder and does not prove successful inference or quota.
+
+
 ### Selected task history and role changes
 
 The Crew native history observer uses the existing live `sync.mayReadCollection`

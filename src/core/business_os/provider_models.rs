@@ -175,6 +175,39 @@ fn exclude(conn: &Connection, owner: &str, request: &ExcludeRequest, now: i64) -
     Ok(())
 }
 
+/// Preserve the existing native main-route choice on first adoption, only
+/// after authenticated discovery confirms it. An explicit selection (even
+/// empty) always wins; this never fills a provider with every catalog model.
+pub(super) fn initialize_inherited_selection(
+    conn: &Connection,
+    owner: &str,
+    provider: &str,
+    inherited: Option<&str>,
+    now: i64,
+) -> Result<()> {
+    let Some(model) = inherited else {
+        return Ok(());
+    };
+    if selection(conn, owner, provider)?.is_some() {
+        return Ok(());
+    }
+    let (_, fresh) = provider_catalog(conn, owner, provider, now)?;
+    if !fresh.contains(model) {
+        return Ok(());
+    }
+    select(
+        conn,
+        owner,
+        &SelectRequest {
+            _inbound_channel: None,
+            provider: provider.to_owned(),
+            models: vec![model.to_owned()],
+            expected_revision: policy_revision(conn, owner)?,
+        },
+        now,
+    )
+}
+
 pub(super) fn handle_command(
     root: &Path,
     command: &BusinessCommand,
@@ -199,10 +232,7 @@ pub(super) fn handle_command(
             }
             _ => anyhow::bail!("unsupported provider model command"),
         }
-        Ok(AppliedDomainEffect {
-            result: list(tx, &owner)?,
-            projections: vec![],
-        })
+        projection::applied(tx, &owner)
     })?;
     Ok(applied.result)
 }
@@ -397,3 +427,7 @@ pub(crate) fn capture_consumable_model(
 #[cfg(test)]
 #[path = "provider_models_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "provider_model_default_tests.rs"]
+mod default_tests;
