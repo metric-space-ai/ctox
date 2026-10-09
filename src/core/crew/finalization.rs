@@ -94,9 +94,25 @@ pub(crate) fn finalize_attempt(
         chrono::DateTime::parse_from_rfc3339(finished)?.to_rfc3339()
     };
     let finished = finished.as_str();
-    // Claim the writer before reading finalized_at. A deferred transaction can
-    // otherwise lose its WAL snapshot to another writer and fail on promotion.
-    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    // Parse and validate up to 1 MiB of reply metadata before reserving the
+    // writer. Only the finalized_at guard and durable accounting need its lock.
+    let succeeded = status == "succeeded";
+    let parsed = parse_retrospective(reply);
+    let had_retrospective = parsed.is_some();
+    let retrospective = parsed.and_then(|mut r| {
+        r.normalize();
+        r.validate(succeeded && review_passed == Some(true), owner_feedback)
+            .ok()
+            .map(|()| r)
+    });
+    let learning_json = retrospective
+        .as_ref()
+        .map(|r| serde_json::to_string(&r.learnings))
+        .transpose()?
+        .unwrap_or_else(|| "[]".to_string());
+    // Claim before reading finalized_at: a deferred WAL read cannot safely
+    // promote after a concurrent commit, regardless of busy_timeout.
+    let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "crew.finalize_attempt")?;
 
     let member: Option<String> = tx
         .query_row(
@@ -108,27 +124,6 @@ pub(crate) fn finalize_attempt(
     let Some(member) = member else {
         return Ok(());
     };
-    let succeeded = status == "succeeded";
-    let retrospective = parse_retrospective(reply).and_then(|mut r| {
-        r.normalize();
-        match r.validate(succeeded && review_passed == Some(true), owner_feedback) {
-            Ok(()) => Some(r),
-            Err(_) => {
-                // The transaction's finalized_at guard makes this once per attempt.
-                // Neither the rejected text nor credentials are logged.
-                eprintln!("[ctox crew] rejected retrospective for attempt {attempt}: invalid prose or unsupported evidence");
-                None
-            }
-        }
-    });
-    // Learnings no longer get their own store. They wait as typed JSON on the
-    // attempt until the learner (maintenance loop) writes them into the
-    // member's anchors document and refreshes its memory in the LCM.
-    let learning_json = retrospective
-        .as_ref()
-        .map(|r| serde_json::to_string(&r.learnings))
-        .transpose()?
-        .unwrap_or_else(|| "[]".to_string());
     tx.execute(
         "UPDATE crew_attempts SET finalized_at=?2,succeeded=?3,review_passed=?4,
         elapsed_ms=?5,retrospective=?6,learning_json=?7,learning_due=1
@@ -171,6 +166,9 @@ pub(crate) fn finalize_attempt(
     )?;
     retain_learnings(&tx, &member)?;
     tx.commit()?;
+    if had_retrospective && retrospective.is_none() {
+        eprintln!("[ctox crew] rejected retrospective for attempt {attempt}: invalid prose or unsupported evidence");
+    }
     Ok(())
 }
 

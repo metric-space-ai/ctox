@@ -22,6 +22,70 @@ fn leased() -> Result<(tempfile::TempDir, Connection, String)> {
 }
 
 #[test]
+fn crew_retention_revalidates_start_and_lease_after_candidate_reads() -> Result<()> {
+    let (root, conn, started_task) = leased()?;
+    conn.execute(
+        "UPDATE communication_routing_state SET route_status='pending' WHERE message_key=?1",
+        [&started_task],
+    )?;
+    let leased_task = crate::mission::channels::create_queue_task(
+        root.path(),
+        crate::mission::channels::QueueTaskCreateRequest {
+            title: "Retention admission race".into(),
+            prompt: "Inspect fixture".into(),
+            thread_key: "retention-other".into(),
+            workspace_root: None,
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        },
+    )?
+    .message_key;
+    conn.execute_batch("PRAGMA journal_mode=WAL")?;
+    for (attempt, task) in [
+        ("started", started_task.as_str()),
+        ("leased", leased_task.as_str()),
+        ("expired", "closed"),
+    ] {
+        conn.execute("INSERT INTO crew_attempts(attempt_id,task_id,member_id,selected_at) VALUES(?1,?2,'crew-milo','2020-01-01T00:00:00Z')",
+            params![attempt, task])?;
+    }
+    let path = crate::paths::core_db(root.path());
+    let callback_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = callback_ran.clone();
+    super::lifecycle::AFTER_RETENTION_READS.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let other = Connection::open(&path).unwrap();
+            other.busy_timeout(std::time::Duration::ZERO).unwrap();
+            // This real commit invalidates an old deferred WAL read snapshot.
+            let tx = rusqlite::Transaction::new_unchecked(&other, rusqlite::TransactionBehavior::Immediate).unwrap();
+            tx.execute("UPDATE crew_attempts SET started_at='2026-10-09T12:00:00Z' WHERE attempt_id='started'", []).unwrap();
+            tx.execute("UPDATE communication_routing_state SET route_status='leased' WHERE message_key=?1", [&leased_task]).unwrap();
+            tx.commit().unwrap();
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+    });
+    let result = retain_attempts(&conn, chrono::Utc::now().timestamp_millis());
+    super::lifecycle::AFTER_RETENTION_READS.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    result?;
+    assert!(callback_ran.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(conn.is_autocommit());
+    let ids = conn
+        .prepare("SELECT attempt_id FROM crew_attempts ORDER BY attempt_id")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    assert_eq!(ids, vec!["leased", "started"]);
+    // No writer reservation survives the maintenance call.
+    let other = Connection::open(crate::paths::core_db(root.path()))?;
+    other.busy_timeout(std::time::Duration::ZERO)?;
+    other.execute_batch("BEGIN IMMEDIATE; ROLLBACK")?;
+    Ok(())
+}
+
+#[test]
 fn crew_migration_keeps_flow_ledger_lazy_until_admission() -> Result<()> {
     let (root, conn, task) = leased()?;
     assert!(!conn.query_row(

@@ -2629,7 +2629,7 @@ pub fn ack_leased_messages_for_attempt(
     // (07.10.2026) every reviewed lead-research ack failed so: the attempt
     // stayed `finalizing`, the lease expired, and each re-lease re-ran the
     // review of the same reply (one task 28 times) without ever terminalizing.
-    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+    let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "queue.ack_attempt")?;
     let already_applied: Option<Option<String>> = tx
         .query_row(
             "SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id = ?1",
@@ -4173,8 +4173,7 @@ fn lease_queue_task_with_filter(
     // a separate connection cannot overwrite our lease_owner (lost-update).
     attach_queue_projection_store(root, &conn)?;
     let leased = {
-        let tx =
-            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+        let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "queue.lease_task")?;
         if let Some(eligible) = eligible {
             let candidate =
                 load_queue_task_from_conn(&tx, message_key)?.context("queue task not found")?;
@@ -6308,7 +6307,7 @@ fn ack_messages(
     // Acknowledgement reads before updating Core and its attached projection
     // store. Reserve both writers first so a concurrent WAL commit cannot
     // invalidate the read snapshot during promotion (SQLITE_BUSY_SNAPSHOT).
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "queue.ack_messages")?;
     let updated = ack_messages_in_transaction(
         &tx,
         message_keys,

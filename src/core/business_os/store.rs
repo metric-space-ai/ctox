@@ -13203,13 +13203,20 @@ impl BusinessProjectionWriter {
         source_updated_at_ms: i64,
         payload: Value,
     ) -> anyhow::Result<()> {
-        upsert_business_record(
+        // Reserve only this record's source write, never the projection pass
+        // or the subsequent RxDB delivery. Diagnostics separate wait from hold.
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
+            "projection.source_upsert",
+        )?;
+        upsert_business_record(
+            &tx,
             collection,
             record_id,
             source_updated_at_ms,
             payload.clone(),
         )?;
+        tx.commit()?;
         self.rxdb_writers.upsert_source_projection(
             collection,
             record_id,
@@ -13224,7 +13231,12 @@ impl BusinessProjectionWriter {
         record_id: &str,
         source_updated_at_ms: i64,
     ) -> anyhow::Result<()> {
-        upsert_business_record_tombstone(&self.conn, collection, record_id, source_updated_at_ms)?;
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
+            &self.conn,
+            "projection.source_tombstone",
+        )?;
+        upsert_business_record_tombstone(&tx, collection, record_id, source_updated_at_ms)?;
+        tx.commit()?;
         self.rxdb_writers
             .tombstone_source_projection(collection, record_id, source_updated_at_ms)
     }
@@ -13451,8 +13463,12 @@ impl RxdbCollectionWriter {
         let replication_now = now_ms().min(i64::MAX as u128) as i64;
         let replication_lwt = replication_now.max(self.last_replication_lwt.saturating_add(1));
         self.last_replication_lwt = replication_lwt;
-        upsert_rxdb_collection_record_with_writer(
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
+            "projection.rxdb_upsert",
+        )?;
+        upsert_rxdb_collection_record_with_writer(
+            &tx,
             &self.table,
             &self.columns,
             record_id,
@@ -13463,6 +13479,7 @@ impl RxdbCollectionWriter {
             false,
             true,
         )?;
+        tx.commit()?;
         self.notify_committed_change();
         Ok(())
     }
@@ -13475,8 +13492,12 @@ impl RxdbCollectionWriter {
         let replication_now = now_ms().min(i64::MAX as u128) as i64;
         let replication_lwt = replication_now.max(self.last_replication_lwt.saturating_add(1));
         self.last_replication_lwt = replication_lwt;
-        upsert_rxdb_collection_record_with_writer(
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
+            "projection.rxdb_tombstone",
+        )?;
+        upsert_rxdb_collection_record_with_writer(
+            &tx,
             &self.table,
             &self.columns,
             record_id,
@@ -13491,6 +13512,7 @@ impl RxdbCollectionWriter {
             true,
             true,
         )?;
+        tx.commit()?;
         self.notify_committed_change();
         Ok(())
     }
