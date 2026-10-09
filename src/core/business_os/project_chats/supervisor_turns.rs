@@ -145,6 +145,60 @@ fn owned_turn(
     }))
 }
 
+/// Native policy for completing a dialogue reply, not the project's work.
+/// Prompt text and a model's claimed status never confer this exemption.
+pub(crate) fn reply_completion_allowed(root: &Path, canonical: &Value) -> anyhow::Result<bool> {
+    let payload = &canonical["payload"];
+    let empty_array = |field: &str| {
+        payload.get(field).is_none_or(|value| value.as_array().is_some_and(Vec::is_empty))
+    };
+    if canonical["command_type"] != "business_os.chat.task"
+        || canonical["module"] != "ctox"
+        || payload["risk_class"] != "internal"
+        || payload.get("mode").is_some()
+        || payload.get("writeback_contract").is_some()
+        || payload.get("external_executor").is_some()
+        || !empty_array("attachments")
+        || !empty_array("dependencies")
+    {
+        return Ok(false);
+    }
+    let Some(id) = canonical["command_id"].as_str() else {
+        return Ok(false);
+    };
+    let conn = open_store(root)?;
+    let admitted = store::load_business_command(&conn, id)?;
+    let owner = admitted.client_context.pointer("/actor/id")
+        .and_then(Value::as_str).context("Supervisor reply has no admitted owner")?;
+    let Some(thread_id) = admitted.payload["thread_id"].as_str() else {
+        return Ok(false);
+    };
+    // Ordinary Business OS chats and coding workers have no Supervisor binding.
+    let Some(binding) = supervisor_binding::for_thread(&conn, owner, thread_id)? else {
+        return Ok(false);
+    };
+    let binding = binding_from_connection(&conn, owner, &binding.project_id, thread_id, true)?;
+    ensure!(
+        canonical["module"] == admitted.module
+            && canonical["command_type"] == admitted.command_type
+            && canonical["record_id"].as_str() == admitted.record_id.as_deref()
+            && canonical["payload"] == admitted.payload,
+        "Supervisor reply conflicts with its admitted native command"
+    );
+    drop(conn);
+    let turn = owned_turn(root, owner, &binding, id)?;
+    let result = &turn["result"];
+    ensure!(
+        matches!(turn["execution_phase"].as_str(), Some("awaiting_review" | "validating"))
+            && result["command_id"] == id
+            && result["execution_task_id"] == turn["task_id"]
+            && result["attempt"] == turn["attempt"]
+            && result["user_reply"].as_str().is_some_and(|reply| !reply.trim().is_empty()),
+        "Supervisor reply lacks a persisted response for this exact command, task and attempt"
+    );
+    Ok(true)
+}
+
 pub(in crate::business_os) fn control(
     root: &Path,
     command: &BusinessCommand,
