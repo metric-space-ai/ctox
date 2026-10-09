@@ -29,9 +29,14 @@ attached canonical projection writes still commit together.
 
 Finalization parses/validates bounded retrospective metadata before reserving
 the writer. Its finalized_at guard, statistics, learning state and commit
-remain atomic. Source and RxDB projection writers reserve one record at a time;
-source commit precedes mirror delivery, and notifications follow mirror commit.
-No writer reservation spans a full pass or both independently delivered stores.
+remain atomic. Single-record writes keep their existing boundaries. Cold event
+delivery prepares payloads and deduplication outside the writer, then commits at
+most 32 source records and 32 mirror records per separate transaction, using the
+same per-row merge/envelope functions. Source commit precedes mirror delivery;
+notifications follow mirror commit. A failed mirror chunk rolls back together,
+retains completed chunks in the dedupe cache and restores the unclaimed replay
+cursor so its unpublished rows stay eligible. No writer reservation spans a full
+pass or both independently delivered stores.
 
 ## Writer diagnostics
 
@@ -44,7 +49,8 @@ Operations covered: queue.lease_task, queue.lease_batch, queue.ack_attempt,
 queue.ack_messages,
 crew.retention_orphan, crew.finalize_attempt, projection.source_upsert,
 projection.source_tombstone, projection.rxdb_upsert and
-projection.rxdb_tombstone. Queue operations may reserve attached projection
+projection.rxdb_tombstone, projection.source_batch and projection.rxdb_batch.
+Queue operations may reserve attached projection
 databases as well as the reported primary Core database. These labels distinguish
 queue ownership, Crew accounting and source/mirror delivery; other transaction
 paths are not claimed to be traced.
@@ -74,8 +80,9 @@ cargo test --bin ctox cockpit_projection_one_hour_eight_native_writers -- \
 The test reports CTOX_SQLITE_LOAD with duration, commits per writer,
 projection passes, warm-up duration, maximum measured pass and every failure.
 It must finish a full hour, have writes from all eight workers, have zero
-errors and keep every measured steady-state pass below one second.
-Warm-up is reported separately. It uses no model accounts or external effects.
+errors and keep both the populated cold projection and every measured
+steady-state pass below one second. Cold timing is reported separately. It uses
+no model accounts or external effects.
 
 This is an isolated native fixture, not installed-service or customer acceptance.
 An installed proof must identify binary/source revisions, isolated prefix,
