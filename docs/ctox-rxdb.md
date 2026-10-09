@@ -35,9 +35,11 @@ timestamps and `catalog_freshness_ms`. Disabled accounts keep their rows.
 
 Readers validate current active Owner/Admin identity and verified canonical
 alias before generic administrative access. Held and ordinary readers require
-the current native owner/record/content association. Foreign administrators,
-forged envelopes, stale snapshots and revoked users fail closed; peers cannot
-write this collection. Startup backfill is bounded at 256 owners and snapshots
+current native owner/record/account associations. Foreign administrators,
+forged envelopes and revoked users fail closed; peers cannot
+write this collection. Older metadata snapshots remain readable across normal
+configuration changes; execution uses separate current authority and bindings.
+Startup backfill is bounded at 256 owners and snapshots
 at 1 MiB. This is metadata, not execution authority or holder dispatch.
 Computer-held adoption, routed inference and unified Settings remain open.
 

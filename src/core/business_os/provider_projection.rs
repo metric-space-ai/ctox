@@ -64,18 +64,37 @@ pub(super) fn visible(conn: &Connection, document: &Value, actor: &str) -> Resul
     let Some(current) = store::outbound_load_record(conn, COLLECTION, &id)? else {
         return Ok(false);
     };
-    // Never authorize victim metadata with a substituted owner/id envelope.
-    Ok([
-        "id",
-        "owner_user_id",
-        "policy_revision",
-        "catalog_freshness_ms",
-        "accounts",
-        "providers",
-        "is_deleted",
-    ]
-    .iter()
-    .all(|field| document[*field] == current[*field]))
+    ensure!(
+        current["owner_user_id"] == owner && current["id"] == id,
+        "native registry ownership changed"
+    );
+    let Some(accounts) = document["accounts"].as_array() else {
+        return Ok(false);
+    };
+    if accounts.len() > MAX_ACCOUNTS {
+        return Ok(false);
+    }
+    // Metadata snapshots may legitimately precede enablement/catalog updates.
+    // They do not authorize inference. Bind every claimed account to its
+    // current native owner/provider/holder, rather than treating data changes
+    // as session revocation or trusting a substituted owner/id envelope.
+    for account in accounts {
+        let owned: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM business_provider_federation_accounts
+             WHERE account_id=?1 AND owner_user_id=?2 AND provider=?3 AND holder_instance_id=?4)",
+            params![
+                account["id"].as_str().unwrap_or_default(),
+                owner,
+                account["provider"].as_str().unwrap_or_default(),
+                account["holder"]["id"].as_str().unwrap_or_default()
+            ],
+            |row| row.get(0),
+        )?;
+        if !owned {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Startup/backfill repair for already adopted accounts. Rebuild only public
@@ -132,7 +151,8 @@ mod tests {
             store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.unwrap();
         assert_eq!(current["accounts"][0]["enabled"], false);
         assert_eq!(current["accounts"].as_array().unwrap().len(), 1);
-        assert!(!visible(&f.conn, &first, "owner")?);
+        // An older metadata snapshot is readable; it is not an execution permit.
+        assert!(visible(&f.conn, &first, "owner")?);
         assert!(visible(&f.conn, &current, "owner")?);
         Ok(())
     }
@@ -227,9 +247,9 @@ mod tests {
     fn registry_projection_requires_current_own_management_identity() -> Result<()> {
         let f = Fixture::new()?;
         f.adopt(&[account("private")])?;
-        let applied = applied(&f.conn, "owner")?;
+        let effect = applied(&f.conn, "owner")?;
         let mut record =
-            store::outbound_load_record(&f.conn, COLLECTION, &applied.projections[0].id)?.unwrap();
+            store::outbound_load_record(&f.conn, COLLECTION, &effect.projections[0].id)?.unwrap();
         assert!(visible(&f.conn, &record, "owner")?);
         store::issue_business_os_capability_token_for_managed_user(
             f.root.path(),
@@ -242,6 +262,16 @@ mod tests {
         record["owner_user_id"] = json!("foreign");
         assert!(!visible(&f.conn, &record, "foreign")?);
         record["id"] = json!(record_id("foreign"));
+        assert!(!visible(&f.conn, &record, "foreign")?);
+        adopt(
+            &f.conn,
+            "foreign",
+            "native-instance",
+            &[account("foreign-private")],
+            101,
+        )?;
+        applied(&f.conn, "foreign")?;
+        // Even a real foreign-owner registry cannot authorize victim account data.
         assert!(!visible(&f.conn, &record, "foreign")?);
         f.conn.execute(
             "UPDATE business_users SET active=0 WHERE user_id='foreign'",
