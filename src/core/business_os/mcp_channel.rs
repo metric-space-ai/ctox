@@ -57,12 +57,12 @@ pub(super) use workjet_calendar::WEBRTC_METHOD as WORKJET_CALENDAR_READ_METHOD;
 #[path = "mcp_workjet_confirmed_plan.rs"]
 mod workjet_confirmed_plan;
 pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_session;
+#[path = "mcp_supervisor_luma.rs"]
+mod supervisor_luma;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
 #[path = "mcp_workjet_kpis.rs"]
 mod workjet_kpis;
-#[path = "mcp_supervisor_luma.rs"]
-mod supervisor_luma;
 #[path = "mcp_workjet_luma_config.rs"]
 mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
