@@ -111,6 +111,7 @@
     "ctox.workjet.project.worker.remove",
     "ctox.workjet.providers.adopt_native",
     "ctox.workjet.providers.list",
+    "ctox.workjet.providers.observe_native",
     "ctox.workjet.providers.withdraw",
     "ctox.workjet.session.create",
     "ctox.workjet.session.delete",
