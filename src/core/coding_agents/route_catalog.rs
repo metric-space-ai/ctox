@@ -14,6 +14,59 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+pub(crate) struct NativeInheritedAccountMetadata {
+    pub provider: String,
+}
+
+// This is configured account existence only: neither a model-list observation
+// nor a credential/limit/Hi validation. No model or credential leaves the host.
+fn native_metadata_from_current(
+    route: &InheritedCodingRoute,
+    credential: Option<&str>,
+    current_route: Option<&InheritedCodingRoute>,
+    current_credential: Option<&str>,
+) -> anyhow::Result<Option<NativeInheritedAccountMetadata>> {
+    anyhow::ensure!(
+        current_route == Some(route) && current_credential == credential,
+        "native main account configuration changed"
+    );
+    let Some(credential) = credential else {
+        return Ok(None);
+    };
+    if credential.trim().is_empty()
+        || credential.len() > 8192
+        || credential.chars().any(char::is_control)
+    {
+        return Ok(None);
+    }
+    Ok(Some(NativeInheritedAccountMetadata {
+        provider: route.provider.clone(),
+    }))
+}
+
+pub(super) fn account_metadata(
+    root: &Path,
+) -> anyhow::Result<Option<NativeInheritedAccountMetadata>> {
+    let route = resolve_inherited_coding_route(root)
+        .map_err(|_| anyhow::anyhow!("native main account route is unavailable"))?;
+    let credential = runtime_env::load_runtime_env_map(root)
+        .map_err(|_| anyhow::anyhow!("native main credential metadata is unavailable"))?
+        .remove(route.credential_key)
+        .map(Zeroizing::new);
+    let current_route = resolve_inherited_coding_route(root)
+        .map_err(|_| anyhow::anyhow!("native main account route is unavailable"))?;
+    let current_credential = runtime_env::load_runtime_env_map(root)
+        .map_err(|_| anyhow::anyhow!("native main credential metadata is unavailable"))?
+        .remove(current_route.credential_key)
+        .map(Zeroizing::new);
+    native_metadata_from_current(
+        &route,
+        credential.as_ref().map(|value| value.as_str()),
+        Some(&current_route),
+        current_credential.as_ref().map(|value| value.as_str()),
+    )
+}
+
 const MAX_BODY: u64 = 65_536;
 const MAX_MODELS: usize = 1024;
 const DEADLINE: Duration = Duration::from_secs(8);
