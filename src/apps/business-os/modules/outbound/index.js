@@ -1972,7 +1972,12 @@ function syncingStateHint() {
 
 function scheduleDataRefresh(delay = 80) {
   if (!state.refreshEnabled) return;
-  if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
+  if (state.refreshInFlight) {
+    state.refreshQueued = true;
+    return;
+  }
+  // Coalesce bursts without pushing the first deadline back indefinitely.
+  if (state.refreshTimer) return;
   state.refreshTimer = window.setTimeout(runDataRefresh, delay);
 }
 

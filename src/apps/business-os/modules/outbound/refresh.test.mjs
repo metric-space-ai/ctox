@@ -73,6 +73,24 @@ test('replication bursts during a slow read create one trailing reload without o
   assert.equal(r.counters.focus, 2, 'preserve main navigation receipts');
 });
 
+test('continuous invalidations preserve the deadline and queue work during a read', async () => {
+  const blocked = deferred();
+  let calls = 0;
+  const r = runtime({ loadAll: async () => { calls++; if (calls === 1) await blocked.promise; } });
+  r.ctx.scheduleDataRefresh(150);
+  const firstTimer = r.timers.keys().next().value;
+  for (let i = 0; i < 100; i++) r.ctx.scheduleDataRefresh(150);
+  assert.equal(r.timers.keys().next().value, firstTimer, 'the deadline cannot move on every event');
+  const reading = r.fireTimer();
+  for (let i = 0; i < 100; i++) r.ctx.scheduleDataRefresh(150);
+  assert.equal(r.timers.size, 0, 'in-flight changes do not start another timer');
+  blocked.resolve();
+  await reading;
+  assert.equal(r.timers.size, 1);
+  await r.fireTimer();
+  assert.equal(calls, 2);
+});
+
 test('a rejected read releases the flight and the next invalidation retries', async () => {
   let calls = 0;
   const r = runtime({ loadAll: async () => { if (++calls === 1) throw new Error('offline'); } });
