@@ -2100,6 +2100,7 @@ fn effective_instance_proxy_config(
         .kimi_subscription_accounts
         .iter()
         .any(|account| !account.disabled);
+    let xai_enabled = crate::execution::cliproxyapi_xai::subscription_installed(root);
     let stored = load_instance_proxy_config(root)?;
     let automatic_codex = instance_codex_runtime_config(root)?;
     let portable = match (stored, automatic_codex) {
@@ -2140,7 +2141,7 @@ fn effective_instance_proxy_config(
     };
     let (default_provider, runtime) = match portable {
         Some(portable) => portable,
-        None if kimi_enabled => {
+        None if kimi_enabled || xai_enabled => {
             let runtime = CliproxyRuntimeConfig {
                 request_timeout_ms: 30_000,
                 routing_strategy: SchedulerStrategy::RoundRobin,
@@ -2150,7 +2151,14 @@ fn effective_instance_proxy_config(
             }
             .validate_for_extension_host()
             .map_err(|_| anyhow::anyhow!("empty portable proxy config is invalid"))?;
-            ("kimi".to_owned(), runtime)
+            (
+                if kimi_enabled {
+                    "kimi".to_owned()
+                } else {
+                    String::new()
+                },
+                runtime,
+            )
         }
         None => return Ok(None),
     };

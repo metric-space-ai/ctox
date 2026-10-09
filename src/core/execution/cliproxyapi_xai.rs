@@ -17,6 +17,9 @@ use zeroize::Zeroizing;
 
 const SCOPE: &str = "provider-subscriptions";
 const NAME: &str = "xai-instance-oauth";
+pub fn subscription_installed(root: &Path) -> bool {
+    crate::secrets::secret_exists(root, SCOPE, NAME).unwrap_or(false)
+}
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum XaiLoginProgress {

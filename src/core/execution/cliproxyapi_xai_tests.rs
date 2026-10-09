@@ -1,6 +1,31 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[tokio::test]
+async fn native_router_starts_for_subscription_without_creating_a_default() {
+    use ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::{
+        OpenAiResponsesRouteHandler, OpenAiResponsesRouteResponse,
+    };
+    let root = tempfile::tempdir().unwrap();
+    save_bundle(root.path(), &bundle()).unwrap();
+    let router =
+        crate::execution::cliproxyapi_host::build_instance_codex_responses_router(root.path())
+            .unwrap()
+            .unwrap();
+    let response = router
+        .handle_provider_route(None, br#"{"model":"grok-4.7","input":"fixture"}"#)
+        .await;
+    assert!(matches!(
+        response,
+        OpenAiResponsesRouteResponse::Buffered(_)
+    ));
+    assert!(
+        crate::execution::cliproxyapi_host::load_instance_proxy_config(root.path())
+            .unwrap()
+            .is_none()
+    );
+}
+
 struct FixtureLogin;
 impl XaiHttpTransport for FixtureLogin {
     fn execute<'a>(
