@@ -91,10 +91,13 @@ async function runThreadsRightClickPeers({
       if (type === 'warning') browserDiagnostics.warnings += 1;
       if (type === 'error') browserDiagnostics.errors += 1;
       console.log('[browser:' + actor + ':' + type + '] ' + message.text());
+      if (type === 'error') {
+        console.error('threads_console_error_location=' + JSON.stringify({ actor, ...message.location() }));
+      }
     });
     page.on('pageerror', (error) => {
       browserDiagnostics.errors += 1;
-      console.error('[browser:' + actor + ':error] ' + error.message);
+      console.error('[browser:' + actor + ':pageerror] ' + (error.stack || error.message));
     });
     page.on('requestfailed', (request) => {
       browserDiagnostics.requestFailures += 1;
