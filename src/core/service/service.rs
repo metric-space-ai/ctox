@@ -1439,6 +1439,12 @@ const CHANNEL_ROUTER_SERIAL_LEASE_LIMIT: usize = 1;
 // founder-priority fix never starves the durable queue with ordinary email/ticket
 // work. ROUTER_INBOUND_RANK_PROBE_LIMIT bounds the read-only rank probe per tick.
 const FOUNDER_INBOUND_DISPATCH_RANK: u8 = 4;
+// People before background work (owner 09.10.2026: communication is high
+// priority by itself). Every communication channel (email, jami, teams,
+// meeting = rank 3) takes the serial slot before durable queue work; tickets
+// (rank 2) do not. The queue cannot starve: each such message is routed and
+// handled when it takes the slot.
+const COMMUNICATION_INBOUND_DISPATCH_RANK: u8 = 3;
 const ROUTER_INBOUND_RANK_PROBE_LIMIT: usize = 32;
 const REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS: usize = 6_000;
 const STANDALONE_OUTBOUND_DB_LOCK_RETRY_MARKER: &str =
@@ -16666,7 +16672,26 @@ fn clear_live_service_settings_cache_for_tests() {
 
 fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
     let shared = lock_shared_state(state);
-    shared.busy || shared.worker_active_count > 0
+    // Isolated Business OS chat sessions run in their own slots and do not use
+    // the serial loop the router arbitrates (same count as
+    // lease_business_queue_capacity). Counting them kept the router asleep
+    // for as long as a research campaign ran: no e-mail was routed on thesen
+    // between 09:16 and 11:30Z on 09.10.2026.
+    let active_chats = shared
+        .parallel_queue_jobs
+        .keys()
+        .filter(|key| shared.active_worker_lease_keys.contains(*key))
+        .count();
+    shared.busy
+        || shared.serial_prompt_starting
+        || shared.worker_active_count.saturating_sub(active_chats) > 0
+}
+
+/// A communication message (email, jami, teams, meeting) waits for the serial
+/// slot; durable queue work steps back until it is routed.
+fn communication_inbound_waiting(root: &Path) -> bool {
+    highest_leasable_inbound_rank(root, &live_service_settings(root))
+        >= COMMUNICATION_INBOUND_DISPATCH_RANK
 }
 
 fn should_skip_idle_harness_audit_tick(root: &Path) -> bool {
@@ -17099,7 +17124,10 @@ fn route_external_messages_with_priority_dispatch(
     if let Err(err) = reconcile_ticket_runtime_state(root, state) {
         push_event(state, format!("Ticket reconciliation failed: {err}"));
     }
-    if queue_pressure_active(root, state) {
+    // Queue pressure contains background work, never communication: with more
+    // than QUEUE_PRESSURE_GUARD_THRESHOLD research tasks pending this skip
+    // stopped every e-mail on thesen (09.10.2026, 84 tasks pending).
+    if queue_pressure_active(root, state) && !communication_inbound_waiting(root) {
         match repair_stalled_founder_communications(root, state, &settings) {
             Ok(repaired) if repaired > 0 => push_event(
                 state,
@@ -17168,7 +17196,7 @@ fn route_external_messages_with_priority_dispatch(
     // starve the durable queue, and the governance event makes any starvation
     // observable.
     let top_inbound_rank = highest_leasable_inbound_rank(root, &settings);
-    if top_inbound_rank >= FOUNDER_INBOUND_DISPATCH_RANK {
+    if top_inbound_rank >= COMMUNICATION_INBOUND_DISPATCH_RANK {
         governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
@@ -42630,6 +42658,187 @@ Use shell tools to create or update these files."
         assert_ne!(
             founder_status, "pending",
             "founder inbound should have been leased/handled this tick"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// thesen 09.10.2026: 40 research tasks older than the owner's mail filled the
+    /// whole rank probe and the age-ordered lease, so the mail waited for hours.
+    #[test]
+    fn owner_mail_is_leased_before_a_backlog_of_older_queue_work() {
+        let root = temp_root("ctox-router-owner-mail-before-backlog");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist owner setting");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        for index in 0..40 {
+            let task = channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("Neurecherche {index}"),
+                    prompt: "Research one lead.".to_string(),
+                    thread_key: format!("research-{index}"),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )
+            .expect("failed to seed durable queue task");
+            conn.execute(
+                "UPDATE communication_messages SET external_created_at='2020-01-01T00:00:00Z', observed_at='2020-01-01T00:00:00Z' WHERE message_key=?1",
+                rusqlite::params![task.message_key],
+            )
+            .expect("age queue task");
+            conn.execute(
+                "UPDATE communication_routing_state SET first_pending_at='2020-01-01T00:00:00Z' WHERE message_key=?1",
+                rusqlite::params![task.message_key],
+            )
+            .expect("age queue routing");
+        }
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:crew@thesen-ag.com', '<owner-mail-backlog@example.com>',
+                'remote-owner-backlog-1', 'inbound', 'INBOX', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Firmen aus der Excel recherchieren.', '', '',
+                'normal', 'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', '{}'
+            )"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::owner-backlog"],
+        )
+        .expect("failed to insert owner inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-10-09T10:28:26Z')"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::owner-backlog"],
+        )
+        .expect("failed to insert owner routing state");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        let owner_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params!["email:crew@thesen-ag.com::INBOX::owner-backlog"],
+                |row| row.get(0),
+            )
+            .expect("failed to read owner routing state");
+        assert_ne!(
+            owner_status, "pending",
+            "the owner's mail must be leased in the first router tick despite the backlog"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// thesen 09.10.2026: research chats ran in their own slots, yet the router
+    /// counted them as an active serial loop and slept; an ordinary mail waited
+    /// behind the queue as well. Both must hand the serial slot to the mail.
+    #[test]
+    fn ordinary_mail_is_routed_while_isolated_research_chats_run() {
+        let root = temp_root("ctox-router-mail-beside-research-chats");
+        let seed = |index: usize| {
+            channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("Neurecherche {index}"),
+                    prompt: "Research one lead.".to_string(),
+                    thread_key: format!("research-chat-{index}"),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(
+                        serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
+                    ),
+                },
+            )
+            .expect("failed to seed research task")
+        };
+        let running = seed(0);
+        let waiting = seed(1);
+        channels::lease_queue_task(&root, &running.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease running research chat");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            "UPDATE communication_routing_state SET first_pending_at='2020-01-01T00:00:00Z' WHERE message_key=?1",
+            rusqlite::params![waiting.message_key],
+        )
+        .expect("age waiting research task");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:crew@thesen-ag.com', '<customer-mail@example.com>',
+                'remote-customer-1', 'inbound', 'INBOX', 'Kunde', 'kunde@example.com',
+                '[]', '[]', '[]', 'Frage', 'Frage', 'Eine kurze Frage.', '', '',
+                'normal', 'received', 0, 0, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', '{}'
+            )"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::customer"],
+        )
+        .expect("failed to insert customer inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-10-09T10:28:26Z')"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::customer"],
+        )
+        .expect("failed to insert customer routing state");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            let job = queued_prompt_from_queue_task(
+                channels::load_queue_task(&root, &running.message_key)
+                    .expect("load running task")
+                    .expect("running task exists"),
+            );
+            shared
+                .parallel_queue_jobs
+                .insert(running.message_key.clone(), job);
+            shared
+                .active_worker_lease_keys
+                .insert(running.message_key.clone());
+            shared.worker_active_count = 1;
+        }
+        assert!(!active_agent_loop_in_progress(&state));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        let mail_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params!["email:crew@thesen-ag.com::INBOX::customer"],
+                |row| row.get(0),
+            )
+            .expect("failed to read customer routing state");
+        assert_ne!(mail_status, "pending", "the mail must take the serial slot");
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert!(
+            pending
+                .iter()
+                .any(|task| task.message_key == waiting.message_key),
+            "the older research task waits until the mail is routed"
         );
 
         let _ = std::fs::remove_dir_all(&root);
