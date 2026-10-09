@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 117] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 120] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -382,6 +382,9 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 117] = [
     "ctox.workjet.jour_fixe.narration.local_publish",
     "ctox.workjet.jour_fixe.transcript.local_candidate",
     "ctox.workjet.jour_fixe.todos.revise",
+    "ctox.workjet.presentation.read",
+    "ctox.workjet.presentation.canvas.save",
+    "ctox.workjet.presentation.edits.apply",
     "ctox.workjet.project.supervisor.turn.cancel",
     "ctox.workjet.project.chat.create",
     "ctox.workjet.project.worker.add",
@@ -1286,7 +1289,9 @@ impl CentralCommandPolicyRequirement {
             ))
         } else if matches!(
             command_type,
-            "ctox.workjet.project.supervisor.turn.watch" | "ctox.workjet.jour_fixe.meeting.read"
+            "ctox.workjet.project.supervisor.turn.watch"
+                | "ctox.workjet.jour_fixe.meeting.read"
+                | "ctox.workjet.presentation.read"
         ) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataRead,
@@ -1750,6 +1755,40 @@ fn dispatch_business_command(
                     .as_ref()
                     .context("meeting edit requires domain admission")?,
             ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
+                )),
+            }
+        }
+        "ctox.workjet.presentation.canvas.save" | "ctox.workjet.presentation.edits.apply" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor = session_user_id(session)
+                .context("presentation edit requires authenticated user")?;
+            match super::project_chats::presentation::handle(
+                root,
+                command,
+                actor,
+                prepared
+                    .domain_effect_admission
+                    .as_ref()
+                    .context("presentation edit requires domain admission")?,
+            ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
+                )),
+            }
+        }
+        "ctox.workjet.presentation.read" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let owner = session_user_id(session)
+                .context("presentation read requires authenticated user")?;
+            match super::project_chats::presentation::read(root, command, owner) {
                 Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,

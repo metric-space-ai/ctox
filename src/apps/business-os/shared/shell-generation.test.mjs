@@ -32,7 +32,7 @@ test('index, app and generation-bound imports declare one shell generation', asy
   const active = appSource.match(/const APP_BUILD = ['"]([^'"]+)['"]/)?.[1] || '';
   assert.match(active, /-shell-v2-/);
 
-  const appGenerationTokens = [...appSource.matchAll(/\?v=([^'"`\s]*-shell-v2-[^'"`\s]*)/g)]
+  const appGenerationTokens = [...appSource.matchAll(/\?v=(\d{8}[^'"`\s]*)/g)]
     .map((match) => match[1]);
   assert.ok(appGenerationTokens.length > 0);
   assert.deepEqual([...new Set(appGenerationTokens)], [active]);

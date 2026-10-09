@@ -1,22 +1,22 @@
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-query-ready-diagnostics';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-query-ready-diagnostics';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-query-ready-diagnostics';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-query-ready-diagnostics';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-query-ready-diagnostics';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-presentation-revisions';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-presentation-revisions';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-presentation-revisions';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-presentation-revisions';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-presentation-revisions';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-presentation-revisions';
+import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-presentation-revisions';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-presentation-revisions';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-presentation-revisions';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-presentation-revisions';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-presentation-revisions';
+import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-presentation-revisions';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './shared/app-lifecycle.js?v=20261009-shell-v2-presentation-revisions';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -25,20 +25,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './shared/permissions.js?v=20261009-shell-v2-presentation-revisions';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './shared/branding.js?v=20261009-shell-v2-presentation-revisions';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-presentation-revisions';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './shared/presentation.js?v=20261009-shell-v2-presentation-revisions';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -49,9 +49,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-presentation-revisions';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-presentation-revisions';
+import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-presentation-revisions';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -59,27 +59,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './shared/maintenance-state.js?v=20261009-shell-v2-presentation-revisions';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './shared/workspace-session.js?v=20261009-shell-v2-presentation-revisions';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './shared/taskbar-pins.js?v=20261009-shell-v2-presentation-revisions';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './shared/workjet-theme.js?v=20261009-shell-v2-presentation-revisions';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-presentation-revisions';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-presentation-revisions';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-presentation-revisions';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-presentation-revisions';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -87,9 +87,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261008-narration-read';
+} from './shared/startup-deadlines.js?v=20261009-shell-v2-presentation-revisions';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-presentation-revisions';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-presentation-revisions';
+import {
+  PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
+  presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
+} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-presentation-revisions';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-presentation-revisions';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -107,7 +112,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261009-shell-v2-query-ready-diagnostics';
+const APP_BUILD = '20261009-shell-v2-presentation-revisions';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13762,6 +13767,9 @@ async function workjetProjectControl(request = {}) {
       });
     } finally { clearTimeout(timer); controller.abort(); }
   }
+  if (action.startsWith('project.presentation.')) {
+    return workjetPresentationControl(action, request, { requestSession, requestDb, ownerUserId });
+  }
   if (action === 'project.jour_fixe.speech') {
     const sync = state.sync;
     const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
@@ -14867,6 +14875,104 @@ async function waitForSyncBridgeReady(bridge, timeoutMs = 15000) {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+// Jour fixe presentations: native manifest reads and owner canvas saves travel as
+// ctox.workjet.presentation.* commands; document bytes are policy-checked
+// rxdb.file.fetch ranges of the revision's desktop file. No HTTP data path.
+async function workjetPresentationControl(action, request, scope) {
+  const deadline = Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1000;
+  const requestSync = state.sync;
+  const assertSession = () => {
+    if (Date.now() >= deadline || state.session !== scope.requestSession || state.db !== scope.requestDb
+      || state.sync !== requestSync || actorContext(state.session).id !== scope.ownerUserId) {
+      throw Object.assign(new Error('The Workjet project session changed during the presentation request.'),
+        { code: 'PRESENTATION_SCOPE_CHANGED' });
+    }
+  };
+  const dispatch = async (commandId, projectId, commandType, payload, compareKeys) => {
+    assertSession();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox', record_id: projectId,
+      command_type: commandType, inbound_channel: 'ctox', payload: JSON.parse(JSON.stringify(payload)),
+      client_context: { source: 'workjet-project-control', actor: actorContext(scope.requestSession) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: Math.max(1, deadline - Date.now()) });
+    assertSession();
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId || receipt.result?.ok !== true
+      || receipt.result.contract !== PRESENTATION_SCHEMA
+      || compareKeys.some(key => receipt.payload?.[key] !== payload[key])) {
+      const reason = receipt?.result?.error || receipt?.error;
+      throw new Error(typeof reason === 'string' && reason ? reason : 'The presentation command was not confirmed.');
+    }
+    return receipt.result;
+  };
+  if (!PRESENTATION_ACTIONS.includes(action)) {
+    throw new TypeError('Unsupported Workjet presentation action.');
+  }
+  await awaitWorkjetProjectListStep(requireWorkjetSupervisorDataPlane(), deadline, 'presentation collections');
+  const readManifest = async scopeRequest => {
+    const commandId = scopeRequest.commandId ?? crypto.randomUUID();
+    const payload = presentationReadPayload({ action: PRESENTATION_READ_ACTION, commandId,
+      projectId: scopeRequest.projectId, meetingId: scopeRequest.meetingId });
+    const result = await dispatch(commandId, scopeRequest.projectId, 'ctox.workjet.presentation.read', payload,
+      Object.keys(payload));
+    return presentationFromReadResult(result, scopeRequest);
+  };
+  if (action === PRESENTATION_READ_ACTION) {
+    presentationReadPayload(request);
+    const presentation = await readManifest(request);
+    return { action, commandId: request.commandId, projectId: request.projectId, meetingId: request.meetingId,
+      contract: PRESENTATION_SCHEMA, presentation };
+  }
+  if (action === PRESENTATION_CANVAS_SAVE_ACTION) {
+    const payload = presentationCanvasSavePayload(request);
+    const result = await dispatch(request.commandId, request.projectId, 'ctox.workjet.presentation.canvas.save',
+      payload, ['operation_id', 'presentation_id', 'expected_revision', 'slide_id']);
+    const { mutation, presentation } = presentationMutationFromResult(result, payload, request);
+    return { action, commandId: request.commandId, projectId: request.projectId, meetingId: request.meetingId,
+      contract: PRESENTATION_SCHEMA, mutation, presentation };
+  }
+  const instance = boundedWorkjetProjectText(
+    state.syncConfig?.instance_id || requestSync?.config?.instance_id, 'native instanceId', 256,
+  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+  const authority = {};
+  let bridge;
+  const assertCurrent = () => {
+    assertSession();
+    if (controller.signal.aborted
+      || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance
+      || (authority.peer && (authority.peer.cancelled
+        || authority.peer.collection.demandLoader !== authority.loader
+        || authority.peer.collectionQueryGenerationToken?.(authority.peer.activeRemotePeerId) !== authority.generation))) {
+      throw Object.assign(new Error('Presentation scope or connection changed.'), { code: 'PRESENTATION_SCOPE_CHANGED' });
+    }
+  };
+  try {
+    return await readJourFixePresentationContent(request, {
+      assertCurrent,
+      readManifest: scopeRequest => readManifest({ projectId: scopeRequest.projectId, meetingId: scopeRequest.meetingId }),
+      readMetadata: async fileId => {
+        bridge ??= await awaitWorkjetProjectListStep(
+          requestSync?.startCollection?.('desktop_files', { pin: false, forceDirect: true }), deadline, 'presentation file bridge',
+        );
+        if (!bridge?.state && bridge?.ready) {
+          bridge = await awaitWorkjetProjectListStep(bridge.ready, deadline, 'presentation file bridge readiness');
+        }
+        const rows = await readWorkjetProjectListRows(bridge, {
+          selector: { id: { $eq: fileId } }, limit: 1,
+        }, crypto.randomUUID(), deadline, controller.signal, authority);
+        return rows[0]?.toJSON?.() || rows[0] || null;
+      },
+      readRange: (fileId, range) => {
+        const loader = bridge?.state?.demandFileLoader;
+        if (!loader?.fetchFile) throw new Error('Presentation file transport is unavailable.');
+        return awaitWorkjetProjectListStep(loader.fetchFile(fileId, { range }), deadline, 'presentation bytes');
+      },
+    });
+  } finally { clearTimeout(timer); controller.abort(); }
 }
 
 const WORKJET_SESSION_CONTROL_MAX_RESULTS = 100;

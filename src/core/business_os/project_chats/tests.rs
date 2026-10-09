@@ -18,6 +18,8 @@ mod jour_fixe_owner;
 mod jour_fixe_preparation;
 #[path = "jour_fixe_speech_tests.rs"]
 mod jour_fixe_speech;
+#[path = "presentation_tests.rs"]
+mod presentation;
 #[path = "recovery_tests.rs"]
 mod recovery;
 #[path = "supervisor_tests.rs"]
