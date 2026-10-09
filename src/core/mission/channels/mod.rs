@@ -2901,6 +2901,8 @@ pub fn ack_leased_messages_with_failure_reason(
 /// technical failure budget; the task waits and is offered again.
 pub const PROVIDER_CAPACITY_HOLD_POLICY: &str = "worker-provider-capacity";
 const PROVIDER_CAPACITY_RETRY_SECS: i64 = 600;
+const PROVIDER_CAPACITY_RETRY_MAX_SECS: i64 = 3_600;
+const PROVIDER_CAPACITY_FAILURE_CLASS_PREFIX: &str = "provider_capacity:";
 
 pub fn hold_leased_messages(
     root: &Path,
@@ -3007,14 +3009,14 @@ fn hold_leased_messages_impl(
             HoldReason::Technical { .. }
             | HoldReason::MissingReviewEvidence
             | HoldReason::MissingArtifact => {
-                let previous_attempts: i64 = tx
+                let (previous_attempts, previous_class): (i64, Option<String>) = tx
                     .query_row(
-                        "SELECT failure_attempt_count FROM communication_routing_state WHERE message_key=?1",
+                        "SELECT failure_attempt_count, failure_class FROM communication_routing_state WHERE message_key=?1",
                         params![message_key],
-                        |row| row.get(0),
+                        |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .optional()?
-                    .unwrap_or(0);
+                    .unwrap_or((0, None));
                 // A provider that is out of capacity (token-plan window used
                 // up, rate limit) says nothing about the task. Counted as a
                 // technical failure it ended 49 research tasks on thesen
@@ -3031,10 +3033,31 @@ fn hold_leased_messages_impl(
                     previous_attempts.saturating_add(1)
                 };
                 let exhausted = !capacity_wait && attempts >= 5;
+                // Consecutive capacity holds back off (10, 20, 40, then 60 min).
+                // With the weekly plan used up for days, 85 waiting research
+                // tasks came back every 10 minutes, rebuilt their context,
+                // met the same 429 and held the core database write lock 39 %
+                // of the time (thesen 09.10.2026). A single burst limit still
+                // waits only the first step. The step lives in failure_class,
+                // which a lease keeps and a success clears.
+                let capacity_step = if capacity_wait {
+                    previous_class
+                        .as_deref()
+                        .and_then(|class| {
+                            class.strip_prefix(PROVIDER_CAPACITY_FAILURE_CLASS_PREFIX)
+                        })
+                        .and_then(|step| step.parse::<u32>().ok())
+                        .map_or(0, |step| step.saturating_add(1).min(16))
+                } else {
+                    0
+                };
                 let failure_class = match reason {
-                    HoldReason::Technical { .. } => "technical",
-                    HoldReason::MissingReviewEvidence => "missing_review_evidence",
-                    HoldReason::MissingArtifact => "missing_artifact",
+                    HoldReason::Technical { .. } if capacity_wait => {
+                        format!("{PROVIDER_CAPACITY_FAILURE_CLASS_PREFIX}{capacity_step}")
+                    }
+                    HoldReason::Technical { .. } => "technical".to_string(),
+                    HoldReason::MissingReviewEvidence => "missing_review_evidence".to_string(),
+                    HoldReason::MissingArtifact => "missing_artifact".to_string(),
                     HoldReason::WaitingExternal(_) => unreachable!(),
                 };
                 let hold_reason = match reason {
@@ -3054,6 +3077,8 @@ fn hold_leased_messages_impl(
                         .min(16);
                     let seconds = if capacity_wait {
                         PROVIDER_CAPACITY_RETRY_SECS
+                            .saturating_mul(2_i64.saturating_pow(capacity_step))
+                            .min(PROVIDER_CAPACITY_RETRY_MAX_SECS)
                     } else {
                         300_i64
                             .saturating_mul(2_i64.saturating_pow(exponent))

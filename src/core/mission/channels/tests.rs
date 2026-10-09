@@ -8312,32 +8312,50 @@ fn provider_capacity_hold_waits_without_spending_the_failure_budget() {
         .expect("hold leased task");
     };
     let quota = "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)";
+    let wait_seconds = || -> i64 {
+        let retry_not_before: Option<String> = conn
+            .query_row(
+                "SELECT retry_not_before FROM communication_routing_state WHERE message_key=?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .expect("load retry gate");
+        chrono::DateTime::parse_from_rfc3339(retry_not_before.as_deref().expect("retry gate set"))
+            .expect("retry timestamp")
+            .signed_duration_since(Utc::now())
+            .num_seconds()
+    };
     // Longer than the five-step technical budget: a provider window that
-    // stays empty for hours must not end the task.
+    // stays empty for hours must not end the task, and consecutive capacity
+    // holds back off (10, 20, 40, then 60 minutes).
+    let mut waits = Vec::new();
     for _ in 0..7 {
         hold_once(PROVIDER_CAPACITY_HOLD_POLICY, quota);
+        waits.push(wait_seconds());
+    }
+    for (wait, expected) in waits.iter().zip([600, 1200, 2400, 3600, 3600, 3600, 3600]) {
+        assert!(
+            (expected - 100..=expected).contains(wait),
+            "capacity waits {waits:?} do not follow 600/1200/2400/3600"
+        );
     }
     let task = load_queue_task(&root, &task_id)
         .expect("load held queue task")
         .expect("queue task exists");
     assert_eq!(task.route_status, "pending");
-    let (attempts, retry_not_before, hold_reason): (i64, Option<String>, Option<String>) = conn
+    let (attempts, failure_class, hold_reason): (i64, Option<String>, Option<String>) = conn
         .query_row(
-            "SELECT failure_attempt_count, retry_not_before, hold_reason FROM communication_routing_state WHERE message_key=?1",
+            "SELECT failure_attempt_count, failure_class, hold_reason FROM communication_routing_state WHERE message_key=?1",
             params![task_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .expect("load durable hold metadata");
     assert_eq!(attempts, 0);
+    assert_eq!(failure_class.as_deref(), Some("provider_capacity:6"));
     assert_eq!(
         hold_reason.as_deref(),
         Some("technical:worker-provider-capacity")
     );
-    let wait = chrono::DateTime::parse_from_rfc3339(retry_not_before.as_deref().unwrap())
-        .expect("retry timestamp")
-        .signed_duration_since(Utc::now())
-        .num_seconds();
-    assert!((500..=600).contains(&wait), "capacity wait was {wait}s");
     let projection = business_command_projection(&root, "command-capacity-hold")
         .expect("load held command projection");
     assert_eq!(projection["terminal_status"], "none");
@@ -8355,5 +8373,11 @@ fn provider_capacity_hold_waits_without_spending_the_failure_budget() {
         )
         .expect("load attempts");
     assert_eq!(attempts, 1);
+    // After a different failure the next capacity hold starts at 10 minutes.
+    hold_once(PROVIDER_CAPACITY_HOLD_POLICY, quota);
+    assert!(
+        (500..=600).contains(&wait_seconds()),
+        "capacity backoff restarts after a technical hold"
+    );
     let _ = fs::remove_dir_all(root);
 }
