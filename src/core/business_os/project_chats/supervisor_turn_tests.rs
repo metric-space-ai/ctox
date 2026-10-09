@@ -338,7 +338,7 @@ fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyh
             "Hier ist der nächste Schritt.",
         )?;
         let canonical = channels::inspect_business_command(root.path(), command_id)?.unwrap();
-        assert!(super::supervisor_turns::reply_completion_allowed(
+        assert!(crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
             root.path(),
             &canonical["command"]
         )?);
@@ -347,7 +347,7 @@ fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyh
                 "UPDATE business_users SET active=0 WHERE user_id=?1",
                 [revoked],
             )?;
-            assert!(super::supervisor_turns::reply_completion_allowed(
+            assert!(crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
                 root.path(),
                 &canonical["command"]
             )
@@ -361,7 +361,7 @@ fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyh
                 '$.actor.email',?1) WHERE command_id='alias-conversation'",
                 [ALIAS],
             )?;
-            assert!(super::supervisor_turns::reply_completion_allowed(
+            assert!(crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
                 root.path(),
                 &canonical["command"]
             )

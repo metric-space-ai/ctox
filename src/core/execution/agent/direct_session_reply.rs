@@ -99,12 +99,20 @@ mod tests {
     fn unfenced_metadata_item_retains_the_same_turn_explicit_final_answer() {
         let metadata = "ctox-crew metadata:\n```json\n{\"crew_retrospective\":{}}\n```";
         assert!(is_crew_metadata_only(metadata));
-        assert!(!is_crew_metadata_only("Quote ctox-crew metadata: literally."));
+        assert!(!is_crew_metadata_only(
+            "Quote ctox-crew metadata: literally."
+        ));
         let mut capture = DirectSessionReplyCapture::default();
-        capture.observe(&event("Eine vollständige Antwort.", Some(MessagePhase::FinalAnswer)));
+        capture.observe(&event(
+            "Eine vollständige Antwort.",
+            Some(MessagePhase::FinalAnswer),
+        ));
         capture.observe(&event(metadata, Some(MessagePhase::FinalAnswer)));
         let retained = capture.complete(Some(metadata), true).unwrap();
-        assert_eq!(crate::crew::public_reply_text(&retained), "Eine vollständige Antwort.");
+        assert_eq!(
+            crate::crew::public_reply_text(&retained),
+            "Eine vollständige Antwort."
+        );
         assert!(retained.contains(metadata));
     }
 
