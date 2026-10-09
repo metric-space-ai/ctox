@@ -1,23 +1,23 @@
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-computer-ssh-key';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-computer-ssh-key';
-import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-computer-ssh-key';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-computer-ssh-key';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-computer-ssh-key';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-computer-ssh-key';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-computer-ssh-key';
-import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-computer-ssh-key';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-user-look-reload';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-user-look-reload';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-user-look-reload';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-user-look-reload';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-user-look-reload';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-user-look-reload';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-user-look-reload';
+import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-user-look-reload';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-user-look-reload';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-user-look-reload';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-user-look-reload';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-user-look-reload';
+import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-user-look-reload';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/app-lifecycle.js?v=20261009-shell-v2-user-look-reload';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -26,20 +26,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/permissions.js?v=20261009-shell-v2-user-look-reload';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261009-shell-v2-computer-ssh-key';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/branding.js?v=20261009-shell-v2-user-look-reload';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-user-look-reload';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/presentation.js?v=20261009-shell-v2-user-look-reload';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -50,9 +50,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-computer-ssh-key';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-computer-ssh-key';
-import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-user-look-reload';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-user-look-reload';
+import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-user-look-reload';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -60,27 +60,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/maintenance-state.js?v=20261009-shell-v2-user-look-reload';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/workspace-session.js?v=20261009-shell-v2-user-look-reload';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/taskbar-pins.js?v=20261009-shell-v2-user-look-reload';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261009-shell-v2-computer-ssh-key';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-computer-ssh-key';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-computer-ssh-key';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-computer-ssh-key';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/workjet-theme.js?v=20261009-shell-v2-user-look-reload';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-user-look-reload';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-user-look-reload';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-user-look-reload';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-user-look-reload';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -88,19 +88,22 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261009-shell-v2-computer-ssh-key';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-computer-ssh-key';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/startup-deadlines.js?v=20261009-shell-v2-user-look-reload';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-user-look-reload';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-user-look-reload';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-user-look-reload';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-user-look-reload';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
 const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
+// The look of the last signed-in user on this device (theme, language, style),
+// read for the first paint while the session is still unknown.
+const DEVICE_LOOK_KEY = 'ctox.businessOs.deviceLook';
 const PAIRING_CONFIG_KEY = 'ctox.businessOs.pairingConfig';
 const RXDB_BOOTSTRAP_VERSION_KEY = 'ctox.businessOs.rxdbBootstrapVersion';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
@@ -113,7 +116,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261009-shell-v2-computer-ssh-key';
+const APP_BUILD = '20261009-shell-v2-user-look-reload';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -1315,7 +1318,7 @@ async function bootstrap() {
   }
   const { installBusinessDialogFallbacks } = await traceShellPhase('dialog-assets', loadShellDialogsModule);
   installBusinessDialogFallbacks();
-  const prefs = readAccountPrefs();
+  const prefs = { ...readDeviceLook(), ...readAccountPrefs() };
   applyShellTheme(prefs.theme || 'dark', { persist: false });
   applyShellLanguage(prefs.language || 'de', { persist: false });
   applyShellStyle(prefs.shellStyle || 'ctox', { persist: false });
@@ -1327,6 +1330,7 @@ async function bootstrap() {
   // the system is loading data when nothing past the auth gate runs.
   const session = await traceShellPhase('session', loadSession);
   state.session = session;
+  if (session.authenticated) applySessionAccountPrefs(prefs);
   renderAccountButton(session);
   if (!session.authenticated) {
     document.documentElement.dataset.authState = 'locked';
@@ -9575,7 +9579,41 @@ function readAccountPrefs() {
 function writeAccountPrefs(nextPrefs) {
   const prefs = { ...readAccountPrefs(), ...(nextPrefs || {}) };
   writeScopedLocalStorage(ACCOUNT_PREFS_KEY, JSON.stringify(prefs));
+  writeDeviceLook(prefs);
   return prefs;
+}
+
+function readDeviceLook() {
+  try {
+    return JSON.parse(localStorage.getItem(DEVICE_LOOK_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDeviceLook(prefs) {
+  const look = {};
+  for (const key of ['theme', 'language', 'shellStyle']) {
+    if (prefs?.[key]) look[key] = prefs[key];
+  }
+  try { localStorage.setItem(DEVICE_LOOK_KEY, JSON.stringify(look)); } catch {}
+}
+
+// Preferences are stored per user (scopedStorageKey includes the actor), but
+// the shell applied them before the session was known, under the anonymous
+// "browser" scope: a chosen theme never came back after a reload (thesen
+// 09.10.2026). Apply the user's own preferences once the session is set; a
+// user without any yet inherits what this device showed.
+function applySessionAccountPrefs(fallback = {}) {
+  let prefs = readAccountPrefs();
+  if (!Object.keys(prefs).length && Object.keys(fallback || {}).length) {
+    prefs = writeAccountPrefs(fallback);
+  }
+  applyShellTheme(prefs.theme || 'dark', { persist: false });
+  applyShellLanguage(prefs.language || 'de', { persist: false });
+  applyShellStyle(prefs.shellStyle || 'ctox', { persist: false });
+  writeDeviceLook(prefs);
+  syncHeaderControls();
 }
 
 function clearStoredBrowserAuth() {
