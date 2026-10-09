@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
+import { createRxDatabase } from '../../rxdb/src/index.mjs';
 import {
   __ticketTestHooks,
   ticketBandOf,
@@ -233,4 +234,79 @@ test('tickets: ops pane auto-reveal follows mode + operation flow', () => {
   assert.equal(ticketOpsFlowActive([{ state: 'approval_pending' }], []), true);
   assert.equal(ticketOpsFlowActive([], [{ status: 'draft' }]), true);
   assert.equal(ticketOpsFlowActive([], [{ status: 'resolved' }]), false);
+});
+
+
+test('tickets realtime refresh hints do not start an unused denied queue snapshot', async () => {
+  const names = ['ctox_ticket_items', 'ctox_queue_tasks', 'ctox_crew_members'];
+  const databases = [];
+  const handles = new Map();
+  const observers = new Map();
+  const reads = { demand: 0, storage: 0 };
+  const denied = Object.assign(new Error('peer is not authorized for collection ctox_queue_tasks'), {
+    code: 'REMOTE_ERROR',
+  });
+  let refreshes = 0;
+  let cleanup;
+  const wait = () => new Promise(resolve => setTimeout(resolve, 120));
+  try {
+    for (const name of names) {
+      const listeners = new Set();
+      observers.set(name, listeners);
+      const storage = {
+        primaryPath: 'id', schemaIndexes: () => [],
+        observe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+        async queryDocuments() { reads.storage++; return []; },
+        async allDocuments() { reads.storage++; return []; },
+        async findDocumentsById() { reads.storage++; return {}; },
+      };
+      const db = await createRxDatabase({
+        name: 'tickets-realtime-' + name,
+        storage: { nativeStorage: { collection: () => storage, close() {} } },
+      });
+      databases.push(db);
+      await db.addCollections({ [name]: { schema: {
+        version: 0, primaryKey: 'id', type: 'object', properties: { id: { type: 'string' } },
+      } } });
+      const collection = db.collection(name);
+      collection.setDemandLoader({ async resolveQuery() {
+        reads.demand++;
+        if (name === 'ctox_queue_tasks') throw denied;
+        return [{ id: 'visible-record', _rev: '1-record', _deleted: false }];
+      } });
+      handles.set(name, collection);
+    }
+    const declarationStart = indexJs.indexOf('const collectionNames = [');
+    const declarationEnd = indexJs.indexOf('];', declarationStart) + 2;
+    const functionStart = indexJs.indexOf('function wireRealtime() {');
+    const functionEnd = indexJs.indexOf('\nfunction readPrimaryTicketReadiness(', functionStart);
+    assert(declarationStart >= 0 && declarationEnd > declarationStart && functionStart >= 0 && functionEnd > functionStart);
+    // Run the production function and collection list, with actual RxDB handles.
+    // Its callback only schedules the existing bounded refresh; no snapshot is consumed.
+    const wire = new Function('ticketCollection', 'scheduleRefresh',
+      indexJs.slice(declarationStart, declarationEnd) + '\n'
+      + indexJs.slice(functionStart, functionEnd) + '\nreturn wireRealtime;')(
+      name => handles.get(name), () => { refreshes++; },
+    );
+    cleanup = wire();
+    await wait();
+    assert.equal(refreshes, 3, 'initial invalidation reaches each present source');
+    assert.deepEqual(reads, { demand: 0, storage: 0 }, 'subscribing does not issue implicit native reads');
+    for (const listener of observers.get('ctox_ticket_items')) listener({ external: true, ids: ['visible-record'] });
+    await wait();
+    assert.equal(refreshes, 4, 'a changed ticket still schedules refresh');
+    assert.deepEqual(reads, { demand: 0, storage: 0 });
+    assert.equal((await handles.get('ctox_ticket_items').find().exec()).length, 1);
+    await assert.rejects(handles.get('ctox_queue_tasks').find().exec(), error => error === denied);
+    assert.equal(reads.demand, 2, 'explicit reads retain both authorized data and native denial');
+    cleanup();
+    cleanup();
+    assert.equal([...observers.values()].reduce((total, listeners) => total + listeners.size, 0), 0);
+    for (const handle of handles.values()) handle.notifyQueryWindowChange();
+    await wait();
+    assert.equal(refreshes, 4, 'closing Tickets detaches every realtime listener');
+  } finally {
+    cleanup?.();
+    await Promise.all(databases.map(db => db.close()));
+  }
 });
