@@ -254,6 +254,7 @@ const NATIVE_PROJECTION_COLLECTIONS: &[&str] = &[
     // Workjet project identity and local checkout bindings are native-authored
     // through exact business_commands; peers render their projections only.
     "workjet_computers",
+    super::provider_federation::REGISTRY_COLLECTION,
     "workjet_projects",
     "workjet_sessions",
     "workjet_session_transfers",
@@ -416,6 +417,18 @@ impl ReplicationPolicyReader for RootReplicationReader<'_> {
         document: &Value,
         user: &str,
     ) -> Option<bool> {
+        if collection == super::provider_federation::REGISTRY_COLLECTION {
+            let decision = (|| -> anyhow::Result<bool> {
+                let conn = Connection::open_with_flags(
+                    store::business_os_store_path(self.root),
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                )?;
+                conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+                super::provider_federation::projection_visible(&conn, document, user)
+            })();
+            return Some(decision.unwrap_or(false));
+        }
         self.visibility.visible(collection, document, user)
     }
     fn browser_visible(&mut self, collection: &str, document: &Value, user: &str) -> bool {
@@ -454,6 +467,12 @@ impl ReplicationPolicyReader for HeldReplicationReader<'_> {
         document: &Value,
         user: &str,
     ) -> Option<bool> {
+        if collection == super::provider_federation::REGISTRY_COLLECTION {
+            return Some(
+                super::provider_federation::projection_visible(self.store, document, user)
+                    .unwrap_or(false),
+            );
+        }
         super::project_chats::document_visible_from_connections(
             self.core, self.store, collection, document, user,
         )

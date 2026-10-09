@@ -232,10 +232,7 @@ pub(super) fn handle_command(
                     )?;
                 }
                 adopt(tx, &owner, &holder, &accounts, now)?;
-                Ok(AppliedDomainEffect {
-                    result: list(tx, &owner)?,
-                    projections: vec![],
-                })
+                projection::applied(tx, &owner)
             })?;
             Ok(applied.result)
         }
@@ -276,10 +273,7 @@ pub(super) fn handle_command(
                     "native account provider changed"
                 );
                 retain_catalog_observation(tx, &request, &observation)?;
-                Ok(AppliedDomainEffect {
-                    result: list(tx, &owner)?,
-                    projections: vec![],
-                })
+                projection::applied(tx, &owner)
             })?;
             Ok(applied.result)
         }
@@ -299,10 +293,7 @@ pub(super) fn handle_command(
             let applied = admitted.apply(&mut conn, |tx| {
                 let owner = management_owner(tx, actor)?;
                 withdraw(tx, &owner, &request)?;
-                Ok(AppliedDomainEffect {
-                    result: list(tx, &owner)?,
-                    projections: vec![],
-                })
+                projection::applied(tx, &owner)
             })?;
             Ok(applied.result)
         }
@@ -788,3 +779,9 @@ mod catalog_tests;
 mod models;
 
 pub(crate) use models::{capture_consumable_model, with_consumable_model, ConsumableModel};
+
+#[path = "provider_projection.rs"]
+mod projection;
+pub(super) use projection::{
+    repair as repair_projections, visible as projection_visible, COLLECTION as REGISTRY_COLLECTION,
+};

@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261009-shell-v2-supervisor-turn-kind';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261009-shell-v2-provider-registry';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
