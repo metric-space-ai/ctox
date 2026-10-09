@@ -1712,7 +1712,7 @@ pub fn provider_subscription_status(root: &Path) -> serde_json::Value {
         );
     }
     if crate::execution::cliproxyapi_xai::subscription_installed(root) {
-        accounts.push(serde_json::json!({"id": crate::execution::cliproxyapi_xai::ACCOUNT_ID, "provider": "xai", "enabled": true, "ready": true, "status": "authenticated"}));
+        accounts.push(serde_json::json!({"id": crate::execution::cliproxyapi_xai::ACCOUNT_ID, "provider": "xai", "enabled": true, "status": "authenticated"}));
     }
     if instance_codex_runtime_config(root).ok().flatten().is_some()
         && !accounts.iter().any(|a| {
