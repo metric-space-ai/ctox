@@ -13,8 +13,8 @@
   applicable shared windows retain their latest bounded reset. Generic
   Retry-After/Ms and the existing conductor/account scopes remain unchanged;
   upstream random grace is not introduced by this slice. Eight parser guards
-  and a real loopback transport regression cover the integration. Their
-  execution evidence is pending. This does not promote the accepted pin or
+  and a real loopback transport regression cover the integration. Both feature
+  matrices execute those applicable guards. This does not promote the accepted pin or
   establish full v8.0.22 parity, deployed providers or installed acceptance.
 - The direct Claude Responses route now creates native caller context below
   the actual account selection on every unary/stream failover attempt. Original
