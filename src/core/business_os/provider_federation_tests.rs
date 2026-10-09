@@ -73,7 +73,7 @@ impl Fixture {
     // Policy-unit input only. Production has no ConsumerFacts-based public
     // constructor: with_consumable_account requires Architecture's sealed,
     // possession-bound transport authority and revalidates current enrollment.
-    fn facts(&self, computer: &str) -> ConsumerFacts {
+    pub(super) fn facts(&self, computer: &str) -> ConsumerFacts {
         ConsumerFacts {
             owner_user_id: "owner".into(),
             owner_epoch: 0,
