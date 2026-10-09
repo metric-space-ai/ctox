@@ -1,0 +1,14 @@
+{
+  "component": "@workjet/slide-engine validator",
+  "source_repository": "https://github.com/metric-space-ai/workjet",
+  "source_path": "packages/slide-engine",
+  "source_commit": "7c8efc6ca8c4cceb1d7e59a0041588adf1d55274",
+  "build": "node packages/slide-engine/scripts/build-validator.mjs (esbuild 0.28.1, ESM, platform node, target node22)",
+  "bundle": "slide-engine-validator.mjs",
+  "bundle_sha256": "d784d43809f157f3dd4236abbd349800c707fce1066262b94f3ce27fe8f8e989",
+  "upstream": "metric-space-ai/learnordie packages/slide-engine at d94f8a594dbea7e4bd9b4872fcdaf5c7342b5dfe, Workjet fork deltas listed in packages/slide-engine/UPSTREAM.md",
+  "bundled_dependencies": [
+    "zod 4.4.3 (MIT)"
+  ],
+  "fixture": "jour-fixe-deck.json is packages/slide-engine/fixtures/jour-fixe-deck.json from the same commit"
+}

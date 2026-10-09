@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261009-shell-v2-query-ready-diagnostics';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261009-shell-v2-query-ready-diagnostics';
+} from './sync-contract.js?v=20261009-shell-v2-presentation-revisions';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261009-shell-v2-presentation-revisions';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261009-shell-v2-presentation-revisions';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20261009-shell-v2-query-ready-diagnostics';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261009-shell-v2-presentation-revisions';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',

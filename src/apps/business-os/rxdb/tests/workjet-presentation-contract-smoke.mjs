@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { PRESENTATION_SCHEMA, PRESENTATION_VERSION, PRESENTATION_TYPES, PRESENTATION_COMMANDS, validatePresentationValue } from '../../shared/workjet-presentation-contract.generated.mjs';
+const fixture = JSON.parse(readFileSync(new URL('../../../../core/rxdb/tests/fixtures/workjet-presentation-v1.json', import.meta.url), 'utf8'));
+assert.equal(PRESENTATION_VERSION, fixture.contract_version);
+assert.equal(PRESENTATION_SCHEMA, fixture.schema);
+assert.deepEqual(PRESENTATION_TYPES, fixture.types);
+assert.deepEqual(PRESENTATION_COMMANDS, fixture.commands);
+for (const {type, value} of fixture.valid_cases) assert.equal(validatePresentationValue(type, value).ok, true, type);
+for (const {type, value, reason} of fixture.invalid_cases) assert.equal(validatePresentationValue(type, value).ok, false, reason);
+assert.throws(() => { PRESENTATION_TYPES.PresentationManifest.fields.revision.type = 'bool'; }, TypeError);
+assert.equal(PRESENTATION_COMMANDS['ctox.workjet.presentation.canvas.save'].authorization, 'owner');
+console.log(`Presentation contract: ${fixture.valid_cases.length} valid / ${fixture.invalid_cases.length} rejected cases agree with native fixture`);

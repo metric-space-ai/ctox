@@ -63,6 +63,8 @@ mod workjet_kpis;
 mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
 mod workjet_narration;
+#[path = "mcp_workjet_presentation.rs"]
+mod workjet_presentation;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
 
@@ -866,6 +868,8 @@ fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bo
             workjet_worker_dispatch::TOOL
                 | workjet_jour_fixe::READ_TOOL
                 | workjet_jour_fixe::WRITE_TOOL
+                | workjet_presentation::READ_TOOL
+                | workjet_presentation::WRITE_TOOL
                 | workjet_kpis::TOOL
         );
     }
@@ -1482,6 +1486,8 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         workjet_worker_dispatch::descriptor(),
         workjet_jour_fixe::read_descriptor(),
         workjet_jour_fixe::write_descriptor(),
+        workjet_presentation::read_descriptor(),
+        workjet_presentation::write_descriptor(),
         workjet_luma_config::read_descriptor(),
         workjet_luma_config::write_descriptor(),
         workjet_kpis::descriptor(),
@@ -3273,6 +3279,15 @@ fn call_tool_inner(
         )?,
         workjet_calendar::ACCOUNTS_TOOL | workjet_calendar::EVENTS_TOOL => {
             workjet_calendar::execute(
+                root,
+                &context,
+                tool_name,
+                &arguments,
+                trusted_gateway_context,
+            )?
+        }
+        workjet_presentation::READ_TOOL | workjet_presentation::WRITE_TOOL => {
+            workjet_presentation::execute(
                 root,
                 &context,
                 tool_name,
@@ -7123,7 +7138,11 @@ fn enforce_argument_scope_policy(
             enforce_module_policy(root, "kundenpipeline")?;
             enforce_collection_policy(root, "kundenpipeline_entscheidungen")?;
         }
-        workjet_kpis::TOOL | workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
+        workjet_kpis::TOOL
+        | workjet_jour_fixe::READ_TOOL
+        | workjet_jour_fixe::WRITE_TOOL
+        | workjet_presentation::READ_TOOL
+        | workjet_presentation::WRITE_TOOL => {
             enforce_module_policy(root, "ctox")?;
         }
         workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
@@ -7314,6 +7333,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "business_os.remote_worker_admission"
         | "business_os.workjet_worker_dispatch"
         | "business_os.jour_fixe_update"
+        | workjet_presentation::WRITE_TOOL
         | workjet_luma_config::WRITE_TOOL
         | workjet_kpis::TOOL
         | "business_os.cancel_project_task"
@@ -7664,6 +7684,7 @@ fn enforce_internal_command_session_scope(
         anyhow::ensure!(
             (tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "dispatch")
                 || workjet_jour_fixe::allows(tool_name, arguments)
+                || workjet_presentation::allows(tool_name, arguments)
                 || workjet_kpis::allows(tool_name, arguments),
             "tool/action is outside the restricted native supervisor session"
         );

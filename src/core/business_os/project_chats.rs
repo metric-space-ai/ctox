@@ -20,6 +20,8 @@ pub(in crate::business_os) mod jour_fixe_local_narration;
 pub(in crate::business_os) mod jour_fixe_owner;
 pub(in crate::business_os) mod jour_fixe_preparation;
 pub(in crate::business_os) mod jour_fixe_speech;
+pub(in crate::business_os) mod presentation;
+pub(in crate::business_os) mod presentation_validator;
 mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
 mod supervisor_observation;
@@ -77,6 +79,7 @@ pub(super) fn is_command(command_type: &str) -> bool {
         || jour_fixe_owner::is_command(command_type)
         || jour_fixe_owner::is_reserved_command(command_type)
         || command_type == "ctox.workjet.jour_fixe.meeting.read"
+        || presentation::is_command(command_type)
         || super::workjet_project_kpis::is_command(command_type)
         || matches!(
             command_type,
