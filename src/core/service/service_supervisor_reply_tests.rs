@@ -13,7 +13,7 @@ fn fixture_for_kind(turn_kind: Option<&str>) -> Result<(tempfile::TempDir, Queue
         crate::business_os::mcp_channel::workjet_dispatch_service_test_fixture()?;
     let command_id = if let Some(kind) = turn_kind {
         let original = channels::inspect_business_command(temp.path(), &command_id)?.unwrap();
-        let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+        let accepted = crate::business_os::store::accept_rxdb_business_command(
             temp.path(),
             json!({"id": format!("submit-reply-{kind}"), "module":"ctox",
                 "command_type":"ctox.workjet.project.supervisor.turn.submit", "record_id":"project",
@@ -288,7 +288,7 @@ fn supervisor_submit_rejects_unknown_or_null_kind() -> Result<()> {
     .into_iter()
     .enumerate()
     {
-        let admitted = crate::business_os::command_plane::accept_rxdb_business_command(
+        let admitted = crate::business_os::store::accept_rxdb_business_command(
             temp.path(),
             json!({"id":format!("invalid-kind-{index}"), "module":"ctox",
                 "command_type":"ctox.workjet.project.supervisor.turn.submit", "record_id":"project",
@@ -309,7 +309,7 @@ fn generic_threads_request_cannot_copy_supervisor_conversation_provenance() -> R
     let (temp, _, command_id) = fixture()?;
     let root = temp.path();
     let original = channels::inspect_business_command(root, &command_id)?.unwrap();
-    let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+    let accepted = crate::business_os::store::accept_rxdb_business_command(
         root,
         json!({"id":"generic-ai-forged-kind", "module":"threads", "command_type":"threads.ai.request",
             "record_id": original["command"]["payload"]["thread_id"],
@@ -347,7 +347,7 @@ fn supervisor_turn_kind_capability_is_owner_scoped_and_does_not_submit_work() ->
         |row| row.get(0),
     )?;
     for actor in ["owner", "foreign"] {
-        let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+        let accepted = crate::business_os::store::accept_rxdb_business_command(
             root,
             json!({"id":format!("turn-kind-capabilities-{actor}"),"module":"ctox",
                 "command_type":"ctox.workjet.project.supervisor.turn.capabilities","record_id":"project",

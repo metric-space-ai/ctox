@@ -51,7 +51,7 @@ pub(super) fn snapshot_binding_is_current(
 
 pub(in crate::business_os) fn catalogue() -> Value {
     json!([
-      {"recipe":"project_tasks_total","label":"Tasks","meaning":"Native queued Supervisor commands admitted to this project, created within the rolling window."},
+      {"recipe":"project_tasks_total","label":"Tasks","meaning":"Native queued Supervisor work requests admitted to this project within the rolling window; explicit conversation replies are excluded."},
       {"recipe":"project_tasks_completed","label":"Erledigt","meaning":"Those commands with a terminal completed receipt, not model claims or lease completion."},
       {"recipe":"project_tasks_failed","label":"Fehlversuche","meaning":"Those commands with a terminal failed receipt."},
       {"recipe":"project_tasks_open","label":"Offene Tasks","meaning":"Those commands whose native execution phase is not terminal."},
@@ -113,7 +113,8 @@ fn calculate(
        AND execution_mode='queue' AND record_id=?1 AND created_at_ms>=?2 AND created_at_ms<=?3
        AND json_extract(intent_json,'$.payload.thread_id')=?4
        AND json_extract(intent_json,'$.payload.risk_class')='internal'
-       AND json_extract(intent_json,'$.client_context.actor.id')=?5",
+       AND json_extract(intent_json,'$.client_context.actor.id')=?5
+       AND coalesce(json_extract(intent_json,'$.payload.supervisor_turn.kind'),'work')!='conversation'",
        params![request.project_id,start,now,thread,owner], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
     let (label, unit, metric, value, values, operation) = match request.recipe {
         NativeMetricRecipe::ProjectTasksTotal => (
