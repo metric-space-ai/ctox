@@ -144,12 +144,10 @@ fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
     assert!(!fence(&other.message_key, "stale-worker").still_owned(&reader)?);
     assert!(!fence("queue:system::missing", "worker-target").still_owned(&reader)?);
     assert!(fence(&other.message_key, "").open_reader().is_err());
-    assert!(
-        reader
-            .connection
-            .execute("DELETE FROM communication_routing_state", [])
-            .is_err()
-    );
+    assert!(reader
+        .connection
+        .execute("DELETE FROM communication_routing_state", [])
+        .is_err());
     Ok(())
 }
 
@@ -1511,11 +1509,9 @@ fn queue_thread_refresh_failure_does_not_leave_a_committed_lease() {
 
     let error = lease_queue_task(&root, &created.message_key, "ctox-service")
         .expect_err("thread refresh failure must abort before queue lease commit");
-    assert!(
-        error
-            .to_string()
-            .contains("injected thread refresh failure")
-    );
+    assert!(error
+        .to_string()
+        .contains("injected thread refresh failure"));
     let reloaded = load_queue_task(&root, &created.message_key)
         .expect("failed to load queue task")
         .expect("missing queue task");
@@ -2136,17 +2132,13 @@ fn queue_task_lease_stalled_probe_tracks_heartbeat_expiry() {
     )
     .expect("failed to create queue task");
     // A pending task has no lease at all: not stalled.
-    assert!(
-        !queue_task_lease_stalled(&root, &created.message_key)
-            .expect("stalled probe failed for pending task")
-    );
+    assert!(!queue_task_lease_stalled(&root, &created.message_key)
+        .expect("stalled probe failed for pending task"));
     lease_queue_task(&root, &created.message_key, "ctox-service")
         .expect("failed to lease queue task");
     // A fresh lease with a future expiry has a live heartbeat window.
-    assert!(
-        !queue_task_lease_stalled(&root, &created.message_key)
-            .expect("stalled probe failed for fresh lease")
-    );
+    assert!(!queue_task_lease_stalled(&root, &created.message_key)
+        .expect("stalled probe failed for fresh lease"));
     let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
     conn.execute(
         "UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
@@ -2156,10 +2148,8 @@ fn queue_task_lease_stalled_probe_tracks_heartbeat_expiry() {
     drop(conn);
     // Heartbeat stopped and the expiry passed: the lease is stalled and
     // must surface as such, never as healthy progress.
-    assert!(
-        queue_task_lease_stalled(&root, &created.message_key)
-            .expect("stalled probe failed for expired lease")
-    );
+    assert!(queue_task_lease_stalled(&root, &created.message_key)
+        .expect("stalled probe failed for expired lease"));
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -2625,11 +2615,9 @@ fn owner_profile_settings_merge_adds_founder_mailboxes_for_routing() {
     let policy = classify_email_sender(&settings, "mp@example.com");
     assert!(policy.allowed);
     assert_eq!(policy.role, "founder");
-    assert!(
-        settings
-            .get("CTOX_FOUNDER_EMAIL_ROLES")
-            .is_some_and(|roles| roles.contains("mp@example.com=CFO / Founder"))
-    );
+    assert!(settings
+        .get("CTOX_FOUNDER_EMAIL_ROLES")
+        .is_some_and(|roles| roles.contains("mp@example.com=CFO / Founder")));
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -2687,10 +2675,9 @@ fn founder_ack_guard_uses_sqlite_owner_profiles() {
 
     let err = ack_leased_messages(&root, &[message_key.to_string()], "handled")
         .expect_err("founder mail must not be handled without reviewed send proof");
-    assert!(
-        err.to_string()
-            .contains("cannot mark founder/owner/admin inbound mail as handled")
-    );
+    assert!(err
+        .to_string()
+        .contains("cannot mark founder/owner/admin inbound mail as handled"));
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -2776,10 +2763,9 @@ fn failed_queue_ack_requires_and_persists_failure_reason() {
 
     let err = ack_leased_messages(&root, std::slice::from_ref(&task.message_key), "failed")
         .expect_err("failed ack without reason must be rejected");
-    assert!(
-        err.to_string()
-            .contains("failed queue ack requires a non-empty failure reason")
-    );
+    assert!(err
+        .to_string()
+        .contains("failed queue ack requires a non-empty failure reason"));
 
     ack_leased_messages_with_failure_reason(
         &root,
@@ -3239,13 +3225,11 @@ fn reviewed_reply_removes_only_its_exact_leading_subject_header() -> Result<()> 
         subject,
     )?;
     assert!(ensure_founder_outbound_body_text_clean(&addressed).is_err());
-    assert!(
-        outbound_review::reviewed_reply_body_only(
-            "Subject: Re: Import falsch gelandet\n\n",
-            subject,
-        )
-        .is_err()
-    );
+    assert!(outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\n\n",
+        subject,
+    )
+    .is_err());
     Ok(())
 }
 
@@ -3423,11 +3407,9 @@ fn founder_reply_blocks_send_when_qr_code_is_missing() {
         &[],
     )
     .expect_err("missing qr code should block founder reply");
-    assert!(
-        error
-            .to_string()
-            .contains("missing required deliverable(s): qr_code")
-    );
+    assert!(error
+        .to_string()
+        .contains("missing required deliverable(s): qr_code"));
 
     let _ = std::fs::remove_file(&db_path);
     let _ = fs::remove_dir_all(&root);
@@ -3616,10 +3598,9 @@ fn teams_work_ack_requires_review_even_with_queue_backing() {
 
     let err = enforce_external_work_ack_has_pipeline_backing(&conn, &request)
         .expect_err("queue-backed acknowledgement must still require review");
-    assert!(
-        err.to_string()
-            .contains("has not passed communication review")
-    );
+    assert!(err
+        .to_string()
+        .contains("has not passed communication review"));
 
     let reviewed_request = ChannelSendRequest {
         reviewed_founder_send: true,
@@ -3705,11 +3686,9 @@ fn email_communication_review_approval_is_exact_and_typed() {
         .expect("exact approved email body should match");
     let changed_body = require_any_unconsumed_external_chat_review(&conn, &action, "Changed body")
         .expect_err("changed email body must not inherit approval");
-    assert!(
-        changed_body
-            .to_string()
-            .contains("no matching unconsumed review approval")
-    );
+    assert!(changed_body
+        .to_string()
+        .contains("no matching unconsumed review approval"));
 
     let _ = std::fs::remove_file(&db_path);
     let _ = fs::remove_dir_all(&root);
@@ -4010,11 +3989,9 @@ fn reviewed_founder_reply_requires_exact_approval_before_send() {
     let before_approval =
         require_unconsumed_founder_reply_review(&conn, inbound_key, &action, approved_body)
             .expect_err("send must be blocked before review approval");
-    assert!(
-        before_approval
-            .to_string()
-            .contains("no matching unconsumed review approval")
-    );
+    assert!(before_approval
+        .to_string()
+        .contains("no matching unconsumed review approval"));
 
     record_founder_reply_review_approval(&root, inbound_key, approved_body, "PASS")
         .expect("record approval");
@@ -4024,11 +4001,9 @@ fn reviewed_founder_reply_requires_exact_approval_before_send() {
     let changed_body =
         require_unconsumed_founder_reply_review(&conn, inbound_key, &action, "Changed body")
             .expect_err("changed body must not inherit the approval");
-    assert!(
-        changed_body
-            .to_string()
-            .contains("no matching unconsumed review approval")
-    );
+    assert!(changed_body
+        .to_string()
+        .contains("no matching unconsumed review approval"));
 
     let _ = std::fs::remove_file(&db_path);
     let _ = fs::remove_dir_all(&root);
@@ -4187,10 +4162,9 @@ fn founder_inbound_cannot_be_handled_without_reviewed_send() {
 
     let err = ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
         .expect_err("founder inbound should not be handleable before reviewed send");
-    assert!(
-        err.to_string()
-            .contains("cannot mark founder/owner/admin inbound mail as handled")
-    );
+    assert!(err
+        .to_string()
+        .contains("cannot mark founder/owner/admin inbound mail as handled"));
 
     let _ = std::fs::remove_file(&db_path);
     let _ = fs::remove_dir_all(&root);
@@ -4845,11 +4819,9 @@ fn take_messages_does_not_retake_same_owner_lease() {
             .len(),
         1
     );
-    assert!(
-        take_messages(&mut conn, Some("email"), 1, "ctox-service")
-            .expect("second take")
-            .is_empty()
-    );
+    assert!(take_messages(&mut conn, Some("email"), 1, "ctox-service")
+        .expect("second take")
+        .is_empty());
 
     let _ = fs::remove_file(&db_path);
 }
@@ -4889,10 +4861,8 @@ fn thread_prefers_voice_reply_for_voice_jami_inbound() {
     )
     .expect("failed to upsert jami voice message");
 
-    assert!(
-        thread_prefers_voice_reply(&conn, "jami/thread-voice-1")
-            .expect("failed to resolve jami voice preference")
-    );
+    assert!(thread_prefers_voice_reply(&conn, "jami/thread-voice-1")
+        .expect("failed to resolve jami voice preference"));
 
     let _ = fs::remove_file(&db_path);
 }
@@ -5069,11 +5039,9 @@ fn channel_history_and_search_can_reconstruct_related_messages() {
     let search = search_messages(&conn, "nextcloud endpoint", Some("email"), None, 10)
         .expect("failed to search");
     assert_eq!(search.len(), 2);
-    assert!(
-        search
-            .iter()
-            .all(|item| item.thread_key == "email/thread-a")
-    );
+    assert!(search
+        .iter()
+        .all(|item| item.thread_key == "email/thread-a"));
 
     let sender_search =
         search_messages(&conn, "redis", Some("email"), Some("owner@example.com"), 10)
@@ -5221,19 +5189,15 @@ fn channel_context_groups_thread_state_blockers_and_open_questions() {
         Some("ctx-2")
     );
     assert!(!context.candidate_blockers.is_empty());
-    assert!(
-        context
-            .candidate_blockers
-            .iter()
-            .any(|item| item.message_key == "ctx-2")
-    );
+    assert!(context
+        .candidate_blockers
+        .iter()
+        .any(|item| item.message_key == "ctx-2"));
     assert!(!context.open_owner_questions.is_empty());
-    assert!(
-        context
-            .related_messages
-            .iter()
-            .any(|item| item.message_key == "ctx-4")
-    );
+    assert!(context
+        .related_messages
+        .iter()
+        .any(|item| item.message_key == "ctx-4"));
 
     let _ = fs::remove_file(&db_path);
 }
@@ -5977,13 +5941,11 @@ fn phase1_update_pending_send_to_failed_preserves_body_and_records_provider_erro
         metadata.get("transitioned_to").and_then(Value::as_str),
         Some("send_failed")
     );
-    assert!(
-        metadata
-            .get("provider_error")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .contains("smtp authentication failed")
-    );
+    assert!(metadata
+        .get("provider_error")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .contains("smtp authentication failed"));
 
     let _ = std::fs::remove_file(&db_path);
 }
@@ -7143,10 +7105,13 @@ fn registered_saga_replays_claimed_effect_and_keeps_failed_compensation_visible(
             .expect_err("second forward effect must wait for the first");
     assert!(out_of_order.to_string().contains("registered order"));
 
-    assert!(
-        claim_business_command_saga_step(&root, "command-saga-crash", "persist_visibility", false,)
-            .expect("claim first forward effect")
-    );
+    assert!(claim_business_command_saga_step(
+        &root,
+        "command-saga-crash",
+        "persist_visibility",
+        false,
+    )
+    .expect("claim first forward effect"));
     let evidence = json!({"module_id": "notes", "previous_visible": false, "visible": true});
     record_business_command_saga_step_evidence(
         &root,
@@ -7166,10 +7131,13 @@ fn registered_saga_replays_claimed_effect_and_keeps_failed_compensation_visible(
             .expect("recover effect evidence"),
         evidence,
     );
-    assert!(
-        claim_business_command_saga_step(&root, "command-saga-crash", "persist_visibility", false,)
-            .expect("reclaim interrupted effect")
-    );
+    assert!(claim_business_command_saga_step(
+        &root,
+        "command-saga-crash",
+        "persist_visibility",
+        false,
+    )
+    .expect("reclaim interrupted effect"));
     complete_business_command_saga_step(
         &root,
         "command-saga-crash",
@@ -7215,11 +7183,9 @@ fn registered_saga_replays_claimed_effect_and_keeps_failed_compensation_visible(
         None,
     )
     .expect_err("manual intervention saga must never report success");
-    assert!(
-        premature_success
-            .to_string()
-            .contains("terminal success rejected")
-    );
+    assert!(premature_success
+        .to_string()
+        .contains("terminal success rejected"));
     complete_business_control_command(
         &root,
         "command-saga-crash",
@@ -7307,11 +7273,9 @@ fn business_command_cannot_complete_before_typed_result_review_and_validation() 
         "assistant prose claimed completion",
     )
     .expect_err("completion before review must fail");
-    assert!(
-        premature
-            .to_string()
-            .contains("passed review and validation")
-    );
+    assert!(premature
+        .to_string()
+        .contains("passed review and validation"));
 
     record_business_command_review(
         &root,

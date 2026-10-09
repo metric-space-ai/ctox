@@ -63,30 +63,19 @@ pub(crate) use queue_execution_fence::{QueueExecutionFence, QueueWorkerLifetime}
 pub(crate) use queue_provider_binding::tests::public_text_provider_fixture;
 #[cfg(unix)]
 pub(crate) use queue_provider_binding::{
-    NativeProviderAdmission, NativeProviderBinding, NativeProviderCaptureOwner,
-    NativeProviderCommand, NativeProviderCommandEmitter, NativeProviderFacts,
-    NativeProviderTurnOwner, lookup_native_provider_binding,
+    lookup_native_provider_binding, NativeProviderAdmission, NativeProviderBinding,
+    NativeProviderCaptureOwner, NativeProviderCommand, NativeProviderCommandEmitter,
+    NativeProviderFacts, NativeProviderTurnOwner,
 };
 mod outbound_review;
 use crate::communication_store::parse_string_json_array;
 pub(crate) use crate::communication_store::{
-    UpsertMessage, now_iso_string, open_channel_db, preview_text, refresh_thread,
-    refresh_thread_tx, upsert_communication_message, upsert_communication_message_tx,
+    now_iso_string, open_channel_db, preview_text, refresh_thread, refresh_thread_tx,
+    upsert_communication_message, upsert_communication_message_tx, UpsertMessage,
 };
 use account_helpers::*;
 pub(crate) use account_helpers::{
     record_communication_sync_run, stable_digest, upsert_communication_account,
-};
-pub(crate) use outbound_review::{
-    PolicyReportEmail, default_email_account_key, ensure_founder_outbound_body_text_clean,
-    ensure_founder_reply_deliverables_present, is_reviewed_external_chat_channel,
-    prepare_reviewed_external_chat_reply, prepare_reviewed_founder_reply,
-    record_and_send_external_chat_escalation_reply, record_and_send_founder_escalation_reply,
-    record_and_send_policy_report_email, record_external_chat_review_approval,
-    record_founder_outbound_review_approval, record_founder_reply_review_approval,
-    required_founder_reply_deliverables, reviewed_send_result_has_durable_outbound_artifact,
-    send_reviewed_external_chat_action, send_reviewed_founder_outbound_action,
-    terminal_founder_outbound_artifact_count,
 };
 use outbound_review::{
     cached_queue_task_count, cached_queue_task_list, channel_projection_tables_exist,
@@ -123,6 +112,17 @@ use outbound_review::{
     reviewed_outbound_evidence, stranded_outbound_send_attempt, update_pending_send_to_accepted,
     update_pending_send_to_failed,
 };
+pub(crate) use outbound_review::{
+    default_email_account_key, ensure_founder_outbound_body_text_clean,
+    ensure_founder_reply_deliverables_present, is_reviewed_external_chat_channel,
+    prepare_reviewed_external_chat_reply, prepare_reviewed_founder_reply,
+    record_and_send_external_chat_escalation_reply, record_and_send_founder_escalation_reply,
+    record_and_send_policy_report_email, record_external_chat_review_approval,
+    record_founder_outbound_review_approval, record_founder_reply_review_approval,
+    required_founder_reply_deliverables, reviewed_send_result_has_durable_outbound_artifact,
+    send_reviewed_external_chat_action, send_reviewed_founder_outbound_action,
+    terminal_founder_outbound_artifact_count, PolicyReportEmail,
+};
 pub(crate) use outbound_review::{ensure_open_routing_rows_once, ensure_schema_once};
 pub use outbound_review::{
     inbound_message_has_terminal_no_send, inbound_message_is_auto_submitted,
@@ -135,26 +135,27 @@ mod command_saga;
 use command_saga::transition_business_command_for_task_in_transaction;
 mod route_status;
 pub(crate) use command_saga::{
-    BusinessOsQueueMirrorSnapshot, audit_and_migrate_business_command_storage,
-    business_command_core_diagnostics, business_command_projection,
-    business_command_projection_from_conn, business_command_retention_maintenance,
-    business_command_saga_pending_compensation_steps, business_command_saga_status,
-    business_command_saga_step_evidence, canonical_command_mirror_projection,
-    claim_business_command_saga_step, claim_business_command_waiting_dependencies,
-    claim_business_command_with_queue, claim_business_control_command,
-    communication_projection_clock_version, complete_business_command_saga_step,
-    complete_business_control_command, fail_business_command_saga_step, inspect_business_command,
-    inspect_business_command_for_task, inspect_business_command_for_task_from_conn,
-    load_business_command_projection_if_present, load_business_os_queue_mirror_snapshot,
-    load_business_os_queue_mirror_snapshot_from_conn, mark_business_command_outbox_delivered,
-    mark_business_command_outbox_failed, pending_business_command_outbox,
-    persist_business_command_worker_result, progress_business_control_command,
-    reconcile_business_command_invariants, record_business_command_applied_effect_delivery_failure,
+    audit_and_migrate_business_command_storage, business_command_core_diagnostics,
+    business_command_projection, business_command_projection_from_conn,
+    business_command_retention_maintenance, business_command_saga_pending_compensation_steps,
+    business_command_saga_status, business_command_saga_step_evidence,
+    canonical_command_mirror_projection, claim_business_command_saga_step,
+    claim_business_command_waiting_dependencies, claim_business_command_with_queue,
+    claim_business_control_command, communication_projection_clock_version,
+    complete_business_command_saga_step, complete_business_control_command,
+    fail_business_command_saga_step, inspect_business_command, inspect_business_command_for_task,
+    inspect_business_command_for_task_from_conn, load_business_command_projection_if_present,
+    load_business_os_queue_mirror_snapshot, load_business_os_queue_mirror_snapshot_from_conn,
+    mark_business_command_outbox_delivered, mark_business_command_outbox_failed,
+    pending_business_command_outbox, persist_business_command_worker_result,
+    progress_business_control_command, reconcile_business_command_invariants,
+    record_business_command_applied_effect_delivery_failure,
     record_business_command_intake_failure, record_business_command_review,
     record_business_command_saga_step_evidence, reject_legacy_unowned_external_sql_command,
     resolve_business_command_intake_failures, retry_failed_app_create_business_command,
     runtime_business_command_action_snapshot, start_business_command_saga,
     start_runtime_business_command_saga, transition_business_command_for_task,
+    BusinessOsQueueMirrorSnapshot,
 };
 pub(crate) use route_status::QueueRouteStatus;
 
@@ -176,19 +177,19 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
-use qrcode::QrCode;
 use qrcode::types::Color as QrColor;
+use qrcode::QrCode;
+use rusqlite::params;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
-use rusqlite::params;
-use rusqlite::params_from_iter;
-use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -208,8 +209,8 @@ use crate::communication::adapters as communication_adapters;
 use crate::communication::adapters::CommunicationTransportAdapter;
 use crate::communication::gateway as communication_gateway;
 use crate::core_state::guard::{
-    CoreSpawnProof, CoreSpawnRequest, enforce_core_spawn, enforce_core_spawn_in_transaction,
-    enforce_core_transition, ensure_core_transition_guard_schema, evaluate_core_spawn,
+    enforce_core_spawn, enforce_core_spawn_in_transaction, enforce_core_transition,
+    ensure_core_transition_guard_schema, evaluate_core_spawn, CoreSpawnProof, CoreSpawnRequest,
 };
 use crate::core_state::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
@@ -217,7 +218,7 @@ use crate::core_state::{
 use crate::mission::review::HoldReason;
 use crate::secrets;
 use crate::service::harness_flow::{
-    RecordHarnessFlowEventRequest, record_harness_flow_event_lossy,
+    record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
 };
 
 const DEFAULT_TAKE_LIMIT: usize = 10;
