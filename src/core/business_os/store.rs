@@ -15080,7 +15080,7 @@ pub(crate) fn install_replicated_secret_sanitizer() {
         detach_secret_from_replicated_document,
     ));
     rxdb::replication_protocol::index_mod::set_master_write_validator(Arc::new(
-        super::outbound_field_review::peer_preserves_native_field_status,
+        super::outbound_field_review::peer_lead_write_allowed,
     ));
 }
 

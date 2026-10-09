@@ -31,6 +31,7 @@ import { captureResearchExport, openResearchSnapshot } from './current-state-exp
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
+import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -10476,7 +10477,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
           lead,
           NICHT_ZURUECKGEMELDET,
           { research_finished_at_ms: Date.now() },
-        ))) changed = true;
+        ), lead)) changed = true;
         continue;
       }
       const observedCommandId = String(command.command_id || command.id || '').trim();
@@ -10490,7 +10491,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
         && command?.command_type === 'business_os.chat.task'
         && vorgangNochOffen(command)) {
         const wieder = chatResearchTaskLeadPatch(lead, command);
-        if (wieder && await patchLeadImAbgleich(lead.id, wieder)) changed = true;
+        if (wieder && await patchLeadImAbgleich(lead.id, wieder, lead)) changed = true;
         continue;
       }
       const zurueckgefallen = researchInFlight(lead) && befehlIstEndgueltig(command);
@@ -10499,7 +10500,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
         // die Ausfuehrungsphase wechselt (queued -> leased -> retry_wait). Die
         // Phase wird deshalb hier eigens verglichen (Codex-Review 1.0.268).
         const nurPhase = ausfuehrungsphasePatch(lead, command);
-        if (nurPhase && await patchLeadImAbgleich(lead.id, nurPhase)) changed = true;
+        if (nurPhase && await patchLeadImAbgleich(lead.id, nurPhase, lead)) changed = true;
         continue;
       }
       const patch = researchCommandLeadPatch(lead, command);
@@ -10515,7 +10516,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
           : {}),
       };
       abgleichDiagnose('schreiben', { lead: lead.id });
-      if (await patchLeadImAbgleich(lead.id, patch)) changed = true;
+      if (await patchLeadImAbgleich(lead.id, patch, lead)) changed = true;
     }
   } finally {
     state.reconcilingCommands = false;
@@ -10537,14 +10538,37 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
 // Ein Lead, dessen Schreiben scheitert, darf den Abgleich der uebrigen nicht
 // abbrechen: lead_12a1ulp hielt so am 08.10.2026 bei jedem Durchlauf 35 Leads
 // mit laengst beendetem Vorgang auf "Läuft".
-async function patchLeadImAbgleich(id, patch) {
+// Der Abgleich entscheidet anhand der Lead-Kopie im Speicher, geschrieben wird
+// aber auf das aktuelle Dokument. Ist das Dokument inzwischen weiter, gilt die
+// Entscheidung nicht mehr: am 09.10.2026 setzte ein Browser auf thesen 151
+// recherchierte Leads ("Prüfung nötig") anhand veralteter "Läuft"-Kopien gegen
+// alte, gescheiterte Aufträge auf "Unvollständig" und ersetzte ihren payload
+// durch den alten Stand. Dann wird nur die Kopie aufgefrischt; der nächste
+// Durchlauf entscheidet neu.
+async function patchLeadImAbgleich(id, patch, basis = null) {
   try {
+    if (basis) {
+      const doc = await state.collections.leads.findOne(id).exec();
+      const current = doc?.toJSON?.() || doc;
+      if (!current) return false;
+      if (abgleichBasisVeraltet(basis, current)) {
+        uebernimmAktuellenLead(current);
+        return false;
+      }
+    }
     await patchLead(id, patch);
     return true;
   } catch (error) {
     console.warn('[olg-abgleich] Lead nicht geschrieben', id, String(error?.message || error).slice(0, 300));
     return false;
   }
+}
+
+
+function uebernimmAktuellenLead(current) {
+  const index = state.leads.findIndex((lead) => lead.id === current.id);
+  if (index < 0) return;
+  state.leads[index] = applyPendingLeadPatches([normalizeLeadRecipientShape(current)])[0];
 }
 
 function newerResearchCommandCanRecoverLead(lead, command) {
@@ -12204,7 +12228,7 @@ function hatRechercheErgebnis(lead) {
   if (!lead) return false;
   if (Array.isArray(lead.payload?.researched_field_keys) && lead.payload.researched_field_keys.length) return true;
   if (['completed', 'needs_review'].includes(String(lead.research_status || ''))) return true;
-  return false;
+  return hatBelegteFelder(lead);
 }
 
 // Fehlertext festhalten, Ergebnisstatus behalten.
