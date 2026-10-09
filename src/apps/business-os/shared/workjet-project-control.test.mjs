@@ -1483,6 +1483,38 @@ test('opted-in supervisor watch forwards the bounded fixture contract and actual
   assert.equal(result.executionPage.events[0].sequence, 12);
 });
 
+test('public assistant text opt-in survives the Shell bridge and preserves native chunks', async () => {
+  const publicText = { turn_id: 'provider-turn', item_id: 'provider-item', phase: 'final_answer',
+    offset: 0, text: 'Public reply 🦊', completed: false, truncated: false };
+  for (const include of [true, false]) {
+    const fixture = executionFixture(receipt => {
+      if (include) {
+        receipt.result.execution_page.public_text_supported = true;
+        receipt.result.execution_page.events[0] = { id: 'public-event', sequence: 12,
+          kind: 'worker.assistant_text', title: 'Assistant response',
+          created_at_ms: 1791410400000, public_text: publicText };
+        receipt.result.execution_page.next_cursor.after_event_id = 'public-event';
+      }
+    });
+    const result = await fixture.invoke(supervisorTurnRequest('watch', {
+      executionPage: { include_public_text: include, attempt_id: 'native-attempt', limit: 1 },
+    }));
+    assert.equal(fixture.commands[0].command.payload.execution_page.include_public_text, include);
+    if (include) {
+      assert.equal(result.executionPage.public_text_supported, true);
+      assert.deepEqual(JSON.parse(JSON.stringify(result.executionPage.events[0].public_text)), publicText);
+    } else {
+      assert.equal(result.executionPage.public_text_supported, undefined);
+      assert.equal(result.executionPage.events[0].public_text, undefined);
+    }
+  }
+  const invalid = executionFixture();
+  await assert.rejects(invalid.invoke(supervisorTurnRequest('watch', {
+    executionPage: { include_public_text: 'true' },
+  })));
+  assert.equal(invalid.commands.length, 0);
+});
+
 test('an opted-in queued supervisor turn preserves the absence of an actual attempt', async () => {
   const fixture = executionFixture(receipt => {
     receipt.result.execution_page = { command_id: nativeTurnId, task_id: 'queue:system::supervisor-turn', events: [], has_more: false };

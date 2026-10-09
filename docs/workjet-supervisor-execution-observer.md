@@ -80,6 +80,11 @@ reject the new request field; callers must retain their ordinary history read
 and explicitly report unavailable public-text support. Non-Unix natives return
 `public_text_supported: false`; they do not invent a transcript stream.
 
+The Shell forwards `include_public_text` inside `executionPage` to the native
+payload without stripping either boolean value. This needs the matching signed
+Shell slot as well as the native binary; changing the desktop alone does not
+enable the stream. The generation stamp advances with the generated validator.
+
 The producer consumes V2 assistant item start/delta/completion notifications
 for the exact provider thread and turn, only in the verified Workjet supervisor
 session. It excludes reasoning and tool items and filters private ctox-crew
