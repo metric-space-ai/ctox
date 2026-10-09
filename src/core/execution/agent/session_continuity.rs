@@ -849,7 +849,7 @@ mod tests {
                         "workspace-write"
                     }
                 );
-                assert_eq!(client.calls(), vec!["thread/resume"]);
+                assert_eq!(client.methods(), vec!["thread/resume"]);
             }
         }
         Ok(())
