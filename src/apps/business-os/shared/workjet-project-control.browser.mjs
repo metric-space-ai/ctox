@@ -69,7 +69,10 @@ try {
     assert.equal(value.truncated, false);
     assert.equal(live.reads.length, 2);
     assert.ok(live.reads.every(({ query }) => query.signal.aborted));
-    results.push('current native projects and copies without historical pull');
+    live.rows.workjet_projects[0].supervisor_luma_id = 'luma-physics';
+    assert.equal(Object.hasOwn((await live.invoke({ includeConfiguration: true })).projects[0], 'supervisorLumaId'), false);
+    assert.equal((await live.invoke({ includeSupervisorLuma: true })).projects[0].supervisorLumaId, 'luma-physics');
+    results.push('current native projects and copies without historical pull; Luma metadata is separately opted in');
     live.rows.workjet_projects.length = 0;
     live.rows.workjet_working_copies.length = 0;
     const empty = await live.invoke();

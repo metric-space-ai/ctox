@@ -14511,11 +14511,14 @@ async function workjetProjectControl(request = {}) {
   }
 
   if (action === 'project.list') {
-    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'includeConfiguration']));
-    if (Object.hasOwn(request, 'includeConfiguration') && typeof request.includeConfiguration !== 'boolean') {
-      throw new Error('Invalid Workjet project includeConfiguration.');
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'includeConfiguration', 'includeSupervisorLuma']));
+    for (const flag of ['includeConfiguration', 'includeSupervisorLuma']) {
+      if (Object.hasOwn(request, flag) && typeof request[flag] !== 'boolean') {
+        throw new Error(`Invalid Workjet project ${flag}.`);
+      }
     }
     const includeConfiguration = request.includeConfiguration === true;
+    const includeSupervisorLuma = request.includeSupervisorLuma === true;
     const commandId = `cmd_workjet_project_list_${newId()}`;
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
@@ -14600,7 +14603,7 @@ async function workjetProjectControl(request = {}) {
       const workingCopies = await listProjectedWorkjetWorkingCopies(projectOwnerUserId, copyDocs);
       let projects = await listProjectedWorkjetProjects(
         projectOwnerUserId, WORKJET_PROJECT_CONTROL_MAX_RESULTS, workingCopies, projectDocs,
-        { includeConfiguration },
+        { includeConfiguration, includeSupervisorLuma },
       );
       assertCurrentIdentity();
       if (confirmedProjectIds) {
@@ -14617,7 +14620,7 @@ async function workjetProjectControl(request = {}) {
           projectDocs = projectDocs.concat(missingDocs);
           projects = await listProjectedWorkjetProjects(
             projectOwnerUserId, WORKJET_PROJECT_CONTROL_MAX_RESULTS, workingCopies, projectDocs,
-            { includeConfiguration },
+            { includeConfiguration, includeSupervisorLuma },
           );
         }
       }
@@ -14679,7 +14682,9 @@ async function workjetProjectControl(request = {}) {
       || nativeProject?.owner_user_id !== projectOwnerUserId) {
       throw new Error('Workjet project configuration returned an uncorrelated or unsuccessful receipt.');
     }
-    const project = boundedWorkjetProjectResult(nativeProject, { includeConfiguration: true });
+    const project = boundedWorkjetProjectResult(nativeProject, {
+      includeConfiguration: true, includeSupervisorLuma: Object.hasOwn(payload, 'supervisor_luma_id'),
+    });
     if (!project) throw new Error('Workjet project configuration returned no project.');
     if (Object.hasOwn(payload, 'supervisor_luma_id')) {
       const selected = project.supervisorLumaId ?? null;
@@ -14865,7 +14870,7 @@ async function readWorkjetProjectListRows(bridge, query, requireRevision, deadli
   return rows;
 }
 
-async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null, { includeConfiguration = false } = {}) {
+async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null, { includeConfiguration = false, includeSupervisorLuma = false } = {}) {
   const collection = state.db?.collection?.('workjet_projects');
   const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId }, status: { $eq: 'active' } },
@@ -14875,7 +14880,7 @@ async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = 
     .map((doc) => {
       const value = doc?.toJSON?.() || doc;
       if (value?.owner_user_id !== ownerUserId) return null;
-      const project = boundedWorkjetProjectResult(value, { includeConfiguration });
+      const project = boundedWorkjetProjectResult(value, { includeConfiguration, includeSupervisorLuma });
       if (!project) return null;
       return Object.freeze({
         ...project,
@@ -15027,7 +15032,7 @@ async function workjetProjectChildCommandId(parentCommandId, kind) {
   return `cmd_workjet_${kind.replaceAll('-', '_')}_${hex}`;
 }
 
-function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {}) {
+function boundedWorkjetProjectResult(value, { includeConfiguration = false, includeSupervisorLuma = false } = {}) {
   if (!value || typeof value !== 'object' || value._deleted === true || value.is_deleted === true
     || value.status !== 'active') {
     return null;
@@ -15040,14 +15045,14 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {
   if (Number.isFinite(createdAtMs) && createdAtMs >= 0) {
     result.createdAt = new Date(createdAtMs).toISOString();
   }
-  if (!includeConfiguration) return Object.freeze(result);
+  if (!includeConfiguration && !includeSupervisorLuma) return Object.freeze(result);
   const metadata = boundedWorkjetProjectMetadata({
-    ...(Object.hasOwn(value, 'description') ? { description: value.description } : {}),
-    ...(Object.hasOwn(value, 'repo_url') ? { repoUrl: value.repo_url } : {}),
-    ...(Object.hasOwn(value, 'public_url') ? { publicUrl: value.public_url } : {}),
-    ...(Object.hasOwn(value, 'info') ? { info: value.info } : {}),
-    ...(Object.hasOwn(value, 'jour_fixe') ? { jourFixe: value.jour_fixe } : {}),
-    ...(Object.hasOwn(value, 'supervisor_luma_id') ? { supervisorLumaId: value.supervisor_luma_id } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'description') ? { description: value.description } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'repo_url') ? { repoUrl: value.repo_url } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'public_url') ? { publicUrl: value.public_url } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'info') ? { info: value.info } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'jour_fixe') ? { jourFixe: value.jour_fixe } : {}),
+    ...(includeSupervisorLuma && Object.hasOwn(value, 'supervisor_luma_id') ? { supervisorLumaId: value.supervisor_luma_id } : {}),
   });
   for (const [nativeKey, key] of [
     ['description', 'description'], ['repo_url', 'repoUrl'], ['public_url', 'publicUrl'],

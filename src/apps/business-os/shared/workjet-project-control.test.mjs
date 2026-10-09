@@ -645,16 +645,28 @@ test('Supervisor configuration rejects an unconfirmed selection or unsuccessful 
   }
 });
 
-test('Project list exposes configured Supervisor selection only on explicit configuration reads', async () => {
+test('Project list exposes configured Supervisor selection only on a dedicated opt-in', async () => {
   const fixture = nativeProjectListFixture();
   fixture.context.validateSupervisorLumaValue = validateSupervisorLumaValue;
   fixture.rows.workjet_projects[0].supervisor_luma_id = 'luma-physics';
   assert.equal(Object.hasOwn((await fixture.invoke()).projects[0], 'supervisorLumaId'), false);
-  const selected = (await fixture.invoke({ includeConfiguration: true })).projects[0];
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeConfiguration: true })).projects[0], 'supervisorLumaId'), false);
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeConfiguration: true, includeSupervisorLuma: false })).projects[0], 'supervisorLumaId'), false);
+  const selected = (await fixture.invoke({ includeSupervisorLuma: true })).projects[0];
   assert.equal(selected.supervisorLumaId, 'luma-physics');
   assert.equal(Object.hasOwn(selected, 'model'), false);
   delete fixture.rows.workjet_projects[0].supervisor_luma_id;
-  assert.equal(Object.hasOwn((await fixture.invoke({ includeConfiguration: true })).projects[0], 'supervisorLumaId'), false);
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeSupervisorLuma: true })).projects[0], 'supervisorLumaId'), false);
+  for (const value of ['true', null, 1, {}]) {
+    await assert.rejects(fixture.invoke({ includeSupervisorLuma: value }), /includeSupervisorLuma/);
+  }
+});
+
+test('Old configure callers do not receive a stored Luma selection without sending that field', async () => {
+  const fixture = projectConfigurationFixture(receipt => { receipt.result.project.supervisor_luma_id = 'luma-physics'; });
+  const result = await fixture.invoke(projectConfigurationRequest());
+  assert.equal(Object.hasOwn(result.project, 'supervisorLumaId'), false);
+  assert.equal(Object.hasOwn(fixture.commands[0].payload, 'supervisor_luma_id'), false);
 });
 
 test('project configuration forwards bounded metadata and returns native fields to Workjet', async () => {
