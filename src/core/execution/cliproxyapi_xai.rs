@@ -238,7 +238,7 @@ struct Stored {
     token_endpoint: String,
 }
 fn save_bundle(root: &Path, bundle: &AuthBundle) -> anyhow::Result<()> {
-    let record = Stored {
+    let mut record = Stored {
         access: bundle.token_data.access_token().expose_secret().into(),
         refresh: bundle
             .token_data
@@ -255,6 +255,18 @@ fn save_bundle(root: &Path, bundle: &AuthBundle) -> anyhow::Result<()> {
             .map(|d| d.as_secs()),
         token_endpoint: bundle.token_endpoint.clone(),
     };
+    // Refresh responses may omit an unchanged refresh/identity token.
+    if let Ok(previous) = crate::secrets::read_secret_value(root, SCOPE, NAME) {
+        let previous = Zeroizing::new(previous);
+        if let Ok(prior) = serde_json::from_str::<Stored>(&previous) {
+            if record.refresh.is_none() {
+                record.refresh = prior.refresh.clone();
+            }
+            if record.identity.is_none() {
+                record.identity = prior.identity.clone();
+            }
+        }
+    }
     let encoded = Zeroizing::new(serde_json::to_string(&record)?);
     crate::secrets::write_secret_record(
         root,
