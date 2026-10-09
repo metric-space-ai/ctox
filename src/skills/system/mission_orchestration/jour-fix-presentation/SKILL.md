@@ -242,7 +242,9 @@ voice reads aloud while that slide is shown. What is spoken must fit the slide:
 - Write as you would speak: spell out units and signs (Euro, Millisekunden,
   Pull Request Nummer 14).
 - Through-line: every slide except the last ends with one short, complete
-  sentence that leads to the next slide's topic. The last slide closes with what
+  sentence that leads to the next slide's topic. Name that topic as a topic,
+  never as an outcome the next slide contradicts (no "vergleichen" when the next
+  slide says no comparison is possible yet). The last slide closes with what
   the Owner's decisions today make possible, instead of listing them again or
   repeating "Nächste Schritte". Its closing sentence names each decision by the
   key term on the slide (for example the goal, the data sources, the exit value
@@ -256,6 +258,8 @@ voice reads aloud while that slide is shown. What is spoken must fit the slide:
   or by name. The title slide's narration speaks the project name and today's
   date once (the listener hears the voice, not the subtitle); later slides do
   not repeat them.
+- When a gap line on the slide already states its cause and effect, do not
+  repeat that chain aloud; say what the gap means for today's decision.
 - Never point at what the slide shows ("diese drei Punkte", "hier oben"); state
   the scope as a fact. When the slide offers a choice, say what follows from
   each option instead of repeating the options.
