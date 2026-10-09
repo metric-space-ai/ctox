@@ -413,6 +413,7 @@
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
     "ctox.workjet.project.supervisor.bind",
+    "ctox.workjet.project.supervisor.turn.history",
     "ctox.workjet.project.upsert",
     "ctox.workjet.working_copy.upsert",
     "customers.account.archive",
