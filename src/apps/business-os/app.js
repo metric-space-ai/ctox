@@ -13749,6 +13749,17 @@ const WORKJET_PROJECT_CONTROL_MAX_RESULTS = 100;
 const WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES = 500;
 const WORKJET_PROJECT_CONTROL_TIMEOUT_MS = 30_000;
 
+function boundedWorkjetHistoryRequest(value) {
+  validateSupervisorExecutionValue('TurnHistoryRequest', value);
+  return {
+    ...(value.cursor == null ? {} : { cursor: {
+      before_created_at_ms: value.cursor.before_created_at_ms,
+      before_command_id: value.cursor.before_command_id,
+    } }),
+    ...(value.limit == null ? {} : { limit: value.limit }),
+  };
+}
+
 function boundedWorkjetExecutionRequest(value) {
   validateSupervisorExecutionValue('ExecutionPageRequest', value);
   return {
@@ -13847,7 +13858,7 @@ async function workjetProjectControl(request = {}) {
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
   const supervisorActions = ['project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
-    'project.supervisor.turn.watch', 'project.supervisor.turn.cancel',
+    'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
@@ -14149,6 +14160,51 @@ async function workjetProjectControl(request = {}) {
       throw new Error('Workjet project command did not return a private chat id.');
     }
     return { action, commandId, projectId, workerProfileId, chatId };
+  }
+
+  if (action === 'project.supervisor.turn.history') {
+    assertWorkjetProjectPayloadKeys(request,
+      new Set(['action', 'commandId', 'projectId', 'threadId', 'historyPage']));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const threadId = boundedWorkjetProjectText(request.threadId, 'threadId', 36);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(threadId)
+      || threadId === '00000000-0000-0000-0000-000000000000') {
+      throw new TypeError('Workjet supervisor history requires its existing lowercase CodeThread UUID.');
+    }
+    const historyRequest = boundedWorkjetHistoryRequest(request.historyPage ?? {});
+    const payload = { project_id: projectId, thread_id: threadId, history_page: historyRequest };
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before its history was delivered.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox', record_id: projectId,
+      command_type: 'ctox.workjet.project.supervisor.turn.history', payload,
+      client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    assertCurrentIdentity();
+    const contract = 'ctox.workjet.supervisor_history.v1';
+    const binding = receipt?.result?.binding;
+    const page = receipt?.result?.history_page;
+    validateSupervisorExecutionValue('TurnHistoryPage', page);
+    const threadKey = `business-os/threads/${threadId}`;
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId || receipt.result?.ok !== true
+      || receipt.result?.contract !== contract || receipt.result?.history_contract !== contract
+      || receipt.payload?.project_id !== projectId || receipt.payload?.thread_id !== threadId
+      || JSON.stringify(boundedWorkjetHistoryRequest(receipt.payload?.history_page))
+        !== JSON.stringify(historyRequest)
+      || binding?.project_id !== projectId || binding?.thread_id !== threadId
+      || binding?.thread_key !== threadKey || page.project_id !== projectId
+      || page.thread_id !== threadId || page.thread_key !== threadKey) {
+      throw new Error('Workjet supervisor history returned an unmatched Owner/thread receipt.');
+    }
+    return { action, commandId, projectId, threadId, threadKey,
+      historyContract: contract, historyPage: page };
   }
 
   if (['project.supervisor.turn.capabilities', 'project.supervisor.turn.submit', 'project.supervisor.turn.watch',

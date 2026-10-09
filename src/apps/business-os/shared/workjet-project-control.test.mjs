@@ -41,7 +41,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 9);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 10);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -1379,6 +1379,65 @@ function supervisorTurnFixture(change = () => {}) {
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
 }
+function supervisorHistoryFixture(change = () => {}) {
+  return supervisorTurnFixture((receipt, state) => {
+    receipt.result = {
+      ok: true, contract: 'ctox.workjet.supervisor_history.v1',
+      history_contract: 'ctox.workjet.supervisor_history.v1',
+      binding: receipt.result.binding,
+      history_page: {
+        project_id: 'project-1', thread_id: supervisorThread,
+        thread_key: `business-os/threads/${supervisorThread}`,
+        turns: [{ command_id: nativeTurnId, task_id: 'queue:system::supervisor-turn',
+          created_at_ms: 12, user_text: 'Earlier Owner question', user_text_truncated: false }],
+        has_more: false,
+      },
+    };
+    change(receipt, state);
+  });
+}
+const historyRequest = extra => ({
+  action: 'project.supervisor.turn.history', commandId: 'history-1',
+  projectId: 'project-1', threadId: supervisorThread, ...extra,
+});
+test('Supervisor history enumerates earlier native identities without submitting prompts', async () => {
+  const fixture = supervisorHistoryFixture();
+  const result = await fixture.invoke(historyRequest({ historyPage: {
+    limit: 2, cursor: { before_created_at_ms: 20, before_command_id: 'previous-native-command' },
+  } }));
+  assert.equal(fixture.commands.length, 1);
+  const { command, options } = fixture.commands[0];
+  assert.equal(command.command_type, 'ctox.workjet.project.supervisor.turn.history');
+  assert.deepEqual(JSON.parse(JSON.stringify(command.payload.history_page)), {
+    cursor: { before_created_at_ms: 20, before_command_id: 'previous-native-command' }, limit: 2,
+  });
+  assert.equal(command.payload.target_command_id, undefined);
+  assert.equal(command.payload.goal, undefined);
+  assert.equal(options.sync_queue_tasks, false);
+  assert.equal(result.historyPage.turns[0].command_id, nativeTurnId);
+  assert.equal(result.historyPage.turns[0].user_text, 'Earlier Owner question');
+});
+test('Supervisor history rejects foreign receipts and stale session identity', async () => {
+  for (const change of [
+    receipt => { receipt.result.binding.thread_id = 'foreign'; },
+    receipt => { receipt.result.history_page.project_id = 'foreign'; },
+    receipt => { receipt.result.history_contract = 'foreign'; },
+    receipt => { receipt.payload.history_page = { limit: 20 }; },
+    receipt => { receipt.result.history_page.turns[0].created_at_ms = -1; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(supervisorHistoryFixture(change).invoke(historyRequest({})));
+});
+test('Supervisor history rejects malformed pagination before dispatch', async () => {
+  for (const historyPage of [
+    { limit: 0 }, { limit: 21 }, { owner_user_id: 'foreign' },
+    { cursor: { before_created_at_ms: -1, before_command_id: 'command' } },
+  ]) {
+    const fixture = supervisorHistoryFixture();
+    await assert.rejects(fixture.invoke(historyRequest({ historyPage })));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
 function supervisorTurnRequest(action, extra = {}) {
   return {
     action: `project.supervisor.turn.${action}`, commandId: `${action}-1`, projectId: 'project-1', threadId: supervisorThread,
