@@ -75,9 +75,13 @@ Three to nine slides. Suggested order, adapt to the evidence:
 | 8 | Nächste Schritte | `technical_one_column` | `summary` | `numberedList` of next acceptance criteria |
 
 A slide whose evidence is entirely missing is left out; say on slide 2 what
-is missing. Never keep an empty slide. When almost nothing is measured yet (a
-first Regeltermin), the deck has three slides: the title with the question,
-goal and status naming every gap once, and the decisions for today.
+is missing. Never keep an empty slide. When nothing is measured yet (no KPI
+has a stored value), the deck has three slides: the title with the question,
+goal and status naming every gap once, and the decisions for today. As soon as
+one KPI has a stored value, the deck keeps the KPI slide with its
+`business.kpi-bars` scene, also at a first Regeltermin: show the current values
+without `previous` and say once that no comparison exists yet. Numbers belong
+in the scene, not as text in the goal and status slide.
 
 Every slide's `title` is drawn as its handwritten headline: at most 60
 characters, and do not repeat it as a `heading` block. Use `heading` blocks
@@ -261,8 +265,11 @@ voice reads aloud while that slide is shown. What is spoken must fit the slide:
 - When a gap line on the slide already states its cause and effect, do not
   repeat that chain aloud; say what the gap means for today's decision.
 - Never point at what the slide shows ("diese drei Punkte", "hier oben"); state
-  the scope as a fact. When the slide offers a choice, say what follows from
-  each option instead of repeating the options.
+  the scope as a fact. When the slide offers a choice, say what the choice
+  depends on and, where the facts show it, what an option changes; never list
+  for every option that the others are not chosen.
+- Read every sentence once more as the Owner hears it: it must be complete,
+  grammatical German with a verb and a clear subject.
 - Do not add lines to a slide only so the narration may cite them; slide and
   narration carry each fact once. Say nothing about the future you cannot know:
   no forecast of what will or will not change.
