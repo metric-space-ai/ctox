@@ -76,10 +76,13 @@ pub(super) fn fixture() -> anyhow::Result<tempfile::TempDir> {
     Ok(root)
 }
 pub(super) fn queued_supervisor(root: &Path) -> anyhow::Result<String> {
+    queued_supervisor_named(root, "submit-supervisor")
+}
+fn queued_supervisor_named(root: &Path, submit_id: &str) -> anyhow::Result<String> {
     let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
         root,
         json!({
-        "id":"submit-supervisor","module":"ctox","command_type":"ctox.workjet.project.supervisor.turn.submit",
+        "id":submit_id,"module":"ctox","command_type":"ctox.workjet.project.supervisor.turn.submit",
         "record_id":"project","payload":{"project_id":"project","thread_id":THREAD,"goal":"Make a small tested change"},
         "client_context":{"actor":{"id":"owner","role":"chef","is_admin":true}}}),
     )?;
@@ -103,7 +106,10 @@ pub(super) fn queued_supervisor(root: &Path) -> anyhow::Result<String> {
     Ok(id)
 }
 pub(super) fn session(root: &Path) -> anyhow::Result<(String, Value)> {
-    let id = queued_supervisor(root)?;
+    session_named(root, "submit-supervisor")
+}
+fn session_named(root: &Path, submit_id: &str) -> anyhow::Result<(String, Value)> {
+    let id = queued_supervisor_named(root, submit_id)?;
     let command = crate::channels::business_command_projection(root, &id)?;
     let token = issue_internal_command_session_token(
         root,
@@ -135,7 +141,7 @@ fn success(intent: &Value) -> Value {
     json!({"schemaVersion":1,"status":"dispatched","environmentId":"target-env",
         "workerThreadId":intent["intentId"],"computerId":"native-computer","branch":"codex/worker",
         "worktreePath":"/private/worktrees/worker","parent":{"environmentId":"source-env","threadId":THREAD},
-        "modelSelection":{"instanceId":"source-env","model":"model-1","options":[{"id":"reasoning","value":"high"}]},
+        "modelSelection":{"instanceId":"source-env","model":"claude-opus-5-5","options":[{"id":"reasoning","value":"high"}]},
         "enabledCapabilityIds":["repository_read","run_checks"]})
 }
 
@@ -392,5 +398,144 @@ fn workjet_dispatch_rejects_forged_context_non_supervisor_and_unbounded_results(
         &intent,
         &json!({"schemaVersion":1,"status":"failed","reason":"remote-dispatch-failed"}),
     )?;
+    Ok(())
+}
+
+fn observe_call(root: &Path, trusted: &Value, limit: Option<u32>) -> anyhow::Result<Value> {
+    let mut request = json!({"action":"observe"});
+    if let Some(limit) = limit {
+        request["limit"] = json!(limit);
+    }
+    super::super::call_tool_inner(root, TOOL, request, Some(trusted))
+}
+
+#[test]
+fn supervisor_observes_retained_start_receipts_in_a_later_real_turn() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let registration = register(root.path())?;
+    let (_, trusted) = session(root.path())?;
+    assert_eq!(
+        observe_call(root.path(), &trusted, None)?["observations"],
+        json!([])
+    );
+    let first = dispatch(root.path(), &trusted)?;
+    let pending = observe_call(root.path(), &trusted, None)?;
+    assert_eq!(pending["projectId"], "project");
+    assert_eq!(pending["supervisorThreadId"], THREAD);
+    assert_eq!(
+        pending["observations"][0]["intentId"],
+        first["intent"]["intentId"]
+    );
+    assert_eq!(pending["observations"][0]["dispatchKey"], "worker-one");
+    assert_eq!(pending["observations"][0]["registrationCurrent"], true);
+    assert!(pending["observations"][0]["acknowledgement"].is_null());
+    assert!(pending["observations"][0]["execution"].is_null());
+    call(
+        root.path(),
+        "owner",
+        complete(&registration, &first["intent"], success(&first["intent"])),
+    )?;
+    let (_, next) = session_named(root.path(), "submit-supervisor-next")?;
+    let observed = observe_call(root.path(), &next, None)?;
+    let ack = &observed["observations"][0]["acknowledgement"];
+    assert_eq!(ack["status"], "dispatched");
+    assert_eq!(ack["workerThreadId"], first["intent"]["intentId"]);
+    assert_eq!(ack["computerId"], "native-computer");
+    assert!(ack.get("modelSelection").is_none());
+    assert!(observed["observations"][0]["execution"].is_null());
+    assert_eq!(observed["truncated"], false);
+    assert_eq!(poll(root.path(), "owner")?["intents"], json!([]));
+    Ok(())
+}
+
+#[test]
+fn supervisor_observation_is_bounded_read_only_without_schema_repair() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let (_, trusted) = session(root.path())?;
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    let absent: bool = core.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='workjet_worker_dispatch_intents')", [], |row| row.get(0))?;
+    assert!(absent);
+    assert_eq!(
+        observe_call(root.path(), &trusted, None)?["observations"],
+        json!([])
+    );
+    assert!(core.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='workjet_worker_dispatch_intents')", [], |row| row.get::<_,bool>(0))?);
+    let registration = register(root.path())?;
+    for key in ["first", "second", "third"] {
+        let dispatched = super::super::call_tool_inner(
+            root.path(),
+            TOOL,
+            json!({"action":"dispatch","dispatch_key":key,"task":"A real scoped task"}),
+            Some(&trusted),
+        )?;
+        call(
+            root.path(),
+            "owner",
+            complete(
+                &registration,
+                &dispatched["intent"],
+                json!({"schemaVersion":1,"status":"failed","reason":"computer-unavailable"}),
+            ),
+        )?;
+    }
+    core.execute_batch("BEGIN IMMEDIATE")?;
+    let observed = observe_call(root.path(), &trusted, Some(2))?;
+    core.execute_batch("ROLLBACK")?;
+    assert_eq!(observed["observations"].as_array().unwrap().len(), 2);
+    assert_eq!(observed["observations"][0]["dispatchKey"], "third");
+    assert_eq!(
+        observed["observations"][0]["acknowledgement"]["reason"],
+        "computer-unavailable"
+    );
+    assert_eq!(observed["truncated"], true);
+    assert!(serde_json::to_vec(&observed)?.len() < 64 * 1024);
+    assert!(observe_call(root.path(), &trusted, Some(0)).is_err());
+    assert!(observe_call(root.path(), &trusted, Some(33)).is_err());
+    assert!(super::super::call_tool_inner(
+        root.path(),
+        TOOL,
+        json!({"action":"observe","project_id":"foreign"}),
+        Some(&trusted)
+    )
+    .is_err());
+    assert!(call(root.path(), "owner", json!({"action":"observe"})).is_err());
+    Ok(())
+}
+
+#[test]
+fn supervisor_observation_retains_stale_registration_without_reopening_it() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let registration = register(root.path())?;
+    let (_, trusted) = session(root.path())?;
+    dispatch(root.path(), &trusted)?;
+    call(
+        root.path(),
+        "owner",
+        json!({"action":"revoke_source","registration_id":registration["registrationId"],"revision":registration["revision"]}),
+    )?;
+    let observed = observe_call(root.path(), &trusted, None)?;
+    assert_eq!(observed["observations"][0]["registrationCurrent"], false);
+    assert!(observed["observations"][0]["acknowledgement"].is_null());
+    assert!(dispatch(root.path(), &trusted).is_err());
+    Ok(())
+}
+
+#[test]
+fn supervisor_observation_rejects_old_leases_and_foreign_owner_rows() -> anyhow::Result<()> {
+    let root = fixture()?;
+    register(root.path())?;
+    let (_, trusted) = session(root.path())?;
+    dispatch(root.path(), &trusted)?;
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    core.execute(
+        "UPDATE workjet_worker_dispatch_sources SET owner_user_id='foreign'",
+        [],
+    )?;
+    assert_eq!(
+        observe_call(root.path(), &trusted, None)?["observations"],
+        json!([])
+    );
+    core.execute("UPDATE communication_routing_state SET lease_worker_id='new-worker' WHERE route_status='leased'", [])?;
+    assert!(observe_call(root.path(), &trusted, None).is_err());
     Ok(())
 }

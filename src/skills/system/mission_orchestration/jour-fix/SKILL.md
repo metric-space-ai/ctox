@@ -60,3 +60,5 @@ operation_id and identical request. Changed authority/expired lease needs native
 recovery, never forged receipts. Only the owner's explicit confirmation of the
 current proposal installs the next durable Supervisor goal. A proposal is not a
 confirmed goal; subsequent work retains normal permissions, review and recovery.
+
+Confirmed-goal work: business_os.workjet_worker_dispatch {action:"observe"} before dispatch. A start receipt proves no completion or merged PR.
