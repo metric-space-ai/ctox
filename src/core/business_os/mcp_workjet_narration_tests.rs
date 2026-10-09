@@ -267,6 +267,139 @@ fn failed_prerequisites_have_bounded_retry_but_uncertain_transport_never_resynth
     Ok(())
 }
 #[test]
+fn configuration_unavailable_then_new_operation_commits_audio() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    let configured = std::cell::Cell::new(false);
+    let producer = |request: &SpeechRequest| {
+        if configured.get() {
+            output(request)
+        } else {
+            Err(SpeechError::ConfigurationUnavailable)
+        }
+    };
+    assert!(call(root.path(), &trusted, args(), producer).is_err());
+    assert!(saved(root.path())?["slides"][0]["audio"].is_null());
+    let policy = store::open_store(root.path())?;
+    assert_eq!(
+        policy.query_row(
+            "SELECT state FROM workjet_jour_fixe_native_narration WHERE operation_id='narrate-op'",
+            [],
+            |row| row.get::<_, String>(0),
+        )?,
+        "failed_prerequisite"
+    );
+
+    configured.set(true);
+    let mut retry = args();
+    retry["request"]["operation_id"] = json!("configured-retry");
+    let result = call(root.path(), &trusted, retry.clone(), producer)?;
+    assert_eq!(
+        result["native_narration"]["operation_id"],
+        "configured-retry"
+    );
+    assert_eq!(result["mutation"]["state"], "ready");
+    assert_eq!(
+        saved(root.path())?["slides"][0]["audio"]["sha256"],
+        hash(&wav())
+    );
+    assert_eq!(
+        policy.query_row(
+            "SELECT operation_id,state,attempts FROM workjet_jour_fixe_native_narration",
+            [],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?
+            )),
+        )?,
+        ("configured-retry".into(), "complete".into(), 2)
+    );
+    assert_eq!(
+        call(root.path(), &trusted, retry, |_| panic!(
+            "retry receipt resynthesized"
+        ))?,
+        result
+    );
+    let error = call(root.path(), &trusted, args(), |_| {
+        panic!("old operation resynthesized")
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("operation_id 'configured-retry'"), "{error}");
+    assert!(error.contains("status 'complete'"), "{error}");
+    Ok(())
+}
+
+#[test]
+fn failed_slide_slot_can_retry_with_a_new_operation() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    assert!(call(root.path(), &trusted, args(), |_| Err(
+        SpeechError::MissingVoice
+    ))
+    .is_err());
+    store::open_store(root.path())?.execute(
+        "UPDATE workjet_jour_fixe_native_narration SET state='failed' WHERE operation_id='narrate-op'",
+        [],
+    )?;
+    let mut retry = args();
+    retry["request"]["operation_id"] = json!("failed-retry");
+    call(root.path(), &trusted, retry, output)?;
+    assert!(saved(root.path())?["slides"][0]["audio"].is_object());
+    Ok(())
+}
+
+#[test]
+fn fresh_operation_ids_cannot_bypass_the_slide_retry_budget() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    for attempt in 1..=3 {
+        let mut retry = args();
+        retry["request"]["operation_id"] = json!(format!("retry-{attempt}"));
+        assert!(call(root.path(), &trusted, retry, |_| Err(
+            SpeechError::ConfigurationUnavailable
+        ))
+        .is_err());
+    }
+    let mut retry = args();
+    retry["request"]["operation_id"] = json!("retry-4");
+    let error = call(root.path(), &trusted, retry, |_| {
+        panic!("slide retry ceiling exceeded")
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("operation_id 'retry-3'"), "{error}");
+    assert!(error.contains("status 'failed_prerequisite'"), "{error}");
+    assert!(error.contains("attempts 3"), "{error}");
+    assert!(saved(root.path())?["slides"][0]["audio"].is_null());
+    Ok(())
+}
+
+#[test]
+fn running_and_uncertain_slot_conflicts_name_the_existing_operation() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    let mut retry = args();
+    retry["request"]["operation_id"] = json!("overlapping-retry");
+    assert!(call(root.path(), &trusted, args(), |_| {
+        let error = call(root.path(), &trusted, retry.clone(), |_| {
+            panic!("overlapping synthesis")
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("operation_id 'narrate-op'"), "{error}");
+        assert!(error.contains("status 'reserved'"), "{error}");
+        Err(SpeechError::Transport)
+    })
+    .is_err());
+    let error = call(root.path(), &trusted, retry, |_| {
+        panic!("uncertain synthesis repeated")
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("operation_id 'narrate-op'"), "{error}");
+    assert!(error.contains("status 'uncertain'"), "{error}");
+    Ok(())
+}
+
+#[test]
 fn invalid_wav_or_wrong_native_text_receipt_never_creates_ready_audio() -> anyhow::Result<()> {
     for change in ["wav", "text"] {
         let (root, trusted) = fixture()?;
