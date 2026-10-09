@@ -2629,7 +2629,7 @@ pub fn ack_leased_messages_for_attempt(
     // (07.10.2026) every reviewed lead-research ack failed so: the attempt
     // stayed `finalizing`, the lease expired, and each re-lease re-ran the
     // review of the same reply (one task 28 times) without ever terminalizing.
-    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+    let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "queue.ack_attempt")?;
     let already_applied: Option<Option<String>> = tx
         .query_row(
             "SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id = ?1",
@@ -4173,8 +4173,7 @@ fn lease_queue_task_with_filter(
     // a separate connection cannot overwrite our lease_owner (lost-update).
     attach_queue_projection_store(root, &conn)?;
     let leased = {
-        let tx =
-            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+        let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "queue.lease_task")?;
         if let Some(eligible) = eligible {
             let candidate =
                 load_queue_task_from_conn(&tx, message_key)?.context("queue task not found")?;
@@ -5974,6 +5973,47 @@ fn take_messages(
     take_messages_with_projection(None, conn, channel, limit, lease_owner)
 }
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_BATCH_LEASE_READS: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
+fn revalidate_pending_message(
+    conn: &Connection,
+    candidate: &ChannelMessageView,
+) -> Result<Option<ChannelMessageView>> {
+    conn.query_row(
+        r#"SELECT m.message_key, m.channel, m.account_key, m.thread_key, m.remote_id,
+                  m.direction, m.folder_hint, m.sender_display, m.sender_address,
+                  m.subject, m.preview, m.body_text, m.status, m.seen,
+                  m.external_created_at, m.observed_at, m.metadata_json,
+                  r.route_status, r.lease_owner, r.leased_at, r.acked_at,
+                  r.last_error, r.updated_at
+           FROM communication_messages m
+           JOIN communication_routing_state r ON r.message_key=m.message_key
+           WHERE m.message_key=?1 AND m.channel=?2 AND m.account_key=?3
+             AND m.thread_key=?4 AND m.remote_id=?5 AND m.direction='inbound'
+             AND r.route_status='pending'
+             AND (r.retry_not_before IS NULL
+                  OR datetime(r.retry_not_before)<=datetime('now'))
+             AND (json_extract(m.metadata_json,'$.not_before') IS NULL
+                  OR json_extract(m.metadata_json,'$.not_before')=''
+                  OR json_extract(m.metadata_json,'$.not_before')
+                     <=strftime('%Y-%m-%dT%H:%M:%SZ','now'))"#,
+        params![
+            candidate.message_key,
+            candidate.channel,
+            candidate.account_key,
+            candidate.thread_key,
+            candidate.remote_id
+        ],
+        map_channel_message_row,
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
+}
+
 fn take_messages_with_projection(
     projection_root: Option<&Path>,
     conn: &mut Connection,
@@ -6180,19 +6220,14 @@ fn take_messages_with_projection(
         "#
     };
 
-    // Hold a write lock for the whole check-then-act window so a concurrent
-    // leaser on a different connection cannot steal a lease between our
-    // eligibility SELECT and our UPDATE (lost-update). The lease UPDATE is a
-    // check-and-set: its WHERE mirrors the eligibility predicate above, so a
-    // losing racer flips 0 rows and we record neither the row nor a
-    // core-transition proof for it.
     if let Some(root) = projection_root {
         attach_queue_projection_store(root, conn)?;
     }
-    let tx =
-        rusqlite::Transaction::new_unchecked(&*conn, rusqlite::TransactionBehavior::Immediate)?;
+    // Rank candidates without reserving the writer. Release the statement/read
+    // snapshot before acquiring IMMEDIATE; eligibility and message identity are
+    // then rechecked by primary key under the writer before any lease or proof.
     let rows = {
-        let mut statement = tx.prepare(sql)?;
+        let mut statement = conn.prepare(sql)?;
         let mapped = if let Some(channel) = channel {
             statement.query_map(
                 params![channel, lease_owner, limit as i64],
@@ -6203,10 +6238,21 @@ fn take_messages_with_projection(
         };
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
+    #[cfg(test)]
+    if let Some(mut callback) = AFTER_BATCH_LEASE_READS.with(|slot| slot.borrow_mut().take()) {
+        callback();
+    }
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "queue.lease_batch")?;
     let leased_at = now_iso_string();
     let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
     let mut taken = Vec::new();
-    for mut item in rows {
+    for candidate in rows {
+        let Some(mut item) = revalidate_pending_message(&tx, &candidate)? else {
+            continue;
+        };
         let updated = tx.execute(
             r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, lease_worker_id, acked_at, last_error, updated_at, attempt)
                VALUES (?1, ?5, ?2, ?3, ?3, ?4, NULL, NULL, NULL, ?3, 1)
@@ -6308,7 +6354,7 @@ fn ack_messages(
     // Acknowledgement reads before updating Core and its attached projection
     // store. Reserve both writers first so a concurrent WAL commit cannot
     // invalidate the read snapshot during promotion (SQLITE_BUSY_SNAPSHOT).
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "queue.ack_messages")?;
     let updated = ack_messages_in_transaction(
         &tx,
         message_keys,
