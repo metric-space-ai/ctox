@@ -4970,6 +4970,11 @@ mod tests {
             .status()
             .expect("watchdog probe");
         assert_eq!(blocked.code(), Some(42));
+        // Unlock explicitly before closing: a test thread that spawns a child
+        // at the same moment briefly holds a duplicate of this descriptor
+        // between fork and exec, and close alone would leave the shared flock
+        // in place (CI with --test-threads=2 saw 42 instead of 99).
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) }, 0);
         drop(lock);
         let released = Command::new("/usr/bin/flock")
             .args(["-n", "-E", "42"])
