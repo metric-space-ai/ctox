@@ -273,6 +273,13 @@ pub(super) fn handle_command(
                     "native account provider changed"
                 );
                 retain_catalog_observation(tx, &request, &observation)?;
+                models::initialize_inherited_selection(
+                    tx,
+                    &owner,
+                    &current,
+                    observation.inherited_selected_model.as_deref(),
+                    observation.checked_at_ms,
+                )?;
                 projection::applied(tx, &owner)
             })?;
             Ok(applied.result)

@@ -43,6 +43,13 @@ Startup backfill is bounded at 256 owners and snapshots
 at 1 MiB. This is metadata, not execution authority or holder dispatch.
 Computer-held adoption, routed inference and unified Settings remain open.
 
+On first native main-route discovery, a previously unset provider selection
+inherits only the existing configured model if the authenticated live list
+confirms it. An explicit provider selection, including an empty one, is never
+overwritten. Missing, rejected, stale or disabled discovery does not create a
+default; the catalog is not automatically selected in full. The adoption hint
+stays local to the holder and does not prove successful inference or quota.
+
 
 ### Selected task history and role changes
 
