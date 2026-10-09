@@ -21,7 +21,7 @@ Call `business_os.presentation_read` with this envelope, placing the complete
 JSON document in `request.document`:
 
 ```json
-{"action":"validate_document","request":{"document":{}}}
+{"action":"validate_document","request":{"project_id":"isolated-project","meeting_id":"isolated-meeting","document":{}}}
 ```
 
 The empty object above illustrates the envelope only and is not a valid deck.

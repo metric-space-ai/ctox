@@ -49,7 +49,8 @@ material, never a real project's KPI source.
 
 ## Store and edit
 
-Validate the draft with `presentation_read` action `validate_document`.
+Validate the draft with `presentation_read` action `validate_document`, bound to
+the authorised `project_id` and `meeting_id` in the installed descriptor.
 Repair errors at their supplied paths using `repairHint`; shorten crowded
 slides when layout warnings reveal an unreadable composition.
 
